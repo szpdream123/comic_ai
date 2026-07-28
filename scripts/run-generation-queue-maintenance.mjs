@@ -15,6 +15,12 @@ const [
   { enqueueDueGenerationPolls },
   { GenerationMaintenanceStepTimeoutError, runIsolatedGenerationMaintenanceStep },
   { processGenerationQueueJobCancellations },
+  { reconcileActiveCanvasGenerationBatches },
+  { restoreCanvasActorScope },
+  { createCanvasGenerationBatchDispatch },
+  { createStorageAdapterFromEnv },
+  { reconcileCanvasMediaDerivations },
+  { findGenerationArtifactHandoff },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
@@ -26,6 +32,12 @@ const [
     import("../apps/backend/src/modules/model-gateway/generation-due-poll.service.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-maintenance-step-runner.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue-cancellation.service.ts"),
+    import("../apps/backend/src/modules/project/canvas-generation-batch.service.ts"),
+    import("../apps/backend/src/modules/identity/canvas-actor-scope.service.ts"),
+    import("../apps/backend/src/entrypoints/phone-auth-dev-server.ts"),
+    import("../apps/backend/src/modules/storage/storage-adapter.factory.ts"),
+    import("../apps/backend/src/modules/project/canvas-media-derivation.service.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-artifact-handoff.service.ts"),
   ]);
 
 const config = loadGenerationQueueConfig(process.env);
@@ -34,6 +46,7 @@ const publisher = createBullMQGenerationPublisher(config);
 const assignmentInspector = createBullMQGenerationQueueAssignmentInspector(config);
 const adminRecoveryJobOps = createGenerationQueueAdminRecoveryJobOps(db, config);
 const maintenanceWorkerId = `generation-maintenance:${process.pid}`;
+const canvasStorageRuntime = createCanvasStorageRuntime(process.env);
 const maintenanceStepTimeoutMs = positiveInteger(
   process.env.GENERATION_MAINTENANCE_STEP_TIMEOUT_MS,
   120_000,
@@ -41,6 +54,7 @@ const maintenanceStepTimeoutMs = positiveInteger(
 let stopping = false;
 let lastShardLifecycleAt = 0;
 let forcedExitTimer = null;
+const reportMaintenanceError = createDedupedErrorReporter("generation-maintenance");
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
@@ -120,7 +134,24 @@ try {
           now,
           limit: config.outbox.dispatchBatchSize,
           remover: assignmentInspector,
-        }),
+      }),
+    );
+    const canvasBatchReconciliation = await runMaintenanceStep(
+      "canvas_batch_reconciliation",
+      () => reconcileActiveCanvasGenerationBatches(db, {
+        now,
+        limit: config.outbox.dispatchBatchSize,
+        staleDispatchMs: config.repair.staleDispatchMs,
+        createDispatch: createPersistentCanvasBatchDispatch,
+      }),
+    );
+    const canvasDerivationReconciliation = await runMaintenanceStep(
+      "canvas_derivation_reconciliation",
+      () => reconcileCanvasMediaDerivations(db, {
+        now,
+        limit: config.outbox.dispatchBatchSize,
+        resolveArtifact: (taskId) => findGenerationArtifactHandoff(db, taskId),
+      }),
     );
     const adminCommandRecovery = await runMaintenanceStep(
       "admin_command_recovery",
@@ -167,6 +198,23 @@ try {
         `[generation-maintenance] canceledQueueJobs=${jobCancellations.completedAssignmentKeys.length} cancellationFailures=${jobCancellations.failedAssignmentKeys.length}`,
       );
     }
+    if (canvasBatchReconciliation && (
+      canvasBatchReconciliation.reconciledBatchIds.length
+      || canvasBatchReconciliation.failedBatches.length
+    )) {
+      console.info(
+        `[generation-maintenance] reconciledCanvasBatches=${canvasBatchReconciliation.reconciledBatchIds.length} failedCanvasBatches=${canvasBatchReconciliation.failedBatches.length}`,
+      );
+    }
+    if (canvasDerivationReconciliation && (
+      canvasDerivationReconciliation.completedDerivationIds.length
+      || canvasDerivationReconciliation.failedDerivationIds.length
+      || canvasDerivationReconciliation.canceledDerivationIds.length
+    )) {
+      console.info(
+        `[generation-maintenance] completedCanvasDerivations=${canvasDerivationReconciliation.completedDerivationIds.length} failedCanvasDerivations=${canvasDerivationReconciliation.failedDerivationIds.length} canceledCanvasDerivations=${canvasDerivationReconciliation.canceledDerivationIds.length}`,
+      );
+    }
     if (adminCommandRecovery && (
       adminCommandRecovery.recoveredCommandIds.length
       || adminCommandRecovery.terminalCommandIds.length
@@ -207,11 +255,21 @@ function runMaintenanceStep(name, run) {
     runInContext: runWithDatabaseContext,
     timeoutMs: maintenanceStepTimeoutMs,
     onError(stepName, error) {
-      console.error(
-        `[generation-maintenance] stepFailed=${stepName} ${error instanceof Error ? error.message : String(error)}`,
-      );
+      reportMaintenanceError(error, `stepFailed=${stepName}`);
     },
   });
+}
+
+function createDedupedErrorReporter(scope) {
+  const reported = new Set();
+  return (error, context) => {
+    const code = typeof error?.code === "string" ? error.code : "ERROR";
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${code}:${message}`;
+    if (reported.has(key)) return;
+    reported.add(key);
+    console.error(`[${scope}] ${context} ${code}: ${message} (duplicate errors suppressed)`);
+  };
 }
 
 async function retireIdleShardsIfDue(now) {
@@ -244,4 +302,67 @@ function loadDotEnvFile(envFilePath) {
 function positiveInteger(value, fallback) {
   const numberValue = Number(value);
   return Number.isSafeInteger(numberValue) && numberValue > 0 ? numberValue : fallback;
+}
+
+async function createPersistentCanvasBatchDispatch(target) {
+  const expectedPrincipal = target.actorTeamMemberId
+    ? `member:${target.actorTeamMemberId}`
+    : `owner:${target.ownerUserId}`;
+  if (target.principalKey !== expectedPrincipal) throw new Error("canvas_batch_principal_mismatch");
+  const canvasScope = await restoreCanvasActorScope(db, {
+    canvasId: target.canvasProjectId,
+    ownerUserId: target.ownerUserId,
+    actorTeamMemberId: target.actorTeamMemberId,
+  });
+  const member = target.actorTeamMemberId
+    ? (await db.query(`SELECT id, member_account, member_login_account, member_name FROM team_members
+        WHERE id=$1 AND user_id=$2 AND status='active' AND deleted_at IS NULL LIMIT 1`,
+      [target.actorTeamMemberId, target.ownerUserId])).rows[0]
+    : null;
+  if (target.actorTeamMemberId && !member) throw new Error("canvas_batch_actor_unavailable");
+  return createCanvasGenerationBatchDispatch({
+    db,
+    canvasProjectId: target.canvasProjectId,
+    canvasScope,
+    actor: {
+      userId: target.ownerUserId,
+      capabilities: [],
+      ...(member ? { teamMember: {
+        id: member.id,
+        memberAccount: member.member_account,
+        memberLoginAccount: member.member_login_account,
+        memberName: member.member_name,
+      } } : {}),
+    },
+    authenticated: { sessionToken: `canvas-maintenance:${target.batchId}`, user: {
+      id: target.ownerUserId,
+      phone: null,
+      creditBalance: 0,
+      displayCreditBalance: 0,
+      availableCredits: 0,
+      reservedCredits: 0,
+      frozenCredits: 0,
+      creditFrozenAt: null,
+      creditFrozenUntil: null,
+    } },
+    runtime: canvasStorageRuntime,
+    env: process.env,
+    signedUrlExpiresInSeconds: positiveInteger(process.env.STORAGE_SIGNED_URL_EXPIRES_SECONDS, 900),
+  });
+}
+
+function createCanvasStorageRuntime(env) {
+  const mode = (env.STORAGE_ADAPTER_MODE ?? "dev").trim();
+  return {
+    mode,
+    provider: mode === "cos" ? "tencent_cos" : mode === "s3_compatible" ? "s3_compatible" : "creator-dev",
+    bucket: env.STORAGE_BUCKET?.trim() || (mode === "dev" ? "creator-dev" : `creator-${mode}`),
+    region: (env.STORAGE_REGION ?? "ap-shanghai").trim(),
+    publicBaseUrl: env.STORAGE_PUBLIC_BASE_URL?.trim() || env.STORAGE_ENDPOINT?.trim() || null,
+    adapter: createStorageAdapterFromEnv(env),
+    stsSecretId: env.STORAGE_COS_SECRET_ID?.trim() ?? null,
+    stsSecretKey: env.STORAGE_COS_SECRET_KEY?.trim() ?? null,
+    stsDurationSeconds: positiveInteger(env.STORAGE_COS_STS_DURATION_SECONDS, 1800),
+    localUploadUrlPath: "/api/storage/upload-sessions",
+  };
 }

@@ -1,0 +1,1781 @@
+import { canvasAssetNodeData } from "../production-workbench/canvas/canvas-asset-library.js";
+import {
+  addCanvasNode,
+  resolveCanvasNodePlacement,
+  updateCanvasNodeData,
+} from "../production-workbench/canvas/canvas-state.js";
+import { renderNewCanvasChrome, renderNewCanvasChromeRail } from "./canvas-chrome.js";
+
+const AGENT_MODES = [
+  { id: "b", label: "B", title: "先确认后执行" },
+  { id: "c", label: "C", title: "按策略连续执行" },
+  { id: "plan", label: "Plan", title: "只生成执行计划" },
+  { id: "expert", label: "Expert", title: "只读专家分析" },
+];
+
+const TERMINAL_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "canceled",
+  "result_unknown",
+  "manual_review_required",
+]);
+
+export function ensureCanvasAgentState(ui = {}) {
+  const previous = ui.canvasAgent && typeof ui.canvasAgent === "object" ? ui.canvasAgent : {};
+  const mode = AGENT_MODES.some((item) => item.id === previous.mode) ? previous.mode : "b";
+  Object.assign(previous, {
+    conversationId: "",
+    conversations: [],
+    taskId: "",
+    mode,
+    modelCode: String(previous.modelCode ?? ui.canvasAgentModelCode ?? ""),
+    models: [],
+    modelsStatus: "idle",
+    modelsError: "",
+    promptDraft: "",
+    interjectionDraft: "",
+    status: "idle",
+    events: [],
+    messages: [],
+    messagesStatus: "idle",
+    fileGrants: [],
+    fileGrantsStatus: "idle",
+    memoryRecords: [],
+    memoryRecordsStatus: "idle",
+    memoryRecordsError: "",
+    memoryCategoryFilter: "",
+    memorySourceFilter: "",
+    memoryEditingId: "",
+    memoryDraftKey: "",
+    memoryDraftCategory: "general",
+    memoryDraftValue: "",
+    panelView: "timeline",
+    taskFilter: "active",
+    taskItems: [],
+    taskCenterStatus: "idle",
+    taskCenterError: "",
+    memoryEvents: [],
+    skippedStepIds: [],
+    sequence: 0,
+    busyAction: "",
+    error: "",
+    polling: false,
+    ...previous,
+    mode,
+  });
+  ui.canvasAgent = previous;
+  return previous;
+}
+
+export function renderCanvasAgentPanel(ui = {}) {
+  const agent = ensureCanvasAgentState(ui);
+  const pendingApproval = findPendingApproval(agent.events, agent.skippedStepIds);
+  const approvalPresentation = pendingApproval ? resolveAgentApprovalPresentation(agent.events, pendingApproval) : null;
+  const active = Boolean(agent.taskId) && !TERMINAL_STATUSES.has(agent.status);
+  const paused = agent.status === "paused";
+  const busy = Boolean(agent.busyAction);
+  const models = Array.isArray(agent.models) ? agent.models : [];
+  const selectedConversation = (agent.conversations ?? []).find((conversation) => conversation.id === agent.conversationId);
+  const conversationArchived = selectedConversation?.status === "archived";
+  const modelSelectDisabled = busy || agent.modelsStatus !== "ready" || !models.length;
+  const selectedFile = resolveSelectedAgentFileReference(ui);
+  const panelView = ["timeline", "tasks", "memory"].includes(agent.panelView) ? agent.panelView : "timeline";
+  const activeTaskCount = countActiveAgentTasks(agent);
+  return `
+    <aside class="canvas-agent-panel ${panelView === "timeline" ? "" : "has-special-view"}" data-canvas-agent-panel aria-label="Canvas Agent">
+      <header class="canvas-agent-head">
+        <div>
+          <span>CANVAS AGENT</span>
+          <strong>智能协作</strong>
+        </div>
+        <div class="canvas-agent-head-actions">
+          <button type="button" class="canvas-agent-head-tool ${panelView === "tasks" ? "active" : ""}" data-agent-action="open-task-center" aria-label="任务中心${activeTaskCount ? `，${activeTaskCount} 个进行中` : ""}" title="任务中心" aria-pressed="${panelView === "tasks"}">任务${activeTaskCount ? `<b>${activeTaskCount}</b>` : ""}</button>
+          <button type="button" class="canvas-agent-head-tool ${panelView === "memory" ? "active" : ""}" data-agent-action="open-memory" aria-label="画布记忆" title="画布记忆" aria-pressed="${panelView === "memory"}">记忆</button>
+          <button type="button" data-agent-action="new-conversation" ${busy ? "disabled" : ""}>新会话</button>
+        </div>
+      </header>
+
+      ${panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : `
+      ${agent.conversations?.length ? `
+        <label class="canvas-agent-conversation">
+          <span>会话</span>
+          <select data-agent-field="conversationId" ${busy ? "disabled" : ""}>
+            ${agent.conversations.map((conversation) => `<option value="${escapeAttr(conversation.id)}" ${conversation.id === agent.conversationId ? "selected" : ""}>${conversation.pinned ? "★ " : ""}${escapeHtml(conversation.title || "未命名会话")}${conversation.status === "archived" ? "（已归档）" : ""}</option>`).join("")}
+          </select>
+          <span>
+            ${conversationArchived
+              ? `<button type="button" data-agent-action="restore-conversation" ${busy ? "disabled" : ""}>恢复</button>`
+              : `<button type="button" data-agent-action="archive-conversation" ${busy ? "disabled" : ""}>归档</button>`}
+            <button type="button" class="danger" data-agent-action="delete-conversation" ${busy ? "disabled" : ""}>删除</button>
+            <button type="button" data-agent-action="toggle-pin-conversation" ${busy ? "disabled" : ""}>${selectedConversation?.pinned ? "取消置顶" : "置顶"}</button>
+            <button type="button" data-agent-action="rename-conversation" ${busy ? "disabled" : ""}>重命名</button>
+          </span>
+        </label>
+      ` : ""}
+
+      <div class="canvas-agent-mode" role="tablist" aria-label="Agent 模式">
+        ${AGENT_MODES.map((mode) => `
+          <button type="button" role="tab" aria-selected="${agent.mode === mode.id}" class="${agent.mode === mode.id ? "active" : ""}" data-agent-action="set-mode" data-agent-mode="${mode.id}" title="${mode.title}">${mode.label}</button>
+        `).join("")}
+      </div>
+
+      <label class="canvas-agent-model">
+        <span>模型代码</span>
+        <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="Agent 模型">
+          ${models.length
+            ? models.map((model) => `<option value="${escapeAttr(model.modelCode)}" ${model.modelCode === agent.modelCode ? "selected" : ""}>${escapeHtml(model.modelLabel || model.modelCode)}</option>`).join("")
+            : `<option value="">${agent.modelsStatus === "loading" ? "正在加载模型" : "暂无可用 Agent 模型"}</option>`}
+        </select>
+        ${agent.modelsError ? `<small>${escapeHtml(agent.modelsError)}</small>` : ""}
+      </label>
+
+      ${agent.conversationId ? renderAgentFileGrants(agent, selectedFile, busy) : ""}
+
+      <section class="canvas-agent-timeline" aria-label="Agent 事件" aria-live="polite">
+        ${renderAgentTimeline(agent)}
+      </section>
+
+      ${approvalPresentation ? renderAgentApprovalCard(approvalPresentation, busy) : ""}
+
+      ${active ? `
+        <div class="canvas-agent-task-controls" aria-label="Agent 任务控制">
+          ${paused
+            ? '<button type="button" data-agent-action="resume">继续</button>'
+            : '<button type="button" data-agent-action="pause">暂停</button>'}
+          <button type="button" data-agent-action="replan">重规划</button>
+          ${renderAgentSkipStepButton(agent, busy)}
+          <button type="button" class="danger" data-agent-action="stop">停止</button>
+        </div>
+        <div class="canvas-agent-interject">
+          <input type="text" data-agent-field="interjectionDraft" value="${escapeAttr(agent.interjectionDraft)}" placeholder="补充要求或修正方向" />
+          <button type="button" data-agent-action="interject" ${busy ? "disabled" : ""}>插话</button>
+        </div>
+      ` : ""}
+      ${agent.taskId ? `<div class="canvas-agent-rewind-control">
+        <button type="button" data-agent-action="rewind" ${busy ? "disabled" : ""} title="恢复最近一次 Agent 检查点">回退最近检查点</button>
+      </div>` : ""}
+
+      <footer class="canvas-agent-composer">
+        <textarea data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
+        <div>
+          <span class="canvas-agent-status ${escapeAttr(agent.status)}">${escapeHtml(agentStatusLabel(agent))}</span>
+          <span class="canvas-agent-composer-actions">
+            ${renderAgentContextUsage(agent)}
+            <button type="button" data-agent-action="send" ${busy || modelSelectDisabled || conversationArchived ? "disabled" : ""}>发送</button>
+          </span>
+        </div>
+        ${agent.error ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.error)}</p>` : ""}
+      </footer>
+      `}
+    </aside>
+  `;
+}
+
+export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "") {
+  const sidebarWidth = ui.canvasSidebarCollapsed === true
+    ? 0
+    : ["assets", "history"].includes(ui.canvasSidebarMode)
+      ? Math.max(264, (Math.min(6, Math.max(2, Number(ui.canvasAssetLayoutColumns ?? 3) || 3)) * 118))
+      : 264;
+  return `
+    <div class="new-canvas-layout">
+      ${renderNewCanvasChrome(ui)}
+      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${renderNewCanvasChromeRail(ui)}</div>
+      ${renderCanvasAgentPanel(ui)}
+      ${auxiliaryMarkup}
+    </div>
+  `;
+}
+
+export function reduceCanvasAgentEvents(agent, incoming = []) {
+  const bySequence = new Map(
+    (Array.isArray(agent.events) ? agent.events : [])
+      .map((event) => [Number(event?.sequence ?? 0), event]),
+  );
+  for (const event of Array.isArray(incoming) ? incoming : []) {
+    const sequence = Number(event?.sequence ?? 0);
+    if (sequence > 0) bySequence.set(sequence, event);
+  }
+  agent.events = [...bySequence.values()]
+    .sort((left, right) => Number(left.sequence) - Number(right.sequence))
+    .slice(-500);
+  agent.sequence = agent.events.reduce((max, event) => Math.max(max, Number(event?.sequence ?? 0)), Number(agent.sequence ?? 0));
+  for (const event of agent.events) {
+    const nextStatus = statusFromEvent(event);
+    if (nextStatus) agent.status = nextStatus;
+  }
+  syncCurrentAgentTaskItem(agent);
+  return agent;
+}
+
+export function createCanvasAgentController({ surface, workbench, renderPanel, pollIntervalMs = 1500 }) {
+  const ui = workbench.ui ?? (workbench.ui = {});
+  const agent = ensureCanvasAgentState(ui);
+  const syncPanel = () => {
+    const current = surface.querySelector?.("[data-canvas-agent-panel]");
+    if (!current || typeof document === "undefined") return false;
+    const template = document.createElement("template");
+    template.innerHTML = renderCanvasAgentPanel(ui);
+    const next = template.content.firstElementChild;
+    if (!next) return false;
+    current.replaceWith(next);
+    renderPanel?.(next);
+    return true;
+  };
+  let pollTimer = null;
+  let pollInFlight = false;
+  let streamAbortController = null;
+  let streamInFlight = false;
+  let realtimeGeneration = 0;
+  let disposed = false;
+
+  const stopPolling = () => {
+    realtimeGeneration += 1;
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = null;
+    streamAbortController?.abort();
+    streamAbortController = null;
+    agent.polling = false;
+  };
+
+  const schedulePoll = (delay = pollIntervalMs) => {
+    stopPolling();
+    if (disposed || !agent.taskId || TERMINAL_STATUSES.has(agent.status)) return;
+    agent.polling = true;
+    pollTimer = setTimeout(
+      () => void (typeof workbench.api?.streamCanvasAgentEvents === "function" ? stream() : poll()),
+      Math.max(0, delay),
+    );
+  };
+
+  const stream = async () => {
+    if (disposed || streamInFlight || !agent.taskId) return;
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || typeof workbench.api?.streamCanvasAgentEvents !== "function") return void poll();
+    const taskId = agent.taskId;
+    const generation = realtimeGeneration;
+    const abortController = new AbortController();
+    streamAbortController = abortController;
+    streamInFlight = true;
+    agent.polling = true;
+    try {
+      for await (const message of workbench.api.streamCanvasAgentEvents(canvasId, taskId, {
+        after: agent.sequence,
+        limit: 200,
+        signal: abortController.signal,
+      })) {
+        if (disposed || agent.taskId !== taskId || generation !== realtimeGeneration) break;
+        if (message?.event === "access.revoked") throw new Error("canvas_agent_access_revoked");
+        const event = message?.data;
+        if (!event || typeof event !== "object" || !event.eventType) continue;
+        reduceCanvasAgentEvents(agent, [event]);
+        agent.error = "";
+        syncPanel();
+        if (TERMINAL_STATUSES.has(agent.status)) {
+          await refreshConversationMessages(agent.conversationId);
+          syncPanel();
+          break;
+        }
+      }
+    } catch (error) {
+      if (!abortController.signal.aborted && generation === realtimeGeneration) {
+        agent.error = friendlyAgentError(error);
+        syncPanel();
+      }
+    } finally {
+      if (streamAbortController === abortController) streamAbortController = null;
+      streamInFlight = false;
+      if (!disposed && generation === realtimeGeneration && agent.taskId === taskId) schedulePoll(1_000);
+    }
+  };
+
+  const poll = async () => {
+    if (disposed || pollInFlight || !agent.taskId) return;
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || typeof workbench.api?.listCanvasAgentEvents !== "function") return;
+    pollInFlight = true;
+    try {
+      const payload = await workbench.api.listCanvasAgentEvents(canvasId, agent.taskId, {
+        after: agent.sequence,
+        limit: 200,
+      });
+      const events = Array.isArray(payload?.events) ? payload.events : [];
+      if (events.length) {
+        reduceCanvasAgentEvents(agent, events);
+        agent.error = "";
+        if (TERMINAL_STATUSES.has(agent.status)) await refreshConversationMessages(agent.conversationId);
+        syncPanel();
+      }
+    } catch (error) {
+      agent.error = friendlyAgentError(error);
+      syncPanel();
+    } finally {
+      pollInFlight = false;
+      schedulePoll();
+    }
+  };
+
+  const ensureConversation = async () => {
+    if (agent.conversationId) return agent.conversationId;
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    const payload = await workbench.api.createCanvasAgentConversation(canvasId, { title: "画布协作" });
+    const id = String(payload?.conversation?.id ?? payload?.id ?? "");
+    if (!id) throw new Error("canvas_agent_conversation_missing");
+    agent.conversationId = id;
+    return id;
+  };
+
+  const hydrateMediaMessages = async () => {
+    const taskIds = [...new Set((agent.messages ?? []).map((message) => message.generationTaskId).filter(Boolean))];
+    if (!taskIds.length) return agent.messages;
+    let items = [];
+    try {
+      if (typeof workbench.api?.getGenerationTasks === "function") {
+        const payload = await workbench.api.getGenerationTasks(taskIds);
+        items = Array.isArray(payload?.items) ? payload.items : [];
+      } else if (typeof workbench.api?.getGenerationTask === "function") {
+        items = (await Promise.all(taskIds.map((taskId) => workbench.api.getGenerationTask(taskId).catch(() => null)))).filter(Boolean);
+      }
+    } catch {
+      return agent.messages;
+    }
+    const byTaskId = new Map(items.map((task) => [String(task?.taskId ?? task?.id ?? ""), normalizeAgentMediaTask(task)]));
+    agent.messages = agent.messages.map((message) => ({
+      ...message,
+      media: byTaskId.get(message.generationTaskId) ?? message.media ?? null,
+    }));
+    return agent.messages;
+  };
+
+  const refreshConversationMessages = async (conversationId) => {
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || !conversationId || typeof workbench.api?.listCanvasAgentMessages !== "function") return agent.messages;
+    const payload = await workbench.api.listCanvasAgentMessages(canvasId, conversationId, { limit: 200 });
+    if (agent.conversationId !== conversationId) return agent.messages;
+    const rows = Array.isArray(payload?.messages) ? payload.messages : [];
+    agent.messages = rows.map(normalizeAgentMessage).filter((message) => message.text || message.generationTaskId).slice(-200);
+    await hydrateMediaMessages();
+    return agent.messages;
+  };
+
+  const loadMessages = async (conversationId) => {
+    stopPolling();
+    Object.assign(agent, {
+      taskId: "",
+      status: "idle",
+      events: [],
+      messages: [],
+      sequence: 0,
+      messagesStatus: conversationId ? "loading" : "idle",
+      error: "",
+    });
+    syncPanel();
+    if (!conversationId) return [];
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || typeof workbench.api?.listCanvasAgentMessages !== "function") {
+      agent.messagesStatus = "unavailable";
+      agent.error = "会话历史暂不可用";
+      syncPanel();
+      return [];
+    }
+    try {
+      await refreshConversationMessages(conversationId);
+      const conversation = (agent.conversations ?? []).find((item) => String(item.id) === conversationId);
+      if (conversation?.taskId) {
+        agent.taskId = String(conversation.taskId);
+        agent.status = String(conversation.taskStatus ?? "queued");
+        schedulePoll(0);
+      }
+      agent.messagesStatus = "ready";
+      await loadFileGrants(conversationId);
+    } catch (error) {
+      if (agent.conversationId !== conversationId) return [];
+      agent.messagesStatus = "unavailable";
+      agent.error = friendlyAgentError(error);
+    }
+    syncPanel();
+    return agent.messages;
+  };
+
+  const loadFileGrants = async (conversationId = agent.conversationId) => {
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || !conversationId || typeof workbench.api?.listCanvasAgentFileGrants !== "function") {
+      agent.fileGrants = [];
+      agent.fileGrantsStatus = "unavailable";
+      return [];
+    }
+    agent.fileGrantsStatus = "loading";
+    try {
+      const payload = await workbench.api.listCanvasAgentFileGrants(canvasId, conversationId);
+      if (agent.conversationId !== conversationId) return [];
+      agent.fileGrants = (Array.isArray(payload?.grants) ? payload.grants : [])
+        .map(normalizeAgentFileGrant)
+        .filter((grant) => grant.id && grant.status === "active");
+      agent.fileGrantsStatus = "ready";
+    } catch (error) {
+      if (agent.conversationId !== conversationId) return [];
+      agent.fileGrants = [];
+      agent.fileGrantsStatus = "unavailable";
+      agent.error = friendlyAgentError(error);
+    }
+    syncPanel();
+    return agent.fileGrants;
+  };
+
+  const loadMemories = async (conversationId = agent.conversationId) => {
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || !conversationId || typeof workbench.api?.listCanvasAgentMemories !== "function") {
+      agent.memoryRecords = [];
+      agent.memoryRecordsStatus = "unavailable";
+      agent.memoryRecordsError = conversationId ? "记忆记录接口暂不可用" : "请先选择会话";
+      syncPanel();
+      return [];
+    }
+    agent.memoryRecordsStatus = "loading";
+    agent.memoryRecordsError = "";
+    syncPanel();
+    try {
+      const payload = await workbench.api.listCanvasAgentMemories(canvasId, conversationId, { includeInactive: true });
+      if (agent.conversationId !== conversationId) return [];
+      const rows = Array.isArray(payload?.memories)
+        ? payload.memories
+        : Array.isArray(payload?.records)
+          ? payload.records
+          : Array.isArray(payload?.items) ? payload.items : [];
+      agent.memoryRecords = rows.map(normalizeAgentMemoryRecord).filter((record) => record.id && record.key);
+      agent.memoryRecordsStatus = "ready";
+    } catch (error) {
+      if (agent.conversationId !== conversationId) return [];
+      agent.memoryRecords = [];
+      agent.memoryRecordsStatus = "unavailable";
+      agent.memoryRecordsError = friendlyAgentError(error);
+    }
+    syncPanel();
+    return agent.memoryRecords;
+  };
+
+  const loadModels = async () => {
+    if (disposed || agent.modelsStatus === "loading") return agent.models;
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || typeof workbench.api?.listCanvasAgentModels !== "function") {
+      agent.models = [];
+      agent.modelsStatus = "unavailable";
+      agent.modelsError = "Agent 模型列表暂不可用";
+      syncPanel();
+      return [];
+    }
+    agent.modelsStatus = "loading";
+    agent.modelsError = "";
+    syncPanel();
+    try {
+      const payload = await workbench.api.listCanvasAgentModels(canvasId);
+      const rows = Array.isArray(payload?.models) ? payload.models : Array.isArray(payload) ? payload : [];
+      agent.models = rows.map(normalizeAgentModel).filter((model) => model.modelCode);
+      agent.modelsStatus = "ready";
+      if (!agent.models.some((model) => model.modelCode === agent.modelCode)) {
+        agent.modelCode = agent.models[0]?.modelCode ?? "";
+      }
+      if (!agent.models.length) agent.modelsError = "管理员尚未配置可用 Agent 模型";
+    } catch (error) {
+      agent.models = [];
+      agent.modelsStatus = "unavailable";
+      agent.modelsError = friendlyAgentError(error);
+    }
+    syncPanel();
+    return agent.models;
+  };
+
+  const loadConversations = async () => {
+    if (disposed || typeof workbench.api?.listCanvasAgentConversations !== "function") return [];
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId) return [];
+    try {
+      const payload = await workbench.api.listCanvasAgentConversations(canvasId, { limit: 50 });
+      agent.conversations = Array.isArray(payload?.conversations) ? payload.conversations : [];
+      if (!agent.conversations.some((conversation) => String(conversation.id) === agent.conversationId)) {
+        agent.conversationId = String(agent.conversations[0]?.id ?? "");
+      }
+      syncPanel();
+    } catch (error) {
+      agent.error = friendlyAgentError(error);
+      syncPanel();
+    }
+    return agent.conversations;
+  };
+
+  const loadTaskCenter = async () => {
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || typeof workbench.api?.listCanvasAgentMessages !== "function") {
+      agent.taskCenterStatus = "unavailable";
+      agent.taskCenterError = "任务记录暂不可用";
+      syncPanel();
+      return agent.taskItems;
+    }
+    agent.taskCenterStatus = "loading";
+    agent.taskCenterError = "";
+    syncPanel();
+    try {
+      if (!agent.conversations.length) await loadConversations();
+      const conversations = Array.isArray(agent.conversations) ? agent.conversations : [];
+      const histories = await Promise.all(conversations.map(async (conversation) => {
+        const payload = await workbench.api.listCanvasAgentMessages(canvasId, conversation.id, { limit: 200 });
+        return {
+          conversation,
+          messages: (Array.isArray(payload?.messages) ? payload.messages : []).map(normalizeAgentMessage),
+        };
+      }));
+      const seeds = collectAgentTaskSeeds(histories, agent);
+      const items = await Promise.all([...seeds.values()].map(async (seed) => {
+        let events = seed.taskId === agent.taskId ? [...agent.events] : [];
+        if (!events.length && typeof workbench.api?.listCanvasAgentEvents === "function") {
+          try {
+            const payload = await workbench.api.listCanvasAgentEvents(canvasId, seed.taskId, { after: 0, limit: 1000 });
+            events = Array.isArray(payload?.events) ? payload.events : [];
+          } catch {
+            events = [];
+          }
+        }
+        return buildAgentTaskItem(seed, events);
+      }));
+      agent.taskItems = items.sort((left, right) => right.updatedAt - left.updatedAt);
+      agent.memoryEvents = collectAgentMemoryEvents(agent.taskItems, agent.events);
+      agent.taskCenterStatus = "ready";
+    } catch (error) {
+      agent.taskCenterStatus = "unavailable";
+      agent.taskCenterError = friendlyAgentError(error);
+    }
+    syncPanel();
+    return agent.taskItems;
+  };
+
+  const run = async (action, operation) => {
+    if (agent.busyAction) return;
+    agent.busyAction = action;
+    agent.error = "";
+    syncPanel();
+    try {
+      await operation();
+    } catch (error) {
+      agent.error = friendlyAgentError(error);
+    } finally {
+      agent.busyAction = "";
+      syncPanel();
+    }
+  };
+
+  const control = async (action, input = {}, taskId = agent.taskId) => {
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    if (!canvasId || !taskId) throw new Error("canvas_agent_task_missing");
+    const payload = await workbench.api.controlCanvasAgentTask(canvasId, taskId, action, input);
+    const resultStatus = String(payload?.result?.status ?? "");
+    if (resultStatus) {
+      if (taskId === agent.taskId) agent.status = resultStatus;
+      updateAgentTaskItemStatus(agent, taskId, resultStatus);
+    }
+    if (taskId === agent.taskId) schedulePoll(0);
+    return payload;
+  };
+
+  return {
+    syncPanel,
+    loadModels,
+    loadMessages,
+    loadFileGrants,
+    loadMemories,
+    loadTaskCenter,
+    handleInput(target) {
+      const field = String(target?.dataset?.agentField ?? "");
+      if (!field || !Object.hasOwn(agent, field)) return false;
+      const value = String(target.value ?? "");
+      if (field === "conversationId" && value !== agent.conversationId) {
+        agent.conversationId = value;
+        void loadMessages(value);
+        return true;
+      }
+      agent[field] = value;
+      return true;
+    },
+    handleKeydown(event, target) {
+      if (target?.dataset?.agentField !== "promptDraft" || event.key !== "Enter" || event.shiftKey) return false;
+      event.preventDefault();
+      void this.handleAction({ dataset: { agentAction: "send" } });
+      return true;
+    },
+    async handleAction(target) {
+      const action = String(target?.dataset?.agentAction ?? "");
+      if (!action) return false;
+      if (action === "set-mode") {
+        const mode = String(target.dataset.agentMode ?? "b");
+        agent.mode = AGENT_MODES.some((item) => item.id === mode) ? mode : "b";
+        syncPanel();
+        return true;
+      }
+      if (action === "open-task-center" || action === "open-memory") {
+        agent.panelView = action === "open-task-center" ? "tasks" : "memory";
+        syncPanel();
+        await run(action === "open-task-center" ? "load-agent-history" : "load-agent-memories", action === "open-task-center" ? loadTaskCenter : loadMemories);
+        return true;
+      }
+      if (action === "close-agent-view") {
+        agent.panelView = "timeline";
+        syncPanel();
+        return true;
+      }
+      if (action === "set-task-filter") {
+        agent.taskFilter = target.dataset.taskFilter === "all" ? "all" : "active";
+        syncPanel();
+        return true;
+      }
+      if (action === "refresh-agent-history") {
+        await run("load-agent-history", loadTaskCenter);
+        return true;
+      }
+      if (action === "refresh-agent-memories") {
+        await run("load-agent-memories", loadMemories);
+        return true;
+      }
+      if (action === "edit-agent-memory") {
+        const memoryId = String(target.dataset.memoryId ?? "");
+        const record = agent.memoryRecords.find((item) => item.id === memoryId);
+        if (!record) return true;
+        agent.memoryEditingId = memoryId;
+        agent.memoryDraftKey = record.key;
+        agent.memoryDraftCategory = record.category || "general";
+        agent.memoryDraftValue = JSON.stringify(record.value, null, 2);
+        syncPanel();
+        return true;
+      }
+      if (action === "cancel-agent-memory-edit") {
+        agent.memoryEditingId = "";
+        syncPanel();
+        return true;
+      }
+      if (action === "save-agent-memory") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const memoryId = String(target.dataset.memoryId ?? agent.memoryEditingId ?? "");
+          if (!canvasId || !agent.conversationId || !memoryId || typeof workbench.api?.updateCanvasAgentMemory !== "function") {
+            throw new Error("canvas_agent_memory_unavailable");
+          }
+          let value;
+          try {
+            value = JSON.parse(String(agent.memoryDraftValue ?? ""));
+          } catch {
+            throw new Error("记忆内容必须是有效的 JSON 对象。");
+          }
+          if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("记忆内容必须是 JSON 对象。");
+          const key = String(agent.memoryDraftKey ?? "").trim();
+          if (!key) throw new Error("记忆键不能为空。");
+          const currentRecord = agent.memoryRecords.find((record) => record.id === memoryId);
+          await workbench.api.updateCanvasAgentMemory(canvasId, agent.conversationId, memoryId, {
+            key,
+            value,
+            category: String(agent.memoryDraftCategory || "general"),
+            status: currentRecord?.status === "revoked" ? "revoked" : "active",
+          });
+          agent.memoryEditingId = "";
+          await loadMemories();
+        });
+        return true;
+      }
+      if (action === "toggle-agent-memory") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const memoryId = String(target.dataset.memoryId ?? "");
+          const record = agent.memoryRecords.find((item) => item.id === memoryId);
+          if (!canvasId || !agent.conversationId || !record || typeof workbench.api?.updateCanvasAgentMemory !== "function") {
+            throw new Error("canvas_agent_memory_unavailable");
+          }
+          await workbench.api.updateCanvasAgentMemory(canvasId, agent.conversationId, memoryId, {
+            status: record.status === "active" ? "revoked" : "active",
+          });
+          await loadMemories();
+        });
+        return true;
+      }
+      if (action === "delete-agent-memory") {
+        if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定永久删除这条画布记忆吗？")) return true;
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const memoryId = String(target.dataset.memoryId ?? "");
+          if (!canvasId || !agent.conversationId || !memoryId || typeof workbench.api?.deleteCanvasAgentMemory !== "function") {
+            throw new Error("canvas_agent_memory_unavailable");
+          }
+          await workbench.api.deleteCanvasAgentMemory(canvasId, agent.conversationId, memoryId);
+          agent.memoryRecords = agent.memoryRecords.filter((record) => record.id !== memoryId);
+          if (agent.memoryEditingId === memoryId) agent.memoryEditingId = "";
+        });
+        return true;
+      }
+      if (action === "inspect-memories") {
+        agent.promptDraft = "请使用 memory.read 读取并整理当前画布已确认的记忆，按约束、决定、偏好和事实分类列出。";
+        agent.panelView = "timeline";
+        syncPanel();
+        return true;
+      }
+      if (action === "select-agent-task") {
+        const taskId = String(target.dataset.taskId ?? "");
+        const item = (agent.taskItems ?? []).find((task) => task.taskId === taskId);
+        if (!item) return true;
+        await run(action, async () => {
+          stopPolling();
+          agent.conversationId = item.conversationId;
+          await loadMessages(item.conversationId);
+          agent.taskId = item.taskId;
+          agent.status = item.status;
+          agent.events = [...item.events];
+          agent.sequence = item.events.reduce((max, event) => Math.max(max, Number(event?.sequence ?? 0)), 0);
+          agent.panelView = "timeline";
+          if (!TERMINAL_STATUSES.has(agent.status)) schedulePoll(0);
+        });
+        return true;
+      }
+      if (action === "skip-step") {
+        const taskId = String(target.dataset.taskId ?? agent.taskId ?? "");
+        const stepId = String(target.dataset.stepId ?? "");
+        if (!taskId || !stepId) return true;
+        await run(action, async () => {
+          const taskStatus = String((agent.taskItems ?? []).find((task) => task.taskId === taskId)?.status ?? (taskId === agent.taskId ? agent.status : ""));
+          await control("skip", { stepId, reason: "user_requested" }, taskId);
+          const nextTaskStatus = taskStatus === "paused" ? "paused" : "queued";
+          if (taskId === agent.taskId) agent.status = nextTaskStatus;
+          updateAgentTaskItemStatus(agent, taskId, nextTaskStatus);
+          markAgentStepSkipped(agent, taskId, stepId);
+          if (taskId === agent.taskId) schedulePoll(0);
+        });
+        return true;
+      }
+      if (action === "add-media-to-canvas" || action === "locate-agent-canvas-node") {
+        const messageId = String(target.dataset.messageId ?? "");
+        const message = (agent.messages ?? []).find((item) => item.id === messageId);
+        if (!message) return true;
+        if (action === "locate-agent-canvas-node" || message.canvasNodeId) {
+          const nodeId = String(message.canvasNodeId ?? "");
+          if (!nodeId) return true;
+          workbench.ui.selectedCanvasNodeId = nodeId;
+          workbench.ui.canvasEditorOpen = true;
+          const cell = workbench.canvasGraph?.getCellById?.(nodeId);
+          if (cell) {
+            workbench.canvasGraph.select?.(cell);
+            workbench.canvasGraph.centerCell?.(cell);
+          }
+          await workbench.refreshCanvasSurface?.();
+          return true;
+        }
+        const media = message.media;
+        if (!media?.url || !["image", "video", "audio"].includes(media.kind)) return true;
+        const document = workbench.ui?.canvasDocument;
+        if (!document) return true;
+        const type = `source-${media.kind}`;
+        const position = resolveCanvasNodePlacement(document, { type, position: { x: 220, y: 180 } });
+        let nextDocument = addCanvasNode(document, { type, position });
+        const nodeId = String(nextDocument.nodes.at(-1)?.id ?? "");
+        nextDocument = updateCanvasNodeData(nextDocument, nodeId, {
+          ...canvasAssetNodeData({
+            id: media.assetVersionId || media.storageObjectId || media.taskId,
+            artifactId: media.artifactId,
+            storageObjectId: media.storageObjectId,
+            assetId: media.assetId,
+            assetVersionId: media.assetVersionId,
+            kind: media.kind,
+            title: media.title || "Agent 生成产物",
+            url: media.url,
+          }),
+          source: "canvas_agent",
+          generationTaskId: media.taskId,
+          prompt: media.prompt,
+        });
+        if (typeof workbench.updateCanvasDocument === "function") workbench.updateCanvasDocument(nextDocument);
+        else workbench.ui.canvasDocument = nextDocument;
+        message.canvasNodeId = nodeId;
+        workbench.ui.selectedCanvasNodeId = nodeId;
+        workbench.ui.canvasEditorOpen = true;
+        await workbench.refreshCanvasSurface?.();
+        return true;
+      }
+      if (action === "new-conversation") {
+        stopPolling();
+        Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], sequence: 0, error: "", panelView: "timeline" });
+        await run(action, async () => {
+          const conversationId = await ensureConversation();
+          agent.conversations = [{ id: conversationId, title: "画布协作", status: "active" }, ...(agent.conversations ?? []).filter((item) => item.id !== conversationId)];
+        });
+        return true;
+      }
+      if (action === "grant-selected-file") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const selectedFile = resolveSelectedAgentFileReference(workbench.ui);
+          if (!canvasId || !agent.conversationId || !selectedFile?.storageObjectId) {
+            throw new Error("canvas_agent_file_grant_target_missing");
+          }
+          if (typeof workbench.api?.createCanvasAgentFileGrant !== "function") {
+            throw new Error("canvas_agent_file_grant_unavailable");
+          }
+          await workbench.api.createCanvasAgentFileGrant(canvasId, agent.conversationId, {
+            storageObjectId: selectedFile.storageObjectId,
+            purpose: `Canvas Agent reference: ${selectedFile.title}`,
+            expiresInSeconds: 3_600,
+          });
+          await loadFileGrants(agent.conversationId);
+        });
+        return true;
+      }
+      if (action === "revoke-file-grant") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const grantId = String(target.dataset.grantId ?? "");
+          if (!canvasId || !agent.conversationId || !grantId || typeof workbench.api?.revokeCanvasAgentFileGrant !== "function") {
+            throw new Error("canvas_agent_file_grant_unavailable");
+          }
+          await workbench.api.revokeCanvasAgentFileGrant(canvasId, agent.conversationId, grantId);
+          agent.fileGrants = agent.fileGrants.filter((grant) => grant.id !== grantId);
+        });
+        return true;
+      }
+      if (action === "archive-conversation" || action === "restore-conversation") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          if (!canvasId || !agent.conversationId) throw new Error("canvas_agent_conversation_missing");
+          const status = action === "archive-conversation" ? "archived" : "active";
+          const payload = await workbench.api.updateCanvasAgentConversation(canvasId, {
+            conversationId: agent.conversationId,
+            status,
+          });
+          const updated = payload?.conversation ?? { id: agent.conversationId, status };
+          agent.conversations = (agent.conversations ?? []).map((conversation) =>
+            conversation.id === agent.conversationId ? { ...conversation, ...updated } : conversation,
+          );
+        });
+        return true;
+      }
+      if (action === "delete-conversation") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const deletedId = agent.conversationId;
+          if (!canvasId || !deletedId) throw new Error("canvas_agent_conversation_missing");
+          stopPolling();
+          await workbench.api.deleteCanvasAgentConversation(canvasId, deletedId);
+          agent.conversations = (agent.conversations ?? []).filter((conversation) => conversation.id !== deletedId);
+          agent.conversationId = String(agent.conversations[0]?.id ?? "");
+          await loadMessages(agent.conversationId);
+        });
+        return true;
+      }
+      if (action === "toggle-pin-conversation" || action === "rename-conversation") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const conversation = (agent.conversations ?? []).find((item) => item.id === agent.conversationId);
+          if (!canvasId || !conversation) throw new Error("canvas_agent_conversation_missing");
+          const patch = action === "toggle-pin-conversation"
+            ? { pinned: !conversation.pinned }
+            : (() => {
+                const nextTitle = typeof globalThis.window?.prompt === "function"
+                  ? globalThis.window.prompt("会话名称", conversation.title || "画布协作")
+                  : conversation.title;
+                return nextTitle == null ? null : { title: String(nextTitle).trim().slice(0, 200) };
+              })();
+          if (!patch) return;
+          const payload = await workbench.api.updateCanvasAgentConversation(canvasId, {
+            conversationId: agent.conversationId,
+            ...patch,
+          });
+          const updated = payload?.conversation ?? patch;
+          agent.conversations = (agent.conversations ?? []).map((item) => item.id === agent.conversationId ? { ...item, ...updated } : item);
+        });
+        return true;
+      }
+      if (action === "send") {
+        await run(action, async () => {
+          const text = String(agent.promptDraft ?? "").trim();
+          const modelCode = String(agent.modelCode ?? "").trim();
+          if (!text) throw new Error("请输入 Agent 指令。");
+          if (
+            agent.modelsStatus !== "ready"
+            || !agent.models.some((model) => model.modelCode === modelCode)
+          ) {
+            throw new Error("管理员尚未配置可用 Agent 模型。");
+          }
+          const conversationId = await ensureConversation();
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const payload = await workbench.api.sendCanvasAgentMessage(canvasId, conversationId, {
+            modelCode,
+            mode: agent.mode,
+            message: { text },
+          });
+          const task = payload?.task ?? payload;
+          const taskId = String(task?.id ?? task?.taskId ?? "");
+          if (!taskId) throw new Error("canvas_agent_task_missing");
+          agent.taskId = taskId;
+          agent.status = String(task?.status ?? "queued");
+          agent.events = [];
+          agent.skippedStepIds = [];
+          agent.sequence = 0;
+          agent.messages = [...agent.messages, { role: "user", text, taskId, createdAt: new Date().toISOString() }].slice(-200);
+          syncCurrentAgentTaskItem(agent, { goal: text, conversationId });
+          agent.promptDraft = "";
+          schedulePoll(0);
+        });
+        return true;
+      }
+      if (["pause", "resume", "stop"].includes(action)) {
+        await run(action, () => control(action));
+        return true;
+      }
+      if (action === "replan") {
+        await run(action, () => control("replan", { reason: agent.interjectionDraft || "user_requested" }));
+        return true;
+      }
+      if (action === "interject") {
+        await run(action, async () => {
+          const text = String(agent.interjectionDraft ?? "").trim();
+          if (!text) throw new Error("请输入插话内容。");
+          await control("interject", { message: { text } });
+          agent.messages = [...agent.messages, { role: "user", text, interjection: true }].slice(-20);
+          agent.interjectionDraft = "";
+        });
+        return true;
+      }
+      if (action === "rewind") {
+        if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("将按最近检查点创建补偿 revision，确定回退吗？")) return true;
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          if (!canvasId || !agent.taskId || typeof workbench.api?.rewindCanvasAgentTask !== "function") {
+            throw new Error("canvas_agent_rewind_unavailable");
+          }
+          await workbench.api.rewindCanvasAgentTask(canvasId, agent.taskId, {});
+          await poll();
+        });
+        return true;
+      }
+      if (action === "approve" || action === "reject") {
+        await run(action, () => control("approve", {
+          approvalId: String(target.dataset.approvalId ?? ""),
+          decision: action === "reject" ? "rejected" : "approved",
+        }));
+        return true;
+      }
+      return false;
+    },
+    async resume() {
+      await loadConversations();
+      await loadMessages(agent.conversationId);
+      await loadModels();
+      schedulePoll(0);
+    },
+    dispose() {
+      disposed = true;
+      stopPolling();
+    },
+  };
+}
+
+const ACTIVE_AGENT_TASK_STATUSES = new Set([
+  "queued", "running", "waiting_approval", "waiting_external", "paused", "cancel_requested",
+]);
+const SKIPPABLE_AGENT_TASK_STATUSES = new Set(["queued", "waiting_approval", "paused"]);
+
+function countActiveAgentTasks(agent) {
+  const ids = new Set();
+  for (const task of Array.isArray(agent.taskItems) ? agent.taskItems : []) {
+    if (ACTIVE_AGENT_TASK_STATUSES.has(task.status)) ids.add(task.taskId);
+  }
+  for (const conversation of Array.isArray(agent.conversations) ? agent.conversations : []) {
+    if (conversation?.taskId && ACTIVE_AGENT_TASK_STATUSES.has(String(conversation.taskStatus ?? "queued"))) {
+      ids.add(String(conversation.taskId));
+    }
+  }
+  if (agent.taskId && ACTIVE_AGENT_TASK_STATUSES.has(agent.status)) ids.add(agent.taskId);
+  return ids.size;
+}
+
+function renderAgentTaskCenter(agent, busy) {
+  const filter = agent.taskFilter === "all" ? "all" : "active";
+  const items = (Array.isArray(agent.taskItems) ? agent.taskItems : [])
+    .filter((task) => filter === "all" || ACTIVE_AGENT_TASK_STATUSES.has(task.status));
+  const activeCount = countActiveAgentTasks(agent);
+  const loading = agent.taskCenterStatus === "loading" || agent.busyAction === "load-agent-history";
+  return `<section class="canvas-agent-special-view canvas-agent-task-center" aria-label="Agent 任务中心">
+    <header class="canvas-agent-special-head">
+      <span><strong>任务中心</strong><small>${activeCount} 进行中</small></span>
+      <div class="canvas-agent-task-filter" role="tablist" aria-label="任务范围">
+        <button type="button" role="tab" aria-selected="${filter === "active"}" class="${filter === "active" ? "active" : ""}" data-agent-action="set-task-filter" data-task-filter="active">进行中</button>
+        <button type="button" role="tab" aria-selected="${filter === "all"}" class="${filter === "all" ? "active" : ""}" data-agent-action="set-task-filter" data-task-filter="all">全部</button>
+      </div>
+      <button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭任务中心" title="关闭">×</button>
+    </header>
+    <div class="canvas-agent-special-content">
+      ${loading && !items.length ? renderAgentSpecialEmpty("正在同步任务", "读取已持久化的会话、消息和任务事件。") : ""}
+      ${!loading && !items.length ? renderAgentSpecialEmpty(filter === "active" ? "暂无进行中的任务" : "暂无任务记录", "发送 Agent 指令后，任务会在这里汇总。") : ""}
+      ${items.map((task) => renderAgentTaskCenterItem(task, busy)).join("")}
+      ${agent.taskCenterError ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.taskCenterError)}</p>` : ""}
+    </div>
+    <footer class="canvas-agent-special-footer">
+      <button type="button" data-agent-action="refresh-agent-history" ${busy ? "disabled" : ""}>刷新</button>
+    </footer>
+  </section>`;
+}
+
+function renderAgentTaskCenterItem(task, busy) {
+  const steps = Array.isArray(task.steps) ? task.steps : [];
+  const activeStep = [...steps].reverse().find((step) => isSkippableAgentStep(step));
+  const completed = steps.filter((step) => ["succeeded", "failed", "canceled", "skipped"].includes(step.status)).length;
+  return `<article class="canvas-agent-task-item" data-task-status="${escapeAttr(task.status)}">
+    <header>
+      <div>
+        <strong>${escapeHtml(task.goal || "Agent 任务")}</strong>
+        <span>${escapeHtml(task.conversationTitle || "画布协作")}</span>
+      </div>
+      <span class="canvas-agent-task-state">${escapeHtml(agentStatusText(task.status))}</span>
+    </header>
+    ${steps.length ? `<div class="canvas-agent-task-progress"><span>${completed}/${steps.length} 步</span><i style="--task-progress:${Math.round((completed / steps.length) * 100)}%"></i></div>` : ""}
+    ${steps.length ? `<ol class="canvas-agent-step-list">${steps.slice(-8).map((step) => `<li data-step-status="${escapeAttr(step.status)}"><i aria-hidden="true"></i><span><strong>${escapeHtml(step.toolId || agentEventLabel(`step.${step.status}`))}</strong><small>${escapeHtml(agentStepStatusText(step.status))}</small></span></li>`).join("")}</ol>` : ""}
+    <footer>
+      ${activeStep && SKIPPABLE_AGENT_TASK_STATUSES.has(task.status) ? `<button type="button" data-agent-action="skip-step" data-task-id="${escapeAttr(task.taskId)}" data-step-id="${escapeAttr(activeStep.stepId)}" ${busy ? "disabled" : ""}>跳过此步</button>` : ""}
+      <button type="button" data-agent-action="select-agent-task" data-task-id="${escapeAttr(task.taskId)}" ${busy ? "disabled" : ""}>打开任务</button>
+    </footer>
+  </article>`;
+}
+
+function renderAgentMemoryPanel(agent, busy) {
+  const records = Array.isArray(agent.memoryRecords) ? agent.memoryRecords : [];
+  const categoryFilter = String(agent.memoryCategoryFilter ?? "");
+  const sourceFilter = String(agent.memorySourceFilter ?? "");
+  const visibleRecords = records.filter((record) =>
+    (!categoryFilter || record.category === categoryFilter)
+    && (!sourceFilter || record.source === sourceFilter),
+  );
+  const categories = [...new Set(records.map((record) => record.category).filter(Boolean))].sort();
+  const sources = [...new Set(records.map((record) => record.source).filter(Boolean))].sort();
+  const loading = agent.memoryRecordsStatus === "loading" || agent.busyAction === "load-agent-memories";
+  return `<section class="canvas-agent-special-view canvas-agent-memory" aria-label="画布记忆">
+    <header class="canvas-agent-special-head">
+      <span><strong>画布记忆</strong><small>${visibleRecords.length === records.length ? `${records.length} 条记录` : `${visibleRecords.length}/${records.length} 条记录`}</small></span>
+      <button type="button" class="canvas-agent-close-view" data-agent-action="close-agent-view" aria-label="关闭画布记忆" title="关闭">×</button>
+    </header>
+    <div class="canvas-agent-memory-filters" aria-label="记忆筛选">
+      <label><span>分类</span><select data-agent-field="memoryCategoryFilter">
+        <option value="">全部分类</option>
+        ${categories.map((category) => `<option value="${escapeAttr(category)}" ${category === categoryFilter ? "selected" : ""}>${escapeHtml(agentMemoryCategoryLabel(category))}</option>`).join("")}
+      </select></label>
+      <label><span>来源</span><select data-agent-field="memorySourceFilter">
+        <option value="">全部来源</option>
+        ${sources.map((source) => `<option value="${escapeAttr(source)}" ${source === sourceFilter ? "selected" : ""}>${escapeHtml(agentMemorySourceLabel(source))}</option>`).join("")}
+      </select></label>
+    </div>
+    <div class="canvas-agent-special-content">
+      ${loading && !records.length ? renderAgentSpecialEmpty("正在同步记忆", "读取当前会话已持久化的画布记忆。") : ""}
+      ${!loading && agent.memoryRecordsStatus === "ready" && !records.length ? renderAgentSpecialEmpty("还没有画布记忆", "经确认保存的记忆会出现在这里。") : ""}
+      ${!loading && records.length && !visibleRecords.length ? renderAgentSpecialEmpty("没有匹配的记忆", "调整分类或来源筛选条件。") : ""}
+      ${visibleRecords.map((record) => renderAgentMemoryRecord(record, agent, busy)).join("")}
+      ${agent.memoryRecordsError ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.memoryRecordsError)}</p>` : ""}
+    </div>
+    <footer class="canvas-agent-special-footer">
+      <button type="button" data-agent-action="refresh-agent-memories" ${busy ? "disabled" : ""}>刷新</button>
+    </footer>
+  </section>`;
+}
+
+function renderAgentMemoryRecord(record, agent, busy) {
+  const editing = agent.memoryEditingId === record.id;
+  if (editing) {
+    return `<article class="canvas-agent-memory-item is-editing" data-memory-id="${escapeAttr(record.id)}">
+      <label><span>记忆键</span><input type="text" data-agent-field="memoryDraftKey" value="${escapeAttr(agent.memoryDraftKey)}" maxlength="120" /></label>
+      <label><span>分类</span><select data-agent-field="memoryDraftCategory">${renderAgentMemoryCategoryOptions(agent.memoryDraftCategory)}</select></label>
+      <label><span>内容 JSON</span><textarea data-agent-field="memoryDraftValue" rows="7">${escapeHtml(agent.memoryDraftValue)}</textarea></label>
+      <small>来源 ${escapeHtml(agentMemorySourceLabel(record.source))} · ${escapeHtml(formatAgentActivityTime(record.updatedAt))}</small>
+      <footer>
+        <button type="button" data-agent-action="cancel-agent-memory-edit" ${busy ? "disabled" : ""}>取消</button>
+        <button type="button" data-agent-action="save-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>保存</button>
+      </footer>
+    </article>`;
+  }
+  return `<article class="canvas-agent-memory-item ${record.status === "active" ? "" : "is-inactive"}" data-memory-id="${escapeAttr(record.id)}">
+    <header>
+      <div><strong>${escapeHtml(record.key)}</strong><span>${escapeHtml(agentMemoryCategoryLabel(record.category))}</span></div>
+      <span>${record.status === "active" ? "已启用" : "已停用"}</span>
+    </header>
+    <pre>${escapeHtml(formatAgentMemoryValue(record.value))}</pre>
+    <small>${escapeHtml(agentMemorySourceLabel(record.source))} · ${escapeHtml(formatAgentActivityTime(record.updatedAt))}</small>
+    <footer>
+      <button type="button" data-agent-action="edit-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>编辑</button>
+      <button type="button" data-agent-action="toggle-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>${record.status === "active" ? "停用" : "启用"}</button>
+      <button type="button" class="danger" data-agent-action="delete-agent-memory" data-memory-id="${escapeAttr(record.id)}" ${busy ? "disabled" : ""}>删除</button>
+    </footer>
+  </article>`;
+}
+
+function renderAgentMemoryCategoryOptions(selected) {
+  const options = ["general", "constraint", "decision", "preference", "fact", "other"];
+  if (selected && !options.includes(selected)) options.push(selected);
+  return options.map((category) => `<option value="${escapeAttr(category)}" ${category === selected ? "selected" : ""}>${escapeHtml(agentMemoryCategoryLabel(category))}</option>`).join("");
+}
+
+function renderAgentSpecialEmpty(title, detail) {
+  return `<div class="canvas-agent-special-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
+}
+
+function renderAgentSkipStepButton(agent, busy) {
+  const step = resolveCurrentAgentStep(agent.events, agent.skippedStepIds);
+  if (!step) return "";
+  return `<button type="button" data-agent-action="skip-step" data-task-id="${escapeAttr(agent.taskId)}" data-step-id="${escapeAttr(step.stepId)}" ${busy ? "disabled" : ""}>跳过此步</button>`;
+}
+
+export function resolveAgentContextUsage(agent = {}) {
+  const model = (Array.isArray(agent.models) ? agent.models : []).find((item) => item.modelCode === agent.modelCode);
+  const capabilities = model?.capabilities && typeof model.capabilities === "object" ? model.capabilities : {};
+  const declaredWindow = Number(capabilities.contextWindow ?? capabilities.context_window ?? 0);
+  const contextWindow = Number.isFinite(declaredWindow) && declaredWindow > 0 ? Math.trunc(declaredWindow) : 32_000;
+  const declaredOutput = Number(capabilities.maxOutputTokens ?? capabilities.outputBudget ?? capabilities.max_tokens ?? 0);
+  const outputBudget = Number.isFinite(declaredOutput) && declaredOutput > 0
+    ? Math.min(Math.trunc(declaredOutput), Math.max(1_024, contextWindow - 1_024))
+    : Math.min(4_096, Math.max(1_024, Math.floor(contextWindow / 8)));
+  const inputBudget = Math.max(1_024, contextWindow - outputBudget);
+  let estimatedTokens = 1_200;
+  for (const message of Array.isArray(agent.messages) ? agent.messages : []) {
+    if (!message?.text || !["user", "assistant"].includes(message.role)) continue;
+    estimatedTokens += 8 + estimateAgentTextTokens(message.text);
+  }
+  const ratio = estimatedTokens / inputBudget;
+  return {
+    estimatedTokens,
+    contextWindow,
+    inputBudget,
+    ratio,
+    source: declaredWindow > 0 ? "declared" : "default",
+  };
+}
+
+function renderAgentContextUsage(agent) {
+  if (!agent.conversationId) return "";
+  const usage = resolveAgentContextUsage(agent);
+  const percent = Math.max(0, Math.round(usage.ratio * 100));
+  const angle = Math.round(Math.min(1, Math.max(0, usage.ratio)) * 360);
+  const tone = usage.ratio >= 0.9 ? "danger" : usage.ratio >= 0.75 ? "warning" : "normal";
+  const source = usage.source === "declared" ? "模型配置声明" : "保守默认值";
+  const title = `上下文占用（估算）：约 ${usage.estimatedTokens.toLocaleString()} token；输入预算 ${usage.inputBudget.toLocaleString()} token；上下文窗口 ${usage.contextWindow.toLocaleString()} token（${source}）`;
+  return `<span class="canvas-agent-context-usage ${tone}" style="--context-angle:${angle}deg" role="img" aria-label="上下文占用约 ${percent}%" title="${escapeAttr(title)}"><i aria-hidden="true"></i><small>${percent}%</small></span>`;
+}
+
+function estimateAgentTextTokens(value) {
+  const text = String(value ?? "");
+  const cjk = text.match(/[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/g)?.length ?? 0;
+  return Math.ceil(cjk + (text.length - cjk) / 4);
+}
+
+function collectAgentTaskSeeds(histories, agent) {
+  const seeds = new Map();
+  const ensureSeed = (taskId, conversation, patch = {}) => {
+    const id = String(taskId ?? "");
+    if (!id) return null;
+    const previous = seeds.get(id) ?? {
+      taskId: id,
+      conversationId: String(conversation?.id ?? patch.conversationId ?? ""),
+      conversationTitle: String(conversation?.title ?? patch.conversationTitle ?? "画布协作"),
+      taskStatus: String(conversation?.taskId === id ? conversation.taskStatus ?? "" : patch.taskStatus ?? ""),
+      goal: "",
+      messages: [],
+      updatedAt: parseAgentActivityTime(conversation?.updatedAt),
+    };
+    Object.assign(previous, patch);
+    seeds.set(id, previous);
+    return previous;
+  };
+  for (const history of histories) {
+    const conversation = history.conversation;
+    if (conversation?.taskId) ensureSeed(conversation.taskId, conversation);
+    for (const message of history.messages) {
+      if (!message.taskId) continue;
+      const seed = ensureSeed(message.taskId, conversation);
+      seed.messages.push(message);
+      if (!seed.goal && message.role === "user") seed.goal = message.text;
+      seed.updatedAt = Math.max(seed.updatedAt, parseAgentActivityTime(message.createdAt));
+    }
+  }
+  for (const task of Array.isArray(agent.taskItems) ? agent.taskItems : []) {
+    if (!seeds.has(task.taskId)) ensureSeed(task.taskId, null, task);
+  }
+  if (agent.taskId) {
+    const conversation = (agent.conversations ?? []).find((item) => item.id === agent.conversationId);
+    const seed = ensureSeed(agent.taskId, conversation, { taskStatus: agent.status, conversationId: agent.conversationId });
+    if (!seed.goal) seed.goal = [...(agent.messages ?? [])].reverse().find((message) => message.role === "user")?.text ?? "";
+    seed.messages = agent.messages.filter((message) => !message.taskId || message.taskId === agent.taskId);
+  }
+  return seeds;
+}
+
+function buildAgentTaskItem(seed, events) {
+  const normalizedEvents = [...events].sort((left, right) => Number(left?.sequence ?? 0) - Number(right?.sequence ?? 0));
+  let status = String(seed.taskStatus ?? "");
+  for (const event of normalizedEvents) status = statusFromEvent(event) || status;
+  if (!status && seed.messages.some((message) => message.role === "assistant")) status = "succeeded";
+  if (!status) status = "unknown";
+  const updatedAt = normalizedEvents.reduce((latest, event) => Math.max(latest, parseAgentActivityTime(event?.createdAt)), seed.updatedAt || 0);
+  return {
+    taskId: seed.taskId,
+    conversationId: seed.conversationId,
+    conversationTitle: seed.conversationTitle,
+    goal: seed.goal || seed.conversationTitle,
+    status,
+    updatedAt,
+    events: normalizedEvents,
+    steps: normalizeAgentSteps(normalizedEvents),
+  };
+}
+
+function normalizeAgentSteps(events = []) {
+  const steps = new Map();
+  for (const record of events) {
+    const event = record?.event && typeof record.event === "object" ? record.event : {};
+    const stepId = String(event.stepId ?? "");
+    if (!stepId) continue;
+    const previous = steps.get(stepId) ?? { stepId, toolId: "", effect: "", status: "created", sequence: Number(record.sequence ?? 0) };
+    if (event.toolId) previous.toolId = String(event.toolId);
+    if (event.effect) previous.effect = String(event.effect);
+    const eventType = String(record.eventType ?? "");
+    if (eventType.startsWith("step.")) previous.status = eventType.slice(5);
+    if (eventType === "approval.requested") previous.status = "waiting_approval";
+    if (eventType === "approval.rejected") previous.status = "canceled";
+    previous.sequence = Math.max(previous.sequence, Number(record.sequence ?? 0));
+    steps.set(stepId, previous);
+  }
+  return [...steps.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
+function resolveCurrentAgentStep(events = [], skippedStepIds = []) {
+  const skipped = new Set(Array.isArray(skippedStepIds) ? skippedStepIds : []);
+  return [...normalizeAgentSteps(events)].reverse().find((step) => isSkippableAgentStep(step) && !skipped.has(step.stepId)) ?? null;
+}
+
+function isSkippableAgentStep(step) {
+  return ["created", "waiting_approval"].includes(String(step?.status ?? ""));
+}
+
+function syncCurrentAgentTaskItem(agent, patch = {}) {
+  const taskId = String(agent.taskId ?? "");
+  if (!taskId) return;
+  const items = Array.isArray(agent.taskItems) ? agent.taskItems : [];
+  const previous = items.find((item) => item.taskId === taskId);
+  const conversation = (agent.conversations ?? []).find((item) => item.id === (patch.conversationId ?? agent.conversationId));
+  const next = {
+    taskId,
+    conversationId: String(patch.conversationId ?? previous?.conversationId ?? agent.conversationId ?? ""),
+    conversationTitle: String(previous?.conversationTitle ?? conversation?.title ?? "画布协作"),
+    goal: String(patch.goal ?? previous?.goal ?? [...(agent.messages ?? [])].reverse().find((message) => message.role === "user")?.text ?? "Agent 任务"),
+    status: String(agent.status ?? previous?.status ?? "queued"),
+    updatedAt: Date.now(),
+    events: [...(agent.events ?? [])],
+    steps: normalizeAgentSteps(agent.events),
+  };
+  agent.taskItems = [next, ...items.filter((item) => item.taskId !== taskId)];
+}
+
+function updateAgentTaskItemStatus(agent, taskId, status) {
+  agent.taskItems = (Array.isArray(agent.taskItems) ? agent.taskItems : []).map((item) =>
+    item.taskId === taskId ? { ...item, status, updatedAt: Date.now() } : item,
+  );
+}
+
+function markAgentStepSkipped(agent, taskId, stepId) {
+  if (!agent.skippedStepIds.includes(stepId)) agent.skippedStepIds = [...agent.skippedStepIds, stepId];
+  agent.taskItems = (Array.isArray(agent.taskItems) ? agent.taskItems : []).map((item) => item.taskId === taskId ? {
+    ...item,
+    status: "queued",
+    updatedAt: Date.now(),
+    steps: item.steps.map((step) => step.stepId === stepId ? { ...step, status: "skipped" } : step),
+  } : item);
+}
+
+function collectAgentMemoryEvents(taskItems = [], currentEvents = []) {
+  const records = [...taskItems.flatMap((task) => task.events ?? []), ...(Array.isArray(currentEvents) ? currentEvents : [])];
+  const seen = new Set();
+  return records.flatMap((record) => {
+    const id = String(record?.id ?? `${record?.taskId ?? ""}:${record?.sequence ?? ""}`);
+    if (!id || seen.has(id) || agentEventKind(record) !== "memory") return [];
+    seen.add(id);
+    const event = record?.event && typeof record.event === "object" ? record.event : {};
+    return [{
+      id,
+      taskId: String(record?.taskId ?? ""),
+      eventType: String(record?.eventType ?? ""),
+      toolId: String(event.toolId ?? (event.effect === "memory_write" ? "memory.write" : "")),
+      summary: agentEventSummary(record),
+      createdAt: record?.createdAt,
+    }];
+  }).sort((left, right) => parseAgentActivityTime(right.createdAt) - parseAgentActivityTime(left.createdAt));
+}
+
+export function normalizeAgentMemoryRecord(record = {}) {
+  const value = record.value && typeof record.value === "object" && !Array.isArray(record.value)
+    ? record.value
+    : record.valueJson && typeof record.valueJson === "object" && !Array.isArray(record.valueJson)
+      ? record.valueJson
+      : {};
+  const key = String(record.key ?? record.memoryKey ?? "").trim();
+  const category = String(record.category ?? value.category ?? inferAgentMemoryCategory(key) ?? "other").trim().toLowerCase();
+  const source = String(
+    record.source ?? value.source ?? (record.sourceTaskId || record.sourceStepId ? "agent_task" : "manual"),
+  ).trim().toLowerCase();
+  return {
+    id: String(record.id ?? ""),
+    key,
+    value,
+    category: category || "other",
+    source: source || "manual",
+    status: String(record.status ?? "active").toLowerCase() === "active" ? "active" : "revoked",
+    sourceTaskId: String(record.sourceTaskId ?? ""),
+    sourceStepId: String(record.sourceStepId ?? ""),
+    updatedAt: String(record.updatedAt ?? record.createdAt ?? ""),
+  };
+}
+
+function inferAgentMemoryCategory(key) {
+  const prefix = String(key ?? "").split(/[.:-]/, 1)[0]?.toLowerCase();
+  return {
+    constraint: "constraint", constraints: "constraint",
+    decision: "decision", decisions: "decision",
+    preference: "preference", preferences: "preference",
+    fact: "fact", facts: "fact",
+  }[prefix] ?? "";
+}
+
+function agentMemoryCategoryLabel(category) {
+  return {
+    general: "通用", constraint: "约束", decision: "决定", preference: "偏好", fact: "事实", other: "其他",
+  }[category] ?? (category || "其他");
+}
+
+function agentMemorySourceLabel(source) {
+  return {
+    agent_step: "Agent 步骤", agent_task: "Agent 任务", task: "Agent 任务", user: "用户确认", manual: "手动记录",
+    import: "导入", provider: "Provider", tool: "工具",
+  }[source] ?? (source || "未知来源");
+}
+
+function formatAgentMemoryValue(value) {
+  try {
+    return JSON.stringify(value ?? {}, null, 2);
+  } catch {
+    return "{}";
+  }
+}
+
+function agentStatusText(status) {
+  return {
+    idle: "未开始", queued: "排队中", running: "执行中", waiting_approval: "等待审批",
+    waiting_external: "等待生成", paused: "已暂停", succeeded: "已完成", failed: "失败",
+    cancel_requested: "停止中", canceled: "已停止", result_unknown: "结果待确认",
+    manual_review_required: "需要复核", unknown: "记录已结束",
+  }[status] ?? String(status ?? "未知");
+}
+
+function agentStepStatusText(status) {
+  return {
+    created: "等待", running: "执行中", waiting_approval: "待确认", waiting_external: "等待外部结果",
+    succeeded: "完成", failed: "失败", canceled: "已停止", skipped: "已跳过",
+  }[status] ?? String(status ?? "未知");
+}
+
+function agentMemoryStatusText(eventType) {
+  if (eventType === "approval.requested") return "待确认";
+  if (eventType === "approval.approved") return "已确认";
+  if (eventType === "approval.rejected") return "已拒绝";
+  if (eventType === "step.succeeded") return "已保存";
+  if (eventType === "step.failed") return "失败";
+  return "记忆活动";
+}
+
+function parseAgentActivityTime(value) {
+  const timestamp = Date.parse(String(value ?? ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function formatAgentActivityTime(value) {
+  const timestamp = parseAgentActivityTime(value);
+  if (!timestamp) return "时间未知";
+  return new Date(timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderAgentFileGrants(agent, selectedFile, busy) {
+  const grants = Array.isArray(agent.fileGrants) ? agent.fileGrants : [];
+  const canGrant = Boolean(selectedFile?.storageObjectId) && agent.fileGrantsStatus !== "loading";
+  return `<section class="canvas-agent-file-grants" aria-label="会话文件授权">
+    <header>
+      <span><strong>会话文件</strong><small>${grants.length}</small></span>
+      <button type="button" data-agent-action="grant-selected-file" ${busy || !canGrant ? "disabled" : ""} title="授权当前选中节点的已存储文件">授权所选</button>
+    </header>
+    ${grants.length ? `<ul>${grants.map((grant) => `<li>
+      <span><strong>${escapeHtml(grant.purpose || "画布文件")}</strong><small>${escapeHtml(formatAgentGrantExpiry(grant.expiresAt))}</small></span>
+      <button type="button" data-agent-action="revoke-file-grant" data-grant-id="${escapeAttr(grant.id)}" ${busy ? "disabled" : ""} aria-label="撤销文件授权">撤销</button>
+    </li>`).join("")}</ul>` : `<p>${selectedFile ? `当前所选：${escapeHtml(selectedFile.title)}` : "选择包含已存储文件的节点后可授权"}</p>`}
+  </section>`;
+}
+
+function resolveSelectedAgentFileReference(ui = {}) {
+  const nodeId = String(ui.selectedCanvasNodeId ?? "");
+  const node = (Array.isArray(ui.canvasDocument?.nodes) ? ui.canvasDocument.nodes : [])
+    .find((item) => String(item?.id ?? "") === nodeId);
+  if (!node) return null;
+  const data = node.data && typeof node.data === "object" ? node.data : {};
+  const storageObjectId = String(
+    data.storageObjectId ?? data.file?.storageObjectId ?? data.asset?.storageObjectId ?? data.result?.storageObjectId ?? "",
+  ).trim();
+  return storageObjectId ? {
+    storageObjectId,
+    title: String(data.title ?? data.name ?? node.title ?? node.type ?? "画布文件").trim().slice(0, 120),
+  } : null;
+}
+
+function normalizeAgentFileGrant(grant = {}) {
+  return {
+    id: String(grant.id ?? ""),
+    storageObjectId: String(grant.storageObjectId ?? ""),
+    purpose: String(grant.purpose ?? ""),
+    status: String(grant.status ?? "active"),
+    expiresAt: String(grant.expiresAt ?? ""),
+  };
+}
+
+function formatAgentGrantExpiry(value) {
+  const timestamp = Date.parse(String(value ?? ""));
+  if (!Number.isFinite(timestamp)) return "有效期未知";
+  const minutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60_000));
+  return minutes > 60 ? `${Math.ceil(minutes / 60)} 小时后到期` : `${minutes} 分钟后到期`;
+}
+
+function renderAgentTimeline(agent) {
+  const entries = [
+    ...(Array.isArray(agent.messages) ? agent.messages : []).map((message, index) => ({
+      id: `message-${message.id || index}`,
+      messageId: String(message.id ?? ""),
+      type: message.interjection ? "用户插话" : agentMessageLabel(message.role),
+      summary: message.text,
+      status: "message",
+      kind: message.role === "assistant" ? "answer" : "message",
+      citations: normalizeAgentCitations(message.citations),
+      media: message.media ?? null,
+      canvasNodeId: String(message.canvasNodeId ?? ""),
+    })),
+    ...(Array.isArray(agent.events) ? agent.events : []).slice(-30).map((event) => ({
+      id: event.id ?? `event-${event.sequence}`,
+      type: agentEventLabel(event.eventType),
+      summary: agentEventSummary(event),
+      status: event.eventType,
+      kind: agentEventKind(event),
+      metadata: agentEventMetadata(event),
+    })),
+  ].slice(-40);
+  if (!entries.length) {
+    return '<div class="canvas-agent-empty"><strong>等待指令</strong><span>选择模式并发送消息后，这里会显示服务端任务事件。</span></div>';
+  }
+  return entries.map((entry) => `
+    <article class="canvas-agent-event" data-event-status="${escapeAttr(entry.status)}" data-event-kind="${escapeAttr(entry.kind)}">
+      <i aria-hidden="true"></i>
+      <div>
+        <span class="canvas-agent-event-title"><strong>${escapeHtml(entry.type)}</strong>${entry.kind && !["message", "answer"].includes(entry.kind) ? `<em>${escapeHtml(agentEventKindLabel(entry.kind))}</em>` : ""}</span>
+        ${entry.summary ? `<p>${escapeHtml(entry.summary)}</p>` : ""}
+        ${entry.media ? renderAgentMedia(entry.media, entry.messageId, entry.canvasNodeId) : ""}
+        ${entry.metadata?.length ? `<div class="canvas-agent-event-meta">${entry.metadata.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+        ${entry.citations?.length ? `<ol class="canvas-agent-citations" aria-label="引用来源">${entry.citations.map((citation) => renderAgentCitation(citation)).join("")}</ol>` : ""}
+      </div>
+    </article>
+  `).join("");
+}
+
+export function normalizeAgentMessage(message = {}) {
+  const content = message.content && typeof message.content === "object" ? message.content : {};
+  const output = content.output && typeof content.output === "object" ? content.output : {};
+  const role = ["system", "user", "assistant", "tool"].includes(message.role) ? message.role : "assistant";
+  const text = String(
+    content.text ?? content.message ?? message.text ??
+    (role === "tool" && content.toolId ? `${content.toolId} 已执行` : ""),
+  ).trim();
+  return {
+    id: String(message.id ?? ""),
+    taskId: String(message.taskId ?? ""),
+    createdAt: String(message.createdAt ?? ""),
+    sequence: Number(message.sequence ?? 0),
+    role,
+    text,
+    interjection: Boolean(message.interjection),
+    citations: normalizeAgentCitations(content.citations),
+    generationTaskId: String(content.generationTaskId ?? output.generationTaskId ?? ""),
+    canvasNodeId: String(content.canvasNodeId ?? output.canvasNodeId ?? ""),
+  };
+}
+
+export function normalizeAgentMediaTask(task = {}) {
+  const result = task.result && typeof task.result === "object" ? task.result : {};
+  const audioItem = Array.isArray(task.generatedAudioItems) ? task.generatedAudioItems[0] : null;
+  const rawKind = String(task.kind ?? result.mediaKind ?? (audioItem ? "audio" : "image")).toLowerCase();
+  const kind = ["video", "audio"].includes(rawKind) ? rawKind : "image";
+  const url = normalizeAgentMediaUrl(
+    result.imageUrl ?? result.videoUrl ?? result.audioUrl ?? result.sourceUrl ?? result.previewUrl ??
+    audioItem?.audioUrl ?? task.url,
+  );
+  const status = String(task.status ?? "queued").toLowerCase();
+  return {
+    taskId: String(task.taskId ?? task.id ?? ""),
+    kind,
+    status,
+    url,
+    prompt: String(task.prompt ?? "").trim().slice(0, 2_000),
+    title: String(result.title ?? result.fileName ?? `${kind} 生成结果`).trim().slice(0, 160),
+    error: String(task.failure?.displayMessage ?? task.failure?.providerMessage ?? task.failureCode ?? "").trim().slice(0, 500),
+    artifactId: String(result.artifactId ?? ""),
+    storageObjectId: String(result.storageObjectId ?? ""),
+    assetId: String(result.assetId ?? ""),
+    assetVersionId: String(result.assetVersionId ?? ""),
+  };
+}
+
+function renderAgentMedia(media, messageIndex, canvasNodeId) {
+  const ready = ["completed", "succeeded", "success"].includes(media.status) && Boolean(media.url);
+  const failed = ["failed", "canceled", "cancelled", "result_unknown"].includes(media.status);
+  if (!ready) {
+    return `<div class="canvas-agent-media-status ${failed ? "is-error" : ""}" role="status">${escapeHtml(failed ? media.error || "媒体生成失败" : "媒体生成中")}</div>`;
+  }
+  const preview = media.kind === "video"
+    ? `<video src="${escapeAttr(media.url)}" controls preload="metadata"></video>`
+    : media.kind === "audio"
+      ? `<audio src="${escapeAttr(media.url)}" controls preload="metadata"></audio>`
+      : `<img src="${escapeAttr(media.url)}" alt="${escapeAttr(media.title || "Agent 生成图片")}" loading="lazy" />`;
+  return `<figure class="canvas-agent-media" data-media-kind="${escapeAttr(media.kind)}">
+    ${preview}
+    ${media.prompt ? `<figcaption>${escapeHtml(media.prompt)}</figcaption>` : ""}
+    <div class="canvas-agent-media-actions">
+      <button type="button" data-agent-action="${canvasNodeId ? "locate-agent-canvas-node" : "add-media-to-canvas"}" data-message-id="${escapeAttr(String(messageIndex))}">${canvasNodeId ? "定位节点" : "添加到画布"}</button>
+    </div>
+  </figure>`;
+}
+
+function normalizeAgentMediaUrl(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^\/(?!\/)/.test(raw)) return raw;
+  // Agent media must always resolve through the signed/proxy storage path.
+  // Inline data URLs can be unbounded and would put media bytes into HTML.
+  if (/^data:/i.test(raw)) return "";
+  try {
+    const url = new URL(raw);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeAgentCitations(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value.flatMap((citation) => {
+    if (!citation || typeof citation !== "object") return [];
+    const id = String(citation.id ?? "").trim();
+    const title = String(citation.title ?? citation.sourceKey ?? "来源").trim().slice(0, 240);
+    const canonicalUrl = normalizeAgentCitationUrl(citation.canonicalUrl);
+    const dedupeKey = id || `${title}:${canonicalUrl}`;
+    if (!dedupeKey || seen.has(dedupeKey)) return [];
+    seen.add(dedupeKey);
+    return [{
+      id,
+      title,
+      canonicalUrl,
+      sourceType: citation.sourceType === "web" ? "web" : "provider_docs",
+      excerpt: String(citation.excerpt ?? "").trim().slice(0, 360),
+    }];
+  }).slice(0, 20);
+}
+
+function normalizeAgentCitationUrl(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function renderAgentCitation(citation) {
+  const sourceLabel = citation.sourceType === "web" ? "网页" : "Provider 文档";
+  const content = `<span>${escapeHtml(citation.title)}</span><small>${sourceLabel}</small>${citation.excerpt ? `<p>${escapeHtml(citation.excerpt)}</p>` : ""}`;
+  return citation.canonicalUrl
+    ? `<li><a href="${escapeAttr(citation.canonicalUrl)}" target="_blank" rel="noopener noreferrer" title="在新窗口打开来源">${content}</a></li>`
+    : `<li><div>${content}</div></li>`;
+}
+
+function agentMessageLabel(role) {
+  return { system: "系统", user: "用户", assistant: "Agent", tool: "工具" }[role] ?? "Agent";
+}
+
+function findPendingApproval(events = [], skippedStepIds = []) {
+  const skipped = new Set(Array.isArray(skippedStepIds) ? skippedStepIds : []);
+  const decided = new Set(events
+    .filter((event) => ["approval.approved", "approval.rejected"].includes(event?.eventType))
+    .map((event) => String(event?.event?.approvalId ?? "")));
+  return [...events].reverse().find((event) =>
+    event?.eventType === "approval.requested"
+      && !skipped.has(String(event?.event?.stepId ?? ""))
+      && !decided.has(String(event?.event?.approvalId ?? "")),
+  ) ?? null;
+}
+
+export function resolveAgentApprovalPresentation(events = [], approvalEvent = null) {
+  if (!approvalEvent) return null;
+  const event = approvalEvent.event && typeof approvalEvent.event === "object" ? approvalEvent.event : {};
+  const effect = String(event.effect ?? "canvas_write");
+  const metadata = {
+    read: ["读取数据", "只读取当前授权范围内的数据。"],
+    canvas_write: ["画布修改", "会修改当前画布节点、连接或设置。"],
+    media_generation: ["生成媒体", "会提交生成任务并按现有计费规则结算。"],
+    asset_write: ["写入资产", "会创建或更新当前用户范围内的资产。"],
+    memory_write: ["保存记忆", "会把明确确认的信息写入当前画布的 Agent 记忆。"],
+    config_write: ["后台配置", "不会写入 API Key；新连接保持空白，已有 Secret Reference 保留原值。"],
+    external_network: ["访问外部网络", "会按管理员策略访问获准的外部站点。"],
+    mcp: ["调用 MCP", "会调用管理员已允许的远程 MCP 工具。"],
+  }[effect] ?? ["受控操作", "该操作需要当前用户明确确认后才能继续。"];
+  const stepId = String(event.stepId ?? "");
+  const stepEvent = [...events].reverse().find((candidate) => {
+    const candidateEvent = candidate?.event && typeof candidate.event === "object" ? candidate.event : {};
+    return stepId && String(candidateEvent.stepId ?? "") === stepId && Boolean(candidateEvent.toolId);
+  });
+  return {
+    approvalId: String(event.approvalId ?? ""),
+    effect,
+    label: metadata[0],
+    detail: metadata[1],
+    summary: String(event.reason ?? agentEventSummary(approvalEvent) ?? "").trim(),
+    toolId: String(stepEvent?.event?.toolId ?? ""),
+  };
+}
+
+function renderAgentApprovalCard(approval, busy) {
+  return `<section class="canvas-agent-approval" data-approval-effect="${escapeAttr(approval.effect)}" aria-label="${escapeAttr(`${approval.label}待确认`)}">
+    <div class="canvas-agent-approval-head">
+      <span class="canvas-agent-approval-badge">待确认 · ${escapeHtml(approval.label)}</span>
+      ${approval.toolId ? `<code>${escapeHtml(approval.toolId)}</code>` : ""}
+    </div>
+    ${approval.summary ? `<p>${escapeHtml(approval.summary)}</p>` : ""}
+    <small>${escapeHtml(approval.detail)}</small>
+    <div class="canvas-agent-approval-actions">
+      <button type="button" class="danger" data-agent-action="reject" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy ? "disabled" : ""}>拒绝</button>
+      <button type="button" data-agent-action="approve" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy ? "disabled" : ""}>确认执行</button>
+    </div>
+  </section>`;
+}
+
+function statusFromEvent(event) {
+  const type = String(event?.eventType ?? "");
+  if (type === "approval.requested") return "waiting_approval";
+  if (type === "approval.approved" || type === "task.resumed" || type === "task.replanned") return "queued";
+  if (type === "approval.rejected") return "canceled";
+  if (type === "task.started") return "running";
+  if (type === "task.stop_requested") return "cancel_requested";
+  if (type.startsWith("task.")) return type.slice(5);
+  return "";
+}
+
+function agentStatusLabel(agent) {
+  if (agent.busyAction) return "正在提交";
+  const labels = {
+    idle: "未开始", queued: "排队中", running: "执行中", waiting_approval: "等待审批",
+    waiting_external: "等待生成", paused: "已暂停", succeeded: "已完成", failed: "失败",
+    cancel_requested: "停止中", canceled: "已停止", result_unknown: "结果待确认",
+    manual_review_required: "需要人工复核",
+  };
+  return `${labels[agent.status] ?? agent.status}${agent.polling ? " · 同步中" : ""}`;
+}
+
+function agentEventLabel(type) {
+  const labels = {
+    "task.created": "任务创建", "task.started": "开始执行", "task.succeeded": "Agent 回复",
+    "task.failed": "执行失败", "task.paused": "任务暂停", "task.resumed": "继续执行",
+    "task.stop_requested": "请求停止", "task.replanned": "重新规划", "task.interjected": "已接收插话",
+    "step.created": "准备工具", "step.running": "工具执行中", "step.succeeded": "工具完成",
+    "step.failed": "工具失败", "step.waiting_approval": "等待工具审批", "step.waiting_external": "等待外部任务",
+    "policy.decided": "策略检查", "conversation.deleted": "会话已删除",
+    "approval.requested": "等待审批", "approval.approved": "审批通过", "approval.rejected": "审批拒绝",
+    "step.created": "步骤创建", "step.running": "步骤执行", "step.succeeded": "步骤完成",
+    "policy.decided": "策略判定", "generation.completed_wakeup": "生成结果返回",
+  };
+  return labels[type] ?? String(type ?? "Agent 事件");
+}
+
+function agentEventKind(record) {
+  const event = record?.event ?? {};
+  const toolId = String(event.toolId ?? "").toLowerCase();
+  const effect = String(event.effect ?? "").toLowerCase();
+  if (toolId.startsWith("web_") || effect === "external_network") return "research";
+  if (toolId.startsWith("mcp.") || effect === "mcp") return "mcp";
+  if (toolId.startsWith("file_grant.") || toolId.startsWith("file.")) return "file";
+  if (toolId.startsWith("memory.") || effect === "memory_write") return "memory";
+  if (effect === "media_generation" || /(?:image|video|audio|media)\./.test(toolId)) return "media";
+  if (effect === "canvas_write" || toolId.startsWith("canvas.")) return "canvas";
+  if (String(record?.eventType ?? "").startsWith("approval.")) return "approval";
+  if (String(record?.eventType ?? "").startsWith("policy.")) return "policy";
+  return "task";
+}
+
+function agentEventKindLabel(kind) {
+  return {
+    research: "联网研究", mcp: "MCP", file: "文件授权", memory: "记忆", media: "媒体",
+    canvas: "画布", approval: "审批", policy: "策略", task: "任务",
+  }[kind] ?? "任务";
+}
+
+function agentEventMetadata(record) {
+  const event = record?.event ?? {};
+  const values = [
+    event.toolId ? `工具 ${event.toolId}` : "",
+    event.decision ? `决策 ${event.decision}` : "",
+    event.stepId ? `步骤 ${event.stepId}` : "",
+    event.providerRequestId ? `请求 ${event.providerRequestId}` : "",
+    event.generationTaskId ? `媒体任务 ${event.generationTaskId}` : "",
+  ].filter(Boolean);
+  return [...new Set(values)].slice(0, 4);
+}
+
+function agentEventSummary(record) {
+  const event = record?.event ?? {};
+  return String(
+    event.message ?? event.reason ?? event.toolId ?? event.effect ?? event.status ?? event.errorCode ??
+    (event.stepId ? `步骤 ${event.stepId}` : "状态已更新"),
+  );
+}
+
+function friendlyAgentError(error) {
+  const message = String(error?.message ?? error ?? "Agent 请求失败");
+  const labels = {
+    canvas_agent_conversation_missing: "会话创建失败，请重试。",
+    canvas_agent_task_missing: "未找到 Agent 任务，请重新发送。",
+    canvas_agent_memory_unavailable: "画布记忆接口暂不可用。",
+    canvas_agent_memory_not_found: "这条画布记忆已不存在，请刷新后重试。",
+    canvas_agent_memory_key_conflict: "当前会话已有相同记忆键。",
+    canvas_agent_memory_key_invalid: "记忆键仅支持字母、数字及 . _ : -。",
+    canvas_agent_memory_too_large: "记忆内容超过 16 KB 限制。",
+  };
+  return labels[message] ?? message;
+}
+
+function normalizeAgentModel(model = {}) {
+  const modelCode = String(model.modelCode ?? model.code ?? model.id ?? "").trim();
+  return {
+    modelCode,
+    modelLabel: String(model.modelLabel ?? model.name ?? model.label ?? modelCode).trim(),
+    capabilities: model.capabilities && typeof model.capabilities === "object" ? model.capabilities : {},
+  };
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replaceAll("`", "&#96;");
+}

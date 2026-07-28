@@ -203,9 +203,44 @@ describe("route auth policy registry", () => {
     }
   });
 
+  it("registers every Canvas character library route as user-authenticated", () => {
+    for (const [method, path] of [
+      ["GET", "/api/canvas/canvas-1/characters"],
+      ["POST", "/api/canvas/canvas-1/characters"],
+      ["GET", "/api/canvas/canvas-1/characters/character-1"],
+      ["PATCH", "/api/canvas/canvas-1/characters/character-1"],
+      ["DELETE", "/api/canvas/canvas-1/characters/character-1"],
+      ["POST", "/api/canvas/canvas-1/characters/character-1/copy"],
+      ["POST", "/api/canvas/canvas-1/characters/character-1/references"],
+      ["PATCH", "/api/canvas/canvas-1/characters/character-1/references/reference-1"],
+      ["DELETE", "/api/canvas/canvas-1/characters/character-1/references/reference-1"],
+    ] as const) {
+      assert.equal(criticalApiRouteAuthPolicyRegistry.resolve(method, path)?.policy, "user", `${method} ${path}`);
+    }
+  });
+
+  it("registers formal and compatibility Canvas resource routes as user-authenticated", () => {
+    for (const [method, path] of [
+      ["GET", "/api/creator/canvases"],
+      ["POST", "/api/creator/canvases"],
+      ["GET", "/api/creator/canvases/canvas-1"],
+      ["PATCH", "/api/creator/canvases/canvas-1"],
+      ["DELETE", "/api/creator/canvases/canvas-1"],
+      ["POST", "/api/creator/canvases/canvas-1/restore"],
+      ["GET", "/api/creator/canvases/canvas-1/document"],
+      ["PUT", "/api/creator/canvases/canvas-1/document"],
+      ["GET", "/api/creator/canvases/canvas-1/revisions"],
+      ["GET", "/api/creator/canvases/canvas-1/revisions/revision-1"],
+      ["GET", "/api/creator/canvas-projects"],
+      ["GET", "/api/creator/canvas-projects/canvas-1/canvas"],
+    ] as const) {
+      assert.equal(criticalApiRouteAuthPolicyRegistry.resolve(method, path)?.policy, "user", `${method} ${path}`);
+    }
+  });
+
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 163);
+    assert.equal(signatures.length, 171);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");
@@ -218,7 +253,7 @@ describe("route auth policy registry", () => {
 
   it("covers every regex pathname matcher and each method handled by its branch", () => {
     const matchers = dynamicPathMatchers();
-    assert.equal(matchers.length, 92);
+    assert.equal(matchers.length, 131);
     const uncovered: string[] = [];
 
     for (const declaration of matchers) {
@@ -262,10 +297,10 @@ describe("route auth policy registry", () => {
       && !condition.includes('!pathname.startsWith("/api/")')
     );
 
-    assert.equal(wideCompositePredicates.length, 55);
+    assert.equal(wideCompositePredicates.length, 57);
     assert.deepEqual(apiRouteAuthInventoryCoverage, {
-      explicitMethodPath: { discovered: 163, uncovered: 0 },
-      regexDynamicMatchers: { discovered: 91, uncovered: 0 },
+      explicitMethodPath: { discovered: 165, uncovered: 0 },
+      regexDynamicMatchers: { discovered: 115, uncovered: 0 },
       wideCompositePredicates: { unresolved: 55 },
       conditionalQueryPolicies: { unresolved: 1 },
       coverage: "partial",

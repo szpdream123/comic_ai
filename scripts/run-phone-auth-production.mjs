@@ -1,6 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
 
 const runtime = findNodeRuntime(18);
 const serverEntrypoint = join(
@@ -23,10 +25,84 @@ process.env.NODE_ENV = "production";
 
 const listenHost = (process.env.HOST ?? "0.0.0.0").trim() || "0.0.0.0";
 const publicHost = (process.env.PUBLIC_HOST ?? listenHost).trim() || listenHost;
+for (const key of ["BULLMQ_OUTBOX_DISPATCHER_ENABLED", "BULLMQ_WORKERS_ENABLED"]) {
+  if (!isEnabled(process.env[key])) {
+    console.error(`[production] ${key}=true is required so the generation chain cannot start partially.`);
+    process.exit(1);
+  }
+}
 
-const result = spawnSync(
-  runtime,
-  [
+let stopping = false;
+const supervisor = createCreatorDevServiceSupervisor({
+  now: () => Date.now(),
+  setTimeout,
+  clearTimeout,
+  maxRestartAttempts: 5,
+  spawnProcess(name, args) {
+    const child = spawn(runtime, args, {
+      cwd: process.cwd(),
+      env: process.env,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    pipeWithPrefix(child.stdout, name);
+    pipeWithPrefix(child.stderr, name);
+    return child;
+  },
+  onRestartScheduled(name, delayMs, code, signal, attempt) {
+    if (attempt > 1) return;
+    console.error(
+      `[production] ${name} exited code=${code ?? "null"} signal=${signal ?? "null"}; restarting in ${delayMs}ms.`,
+    );
+  },
+  onRestartLimitReached(name, attempts, code, signal) {
+    console.error(
+      `[production] ${name} restart limit reached after ${attempts} attempts (code=${code ?? "null"} signal=${signal ?? "null"}); stopping supervised services.`,
+    );
+    stopping = true;
+    supervisor.stop("SIGTERM");
+    process.exitCode = 1;
+  },
+  onSpawnError(name, error) {
+    console.error(`[production] ${name} failed to spawn: ${error instanceof Error ? error.message : String(error)}`);
+  },
+  onFatalExit(name, code, signal) {
+    console.error(`[production] ${name} stopped code=${code ?? "null"} signal=${signal ?? "null"}.`);
+  },
+});
+
+supervisor.start("phone-auth", productionApiArgs(), { restartOnFailure: true });
+supervisor.start("generation-outbox", [
+  ...resolveTsxRuntimeArgs(runtime),
+  "scripts/run-generation-outbox-dispatcher.mjs",
+], { restartOnFailure: true });
+supervisor.start("generation-repair", [
+  ...resolveTsxRuntimeArgs(runtime),
+  "scripts/run-generation-queue-maintenance.mjs",
+], { restartOnFailure: true });
+supervisor.start("generation-worker", [
+  ...resolveTsxRuntimeArgs(runtime),
+  "scripts/run-generation-video-worker.mjs",
+], { restartOnFailure: true });
+supervisor.start("canvas-agent", [
+  ...resolveTsxRuntimeArgs(runtime),
+  "scripts/run-canvas-agent-worker.mjs",
+], { restartOnFailure: true });
+console.info(
+  "[production] API, generation-outbox, generation-repair, generation-worker, and canvas-agent are supervised.",
+);
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    if (stopping) return;
+    stopping = true;
+    console.info(`[production] Received ${signal}; stopping API and generation services...`);
+    supervisor.stop(signal);
+  });
+}
+
+function productionApiArgs() {
+  return [
     ...resolveTsxRuntimeArgs(runtime),
     "--input-type=module",
     "--eval",
@@ -40,19 +116,34 @@ const result = spawnSync(
       const port = Number(process.env.PORT ?? "4310");
       await server.listen(port);
       console.log("Phone auth production server listening on http://${publicHost}:" + port);
-      setInterval(() => {}, 1000);
+      let closing = false;
+      for (const signal of ["SIGINT", "SIGTERM"]) {
+        process.once(signal, async () => {
+          if (closing) return;
+          closing = true;
+          await server.close().catch((error) => console.error(error));
+          process.exit(0);
+        });
+      }
     }).catch((error) => {
       console.error(error);
       process.exit(1);
     });`,
-  ],
-  {
-    env: process.env,
-    stdio: "inherit",
-  },
-);
+  ];
+}
 
-process.exit(result.status ?? 1);
+function pipeWithPrefix(stream, name) {
+  let buffer = "";
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) console.log(`[${name}] ${line}`);
+    }
+  });
+}
 
 function pathToFileUrl(filePath) {
   return `file:///${filePath.replace(/\\/g, "/")}`;
@@ -123,6 +214,10 @@ function resolveTsxRuntimeArgs(runtimePath) {
   }
 
   return ["--loader", "tsx"];
+}
+
+function isEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 }
 
 function loadDotEnvFile(targetEnvFilePath) {

@@ -148,6 +148,34 @@ function audioArtifactFromPayload(
     mimeType: responseMimeType ?? mimeTypeForFormat(format),
     fileExtension: format,
     url,
+    ...(firstString(payload, [
+      ["output", "transcript"],
+      ["output", "text"],
+      ["data", "transcript"],
+      ["data", "text"],
+      ["transcript"],
+      ["text"],
+    ]) ? { transcript: firstString(payload, [
+      ["output", "transcript"],
+      ["output", "text"],
+      ["data", "transcript"],
+      ["data", "text"],
+      ["transcript"],
+      ["text"],
+    ]) } : {}),
+    ...(firstString(payload, [
+      ["output", "lyrics"],
+      ["output", "song", "lyrics"],
+      ["data", "lyrics"],
+      ["data", "song", "lyrics"],
+      ["lyrics"],
+    ]) ? { lyrics: firstString(payload, [
+      ["output", "lyrics"],
+      ["output", "song", "lyrics"],
+      ["data", "lyrics"],
+      ["data", "song", "lyrics"],
+      ["lyrics"],
+    ]) } : {}),
   };
 }
 

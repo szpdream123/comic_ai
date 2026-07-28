@@ -272,7 +272,7 @@ export async function finalizeTaskAttempt(
     attemptId: string;
     status: Extract<
       TaskStatus,
-      "succeeded" | "failed" | "result_unknown" | "manual_review_required"
+      "succeeded" | "failed" | "canceled" | "result_unknown" | "manual_review_required"
     >;
     failureCode?: string | null;
     now: Date;
@@ -352,6 +352,59 @@ export async function finalizeTaskAttempt(
     if (!attempt || !task) {
       throw new Error("task_finalization_state_conflict");
     }
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+}
+
+/**
+ * Close the current attempt while leaving the task queued for a later wakeup.
+ *
+ * Canvas Agent uses this when execution deliberately pauses for approval or an
+ * external generation task. Those states are not terminal task statuses, so
+ * finalizeTaskAttempt cannot be used without incorrectly marking the task as
+ * failed/canceled.
+ */
+export async function releaseTaskAttemptForWait(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    attemptId: string;
+    reason?: string | null;
+    now: Date;
+  },
+): Promise<void> {
+  await db.query("BEGIN");
+  try {
+    await db.query(
+      `
+        UPDATE task_attempts
+        SET status = 'canceled',
+            failure_code = $3,
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            finished_at = $4,
+            updated_at = $4
+        WHERE id = $1 AND task_id = $2 AND status = 'running'
+      `,
+      [input.attemptId, input.taskId, input.reason ?? "task_waiting", input.now],
+    );
+    await db.query(
+      `
+        UPDATE tasks
+        SET status = 'queued',
+            current_attempt_id = NULL,
+            locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL,
+            updated_at = $3
+        WHERE id = $1 AND current_attempt_id = $2 AND status = 'running'
+      `,
+      [input.taskId, input.attemptId, input.now],
+    );
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK");

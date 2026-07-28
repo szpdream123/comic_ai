@@ -13,7 +13,10 @@ import { signPaymentCallback } from "../../modules/commerce-payment/commerce-pay
 import { grantCredits } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
-import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
+import {
+  __phoneAuthDevServerTestUtils,
+  createPhoneAuthDevServer as createPhoneAuthDevServerBase,
+} from "../phone-auth-dev-server.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 
@@ -62,6 +65,35 @@ function fetchEpisodeImageTask(origin: string, episodeId: string, init: RequestI
 }
 
 describe("admin ops HTTP routes", { concurrency: false }, () => {
+  it("allows replaying a queued generation.task.created job before provider submission", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000091";
+    const db = {
+      async query<T>(sql: string, params: unknown[] = []) {
+        assert.match(sql, /FROM tasks task/);
+        assert.deepEqual(params, [taskId]);
+        return {
+          rows: [{
+            status: "queued",
+            external_submission_started: false,
+            pollable_provider_request: false,
+          } as T],
+        };
+      },
+    };
+
+    const replayAllowed = await __phoneAuthDevServerTestUtils.validateGenerationQueueReplay(
+      db,
+      {
+        sourceQueueName: "generation-video-submit-r8-test-000",
+        sourceJobName: "generation.task.created",
+        sourceJobId: `generation.task.created__${taskId}__submit`,
+        sourceJobData: { taskId },
+      },
+    );
+
+    assert.equal(replayAllowed, true);
+  });
+
   it("does not require or impersonate a frontend user for backend admin operations", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -242,6 +274,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
 
   it("exposes generation queue health for ops admins", async () => {
     const db = await createMigratedTestDb();
+    const queueHealthInputs: Array<{ failedSampleSize?: number } | undefined> = [];
     const server = createPhoneAuthDevServer({
       db,
       env: {
@@ -250,7 +283,8 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         BULLMQ_QUEUE_PREFIX: "admin-ops-http-test",
       },
       generationQueueHealthService: {
-        async inspect() {
+        async inspect(input?: { failedSampleSize?: number }) {
+          queueHealthInputs.push(input);
           return {
             status: "unavailable",
             inspectedAt: new Date().toISOString(),
@@ -278,6 +312,17 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
         headers: { cookie: adminCookie },
       });
       const allowedPayload = await allowed.json();
+      const dashboardAllowed = await fetch(`${server.origin}/api/admin/dashboard/queue-health`, {
+        headers: { cookie: adminCookie },
+      });
+      const dashboardAllowedPayload = await dashboardAllowed.json();
+      const forbiddenAgentMetrics = await fetch(`${server.origin}/api/admin/ops/canvas-agent-metrics`, {
+        headers: { cookie: creatorCookie },
+      });
+      const allowedAgentMetrics = await fetch(`${server.origin}/api/admin/ops/canvas-agent-metrics?windowHours=9999`, {
+        headers: { cookie: adminCookie },
+      });
+      const allowedAgentMetricsPayload = await allowedAgentMetrics.json();
 
       assert.equal(forbidden.status, 401);
       assert.deepEqual(forbiddenPayload, {
@@ -288,6 +333,16 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(allowedPayload.redis.status, "unavailable");
       assert.equal(allowedPayload.queuePrefix, "admin-ops-http-test");
       assert.deepEqual(allowedPayload.queues, []);
+      assert.equal(dashboardAllowed.status, 200);
+      assert.equal(dashboardAllowedPayload.status, "unavailable");
+      assert.equal(dashboardAllowedPayload.redis.status, "unavailable");
+      assert.deepEqual(dashboardAllowedPayload.queues, []);
+      assert.equal(queueHealthInputs.some((input) => input?.failedSampleSize === 100), true);
+      assert.equal(forbiddenAgentMetrics.status, 401);
+      assert.equal(allowedAgentMetrics.status, 200);
+      assert.equal(allowedAgentMetricsPayload.windowHours, 720);
+      assert.equal(allowedAgentMetricsPayload.summary.totalTasks, 0);
+      assert.equal("messages" in allowedAgentMetricsPayload, false);
     } finally {
       await server.close();
       await db.close().catch(() => undefined);

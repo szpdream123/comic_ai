@@ -8,7 +8,9 @@ import {
   applyProjectDetail,
   applyStoryboardScopeUpdate,
   appendSelectedEpisodeAssetToPrompt,
+  buildCanvasGenerationBatchNodes,
   buildImageGenerationPayload,
+  buildStoryboardGeneratorPromptEditorReferencesForTest,
   buildVideoGenerationPayload,
   createEpisodeExportPreviewWithKindForTest,
   createProjectShotImageBatchForTest,
@@ -16,7 +18,9 @@ import {
   generateAssetImages,
   generateStoryboardImages,
   generateStoryboardVideos,
+  handleCanvasLiveEventForTest,
   handleLocalStoryboardImageFileForTest,
+  handleNewCanvasHostInputForTest,
   hasActiveWorkbenchTextSelection,
   handleWorkbenchActionForTest,
   initProductionWorkbench,
@@ -25,18 +29,28 @@ import {
   mapEpisodeAssetContractsForTest,
   mapEpisodeStoryboardContractForTest,
   loadSelectedAssetConversationHistory,
+  loadCanvasGenerationAssetsForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
+  persistStoryboardCardDescriptionForTest,
   sanitizeEpisodeWorkbenchSelection,
   findProjectCoverInput,
   refreshProductionWorkbenchForTest,
+  reconcilePromptMentionMediaItemsForTest,
   reconcileSelectedStoryboardPendingGenerationForTest,
   registerTaskCenterTaskForTest,
   resolvePromptEditorMentionReferences,
   resumeCanvasGenerationPollingForTest,
   resolveCanvasGenerationPollDelayForTest,
+  resolveCanvasKeyboardActionForTest,
+  resolveCanvasFitViewport,
+  resolveCanvasGraphFitNodes,
+  resolveCanvasCenteringDelta,
+  resolveCanvasRevisionConflictForTest,
   saveProjectCanvasNowForTest,
   scheduleProjectCanvasSaveForTest,
+  stopCanvasLiveSubscriptionForTest,
+  syncCanvasLiveSubscriptionForTest,
   renderProductionWorkbench,
   scheduleGenerationPollingForTest,
   scheduleTaskCenterPollingForTest,
@@ -52,7 +66,9 @@ import {
 } from "../src/features/production-workbench/index.js";
 import {
   renderAssetGeneratedStage,
+  renderAssetConversationEntryForPolling,
   renderPromptDock,
+  resolveGenerationModelLabel,
   renderStoryboardCard,
   renderStoryboardGenerationEntryForPolling,
   renderStoryboardPanel,
@@ -72,7 +88,7 @@ import {
 import { connectCanvasNodes } from "../src/features/production-workbench/canvas/canvas-state.js";
 import { renderProjectCreateModal } from "../src/features/production-workbench/project-create-modal.js";
 import { buildProjectCreateRequest } from "../src/features/production-workbench/project-create-request.js";
-import { renderStoryboardGeneratorTaskOverview } from "../src/features/production-workbench/project-detail.js";
+import { renderCanvasSurfaceForHost, renderStoryboardGeneratorTaskOverview } from "../src/features/production-workbench/project-detail.js";
 import {
   validateVideoGeneration,
   videoModels,
@@ -80,6 +96,11 @@ import {
 import { getLibraryAssetsForImport } from "../src/features/library-team/asset-library-page.js";
 
 describe("production workbench home shell", () => {
+  it("never falls back to a real model code in conversation metadata", () => {
+    assert.equal(resolveGenerationModelLabel("extra_seedance_2_0_mini"), "默认模型");
+    assert.equal(resolveGenerationModelLabel("gpt-image-2", "Image-2(优越)"), "Image-2(优越)");
+  });
+
   it("queues global toasts independently and clears only the current message", () => {
     const previousWindow = globalThis.window;
     const timers = [];
@@ -215,6 +236,72 @@ describe("production workbench home shell", () => {
     assert.equal(storyboard.videoPromptDraft.prompt, "动态视频提示词");
   });
 
+  it("persists edited storyboard card copy as the video draft used after refresh", async () => {
+    const original = mapEpisodeStoryboardContractForTest({
+      storyboardId: "10000000-0000-4000-8000-000000000101",
+      episodeId: "10000000-0000-4000-8000-000000000201",
+      indexNo: 1,
+      sceneAnalysis: "旧分镜摘要",
+      generationDrafts: [
+        {
+          mode: "video",
+          prompt: "旧视频提示词",
+          payload: { source: "ai_storyboard_preview" },
+          updatedAt: "2026-06-08T00:00:00.000Z",
+        },
+      ],
+    });
+    const calls = [];
+    const workbench = {
+      api: {
+        async updateShot(payload) {
+          calls.push(["shot", payload]);
+        },
+        async saveDraft(episodeId, targetType, targetId, payload) {
+          calls.push(["draft", { episodeId, targetType, targetId, payload }]);
+          return {
+            draft: {
+              ...payload,
+              payload: payload.payload,
+              updatedAt: "2026-07-25T12:00:00.000Z",
+            },
+          };
+        },
+      },
+      ui: {
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000201",
+      },
+    };
+
+    const result = await persistStoryboardCardDescriptionForTest(
+      workbench,
+      original,
+      "新视频提示词",
+    );
+    const refreshed = mapEpisodeStoryboardContractForTest({
+      storyboardId: original.linkedShotId,
+      episodeId: workbench.ui.selectedEpisodeId,
+      description: "新视频提示词",
+      generationDrafts: [result.savedVideoDraft],
+    });
+
+    assert.deepEqual(calls, [
+      ["shot", { shotId: original.linkedShotId, description: "新视频提示词" }],
+      ["draft", {
+        episodeId: workbench.ui.selectedEpisodeId,
+        targetType: "storyboard",
+        targetId: original.linkedShotId,
+        payload: {
+          prompt: "新视频提示词",
+          mode: "video",
+          payload: { source: "ai_storyboard_preview" },
+        },
+      }],
+    ]);
+    assert.equal(refreshed.description, "新视频提示词");
+    assert.equal(refreshed.videoPromptDraft.prompt, "新视频提示词");
+  });
+
   it("maps the full persisted storyboard video prompt without truncating it", () => {
     const fullVideoPrompt = [
       "BEGIN_DYNAMIC_VIDEO_PROMPT_SENTINEL",
@@ -337,7 +424,21 @@ describe("production workbench home shell", () => {
       root: { innerHTML: "" },
       state: {},
       session: { user: { phone: "+86 13800138000" } },
-      api: {},
+      api: {
+        async getPromptMarketplace(input) {
+          assert.equal(input.category, "script");
+          return { items: [{ id: "official-script-skill", title: "官方小说转剧本", category: "script", official: true, priceCredits: 9 }] };
+        },
+        async getPromptMarketplaceLibrary() {
+          return { items: [{ id: "personal-script-skill", title: "个人改编技能", category: "script", official: false, priceCredits: 18 }] };
+        },
+        async listGlobalGenerationConfig(options) {
+          assert.deepEqual(options, { fresh: true, mediaType: "text" });
+          return {
+            models: [{ modelCode: "deepseek-noval", mediaType: "text", pricing: { baseCredits: 160 } }],
+          };
+        },
+      },
       ui: {
         activeNavTab: "script",
         scriptModalMode: "full",
@@ -352,6 +453,9 @@ describe("production workbench home shell", () => {
     assert.equal(workbench.ui.isScriptModalOpen, true);
     assert.equal(workbench.ui.scriptModalMode, "manual");
     assert.equal(workbench.ui.scriptTab, "script-library");
+    assert.equal(workbench.ui.selectedScriptConversionSkillId, "official-script-skill");
+    assert.match(workbench.root.innerHTML, /小说转剧本技能/);
+    assert.match(workbench.root.innerHTML, /开始分析 160 \+ 9积分/);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "open-script-modal", scriptModalMode: "upload" },
@@ -1243,6 +1347,7 @@ describe("episode workbench asset list layout", () => {
 
     assert.match(generatedStageBlock, /display:\s*grid\s*!important/);
     assert.match(generatedStageBlock, /align-content:\s*safe end\s*!important/);
+    assert.match(generatedStageBlock, /\.episode-replica-asset-conversation-list,[\s\S]*?\.episode-replica-storyboard-conversation-list\s*\{[\s\S]*?padding-bottom:\s*5rem/);
   });
 
   it("lets the collapsed quick asset icon move freely and persists its position", () => {
@@ -1825,11 +1930,11 @@ describe("workbench generation payloads and inspectors", () => {
   });
 
   it("renders the asset inspector modal for current-page media details", () => {
-    const state = {
-      project: {
-        id: "project-1",
-        name: "try",
-        phase: "asset_review",
+      const state = {
+        project: {
+          id: "project-1",
+          name: "try",
+          phase: "asset_review",
         aspectRatio: "9:16",
         resolution: "1080p",
       },
@@ -2056,7 +2161,55 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.assetPromptDraft?.quickReferenceItems?.length, 0);
   });
 
-  it("appends the selected style with a dynamically numbered thumbnail reference", async () => {
+  it("strips only the persisted automatic style when importing an asset into the prompt", () => {
+    const workbench = {
+      state: {
+        episodes: [{ id: "episode-1", title: "第一集" }],
+      },
+      ui: {
+        museScopeMode: "assets",
+        prompt: "",
+        selectedEpisodeId: "episode-1",
+        projectAssetTab: "character",
+        selectedEpisodeAssetId: "asset-style-import",
+        projectStyles: [{
+          id: "animation",
+          code: "animation",
+          name: "动画",
+          coverImageUrl: "https://example.com/animation-style.png",
+        }],
+        importedAssets: {
+          character: [{
+            id: "asset-style-import",
+            name: "风格导入角色",
+            description: "角色要求\n图片风格：【@图2】自动加入的技能文案。\n图片风格：用户手写的赛博朋克风格。",
+            generationResult: {
+              prompt: "角色要求\n图片风格：【@图2】自动加入的技能文案。\n图片风格：用户手写的赛博朋克风格。",
+              parameters: {
+                references: [
+                  { id: "character-reference", kind: "image", url: "https://example.com/character.png" },
+                  { id: "persisted-style-reference", kind: "image", url: "https://example.com/animation-style.png" },
+                ],
+              },
+            },
+          }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench);
+
+    assert.equal(result.ok, true);
+    assert.equal(
+      workbench.ui.prompt,
+      "角色要求\n图片风格：用户手写的赛博朋克风格。",
+    );
+  });
+
+  it("imports only the selected asset into the asset prompt", async () => {
     const storyboard = {
       id: "storyboard-still-selected",
       title: "旧分镜选择",
@@ -2137,21 +2290,10 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(result.ok, true);
     assert.equal(
       workbench.ui.prompt,
-      "灰黑短发，破旧麻袋衣。\n图片风格：【@图3】厚涂油画质感，清晰笔触。",
+      "灰黑短发，破旧麻袋衣。",
     );
     assert.deepEqual(storyboard.generationState.quickReferenceItems, []);
-    assert.deepEqual(
-      workbench.ui.assetPromptDraft?.quickReferenceItems?.map((item) => ({
-        id: item.id,
-        preview: item.preview,
-      })),
-      [
-        {
-          id: "quick-ref:style:oil_painting",
-          preview: "/admin/assets/prompt-covers/oil_painting.webp",
-        },
-      ],
-    );
+    assert.deepEqual(workbench.ui.assetPromptDraft?.quickReferenceItems, []);
     const promptDockHtml = renderPromptDock({
       selectedStoryboard: storyboard,
       selectedModelId: "gpt-image-2-cn",
@@ -2168,34 +2310,9 @@ describe("workbench generation payloads and inspectors", () => {
       mediaMode: "image",
       scopeMode: "assets",
     });
-    assert.equal((promptDockHtml.match(/episode-replica-ref-card quick-reference image/g) ?? []).length, 1);
+    assert.equal((promptDockHtml.match(/episode-replica-ref-card quick-reference image/g) ?? []).length, 0);
     assert.equal((promptDockHtml.match(/episode-replica-ref-card attachment image/g) ?? []).length, 2);
     assert.doesNotMatch(promptDockHtml, /src="\/uploads\/asset-1\.avif"/);
-    assert.match(promptDockHtml, /src="\/admin\/assets\/prompt-covers\/oil_painting\.webp"/);
-    assert.match(promptDockHtml, /episode-replica-ref-index">图3<\/span>/);
-    updatePromptMentionState(workbench, "@", 1);
-    const styleMentionSuggestion = workbench.ui.promptMentionSuggestions.find(
-      (item) => item.id === "quick-ref:style:oil_painting",
-    );
-    assert.equal(styleMentionSuggestion?.name, "图3");
-    assert.equal(styleMentionSuggestion?.originalName, "图片风格参考图");
-
-    workbench.ui.assetPromptDraft.quickReferenceItems = workbench.ui.assetPromptDraft.quickReferenceItems.map(
-      ({ isGenerationStyleReference: _styleReference, originalName: _originalName, ...item }) => ({
-        ...item,
-        id: "persisted-reference-without-style-marker",
-      }),
-    );
-    workbench.ui.assetPromptDraft.mentionReferences = [
-      {
-        id: "mention-ref:image:quick-ref:style:oil_painting",
-        assetId: "quick-ref:style:oil_painting",
-        kind: "image",
-        name: "图3",
-        token: "【@图3】",
-        preview: "/admin/assets/prompt-covers/oil_painting.webp",
-      },
-    ];
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: {
@@ -2206,20 +2323,9 @@ describe("workbench generation payloads and inspectors", () => {
 
     assert.equal(
       workbench.ui.prompt,
-      "灰黑短发，破旧麻袋衣。\n图片风格：【@图3】高质量动画电影风格。",
+      "灰黑短发，破旧麻袋衣。",
     );
-    assert.deepEqual(
-      workbench.ui.assetPromptDraft?.quickReferenceItems?.map((item) => ({
-        id: item.id,
-        preview: item.preview,
-      })),
-      [
-        {
-          id: "quick-ref:style:animation",
-          preview: "/admin/assets/prompt-covers/animation.webp",
-        },
-      ],
-    );
+    assert.deepEqual(workbench.ui.assetPromptDraft?.quickReferenceItems, []);
     const switchedPromptDockHtml = renderPromptDock({
       selectedStoryboard: storyboard,
       selectedModelId: "gpt-image-2-cn",
@@ -2236,15 +2342,16 @@ describe("workbench generation payloads and inspectors", () => {
       mediaMode: "image",
       scopeMode: "assets",
     });
-    assert.match(switchedPromptDockHtml, /src="\/admin\/assets\/prompt-covers\/animation\.webp"/);
-    assert.doesNotMatch(switchedPromptDockHtml, /src="\/admin\/assets\/prompt-covers\/oil_painting\.webp"/);
+    assert.doesNotMatch(
+      switchedPromptDockHtml.slice(0, switchedPromptDockHtml.indexOf("episode-replica-prompt-footer")),
+      /src="\/admin\/assets\/prompt-covers\/(?:animation|oil_painting)\.webp"/,
+    );
     const switchedEditorReferences = resolvePromptEditorMentionReferences(
       workbench,
       workbench.ui.prompt,
       workbench.ui.assetPromptDraft.mentionReferences,
     );
-    assert.equal(switchedEditorReferences[0]?.name, "图3");
-    assert.equal(switchedEditorReferences[0]?.preview, "/admin/assets/prompt-covers/animation.webp");
+    assert.deepEqual(switchedEditorReferences, []);
     const workbenchSource = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
@@ -2265,7 +2372,7 @@ describe("workbench generation payloads and inspectors", () => {
 
     assert.equal(
       workbench.ui.prompt,
-      "灰黑短发，破旧麻袋衣。\n图片风格：【@图2】高质量动画电影风格。",
+      "灰黑短发，破旧麻袋衣。",
     );
 
     await handleWorkbenchActionForTest(workbench, {
@@ -2277,7 +2384,7 @@ describe("workbench generation payloads and inspectors", () => {
 
     assert.equal(
       workbench.ui.prompt,
-      "灰黑短发，破旧麻袋衣。\n图片风格：【@图1】高质量动画电影风格。",
+      "灰黑短发，破旧麻袋衣。",
     );
   });
 
@@ -2714,8 +2821,8 @@ describe("workbench generation payloads and inspectors", () => {
 
     assert.equal(result.ok, true);
     assert.equal(workbench.ui.selectedStoryboardId, "storyboard-card-2");
-    assert.equal(workbench.ui.prompt, "第二条分镜内容\n视频风格：水墨晕染，东方写意，留白构图，笔触清晰。");
-    assert.equal((workbench.ui.prompt.match(/视频风格：/gu) ?? []).length, 1);
+    assert.equal(workbench.ui.prompt, "第二条分镜内容");
+    assert.equal((workbench.ui.prompt.match(/视频风格：/gu) ?? []).length, 0);
     assert.deepEqual(workbench.ui.episodeStoryboardMap["episode-new"][1].generationState.quickReferenceItems, []);
     assert.deepEqual(result.references, []);
   });
@@ -2961,7 +3068,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.deepEqual(workbench.ui.lipSyncAudioItems, []);
   });
 
-  it("keeps storyboard quick references split into separate images in video mode", () => {
+  it("keeps storyboard quick references split into separate images without appending video style", () => {
     const [storyboard] = addStoryboard([]);
     const storyboards = [
       {
@@ -3013,12 +3120,12 @@ describe("workbench generation payloads and inspectors", () => {
     const reference = quickReferences[0];
 
     assert.equal(result.ok, true);
-    assert.equal(workbench.ui.prompt, "故事发生场景：（黑山森林西区/下午/鹅绒暗影）\n分镜过渡（00:00-00:01）：-\n镜头1（00:01-00:04）：\n视频风格：二维动画质感，线条清晰，色彩统一。");
+    assert.equal(workbench.ui.prompt, "故事发生场景：（黑山森林西区/下午/鹅绒暗影）\n分镜过渡（00:00-00:01）：-\n镜头1（00:01-00:04）：");
     assert.equal(quickReferences.length, 3);
     assert.equal(reference.kind, "image");
     assert.equal(reference.preview, "/uploads/ref-1.png");
     assert.equal(reference.url, "/uploads/ref-1.png");
-    assert.equal(reference.description, "故事发生场景：（黑山森林西区/下午/鹅绒暗影）\n分镜过渡（00:00-00:01）：-\n镜头1（00:01-00:04）：\n视频风格：二维动画质感，线条清晰，色彩统一。");
+    assert.equal(reference.description, "故事发生场景：（黑山森林西区/下午/鹅绒暗影）\n分镜过渡（00:00-00:01）：-\n镜头1（00:01-00:04）：");
     assert.deepEqual(
       quickReferences.map((item) => item.preview),
       ["/uploads/ref-1.png", "/uploads/ref-2.png", "/uploads/ref-3.png"],
@@ -5038,7 +5145,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(css, /\.inline-upload-tray > \.episode-replica-ref-card\s*\{[\s\S]*?flex:\s*0 0 auto;/);
   });
 
-  it("defaults the video style control to the saved project style", () => {
+  it("uses the image style picker for the video style control", () => {
     const html = renderPromptDock({
       selectedStoryboard: { generationState: {} },
       selectedModelId: "vidu-q3-pro",
@@ -5058,12 +5165,16 @@ describe("workbench generation payloads and inspectors", () => {
       scopeMode: "storyboard",
     });
 
-    assert.match(html, /data-field="projectStyle"[^>]*title="风格：油画"[^>]*>油画<\/button>/);
-    assert.match(html, /class="[^"]*is-selected[^"]*"[^>]*data-action="select-episode-generation-style"[^>]*data-value="oil_painting"/);
-    assert.match(html, /data-value="oil_painting"[^>]*><img src="\/admin\/assets\/prompt-covers\/oil_painting\.webp" alt="" loading="lazy" \/><span>油画<\/span><\/button>/);
+    assert.match(html, /data-action="open-asset-image-style-skill-modal"/);
+    assert.match(html, /aria-label="生图风格：油画"/);
+    assert.doesNotMatch(html, /data-field="projectStyle"/);
+    assert.doesNotMatch(html, /data-action="select-episode-generation-style"/);
+    assert.match(html, /class="[^\"]*episode-image-style-skill-trigger[^\"]*"/);
+    assert.match(html, /src="\/admin\/assets\/prompt-covers\/oil_painting\.webp" alt="" \/>/);
+    assert.match(html, /<span class="episode-image-style-skill-name">油画<\/span>/);
   });
 
-  it("shows the project style list in the asset image composer", () => {
+  it("shows project style as the default image style picker in the asset composer", () => {
     const html = renderPromptDock({
       selectedStoryboard: null,
       selectedModelId: "gpt-image-2-cn",
@@ -5072,9 +5183,10 @@ describe("workbench generation payloads and inspectors", () => {
       generationControls: {},
       generationUiState: {
         openGenerationSelectMenu: "projectStyle",
-        selectedProjectStyleCode: "oil_painting",
+        selectedProjectStyleCode: "cyberpunk",
+        projectStyleCode: "oil_painting",
         projectStyles: [
-          { code: "animation", name: "动画", coverImageUrl: "/admin/assets/prompt-covers/animation.webp" },
+          { code: "cyberpunk", name: "赛博朋克", coverImageUrl: "/admin/assets/prompt-covers/cyberpunk.webp" },
           { code: "oil_painting", name: "油画", coverImageUrl: "/admin/assets/prompt-covers/oil_painting.webp" },
         ],
       },
@@ -5082,9 +5194,61 @@ describe("workbench generation payloads and inspectors", () => {
       scopeMode: "assets",
     });
 
-    assert.match(html, /data-field="projectStyle"[^>]*title="风格：油画"[^>]*>油画<\/button>/);
-    assert.match(html, /data-action="select-episode-generation-style"[^>]*data-value="animation"/);
-    assert.match(html, /<img src="\/admin\/assets\/prompt-covers\/oil_painting\.webp" alt="" loading="lazy" \/><span>油画<\/span>/);
+    assert.match(html, /data-action="open-asset-image-style-skill-modal"/);
+    assert.match(html, /aria-label="生图风格：油画"/);
+    assert.doesNotMatch(html, /data-field="projectStyle"/);
+    const trigger = html.match(/<button\s+class="episode-replica-control episode-image-style-skill-trigger"[\s\S]*?<\/button>/)?.[0] ?? "";
+    assert.match(trigger, /<img class="episode-image-style-skill-thumb" src="\/admin\/assets\/prompt-covers\/oil_painting\.webp" alt="" \/>/);
+    assert.match(trigger, /<span class="episode-image-style-skill-name">油画<\/span>/);
+    assert.doesNotMatch(trigger, />项目风格</);
+    assert.doesNotMatch(trigger, /\stitle=/);
+  });
+
+  it("adds the selected image style skill price to the asset image generation button", () => {
+    const html = renderPromptDock({
+      selectedStoryboard: null,
+      selectedModelId: "gpt-image-2-cn",
+      prompt: "角色立绘",
+      busy: false,
+      generationControls: {},
+      generationUiState: {
+        assetImageStyleSkillId: "style-skill-1",
+        assetImageStyleOfficialSkills: [
+          { id: "style-skill-1", label: "电影光影", priceCredits: 25 },
+        ],
+        assetImageStylePrivateSkills: [],
+        projectStyles: [{ code: "animation", name: "动画" }],
+      },
+      mediaMode: "image",
+      scopeMode: "assets",
+    });
+
+    assert.match(html, /aria-label="生图风格：电影光影"/);
+    assert.match(html, /<span class="episode-image-style-skill-name">电影光影<\/span>/);
+    assert.match(html, /data-action="generate-images"[^>]*>[\s\S]*?<span>90 \+ 25积分<\/span>/);
+  });
+
+  it("keeps the original image generation price label when the selected style is free", () => {
+    const html = renderPromptDock({
+      selectedStoryboard: null,
+      selectedModelId: "gpt-image-2-cn",
+      prompt: "角色立绘",
+      busy: false,
+      generationControls: {},
+      generationUiState: {
+        assetImageStyleSkillId: "free-style",
+        assetImageStyleOfficialSkills: [
+          { id: "free-style", label: "动画", priceCredits: 0 },
+        ],
+        assetImageStylePrivateSkills: [],
+        projectStyles: [{ code: "animation", name: "动画" }],
+      },
+      mediaMode: "image",
+      scopeMode: "assets",
+    });
+
+    assert.match(html, /data-action="generate-images"[^>]*>[\s\S]*?<span>90<\/span>/);
+    assert.doesNotMatch(html, /\+ 0积分/);
   });
 
   it("places imported audio attachments to the left of the audio upload card", () => {
@@ -5403,7 +5567,7 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(result.ok, true);
     assert.equal(
       workbench.ui.prompt,
-      "请完美还原图一中故事板(分镜剧情)的剧情并确保人物/场景/道具的一致性，下方脚本是这个故事板的补充!视频中不得出现任何字幕与文字!(文字透明度调整为百分之0)\n故事板内容：城门口人物回头。\n视频风格：二维动画质感，线条清晰，色彩统一。",
+      "请完美还原图一中故事板(分镜剧情)的剧情并确保人物/场景/道具的一致性，下方脚本是这个故事板的补充!视频中不得出现任何字幕与文字!(文字透明度调整为百分之0)\n故事板内容：城门口人物回头。",
     );
     assert.equal(references.length, 1);
     assert.equal(references[0].url, "/uploads/current-storyboard.png");
@@ -5884,6 +6048,179 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(payload.parameters.quickReferences?.length, 1);
     assert.equal(payload.parameters.quickReferences?.[0]?.assetId, "asset-1");
     assert.equal(payload.parameters.selectionContext?.selectedAssetId, "asset-1");
+  });
+
+  it("excludes audio references from image generation payloads", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-image-with-stale-audio",
+      generationState: {
+        quickReferenceItems: [
+          { id: "stale-audio-ref", kind: "audio", type: "audio", url: "/uploads/stale-audio.mp3" },
+        ],
+      },
+    };
+    const payload = buildImageGenerationPayload({
+      state: { project: { id: "project-image-audio-isolation", aspectRatio: "16:9" } },
+      ui: {
+        episodeMediaMode: "image",
+        museScopeMode: "storyboard",
+        selectedStoryboardId: storyboard.id,
+        selectedModelId: "gpt-image-2-cn",
+        storyboards: [storyboard],
+        episodeWorkbenchAttachments: [
+          { id: "stale-audio-attachment", kind: "audio", type: "audio", url: "/uploads/stale-audio.mp3" },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["stale-audio-attachment"],
+      },
+    });
+
+    assert.deepEqual(payload.parameters.quickReferences, []);
+    assert.equal(payload.parameters.filePaths, undefined);
+  });
+
+  it("submits the selected asset image style skill id with its prompt body at the end", () => {
+    const payload = buildImageGenerationPayload({
+      state: {
+        project: { id: "project-1", aspectRatio: "16:9" },
+      },
+      ui: {
+        prompt: "角色固定图",
+        museScopeMode: "assets",
+        imageGenerationMode: "single-image",
+        imageCount: 1,
+        selectedModelId: "gpt-image-2-cn",
+        assetImageStyleSkillId: "private-image-style",
+        assetImageStyleSkillProjectId: "project-1",
+        episodeBatchPrivateImageStyleSkills: [
+          {
+            id: "private-image-style",
+            label: "我的水墨",
+            promptContent: "选中的技能正文",
+            preview: "/uploads/styles/my-ink.png",
+            priceCredits: 25,
+          },
+        ],
+      },
+    });
+
+    assert.equal(
+      payload.promptOverride,
+      "角色固定图\n图片风格：参考【@图1】不要出现参考图内容，选中的技能正文。",
+    );
+    assert.equal(payload.imageStyleCode, undefined);
+    assert.equal(payload.skillId, "private-image-style");
+    assert.equal(payload.sourceSurface, "episode_asset_image");
+    assert.equal(payload.parameters.quickReferences?.length, 1);
+    assert.equal(payload.parameters.quickReferences?.[0]?.name, "引入 我的水墨");
+    assert.equal(payload.parameters.filePaths?.length, 1);
+    assert.equal(Object.hasOwn(payload, "priceCredits"), false);
+    assert.match(JSON.stringify(payload), /选中的技能正文/);
+  });
+
+  it("keeps storyboard prompt skill and image style skill independent in one payload", () => {
+    const payload = buildImageGenerationPayload({
+      state: {
+        project: { id: "project-1", aspectRatio: "16:9" },
+      },
+      ui: {
+        museScopeMode: "storyboard",
+        assetGeneratorTarget: "storyboard",
+        selectedStoryboardId: "storyboard-1",
+        storyboards: [{
+          id: "storyboard-1",
+          description: "城门口开场",
+          generationState: {
+            quickReferenceItems: [
+              { id: "character-reference", kind: "image", name: "图1", url: "/uploads/character.png" },
+              { id: "scene-reference", kind: "image", name: "图2", url: "/uploads/scene.png" },
+            ],
+          },
+        }],
+        prompt: "城门口开场",
+        imageGenerationMode: "single-image",
+        selectedModelId: "gpt-image-2-cn",
+        assetImageStyleSkillId: "private-image-style",
+        assetImageStyleSkillProjectId: "project-1",
+        episodeBatchPrivateImageStyleSkills: [{
+          id: "private-image-style",
+          label: "我的水墨",
+          promptContent: "水墨晕染风格，保留人物线条。",
+          preview: "/uploads/styles/my-ink.png",
+        }],
+        selectedStoryboardPromptSkillId: "storyboard-prompt-skill",
+      },
+    });
+
+    assert.equal(payload.skillId, "storyboard-prompt-skill");
+    assert.equal(payload.sourceSurface, "episode_storyboard_image");
+    assert.equal(
+      payload.promptOverride,
+      "城门口开场\n图片风格：参考【@图3】不要出现参考图内容，水墨晕染风格，保留人物线条。",
+    );
+    assert.equal(payload.imageStyleCode, undefined);
+    assert.equal(payload.imageStyleSkillId, "private-image-style");
+    assert.deepEqual(
+      payload.parameters.quickReferences?.map((item) => item.name),
+      ["图1", "图2", "引入 我的水墨"],
+    );
+    assert.equal(payload.parameters.quickReferences?.[2]?.isGenerationStyleReference, true);
+    assert.deepEqual(payload.parameters.filePaths, [
+      "/uploads/character.png",
+      "/uploads/scene.png",
+      "/uploads/styles/my-ink.png",
+    ]);
+  });
+
+  it("normalizes image reference tokens to their actual composer positions", () => {
+    const payload = buildImageGenerationPayload({
+      state: { project: { aspectRatio: "16:9" } },
+      ui: {
+        museScopeMode: "assets",
+        imageGenerationMode: "multi-image",
+        selectedModelId: "gpt-image-2-cn",
+        prompt: "组合【@角色甲】和【@场景乙】",
+        assetPromptDraft: {
+          scopeMode: "assets",
+          quickReferenceItems: [
+            { id: "character-ref", kind: "image", name: "角色甲", url: "/uploads/character.png", composerOrder: 2 },
+            { id: "scene-ref", kind: "image", name: "场景乙", url: "/uploads/scene.png", composerOrder: 1 },
+          ],
+        },
+      },
+    });
+
+    assert.equal(payload.promptOverride, "组合【@图2】和【@图1】");
+  });
+
+  it("keeps all uploaded image attachments in the image generation payload", () => {
+    const attachments = ["one", "two", "three"].map((name, index) => ({
+      id: `attachment-${name}`,
+      kind: "image",
+      type: "image",
+      name: `图片${index + 1}`,
+      url: `/uploads/${name}.png`,
+      composerOrder: index + 1,
+    }));
+    const payload = buildImageGenerationPayload({
+      state: { project: { aspectRatio: "16:9" } },
+      ui: {
+        museScopeMode: "assets",
+        imageGenerationMode: "multi-image",
+        selectedModelId: "gpt-image-2-cn",
+        prompt: "三张参考图",
+        episodeWorkbenchAttachments: attachments,
+        episodeWorkbenchSelectedAttachmentIds: attachments.map((item) => item.id),
+        assetPromptDraft: { scopeMode: "assets", quickReferenceItems: [] },
+      },
+    });
+
+    assert.equal(payload.parameters.quickReferences.length, 3);
+    assert.deepEqual(payload.parameters.filePaths, [
+      "/uploads/one.png",
+      "/uploads/two.png",
+      "/uploads/three.png",
+    ]);
   });
 
   it("builds video generation payload with uploaded references and edit source", () => {
@@ -6937,11 +7274,47 @@ describe("workbench generation payloads and inspectors", () => {
       [],
     );
 
-    assert.match(html, /class="episode-replica-user-message-copy clamp-3">【总时长】15\.0秒/);
+    assert.match(html, /class="episode-replica-message-row user"/);
+    assert.doesNotMatch(html, /episode-replica-user-message-copy/);
+    assert.match(html, /episode-replica-user-message generation-record/);
+    assert.doesNotMatch(html, /用户提示词/);
+    assert.doesNotMatch(html, /【总时长】15\.0秒/);
     assert.match(html, /class="episode-replica-user-message-refs"/);
     assert.doesNotMatch(html, /class="episode-replica-task-copy clamp-3">/);
     assert.doesNotMatch(html, /class="episode-replica-task-refs">/);
     assert.match(html, /episode-replica-task-status provider_submitted[^>]*>生成中/);
+  });
+
+  it("deduplicates storyboard references and keeps the style reference in the generation summary", () => {
+    const reference = {
+      id: "reference-one",
+      kind: "image",
+      name: "场景参考",
+      url: "https://example.com/storyboard-reference.png",
+    };
+    const styleReference = {
+      id: "storyboard-generator-style:animation",
+      role: "style",
+      kind: "image",
+      name: "动画",
+      preview: "https://example.com/animation-style.png",
+    };
+    const html = renderStoryboardGenerationEntryForPolling(
+      { id: "storyboard-dedupe-style", title: "分镜 1", generationState: {} },
+      {
+        taskId: "storyboard-dedupe-style-task",
+        status: "completed",
+        styleLabel: "动画",
+        quickReferenceItems: [reference, styleReference],
+        attachmentItems: [{ ...reference, id: "attachment-one" }],
+        fixedImages: [{ id: "result-image", url: "https://example.com/result.png" }],
+      },
+      "image",
+    );
+
+    assert.equal((html.match(/class="episode-replica-user-ref-chip/g) ?? []).length, 1);
+    assert.match(html, /episode-generation-summary-style-thumb has-preview[\s\S]*animation-style\.png/);
+    assert.equal((html.match(/animation-style\.png/g) ?? []).length, 1);
   });
 
   it("builds lip-sync video payload with selected voice and text-based credit estimate", () => {
@@ -7273,6 +7646,129 @@ describe("workbench generation payloads and inspectors", () => {
     assert.deepEqual(
       workbench.ui.promptMentionSuggestions.map((item) => item.name),
       ["图1", "图2", "图3", "音频1", "已导入角色", "任小野", "阿婶", "城内街道", "饭食"],
+    );
+  });
+
+  it("keeps image-scope mentions limited to uploaded and current composer images", () => {
+    const workbench = {
+      ui: {
+        museScopeMode: "assets",
+        assetPromptDraft: {
+          quickReferenceItems: [
+            {
+              id: "drag-ref:asset-reference:upload:role-1",
+              assetId: "upload:role-1",
+              kind: "image",
+              type: "image",
+              name: "upload:role-1",
+              url: "/uploads/role.png",
+            },
+            {
+              id: "audio-ref-1",
+              kind: "audio",
+              type: "audio",
+              name: "背景音",
+              url: "/uploads/audio.mp3",
+            },
+          ],
+          mentionReferences: [],
+        },
+        importedAssets: {
+          character: [{ id: "upload:role-1", name: "角色素材", previewUrl: "/uploads/role.png" }],
+          scene: [],
+          prop: [],
+          other: {
+            audio: [],
+            image: [{ id: "uploaded-image-1", name: "已上传参考图", previewUrl: "/uploads/reference.png" }],
+            video: [],
+          },
+        },
+        promptMentionMenuOpen: false,
+        promptMentionQuery: "",
+        promptMentionSuggestions: [],
+      },
+    };
+
+    updatePromptMentionState(workbench, "@", 1);
+
+    assert.equal(workbench.ui.promptMentionMenuOpen, true);
+    assert.deepEqual(
+      workbench.ui.promptMentionSuggestions.map((item) => item.name),
+      ["已上传参考图", "图1"],
+    );
+    assert.equal(
+      resolvePromptEditorMentionReferences(
+        workbench,
+        "请参考【@图1】",
+        [],
+      ).length,
+      1,
+    );
+  });
+
+  it("keeps both asset-scope thumbnails available after selecting one mention", () => {
+    const quickReferenceItems = [
+      {
+        id: "mention-ref-image:character:character-1:first",
+        assetId: "character-1",
+        sourceAssetKind: "character",
+        kind: "image",
+        type: "image",
+        name: "角色参考图一",
+        url: "/uploads/character-first.png",
+        fromPromptMention: true,
+      },
+      {
+        id: "mention-ref-image:character:character-1:second",
+        assetId: "character-1",
+        sourceAssetKind: "character",
+        kind: "image",
+        type: "image",
+        name: "角色参考图二",
+        url: "/uploads/character-second.png",
+        fromPromptMention: true,
+      },
+    ];
+    const workbench = {
+      ui: {
+        museScopeMode: "assets",
+        assetPromptDraft: { quickReferenceItems, mentionReferences: [] },
+        episodeWorkbenchAttachments: [],
+        episodeWorkbenchSelectedAttachmentIds: [],
+        importedAssets: {
+          character: [{ id: "character-1", name: "角色素材" }],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+        promptMentionMenuOpen: false,
+        promptMentionQuery: "",
+        promptMentionSuggestions: [],
+      },
+    };
+
+    updatePromptMentionState(workbench, "@", 1);
+
+    assert.deepEqual(
+      workbench.ui.promptMentionSuggestions.map((item) => [item.name, item.assetId]),
+      [
+        ["图1", "mention-ref-image:character:character-1:first"],
+        ["图2", "mention-ref-image:character:character-1:second"],
+      ],
+    );
+    const mentions = resolvePromptEditorMentionReferences(
+      workbench,
+      "【@图1】【@图2】",
+      [],
+    );
+    assert.deepEqual(mentions.map((item) => item.name), ["图1", "图2"]);
+    assert.deepEqual(
+      reconcilePromptMentionMediaItemsForTest(quickReferenceItems, [{
+        assetId: "mention-ref-image:character:character-1:first",
+      }, {
+        assetId: "mention-ref-image:character:character-1:second",
+      }]).map((item) => item.id),
+      quickReferenceItems.map((item) => item.id),
     );
   });
 
@@ -9204,6 +9700,10 @@ it("does not duplicate image mention suffixes when adding another prompt mention
         prop: [],
         other: { image: [], video: [] },
       },
+      episodeWorkbenchAttachments: [
+        { id: "stale-audio", kind: "audio", type: "audio", name: "旧音频", url: "/uploads/stale-audio.mp3" },
+      ],
+      episodeWorkbenchSelectedAttachmentIds: ["stale-audio"],
     };
 
     const imageHtml = renderProductionWorkbench({
@@ -9225,7 +9725,9 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     });
 
     assert.doesNotMatch(imageHtml, /data-attachment-type="audio"/);
+    assert.doesNotMatch(imageHtml, /episode-replica-ref-card attachment audio/);
     assert.match(videoHtml, /data-attachment-type="audio"/);
+    assert.match(videoHtml, /episode-replica-ref-card attachment audio/);
   });
 
   it("renders the lip-sync panel with text-based credit calculation and selected voice", () => {
@@ -9494,6 +9996,19 @@ it("does not duplicate image mention suffixes when adding another prompt mention
         assetPromptDraft: {
           scopeMode: "assets",
           prompt: "素材侧草稿",
+          quickReferenceItems: [
+            { id: "asset-image-ref", kind: "image", url: "/uploads/asset-image.png" },
+          ],
+          mentionReferences: [
+            { id: "asset-image-mention", assetId: "asset-image-ref", kind: "image", name: "图1" },
+          ],
+        },
+        episodeWorkbenchAttachments: [
+          { id: "asset-audio", kind: "audio", url: "/uploads/asset-audio.mp3" },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["asset-audio"],
+        imageGenerationResult: {
+          taskId: "asset-image-task",
         },
         importedAssets: {
           character: [],
@@ -9514,6 +10029,11 @@ it("does not duplicate image mention suffixes when adding another prompt mention
 
     assert.equal(workbench.ui.museScopeMode, "storyboard");
     assert.equal(workbench.ui.prompt, "");
+    assert.deepEqual(workbench.ui.assetPromptDraft.quickReferenceItems, []);
+    assert.deepEqual(workbench.ui.assetPromptDraft.mentionReferences, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, []);
+    assert.equal(workbench.ui.imageGenerationResult, null);
 
     resolveStoryboards({
       items: [{
@@ -9571,6 +10091,60 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.equal(workbench.ui.projectAssetTab, "scene");
     assert.equal(workbench.ui.selectedEpisodeAssetId, "scene-1");
     assert.equal(workbench.ui.prompt, "");
+  });
+
+  it("clears asset prompt materials when selecting another asset", async () => {
+    const workbench = {
+      state: {
+        project: { id: "project-1", name: "剧一", phase: "asset_review" },
+        shots: [],
+      },
+      api: {},
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-primary",
+        museScopeMode: "assets",
+        prompt: "旧素材提示词",
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "旧素材提示词",
+          quickReferenceItems: [{ id: "old-image", kind: "image", url: "/uploads/old.png" }],
+          mentionReferences: [{ id: "old-mention", assetId: "old-image", kind: "image", name: "图1" }],
+          selectionContext: { assetTab: "character", selectedAssetId: "character-1" },
+        },
+        episodeWorkbenchAttachments: [{ id: "old-attachment", kind: "image", url: "/uploads/old-attachment.png" }],
+        episodeWorkbenchSelectedAttachmentIds: ["old-attachment"],
+        projectAssetTab: "character",
+        selectedEpisodeCardId: "character-1",
+        selectedEpisodeAssetId: "character-1",
+        importedAssets: {
+          character: [
+            { id: "character-1", name: "角色一", description: "角色一描述" },
+            { id: "character-2", name: "角色二", description: "角色二描述" },
+          ],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      },
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "set-episode-asset",
+        assetId: "character-2",
+        assetKind: "character",
+      },
+    });
+
+    assert.equal(workbench.ui.selectedEpisodeAssetId, "character-2");
+    assert.equal(workbench.ui.prompt, "");
+    assert.deepEqual(workbench.ui.assetPromptDraft.quickReferenceItems, []);
+    assert.deepEqual(workbench.ui.assetPromptDraft.mentionReferences, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
+    assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, []);
   });
 
   it("clears the prompt when switching to a storyboard without its own draft", async () => {
@@ -10870,7 +11444,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
                   getAttribute(name) {
                     return {
                       src: "/uploads/scene-reference.png",
-                      "data-reference-id": "scene-reference",
+                      "data-reference-id": "character-reference",
                       "data-reference-name": "场景参考图",
                       alt: "",
                     }[name] ?? null;
@@ -10897,20 +11471,21 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.equal(workbench.ui.assetGeneratorName, "分镜 1: 城门口开场");
     assert.equal(
       workbench.ui.assetGeneratorPrompt,
-      "视频场景对照表: 无图场景\n视频角色对照表: 角色参考图=【@图1】的角色形象；场景参考图=【@图2】的角色形象\n图片风格：【@图3】厚涂油画质感，清晰笔触。",
+      "视频场景对照表: 无图场景\n视频角色对照表: 角色参考图=【@图1】的角色形象；场景参考图=【@图2】的角色形象",
     );
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences.length, 3);
+    assert.equal(
+      workbench.ui.assetGeneratorStoryboardPrompt,
+      "视频场景对照表: 无图场景\n视频角色对照表: 角色参考图=【@图1】的角色形象；场景参考图=【@图2】的角色形象",
+    );
+    assert.equal(workbench.ui.assetGeneratorStoryboardReferences.length, 2);
     assert.equal(workbench.ui.assetGeneratorStoryboardReferences[0].name, "图1");
     assert.equal(workbench.ui.assetGeneratorStoryboardReferences[0].token, "【@图1】");
     assert.equal(workbench.ui.assetGeneratorStoryboardReferences[1].name, "图2");
     assert.equal(workbench.ui.assetGeneratorStoryboardReferences[1].token, "【@图2】");
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences[2].name, "图3");
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences[2].token, "【@图3】");
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences[2].originalName, "图片风格参考图");
-    assert.equal(
-      workbench.ui.assetGeneratorStoryboardReferences[2].url,
-      "/admin/assets/prompt-covers/oil_painting.webp",
-    );
+    const promptEditorReferences = buildStoryboardGeneratorPromptEditorReferencesForTest(workbench);
+    assert.deepEqual(promptEditorReferences.map((item) => item.label), ["图1", "图2"]);
+    assert.equal(new Set(promptEditorReferences.map((item) => item.assetId)).size, 2);
+    assert.equal(new Set(promptEditorReferences.map((item) => item.referenceId)).size, 2);
     assert.equal(
       workbench.ui.assetGeneratorStoryboardReferences.some((item) => item.url === "/uploads/project-thumbnail.png"),
       false,
@@ -10922,8 +11497,8 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.doesNotMatch(workbench.root.innerHTML, /<span>输入提示词<\/span>/);
     assert.doesNotMatch(workbench.root.innerHTML, /id="asset-generator-name-input"/);
     assert.match(workbench.root.innerHTML, /视频场景对照表: 无图场景/);
-    assert.match(workbench.root.innerHTML, /图片风格：/);
-    assert.match(workbench.root.innerHTML, /厚涂油画质感，清晰笔触。/);
+    assert.doesNotMatch(workbench.root.innerHTML, /图片风格：/);
+    assert.doesNotMatch(workbench.root.innerHTML, /厚涂油画质感，清晰笔触。/);
     assert.match(workbench.root.innerHTML, /风格：油画/);
     assert.match(workbench.root.innerHTML, /角色参考图=【@图1】的角色形象；场景参考图=【@图2】的角色形象/);
     assert.match(workbench.root.innerHTML, /character-reference\.png/);
@@ -10935,16 +11510,23 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.match(workbench.root.innerHTML, /asset-generator-reference-item" title="图1"/);
     assert.match(workbench.root.innerHTML, /episode-replica-ref-index">图1</);
     assert.match(workbench.root.innerHTML, /episode-replica-ref-index">图2</);
-    assert.match(workbench.root.innerHTML, /episode-replica-ref-index">图3</);
+    assert.doesNotMatch(workbench.root.innerHTML, /episode-replica-ref-index">图3</);
     assert.doesNotMatch(workbench.root.innerHTML, /project-thumbnail:/);
     assert.doesNotMatch(workbench.root.innerHTML, /project-thumbnail\.png/);
-    assert.match(workbench.root.innerHTML, /oil_painting\.webp/);
     assert.equal(
       (workbench.root.innerHTML.match(/data-action="remove-storyboard-generator-reference"/g) ?? []).length,
-      3,
+      2,
     );
     assert.doesNotMatch(workbench.root.innerHTML, /asset-generator-reference-item" title="(?:角色参考图|动作参考视频)"/);
     assert.match(workbench.root.innerHTML, /data-storyboard-generator-prompt-editor/);
+    assert.equal(
+      (workbench.root.innerHTML.match(/data-action="open-asset-image-style-skill-modal"/g) ?? []).length,
+      2,
+    );
+    assert.equal(
+      (workbench.root.innerHTML.match(/data-action="open-storyboard-prompt-skill-modal"/g) ?? []).length,
+      1,
+    );
     assert.match(workbench.root.innerHTML, /id="asset-generator-storyboard-reference-input"[^>]*multiple/);
     assert.match(workbench.root.innerHTML, /<div class="asset-generator-prompt asset-generator-composer without-heading">/);
     assert.doesNotMatch(workbench.root.innerHTML, /<label class="asset-generator-prompt asset-generator-composer">/);
@@ -10952,52 +11534,6 @@ it("does not duplicate image mention suffixes when adding another prompt mention
       workbench.root.innerHTML.indexOf("asset-generator-reference-upload")
         < workbench.root.innerHTML.indexOf("asset-generator-reference-item"),
     );
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: {
-        action: "toggle-generation-select-menu",
-        field: "storyboardStyle",
-        scope: "asset-generator",
-      },
-    });
-    assert.match(workbench.root.innerHTML, /data-action="select-storyboard-generator-style"/);
-    assert.match(workbench.root.innerHTML, /水彩/);
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "select-storyboard-generator-style", value: "watercolor" },
-    });
-    assert.equal(workbench.ui.assetGeneratorStyleCode, "watercolor");
-    assert.equal(
-      workbench.ui.assetGeneratorPrompt,
-      "视频场景对照表: 无图场景\n视频角色对照表: 角色参考图=【@图1】的角色形象；场景参考图=【@图2】的角色形象\n图片风格：【@图3】透明水彩晕染，柔和纸张纹理。",
-    );
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences.length, 3);
-    assert.equal(
-      workbench.ui.assetGeneratorStoryboardReferences[2].url,
-      "/admin/assets/prompt-covers/watercolor.webp",
-    );
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences[2].originalName, "图片风格参考图");
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "select-storyboard-generator-style", value: "watercolor" },
-    });
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences.length, 3);
-    assert.equal((workbench.ui.assetGeneratorPrompt.match(/图片风格：/gu) ?? []).length, 1);
-
-    const styleReferenceId = workbench.ui.assetGeneratorStoryboardReferences[2].id;
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: {
-        action: "remove-storyboard-generator-reference",
-        referenceId: styleReferenceId,
-      },
-    });
-    assert.equal(workbench.ui.assetGeneratorStoryboardReferences.length, 2);
-    assert.equal(
-      workbench.ui.assetGeneratorPrompt,
-      "视频场景对照表: 无图场景\n视频角色对照表: 角色参考图=【@图1】的角色形象；场景参考图=【@图2】的角色形象\n图片风格：透明水彩晕染，柔和纸张纹理。",
-    );
-    assert.doesNotMatch(workbench.root.innerHTML, /watercolor\.webp/);
-    assert.doesNotMatch(workbench.root.innerHTML, /episode-replica-ref-index">图3</);
 
     const firstReferenceId = workbench.ui.assetGeneratorStoryboardReferences[0].id;
     await handleWorkbenchActionForTest(workbench, {
@@ -11012,6 +11548,8 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     );
     assert.match(workbench.ui.assetGeneratorPrompt, /场景参考图=【@图1】的角色形象/u);
     assert.doesNotMatch(workbench.ui.assetGeneratorPrompt, /【@图2】/u);
+    assert.match(workbench.ui.assetGeneratorStoryboardPrompt, /场景参考图=【@图1】的角色形象/u);
+    assert.doesNotMatch(workbench.ui.assetGeneratorStoryboardPrompt, /【@图2】/u);
   });
 
   it("uploads multiple storyboard generator reference images and appends every cloud result", async () => {
@@ -12379,6 +12917,7 @@ describe("asset generator and imported asset modals", () => {
           generationTaskId: "scene-task-failed-1",
           generationResult: {
             status: "failed",
+            fixedImages: [{ url: "https://example.com/failed-output.png" }],
             prompt: "历史失败提示词",
             model: "historic-scene-model",
             parameters: {
@@ -12397,6 +12936,7 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /生成失败/);
     assert.match(html, /失败原因/);
     assert.match(html, /模型服务超时，请稍后重试。/);
+    assert.match(html, /failed-output\.png/);
     assert.match(html, /asset-generator-task-retry-form/);
     assert.match(html, /asset-generator-retry-prompt-input/);
     assert.match(html, /历史失败提示词/);
@@ -14030,6 +14570,72 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.museBoardMode, "storyboard");
     assert.equal(workbench.ui.episodeMediaMode, "video");
     assert.equal(workbench.ui.selectedModelId, "seedance-i2v-pro");
+  });
+
+  it("keeps storyboard image and video composer drafts isolated", async () => {
+    const storyboards = createStoryboardList(buildProjectState());
+    const storyboard = storyboards[0];
+    storyboard.generationState = {
+      ...storyboard.generationState,
+      prompt: "视频提示词",
+      imagePrompt: "图片提示词",
+      videoPrompt: "视频提示词",
+      quickReferenceItems: [
+        { id: "video-image-ref", kind: "image", type: "image", url: "/uploads/video-image.png" },
+      ],
+      referenceUploads: [
+        { id: "video-upload", kind: "video", type: "video", url: "/uploads/video.mp4" },
+      ],
+      firstFrame: { id: "video-first-frame", kind: "image", type: "image", url: "/uploads/first-frame.png" },
+      editSourceVideo: { id: "video-edit-source", kind: "video", type: "video", url: "/uploads/edit-source.mp4" },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards,
+        episodeStoryboardMap: { "episode-new": storyboards },
+        episodeWorkbenchAttachments: [
+          { id: "video-audio", kind: "audio", type: "audio", url: "/uploads/video-audio.mp3" },
+        ],
+        episodeWorkbenchSelectedAttachmentIds: ["video-audio"],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-episode-media-mode", mode: "image" },
+    });
+
+    const imageState = workbench.ui.episodeStoryboardMap["episode-new"][0].generationState;
+    assert.equal(workbench.ui.prompt, "图片提示词");
+    assert.deepEqual(imageState.quickReferenceItems, []);
+    assert.deepEqual(imageState.referenceUploads, []);
+    assert.equal(imageState.firstFrame, null);
+    assert.equal(imageState.editSourceVideo, null);
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-episode-media-mode", mode: "video" },
+    });
+
+    const restoredVideoState = workbench.ui.episodeStoryboardMap["episode-new"][0].generationState;
+    assert.equal(workbench.ui.prompt, "视频提示词");
+    assert.equal(restoredVideoState.quickReferenceItems[0]?.id, "video-image-ref");
+    assert.equal(restoredVideoState.referenceUploads[0]?.id, "video-upload");
+    assert.equal(restoredVideoState.firstFrame?.id, "video-first-frame");
+    assert.equal(restoredVideoState.editSourceVideo?.id, "video-edit-source");
+    assert.equal(workbench.ui.episodeWorkbenchAttachments[0]?.id, "video-audio");
   });
 
   it("updates the prompt dock when selecting image reference modes from the mini menu", async () => {
@@ -20223,7 +20829,8 @@ describe("production workbench project tab", () => {
         assetGeneratorModal: "storyboard",
         assetGeneratorName: "",
         assetGeneratorStoryboardId: storyboard.id,
-        assetGeneratorPrompt: "【@角色素材】与【@场景素材】同框。",
+        assetGeneratorPrompt: "故事板正文：角色=【@角色素材】与场景=【@场景素材】同框。",
+        assetGeneratorStoryboardPrompt: "故事板正文：角色=【@角色素材】与场景=【@场景素材】同框。",
         assetGeneratorStoryboardReferences: [
           {
             id: "storyboard-material-1",
@@ -20293,14 +20900,8 @@ describe("production workbench project tab", () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].model, "gpt-image-2-cn");
     assert.equal(calls[0].sourceSurface, "storyboard-generator-modal");
-    assert.equal(
-      calls[0].prompt.startsWith("避免场景过于相似创建一个电影制作板/视觉规划表，展示短片或商业广告的完整概念。"),
-      true,
-    );
-    assert.match(calls[0].prompt, /共享创意指导\(顶部栏\):整体限制/u);
-    assert.match(calls[0].prompt, /将宽高比设为16:9，并且标注每个镜头的时长/u);
-    assert.match(calls[0].prompt, /重点保证中文字体清晰可辨/u);
-    assert.equal(calls[0].prompt.endsWith("\n【@图1】与【@图2】同框。"), true);
+    assert.equal(calls[0].prompt, "故事板正文：角色=【@图1】与场景=【@图2】同框。");
+    assert.equal(calls[0].storyboardPrompt, "故事板正文：角色=【@图1】与场景=【@图2】同框。");
     assert.deepEqual(calls[0].parameters.filePaths, [
       "/uploads/storyboard-material-1.png",
       "/uploads/storyboard-material-2.png",
@@ -21674,6 +22275,7 @@ describe("production workbench project tab", () => {
       {
         taskId: "asset-image-character-1-persisted",
         status: "completed",
+        skillId: "image-style-history",
         promptPreview: "读取历史：补强角色破损麻衣和疲惫眼神。",
         selectionContext: {
           assetTab: "character",
@@ -21700,6 +22302,13 @@ describe("production workbench project tab", () => {
           taskId: "stale-local-entry",
           status: "running",
         },
+        episodeBatchOfficialImageStyleSkills: [
+          {
+            id: "image-style-history",
+            label: "历史人像风格",
+            preview: "https://example.com/history-portrait-style.png",
+          },
+        ],
         assetConversationHistory: {},
         episodeBatchResults: {},
       },
@@ -21734,8 +22343,67 @@ describe("production workbench project tab", () => {
       assetId: "character-1",
       mediaMode: "image",
     }]);
-    assert.deepEqual(workbench.ui.assetConversationHistory["image:character-1"], persistedEntries);
+    assert.equal(workbench.ui.assetConversationHistory["image:character-1"]?.[0]?.styleLabel, "历史人像风格");
+    assert.equal(
+      workbench.ui.assetConversationHistory["image:character-1"]?.[0]?.quickReferenceItems?.find((item) => item.isGenerationStyleReference)?.preview,
+      "https://example.com/history-portrait-style.png",
+    );
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-character-1-persisted");
+  });
+
+  it("keeps local asset conversation history when the history response is empty", async () => {
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-1",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        imageGenerationResult: {
+          taskId: "asset-image-character-1-new",
+          status: "running",
+          createdAt: "2026-05-31 09:31:00",
+          selectionContext: {
+            selectedAssetId: "character-1",
+            selectedAssetName: "废土主角",
+          },
+        },
+        assetConversationHistory: {
+          "image:character-1": [
+            {
+              taskId: "asset-image-character-1-old",
+              status: "completed",
+              createdAt: "2026-05-31 09:30:00",
+              selectionContext: {
+                selectedAssetId: "character-1",
+                selectedAssetName: "废土主角",
+              },
+            },
+          ],
+        },
+        episodeBatchResults: {},
+      },
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-1", title: "真实剧集", status: "draft", storyboardCount: 0 }],
+          shots: [],
+        },
+      },
+      api: {
+        async getAssetConversationHistory() {
+          return { entries: [] };
+        },
+      },
+    };
+
+    await loadSelectedAssetConversationHistory(workbench);
+
+    assert.deepEqual(
+      workbench.ui.assetConversationHistory["image:character-1"].map((entry) => entry.taskId),
+      ["asset-image-character-1-old", "asset-image-character-1-new"],
+    );
   });
 
   it("reselects the active tab's first asset and reloads its history when switching asset tabs", async () => {
@@ -22244,7 +22912,7 @@ describe("production workbench project tab", () => {
       mediaKind: "image",
       assetId,
       promptPreview: "第一个任务",
-      selectionContext: { selectedAssetId: assetId },
+      selectionContext: { selectedAssetId: assetId, selectedAssetName: "并行任务角色" },
       fixedImages: [],
     };
     const latestEntry = {
@@ -22282,7 +22950,11 @@ describe("production workbench project tab", () => {
     });
 
     const entries = workbench.ui.assetConversationHistory[`image:${assetId}`];
-    assert.equal(entries.find((entry) => entry.taskId === firstEntry.taskId)?.status, "running");
+      assert.equal(entries.find((entry) => entry.taskId === firstEntry.taskId)?.status, "running");
+      assert.equal(
+        entries.find((entry) => entry.taskId === firstEntry.taskId)?.selectionContext?.selectedAssetName,
+        "并行任务角色",
+      );
     assert.equal(entries.find((entry) => entry.taskId === latestEntry.taskId)?.status, "running");
     assert.equal(workbench.ui.imageGenerationResult.taskId, latestEntry.taskId);
     assert.equal(workbench.ui.episodeBatchResults[assetId].taskId, latestEntry.taskId);
@@ -22294,6 +22966,11 @@ describe("production workbench project tab", () => {
       entries,
     );
     assert.match(html, /asset-task-first-running[\s\S]*?任务进度：生成中/);
+    const firstEntryStart = html.indexOf('data-generation-task-id="asset-task-first-running"');
+    const firstEntryEnd = html.indexOf('data-generation-task-id="asset-task-latest-running"');
+    const firstEntryHtml = html.slice(firstEntryStart, firstEntryEnd);
+    assert.match(firstEntryHtml, /<strong title="并行任务角色">并行任务角色<\/strong>/);
+    assert.doesNotMatch(firstEntryHtml, /未命名生图/);
   });
 
   it("submits the visible asset prompt and selected backend model parameters when clicking generate", async () => {
@@ -22350,6 +23027,16 @@ describe("production workbench project tab", () => {
             selectedAssetName: "叙言",
           },
         },
+        assetImageStyleSkillId: "private-image-style",
+        assetImageStyleSkillProjectId: "project-1",
+        episodeBatchPrivateImageStyleSkills: [
+          {
+            id: "private-image-style",
+            label: "我的水墨",
+            promptContent: "水墨晕染风格，保留人物线条。",
+            preview: "https://example.com/my-ink.png",
+          },
+        ],
         episodeGenerationConfig: {
           defaultImageModelCode: "jimeng-4-5",
           models: [
@@ -22435,8 +23122,13 @@ describe("production workbench project tab", () => {
     assert.equal(createImageGenerationTaskCalls[0].payload.model, "jimeng-4-5");
     assert.equal(createImageGenerationTaskCalls[0].payload.target.kind, "episode_asset");
     assert.equal(createImageGenerationTaskCalls[0].payload.target.targetId, "character-2");
-    assert.equal(createImageGenerationTaskCalls[0].payload.prompt, "框内最新提示词，必须发送给所选模型。");
-    assert.equal(createImageGenerationTaskCalls[0].payload.promptOverride, "框内最新提示词，必须发送给所选模型。");
+    assert.equal(
+      createImageGenerationTaskCalls[0].payload.prompt,
+      "框内最新提示词，必须发送给所选模型。\n图片风格：参考【@图1】不要出现参考图内容，水墨晕染风格，保留人物线条。",
+    );
+    assert.equal(createImageGenerationTaskCalls[0].payload.promptOverride, createImageGenerationTaskCalls[0].payload.prompt);
+    assert.equal(workbench.ui.imageGenerationResult?.promptPreview, createImageGenerationTaskCalls[0].payload.prompt);
+    assert.equal(workbench.ui.imageGenerationResult?.skillId, "private-image-style");
     assert.equal(createImageGenerationTaskCalls[0].payload.parameters.quality, "4K");
     assert.equal(createImageGenerationTaskCalls[0].payload.parameters.aspectRatio, "3:4");
     assert.equal(createImageGenerationTaskCalls[0].payload.parameters.count, 1);
@@ -22513,6 +23205,15 @@ describe("production workbench project tab", () => {
           name: "废土主角",
           description: "灰黑短发，破旧麻袋衣，警惕眼神。",
           preview: "https://example.com/character-1.png",
+        },
+      ],
+      attachmentItems: [
+        {
+          id: "uploaded-reference-1",
+          type: "image",
+          kind: "image",
+          name: "参考图一",
+          url: "https://example.com/uploaded-reference-1.png",
         },
       ],
       selectionContext: {
@@ -22605,13 +23306,204 @@ describe("production workbench project tab", () => {
         preview: "https://example.com/character-1.png",
       },
     ]);
+    assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, [
+      {
+        id: "edit-image:uploaded-reference-1",
+        type: "image",
+        kind: "image",
+        name: "参考图一",
+        preview: "https://example.com/uploaded-reference-1.png",
+        previewUrl: "https://example.com/uploaded-reference-1.png",
+        url: "https://example.com/uploaded-reference-1.png",
+        audioUrl: "https://example.com/uploaded-reference-1.png",
+      },
+    ]);
+    assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, ["edit-image:uploaded-reference-1"]);
     assert.match(workbench.root.innerHTML, /<img src="https:\/\/example\.com\/character-1\.png"/);
+    assert.match(workbench.root.innerHTML, /<img src="https:\/\/example\.com\/uploaded-reference-1\.png"/);
     const quickReferenceCard = workbench.root.innerHTML.match(
       /<article class="episode-replica-ref-card quick-reference"[\s\S]*?<\/article>/,
     )?.[0] ?? "";
     assert.doesNotMatch(quickReferenceCard, /<strong>/);
     assert.doesNotMatch(quickReferenceCard, /<small>/);
     assert.equal(workbench.ui.isStoryboardDescriptionModalOpen, false);
+  });
+
+  it("hides the auto-added image style when re-editing while keeping handwritten style text", async () => {
+    const autoStyleReference = {
+      id: "persisted-reference-2",
+      kind: "image",
+      type: "image",
+      name: "图2",
+      preview: "https://example.com/animation-style.png",
+    };
+    const entry = {
+      taskId: "asset-image-character-style-restore-1",
+      status: "completed",
+      promptPreview: "角色要求\n图片风格：【@图2】自动加入的技能文案。\n图片风格：用户手写的赛博朋克风格。",
+      quickReferenceItems: [
+        {
+          id: "quick-ref:character:character-1",
+          assetId: "character-1",
+          kind: "character",
+          name: "废土主角",
+          preview: "https://example.com/character-1.png",
+        },
+        autoStyleReference,
+      ],
+      selectionContext: {
+        assetTab: "character",
+        selectedAssetId: "character-1",
+        selectedAssetName: "废土主角",
+      },
+    };
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-1",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        projectAssetTab: "character",
+        projectStyles: [{
+          id: "animation",
+          code: "animation",
+          name: "动画",
+          coverImageUrl: "https://example.com/animation-style.png",
+        }],
+        prompt: "",
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt: "",
+          quickReferenceItems: [],
+          mentionReferences: [],
+        },
+        imageGenerationResult: entry,
+        assetConversationHistory: {
+          "image:character-1": [entry],
+        },
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-1", title: "真实剧集", status: "draft", storyboardCount: 0 }],
+          shots: [],
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "episode-fixed-result-action",
+        resultAction: "edit",
+        taskId: entry.taskId,
+      },
+    });
+
+    assert.equal(workbench.ui.assetPromptDraft?.prompt, "角色要求\n图片风格：用户手写的赛博朋克风格。");
+    assert.deepEqual(workbench.ui.assetPromptDraft?.quickReferenceItems.map((item) => item.id), [
+      "quick-ref:character:character-1",
+    ]);
+    assert.doesNotMatch(workbench.ui.prompt, /自动加入的技能文案/);
+    assert.doesNotMatch(workbench.ui.prompt, /animation-style\.png/);
+  });
+
+  it("keeps handwritten image style text when clearing the imported project style", async () => {
+    const prompt = "角色要求\n图片风格：【@图片风格参考图】自动项目风格。\n图片风格：用户手写的水彩风格。";
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        prompt,
+        assetImageStyleSkillId: "project-style",
+        assetImageStyleSkillDraftId: "private-style",
+        episodeBatchPrivateImageStyleSkills: [{ id: "private-style", label: "我的风格" }],
+        assetPromptDraft: {
+          scopeMode: "assets",
+          prompt,
+          quickReferenceItems: [{
+            id: "quick-ref:style:animation",
+            name: "动画",
+            originalName: "图片风格参考图",
+            isGenerationStyleReference: true,
+            preview: "https://example.com/animation-style.png",
+          }],
+        },
+      }),
+      state: buildProjectState(),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-asset-image-style-skill" },
+    });
+
+    assert.equal(workbench.ui.prompt, "角色要求\n图片风格：用户手写的水彩风格。");
+    assert.deepEqual(workbench.ui.assetPromptDraft.quickReferenceItems, []);
+  });
+
+  it("keeps handwritten storyboard style text while hiding the paid style prompt and thumbnail", async () => {
+    const prompt = "故事板正文\n图片风格：【@图2】自动项目风格。\n图片风格：用户手写的水彩风格。";
+    const workbench = {
+      state: buildProjectState(),
+      ui: buildProjectUi({
+        assetGeneratorTarget: "storyboard",
+        assetGeneratorPrompt: prompt,
+        assetGeneratorStoryboardPrompt: prompt,
+        assetGeneratorStyleCode: "animation",
+        assetGeneratorStoryboardReferences: [
+          { id: "character-reference", kind: "image", name: "图1", url: "/uploads/character.png" },
+          {
+            id: "batch-style-reference:animation",
+            kind: "image",
+            name: "图2",
+            originalName: "图片风格参考图",
+            isGenerationStyleReference: true,
+            url: "/uploads/animation-style.png",
+          },
+        ],
+        projectStyles: [{
+          id: "animation",
+          code: "animation",
+          name: "动画",
+          prompt_content: "自动项目风格。",
+        }],
+        assetImageStyleSkillId: "project-style",
+        assetImageStyleSkillDraftId: "private-style",
+        episodeBatchPrivateImageStyleSkills: [{
+          id: "private-style",
+          label: "付费水墨",
+          preview: "/uploads/private-style.png",
+        }],
+      }),
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-asset-image-style-skill" },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorPrompt, "故事板正文\n图片风格：用户手写的水彩风格。");
+    assert.equal(workbench.ui.assetGeneratorStoryboardPrompt, workbench.ui.assetGeneratorPrompt);
+    assert.deepEqual(
+      workbench.ui.assetGeneratorStoryboardReferences.map((item) => item.name),
+      ["图1"],
+    );
+    assert.doesNotMatch(workbench.ui.assetGeneratorPrompt, /private-style\.png|自动项目风格/u);
   });
 
   it("keeps fixed-result actions clickable while a new generation is still busy", async () => {
@@ -22913,12 +23805,18 @@ describe("production workbench project tab", () => {
       assert.equal(timers.length, 1);
       assert.equal(timers[0].delayMs, 0);
       assert.equal(workbench.ui.imageGenerationResult.status, "queued");
+      assert.equal(workbench.ui.imageGenerationResult.selectionContext.selectedAssetName, "废土主角");
       assert.equal(workbench.ui.generationPollingActive, true);
 
       await timers[0].callback();
 
       assert.deepEqual(pollCalls, ["asset-image-task-queued"]);
       assert.equal(workbench.ui.imageGenerationResult.status, "running");
+      assert.equal(workbench.ui.imageGenerationResult.selectionContext.selectedAssetName, "废土主角");
+      assert.equal(
+        workbench.ui.assetConversationHistory["image:a71c2367-d9fd-42ec-a2df-78b30c72f753"][0]?.selectionContext?.selectedAssetName,
+        "废土主角",
+      );
       const nextPollTimer = timers.slice(1).find((timer) => timer.delayMs === 15000);
       assert.ok(nextPollTimer);
 
@@ -22933,6 +23831,7 @@ describe("production workbench project tab", () => {
 
       assert.deepEqual(pollCalls, ["asset-image-task-queued", "asset-image-task-queued"]);
       assert.equal(workbench.ui.imageGenerationResult.status, "completed");
+      assert.equal(workbench.ui.imageGenerationResult.selectionContext.selectedAssetName, "废土主角");
       assert.equal(workbench.ui.generationPollingActive, false);
       assert.equal(workbench.ui.toast, "");
       assert.equal(
@@ -25609,8 +26508,8 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /批量生视频/);
     assert.doesNotMatch(html, /批量高清处理/);
     assert.doesNotMatch(html, /主体固定/);
-    assert.match(html, /官方样式/);
-    assert.doesNotMatch(html, /定制画风/);
+    assert.match(html, /官方技能/);
+    assert.match(html, /私人技能库/);
     assert.doesNotMatch(html, /其他配置/);
     assert.doesNotMatch(html, /图片模型/);
     assert.match(html, /episode-batch-footer image-composer/);
@@ -25624,7 +26523,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /尺寸/);
     assert.match(html, />\s*4K\s*</);
     assert.match(html, />\s*21:9\s*</);
-    assert.match(html, /生成1张图 \| 90 积分/);
+    assert.match(html, /生成 90 积分/);
     assert.match(html, /data-action="submit-episode-batch-modal"/);
     assert.match(html, /--episode-batch-anchor-top:80px/);
     assert.doesNotMatch(html, /data:image\/svg\+xml;charset=UTF-8/);
@@ -25651,12 +26550,13 @@ describe("production workbench project tab", () => {
     assert.match(batchModalBlock, /overflow-y:\s*auto/);
     assert.match(batchModalBlock, /overscroll-behavior:\s*contain/);
     assert.match(batchModalBlock, /max-height:\s*min\(calc\(100vh - var\(--episode-batch-anchor-top,\s*80px\) - 1rem\),\s*82vh\)/);
+    assert.doesNotMatch(css, /\.episode-batch-modal:has\(\.episode-batch-settings-wrap\.is-open\)\s*\{[^}]*overflow:\s*visible/);
     assert.match(css, /\.episode-batch-select-wrap\.menu-down \.episode-batch-select-menu\s*\{/);
     assert.match(css, /top:\s*calc\(100% \+ 0\.45rem\)/);
     assert.match(css, /bottom:\s*auto/);
   });
 
-  it("renders backend batch styles inside the public batch style tab", () => {
+  it("renders image style skills inside the official batch skill tab", () => {
     const html = renderProductionWorkbench({
       state: {
         ...buildProjectState(),
@@ -25682,11 +26582,13 @@ describe("production workbench project tab", () => {
                 id: "batch-style-1",
                 label: "中国武侠",
                 preview: "https://example.com/style-wuxia.png",
+                priceCredits: 12,
               },
               {
                 id: "batch-style-2",
                 label: "赛博朋克",
                 preview: "https://example.com/style-cyberpunk.png",
+                priceCredits: 0,
               },
             ],
             items: [
@@ -25697,13 +26599,61 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /官方样式/);
+    assert.match(html, /官方技能/);
+    assert.match(html, /私人技能库/);
     assert.match(html, /中国武侠/);
     assert.match(html, /赛博朋克/);
     assert.match(html, /https:\/\/example\.com\/style-wuxia\.png/);
     assert.match(html, /https:\/\/example\.com\/style-cyberpunk\.png/);
-    assert.match(html, /生成1张图 \| 90 积分/);
+    assert.match(html, /12积分\/张/);
+    assert.match(html, /免费/);
+    assert.match(html, /生成 78 \+ 12积分/);
     assert.match(html, /episode-batch-style-card[^"\n]* selected/);
+  });
+
+  it("renders the asset image style picker with the actual project style and official or private skills", () => {
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "image",
+          museScopeMode: "assets",
+          selectedEpisodeId: "episode-new",
+          storyboards: [],
+          selectedStoryboard: null,
+          episodeWorkbenchContext: {
+            data: {
+              project: { projectId: "project-1", projectType: "oil_painting" },
+            },
+          },
+          assetImageStyleSkillModalOpen: true,
+          assetImageStyleSkillTab: "official",
+          assetImageStyleSkillDraftId: "project-style",
+          projectStyles: [
+            { code: "oil_painting", name: "油画", coverImageUrl: "/admin/assets/prompt-covers/oil_painting.webp" },
+          ],
+          episodeBatchOfficialImageStyleSkills: [
+            { id: "official-image-style", label: "电影光影", category: "image_style", priceCredits: 12 },
+          ],
+          episodeBatchPrivateImageStyleSkills: [
+            { id: "private-image-style", label: "我的水墨", category: "image_style", priceCredits: 8 },
+          ],
+        }),
+      },
+    });
+
+    assert.match(html, /id="asset-image-style-skill-picker"/);
+    assert.match(html, /官方技能/);
+    assert.match(html, /私人技能库/);
+    assert.match(html, />油画</);
+    assert.match(html, /电影光影/);
+    assert.doesNotMatch(html, /故事版提示词|道具抽取提示词|人物抽取提示词|场景抽取提示词/);
   });
 
   it("resolves relative cover urls in the asset batch image modal", () => {
@@ -26155,6 +27105,9 @@ describe("production workbench project tab", () => {
         episodeMediaMode: "image",
         selectedEpisodeId: "episode-new",
         selectedEpisodeAssetIds: ["character-1", "prop-1"],
+        projectStyles: [
+          { code: "animation", name: "动画", coverImageUrl: "/admin/assets/prompt-covers/animation.webp" },
+        ],
         importedAssets: {
           character: [{ id: "character-1", name: "任小野", kind: "character" }],
           scene: [],
@@ -26199,7 +27152,7 @@ describe("production workbench project tab", () => {
     }
   });
 
-  it("appends the selected official style prompt and thumbnail to each submitted batch asset prompt", async () => {
+  it("submits the selected image style skill id with prompt body and cover reference", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -26242,16 +27195,6 @@ describe("production workbench project tab", () => {
             },
           ],
         },
-        projectStyles: [
-          {
-            id: "batch-style-1",
-            name: "国风仙侠",
-            code: "national_xianxia",
-            coverImageUrl: "https://example.com/style.png",
-            prompt_content: "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
-            status: "enabled",
-          },
-        ],
         importedAssets: {
           character: [{ id: "character-1", name: "任小草", kind: "character" }],
           scene: [{ id: "scene-1", name: "山门", kind: "scene" }],
@@ -26270,6 +27213,8 @@ describe("production workbench project tab", () => {
               id: "batch-style-1",
               label: "国风仙侠",
               preview: "https://example.com/style.png",
+              promptContent: "马蒂斯风格，鲜艳纯色，装饰性平面构图，流畅线条，色彩大胆明快。",
+              priceCredits: 18,
             },
           ],
           items: [
@@ -26304,21 +27249,20 @@ describe("production workbench project tab", () => {
         dataset: { action: "submit-episode-batch-modal" },
       });
 
-      assert.equal(workbench.ui.projectStyles?.[0]?.prompt_content, "国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。");
-      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.promptPreview, [
-        "角色设计展示图，纯米白色背景，左侧为角色上半身特写肖像。",
-        "图片风格：【@图1】国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
-      ].join("\n"));
-      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.quickReferenceItems?.[0]?.url, "https://example.com/style.png");
-      assert.equal(workbench.ui.episodeBatchResults?.["scene-1"]?.promptPreview, [
-        "云雾中的古老山门，晨光穿过松林。",
-        "图片风格：【@图1】国风仙侠批量生图风格，保留东方服饰细节、仙侠氛围、清晰主体和统一光影质感。",
-      ].join("\n"));
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.promptPreview, "角色设计展示图，纯米白色背景，左侧为角色上半身特写肖像。");
+      assert.equal(workbench.ui.episodeBatchResults?.["character-1"]?.quickReferenceItems?.length, 0);
+      assert.equal(workbench.ui.episodeBatchResults?.["scene-1"]?.promptPreview, "云雾中的古老山门，晨光穿过松林。");
       assert.equal(createImageGenerationTaskCalls.length, 2);
       for (const payload of createImageGenerationTaskCalls) {
-        assert.match(payload.prompt, /图片风格：【@图1】国风仙侠批量生图风格/);
-        assert.equal(payload.parameters.quickReferences?.[0]?.url, "https://example.com/style.png");
-        assert.deepEqual(payload.parameters.filePaths, ["https://example.com/style.png"]);
+        assert.equal(payload.prompt, payload.promptOverride);
+        assert.match(
+          payload.prompt,
+          /图片风格：参考【@图1】不要出现参考图内容，马蒂斯风格，鲜艳纯色，装饰性平面构图，流畅线条，色彩大胆明快。/,
+        );
+        assert.equal(payload.skillId, "batch-style-1");
+        assert.equal(payload.priceCredits, undefined);
+        assert.equal(payload.parameters.quickReferences?.length, 1);
+        assert.equal(payload.parameters.filePaths?.length, 1);
       }
       assert.equal(workbench.ui.imageGenerationResult?.promptPreview, workbench.ui.episodeBatchResults?.["character-1"]?.promptPreview);
     } finally {
@@ -26394,6 +27338,11 @@ describe("production workbench project tab", () => {
           imageAspectRatio: "9:16",
           imageClarity: "2K",
           selectedStyleId: "batch-style-1",
+          publicStyles: [{
+            id: "batch-style-1",
+            label: "国风仙侠",
+            priceCredits: 18,
+          }],
           items: [
             {
               id: "character-1",
@@ -26428,10 +27377,15 @@ describe("production workbench project tab", () => {
       assert.equal(createImageGenerationTaskCalls[0].payload.model, "gpt-image-2-cn");
       assert.equal(createImageGenerationTaskCalls[0].payload.target.kind, "episode_asset");
       assert.equal(createImageGenerationTaskCalls[0].payload.target.targetId, "character-1");
-      assert.equal(createImageGenerationTaskCalls[0].payload.prompt, "角色设计展示图，纯米白色背景。\n图片风格：【@图1】国风仙侠批量生图风格，保留东方服饰细节。");
+      assert.equal(
+        createImageGenerationTaskCalls[0].payload.prompt,
+        "角色设计展示图，纯米白色背景。\n图片风格：参考【@图1】不要出现参考图内容，国风仙侠批量生图风格，保留东方服饰细节。",
+      );
       assert.equal(createImageGenerationTaskCalls[0].payload.promptOverride, createImageGenerationTaskCalls[0].payload.prompt);
-      assert.equal(createImageGenerationTaskCalls[0].payload.parameters.quickReferences?.[0]?.url, "https://example.com/style.png");
-      assert.deepEqual(createImageGenerationTaskCalls[0].payload.parameters.filePaths, ["https://example.com/style.png"]);
+      assert.equal(createImageGenerationTaskCalls[0].payload.skillId, "batch-style-1");
+      assert.equal(createImageGenerationTaskCalls[0].payload.priceCredits, undefined);
+      assert.equal(createImageGenerationTaskCalls[0].payload.parameters.quickReferences?.length, 1);
+      assert.equal(createImageGenerationTaskCalls[0].payload.parameters.filePaths?.length, 1);
       assert.equal(createImageGenerationTaskCalls[0].payload.parameters.aspectRatio, "9:16");
       assert.equal(createImageGenerationTaskCalls[0].payload.parameters.quality, "2K");
       assert.deepEqual(workbench.ui.episodeBatchResults?.["character-1"]?.fixedImages, []);
@@ -27000,7 +27954,7 @@ describe("production workbench project tab", () => {
     }
   });
 
-  it("loads official styles when opening the asset batch image modal", async () => {
+  it("loads image style skills and prefers the private default when opening the asset batch image modal", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -27018,23 +27972,32 @@ describe("production workbench project tab", () => {
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       api: {
-        async getProjectStyles() {
+        async getPromptMarketplace() {
           return {
-            data: [
+            items: [
               {
-                id: "batch-style-1",
-                name: "中国武侠",
-                code: "chinese_wuxia",
+                id: "official-style-1",
+                title: "中国武侠",
+                category: "image_style",
+                official: true,
+                isDefault: true,
                 coverImageUrl: "https://example.com/style-wuxia.png",
-                prompt_content: "中国武侠批量生图风格，保留东方武侠服饰、动作张力和统一光影。",
-                status: "enabled",
+                priceCredits: 8,
               },
+            ],
+          };
+        },
+        async getPromptMarketplaceLibrary() {
+          return {
+            items: [
               {
-                id: "batch-style-2",
-                name: "赛博朋克",
-                code: "cyberpunk",
-                cover_image_url: "https://example.com/style-cyberpunk.png",
-                status: "enabled",
+                id: "private-style-1",
+                title: "我的赛博朋克",
+                category: "image_style",
+                official: false,
+                isDefault: true,
+                coverImageUrl: "https://example.com/style-cyberpunk.png",
+                priceCredits: 15,
               },
             ],
           };
@@ -27070,32 +28033,35 @@ describe("production workbench project tab", () => {
         dataset: { action: "open-episode-batch-actions" },
       });
 
-      assert.equal(workbench.ui.projectStyles?.length, 2);
-      assert.equal(
-        workbench.ui.projectStyles?.[0]?.prompt_content,
-        "中国武侠批量生图风格，保留东方武侠服饰、动作张力和统一光影。",
-      );
       assert.deepEqual(workbench.ui.episodeBatchModal?.publicStyles, [
         {
-          id: "batch-style-1",
+          id: "official-style-1",
           label: "中国武侠",
           preview: "https://example.com/style-wuxia.png",
-          prompt_content: "中国武侠批量生图风格，保留东方武侠服饰、动作张力和统一光影。",
-          promptContent: "中国武侠批量生图风格，保留东方武侠服饰、动作张力和统一光影。",
+          priceCredits: 8,
+          isDefault: true,
+          official: true,
+          source: "official",
         },
+      ]);
+      assert.deepEqual(workbench.ui.episodeBatchModal?.customStyles, [
         {
-          id: "batch-style-2",
-          label: "赛博朋克",
+          id: "private-style-1",
+          label: "我的赛博朋克",
           preview: "https://example.com/style-cyberpunk.png",
-          prompt_content: "",
-          promptContent: "",
+          priceCredits: 15,
+          isDefault: true,
+          official: false,
+          source: "private",
         },
       ]);
       assert.deepEqual(
         workbench.ui.episodeBatchModal?.items?.map((item) => item.id),
         ["character-1", "prop-1"],
       );
-      assert.equal(workbench.ui.episodeBatchModal?.selectedStyleId, "batch-style-1");
+      assert.equal(workbench.ui.episodeBatchModal?.styleTab, "custom");
+      assert.equal(workbench.ui.episodeBatchModal?.selectedStyleId, "private-style-1");
+      assert.equal(workbench.ui.selectedEpisodePromptSkillIds?.image_style, "private-style-1");
       assert.deepEqual(workbench.ui.episodeBatchModal?.batchPromptPresetCategories, {
         scene: [],
         character: [],
@@ -27106,7 +28072,77 @@ describe("production workbench project tab", () => {
     }
   });
 
-  it("loads asset batch image generation config and styles in parallel when opening the modal", async () => {
+  it("opens the asset image style picker from the prompt dock", async () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+      body: {
+        classList: {
+          toggle() {},
+        },
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async getPromptMarketplace() {
+          return {
+            items: [{
+              id: "official-style-1",
+              title: "中国武侠",
+              category: "image_style",
+              official: true,
+              priceCredits: 8,
+            }],
+          };
+        },
+        async getPromptMarketplaceLibrary() {
+          return {
+            items: [{
+              id: "private-style-1",
+              title: "我的赛博朋克",
+              category: "image_style",
+              official: false,
+              priceCredits: 15,
+            }],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        projectStyles: [],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "open-asset-image-style-skill-modal" },
+      });
+
+      assert.equal(workbench.ui.assetImageStyleSkillModalOpen, true);
+      assert.match(workbench.root.innerHTML, /data-selection-picker-id="asset-image-style-skill-picker"/);
+      assert.match(workbench.root.innerHTML, /官方技能/);
+      assert.match(workbench.root.innerHTML, /私人技能库/);
+      assert.match(workbench.root.innerHTML, /中国武侠/);
+    } finally {
+      globalThis.document = previousDocument;
+    }
+  });
+
+  it("loads asset batch image generation config and image style skills in parallel when opening the modal", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -27116,12 +28152,16 @@ describe("production workbench project tab", () => {
       },
     };
     let resolveGenerationConfig;
-    let resolveOfficialStyles;
+    let resolveOfficialSkills;
+    let resolvePrivateSkills;
     const pendingGenerationConfig = new Promise((resolve) => {
       resolveGenerationConfig = resolve;
     });
-    const pendingOfficialStyles = new Promise((resolve) => {
-      resolveOfficialStyles = resolve;
+    const pendingOfficialSkills = new Promise((resolve) => {
+      resolveOfficialSkills = resolve;
+    });
+    const pendingPrivateSkills = new Promise((resolve) => {
+      resolvePrivateSkills = resolve;
     });
     const calls = [];
     const workbench = {
@@ -27155,10 +28195,16 @@ describe("production workbench project tab", () => {
           calls.push(`generation-config:${options.mediaType}:done`);
           return payload;
         },
-        async getProjectStyles() {
-          calls.push("official-styles:start");
-          const payload = await pendingOfficialStyles;
-          calls.push("official-styles:done");
+        async getPromptMarketplace() {
+          calls.push("official-skills:start");
+          const payload = await pendingOfficialSkills;
+          calls.push("official-skills:done");
+          return payload;
+        },
+        async getPromptMarketplaceLibrary() {
+          calls.push("private-skills:start");
+          const payload = await pendingPrivateSkills;
+          calls.push("private-skills:done");
           return payload;
         },
       },
@@ -27194,7 +28240,11 @@ describe("production workbench project tab", () => {
 
       await Promise.resolve();
 
-      assert.deepEqual(calls, ["generation-config:image:start", "official-styles:start"]);
+      assert.deepEqual(calls, [
+        "generation-config:image:start",
+        "official-skills:start",
+        "private-skills:start",
+      ]);
       assert.equal(workbench.ui.episodeBatchModal ?? null, null);
 
       resolveGenerationConfig({
@@ -27213,24 +28263,29 @@ describe("production workbench project tab", () => {
           },
         ],
       });
-      resolveOfficialStyles({
-        data: [
+      resolveOfficialSkills({
+        items: [
           {
             id: "batch-style-1",
-            name: "中国武侠",
-            code: "chinese_wuxia",
-            status: "enabled",
+            title: "中国武侠",
+            category: "image_style",
+            official: true,
+            isDefault: true,
+            priceCredits: 0,
           },
         ],
       });
+      resolvePrivateSkills({ items: [] });
 
       await openPromise;
 
       assert.deepEqual(calls, [
         "generation-config:image:start",
-        "official-styles:start",
+        "official-skills:start",
+        "private-skills:start",
         "generation-config:image:done",
-        "official-styles:done",
+        "official-skills:done",
+        "private-skills:done",
       ]);
       assert.equal(workbench.ui.episodeBatchModal?.show, true);
       assert.equal(workbench.ui.episodeBatchModal?.imageModelId, "image-model-a");
@@ -27262,7 +28317,8 @@ describe("production workbench project tab", () => {
       ]);
     } finally {
       resolveGenerationConfig?.({ models: [] });
-      resolveOfficialStyles?.({ data: [] });
+      resolveOfficialSkills?.({ items: [] });
+      resolvePrivateSkills?.({ items: [] });
       globalThis.document = previousDocument;
     }
   });
@@ -27648,7 +28704,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.videoGenerationMode, "reference-video");
   });
 
-  it("calculates asset batch image credits from the selected backend model", async () => {
+  it("calculates asset batch image credits from the selected backend model and style skill", async () => {
     const previousDocument = globalThis.document;
     globalThis.document = {
       body: {
@@ -27688,6 +28744,21 @@ describe("production workbench project tab", () => {
             ],
           };
         },
+        async getPromptMarketplace() {
+          return {
+            items: [{
+              id: "official-image-style",
+              title: "官方生图风格",
+              category: "image_style",
+              official: true,
+              isDefault: true,
+              priceCredits: 15,
+            }],
+          };
+        },
+        async getPromptMarketplaceLibrary() {
+          return { items: [] };
+        },
       },
       ui: buildProjectUi({
         projectPanelMode: "episode-workbench",
@@ -27720,8 +28791,9 @@ describe("production workbench project tab", () => {
 
       assert.deepEqual(freshCalls, [{ fresh: true, mediaType: "image" }]);
       assert.equal(workbench.ui.episodeBatchModal?.imageModelId, "priced-image-a");
-      assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 180);
-      assert.match(renderProductionWorkbench(workbench), /生成2张图 \| 180 积分/);
+      assert.equal(workbench.ui.episodeBatchModal?.selectedStyleId, "official-image-style");
+      assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 210);
+      assert.match(renderProductionWorkbench(workbench), /生成 180 \+ 30积分/);
 
       await handleWorkbenchActionForTest(workbench, {
         dataset: {
@@ -27732,8 +28804,64 @@ describe("production workbench project tab", () => {
       });
 
       assert.equal(workbench.ui.episodeBatchModal?.imageModelId, "priced-image-b");
-      assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 180);
-      assert.match(renderProductionWorkbench(workbench), /生成2张图 \| 180 积分/);
+      assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 210);
+      assert.match(renderProductionWorkbench(workbench), /生成 180 \+ 30积分/);
+    } finally {
+      globalThis.document = previousDocument;
+    }
+  });
+
+  it("uses the outer project's animation style before any official image style skill", async () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = {
+      body: { classList: { toggle() {} } },
+    };
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        project: { ...buildProjectState().project, projectType: "animation" },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async listGlobalGenerationConfig() {
+          return {
+            defaultImageModelCode: "priced-image-a",
+            models: [{ modelCode: "priced-image-a", modelLabel: "定价图片A", mediaType: "image", pricing: { baseCredits: 90 } }],
+          };
+        },
+        async getProjectStyles() {
+          return { styles: [{ code: "animation", name: "动画", coverImageUrl: "/admin/assets/prompt-covers/animation.webp" }] };
+        },
+        async getPromptMarketplace() {
+          return { items: [{ id: "official-picture-book", title: "绘本", category: "image_style", official: true, isDefault: true, priceCredits: 15 }] };
+        },
+        async getPromptMarketplaceLibrary() {
+          return { items: [] };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        selectedEpisodeAssetIds: ["character-1"],
+        importedAssets: { character: [{ id: "character-1", name: "任小野", kind: "character" }], scene: [], prop: [] },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-episode-batch-actions" } });
+      assert.equal(workbench.ui.episodeBatchModal?.selectedStyleId, "animation");
+      assert.match(renderProductionWorkbench(workbench), /episode-batch-selected-style[\s\S]*动画/);
+
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-batch-style-tab", tab: "custom" } });
+      assert.equal(workbench.ui.episodeBatchModal?.selectedStyleId, "animation");
     } finally {
       globalThis.document = previousDocument;
     }
@@ -28682,9 +29810,9 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /任务ID：batch-image-scene-1/);
+    assert.match(html, /data-generation-summary/);
     assert.match(html, /class="episode-replica-generated-stage visible asset-scope"/);
-    assert.match(html, /class="episode-replica-user-message-meta">任务ID：batch-image-scene-1/);
+    assert.match(html, /任务ID<\/span>[\s\S]*?batch-image-scene-1/);
     assert.doesNotMatch(html, /class="episode-replica-system-message"/);
     assert.doesNotMatch(html, /class="episode-replica-task-id"/);
     assert.doesNotMatch(html, /class="episode-replica-stage-actions asset-scope"/);
@@ -28766,6 +29894,9 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /创建人：/);
     assert.doesNotMatch(html, /请联系管理员分配/);
     assert.match(html, /创建画布/);
+    assert.match(html, /data-action="open-new-canvas" title="新画布"/);
+    assert.match(html, /<span class="rail-label">新画布<\/span>/);
+    assert.doesNotMatch(html, /data-tab="new-canvas"|data-new-canvas-href/);
     assert.doesNotMatch(html, /canvas-panel/);
     assert.doesNotMatch(html, /canvas-x6-mount/);
   });
@@ -29210,7 +30341,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
   });
 
-  it("opens canvas project card menu and renders rename plus delete actions", () => {
+  it("opens canvas project card menu and renders rename, archive, and delete actions", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
@@ -29226,8 +30357,10 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /canvas-project-card-menu/);
     assert.match(html, /data-action="rename-canvas-project"/);
+    assert.match(html, /data-action="toggle-canvas-project-archive"/);
     assert.match(html, /data-action="delete-canvas-project"/);
     assert.match(html, />重命名</);
+    assert.match(html, />归档</);
     assert.match(html, />删除</);
   });
 
@@ -29273,6 +30406,234 @@ describe("production workbench project tab", () => {
     assert.deepEqual(apiCalls, [["canvas-project-main", { title: "迷雾世界-第一卷" }]]);
     assert.equal(workbench.ui.canvasProjects[0].title, "迷雾世界-第一卷");
     assert.equal(workbench.ui.renameCanvasProjectId, null);
+  });
+
+  it("archives a canvas project through the existing update api", async () => {
+    const apiCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async updateCanvasProject(projectId, input) {
+          apiCalls.push([projectId, input]);
+          return { project: { id: projectId, title: "画布项目", status: input.status } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [{ id: "canvas-project-main", title: "画布项目", status: "active" }],
+        canvasRecentProjectIds: ["canvas-project-main"],
+        canvasProjectMenuId: "canvas-project-main",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "toggle-canvas-project-archive",
+        canvasProjectId: "canvas-project-main",
+        canvasProjectStatus: "archived",
+      },
+    });
+
+    assert.deepEqual(apiCalls, [["canvas-project-main", { status: "archived" }]]);
+    assert.equal(workbench.ui.canvasProjects[0].status, "archived");
+    assert.deepEqual(workbench.ui.canvasRecentProjectIds, []);
+  });
+
+  it("exports and deletes Canvas generation history through the existing history api", async () => {
+    const calls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async exportCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push(["export", canvasProjectId, input]);
+          return { version: 1, canvasProjectId, items: [] };
+        },
+        async deleteCanvasGenerationRun(canvasProjectId, runId) {
+          calls.push(["delete", canvasProjectId, runId]);
+          return { id: runId, deleted: true };
+        },
+        async listCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push(["list", canvasProjectId, input]);
+          return { items: [], nextCursor: null };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasProjects: [{ id: "canvas-project-main", title: "画布项目", status: "active" }],
+        canvasAssetSearch: "角色",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "export-canvas-generation-history" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "delete-canvas-generation-run", runId: "run-1" },
+    });
+
+    assert.deepEqual(calls, [
+      ["export", "canvas-project-main", { search: "角色" }],
+      ["delete", "canvas-project-main", "run-1"],
+      ["list", "canvas-project-main", { limit: 50, search: "角色" }],
+    ]);
+    assert.deepEqual(workbench.ui.canvasAssets, []);
+  });
+
+  it("queries Canvas generation history by search and keeps the same search while paging", async () => {
+    const calls = [];
+    const workbench = {
+      api: {
+        async listCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push([canvasProjectId, input]);
+          return calls.length === 1
+            ? { items: [{ id: "run-1", title: "角色图" }], nextCursor: "cursor-1" }
+            : { items: [{ id: `run-${calls.length}`, title: "结果图" }], nextCursor: null };
+        },
+      },
+      ui: {
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasAssetSearch: "角色",
+        canvasGenerationHistoryItems: [],
+      },
+    };
+
+    await loadCanvasGenerationAssetsForTest(workbench, { reset: true });
+    await loadCanvasGenerationAssetsForTest(workbench, {
+      append: true,
+      cursor: workbench.ui.canvasHistoryNextCursor,
+    });
+
+    assert.deepEqual(calls, [
+      ["canvas-project-main", { limit: 50, search: "角色" }],
+      ["canvas-project-main", { limit: 50, search: "角色", cursor: "cursor-1" }],
+    ]);
+    assert.equal(workbench.ui.canvasGenerationHistoryItems.length, 2);
+  });
+
+  it("does not apply a late history response after switching Canvas projects", async () => {
+    let resolveHistory;
+    const workbench = {
+      api: {
+        listCanvasGenerationHistory() {
+          return new Promise((resolve) => { resolveHistory = resolve; });
+        },
+      },
+      ui: {
+        selectedCanvasProjectId: "canvas-project-a",
+        canvasGenerationHistoryItems: [{ id: "run-b", nodeKey: "node-b" }],
+        canvasAssets: [{ id: "asset-b" }],
+      },
+    };
+
+    const pending = loadCanvasGenerationAssetsForTest(workbench, { reset: true });
+    workbench.ui.selectedCanvasProjectId = "canvas-project-b";
+    resolveHistory({ items: [{ id: "run-a", nodeKey: "node-a" }], nextCursor: null });
+    await pending;
+
+    assert.deepEqual(workbench.ui.canvasGenerationHistoryItems, [{ id: "run-b", nodeKey: "node-b" }]);
+    assert.deepEqual(workbench.ui.canvasAssets, [{ id: "asset-b" }]);
+  });
+
+  it("restarts Canvas generation history from page one when search input changes", async () => {
+    const calls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async listCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push([canvasProjectId, input]);
+          return { items: [], nextCursor: null };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasAssetSearch: "角色",
+        canvasHistoryNextCursor: "stale-cursor",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleNewCanvasHostInputForTest(workbench, {
+      value: "场景",
+      matches(selector) { return selector === "[data-canvas-asset-search]"; },
+    });
+
+    assert.deepEqual(calls, [["canvas-project-main", { limit: 50, search: "场景" }]]);
+    assert.equal(workbench.ui.canvasHistoryNextCursor, null);
+    assert.equal(workbench.ui.canvasHistoryLoadedSearch, "场景");
+  });
+
+  it("reloads Canvas generation history with the selected media filter", async () => {
+    const calls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async listCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push([canvasProjectId, input]);
+          return { items: [], nextCursor: null };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasSidebarMode: "history",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleNewCanvasHostInputForTest(workbench, {
+      value: "video",
+      matches(selector) { return selector === "[data-canvas-history-filter]"; },
+    });
+
+    assert.deepEqual(calls, [["canvas-project-main", { limit: 50, mediaKind: "video" }]]);
+    assert.equal(workbench.ui.canvasHistoryFilter, "video");
+  });
+
+  it("deletes Canvas generation history by node or for the whole Canvas", async () => {
+    const calls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async deleteCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push(["delete-history", canvasProjectId, input]);
+          return { deletedCount: 2 };
+        },
+        async listCanvasGenerationHistory(canvasProjectId, input) {
+          calls.push(["list", canvasProjectId, input]);
+          return { items: [], nextCursor: null };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        selectedCanvasNodeId: "node-1",
+        canvasProjects: [{ id: "canvas-project-main", title: "画布项目", status: "active" }],
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "delete-canvas-node-generation-history", nodeKey: "node-1" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "delete-all-canvas-generation-history" },
+    });
+
+    assert.deepEqual(calls, [
+      ["delete-history", "canvas-project-main", { scope: "node", nodeKey: "node-1" }],
+      ["list", "canvas-project-main", { limit: 50 }],
+      ["delete-history", "canvas-project-main", { scope: "all" }],
+      ["list", "canvas-project-main", { limit: 50 }],
+    ]);
   });
 
   it("deletes a canvas project through the backend api and removes its document", async () => {
@@ -29535,7 +30896,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /主角正面设定/);
     assert.match(html, /角色资产/);
     assert.match(html, /节点模板/);
-    assert.match(html, /<small>4 个<\/small>/);
+    assert.match(html, /<small>\d+ 个<\/small>/);
     assert.match(html, /data-template-id="template-script"/);
     assert.match(html, /data-template-id="template-send-image"/);
     assert.match(html, /data-template-id="template-video-result"/);
@@ -29583,11 +30944,18 @@ describe("production workbench project tab", () => {
     await handleWorkbenchActionForTest(workbench, {
       dataset: {
         action: "set-canvas-viewport",
-        viewportPatch: "toggle-grid",
+        viewportPatch: "toggle-snap",
       },
     });
 
-    assert.equal(workbench.ui.canvasDocument.viewport.gridVisible, false);
+    assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, false);
+    assert.equal(workbench.ui.canvasDocument.viewport.gridVisible, true);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-canvas-snap" },
+    });
+
+    assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, true);
   });
 
   it("renders the canvas flow with pan and zoom viewport transforms", () => {
@@ -30160,6 +31528,7 @@ describe("production workbench project tab", () => {
     );
 
     assert.equal(configCalls.length, 1);
+    assert.deepEqual(workbench.ui.canvasRecentProjectIds, ["canvas-main"]);
     assert.match(editorHtml, /后台生图模型/);
     assert.match(editorHtml, /4:5/);
     assert.match(editorHtml, /1K/);
@@ -30217,6 +31586,112 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasDocument.nodes[0]?.id, "persisted-node");
     assert.equal(workbench.ui.canvasServerRevision, 3);
     assert.equal(workbench.ui.toast, "");
+  });
+
+  it("flushes and awaits the current Canvas draft before switching projects", async () => {
+    const calls = [];
+    let resolveSave;
+    const currentDocument = {
+      version: 2,
+      canvasProjectId: "canvas-a",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "draft-node", type: "text", data: { text: "未落盘草稿" } }],
+      edges: [],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { features: { newCanvas: true }, user: { id: "user-1" } },
+      api: {
+        async saveStandaloneCanvas(canvasProjectId, input) {
+          calls.push(["save", canvasProjectId, input.document.nodes[0].data.text]);
+          return new Promise((resolve) => { resolveSave = resolve; });
+        },
+        async getStandaloneCanvas(canvasProjectId) {
+          calls.push(["load", canvasProjectId]);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 4,
+              document: { version: 2, canvasProjectId, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [], edges: [] },
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-a",
+        activeCanvasProjectId: "canvas-a",
+        canvasServerRevision: 1,
+        canvasSaveStatus: "pending",
+        canvasProjects: [{ id: "canvas-a", title: "A" }, { id: "canvas-b", title: "B" }],
+        canvasDocument: currentDocument,
+        canvasDocumentsByProject: { "canvas-a": currentDocument },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    const switching = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-canvas-project", canvasProjectId: "canvas-b" },
+    });
+    await Promise.resolve();
+
+    assert.deepEqual(calls, [["save", "canvas-a", "未落盘草稿"]]);
+    assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-a");
+
+    resolveSave({ canvas: { canvasProjectId: "canvas-a", serverRevision: 2, document: currentDocument } });
+    await switching;
+
+    assert.deepEqual(calls, [
+      ["save", "canvas-a", "未落盘草稿"],
+      ["load", "canvas-b"],
+    ]);
+    assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-b");
+  });
+
+  it("keeps the Canvas open when navigation flush hits a revision conflict", async () => {
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-a",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "draft-node", type: "text", data: { text: "本地草稿" } }],
+      edges: [],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { features: { newCanvas: true }, user: { id: "user-1" } },
+      api: {
+        async saveStandaloneCanvas() {
+          const error = new Error("revision conflict");
+          error.errorCode = "canvas_revision_conflict";
+          error.details = {
+            serverRevision: 3,
+            serverDocument: { ...localDocument, nodes: [{ ...localDocument.nodes[0], data: { text: "服务端版本" } }] },
+          };
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-a",
+        activeCanvasProjectId: "canvas-a",
+        canvasServerRevision: 2,
+        canvasSaveStatus: "pending",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-a": localDocument },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "back-to-canvas-projects" } });
+
+    assert.equal(workbench.ui.canvasProjectView, "detail");
+    assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-a");
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.text, "本地草稿");
+    assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].data.text, "服务端版本");
+    assert.equal(workbench.ui.canvasSaveStatus, "conflict");
+    assert.match(String(workbench.ui.toast), /本地草稿已保留/);
   });
 
   it("restores the selected standalone canvas document when refreshing the tools canvas detail route", async () => {
@@ -30483,7 +31958,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /后台视频 A/);
   });
 
-  it("renders node context menu with delete and add actions at the requested pointer position", () => {
+  it("renders only node actions in the node context menu at the requested pointer position", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
@@ -30526,10 +32001,35 @@ describe("production workbench project tab", () => {
       html.indexOf("canvas-node-context-menu"),
       html.indexOf("</aside>", html.indexOf("canvas-node-context-menu")),
     );
-    assert.match(menuHtml, /data-template-id="template-script"/);
-    assert.match(menuHtml, /data-template-id="template-send-image"/);
-    assert.match(menuHtml, /data-template-id="template-video-result"/);
-    assert.match(menuHtml, /data-template-id="template-upload"/);
+    assert.doesNotMatch(menuHtml, /data-template-id=/);
+  });
+
+  it("offers stable media copy without replacing selected-text native context menus", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasContextMenu: {
+          mode: "node",
+          nodeId: "source-image",
+          x: 240,
+          y: 180,
+          mediaCopyEligible: true,
+        },
+      }),
+    });
+    assert.match(html, /data-action="copy-canvas-node-media"/);
+    assert.match(html, />\s*复制媒体\s*</);
+
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const contextMenuBlock = source.match(/root\.addEventListener\("contextmenu"[\s\S]*?root\.addEventListener\("dblclick"/)?.[0] ?? "";
+    assert.match(contextMenuBlock, /canvasEditableContextHasSelection\(eventTarget\)/);
+    assert.match(contextMenuBlock, /mediaCopyEligible: Boolean\(canvasNodeStorageObjectId/);
   });
 
   it("keeps canvas context menus beside right-side pointer positions", () => {
@@ -30552,7 +32052,156 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /canvas-context-menu/);
-    assert.match(html, /style="left:1510px;top:430px"/);
+    assert.match(html, /style="left:1510px;top:72px"/);
+  });
+
+  it("groups blank Canvas node creation entries and exposes upstream shortcuts", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasContextMenu: { mode: "add", x: 180, y: 120 },
+      }),
+    });
+    const menuHtml = html.slice(
+      html.indexOf('data-canvas-context-menu'),
+      html.indexOf("</aside>", html.indexOf('data-canvas-context-menu')),
+    );
+    const generatorGroup = menuHtml.slice(
+      menuHtml.indexOf('data-canvas-node-group="generator"'),
+      menuHtml.indexOf('</section>', menuHtml.indexOf('data-canvas-node-group="generator"')),
+    );
+    const sourceGroup = menuHtml.slice(
+      menuHtml.indexOf('data-canvas-node-group="source"'),
+      menuHtml.indexOf('</section>', menuHtml.indexOf('data-canvas-node-group="source"')),
+    );
+
+    assert.match(generatorGroup, /生成节点/);
+    assert.match(generatorGroup, /data-template-id="template-ai-text"[\s\S]*?<kbd[^>]*>1<\/kbd>/);
+    assert.match(generatorGroup, /data-template-id="template-ai-director"[\s\S]*?<kbd[^>]*>7<\/kbd>/);
+    assert.match(sourceGroup, /来源节点/);
+    assert.match(sourceGroup, /data-template-id="template-source-text"[\s\S]*?<kbd[^>]*>Alt\+1<\/kbd>/);
+    assert.match(sourceGroup, /data-template-id="template-ai-markdown"[\s\S]*?<kbd[^>]*>Alt\+5<\/kbd>/);
+    assert.match(menuHtml, /data-action="add-canvas-template" data-template-id="template-group"/);
+  });
+
+  it("creates an AI Markdown node from the Alt+5 Canvas shortcut", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasDocument: {
+          version: 1,
+          canvasProjectId: "canvas-shortcut",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [],
+          edges: [],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-canvas-shortcut-source-5" },
+    });
+
+    assert.equal(workbench.ui.canvasDocument.nodes.at(-1)?.type, "ai-markdown");
+    assert.equal(workbench.ui.selectedCanvasNodeId, workbench.ui.canvasDocument.nodes.at(-1)?.id);
+    assert.equal(workbench.ui.canvasContextMenu, null);
+  });
+
+  it("renders the percentage zoom menu and line-style toggle without removing canvas actions", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasEdgeStyle: "curve",
+        canvasZoomMenuOpen: true,
+      }),
+    });
+
+    assert.match(html, /data-action="toggle-canvas-zoom-menu"[^>]*data-canvas-zoom-trigger[^>]*aria-expanded="true"[^>]*>100%<\/button>/);
+    assert.match(html, /role="menu" aria-label="画布缩放"/);
+    assert.match(html, /type="number" min="10" max="800" step="1" value="100" data-canvas-zoom-value-input/);
+    assert.match(html, /data-viewport-value="50">缩放至50%<\/button>/);
+    assert.match(html, /data-viewport-value="100">缩放至100%<\/button>/);
+    assert.match(html, /data-viewport-value="800">缩放至800%<\/button>/);
+    assert.doesNotMatch(html, /class="canvas-zoom-slider"|type="range"[^>]*data-viewport-patch="zoom-value"/);
+    assert.match(html, /data-action="set-canvas-edge-style" data-edge-style="orthogonal"/);
+    assert.match(html, /data-action="align-canvas-nodes" data-axis="left"/);
+    assert.match(html, /data-action="run-canvas-selection"/);
+  });
+
+  it("toggles the zoom menu, applies zoom presets, and switches Canvas edges to orthogonal paths", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasDocument: {
+          version: 1,
+          canvasProjectId: "canvas-toolbar",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            { id: "source", type: "source-text", position: { x: 80, y: 80 }, data: { ports: { outputs: [{ id: "out_text" }] } } },
+            { id: "target", type: "ai-text", position: { x: 420, y: 180 }, data: { ports: { inputs: [{ id: "in_text" }] } } },
+          ],
+          edges: [{ id: "edge-1", sourceNodeId: "source", sourcePortId: "out_text", targetNodeId: "target", targetPortId: "in_text" }],
+        },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-canvas-zoom-menu" },
+    });
+    assert.equal(workbench.ui.canvasZoomMenuOpen, true);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-canvas-viewport", viewportPatch: "zoom-in" },
+    });
+    assert.equal(workbench.ui.canvasDocument.viewport.zoom, 1.1);
+    assert.equal(workbench.ui.canvasZoomMenuOpen, true);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-canvas-viewport", viewportPatch: "zoom-value", viewportValue: "800" },
+    });
+    assert.equal(workbench.ui.canvasDocument.viewport.zoom, 8);
+    assert.equal(workbench.ui.canvasZoomMenuOpen, true);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "toggle-canvas-zoom-menu" },
+    });
+    assert.equal(workbench.ui.canvasZoomMenuOpen, false);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-canvas-edge-style", edgeStyle: "orthogonal" },
+    });
+    assert.equal(workbench.ui.canvasEdgeStyle, "orthogonal");
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: workbench.ui,
+    });
+    assert.match(html, /class="canvas-flow-edge-line" d="M [^" ]+ [^" ]+ H [^" ]+ V [^" ]+ H [^" ]+"/);
   });
 
   it("deletes the canvas node selected from the node context menu", async () => {
@@ -30895,6 +32544,112 @@ describe("production workbench project tab", () => {
     assert.match(editorHtml, /style="left:-335px;top:480px;--editor-width:600px"/);
   });
 
+  it("builds existing Canvas batch requests for selected media nodes and preserves their DAG dependency", () => {
+    const workbench = {
+      state: { project: { aspectRatio: "16:9" } },
+      ui: {
+        canvasDocument: {
+          version: 1,
+          nodes: [
+            { id: "image-a", type: "ai-image", data: { mediaKind: "image", prompt: "角色立绘", modelCode: "image-model" } },
+            { id: "video-b", type: "ai-video", data: { mediaKind: "video", prompt: "角色转身", modelCode: "video-model" } },
+          ],
+          edges: [{ id: "edge-a-b", sourceNodeId: "image-a", targetNodeId: "video-b" }],
+        },
+        episodeGenerationConfig: { models: [] },
+      },
+    };
+    const nodes = buildCanvasGenerationBatchNodes(workbench, ["image-a", "video-b"]);
+    assert.equal(nodes.length, 2);
+    assert.deepEqual(nodes[0].dependsOn, []);
+    assert.deepEqual(nodes[1].dependsOn, ["image-a"]);
+    assert.equal(nodes[0].payload.model, "image-model");
+    assert.equal(nodes[1].payload.motionPrompt, "角色转身");
+  });
+
+  it("keeps AI text nodes in Canvas batch DAGs and forwards their generated text", () => {
+    const workbench = {
+      state: { project: { aspectRatio: "16:9" } },
+      ui: {
+        canvasDocument: {
+          version: 1,
+          nodes: [
+            { id: "text-a", type: "ai-text", data: { mediaKind: "text", prompt: "编写角色设定", modelCode: "text-model" } },
+            { id: "image-b", type: "ai-image", data: { mediaKind: "image", prompt: "绘制角色", modelCode: "image-model" } },
+          ],
+          edges: [{ id: "edge-text-image", sourceNodeId: "text-a", targetNodeId: "image-b" }],
+        },
+        episodeGenerationConfig: { models: [] },
+      },
+    };
+    const nodes = buildCanvasGenerationBatchNodes(workbench, ["text-a", "image-b"]);
+    assert.equal(nodes.length, 2);
+    assert.equal(nodes[0].mediaKind, "text");
+    assert.equal(nodes[0].payload.text, "编写角色设定");
+    assert.deepEqual(nodes[1].dependsOn, ["text-a"]);
+  });
+
+  it("matches upstream Canvas shortcuts while leaving editing controls untouched", () => {
+    const selected = [{ id: "node-1", isNode: () => true }];
+    const workbench = {
+      ui: { activeNavTab: "tools", canvasProjectView: "detail" },
+      canvasGraph: { getSelectedCells: () => selected },
+    };
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "f" }), "fit-canvas-view");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "m" }), "toggle-canvas-minimap");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "+", ctrlKey: true }), "zoom-canvas-in");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "-", ctrlKey: true }), "zoom-canvas-out");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "0", ctrlKey: true }), "fit-canvas-view");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "f", altKey: true, shiftKey: true }), "arrange-canvas-nodes");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: " ", code: "Space" }), "open-canvas-node-editor");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "2", code: "Digit2" }), "add-canvas-shortcut-generator-2");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "2", code: "Digit2", altKey: true }), "add-canvas-shortcut-source-2");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "f" }, { matches: () => true }), "");
+  });
+
+  it("fits visible Canvas nodes in the center and defaults an empty Canvas to 50%", () => {
+    assert.deepEqual(resolveCanvasFitViewport({ nodes: [] }, { width: 1000, height: 600 }), {
+      x: 0,
+      y: 0,
+      zoom: 0.5,
+    });
+
+    const viewport = resolveCanvasFitViewport({
+      nodes: [
+        { id: "left", type: "comment", position: { x: 0, y: 0 } },
+        { id: "right", type: "comment", position: { x: 700, y: 400 } },
+        { id: "hidden", type: "comment", position: { x: 100000, y: 100000 }, data: { hiddenByCharacterId: "character-1" } },
+      ],
+    }, { width: 1000, height: 600 }, { padding: 50 });
+
+    assert.deepEqual(viewport, { x: 70, y: 51, zoom: 0.86 });
+    assert.deepEqual(resolveCanvasGraphFitNodes({
+      getNodes: () => [
+        { id: "node-1", getData: () => ({ canvasNode: { type: "comment" } }), getBBox: () => ({ x: -20, y: 40, width: 300, height: 180 }) },
+        { id: "editor", getData: () => ({ canvasTransientEditor: true }), getBBox: () => ({ x: -10000, y: -10000, width: 20000, height: 20000 }) },
+      ],
+    }), [{
+      id: "node-1",
+      type: "comment",
+      position: { x: -20, y: 40 },
+      size: { width: 300, height: 180 },
+    }]);
+    assert.deepEqual(resolveCanvasCenteringDelta(
+      { left: 0, top: 0, right: 1000, bottom: 600 },
+      [{ left: 100, top: 50, right: 700, bottom: 450 }],
+    ), { x: 100, y: 50 });
+
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const fitAction = source.match(/if \(action === "fit-canvas-view"\)[\s\S]*?if \(action === "toggle-canvas-minimap"\)/)?.[0] ?? "";
+    assert.match(fitAction, /graph\.zoomTo\(fittedViewport\.zoom\)/);
+    assert.match(fitAction, /graph\.translate\(fittedViewport\.x, fittedViewport\.y\)/);
+    assert.match(fitAction, /data-canvas-zoom-trigger/);
+    assert.doesNotMatch(fitAction, /render\(workbench\)/);
+  });
+
   it("clears stale canvas run toasts when moving or resizing canvas nodes", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
@@ -30909,7 +32664,8 @@ describe("production workbench project tab", () => {
 
     assert.match(dragBlock, /workbench\.ui\.canvasRunPreview = null;[\s\S]*?workbench\.ui\.toast = "";/);
     assert.match(resizeBlock, /workbench\.ui\.canvasRunPreview = null;[\s\S]*?workbench\.ui\.toast = "";/);
-    assert.match(x6Source, /graph\.on\("node:moved", \(\) => sync\(\{ clearToast: true \}\)\)/);
+    assert.match(x6Source, /graph\.on\("node:moved"/);
+    assert.match(x6Source, /sync\(\{ clearToast: true \}\)/);
     assert.match(x6Source, /graph\.on\("node:resized", \(\) => sync\(\{ clearToast: true \}\)\)/);
   });
 
@@ -30976,7 +32732,7 @@ describe("production workbench project tab", () => {
           version: 1,
           projectId: "canvas-project-main",
           episodeId: "episode-primary",
-          viewport: { x: 0, y: 0, zoom: 1 },
+          viewport: { x: 0, y: 0, zoom: 0.5 },
           nodes: [
             {
               id: "script-source",
@@ -30995,6 +32751,12 @@ describe("production workbench project tab", () => {
 
     assert.match(html, /class="canvas-inline-editor-title" data-canvas-node-drag-handle data-node-id="script-source"/);
     assert.match(html, /class="canvas-inline-richtext"[\s\S]*contenteditable="true"[\s\S]*data-canvas-text-input/);
+    assert.match(html, /--canvas-zoom:0\.5;--canvas-toolbar-scale:2/);
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    assert.match(css, /\.canvas-text-format-toolbar\s*\{[\s\S]*?transform:\s*translateX\(-50%\) scale\(var\(--canvas-toolbar-scale, 1\)\)/);
   });
 
   it("renders canvas edge layer across negative canvas coordinates", () => {
@@ -32779,7 +34541,11 @@ describe("production workbench project tab", () => {
         episodeId: "episode-primary",
       });
       workbench.ui.canvasDocument.nodes.find((node) => node.id === "script-source").data.text = "第一幕剧本";
-      workbench.ui.canvasDocument.nodes.find((node) => node.id === "send-flow").data.prompt = "生成第一幕";
+      workbench.ui.canvasDocument.nodes.find((node) => node.id === "send-flow").data.prompt = "生成第一幕，@style:ink";
+      workbench.ui.canvasDocument.promptReferenceStrict = true;
+      workbench.ui.canvasDocument.promptReferenceCatalog = {
+        style: { ink: { content: "黑白墨线风格", status: "active" } },
+      };
       workbench.ui.canvasDocumentsByProject = {
         [workbench.ui.selectedCanvasProjectId ?? "canvas-project-main"]: workbench.ui.canvasDocument,
       };
@@ -32802,6 +34568,12 @@ describe("production workbench project tab", () => {
       assert.deepEqual(createImageGenerationTaskCalls[0].payload.canvasContext.upstreamNodeIds, ["script-source"]);
       assert.equal(createImageGenerationTaskCalls[0].payload.canvasContext.upstreamTextFragments[0].nodeId, "script-source");
       assert.match(createImageGenerationTaskCalls[0].payload.canvasContext.upstreamTextFragments[0].text, /./);
+      assert.equal(createImageGenerationTaskCalls[0].payload.canvasContext.sourcePrompt, "第一幕剧本\n\n生成第一幕，@style:ink");
+      assert.equal(createImageGenerationTaskCalls[0].payload.canvasContext.expandedPrompt, "第一幕剧本\n\n生成第一幕，黑白墨线风格");
+      assert.deepEqual(createImageGenerationTaskCalls[0].payload.canvasContext.promptReferences, [
+        { token: "@style:ink", type: "style", id: "ink", version: null },
+      ]);
+      assert.deepEqual(createImageGenerationTaskCalls[0].payload.canvasContext.promptReferenceDiagnostics, []);
       assert.equal(workbench.ui.selectedModelId, "global-video-model");
       assert.equal(workbench.ui.canvasGeneratingNodeId, "send-flow");
       assert.equal(workbench.ui.canvasRunPreview.taskId, "task-canvas-image-1");
@@ -33091,7 +34863,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedCanvasNodeId, "send-flow");
     assert.equal(workbench.ui.canvasEditorOpen, true);
     assert.equal(workbench.ui.canvasGeneratingNodeId, null);
-    assert.match(workbench.root.innerHTML, /canvas-node-editor generation-editor image/);
+    assert.match(workbench.root.innerHTML, /data-new-canvas-mount/);
   });
 
   it("renders image generation failure inside the canvas node preview", () => {
@@ -34366,7 +36138,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasServerRevision, 3);
   });
 
-  it("recovers canvas autosave from a server revision conflict", async () => {
+  it("preserves the local Canvas draft and exposes recovery data on a revision conflict", async () => {
     const localDocument = {
       version: 2,
       canvasProjectId: "canvas-main",
@@ -34410,15 +36182,295 @@ describe("production workbench project tab", () => {
       }),
     };
 
-    const recovered = await saveProjectCanvasNowForTest(workbench);
+    await assert.rejects(saveProjectCanvasNowForTest(workbench), (error) => error?.errorCode === "canvas_revision_conflict");
 
-    assert.equal(recovered.serverRevision, 528);
-    assert.equal(workbench.ui.canvasServerRevision, 528);
-    assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "failed");
-    assert.equal(workbench.ui.canvasDocument.nodes[0].data.generationProgress, 100);
+    assert.equal(workbench.ui.canvasServerRevision, 527);
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "running");
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.generationProgress, 10);
     assert.equal("projectId" in workbench.ui.canvasDocument, false);
+    assert.equal(workbench.ui.canvasSaveStatus, "conflict");
+    assert.match(workbench.ui.canvasSaveError, /本地草稿已保留/);
+    assert.equal(workbench.ui.canvasRevisionConflict.serverRevision, 528);
+    assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].data.status, "failed");
+  });
+
+  it("refreshes a clean Canvas from a live revision and protects an unsaved draft", async () => {
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "local-node", type: "text", data: { text: "本地内容" } }],
+      edges: [],
+    };
+    const remoteDocument = {
+      ...localDocument,
+      nodes: [{ id: "remote-node", type: "text", data: { text: "服务端内容" } }],
+    };
+    const workbench = {
+      api: {
+        async getCanvasHead() {
+          return { head: { canvasProjectId: "canvas-main", serverRevision: 3, document: remoteDocument } };
+        },
+        async *streamCanvasLive() {},
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 2,
+        canvasSaveStatus: "saved",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+      }),
+    };
+
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      id: "revision-event-3",
+      data: { type: "revision", eventId: "revision-event-3", serverRevision: 3 },
+    }, { render: false });
+
+    assert.equal(workbench.ui.canvasServerRevision, 3);
+    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "remote-node");
+    assert.equal(workbench.canvasLiveLastEventIds["canvas-main"], "revision-event-3");
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
+
+    workbench.ui.canvasServerRevision = 3;
+    workbench.ui.canvasSaveStatus = "pending";
+    workbench.ui.canvasDocument = localDocument;
+    workbench.api.getCanvasHead = async () => ({
+      head: { canvasProjectId: "canvas-main", serverRevision: 4, document: remoteDocument },
+    });
+
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "revision", eventId: "revision-event-4", serverRevision: 4 },
+    }, { render: false });
+
+    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "local-node");
+    assert.equal(workbench.ui.canvasSaveStatus, "conflict");
+    assert.equal(workbench.ui.canvasRevisionConflict.serverRevision, 4);
+    assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].id, "remote-node");
+  });
+
+  it("resolves a Canvas revision conflict only after an explicit local or server choice", async () => {
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "local-node", type: "text", data: { title: "本地草稿" } }],
+      edges: [],
+    };
+    const serverDocument = {
+      ...localDocument,
+      nodes: [{ id: "server-node", type: "text", data: { title: "服务端版本" } }],
+    };
+    const savedPayloads = [];
+    const workbench = {
+      api: {
+        async saveStandaloneCanvas(_canvasProjectId, input) {
+          savedPayloads.push(input);
+          return { canvas: { canvasProjectId: "canvas-main", serverRevision: 6, document: input.document } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 4,
+        canvasSaveStatus: "conflict",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+        canvasRevisionConflict: {
+          canvasProjectId: "canvas-main",
+          clientRevision: 4,
+          serverRevision: 5,
+          localDocument,
+          serverDocument,
+        },
+      }),
+    };
+
+    await resolveCanvasRevisionConflictForTest(workbench, "server", { render: false });
+    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "server-node");
+    assert.equal(workbench.ui.canvasServerRevision, 5);
     assert.equal(workbench.ui.canvasSaveStatus, "saved");
-    assert.equal(workbench.ui.canvasSaveError, "");
+    assert.equal(savedPayloads.length, 0);
+
+    workbench.ui.canvasRevisionConflict = {
+      canvasProjectId: "canvas-main",
+      clientRevision: 4,
+      serverRevision: 5,
+      localDocument,
+      serverDocument,
+    };
+    workbench.ui.canvasSaveStatus = "conflict";
+    await resolveCanvasRevisionConflictForTest(workbench, "local", { render: false });
+
+    assert.equal(savedPayloads.length, 1);
+    assert.equal(savedPayloads[0].clientRevision, 5);
+    assert.equal(savedPayloads[0].document.nodes[0].id, "local-node");
+    assert.equal(workbench.ui.canvasServerRevision, 6);
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
+  });
+
+  it("renders local and server Canvas summaries with explicit recovery choices", () => {
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "local-node", type: "text", data: { title: "本地草稿节点" } }],
+      edges: [],
+    };
+    const serverDocument = {
+      ...localDocument,
+      nodes: [{ id: "server-node", type: "image", data: { title: "服务端图片节点" } }],
+      edges: [{ id: "edge-1", sourceNodeId: "a", targetNodeId: "b" }],
+    };
+    const html = renderCanvasSurfaceForHost({
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        canvasDocument: localDocument,
+        canvasRevisionConflict: {
+          canvasProjectId: "canvas-main",
+          clientRevision: 8,
+          serverRevision: 9,
+          localDocument,
+          serverDocument,
+        },
+      }),
+    });
+
+    assert.match(html, /画布版本发生冲突/);
+    assert.match(html, /本地草稿节点/);
+    assert.match(html, /服务端图片节点/);
+    assert.match(html, /data-canvas-conflict-version="server"/);
+    assert.match(html, /data-canvas-conflict-version="local"/);
+  });
+
+  it("reconnects Canvas live with the last event id and aborts it when leaving", async () => {
+    const streamCalls = [];
+    let secondStreamStarted;
+    const secondStreamReady = new Promise((resolve) => { secondStreamStarted = resolve; });
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+      edges: [],
+    };
+    const workbench = {
+      canvasLiveRetryDelayMs: 0,
+      canvasLiveRender: false,
+      api: {
+        async *streamCanvasLive(canvasProjectId, input) {
+          streamCalls.push({ canvasProjectId, input });
+          if (streamCalls.length === 1) {
+            yield { data: { type: "presence", eventId: "live-event-1", members: [] } };
+            return;
+          }
+          secondStreamStarted();
+          await new Promise((resolve) => input.signal.addEventListener("abort", resolve, { once: true }));
+        },
+        async getCanvasHead() {
+          return { head: { canvasProjectId: "canvas-main", serverRevision: 1, document } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 1,
+        canvasSaveStatus: "saved",
+        canvasDocument: document,
+      }),
+    };
+
+    const subscription = syncCanvasLiveSubscriptionForTest(workbench);
+    await secondStreamReady;
+    assert.equal(streamCalls.length, 2);
+    assert.equal(streamCalls[0].input.lastEventId, "");
+    assert.equal(streamCalls[1].input.lastEventId, "live-event-1");
+    assert.equal(workbench.ui.canvasLiveStatus, "reconnecting");
+
+    const activeSignal = streamCalls[1].input.signal;
+    stopCanvasLiveSubscriptionForTest(workbench);
+    await subscription;
+    assert.equal(activeSignal.aborted, true);
+    assert.equal(workbench.ui.canvasLiveStatus, "idle");
+  });
+
+  it("treats a closed Canvas live stream followed by a forbidden head as revoked access", async () => {
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+      edges: [],
+    };
+    const workbench = {
+      canvasLiveRetryDelayMs: 0,
+      canvasLiveRender: false,
+      api: {
+        async *streamCanvasLive() {},
+        async getCanvasHead() {
+          const error = new Error("forbidden");
+          error.status = 403;
+          error.errorCode = "canvas_actor_access_denied";
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasProjects: [{ id: "canvas-main", title: "已分配画布" }],
+        canvasServerRevision: 1,
+        canvasSaveStatus: "saved",
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-main": document },
+      }),
+    };
+
+    await syncCanvasLiveSubscriptionForTest(workbench);
+
+    assert.equal(workbench.ui.canvasProjectView, "list");
+    assert.equal(workbench.ui.activeCanvasProjectId, null);
+    assert.match(String(workbench.ui.toast), /访问权限已撤销/);
+  });
+
+  it("returns to the Canvas list when live access is revoked", async () => {
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+      edges: [],
+    };
+    const workbench = {
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasProjects: [{ id: "canvas-main", title: "已分配画布" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-main": document },
+      }),
+    };
+
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "access.revoked" },
+    }, { render: false });
+
+    assert.equal(workbench.ui.canvasProjectView, "list");
+    assert.equal(workbench.ui.activeCanvasProjectId, null);
+    assert.equal(workbench.ui.canvasDocument, null);
+    assert.deepEqual(workbench.ui.canvasProjects, []);
+    assert.match(String(workbench.ui.toast), /访问权限已撤销/);
   });
 
   it("coalesces canvas changes made during an in-flight save into one latest follow-up save", async () => {
@@ -39013,9 +41065,17 @@ describe("production workbench project tab", () => {
         selectedEpisodeId: "episode-new",
         projectAssetTab: "character",
         museScopeMode: "assets",
-        selectedEpisodeCardId: "character-2",
-        selectedEpisodeAssetId: "character-2",
-        prompt: "瘦削，警惕，穿破旧夹克，肩背磨损背包。\n头发凌乱，神情疲惫但强硬，裹着褪色布料。",
+          selectedEpisodeCardId: "character-2",
+          selectedEpisodeAssetId: "character-2",
+          assetImageStyleSkillId: "image-style-portrait",
+          episodeBatchOfficialImageStyleSkills: [
+            {
+              id: "image-style-portrait",
+              label: "人像摄影",
+              preview: "https://example.com/portrait-style.png",
+            },
+          ],
+          prompt: "瘦削，警惕，穿破旧夹克，肩背磨损背包。\n头发凌乱，神情疲惫但强硬，裹着褪色布料。",
         importedAssets: {
           character: [
             {
@@ -39088,7 +41148,12 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.prompt, "");
     assert.equal(workbench.ui.assetPromptDraft?.prompt, "");
     assert.equal(workbench.ui.assetPromptDraft?.quickReferenceItems?.length, 0);
-    assert.equal(workbench.ui.imageGenerationResult?.quickReferenceItems?.length, 2);
+    assert.equal(workbench.ui.imageGenerationResult?.quickReferenceItems?.length, 3);
+    assert.equal(workbench.ui.imageGenerationResult?.styleLabel, "人像摄影");
+    assert.equal(
+      workbench.ui.imageGenerationResult?.quickReferenceItems?.find((item) => item.isGenerationStyleReference)?.preview,
+      "https://example.com/portrait-style.png",
+    );
   });
 
   it("requests latest conversation scroll as soon as asset image generation starts", async () => {
@@ -39348,6 +41413,14 @@ describe("production workbench project tab", () => {
           museScopeMode: "assets",
           selectedEpisodeCardId: "character-1",
           selectedEpisodeAssetId: "character-1",
+          assetImageStyleSkillId: "image-style-chinese",
+          episodeBatchOfficialImageStyleSkills: [
+            {
+              id: "image-style-chinese",
+              label: "中国风",
+              preview: "https://example.com/chinese-style.png",
+            },
+          ],
           prompt: "",
           assetPromptDraft: {
             scopeMode: "assets",
@@ -39377,10 +41450,13 @@ describe("production workbench project tab", () => {
             status: "completed",
             promptPreview: "一位约28岁的中国男性，身穿紧实粗糙的麻袋式上衣。",
             selectedModelId: "jimeng-4-5",
+            modelLabel: "Image-2(优越)",
+            skillId: "image-style-chinese",
             aspectRatio: "16:9",
             resolution: "2K",
             creditCost: 50,
             createdAt: "2026-05-30 10:00:00",
+            returnedAt: "2026-05-30 10:00:12",
             quickReferenceItems: [
               {
                 id: "quick-ref:character:character-1",
@@ -39416,19 +41492,29 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.match(html, /任务ID：asset-image-character-1/);
-    assert.match(html, /任务进度：成功/);
+    assert.match(html, /data-generation-summary/);
+    assert.match(html, /episode-generation-summary-status completed/);
     assert.doesNotMatch(html, /积分：50/);
     assert.match(html, /class="episode-replica-message-thread"/);
     assert.match(html, /class="episode-replica-message-row user"/);
     assert.match(html, /class="episode-replica-message-badge">用户</);
-    assert.match(html, /class="episode-replica-user-message-meta">任务ID：asset-image-character-1/);
+    assert.match(html, /<span>提交时间<\/span>/);
+    assert.match(html, /<span>完成时间<\/span>/);
+    assert.match(html, /<strong[^>]*>Image-2\(优越\)<\/strong>/);
+    assert.match(html, /<span>任务ID<\/span>[\s\S]*?asset-image-character-1/);
+    assert.match(html, /<span>风格<\/span>[\s\S]*?<strong[^>]*>中国风<\/strong>/);
+    assert.match(html, /episode-generation-summary-kicker">生成记录<\/span>/);
+    assert.match(html, /episode-generation-summary-status completed[\s\S]*?成功<\/span>/);
     assert.doesNotMatch(html, /class="episode-replica-message-row system"/);
     assert.doesNotMatch(html, /class="episode-replica-message-badge">系统</);
-    assert.match(html, /class="episode-replica-user-message-copy clamp-3">一位约28岁的中国男性，身穿紧实粗糙的麻袋式上衣。</);
+    assert.doesNotMatch(html, /episode-replica-user-message-copy/);
+    assert.doesNotMatch(html, /一位约28岁的中国男性，身穿紧实粗糙的麻袋式上衣。/);
     assert.match(html, /class="episode-replica-user-message-refs"/);
     assert.match(html, /class="episode-replica-user-ref-card"/);
     assert.match(html, /测试甲/);
+    assert.match(html, /episode-generation-summary-style-thumb has-preview[\s\S]*chinese-style\.png/);
+    assert.equal((html.match(/chinese-style\.png/g) ?? []).length, 2);
+    assert.doesNotMatch(html, />image-style-chinese</);
     assert.match(html, /测试乙/);
     assert.equal((html.match(/class="episode-replica-ref-card quick-reference"/g) ?? []).length, 0);
     assert.doesNotMatch(html, /class="episode-replica-task-id"/);
@@ -39437,6 +41523,16 @@ describe("production workbench project tab", () => {
     assert.match(html, /<textarea id="video-prompt-input" placeholder="请输入您的生图要求"><\/textarea>/);
     assert.match(html, /0 \/ 5000/);
     assert.match(html, /placeholder="请输入您的生图要求"/);
+  });
+
+  it("does not render a completion time before the generation result returns", () => {
+    const html = renderAssetConversationEntryForPolling({
+      taskId: "asset-image-pending",
+      status: "running",
+      createdAt: "2026-05-30 10:00:00",
+    });
+
+    assert.doesNotMatch(html, /<span>完成时间<\/span>/);
   });
 
   it("uses configured model credits and explicit image size in asset generation snapshots", async () => {
@@ -40104,7 +42200,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /local\.png/);
   });
 
-  it("renders all repeated asset generation conversations as an ordered list", () => {
+  it("renders all repeated asset generation conversations with the newest item at the bottom", () => {
     const html = renderProductionWorkbench({
       state: {
         ...buildProjectState(),
@@ -40215,7 +42311,9 @@ describe("production workbench project tab", () => {
     assert.equal((html.match(/class="episode-replica-fixed-image-card"/g) ?? []).length, 2);
     assert.match(html, /asset-image-prop-1-a/);
     assert.match(html, /asset-image-prop-1-b/);
-    assert.ok(html.indexOf("第一次：生成基础枪械外观。") < html.indexOf("第二次：补强枪身细节与枪托磨损。"));
+    assert.ok(html.indexOf("asset-image-prop-1-a") < html.indexOf("asset-image-prop-1-b"));
+    assert.doesNotMatch(html, /第一次：生成基础枪械外观。/);
+    assert.doesNotMatch(html, /第二次：补强枪身细节与枪托磨损。/);
     assert.equal((html.match(/data-task-id="asset-image-prop-1-a"/g) ?? []).length > 0, true);
     assert.equal((html.match(/data-task-id="asset-image-prop-1-b"/g) ?? []).length > 0, true);
     assert.doesNotMatch(html, />文字改图</);
@@ -40224,6 +42322,46 @@ describe("production workbench project tab", () => {
     assert.match(html, />重新编辑</);
     assert.match(html, />下载</);
     assert.match(html, />删除</);
+  });
+
+  it("sorts asset conversation entries by submission time before rendering", () => {
+    const html = renderAssetGeneratedStage(null, "character", null, "image", [
+      { taskId: "new-task", createdAt: "2026-07-27T18:08:32.000Z", status: "running" },
+      { taskId: "old-task", createdAt: "2026-07-27T16:43:28.000Z", status: "failed" },
+    ]);
+
+    assert.ok(html.indexOf("old-task") < html.indexOf("new-task"));
+  });
+
+  it("does not carry optimistic progress into a failed generation record", () => {
+    const html = renderAssetGeneratedStage(null, "character", null, "image", [{
+      taskId: "failed-task",
+      status: "failed",
+      progressPercent: 10,
+      createdAt: "2026-07-27T18:08:32.000Z",
+    }]);
+
+    assert.match(html, /失败/);
+    assert.doesNotMatch(html, /失败 10%/);
+  });
+
+  it("renders all submitted asset images from quick references and attachments", () => {
+    const html = renderAssetGeneratedStage(null, "character", null, "image", [{
+      taskId: "three-image-task",
+      status: "running",
+      quickReferenceItems: [
+        { id: "quick-image-1", kind: "image", name: "图一", url: "/uploads/one.png" },
+      ],
+      attachmentItems: [
+        { id: "attachment-image-2", kind: "image", name: "图二", url: "/uploads/two.png" },
+        { id: "attachment-image-3", kind: "image", name: "图三", url: "/uploads/three.png" },
+      ],
+    }]);
+
+    assert.equal((html.match(/class="episode-replica-user-ref-card"/g) ?? []).length, 3);
+    assert.match(html, /one\.png/);
+    assert.match(html, /two\.png/);
+    assert.match(html, /three\.png/);
   });
 
   it("keeps generated asset images out of the asset card until explicitly set", () => {
@@ -40518,9 +42656,9 @@ describe("production workbench project tab", () => {
     assert.match(html, /storyboard-video-task-a/);
     assert.match(html, /storyboard-video-task-b/);
     assert.match(html, /episode-replica-user-ref-chip audio/);
-    assert.match(html, /第一次视频生成：镜头缓慢推进。/);
-    assert.match(html, /第二次视频生成：雨水更明显。/);
-    assert.ok(html.indexOf("第一次视频生成：镜头缓慢推进。") < html.indexOf("第二次视频生成：雨水更明显。"));
+    assert.ok(html.indexOf("storyboard-video-task-a") < html.indexOf("storyboard-video-task-b"));
+    assert.doesNotMatch(html, /第一次视频生成：镜头缓慢推进。/);
+    assert.doesNotMatch(html, /第二次视频生成：雨水更明显。/);
   });
 
   it("prefills the composer with prior storyboard prompt, audio and images when editing a result", async () => {
@@ -42657,7 +44795,7 @@ describe("production workbench project tab", () => {
     assert.match(batchEpisodeHtml, /data-action="confirm-batch-episode"/);
   });
 
-  it("renders single-episode look controls from storyboard prompt packages", () => {
+  it("renders the independent five-category workflow skill modal in the single-episode flow", () => {
     const state = {
       ...buildProjectState(),
       shots: [],
@@ -42672,10 +44810,38 @@ describe("production workbench project tab", () => {
         projectDetail: state.projectDetail ?? null,
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "EP",
-        storyboardPromptPackages: [
-          { id: "genre-rebirth", name: "重生", package_type: "genre", status: "enabled" },
-          { id: "emotion-pressure", name: "悬疑压迫", package_type: "emotion", status: "enabled" },
+        episodePromptOfficialSkills: [
+          { id: "official-shot", title: "官方分镜", category: "shot", official: true, priceCredits: 12 },
+          { id: "official-prop", title: "官方道具抽取", category: "prop_extract", official: true, priceCredits: 3 },
+          { id: "official-character", title: "官方人物抽取", category: "character_extract", official: true, priceCredits: 4 },
+          { id: "official-scene", title: "官方场景抽取", category: "scene_extract", official: true, priceCredits: 5 },
         ],
+        episodePromptPrivateSkills: [
+          { id: "personal-skill", title: "我的快节奏改编", category: "script", official: false, priceCredits: 23 },
+        ],
+        selectedEpisodePromptSkillIds: {
+          script: "personal-skill",
+          shot: "official-shot",
+          prop_extract: "official-prop",
+          character_extract: "official-character",
+          scene_extract: "official-scene",
+        },
+        episodePromptSkillModalOpen: true,
+        episodePromptSkillSourceTab: "private",
+        episodePromptSkillCategory: "script",
+        episodePromptSkillDraftIds: {
+          script: "personal-skill",
+          shot: "official-shot",
+          prop_extract: "official-prop",
+          character_extract: "official-character",
+          scene_extract: "official-scene",
+        },
+        episodeGenerationConfig: {
+          models: [
+            { modelCode: "deepseek-script", mediaType: "text", pricing: { baseCredits: 200 } },
+            { modelCode: "deepseek-noval", mediaType: "text", pricing: { baseCredits: 160 } },
+          ],
+        },
       }),
     };
 
@@ -42684,85 +44850,191 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...baseUi,
-        singleEpisodeLookPanel: "genre",
-        selectedSingleEpisodeLookPackageIds: {
-          genre: ["genre-rebirth"],
-          emotion: [],
-        },
+        ...baseUi,
       },
     });
-    const emotionHtml = renderProductionWorkbench({
+
+    assert.match(singleEpisodeHtml, /创作技能/);
+    assert.match(singleEpisodeHtml, /single-episode-look-trigger/);
+    assert.match(singleEpisodeHtml, /episode-skill-picker-modal/);
+    assert.match(singleEpisodeHtml, /官方技能/);
+    assert.match(singleEpisodeHtml, /私人技能库/);
+    assert.match(singleEpisodeHtml, /转剧本提示词/);
+    assert.match(singleEpisodeHtml, /分镜提示词/);
+    assert.match(singleEpisodeHtml, /道具抽取提示词/);
+    assert.match(singleEpisodeHtml, /人物抽取提示词/);
+    assert.match(singleEpisodeHtml, /场景抽取提示词/);
+    assert.match(singleEpisodeHtml, /我的快节奏改编/);
+    assert.match(singleEpisodeHtml, /episode-selected-skills/);
+    assert.match(singleEpisodeHtml, /已选技能/);
+    assert.match(singleEpisodeHtml, /官方分镜/);
+    assert.match(singleEpisodeHtml, /AI 小说分镜 200 \+ 47积分/);
+    assert.match(singleEpisodeHtml, /AI剧本分镜 160 \+ 24积分/);
+    assert.doesNotMatch(singleEpisodeHtml, /selection-picker-modal/);
+    assert.doesNotMatch(singleEpisodeHtml, /题材看点/);
+    assert.doesNotMatch(singleEpisodeHtml, /情绪看点/);
+
+    const freeSkillsHtml = renderProductionWorkbench({
       state,
       session: { user: { phone: "+86 13800138000" } },
       ui: {
         ...baseUi,
-        singleEpisodeLookPanel: "emotion",
+        episodePromptOfficialSkills: baseUi.episodePromptOfficialSkills.map((item) => ({ ...item, priceCredits: 0 })),
+        episodePromptPrivateSkills: baseUi.episodePromptPrivateSkills.map((item) => ({ ...item, priceCredits: 0 })),
       },
     });
-
-    assert.match(singleEpisodeHtml, /题材看点/);
-    assert.match(singleEpisodeHtml, /情绪看点/);
-    assert.doesNotMatch(singleEpisodeHtml, /镜头看点/);
-    assert.match(singleEpisodeHtml, /single-episode-look-trigger/);
-    assert.match(singleEpisodeHtml, /自动适配，自动适配/);
-    assert.match(singleEpisodeHtml, /data-action="toggle-single-episode-look-panel"/);
-    assert.match(singleEpisodeHtml, /data-action="toggle-single-episode-look-package"/);
-    assert.match(singleEpisodeHtml, /重生/);
-    assert.doesNotMatch(singleEpisodeHtml, /看点（最多3项）/);
-    assert.doesNotMatch(singleEpisodeHtml, /1\/3/);
-    assert.match(emotionHtml, /悬疑压迫/);
-    assert.doesNotMatch(singleEpisodeHtml, />水平</);
-    assert.doesNotMatch(singleEpisodeHtml, />垂直</);
-    assert.doesNotMatch(singleEpisodeHtml, />自定义</);
+    assert.match(freeSkillsHtml, /AI 小说分镜 200积分/);
+    assert.match(freeSkillsHtml, /AI剧本分镜 160积分/);
+    assert.doesNotMatch(freeSkillsHtml, /\+ 0积分/);
   });
 
-  it("renders manual script analysis package selectors beside the submit button", () => {
+  it("keeps the new workflow skill draft isolated from the original skill picker", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        isSingleEpisodeModalOpen: true,
+        selectedScriptConversionSkillId: "original-script-skill",
+        episodePromptOfficialSkills: [
+          { id: "official-script", title: "官方转剧本", category: "script", priceCredits: 0 },
+          { id: "official-shot", title: "官方分镜", category: "shot", priceCredits: 6 },
+        ],
+        episodePromptPrivateSkills: [
+          { id: "private-shot", title: "私人分镜", category: "shot", priceCredits: 9 },
+        ],
+        selectedEpisodePromptSkillIds: { script: "official-script", shot: "official-shot" },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-episode-prompt-skill-modal" } });
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-prompt-skill-source", skillSource: "private" } });
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-episode-prompt-skill-category", skillCategory: "shot" } });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-episode-prompt-skill-draft", skillCategory: "shot", episodeSkillId: "private-shot" },
+    });
+
+    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "official-shot");
+    assert.equal(workbench.ui.episodePromptSkillDraftIds.shot, "private-shot");
+    assert.equal(workbench.ui.selectedScriptConversionSkillId, "original-script-skill");
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-episode-prompt-skills" } });
+    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "private-shot");
+    assert.equal(workbench.ui.episodePromptSkillModalOpen, false);
+    assert.equal(workbench.ui.selectedScriptConversionSkillId, "original-script-skill");
+  });
+
+  it("renders official and personal novel-to-script skills with combined pricing", () => {
     const state = {
       ...buildProjectState(),
       shots: [],
     };
 
+    const skillUi = buildProjectUi({
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      storyboards: [],
+      selectedStoryboard: null,
+      projectDetail: state.projectDetail ?? null,
+      isScriptModalOpen: true,
+      scriptModalMode: "manual",
+      scriptTab: "script-library",
+      scriptSubmitAction: "confirm-single-episode",
+      scriptSubmitLabel: "开始分析",
+      scriptManualDraft: "任小野把小草托付给闵婶子。",
+      scriptConversionOfficialSkills: [
+        { id: "official-skill", title: "官方通用小说转剧本", category: "script", official: true, priceCredits: 12 },
+      ],
+      scriptConversionPersonalSkills: [
+        { id: "personal-skill", title: "我的快节奏改编", category: "script", official: false, priceCredits: 23 },
+      ],
+      selectedScriptConversionSkillId: "personal-skill",
+      scriptConversionSkillModalOpen: true,
+      scriptConversionSkillTab: "personal",
+      scriptConversionSkillDraftId: "personal-skill",
+      episodeGenerationConfig: {
+        models: [{
+          modelCode: "deepseek-noval",
+          mediaType: "text",
+          pricing: { baseCredits: 160, unit: "text" },
+        }],
+      },
+    });
     const html = renderProductionWorkbench({
       state,
       session: { user: { phone: "+86 13800138000" } },
-      ui: {
-        ...buildProjectUi({
-          projectPanelMode: "detail",
-          projectInteriorSection: "episodes",
-          storyboards: [],
-          selectedStoryboard: null,
-          projectDetail: state.projectDetail ?? null,
-          isScriptModalOpen: true,
-          scriptModalMode: "manual",
-          scriptTab: "script-library",
-          scriptSubmitAction: "confirm-single-episode",
-          scriptSubmitLabel: "开始分析",
-          scriptManualDraft: "任小野把小草托付给闵婶子。",
-          storyboardPromptPackages: [
-            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
-            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
-            { id: "taboo-1", name: "通用禁忌", package_type: "taboo", status: "enabled" },
-          ],
-          selectedSingleEpisodeLookPackageIds: {
-            genre: ["genre-1"],
-            emotion: ["emotion-1"],
-          },
-        }),
-      },
+      ui: skillUi,
+    });
+    const officialHtml = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: { ...skillUi, scriptConversionSkillTab: "official", scriptConversionSkillDraftId: "official-skill" },
     });
 
     assert.match(html, /id="manual-script-input"/);
     assert.match(html, /script-manual-look-controls/);
     assert.match(html, /<div class="modal-actions upload-modal-actions">[\s\S]*script-manual-look-controls[\s\S]*data-action="confirm-single-episode"/);
-    assert.match(html, /题材包/);
-    assert.match(html, /情绪包/);
-    assert.match(html, /玄幻修仙/);
-    assert.match(html, /男频热血/);
-    assert.doesNotMatch(html, /通用禁忌/);
+    assert.match(html, /小说转剧本技能/);
+    assert.match(html, /selection-picker-modal/);
+    assert.match(html, /官方技能/);
+    assert.match(html, /个人添加技能/);
+    assert.match(html, /我的快节奏改编/);
+    assert.match(officialHtml, /官方通用小说转剧本/);
+    assert.match(html, /开始分析 160 \+ 23积分/);
+    assert.doesNotMatch(html, /script-conversion-skill-dropdown/);
+    assert.doesNotMatch(html, /题材包/);
+    assert.doesNotMatch(html, /情绪包/);
     assert.match(html, /data-action="confirm-single-episode"/);
   });
 
-  it("starts DeepSeek analysis from manual script text and selected packages", async () => {
+  it("keeps skill modal selection isolated until confirmation", async () => {
+    const state = buildProjectState();
+    const workbench = {
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        isScriptModalOpen: true,
+        scriptModalMode: "manual",
+        scriptTab: "script-library",
+        selectedScriptConversionSkillId: "official-skill",
+        scriptConversionOfficialSkills: [
+          { id: "official-skill", title: "官方技能", category: "script", official: true, priceCredits: 0 },
+        ],
+        scriptConversionPersonalSkills: [
+          { id: "personal-skill", title: "个人技能", category: "script", official: false, priceCredits: 18 },
+        ],
+        episodeGenerationConfig: {
+          models: [{ modelCode: "deepseek-noval", mediaType: "text", pricing: { baseCredits: 160 } }],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-script-conversion-skill-modal" } });
+    assert.equal(workbench.ui.scriptConversionSkillModalOpen, true);
+    assert.equal(workbench.ui.scriptConversionSkillDraftId, "official-skill");
+    assert.match(workbench.root.innerHTML, /role="dialog"/);
+    assert.match(workbench.root.innerHTML, /开始分析 160积分/);
+    assert.doesNotMatch(workbench.root.innerHTML, /开始分析 160 \+ 0积分/);
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-script-conversion-skill-tab", pickerTab: "personal" } });
+    const htmlBeforeSelection = workbench.root.innerHTML;
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "select-script-conversion-skill-draft", pickerItemId: "personal-skill" } });
+    assert.equal(workbench.ui.selectedScriptConversionSkillId, "official-skill");
+    assert.equal(workbench.ui.scriptConversionSkillDraftId, "personal-skill");
+    assert.equal(workbench.root.innerHTML, htmlBeforeSelection);
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-script-conversion-skill" } });
+    assert.equal(workbench.ui.selectedScriptConversionSkillId, "personal-skill");
+    assert.equal(workbench.ui.scriptConversionSkillModalOpen, false);
+  });
+
+  it("starts DeepSeek analysis from manual script text and selected skill", async () => {
     const state = {
       ...buildProjectState(),
       shots: [],
@@ -42802,14 +45074,7 @@ describe("production workbench project tab", () => {
           scriptSubmitAction: "confirm-single-episode",
           scriptSubmitLabel: "开始分析",
           scriptManualDraft: "框内原始文案",
-          storyboardPromptPackages: [
-            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
-            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
-          ],
-          selectedSingleEpisodeLookPackageIds: {
-            genre: ["genre-1"],
-            emotion: ["emotion-1"],
-          },
+          selectedScriptConversionSkillId: "script-skill-1",
         }),
       },
       root: {
@@ -42829,10 +45094,12 @@ describe("production workbench project tab", () => {
 
     assert.equal(previewCalls.length, 1);
     assert.equal(previewCalls[0].scriptText, "框内最新文案");
-    assert.deepEqual(previewCalls[0].packages, {
-      genrePackageId: "genre-1",
-      emotionPackageId: "emotion-1",
-    });
+    assert.equal(previewCalls[0].skillId, "script-skill-1");
+    assert.equal(previewCalls[0].modelCode, "deepseek-noval");
+    assert.equal(Object.hasOwn(previewCalls[0], "creditCost"), false);
+    assert.equal(Object.hasOwn(previewCalls[0], "modelCreditCost"), false);
+    assert.equal(Object.hasOwn(previewCalls[0], "skillCreditCost"), false);
+    assert.equal(previewCalls[0].packages, undefined);
     assert.equal(workbench.ui.isScriptModalOpen, false);
     assert.equal(workbench.ui.scriptManualDraft, "框内最新文案");
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
@@ -42875,14 +45142,7 @@ describe("production workbench project tab", () => {
           scriptSubmitAction: "confirm-single-episode",
           scriptSubmitLabel: "开始分析",
           scriptManualDraft: "独立剧本文案",
-          storyboardPromptPackages: [
-            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
-            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
-          ],
-          selectedSingleEpisodeLookPackageIds: {
-            genre: ["genre-1"],
-            emotion: ["emotion-1"],
-          },
+          selectedScriptConversionSkillId: "script-skill-2",
         }),
       },
       root: {
@@ -42902,15 +45162,71 @@ describe("production workbench project tab", () => {
 
     assert.equal(previewCalls.length, 1);
     assert.equal(previewCalls[0].scriptText, "独立剧本文案");
-    assert.deepEqual(previewCalls[0].packages, {
-      genrePackageId: "genre-1",
-      emotionPackageId: "emotion-1",
-    });
+    assert.equal(previewCalls[0].skillId, "script-skill-2");
+    assert.equal(previewCalls[0].modelCode, "deepseek-noval");
+    assert.equal(previewCalls[0].packages, undefined);
     assert.equal(workbench.ui.uploadNotice, "");
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
     assert.equal(workbench.ui.singleEpisodeAiPreview.source, "manual-script-analysis");
     assert.equal(workbench.ui.singleEpisodeAiPreview.projectId, null);
     assert.equal(workbench.ui.singleEpisodeAiPreview.scriptText, "独立分析后的剧本");
+  });
+
+  it("keeps manual analysis open and shows billing gate errors", async () => {
+    const scenarios = [
+      {
+        errorCode: "generation_membership_required",
+        status: 403,
+        expected: "有效会员已过期或未开通，请先开通会员。",
+      },
+      {
+        errorCode: "insufficient_credits",
+        status: 402,
+        expected: "积分余额不足，请充值。",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const workbench = {
+        state: buildProjectState(),
+        session: { user: { phone: "+86 13800138000" } },
+        api: {
+          createUserAiScriptAnalysisStream: async function* () {
+            const error = new Error(scenario.errorCode);
+            error.errorCode = scenario.errorCode;
+            error.status = scenario.status;
+            throw error;
+          },
+        },
+        ui: buildProjectUi({
+          isScriptModalOpen: true,
+          scriptModalMode: "manual",
+          scriptTab: "script-library",
+          scriptSubmitAction: "confirm-single-episode",
+          scriptSubmitLabel: "开始分析",
+          scriptManualDraft: "需要保留的原始小说",
+          selectedScriptConversionSkillId: "script-skill-billing",
+        }),
+        root: {
+          innerHTML: "",
+          querySelector(selector) {
+            return selector === "#manual-script-input" ? { value: "需要保留的原始小说" } : null;
+          },
+        },
+      };
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "confirm-single-episode" },
+      });
+
+      assert.equal(workbench.ui.isScriptModalOpen, true);
+      assert.equal(workbench.ui.scriptModalMode, "manual");
+      assert.equal(workbench.ui.scriptManualDraft, "需要保留的原始小说");
+      assert.equal(workbench.ui.singleEpisodeAiPreview.status, "idle");
+      assert.equal(workbench.ui.uploadNotice, scenario.expected);
+      assert.equal(workbench.ui.toast?.message, scenario.expected);
+      assert.equal(workbench.ui.toast?.tone, "error");
+    }
   });
 
   it("renders manual DeepSeek analysis overlay while staying on the script page", () => {
@@ -43072,7 +45388,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-deepseek-new-1");
   });
 
-  it("regenerates manual DeepSeek script analysis with the previous text and packages", async () => {
+  it("regenerates manual DeepSeek script analysis with the previous text and skill", async () => {
     const previewCalls = [];
     const workbench = {
       state: buildProjectState(),
@@ -43095,19 +45411,13 @@ describe("production workbench project tab", () => {
           source: "manual-script-analysis",
           projectId: "project-1",
           sourceScript: "上一次框内文案",
-          packages: {
-            genrePackageId: "genre-1",
-            emotionPackageId: "emotion-1",
-          },
+          skillId: "script-skill-previous",
           scriptText: "旧剧本",
           scriptRawText: "旧剧本",
           data: null,
           error: "",
         },
-        storyboardPromptPackages: [
-          { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
-          { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
-        ],
+        selectedScriptConversionSkillId: "script-skill-current",
       }),
       root: {
         innerHTML: "",
@@ -43126,10 +45436,8 @@ describe("production workbench project tab", () => {
 
     assert.equal(previewCalls.length, 1);
     assert.equal(previewCalls[0].scriptText, "上一次框内文案");
-    assert.deepEqual(previewCalls[0].packages, {
-      genrePackageId: "genre-1",
-      emotionPackageId: "emotion-1",
-    });
+    assert.equal(previewCalls[0].skillId, "script-skill-previous");
+    assert.equal(previewCalls[0].packages, undefined);
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
     assert.equal(workbench.ui.singleEpisodeAiPreview.scriptText, "重新生成后的剧本");
   });
@@ -43215,13 +45523,13 @@ describe("production workbench project tab", () => {
           selectedProjectCardId: "project-1",
           isSingleEpisodeModalOpen: true,
           singleEpisodeScript: "任小野把小草托付给闵婶子。",
-          storyboardPromptPackages: [
-            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
-            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          episodePromptOfficialSkills: [
+            { id: "official-script-skill", title: "官方小说转剧本", category: "script", official: true, priceCredits: 9 },
+            { id: "official-shot-skill", title: "官方分镜提示词", category: "shot", official: true, priceCredits: 6 },
           ],
-          selectedSingleEpisodeLookPackageIds: {
-            genre: ["genre-1"],
-            emotion: ["emotion-1"],
+          selectedEpisodePromptSkillIds: {
+            script: "official-script-skill",
+            shot: "official-shot-skill",
           },
         }),
       },
@@ -43241,10 +45549,12 @@ describe("production workbench project tab", () => {
     assert.equal(createdEpisodeCount, 0);
     assert.equal(previewCalls.length, 1);
     assert.equal(previewCalls[0].projectId, "project-1");
-    assert.deepEqual(previewCalls[0].input.packages, {
-      genrePackageId: "genre-1",
-      emotionPackageId: "emotion-1",
+    assert.deepEqual(previewCalls[0].input.skills, {
+      script: "official-script-skill",
+      shot: "official-shot-skill",
     });
+    assert.equal(previewCalls[0].input.modelCode, "deepseek-script");
+    assert.equal(Object.prototype.hasOwnProperty.call(previewCalls[0].input, "packages"), false);
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
     assert.match(workbench.ui.singleEpisodeAiPreview.scriptText, /任小野托付妹妹/);
     assert.match(workbench.ui.singleEpisodeAiPreview.promptText, /递出饭食/);
@@ -46839,6 +49149,10 @@ describe("storyboard state", () => {
         isScriptModalOpen: false,
         isSingleEpisodeModalOpen: true,
         singleEpisodeScript: "EP",
+        episodePromptOfficialSkills: [
+          { id: "single-episode-skill", title: "单集小说改编", category: "script", official: true, priceCredits: 15 },
+        ],
+        selectedEpisodePromptSkillIds: { script: "single-episode-skill" },
         episodeGenerationConfig: {
           models: [
             {
@@ -46856,7 +49170,7 @@ describe("storyboard state", () => {
     assert.match(modalHtml, /single-episode-modal/);
     assert.match(modalHtml, /id="single-episode-script-input"/);
     assert.match(modalHtml, /data-action="confirm-single-episode"/);
-    assert.match(modalHtml, /AI 小说分镜 20积分/);
+    assert.match(modalHtml, /AI 小说分镜 20 \+ 15积分/);
     assert.ok(modalHtml.includes("2/5000"));
 
     const listHtml = renderProductionWorkbench({
@@ -46918,6 +49232,18 @@ describe("storyboard state", () => {
       state,
       session: { user: { phone: "+86 13800138000" } },
       api: {
+        async getPromptMarketplace() {
+          return { items: [
+            { id: "official-script-default", title: "官方默认剧本技能", category: "script", official: true, isDefault: true, priceCredits: 4 },
+            { id: "official-shot-default", title: "官方默认分镜技能", category: "shot", official: true, isDefault: true, priceCredits: 0 },
+          ] };
+        },
+        async getPromptMarketplaceLibrary() {
+          return { items: [
+            { id: "fresh-script-skill", title: "私人默认剧本技能", category: "script", official: false, isDefault: true, priceCredits: 9 },
+            { id: "private-shot-non-default", title: "私人普通分镜技能", category: "shot", official: false, isDefault: false, priceCredits: 2 },
+          ] };
+        },
         async listGlobalGenerationConfig(options = {}) {
           configCalls.push(options);
           return {
@@ -46972,8 +49298,10 @@ describe("storyboard state", () => {
     });
 
     assert.deepEqual(configCalls, [{ fresh: true, mediaType: undefined }]);
-    assert.match(workbench.root.innerHTML, /AI 小说分镜 35积分/);
-    assert.doesNotMatch(workbench.root.innerHTML, /AI 小说分镜 200积分/);
+    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.script, "fresh-script-skill");
+    assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "official-shot-default");
+    assert.match(workbench.root.innerHTML, /AI 小说分镜 35 \+ 9积分/);
+    assert.doesNotMatch(workbench.root.innerHTML, /AI 小说分镜 200 \+/);
   });
 
   it("renders inline script and chapter selects and applies the selected chapter", async () => {

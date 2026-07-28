@@ -2,15 +2,23 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
+import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
+import type { CanvasActorScope } from "../../identity/canvas-actor-scope.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
+import {
+  isCanvasPlainTextTranscriptionRequest,
+  runCanvasPlainTextTranscription,
+} from "../canvas-audio-text-input.service.ts";
 import {
   attachCanvasTaskResultToHistory,
   appendCanvasNodeArtifact,
   createCanvasNodeRun,
+  findCanvasByCanvasProjectId,
   getCanvasRevision,
   listCanvasRevisions,
   listCanvasNodeRuns,
+  normalizeCanvasDocument,
   saveCanvasByCanvasProjectId,
   selectCanvasNodeArtifact,
 } from "../creator-canvas-record.service.ts";
@@ -18,6 +26,85 @@ import {
 const userId = "00000000-0000-4000-8000-000000000701";
 
 describe("creator canvas record service", { concurrency: false }, () => {
+  it("preserves protocol edge kinds while normalizing historical documents", () => {
+    const document = normalizeCanvasDocument({
+      nodes: [{ id: "a", type: "ai-text" }, { id: "b", type: "ai-image" }],
+      edges: [{
+        id: "reference-1",
+        kind: "reference",
+        sourceNodeId: "a",
+        sourcePortId: "out",
+        targetNodeId: "b",
+        targetPortId: "in",
+      }],
+    }, { canvasProjectId: "canvas-1", now: "2026-07-25T00:00:00.000Z" });
+    assert.equal(document.edges[0]?.kind, "reference");
+  });
+
+  it("uses a team-member scope for document access and records the actual actor", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const memberId = "00000000-0000-4000-8000-000000000799";
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id, user_id, member_account, member_account_suffix, member_login_account,
+            member_name, member_password_hash, member_credits, status
+          )
+          VALUES ($1, $2, 'canvas-editor', 'u00799', 'canvas-editor@u00799', 'Canvas Editor', 'hash', 0, 'active')
+        `,
+        [memberId, userId],
+      );
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T08:00:00.000Z"),
+      });
+      const actorScope: CanvasActorScope = {
+        canvasId: canvas.canvasProjectId,
+        ownerUserId: userId,
+        principal: "team_member",
+        actorTeamMemberId: memberId,
+        principalKey: `member:${memberId}`,
+        capabilities: [capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun],
+      };
+
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        actorScope,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          viewport: { ...canvas.document.viewport, x: 42 },
+        },
+        events: [{ type: "canvas.viewport.updated" }],
+        now: new Date("2026-06-12T08:01:00.000Z"),
+      });
+      const loaded = await findCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        actorScope,
+      });
+      const actors = await db.query<{
+        revision_actor: string | null;
+        event_actor: string | null;
+      }>(
+        `
+          SELECT
+            (SELECT actor_team_member_id::text FROM creator_canvas_revisions
+             WHERE canvas_project_id = $1 AND server_revision = $2) AS revision_actor,
+            (SELECT actor_team_member_id::text FROM creator_canvas_events
+             WHERE canvas_project_id = $1 AND server_revision = $2 LIMIT 1) AS event_actor
+        `,
+        [canvas.canvasProjectId, saved.serverRevision],
+      );
+
+      assert.equal(loaded?.serverRevision, saved.serverRevision);
+      assert.deepEqual(actors.rows[0], { revision_actor: memberId, event_actor: memberId });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("scopes run idempotency keys to a canvas project", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -476,6 +563,258 @@ describe("creator canvas record service", { concurrency: false }, () => {
         historyAfterSelect.artifacts.map((item) => item.artifactKind).sort(),
         ["image", "video"],
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates a source-text node after a successful Canvas audio transcription", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T12:10:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [canvasNode("audio-1", "audio", 80, 90, "audio", "音频")],
+          edges: [],
+        },
+        now: new Date("2026-06-12T12:11:00.000Z"),
+      });
+      const taskId = randomUUID();
+      await createWorkflowWithTasks(db, {
+        userId,
+        projectId: null,
+        canvasProjectId: saved.canvasProjectId,
+        workflowType: "canvas_audio_generation",
+        inputSnapshot: { targetType: "canvas", targetId: "audio-1" },
+        tasks: [{
+          id: taskId,
+          taskType: "episode_generate_audio",
+          queueName: "generation-submit-audio",
+          targetEntityType: "canvas",
+          targetEntityId: saved.canvasProjectId,
+          inputSnapshot: { targetType: "canvas", targetId: "audio-1" },
+        }],
+      });
+      const result = await attachCanvasTaskResultToHistory(db, {
+        canvasProjectId: saved.canvasProjectId,
+        nodeKey: "audio-1",
+        taskId,
+        mediaKind: "audio",
+        result: {
+          mediaKind: "audio",
+          sourceUrl: "https://cdn.example.test/transcript-audio.mp3",
+          transcript: "第一句。第二句。",
+          audioGenerationMode: "transcription",
+        },
+        userId,
+        now: new Date("2026-06-12T12:12:00.000Z"),
+      });
+      assert.ok(result?.artifactId);
+      const current = await findCanvasByCanvasProjectId(db, { canvasProjectId: saved.canvasProjectId, userId });
+      const transcriptNode = current?.document.nodes.find((node) => node.type === "source-text");
+      assert.equal(transcriptNode?.data?.text, "第一句。第二句。");
+      assert.equal(transcriptNode?.data?.sourceAudioNodeId, "audio-1");
+      assert.equal(transcriptNode?.data?.transcriptionTaskId, taskId);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("converts plain text into a linked source-text run without provider, task, or billing records", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T12:20:00.000Z"),
+      });
+      const sourceNode = {
+        ...canvasNode("text-1", "source-text", 80, 90, "text", "原始文本"),
+        data: {
+          ...canvasNode("text-1", "source-text", 80, 90, "text", "原始文本").data,
+          text: "第一句。\n第二句。",
+          ports: { inputs: [], outputs: [{ id: "out-text", kind: "text" }] },
+        },
+      };
+      const audioNode = {
+        ...canvasNode("audio-1", "ai-audio", 520, 90, "audio", "音频转录"),
+        data: {
+          ...canvasNode("audio-1", "ai-audio", 520, 90, "audio", "音频转录").data,
+          prompt: "",
+          audioGenerationMode: "transcription",
+          ports: { inputs: [{ id: "in-text", kind: "text" }], outputs: [{ id: "out-audio", kind: "audio" }] },
+        },
+      };
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [sourceNode, audioNode],
+          edges: [{
+            id: "text-to-transcription",
+            sourceNodeId: "text-1",
+            sourcePortId: "out-text",
+            targetNodeId: "audio-1",
+            targetPortId: "in-text",
+            data: { kind: "text" },
+          }],
+        },
+        now: new Date("2026-06-12T12:21:00.000Z"),
+      });
+      const actorScope: CanvasActorScope = {
+        canvasId: saved.canvasProjectId,
+        ownerUserId: userId,
+        principal: "owner",
+        actorTeamMemberId: null,
+        principalKey: `owner:${userId}`,
+        capabilities: [capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun, capabilities.canvasManage],
+      };
+      const body = {
+        kind: "audio",
+        mode: "transcription",
+        transcriptionInputKind: "text",
+        textInput: "",
+        parameters: { mode: "transcription", transcriptionInputKind: "text" },
+        canvasContext: {
+          upstreamTextFragments: [{ nodeId: "text-1", text: "第一句。\n第二句。" }],
+        },
+      };
+      assert.equal(isCanvasPlainTextTranscriptionRequest(saved, "audio-1", body), true);
+
+      const result = await runCanvasPlainTextTranscription(db, {
+        canvas: saved,
+        nodeKey: "audio-1",
+        idempotencyKey: "plain-text-transcription-1",
+        body,
+        actorScope,
+        userId,
+        now: new Date("2026-06-12T12:22:00.000Z"),
+      });
+      const replayed = await runCanvasPlainTextTranscription(db, {
+        canvas: result.canvas,
+        nodeKey: "audio-1",
+        idempotencyKey: "plain-text-transcription-1",
+        body,
+        actorScope,
+        userId,
+        now: new Date("2026-06-12T12:23:00.000Z"),
+      });
+      const current = await findCanvasByCanvasProjectId(db, { canvasProjectId: saved.canvasProjectId, userId });
+      const transcriptNodes = current?.document.nodes.filter((node) => node.data?.transcriptionRunId === result.runId) ?? [];
+      const sideEffects = await db.query<{
+        task_count: number;
+        provider_count: number;
+        reservation_count: number;
+        artifact_count: number;
+        artifact_urls: number;
+      }>(`
+        SELECT
+          (SELECT count(*)::int FROM tasks) AS task_count,
+          (SELECT count(*)::int FROM provider_requests) AS provider_count,
+          (SELECT count(*)::int FROM credit_reservations) AS reservation_count,
+          (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE run_id=$1) AS artifact_count,
+          (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE run_id=$1 AND (url IS NOT NULL OR thumbnail_url IS NOT NULL)) AS artifact_urls
+      `, [result.runId]);
+
+      assert.equal(result.status, "succeeded");
+      assert.equal(result.taskId, null);
+      assert.equal(result.localConversion, true);
+      assert.equal(result.creditCost, 0);
+      assert.equal(replayed.replayed, true);
+      assert.equal(replayed.runId, result.runId);
+      assert.equal(replayed.artifact.id, result.artifact.id);
+      assert.equal(replayed.canvas.serverRevision, result.canvas.serverRevision);
+      assert.equal(transcriptNodes.length, 1);
+      assert.equal(transcriptNodes[0]?.data?.text, "第一句。\n第二句。");
+      assert.deepEqual(transcriptNodes[0]?.data?.sourceTextNodeIds, ["text-1"]);
+      assert.equal(transcriptNodes[0]?.data?.sourceArtifactId, result.artifact.id);
+      assert.deepEqual(sideEffects.rows[0], {
+        task_count: 0,
+        provider_count: 0,
+        reservation_count: 0,
+        artifact_count: 1,
+        artifact_urls: 0,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("synchronizes music lyrics to the audio node with stable task and artifact ids", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T12:30:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [{
+            ...canvasNode("audio-music", "ai-audio", 80, 90, "audio", "音乐生成"),
+            data: {
+              ...canvasNode("audio-music", "ai-audio", 80, 90, "audio", "音乐生成").data,
+              audioGenerationMode: "music",
+              lyricsMode: "generate",
+            },
+          }],
+          edges: [],
+        },
+        now: new Date("2026-06-12T12:31:00.000Z"),
+      });
+      const taskId = randomUUID();
+      await createWorkflowWithTasks(db, {
+        userId,
+        projectId: null,
+        canvasProjectId: saved.canvasProjectId,
+        workflowType: "canvas_audio_generation",
+        inputSnapshot: { targetType: "canvas", targetId: "audio-music" },
+        tasks: [{
+          id: taskId,
+          taskType: "episode_generate_audio",
+          queueName: "generation-submit-audio",
+          targetEntityType: "canvas",
+          targetEntityId: saved.canvasProjectId,
+          inputSnapshot: { targetType: "canvas", targetId: "audio-music" },
+        }],
+      });
+      const attached = await attachCanvasTaskResultToHistory(db, {
+        canvasProjectId: saved.canvasProjectId,
+        nodeKey: "audio-music",
+        taskId,
+        mediaKind: "audio",
+        result: {
+          mediaKind: "audio",
+          sourceUrl: "https://cdn.example.test/music.mp3",
+          audioGenerationMode: "music",
+          lyricsMode: "generate",
+          lyrics: "沿着微光回家",
+        },
+        userId,
+        now: new Date("2026-06-12T12:32:00.000Z"),
+      });
+      const current = await findCanvasByCanvasProjectId(db, { canvasProjectId: saved.canvasProjectId, userId });
+      const musicNode = current?.document.nodes.find((node) => node.id === "audio-music");
+
+      assert.equal(musicNode?.data?.lyrics, "沿着微光回家");
+      assert.equal(musicNode?.data?.lyricsMode, "generate");
+      assert.equal(musicNode?.data?.lyricsTaskId, taskId);
+      assert.equal(musicNode?.data?.lyricsArtifactId, attached?.artifactId);
+      assert.equal("url" in (musicNode?.data ?? {}), false);
     } finally {
       await db.close();
     }

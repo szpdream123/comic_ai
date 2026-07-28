@@ -30,6 +30,7 @@ interface GenerationRepairTaskRow {
   task_id: string;
   user_id: string;
   workflow_id: string;
+  task_type: string;
   queue_name: string;
   input_snapshot_json: Record<string, unknown> | string;
   target_entity_type: string;
@@ -347,17 +348,22 @@ export async function repairQueuedGenerationTaskOutbox(
         t.id AS task_id,
         COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
+        t.task_type,
         t.queue_name,
         t.input_snapshot_json,
         t.target_entity_type,
         t.target_entity_id
       FROM tasks t
       JOIN workflows workflow ON workflow.id = t.workflow_id
-      JOIN projects project ON project.id = t.project_id
+      LEFT JOIN projects project ON project.id = t.project_id
       WHERE t.status = 'queued'
-        AND t.task_type = 'episode_generate_video'
+        AND t.task_type IN ('episode_generate_video', 'episode_generate_image', 'episode_generate_audio')
         AND t.scheduled_at <= $1
-        AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
+        AND (
+          (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
+          OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
+          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' = 'aliyun-bailian-audio')
+        )
         AND (
           t.last_dispatched_at IS NULL
           OR t.last_dispatched_at < $2
@@ -381,6 +387,7 @@ export async function repairQueuedGenerationTaskOutbox(
   for (const candidate of candidates.rows) {
     const claimed = await markGenerationTaskRedisRepairClaimed(db, {
       taskId: candidate.task_id,
+      taskType: candidate.task_type,
       now: input.now,
       staleCutoff,
     });
@@ -389,16 +396,19 @@ export async function repairQueuedGenerationTaskOutbox(
     }
 
     const snapshot = parseSnapshot(candidate.input_snapshot_json);
+    const mediaType = candidate.task_type === "episode_generate_image"
+      ? "image"
+      : candidate.task_type === "episode_generate_audio" ? "audio" : "video";
     await appendGenerationTaskCreatedOutboxEvent(db, {
       userId: candidate.user_id,
       workflowId: candidate.workflow_id,
       taskId: candidate.task_id,
-      kind: "video",
-      modelCode: readString(snapshot.model) || "seedance-i2v-pro",
+      kind: mediaType,
+      modelCode: readString(snapshot.model) || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance-i2v-pro"),
       queueName: candidate.queue_name,
       targetType: readString(snapshot.targetType) || candidate.target_entity_type,
       targetId: readString(snapshot.targetId) || candidate.target_entity_id,
-      providerExecutor: "seedance",
+      providerExecutor: readString(snapshot.providerExecutor) || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance"),
       ...generationPriorityFromSnapshot(snapshot),
       availableAt: input.now,
     });
@@ -679,7 +689,7 @@ export async function failGenerationTaskAfterQueueError(
         reservation.id AS reservation_id,
         reservation.amount_reserved
       FROM tasks task
-      LEFT JOIN credit_reservations reservation
+      LEFT JOIN generation_task_credit_reservations reservation
         ON reservation.task_id = task.id
        AND reservation.status IN ('active', 'partially_settled')
       WHERE task.id = $1
@@ -860,7 +870,7 @@ export async function repairRunningSeedancePollJobs(
         ), 0) AS poll_sequence
       FROM tasks t
       JOIN workflows workflow ON workflow.id = t.workflow_id
-      JOIN projects project ON project.id = t.project_id
+      LEFT JOIN projects project ON project.id = t.project_id
       WHERE (
           t.status = 'running'
           OR (
@@ -912,9 +922,8 @@ export async function repairRunningSeedancePollJobs(
     const modelCode = readString(snapshot.model) || (mediaType === "image"
       ? "gpt-image-2"
       : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance-i2v-pro");
-    const providerExecutor = mediaType === "video"
-      ? "seedance"
-      : (readString(snapshot.providerExecutor) || (mediaType === "image" ? "gpt-image-2" : "aliyun-bailian-audio"));
+    const providerExecutor = readString(snapshot.providerExecutor)
+      || (mediaType === "video" ? "seedance" : mediaType === "image" ? "gpt-image-2" : "aliyun-bailian-audio");
     const pollAttempt = Math.max(1, Math.floor(Number(candidate.poll_sequence) || 0));
     const repairToken = input.now.getTime();
     let redisJobId = buildGenerationBullMQJobId(
@@ -1010,7 +1019,7 @@ export async function repairRunningSeedancePollJobs(
         t.input_snapshot_json
       FROM tasks t
       JOIN workflows workflow ON workflow.id = t.workflow_id
-      JOIN projects project ON project.id = t.project_id
+      LEFT JOIN projects project ON project.id = t.project_id
       WHERE t.status IN ('running', 'manual_review_required', 'result_unknown')
         AND (
           (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
@@ -1070,7 +1079,7 @@ export async function repairRunningSeedancePollJobs(
       taskId: candidate.task_id,
       kind: mediaType,
       modelCode: readString(snapshot.model) || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance-i2v-pro"),
-      providerExecutor: mediaType === "video" ? "seedance" : (readString(snapshot.providerExecutor) || (mediaType === "image" ? "gpt-image-2" : "aliyun-bailian-audio")),
+      providerExecutor: readString(snapshot.providerExecutor) || (mediaType === "video" ? "seedance" : mediaType === "image" ? "gpt-image-2" : "aliyun-bailian-audio"),
       finalizeMode: "retry_finalize",
       availableAt: input.now,
     });
@@ -1084,6 +1093,7 @@ async function markGenerationTaskRedisRepairClaimed(
   db: SqlDatabase,
   input: {
     taskId: string;
+    taskType: string;
     now: Date;
     staleCutoff: Date;
   },
@@ -1096,15 +1106,19 @@ async function markGenerationTaskRedisRepairClaimed(
           updated_at = $2
       WHERE id = $1
         AND status = 'queued'
-        AND task_type = 'episode_generate_video'
-        AND input_snapshot_json->>'providerExecutor' = 'seedance'
+      AND task_type = $4
+      AND (
+        (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
+        OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
+        OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' = 'aliyun-bailian-audio')
+      )
         AND (
           last_dispatched_at IS NULL
           OR last_dispatched_at < $3
         )
       RETURNING id
     `,
-    [input.taskId, input.now, input.staleCutoff],
+    [input.taskId, input.now, input.staleCutoff, input.taskType],
   );
 
   return Boolean(row);

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   CreditReservationAllocationStatus,
@@ -307,6 +307,98 @@ export async function grantCreditsInTransaction(
   return inserted.entry;
 }
 
+export async function grantPromptSkillUsageCredits(
+  db: SqlDatabase,
+  input: PromptSkillUsageCreditInput,
+) {
+  if (!shouldGrantPromptSkillUsageCredits(input)) return null;
+  return grantCredits(db, buildPromptSkillUsageGrant(input));
+}
+
+export async function grantPromptSkillUsageCreditsInTransaction(
+  db: SqlDatabase,
+  input: PromptSkillUsageCreditInput,
+) {
+  if (!shouldGrantPromptSkillUsageCredits(input)) return null;
+  return grantCreditsInTransaction(db, buildPromptSkillUsageGrant(input));
+}
+
+interface PromptSkillUsageCreditInput {
+  skill: {
+    id?: unknown;
+    category?: unknown;
+    title?: unknown;
+    priceCredits?: unknown;
+    official?: unknown;
+    ownerUserId?: unknown;
+  } | null | undefined;
+  sourceId: string;
+  payerUserId: string;
+  teamMemberId?: string | null;
+  projectId?: string | null;
+  modelCode?: string | null;
+  now: Date;
+}
+
+function shouldGrantPromptSkillUsageCredits(input: PromptSkillUsageCreditInput) {
+  return input.skill?.official === false
+    && Boolean(String(input.skill?.ownerUserId ?? "").trim())
+    && Math.round(Number(input.skill?.priceCredits) || 0) > 0;
+}
+
+function buildPromptSkillUsageGrant(input: PromptSkillUsageCreditInput) {
+  const skill = input.skill!;
+  const amount = Math.max(0, Math.round(Number(skill.priceCredits) || 0));
+  return {
+    userId: String(skill.ownerUserId),
+    amount,
+    sourceType: "prompt_skill_usage_earning",
+    sourceId: input.sourceId,
+    reason: "私人提示词技能使用分成",
+    metadata: {
+      skillId: String(skill.id ?? ""),
+      skillCategory: String(skill.category ?? ""),
+      skillTitle: String(skill.title ?? ""),
+      payerUserId: input.payerUserId,
+      teamMemberId: input.teamMemberId ?? null,
+      projectId: input.projectId ?? null,
+      modelCode: input.modelCode ?? null,
+      skillCreditCost: amount,
+    },
+    createdByUserId: input.payerUserId,
+    now: input.now,
+  };
+}
+
+export async function grantPromptSkillsUsageCredits(
+  db: SqlDatabase,
+  input: Omit<PromptSkillUsageCreditInput, "skill"> & {
+    skills: Array<NonNullable<PromptSkillUsageCreditInput["skill"]>>;
+  },
+) {
+  const skills = input.skills.filter((skill, index, items) => {
+    const skillId = String(skill?.id ?? "").trim();
+    return skillId && items.findIndex((item) => String(item?.id ?? "").trim() === skillId) === index;
+  });
+  const results = [];
+  for (const skill of skills) {
+    const sourceId = skills.length === 1
+      ? input.sourceId
+      : stablePromptSkillUsageSourceId(input.sourceId, String(skill.id));
+    results.push(await grantPromptSkillUsageCredits(db, {
+      ...input,
+      skill,
+      sourceId,
+    }));
+  }
+  return results;
+}
+
+function stablePromptSkillUsageSourceId(taskId: string, skillId: string) {
+  const hex = createHash("sha256").update(`prompt-skill-usage:${taskId}:${skillId}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 export class WalletFrozenMembershipRequiredError extends Error {
   readonly code = "wallet_frozen_membership_required";
 
@@ -600,14 +692,19 @@ export async function settleReservationAllocationInTransaction(
   if (!reservation) {
     throw new CreditReservationNotFoundError();
   }
+  const allocationKey = reservation.sourceType === "canvas_generation_batch"
+    && !reservation.taskId && input.taskId
+    ? `${input.taskId}:${input.allocationKey}`
+    : input.allocationKey;
+  const normalizedInput = { ...input, allocationKey };
 
   const existingAllocation = await findAllocationByKey(db, {
     reservationId: input.reservationId,
-    allocationKey: input.allocationKey,
+    allocationKey,
   });
 
   if (existingAllocation) {
-    assertAllocationReplayMatches(existingAllocation, input);
+    assertAllocationReplayMatches(existingAllocation, normalizedInput);
 
     const ledgerEntry = existingAllocation.settledLedgerEntryId
       ? await findLedgerEntryById(db, existingAllocation.settledLedgerEntryId)
@@ -648,7 +745,7 @@ export async function settleReservationAllocationInTransaction(
       input.taskId ?? null,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.allocationKey,
+      allocationKey,
       input.amount,
       input.outcome,
       JSON.stringify(input.metadata ?? {}),
@@ -742,6 +839,33 @@ export async function settleReservationAllocationInTransaction(
     ledgerEntry: ledger.entry,
     reservation: updatedReservation,
   };
+}
+
+export async function assertExternalCreditReservationInTransaction(
+  db: SqlDatabase,
+  input: {
+    reservationId: string;
+    userId: string;
+    canvasProjectId: string;
+    amount: number;
+  },
+) {
+  assertPositiveAmount(input.amount);
+  const row = await queryOne<CreditReservationRow>(db, `
+    SELECT * FROM credit_reservations WHERE id=$1 FOR UPDATE
+  `, [input.reservationId]);
+  const reservation = row ? reservationFromRow(row) : undefined;
+  if (
+    !reservation
+    || reservation.userId !== input.userId
+    || reservation.canvasProjectId !== input.canvasProjectId
+    || reservation.sourceType !== "canvas_generation_batch"
+    || !["active", "partially_settled"].includes(reservation.status)
+    || reservation.amountReserved < input.amount
+  ) {
+    throw new CreditLedgerConflictError();
+  }
+  return reservation;
 }
 
 export async function repairCreditBalanceCache(

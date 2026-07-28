@@ -2,23 +2,32 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { createMigratedTestDb } from "../apps/backend/src/modules/shared/db/test-db.ts";
+import { createDevDb } from "../apps/backend/src/modules/shared/db/dev-db.ts";
 import { OpenAICompatibleTextAdapter } from "../apps/backend/src/modules/model-gateway/openai-compatible-text.adapter.ts";
+import {
+  AdminBackedTextModelResolver,
+} from "../apps/backend/src/modules/canvas-agent/admin-backed-text-model.resolver.ts";
 import {
   TextModelGatewayService,
   textModelGatewayOperationNames,
 } from "../apps/backend/src/modules/model-gateway/text-model-gateway.service.ts";
 
-const model = process.env.TEXT_GATEWAY_SMOKE_MODEL?.trim() || "deepseek-chat";
+const requestedModel = process.env.TEXT_GATEWAY_SMOKE_MODEL?.trim() || "";
 const prompt =
   process.env.TEXT_GATEWAY_SMOKE_PROMPT?.trim() ||
   "Reply with exactly one short English word confirming the gateway works.";
 
 loadDotEnvFile(join(process.cwd(), ".env"));
 
-const db = await createMigratedTestDb();
+const db = await createDevDb();
 
 try {
+  const model = requestedModel || (await db.query(
+    `SELECT model_code FROM ai_model_configs
+     WHERE status='active' AND media_type='text' AND task_modes_json ? 'text.canvas_agent'
+     ORDER BY sort_order,model_code LIMIT 1`,
+  )).rows[0]?.model_code;
+  if (!model) throw new Error("text_gateway_smoke_model_not_configured");
   const request = {
     model,
     messages: [{ role: "user", content: prompt }],
@@ -36,6 +45,7 @@ try {
   const gateway = new TextModelGatewayService({
     db,
     adapter: new OpenAICompatibleTextAdapter(),
+    resolver: new AdminBackedTextModelResolver(db, { allowFailedCompatibilityProbe: true }),
   });
 
   const result = await gateway.chat.completions.create(request, {

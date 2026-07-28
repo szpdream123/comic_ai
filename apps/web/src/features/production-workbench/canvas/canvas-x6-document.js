@@ -1,22 +1,38 @@
-import { findCanvasPort } from "./canvas-default-document.js";
+import { CANVAS_NODE_SIZES, findCanvasPort } from "./canvas-default-document.js";
 
 export function canvasDocumentToX6Data(document) {
-  const nodes = (Array.isArray(document?.nodes) ? document.nodes : []).map((node) => ({
-    id: node.id,
-    shape: "comic-ai-canvas-node",
-    x: Number(node.position?.x ?? 0),
-    y: Number(node.position?.y ?? 0),
-    width: Number(node.size?.width ?? 360),
-    height: Number(node.size?.height ?? 240),
-    zIndex: 2,
-    data: {
-      canvasNode: structuredCloneSafe(node),
-    },
-    attrs: buildX6NodeAttrs(node),
-    ports: buildX6Ports(node),
-  }));
+  const normalizedNodes = normalizeCanvasGrouping(Array.isArray(document?.nodes) ? document.nodes : []);
+  const visibleNodes = normalizedNodes
+    .filter((node) => !node?.data?.hiddenByCharacterId);
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+  const nodes = visibleNodes.map((node) => {
+    const size = normalizeCanvasX6NodeSize(node);
+    const childNodeIds = node?.type === "group"
+      ? (node.data?.childNodeIds ?? []).filter((childId) => visibleNodeIds.has(childId))
+      : [];
+    return {
+      id: node.id,
+      shape: "comic-ai-canvas-special-media-node",
+      x: Number(node.position?.x ?? 0),
+      y: Number(node.position?.y ?? 0),
+      width: size.width,
+      height: size.height,
+      zIndex: node?.type === "group" ? 1 : 2,
+      ...(node.parentGroupId && visibleNodeIds.has(node.parentGroupId)
+        ? { parent: node.parentGroupId }
+        : {}),
+      ...(node?.type === "group" ? { children: childNodeIds } : {}),
+      data: {
+        canvasNode: structuredCloneSafe(node),
+      },
+      attrs: buildX6NodeAttrs(node),
+      ports: buildX6Ports(node),
+    };
+  });
 
-  const edges = (Array.isArray(document?.edges) ? document.edges : []).map((edge) => ({
+  const edges = (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => visibleNodeIds.has(edge.sourceNodeId) && visibleNodeIds.has(edge.targetNodeId))
+    .map((edge) => ({
     id: edge.id,
     shape: "edge",
     source: {
@@ -35,6 +51,18 @@ export function canvasDocumentToX6Data(document) {
   }));
 
   return { nodes, edges };
+}
+
+function normalizeCanvasX6NodeSize(node = {}) {
+  const defaults = CANVAS_NODE_SIZES[node?.type] ?? { width: 300, height: 180 };
+  const requestedWidth = Number(node?.size?.width);
+  const requestedHeight = Number(node?.size?.height);
+  const minimumWidth = Math.max(240, Math.round(Number(defaults.width ?? 300) * 0.7));
+  const minimumHeight = Math.max(140, Math.round(Number(defaults.height ?? 180) * 0.65));
+  return {
+    width: Math.max(minimumWidth, Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : Number(defaults.width ?? 300)),
+    height: Math.max(minimumHeight, Number.isFinite(requestedHeight) && requestedHeight > 0 ? requestedHeight : Number(defaults.height ?? 180)),
+  };
 }
 
 function buildX6EdgeAttrs(edge) {
@@ -101,10 +129,29 @@ function buildX6NodeAttrs(node) {
 }
 
 function canvasNodeKindLabel(node) {
+  const canonicalLabels = {
+    "ai-text": "AI 文本",
+    "ai-image": "AI 图片",
+    "ai-video": "AI 视频",
+    "ai-audio": "AI 音频",
+    "ai-animation": "AI 动画",
+    "ai-panorama": "AI 全景",
+    "ai-markdown": "AI Markdown",
+    "ai-storyboard": "AI 分镜",
+    "ai-director": "AI 导演",
+    "source-text": "文本源",
+    "source-image": "图片源",
+    "source-video": "视频源",
+    "source-audio": "音频源",
+    comment: "评论",
+    group: "节点分组",
+  };
+  if (canonicalLabels[node?.type]) return canonicalLabels[node.type];
   if (node?.type === "script") return "剧本源";
   if (node?.type === "image") return "图片结果";
   if (node?.type === "video") return "视频结果";
   if (node?.type === "upload") return "上传资源";
+  if (node?.type === "markdown") return "Markdown";
   return node?.type ?? "节点";
 }
 
@@ -130,8 +177,14 @@ function truncateCanvasText(value, maxLength) {
 export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
   const previousNodes = new Map((previousDocument.nodes ?? []).map((node) => [node.id, node]));
   const previousEdges = new Map((previousDocument.edges ?? []).map((edge) => [edge.id, edge]));
-  const nodes = (Array.isArray(x6Data?.nodes) ? x6Data.nodes : []).map((node) => {
-    const previous = previousNodes.get(node.id) ?? node.data?.canvasNode ?? {};
+  const x6Nodes = Array.isArray(x6Data?.nodes) ? x6Data.nodes : [];
+  const visibleNodeIds = new Set(x6Nodes.map((node) => node.id));
+  const nodes = x6Nodes.map((node) => {
+    const stored = node.data?.canvasNode;
+    const previousNode = previousNodes.get(node.id);
+    const previous = previousNode?.data?.hiddenByCharacterId && !stored?.data?.hiddenByCharacterId
+      ? stored
+      : previousNode ?? stored ?? {};
     return {
       ...structuredCloneSafe(previous),
       id: node.id,
@@ -141,8 +194,41 @@ export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
         height: Number(node.height ?? previous.size?.height ?? 240),
       },
     };
-  });
+  }).concat(
+    [...previousNodes.values()]
+      .filter((node) => node?.data?.hiddenByCharacterId && !visibleNodeIds.has(node.id))
+      .map(structuredCloneSafe),
+  );
+  const hasX6GroupingMetadata = x6Nodes.some((node) => (
+    Object.prototype.hasOwnProperty.call(node, "parent") || Object.prototype.hasOwnProperty.call(node, "children")
+  ));
+  const preferredParents = new Map();
+  if (hasX6GroupingMetadata) {
+    const nodeTypes = new Map(nodes.map((node) => [String(node?.id ?? ""), node?.type]));
+    for (const node of x6Nodes) {
+      if (nodeTypes.get(String(node?.id ?? "")) !== "group") {
+        preferredParents.set(String(node?.id ?? ""), null);
+      }
+    }
+    for (const group of x6Nodes) {
+      if (nodeTypes.get(String(group?.id ?? "")) !== "group") continue;
+      for (const childId of Array.isArray(group?.children) ? group.children.map(String) : []) {
+        if (nodeTypes.get(childId) && nodeTypes.get(childId) !== "group") {
+          preferredParents.set(childId, String(group.id));
+        }
+      }
+    }
+    for (const node of x6Nodes) {
+      if (!Object.prototype.hasOwnProperty.call(node, "parent")) continue;
+      const nodeId = String(node?.id ?? "");
+      const parentId = String(node?.parent ?? "");
+      preferredParents.set(nodeId, nodeTypes.get(parentId) === "group" ? parentId : null);
+    }
+  }
+  const normalizedNodes = normalizeCanvasGrouping(nodes, preferredParents);
 
+  const visibleEdgeIds = new Set((Array.isArray(x6Data?.edges) ? x6Data.edges : []).map((edge) => edge.id));
+  const hiddenNodeIds = new Set(nodes.filter((node) => node?.data?.hiddenByCharacterId).map((node) => node.id));
   const edges = (Array.isArray(x6Data?.edges) ? x6Data.edges : []).map((edge) => {
     const previous = previousEdges.get(edge.id) ?? edge.data?.canvasEdge ?? {};
     return {
@@ -153,14 +239,76 @@ export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
       targetNodeId: edge.target?.cell ?? previous.targetNodeId ?? "",
       targetPortId: edge.target?.port ?? previous.targetPortId ?? "",
     };
-  });
+  }).concat(
+    [...previousEdges.values()]
+      .filter((edge) => !visibleEdgeIds.has(edge.id) && (
+        hiddenNodeIds.has(edge.sourceNodeId) || hiddenNodeIds.has(edge.targetNodeId)
+      ))
+      .map(structuredCloneSafe),
+  );
 
   return {
     ...structuredCloneSafe(previousDocument),
-    nodes,
+    nodes: normalizedNodes,
     edges,
     updatedAt: new Date(0).toISOString(),
   };
+}
+
+function normalizeCanvasGrouping(nodes, preferredParents = new Map()) {
+  const clonedNodes = nodes.map(structuredCloneSafe);
+  const nodeById = new Map(clonedNodes.map((node) => [String(node?.id ?? ""), node]));
+  const groupIds = new Set(clonedNodes
+    .filter((node) => node?.type === "group")
+    .map((node) => String(node?.id ?? ""))
+    .filter(Boolean));
+  const childParent = new Map();
+
+  for (const node of clonedNodes) {
+    const nodeId = String(node?.id ?? "");
+    if (!nodeId || node?.type === "group") continue;
+    if (preferredParents.has(nodeId)) {
+      const preferredParentId = String(preferredParents.get(nodeId) ?? "");
+      if (groupIds.has(preferredParentId)) childParent.set(nodeId, preferredParentId);
+      continue;
+    }
+    const parentGroupId = String(node?.parentGroupId ?? "");
+    if (groupIds.has(parentGroupId)) childParent.set(nodeId, parentGroupId);
+  }
+
+  for (const group of clonedNodes) {
+    const groupId = String(group?.id ?? "");
+    if (group?.type !== "group" || !groupIds.has(groupId)) continue;
+    for (const childId of Array.isArray(group?.data?.childNodeIds) ? group.data.childNodeIds.map(String) : []) {
+      const child = nodeById.get(childId);
+      if (child?.type !== "group" && !preferredParents.has(childId) && !childParent.has(childId)) {
+        childParent.set(childId, groupId);
+      }
+    }
+  }
+
+  const groupChildren = new Map([...groupIds].map((groupId) => [groupId, []]));
+  for (const node of clonedNodes) {
+    const nodeId = String(node?.id ?? "");
+    const parentGroupId = childParent.get(nodeId);
+    if (parentGroupId) groupChildren.get(parentGroupId)?.push(nodeId);
+  }
+
+  return clonedNodes.map((node) => {
+    const nodeId = String(node?.id ?? "");
+    if (node?.type === "group") {
+      node.data = {
+        ...structuredCloneSafe(node.data ?? {}),
+        childNodeIds: groupChildren.get(nodeId) ?? [],
+      };
+      delete node.parentGroupId;
+      return node;
+    }
+    const parentGroupId = childParent.get(nodeId);
+    if (parentGroupId) node.parentGroupId = parentGroupId;
+    else delete node.parentGroupId;
+    return node;
+  });
 }
 
 export function resolveCanvasConnectionPorts(document, connection) {

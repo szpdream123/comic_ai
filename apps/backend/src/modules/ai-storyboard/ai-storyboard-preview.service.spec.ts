@@ -41,7 +41,7 @@ describe("ai storyboard preview service", () => {
     assert.equal(gateway.calls.length, 5);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text", "text", "text", "text", "text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [384000, 384000, 384000, 384000, 384000]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [8192, 8192, 8192, 8192, 8192]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /短剧快节奏/);

@@ -7,7 +7,7 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
-import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
+import { generationProviderHttpTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
   attachProviderRawResponse,
   providerResponseDiagnostics,
@@ -20,7 +20,7 @@ const defaultEndpoint = "https://api.openai.com/v1/images/generations";
 const defaultEditEndpoint = "https://api.openai.com/v1/images/edits";
 const defaultModel = "gpt-image-2";
 const defaultSize = "1024x1536";
-const defaultRequestTimeoutMs = generationTimeoutMsFor("image");
+const defaultRequestTimeoutMs = generationProviderHttpTimeoutMsFor("image");
 
 export class OpenAIImagesProviderAdapter implements ProviderAdapter {
   constructor(

@@ -5,7 +5,7 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
-import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
+import { generationProviderHttpTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
   attachProviderRawResponse,
   providerResponseDiagnostics,
@@ -16,7 +16,7 @@ import {
 const defaultModel = "gpt-image-2";
 const defaultEndpoint = "https://api.cumob.com/v1/images/generations";
 const defaultQueryTaskEndpoint = "https://api.cumob.com/v1/status/{taskId}";
-const defaultRequestTimeoutMs = generationTimeoutMsFor("image");
+const defaultRequestTimeoutMs = generationProviderHttpTimeoutMsFor("image");
 
 export class CumobImageProviderAdapter implements ProviderAdapter {
   constructor(

@@ -8,6 +8,8 @@ import {
   CreditReasonRequiredError,
   InsufficientCreditsError,
   grantCredits,
+  grantPromptSkillUsageCredits,
+  grantPromptSkillsUsageCredits,
   repairCreditBalanceCache,
   reserveCredits,
   reserveCreditsInTransaction,
@@ -501,6 +503,133 @@ describe("persistent credit ledger and reservation", () => {
       assert.equal(reservation?.amount_consumed, 30);
       assert.equal(reservation?.amount_reserved, 20);
       assert.equal(reservation?.status, "partially_settled");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("only grants a paid private prompt skill fee after generation success", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+      await db.query(
+        `INSERT INTO users (id, phone_e164, display_name, status, created_at, updated_at)
+         VALUES ($1, '13800138002', 'Skill author', 'active', now(), now())`,
+        [ids.targetUser],
+      );
+      await grantCredits(db, {
+        userId: ids.user,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "充值套餐增加积分",
+        now: now(),
+      });
+      const reserved = await reserveCredits(db, {
+        userId: ids.user,
+        amount: 30,
+        sourceType: "generation_task",
+        sourceId: ids.task,
+        reason: "图片生成预占积分",
+        now: now(),
+      });
+
+      const input = {
+        reservationId: reserved.reservation.id,
+        allocationKey: "image-result",
+        amount: 30,
+        outcome: "consumed" as const,
+        taskId: ids.task,
+        metadata: {
+          mediaType: "image",
+          modelCode: "image-model-a",
+          promptSkill: {
+            id: "60000000-0000-4000-8000-000000000001",
+            category: "image_style",
+            title: "私人东方幻想风格",
+            priceCredits: 10,
+            official: false,
+            ownerUserId: ids.targetUser,
+          },
+        },
+        now: now(),
+      };
+      await settleReservationAllocation(db, input);
+      await settleReservationAllocation(db, input);
+
+      const authorBeforeCompletion = await queryOne<{ credit_balance_cached: number }>(
+        db,
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [ids.targetUser],
+      );
+      assert.equal(authorBeforeCompletion?.credit_balance_cached, 0);
+
+      await grantPromptSkillUsageCredits(db, {
+        skill: input.metadata.promptSkill,
+        sourceId: ids.task,
+        payerUserId: ids.user,
+        projectId: null,
+        modelCode: "image-model-a",
+        now: now(),
+      });
+      await grantPromptSkillUsageCredits(db, {
+        skill: input.metadata.promptSkill,
+        sourceId: ids.task,
+        payerUserId: ids.user,
+        projectId: null,
+        modelCode: "image-model-a",
+        now: now(),
+      });
+
+      const author = await queryOne<{ credit_balance_cached: number }>(
+        db,
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [ids.targetUser],
+      );
+      const authorGrantCount = await queryOne<{ count: number }>(
+        db,
+        `SELECT count(*)::int AS count FROM credit_ledger_entries
+         WHERE user_id = $1 AND source_type = 'prompt_skill_usage_earning' AND source_id = $2`,
+        [ids.targetUser, ids.task],
+      );
+
+      assert.equal(author?.credit_balance_cached, 10);
+      assert.equal(authorGrantCount?.count, 1);
+
+      const combinedSkills = [
+        { ...input.metadata.promptSkill, id: "60000000-0000-4000-8000-000000000002", priceCredits: 6 },
+        { ...input.metadata.promptSkill, id: "60000000-0000-4000-8000-000000000003", priceCredits: 4 },
+      ];
+      await grantPromptSkillsUsageCredits(db, {
+        skills: combinedSkills,
+        sourceId: ids.otherTask,
+        payerUserId: ids.user,
+        projectId: null,
+        modelCode: "image-model-a",
+        now: now(),
+      });
+      await grantPromptSkillsUsageCredits(db, {
+        skills: combinedSkills,
+        sourceId: ids.otherTask,
+        payerUserId: ids.user,
+        projectId: null,
+        modelCode: "image-model-a",
+        now: now(),
+      });
+      const authorAfterCombinedSkills = await queryOne<{ credit_balance_cached: number }>(
+        db,
+        "SELECT credit_balance_cached FROM users WHERE id = $1",
+        [ids.targetUser],
+      );
+      const totalAuthorGrantCount = await queryOne<{ count: number }>(
+        db,
+        `SELECT count(*)::int AS count FROM credit_ledger_entries
+         WHERE user_id = $1 AND source_type = 'prompt_skill_usage_earning'`,
+        [ids.targetUser],
+      );
+      assert.equal(authorAfterCombinedSkills?.credit_balance_cached, 20);
+      assert.equal(totalAuthorGrantCount?.count, 3);
     } finally {
       await db.close();
     }

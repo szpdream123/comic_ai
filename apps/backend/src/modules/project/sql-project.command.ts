@@ -59,6 +59,7 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
       scriptInput: request.body.scriptInput,
       aspectRatio: request.body.aspectRatio,
       resolution: request.body.resolution,
+      projectType: request.body.projectType,
       idempotencyKey: request.idempotencyKey,
     });
 
@@ -87,6 +88,7 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
           scriptInput: request.body.scriptInput,
           aspectRatio: request.body.aspectRatio,
           resolution: request.body.resolution,
+          projectType: request.body.projectType,
           idempotencyKey: request.idempotencyKey,
         }),
         now: request.now,
@@ -121,6 +123,7 @@ export function createSqlProjectCommandHandler(deps: { db: SqlDatabase }) {
             scriptInput: request.body.scriptInput.trim(),
             aspectRatio: request.body.aspectRatio as ProjectAspectRatio,
             resolution: request.body.resolution as ProjectResolution,
+            projectType: request.body.projectType.trim(),
           });
           const result = createProjectResponseBody(bundle);
 
@@ -274,7 +277,7 @@ export function createSqlParseScriptCommandHandler(deps: { db: SqlDatabase }) {
 }
 
 function createProjectResponseBody(bundle: {
-  project: { id: string; phase: string; name: string };
+  project: { id: string; phase: string; name: string; projectType: string };
   script: { id: string; status: string };
 }) {
   return {
@@ -282,6 +285,7 @@ function createProjectResponseBody(bundle: {
       id: bundle.project.id,
       phase: bundle.project.phase,
       name: bundle.project.name,
+      projectType: bundle.project.projectType,
     },
     script: {
       id: bundle.script.id,

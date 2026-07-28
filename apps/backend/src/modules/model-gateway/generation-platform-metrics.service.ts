@@ -4,16 +4,35 @@ import { inspectTaskCenterRuntimeMetrics } from "./task-center-observability.ts"
 
 export async function inspectGenerationPlatformMetrics(
   db: SqlDatabase,
-  input: { now: Date; successorStaleMs?: number },
+  input: { now: Date; successorStaleMs?: number; outboxStaleMs?: number },
 ) {
+  const outboxStaleMs = input.outboxStaleMs ?? 120_000;
+  const outboxStaleBefore = new Date(input.now.getTime() - outboxStaleMs);
   const [outbox, polls, webhooks, tasks, shards, latency, stageLatency, missingSuccessors] = await Promise.all([
-    db.query<{ pending_count: number | string; oldest_available_at: Date | string | null }>(`
+    db.query<{
+      pending_count: number | string;
+      ready_count: number | string;
+      processing_count: number | string;
+      stale_processing_count: number | string;
+      oldest_available_at: Date | string | null;
+      oldest_ready_at: Date | string | null;
+    }>(`
       SELECT
         count(*) FILTER (WHERE status IN ('pending', 'failed')) AS pending_count,
-        min(available_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldest_available_at
+        count(*) FILTER (
+          WHERE status IN ('pending', 'failed') AND available_at <= $1
+        ) AS ready_count,
+        count(*) FILTER (WHERE status = 'processing') AS processing_count,
+        count(*) FILTER (
+          WHERE status = 'processing' AND updated_at <= $2
+        ) AS stale_processing_count,
+        min(available_at) FILTER (WHERE status IN ('pending', 'failed')) AS oldest_available_at,
+        min(available_at) FILTER (
+          WHERE status IN ('pending', 'failed') AND available_at <= $1
+        ) AS oldest_ready_at
       FROM outbox_events
       WHERE event_type LIKE 'generation.task.%'
-    `),
+    `, [input.now, outboxStaleBefore]),
     db.query<{ due_count: number | string; overdue_deadline_count: number | string }>(`
       SELECT
         count(*) FILTER (WHERE next_poll_at IS NOT NULL AND next_poll_at <= $1) AS due_count,
@@ -120,11 +139,31 @@ export async function inspectGenerationPlatformMetrics(
   const taskRow = tasks.rows[0];
   const latencyRow = latency.rows[0];
   const stageLatencyRow = stageLatency.rows[0];
+  const oldestReadyAgeMs = ageMs(outboxRow?.oldest_ready_at, input.now);
+  const readyCount = Number(outboxRow?.ready_count ?? 0);
+  const staleProcessingCount = Number(outboxRow?.stale_processing_count ?? 0);
+  const outboxIssues = [
+    readyCount > 0 && oldestReadyAgeMs != null && oldestReadyAgeMs >= outboxStaleMs
+      ? `outbox_ready_stale:${readyCount}`
+      : null,
+    staleProcessingCount > 0
+      ? `outbox_processing_stale:${staleProcessingCount}`
+      : null,
+  ].filter((issue): issue is string => Boolean(issue));
   return {
+    status: outboxIssues.length ? "degraded" : "healthy",
+    issues: outboxIssues,
     collectedAt: input.now.toISOString(),
     outbox: {
       pendingCount: Number(outboxRow?.pending_count ?? 0),
       oldestAgeMs: ageMs(outboxRow?.oldest_available_at, input.now),
+      readyCount,
+      processingCount: Number(outboxRow?.processing_count ?? 0),
+      staleProcessingCount,
+      oldestReadyAgeMs,
+      staleAfterMs: outboxStaleMs,
+      status: outboxIssues.length ? "degraded" : "healthy",
+      issues: outboxIssues,
     },
     polls: {
       dueCount: Number(pollRow?.due_count ?? 0),

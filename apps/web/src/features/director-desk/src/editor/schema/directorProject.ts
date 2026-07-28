@@ -23,6 +23,9 @@ export type CharacterBodyType =
 export type DirectorAssetKind = "character" | "scene" | "prop" | "panorama";
 export type DirectorAssetSource = "local" | "library";
 export type PanoramaProjectionMode = "equirectangular" | "backdrop";
+export type DirectorModelFormat = "fbx" | "obj" | "glb";
+export type CharacterRigProfile = "mixamo" | "mixamo-alt" | "generic-humanoid" | "unknown";
+export type CharacterImportReadiness = "ready" | "manual-mapping" | "static-only";
 
 export interface DirectorTransform {
   position: [number, number, number];
@@ -64,6 +67,21 @@ export interface DirectorAssetRef {
   url: string;
   assetSource?: DirectorAssetSource;
   projectionMode?: PanoramaProjectionMode;
+  modelFormat?: DirectorModelFormat;
+  characterRigProfile?: CharacterRigProfile;
+  characterImportReadiness?: CharacterImportReadiness;
+  characterBoneNames?: string[];
+  characterBoneMap?: import("./semanticBody").DirectorCharacterBoneMap;
+}
+
+export interface DirectorAnimationAssetRef {
+  id: string;
+  name: string;
+  fileName: string;
+  url: string;
+  modelFormat: Extract<DirectorModelFormat, "fbx" | "glb">;
+  rigProfile: CharacterRigProfile;
+  clips: Array<{ name: string; duration: number; trackCount: number }>;
 }
 
 export interface DirectorObject {
@@ -147,6 +165,7 @@ export interface DirectorProject {
   version: 1;
   scene: SceneSettings;
   assets: DirectorAssetRef[];
+  animationAssets?: DirectorAnimationAssetRef[];
   objects: DirectorObject[];
   cameras: DirectorCameraShot[];
   activeCameraId: string | null;

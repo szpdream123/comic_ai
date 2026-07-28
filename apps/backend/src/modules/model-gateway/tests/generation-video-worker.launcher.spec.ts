@@ -47,7 +47,12 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /config\.poll\.video\.limiter\.max/);
     assert.match(launcherScript, /trackGenerationAssignmentRelease\(job, "completed"\)/);
     assert.match(launcherScript, /trackGenerationAssignmentRelease\(job, "failed"\)/);
+    assert.match(launcherScript, /shouldSettleGenerationTaskAfterQueueError/);
+    assert.match(launcherScript, /if \(!taskId \|\| !shouldSettleGenerationTaskAfterQueueError\(/);
     assert.match(launcherScript, /reserveGenerationQueueStageForPublish/);
+    assert.match(launcherScript, /hasReleasedGenerationQueueStageAssignment/);
+    assert.match(launcherScript, /generation_queue_assignment_already_released/);
+    assert.match(launcherScript, /publishReservedGenerationJob\(\{[\s\S]*?\}\)\.catch\(async \(error\) => \{[\s\S]*?generation_queue_assignment_already_released[\s\S]*?hasReleasedGenerationQueueStageAssignment/);
     assert.match(launcherScript, /publishReservedGenerationJob/);
     assert.match(launcherScript, /markGenerationQueueStagePublished/);
     assert.doesNotMatch(launcherScript, /runGenerationAssignedJob/);

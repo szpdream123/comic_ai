@@ -6,7 +6,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import {
-  generationTimeoutMsFor,
+  generationProviderHttpTimeoutMsFor,
 } from "./generation-timeout.policy.ts";
 import {
   attachProviderRawResponse,
@@ -20,7 +20,7 @@ const defaultGptImage2Path = "/v1/image2/images";
 const defaultBananaPath = "/v1/banana/images";
 const defaultQueryPath = "/v1/result/{taskId}";
 const defaultModel = "gpt-image-2";
-const defaultRequestTimeoutMs = generationTimeoutMsFor("image");
+const defaultRequestTimeoutMs = generationProviderHttpTimeoutMsFor("image");
 
 export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
   constructor(
@@ -392,6 +392,23 @@ function findProviderMessage(payload: Record<string, unknown>) {
     ["data", "error"],
     ["data", "message"],
     ["data", "error", "message"],
+  ]);
+}
+
+function findProviderErrorCode(payload: Record<string, unknown>) {
+  return findFirstString(payload, [
+    ["error", "code"],
+    ["error_code"],
+    ["errorCode"],
+    ["code"],
+    ["data", "error", "code"],
+    ["data", "error_code"],
+    ["data", "errorCode"],
+    ["data", "code"],
+    ["result", "error", "code"],
+    ["result", "error_code"],
+    ["result", "errorCode"],
+    ["result", "code"],
   ]);
 }
 

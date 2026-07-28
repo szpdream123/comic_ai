@@ -43,6 +43,47 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("reads and updates the Canvas Agent runtime settings through the admin contract", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+    try {
+      const initial = await fetch(`${server.origin}/api/admin/settings/canvas-agent`, {
+        headers: { cookie },
+      });
+      const initialPayload = await initial.json();
+      assert.equal(initial.status, 200, JSON.stringify(initialPayload));
+      assert.equal(Array.isArray(initialPayload.data.mcpAllowlist), true);
+      assert.equal(initialPayload.data.webSearchModelCode, null);
+
+      const updated = await fetch(`${server.origin}/api/admin/settings/canvas-agent`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+          "idempotency-key": `canvas-agent-settings-${randomUUID()}`,
+        },
+        body: JSON.stringify({
+          value: { defaultModelCode: "agent-default", expertModelCode: "agent-expert", webSearchModelCode: "canvas-search-tavily", maxRounds: 8, maxToolCalls: 16, mcpAllowlist: [] },
+          reason: "Canvas Agent contract test",
+        }),
+      });
+      const updatedPayload = await updated.json();
+      assert.equal(updated.status, 200, JSON.stringify(updatedPayload));
+
+      const reread = await fetch(`${server.origin}/api/admin/settings/canvas-agent`, {
+        headers: { cookie },
+      });
+      const rereadPayload = await reread.json();
+      assert.equal(reread.status, 200, JSON.stringify(rereadPayload));
+      assert.equal(rereadPayload.data.defaultModelCode, "agent-default");
+      assert.equal(rereadPayload.data.maxToolCalls, 16);
+      assert.equal(rereadPayload.data.webSearchModelCode, "canvas-search-tavily");
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("lets a bootstrapped admin login, inspect the session, and logout", async () => {
     const db = await createMigratedTestDb();
     const loginName = `admin_${randomUUID().slice(0, 8)}`;
@@ -1117,6 +1158,163 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("returns Canvas Agent compatibility diagnostics from the admin model probe", async () => {
+    const db = await createMigratedTestDb();
+    const probeCalls: string[] = [];
+    let probeResult: {
+      ok: boolean;
+      latencyMs: number;
+      failureCode: string | null;
+      checks: Array<{ key: "resolution" | "stream" | "usage" | "json_schema"; status: "passed" | "failed"; message?: string }>;
+    } = {
+      ok: true,
+      latencyMs: 24,
+      failureCode: null as string | null,
+      checks: [
+        { key: "resolution" as const, status: "passed" as const },
+        { key: "stream" as const, status: "passed" as const },
+        { key: "usage" as const, status: "passed" as const },
+        { key: "json_schema" as const, status: "passed" as const },
+      ],
+    };
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      serverOptions: {
+        canvasAgentModelProbe: {
+          async probe(modelCode) {
+            probeCalls.push(modelCode);
+            return probeResult;
+          },
+        },
+      },
+    });
+
+    try {
+      const createResponse = await fetch(`${server.origin}/api/admin/models`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "admin-canvas-agent-model-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          modelCode: "canvas-agent-compatible",
+          displayName: "Canvas Agent Compatible",
+          providerName: "openai-compatible",
+          providerModel: "agent-model",
+          providerProtocol: "openai_compatible_chat",
+          invocationMode: "stream",
+          mediaType: "text",
+          taskModes: ["text.canvas_agent"],
+          capabilities: { stream: true, toolCalling: true, jsonSchema: true, contextWindow: 32000 },
+          parameterSchema: { maxTokens: { type: "number" } },
+          pricing: { unit: "token", baseCredits: 1 },
+          providerConfig: {
+            baseURL: "https://provider.example/v1",
+            endpoint: "/chat/completions",
+            apiKeyEnv: "CANVAS_AGENT_PROVIDER_KEY",
+          },
+          uiConfig: { agentEligible: true },
+          dispatchPolicy: {
+            submitQueueName: "canvas-agent-text",
+            providerRpmLimit: 60,
+            providerConcurrentLimit: 4,
+            submitConcurrencyLimit: 4,
+            pollingIntervalMs: 1000,
+            pollingConcurrencyLimit: 1,
+          },
+          reason: "创建 Canvas Agent 探测模型",
+        }),
+      });
+      const created = await createResponse.json();
+      assert.equal(createResponse.status, 200, JSON.stringify(created));
+
+      const probeResponse = await fetch(`${server.origin}/api/admin/models/${created.data.id}/probe`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ reason: "验证 Canvas Agent 兼容性" }),
+      });
+      const payload = await probeResponse.json();
+
+      assert.equal(probeResponse.status, 200, JSON.stringify(payload));
+      assert.equal(payload.data.ok, true, JSON.stringify(payload));
+      assert.deepEqual(probeCalls, ["canvas-agent-compatible"]);
+      assert.deepEqual(
+        payload.data.checks.filter((check: { key: string }) => check.key.startsWith("canvas_agent.")).map(
+          (check: { key: string; status: string }) => [check.key, check.status],
+        ),
+        [
+          ["canvas_agent.resolution", "passed"],
+          ["canvas_agent.stream", "passed"],
+          ["canvas_agent.usage", "passed"],
+          ["canvas_agent.json_schema", "passed"],
+        ],
+      );
+      const persisted = await db.query<{
+        status: string;
+        failure_code: string | null;
+        latency_ms: number;
+        checks_json: Array<Record<string, unknown>>;
+      }>(`
+        SELECT status, failure_code, latency_ms, checks_json
+        FROM canvas_agent_model_compatibility_probes
+        WHERE model_config_id = $1
+      `, [created.data.id]);
+      assert.equal(persisted.rows[0]?.status, "passed");
+      assert.equal(persisted.rows[0]?.failure_code, null);
+      assert.equal(Number(persisted.rows[0]?.latency_ms), 24);
+      assert.equal(persisted.rows[0]?.checks_json.length, 4);
+
+      const listResponse = await fetch(`${server.origin}/api/admin/models?page=1&pageSize=100`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      const listedModel = listPayload.data.find((model: { id: string }) => model.id === created.data.id);
+      assert.deepEqual(listedModel.compatibilityProbe, {
+        status: "passed",
+        failureCode: null,
+        latencyMs: 24,
+        checks: [
+          { key: "resolution", status: "passed" },
+          { key: "stream", status: "passed" },
+          { key: "usage", status: "passed" },
+          { key: "json_schema", status: "passed" },
+        ],
+        checkedAt: payload.data.checkedAt,
+      });
+
+      probeResult = {
+        ok: false,
+        latencyMs: 31,
+        failureCode: "canvas_agent_model_json_schema_failed",
+        checks: [
+          { key: "resolution", status: "passed" },
+          { key: "stream", status: "passed" },
+          { key: "usage", status: "passed" },
+          { key: "json_schema", status: "failed", message: "schema mismatch" },
+        ],
+      };
+      const failedProbeResponse = await fetch(`${server.origin}/api/admin/models/${created.data.id}/probe`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ reason: "复测 Canvas Agent 兼容性" }),
+      });
+      const failedPayload = await failedProbeResponse.json();
+      assert.equal(failedProbeResponse.status, 200, JSON.stringify(failedPayload));
+      assert.equal(failedPayload.data.ok, false);
+      const failedPersisted = await db.query<{ status: string; failure_code: string | null }>(`
+        SELECT status, failure_code
+        FROM canvas_agent_model_compatibility_probes
+        WHERE model_config_id = $1
+      `, [created.data.id]);
+      assert.deepEqual(failedPersisted.rows[0], {
+        status: "failed",
+        failure_code: "canvas_agent_model_json_schema_failed",
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("lets admins delete model configs with audit records", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
@@ -1195,7 +1393,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
-  it("persists editable storyboard prompt packages in the admin database", async () => {
+  it("persists editable script prompts in the unified prompts table", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
 
@@ -1207,7 +1405,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const listPayload = await listResponse.json();
       assert.ok(listPayload.data.length > 0);
 
-      const packageCode = `test_storyboard_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages`, {
         method: "POST",
         headers: {
@@ -1215,14 +1412,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           cookie,
         },
         body: JSON.stringify({
-          name: "Test Storyboard Prompt",
-          code: packageCode,
-          package_type: "genre",
-          tags: ["test", "genre"],
+          name: "Test Script Prompt",
           cover_image_url: "https://example.com/storyboard-cover.png",
+          summary: "A concise script prompt summary.",
           prompt_content: "This prompt package is long enough to validate database persistence for editable storyboard prompt content.",
           status: "enabled",
-          sort_order: 7,
         }),
       });
       assert.equal(createResponse.status, 200);
@@ -1235,96 +1429,109 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           cookie,
         },
         body: JSON.stringify({
-          ...createPayload.data,
-          name: "Edited Storyboard Prompt",
+          name: "Edited Script Prompt",
           cover_image_url: "https://example.com/storyboard-cover-edited.png",
+          summary: "An edited script prompt summary.",
           prompt_content: "Edited storyboard prompt content is stored back into the database with enough length for validation.",
+          status: "enabled",
         }),
       });
       assert.equal(updateResponse.status, 200);
       const updatePayload = await updateResponse.json();
+      assert.equal(updatePayload.data.category, "script");
+      assert.equal(updatePayload.data.summary, "An edited script prompt summary.");
       assert.equal(updatePayload.data.cover_image_url, "https://example.com/storyboard-cover-edited.png");
 
-      const persisted = await db.query<{ name: string; prompt_content: string; cover_image_url: string | null }>(
-        "SELECT name, prompt_content, cover_image_url FROM storyboard_prompt_packages WHERE id = $1",
+      const disableResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      assert.equal(disableResponse.status, 200);
+      const disablePayload = await disableResponse.json();
+      assert.equal(disablePayload.data.status, "disabled");
+
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        prompt_content: string;
+        cover_image_url: string | null;
+        status: string;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, prompt_content, cover_image_url, status, is_published
+         FROM prompts WHERE id = $1`,
         [createPayload.data.id],
       );
-      assert.equal(persisted.rows[0]?.name, "Edited Storyboard Prompt");
-      assert.equal(persisted.rows[0]?.cover_image_url, "https://example.com/storyboard-cover-edited.png");
-      assert.match(persisted.rows[0]?.prompt_content ?? "", /stored back into the database/);
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "script",
+        name: "Edited Script Prompt",
+        summary: "An edited script prompt summary.",
+        prompt_content: "Edited storyboard prompt content is stored back into the database with enough length for validation.",
+        cover_image_url: "https://example.com/storyboard-cover-edited.png",
+        status: "disabled",
+        is_published: false,
+      });
     } finally {
       await server.close();
     }
   });
 
-  it("keeps storyboard prompt package default flags when editing without resubmitting them", async () => {
+  it("persists storyboard prompts with the fixed storyboard category", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
 
     try {
-      const packageCode = `test_storyboard_default_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
-      const createResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages`, {
+      const createResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/templates`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           cookie,
         },
         body: JSON.stringify({
-          name: "Default Storyboard Prompt",
-          code: packageCode,
-          package_type: "genre",
-          tags: ["test", "default"],
-          prompt_content: "This default storyboard package has enough text to validate that edit requests preserve stored default flags.",
-          status: "enabled",
-          sort_order: 11,
+          name: "Storyboard Assembly Prompt",
+          cover_image_url: "https://example.com/storyboard-template-cover.png",
+          summary: "Creates a complete visual storyboard.",
+          base_prompt: "Create a complete visual storyboard with coherent shots, character continuity, scene continuity, and clear composition.",
+          status: "disabled",
         }),
       });
       assert.equal(createResponse.status, 200);
       const createPayload = await createResponse.json();
+      assert.equal(createPayload.data.category, "storyboard");
+      assert.equal(createPayload.data.cover_image_url, "https://example.com/storyboard-template-cover.png");
+      assert.equal(createPayload.data.summary, "Creates a complete visual storyboard.");
+      assert.equal(createPayload.data.status, "disabled");
 
-      const makeDefaultResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}`, {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          ...createPayload.data,
-          is_default: true,
-        }),
-      });
-      assert.equal(makeDefaultResponse.status, 200);
-
-      const editResponse = await fetch(`${server.origin}/api/admin/storyboard-prompt/packages/${createPayload.data.id}`, {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          name: "Edited Default Storyboard Prompt",
-          code: packageCode,
-          package_type: "genre",
-          prompt_content: "Edited default storyboard package content is still long enough, and this request intentionally omits default flags.",
-          status: "enabled",
-          sort_order: 11,
-        }),
-      });
-      assert.equal(editResponse.status, 200);
-
-      const persisted = await db.query<{ is_default: boolean; is_global_default: boolean; name: string }>(
-        "SELECT is_default, is_global_default, name FROM storyboard_prompt_packages WHERE id = $1",
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        prompt_content: string;
+        cover_image_url: string;
+        status: string;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, prompt_content, cover_image_url, status, is_published
+         FROM prompts WHERE id = $1`,
         [createPayload.data.id],
       );
-      assert.equal(persisted.rows[0]?.name, "Edited Default Storyboard Prompt");
-      assert.equal(persisted.rows[0]?.is_default, true);
-      assert.equal(persisted.rows[0]?.is_global_default, false);
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "storyboard",
+        name: "Storyboard Assembly Prompt",
+        summary: "Creates a complete visual storyboard.",
+        prompt_content: "Create a complete visual storyboard with coherent shots, character continuity, scene continuity, and clear composition.",
+        cover_image_url: "https://example.com/storyboard-template-cover.png",
+        status: "disabled",
+        is_published: false,
+      });
     } finally {
       await server.close();
     }
   });
 
-  it("persists classified shot prompt templates in the admin database", async () => {
+  it("persists shot prompts in the unified prompts table", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
 
@@ -1334,9 +1541,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
-      assert.ok(listPayload.data.some((item: { code: string; stage: string; remark: string }) => item.code === "long_story_precise_breakdown" && item.stage === "outline" && item.remark.includes("强钩子")));
+      assert.ok(listPayload.data.every((item: { category: string }) => item.category === "shot"));
 
-      const templateCode = `test_shot_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/shot-prompt/templates`, {
         method: "POST",
         headers: {
@@ -1345,16 +1551,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
         body: JSON.stringify({
           name: "Test Shot Prompt Template",
-          code: templateCode,
-          stage: "outline",
-          model_family: "general",
-          tags: ["test", "panel"],
-          variables: ["{{script_scene}}"],
-          json_schema: "shots[].shot_no, duration_seconds",
+          cover_image_url: "https://example.com/shot-cover.png",
+          summary: "Breaks a story into coherent shots.",
           prompt_content: "This shot prompt template is long enough to validate database persistence for editable shot prompt content.",
           status: "enabled",
-          sort_order: 7,
-          remark: "擅长测试分镜提示词落库。",
         }),
       });
       assert.equal(createResponse.status, 200);
@@ -1367,29 +1567,55 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           cookie,
         },
         body: JSON.stringify({
-          ...createPayload.data,
           name: "Edited Shot Prompt Template",
+          cover_image_url: "https://example.com/shot-cover-edited.png",
+          summary: "Edited shot prompt summary.",
           prompt_content: "Edited shot prompt content is stored back into the database with enough length for validation.",
-          remark: "擅长验证编辑后的分镜提示词落库。",
+          status: "enabled",
         }),
       });
       assert.equal(updateResponse.status, 200);
       const updatePayload = await updateResponse.json();
       assert.equal(updatePayload.data.name, "Edited Shot Prompt Template");
+      assert.equal(updatePayload.data.category, "shot");
+      assert.equal(updatePayload.data.cover_image_url, "https://example.com/shot-cover-edited.png");
+      assert.equal(updatePayload.data.summary, "Edited shot prompt summary.");
 
-      const persisted = await db.query<{ name: string; prompt_content: string; remark: string | null }>(
-        "SELECT name, prompt_content, remark FROM shot_prompt_templates WHERE id = $1",
+      const disableResponse = await fetch(`${server.origin}/api/admin/shot-prompt/templates/${createPayload.data.id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      assert.equal(disableResponse.status, 200);
+
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        cover_image_url: string;
+        prompt_content: string;
+        status: string;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, cover_image_url, prompt_content, status, is_published
+         FROM prompts WHERE id = $1`,
         [createPayload.data.id],
       );
-      assert.equal(persisted.rows[0]?.name, "Edited Shot Prompt Template");
-      assert.equal(persisted.rows[0]?.remark, "擅长验证编辑后的分镜提示词落库。");
-      assert.match(persisted.rows[0]?.prompt_content ?? "", /stored back into the database/);
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "shot",
+        name: "Edited Shot Prompt Template",
+        summary: "Edited shot prompt summary.",
+        cover_image_url: "https://example.com/shot-cover-edited.png",
+        prompt_content: "Edited shot prompt content is stored back into the database with enough length for validation.",
+        status: "disabled",
+        is_published: false,
+      });
     } finally {
       await server.close();
     }
   });
 
-  it("persists editable image prompt styles in the admin database", async () => {
+  it("persists image styles in the unified prompts table", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
 
@@ -1400,40 +1626,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
       assert.equal(Number(listPayload.meta?.total || 0) >= listPayload.data.length, true);
-      assert.ok(listPayload.data.some((item: { name: string; code: string }) => item.name === "人像摄影" && item.code === "portrait_photography"));
-      assert.ok(listPayload.data.some((item: { name: string }) => item.name === "二次元"));
-
-      const batchListResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles?category=batch&page_size=5`, {
-        headers: { cookie },
-      });
-      assert.equal(batchListResponse.status, 200);
-      const batchListPayload = await batchListResponse.json();
-      assert.equal(batchListPayload.meta?.total, 9);
-      assert.equal(batchListPayload.data.length, 5);
-      assert.ok(batchListPayload.data.every((item: { category: string }) => item.category === "batch"));
-
-      const batchStyleCode = `test_batch_image_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
-      const batchCreateResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          name: "Test Batch Image Prompt Style",
-          code: batchStyleCode,
-          category: "batch",
-          batch_preset_target: "scene",
-          model_family: "doubao",
-          prompt_content: "批量场景生图测试风格，主体清晰，画面干净，用于验证预设目标能够通过后台接口保存。",
-          status: "enabled",
-        }),
-      });
-      assert.equal(batchCreateResponse.status, 200);
-      const batchCreatePayload = await batchCreateResponse.json();
-      assert.equal(batchCreatePayload.data.batch_preset_target, "scene");
-
-      const styleCode = `test_image_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
+      assert.ok(listPayload.data.every((item: { category: string }) => item.category === "image_style"));
       const createResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {
         method: "POST",
         headers: {
@@ -1442,19 +1635,21 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
         body: JSON.stringify({
           name: "Test Image Prompt Style",
-          code: styleCode,
-          category: "official",
-          model_family: "doubao",
           cover_image_url: "https://example.com/image-style-cover.png",
+          summary: "Creates an editorial image style.",
           prompt_content: "豆包生图测试风格，主体清晰，画面干净，中文自然描述，适合验证后台持久化。",
-          negative_prompt: "避免文字、水印、低清晰度、畸形手指。",
-          tags: ["test", "doubao"],
           status: "enabled",
-          sort_order: 7,
+          priceCredits: 19,
+          usageCount: 31,
+          isPublished: true,
         }),
       });
       assert.equal(createResponse.status, 200);
       const createPayload = await createResponse.json();
+      assert.equal(createPayload.data.price_credits, 19);
+      assert.equal(createPayload.data.usage_count, 31);
+      assert.equal(createPayload.data.usageCount, 31);
+      assert.equal(createPayload.data.is_published, true);
 
       const updateResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles/${createPayload.data.id}`, {
         method: "PUT",
@@ -1463,120 +1658,65 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           cookie,
         },
         body: JSON.stringify({
-          ...createPayload.data,
           name: "Edited Image Prompt Style",
           cover_image_url: "https://example.com/image-style-cover-edited.png",
+          summary: "Edited image style summary.",
           prompt_content: "编辑后的豆包生图风格提示词已经写回数据库，保留清晰主体、光影、构图和质量约束。",
+          status: "enabled",
+          price_credits: 25,
+          usage_count: 64,
+          is_published: true,
         }),
       });
       assert.equal(updateResponse.status, 200);
       const updatePayload = await updateResponse.json();
+      assert.equal(updatePayload.data.category, "image_style");
+      assert.equal(updatePayload.data.summary, "Edited image style summary.");
       assert.equal(updatePayload.data.cover_image_url, "https://example.com/image-style-cover-edited.png");
+      assert.equal(updatePayload.data.priceCredits, 25);
+      assert.equal(updatePayload.data.usage_count, 64);
+      assert.equal(updatePayload.data.usageCount, 64);
+      assert.equal(updatePayload.data.isPublished, true);
 
-      const persisted = await db.query<{ name: string; prompt_content: string; cover_image_url: string | null }>(
-        "SELECT name, prompt_content, cover_image_url FROM image_prompt_styles WHERE id = $1",
+      const disableResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles/${createPayload.data.id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      assert.equal(disableResponse.status, 200);
+
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        prompt_content: string;
+        cover_image_url: string | null;
+        status: string;
+        price_credits: number;
+        usage_count: number;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, prompt_content, cover_image_url, status, price_credits, usage_count, is_published
+         FROM prompts WHERE id = $1`,
         [createPayload.data.id],
       );
-      assert.equal(persisted.rows[0]?.name, "Edited Image Prompt Style");
-      assert.equal(persisted.rows[0]?.cover_image_url, "https://example.com/image-style-cover-edited.png");
-      assert.match(persisted.rows[0]?.prompt_content ?? "", /编辑后的豆包生图风格/);
-
-      const fallbackIdUpdateResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles/image-style-animation`, {
-        method: "PUT",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          name: "动画",
-          code: "animation",
-          category: "official",
-          model_family: "doubao",
-          cover_image_url: "/admin/assets/prompt-covers/animation.webp",
-          prompt_content: "二次元，动漫风，日系，手绘，插画风，角色造型生动，色彩明快，线条干净，自然",
-          negative_prompt: "避免文字、水印、logo、低清晰度、主体不完整。",
-          tags: ["动画"],
-          status: "enabled",
-          sort_order: 290,
-        }),
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "image_style",
+        name: "Edited Image Prompt Style",
+        summary: "Edited image style summary.",
+        prompt_content: "编辑后的豆包生图风格提示词已经写回数据库，保留清晰主体、光影、构图和质量约束。",
+        cover_image_url: "https://example.com/image-style-cover-edited.png",
+        status: "disabled",
+        price_credits: 25,
+        usage_count: 64,
+        is_published: false,
       });
-      assert.equal(fallbackIdUpdateResponse.status, 200);
-      const fallbackIdUpdatePayload = await fallbackIdUpdateResponse.json();
-      assert.equal(fallbackIdUpdatePayload.data.code, "animation");
-
-      const fallbackPersisted = await db.query<{ prompt_content: string }>(
-        "SELECT prompt_content FROM image_prompt_styles WHERE code = 'animation'",
-      );
-      assert.match(fallbackPersisted.rows[0]?.prompt_content ?? "", /二次元，动漫风/);
     } finally {
       await server.close();
     }
   });
 
-  it("reads and updates batch image prompt preset categories through the admin prompt API", async () => {
-    const db = await createMigratedTestDb();
-    const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
-
-    try {
-      const initialResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
-        headers: { cookie },
-      });
-      const initialPayload = await initialResponse.json();
-
-      assert.equal(initialResponse.status, 200);
-      assert.deepEqual(initialPayload.data, {
-        scene: [
-          { id: "scene-vr", label: "[系统]VR场景图" },
-          { id: "scene-overlook", label: "[系统]场景-俯视图" },
-          { id: "scene-wide", label: "[系统]场景-广角图" },
-        ],
-        character: [
-          { id: "character-triple", label: "[系统]角色-三视图" },
-        ],
-        prop: [
-          { id: "prop-triple", label: "[系统]道具-三视图" },
-        ],
-      });
-
-      const nextValue = {
-        scene: [{ id: "scene-future-city", label: "未来城市场景", prompt_content: "未来城市环境提示词正文", promptContent: "未来城市环境提示词正文" }],
-        character: [{ id: "character-hero", label: "主角角色预设", prompt_content: "主角角色三视图提示词正文", promptContent: "主角角色三视图提示词正文" }],
-        prop: [{ id: "prop-sword", label: "飞剑道具预设", prompt_content: "飞剑道具三视图提示词正文", promptContent: "飞剑道具三视图提示词正文" }],
-      };
-      const updateResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
-        method: "PATCH",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "admin-batch-image-preset-update",
-          cookie,
-        },
-        body: JSON.stringify({
-          value: nextValue,
-          reason: "同步批量生图预设",
-        }),
-      });
-      const updatePayload = await updateResponse.json();
-
-      assert.equal(updateResponse.status, 200);
-      assert.deepEqual(updatePayload.data.value, nextValue);
-
-      const persisted = await db.query<{ value_json: unknown }>(
-        "SELECT value_json FROM runtime_config_entries WHERE key = 'creator.batch_image_prompt_preset_categories'",
-      );
-      assert.deepEqual(persisted.rows[0]?.value_json, nextValue);
-
-      const refreshedResponse = await fetch(`${server.origin}/api/admin/batch-image-prompt-presets`, {
-        headers: { cookie },
-      });
-      const refreshedPayload = await refreshedResponse.json();
-      assert.equal(refreshedResponse.status, 200);
-      assert.deepEqual(refreshedPayload.data, nextValue);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("composes character prompt templates with backend-recognized variables", async () => {
+  it("persists character prompts in the unified prompts table", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
 
@@ -1586,58 +1726,76 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
-      assert.ok(listPayload.data.some((item: { stage: string; code: string }) => item.stage === "extract" && item.code === "novel_character_extract"));
-      const extractTemplate = listPayload.data.find((item: { stage: string }) => item.stage === "extract");
-      assert.ok(extractTemplate);
+      assert.ok(listPayload.data.every((item: { category: string }) => item.category === "character_extract"));
 
-      const profile = {
-        name: "沈青舟",
-        age: "二十七岁",
-        gender: "男",
-        identity: "落魄剑修",
-        temperament: "冷静克制",
-        visual_anchors: ["青色旧袍", "断剑", "眉尾伤痕"],
-      };
-      const composeResponse = await fetch(`${server.origin}/api/admin/character-prompt/compose`, {
+      const createResponse = await fetch(`${server.origin}/api/admin/character-prompt/templates`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           cookie,
         },
         body: JSON.stringify({
-          template_id: extractTemplate.id,
-          variables: {
-            chunk_id: "chunk_001",
-            novel_chunk: JSON.stringify(profile),
-          },
+          name: "Test Character Prompt",
+          cover_image_url: "https://example.com/character-cover.png",
+          summary: "Extracts consistent character details.",
+          prompt_content: "Extract important character information from the source text with consistent visual traits, identity, relationships, and reusable continuity details.",
+          status: "enabled",
         }),
       });
-      assert.equal(composeResponse.status, 200);
-      const composePayload = await composeResponse.json();
-      assert.equal(composePayload.data.missing_variables.length, 0);
-      assert.match(composePayload.data.composed_prompt, /沈青舟/);
-      assert.match(composePayload.data.composed_prompt, /完整人物外观/);
+      assert.equal(createResponse.status, 200);
+      const createPayload = await createResponse.json();
 
-      const missingResponse = await fetch(`${server.origin}/api/admin/character-prompt/compose`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
+      const updateResponse = await fetch(`${server.origin}/api/admin/character-prompt/templates/${createPayload.data.id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie },
         body: JSON.stringify({
-          template_code: "novel_character_extract",
-          variables: {},
+          name: "Edited Character Prompt",
+          cover_image_url: "https://example.com/character-cover-edited.png",
+          summary: "Edited character prompt summary.",
+          prompt_content: "Edited character prompt content extracts reliable identity, visual traits, relationships, and continuity notes directly from the supplied source text.",
+          status: "enabled",
         }),
       });
-      assert.equal(missingResponse.status, 400);
-      const missingPayload = await missingResponse.json();
-      assert.equal(missingPayload.error.code, "character_prompt_missing_variables");
+      assert.equal(updateResponse.status, 200);
+      const updatePayload = await updateResponse.json();
+      assert.equal(updatePayload.data.category, "character_extract");
+      assert.equal(updatePayload.data.summary, "Edited character prompt summary.");
+
+      const disableResponse = await fetch(`${server.origin}/api/admin/character-prompt/templates/${createPayload.data.id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      assert.equal(disableResponse.status, 200);
+
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        cover_image_url: string;
+        prompt_content: string;
+        status: string;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, cover_image_url, prompt_content, status, is_published
+         FROM prompts WHERE id = $1`,
+        [createPayload.data.id],
+      );
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "character_extract",
+        name: "Edited Character Prompt",
+        summary: "Edited character prompt summary.",
+        cover_image_url: "https://example.com/character-cover-edited.png",
+        prompt_content: "Edited character prompt content extracts reliable identity, visual traits, relationships, and continuity notes directly from the supplied source text.",
+        status: "disabled",
+        is_published: false,
+      });
     } finally {
       await server.close();
     }
   });
 
-  it("persists long novel scene prompt templates in the admin database", async () => {
+  it("persists scene prompts in the unified prompts table", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
 
@@ -1647,11 +1805,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       assert.equal(listResponse.status, 200);
       const listPayload = await listResponse.json();
-      const stages = listPayload.data.map((item: { stage: string }) => item.stage);
-      assert.deepEqual([...new Set(stages)], ["split"]);
-      assert.ok(listPayload.data.some((item: { code: string }) => item.code === "scene_split_long_novel"));
+      assert.ok(listPayload.data.every((item: { category: string }) => item.category === "scene_extract"));
 
-      const templateCode = `test_scene_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const createResponse = await fetch(`${server.origin}/api/admin/scene-prompt/templates`, {
         method: "POST",
         headers: {
@@ -1660,15 +1815,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
         body: JSON.stringify({
           name: "Test Scene Prompt",
-          code: templateCode,
-          stage: "split",
-          model_family: "general",
-          variables: ["{{novel_chapter}}"],
-          tags: ["long_novel", "scene_detail"],
-          json_schema: "sections: scene_name, scene_role, scene_description, image_prompt",
+          cover_image_url: "https://example.com/scene-cover.png",
+          summary: "Extracts continuous scenes from long-form text.",
           prompt_content: "Generate a long novel scene breakdown with location_id, visual_motifs, continuity_notes, foreground, midground, background, and cinematic concept art guidance.",
           status: "enabled",
-          sort_order: 7,
         }),
       });
       assert.equal(createResponse.status, 200);
@@ -1681,34 +1831,58 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           cookie,
         },
         body: JSON.stringify({
-          ...createPayload.data,
           name: "Edited Scene Prompt",
+          cover_image_url: "https://example.com/scene-cover-edited.png",
+          summary: "Edited scene prompt summary.",
           prompt_content: "Edited scene prompt content keeps location_id, continuity_notes, visual_motifs, previous_scene_link, next_scene_hook, and AI drawing prompt structure for long novels.",
+          status: "enabled",
         }),
       });
       assert.equal(updateResponse.status, 200);
       const updatePayload = await updateResponse.json();
       assert.equal(updatePayload.data.name, "Edited Scene Prompt");
-      assert.deepEqual(updatePayload.data.variables, ["{{novel_chapter}}"]);
+      assert.equal(updatePayload.data.category, "scene_extract");
+      assert.equal(updatePayload.data.cover_image_url, "https://example.com/scene-cover-edited.png");
 
-      const persisted = await db.query<{ name: string; prompt_content: string; stage: string }>(
-        "SELECT name, prompt_content, stage FROM scene_prompt_templates WHERE id = $1",
+      const disableResponse = await fetch(`${server.origin}/api/admin/scene-prompt/templates/${createPayload.data.id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      assert.equal(disableResponse.status, 200);
+
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        cover_image_url: string;
+        prompt_content: string;
+        status: string;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, cover_image_url, prompt_content, status, is_published
+         FROM prompts WHERE id = $1`,
         [createPayload.data.id],
       );
-      assert.equal(persisted.rows[0]?.name, "Edited Scene Prompt");
-      assert.equal(persisted.rows[0]?.stage, "split");
-      assert.match(persisted.rows[0]?.prompt_content ?? "", /previous_scene_link/);
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "scene_extract",
+        name: "Edited Scene Prompt",
+        summary: "Edited scene prompt summary.",
+        cover_image_url: "https://example.com/scene-cover-edited.png",
+        prompt_content: "Edited scene prompt content keeps location_id, continuity_notes, visual_motifs, previous_scene_link, next_scene_hook, and AI drawing prompt structure for long novels.",
+        status: "disabled",
+        is_published: false,
+      });
     } finally {
       await server.close();
     }
   });
 
-  it("persists editable prop prompt templates and keeps one default per group", async () => {
+  it("persists prop prompts in the unified prompts table", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
 
     try {
-      const propCode = `test_prop_prompt_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
       const propCreateResponse = await fetch(`${server.origin}/api/admin/prop-prompt/templates`, {
         method: "POST",
         headers: {
@@ -1717,17 +1891,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
         body: JSON.stringify({
           name: "Test Prop Prompt",
-          code: propCode,
-          stage: "extract",
-          model_family: "general",
-          variables: ["script"],
-          tags: ["prop", "editable"],
-          json_schema: "props[].propName, props[].propImagePrompt",
+          cover_image_url: "https://example.com/prop-cover.png",
+          summary: "Extracts reusable visual props.",
           prompt_content: "Extract visible story props and generate detailed visual prompts for each reusable object in the source script.",
-          negative_prompt: "Avoid invented objects, inconsistent materials, blurry references, and unrelated background details.",
           status: "enabled",
-          is_default: true,
-          sort_order: 7,
         }),
       });
       assert.equal(propCreateResponse.status, 200);
@@ -1740,67 +1907,48 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           cookie,
         },
         body: JSON.stringify({
-          ...propCreatePayload.data,
           name: "Edited Prop Prompt",
+          cover_image_url: "https://example.com/prop-cover-edited.png",
+          summary: "Edited prop prompt summary.",
           prompt_content: "Edited prop prompt content is stored back into the database and remains available for admin-managed prop extraction.",
+          status: "enabled",
         }),
       });
       assert.equal(propUpdateResponse.status, 200);
       const propUpdatePayload = await propUpdateResponse.json();
       assert.equal(propUpdatePayload.data.name, "Edited Prop Prompt");
+      assert.equal(propUpdatePayload.data.category, "prop_extract");
+      assert.equal(propUpdatePayload.data.cover_image_url, "https://example.com/prop-cover-edited.png");
 
-      const propDefaults = await db.query<{ code: string }>(
-        "SELECT code FROM prop_prompt_templates WHERE stage = 'extract' AND is_default = true AND deleted_at IS NULL ORDER BY code",
-      );
-      assert.deepEqual(propDefaults.rows.map((row) => row.code), [propCode]);
-
-      const characterCode = `test_character_default_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
-      const characterDefaultResponse = await fetch(`${server.origin}/api/admin/character-prompt/templates`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          name: "Test Character Default",
-          code: characterCode,
-          stage: "extract",
-          model_family: "general",
-          prompt_content: "Extract important character data from a novel chunk with evidence, identity, visual anchors, and reusable continuity notes.",
-          is_default: true,
-          status: "enabled",
-        }),
+      const disableResponse = await fetch(`${server.origin}/api/admin/prop-prompt/templates/${propCreatePayload.data.id}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ status: "disabled" }),
       });
-      assert.equal(characterDefaultResponse.status, 200);
+      assert.equal(disableResponse.status, 200);
 
-      const imageCode = `test_image_default_${randomUUID().replaceAll("-", "_").slice(0, 12)}`;
-      const imageDefaultResponse = await fetch(`${server.origin}/api/admin/image-prompt/styles`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie,
-        },
-        body: JSON.stringify({
-          name: "Test Image Default",
-          code: imageCode,
-          category: "official",
-          model_family: "doubao",
-          prompt_content: "A default image prompt style with clean subject rendering, readable composition, consistent lighting, and rich texture detail.",
-          negative_prompt: "Avoid watermark, text, low clarity, distorted limbs, and unfinished subject details.",
-          is_default: true,
-          status: "enabled",
-        }),
+      const persisted = await db.query<{
+        prompt_category: string;
+        name: string;
+        summary: string;
+        cover_image_url: string;
+        prompt_content: string;
+        status: string;
+        is_published: boolean;
+      }>(
+        `SELECT prompt_category, name, summary, cover_image_url, prompt_content, status, is_published
+         FROM prompts WHERE id = $1`,
+        [propCreatePayload.data.id],
+      );
+      assert.deepEqual(persisted.rows[0], {
+        prompt_category: "prop_extract",
+        name: "Edited Prop Prompt",
+        summary: "Edited prop prompt summary.",
+        cover_image_url: "https://example.com/prop-cover-edited.png",
+        prompt_content: "Edited prop prompt content is stored back into the database and remains available for admin-managed prop extraction.",
+        status: "disabled",
+        is_published: false,
       });
-      assert.equal(imageDefaultResponse.status, 200);
-
-      const characterDefaults = await db.query<{ code: string }>(
-        "SELECT code FROM character_prompt_templates WHERE stage = 'extract' AND is_default = true AND deleted_at IS NULL ORDER BY code",
-      );
-      const imageDefaults = await db.query<{ code: string }>(
-        "SELECT code FROM image_prompt_styles WHERE category = 'official' AND model_family = 'doubao' AND is_default = true AND deleted_at IS NULL ORDER BY code",
-      );
-      assert.deepEqual(characterDefaults.rows.map((row) => row.code), [characterCode]);
-      assert.deepEqual(imageDefaults.rows.map((row) => row.code), [imageCode]);
     } finally {
       await server.close();
     }
@@ -6308,6 +6456,129 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 });
+
+  it("lets admins manage official and private prompt marketplace cards without exposing private content", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db, "super_admin");
+    const packageId = randomUUID();
+    const privatePromptId = randomUUID();
+    const privateOwnerId = randomUUID();
+    try {
+      await db.query(
+        `INSERT INTO prompts (
+           id, prompt_category, name, summary, prompt_content, cover_image_url,
+           status, is_official, is_published, price_credits, published_at
+         ) VALUES (
+           $1, 'script', '官方广场剧本提示词', '官方剧本提示词',
+           '这是用于官方提示词广场卡片验证的完整提示词正文。',
+           '/admin/assets/prompt-covers/official-script.webp', 'enabled', true, true, 0, now()
+         )`,
+        [packageId],
+      );
+      await db.query(
+        "INSERT INTO users (id, phone_e164, display_name, password_hash, status, credit_balance_cached) VALUES ($1, '13800139001', '私人提示词作者', 'plain:test-password', 'active', 0)",
+        [privateOwnerId],
+      );
+      await db.query(
+        `INSERT INTO prompts (
+           id, prompt_category, name, summary, prompt_content,
+           status, is_official, is_published, price_credits, usage_count, published_at
+         ) VALUES (
+           $1, 'script', '私人广场剧本提示词', '用户发布的剧本提示词', '这是用户私有的完整提示词正文，后台可以管理状态但不应读取或返回该正文。',
+           'enabled', false, true, 6, 3, now()
+         )`,
+        [privatePromptId],
+      );
+      await db.query(
+        "INSERT INTO prompt_user_links (id, prompt_id, user_id, relation_type, status, added_at, created_at, updated_at) VALUES ($1, $2, $3, 'owner', 'active', now(), now(), now())",
+        [randomUUID(), privatePromptId, privateOwnerId],
+      );
+      const listResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace?category=script&status=published`, {
+        headers: { cookie },
+      });
+      const listPayload = await listResponse.json();
+      assert.equal(listResponse.status, 200, JSON.stringify(listPayload));
+      const listedItems = listPayload.data?.items ?? listPayload.items ?? listPayload.body?.items ?? [];
+      const item = listedItems.find((entry: { title: string }) => entry.title === "官方广场剧本提示词");
+      assert.ok(item);
+      assert.equal(item.official, true);
+      assert.equal(item.priceCredits, 0);
+      assert.equal(item.coverImageUrl, "/admin/assets/prompt-covers/official-script.webp");
+      const privateItem = listedItems.find((entry: { id: string }) => entry.id === privatePromptId);
+      assert.ok(privateItem);
+      assert.equal(privateItem.official, false);
+      assert.equal(privateItem.ownerUserId, privateOwnerId);
+      assert.equal(privateItem.contentVisible, false);
+      assert.equal(Object.prototype.hasOwnProperty.call(privateItem, "content"), false);
+
+      const updateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${item.id}`, {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          title: "编辑后的官方剧本提示词",
+          summary: "编辑后的官方剧本提示词简介",
+          content: "这是后台编辑后的官方提示词正文。",
+          coverImageUrl: "https://example.com/edited-official-cover.png",
+          cover_storage_object_id: null,
+          priceCredits: 15,
+          status: "published",
+        }),
+      });
+      const updatePayload = await updateResponse.json();
+      assert.equal(updateResponse.status, 200);
+      assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.priceCredits, 15, JSON.stringify(updatePayload));
+      assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.title, "编辑后的官方剧本提示词");
+      assert.equal((updatePayload.data?.item ?? updatePayload.item ?? updatePayload.body?.item)?.content, "这是后台编辑后的官方提示词正文。");
+
+      const updatePrivateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${privatePromptId}`, {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ price_credits: 17, usage_count: 29, is_published: false }),
+      });
+      const updatePrivatePayload = await updatePrivateResponse.json();
+      const updatedPrivate = updatePrivatePayload.data?.item ?? updatePrivatePayload.item ?? updatePrivatePayload.body?.item;
+      assert.equal(updatePrivateResponse.status, 200, JSON.stringify(updatePrivatePayload));
+      assert.equal(updatedPrivate.priceCredits, 17);
+      assert.equal(updatedPrivate.usageCount, 29);
+      assert.equal(updatedPrivate.status, "draft");
+      assert.equal(updatedPrivate.contentVisible, false);
+      assert.equal(Object.prototype.hasOwnProperty.call(updatedPrivate, "content"), false);
+
+      const republishPrivateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${privatePromptId}`, {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ isPublished: true }),
+      });
+      const republishPrivatePayload = await republishPrivateResponse.json();
+      assert.equal(republishPrivateResponse.status, 200, JSON.stringify(republishPrivatePayload));
+      assert.equal((republishPrivatePayload.data?.item ?? republishPrivatePayload.item ?? republishPrivatePayload.body?.item)?.status, "published");
+
+      const privateOnlyResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace?source=private`, {
+        headers: { cookie },
+      });
+      const privateOnlyPayload = await privateOnlyResponse.json();
+      const privateOnlyItems = privateOnlyPayload.data?.items ?? privateOnlyPayload.items ?? privateOnlyPayload.body?.items ?? [];
+      assert.equal(privateOnlyResponse.status, 200, JSON.stringify(privateOnlyPayload));
+      assert.equal(privateOnlyItems.some((entry: { id: string }) => entry.id === privatePromptId), true);
+      assert.equal(privateOnlyItems.every((entry: { official: boolean }) => entry.official === false), true);
+
+      const deletePrivateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${privatePromptId}`, {
+        method: "DELETE",
+        headers: { cookie },
+      });
+      const deletePrivatePayload = await deletePrivateResponse.json();
+      assert.equal(deletePrivateResponse.status, 200, JSON.stringify(deletePrivatePayload));
+      assert.equal(deletePrivatePayload.data?.deleted ?? deletePrivatePayload.deleted, true);
+      const privateAfterDelete = await fetch(`${server.origin}/api/admin/prompt-marketplace?source=private`, {
+        headers: { cookie },
+      });
+      const privateAfterDeletePayload = await privateAfterDelete.json();
+      const remainingPrivateItems = privateAfterDeletePayload.data?.items ?? privateAfterDeletePayload.items ?? [];
+      assert.equal(remainingPrivateItems.some((entry: { id: string }) => entry.id === privatePromptId), false);
+    } finally {
+      await server.close();
+    }
+  });
 
 async function createLoggedInAdminServer(
   db: Awaited<ReturnType<typeof createMigratedTestDb>>,

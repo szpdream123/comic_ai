@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
+import {
+  CanvasAgentModelCompatibilityProbeService,
+  type CanvasAgentModelCompatibilityProbeResult,
+} from "../canvas-agent/canvas-agent-model-compatibility-probe.service.ts";
 import { generationPollIntervalMs } from "../model-gateway/generation-timeout.policy.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -26,6 +30,15 @@ export interface AdminModelConfigView {
   sortOrder: number;
   remark: string | null;
   dispatchPolicy: AdminModelDispatchPolicyView | null;
+  compatibilityProbe: AdminModelCompatibilityProbeView | null;
+}
+
+export interface AdminModelCompatibilityProbeView {
+  status: "passed" | "failed";
+  failureCode: string | null;
+  latencyMs: number;
+  checks: Array<Record<string, unknown>>;
+  checkedAt: string;
 }
 
 export interface AdminModelDispatchPolicyView {
@@ -798,9 +811,18 @@ interface AdminModelConfigRow {
   sort_order: number | string;
   remark: string | null;
   dispatch_policy_json: unknown;
+  compatibility_probe_status: string | null;
+  compatibility_probe_failure_code: string | null;
+  compatibility_probe_latency_ms: number | string | null;
+  compatibility_probe_checks_json: unknown;
+  compatibility_probe_checked_at: Date | string | null;
 }
 
-export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
+export function createAdminModelConfigService(deps: {
+  db: SqlDatabase;
+  canvasAgentProbe?: Pick<CanvasAgentModelCompatibilityProbeService, "probe">;
+}) {
+  const canvasAgentProbe = deps.canvasAgentProbe ?? new CanvasAgentModelCompatibilityProbeService({ db: deps.db });
   function listModelTemplates() {
     return {
       data: ADMIN_MODEL_TEMPLATES.map((template) => cloneJson(template) as AdminModelTemplateView),
@@ -850,7 +872,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
     const model = await getModel(input.id);
     if (!model) return error(404, "admin_model_not_found", "模型不存在");
     const launchCheck = modelLaunchCheck(model);
-    const checks = launchCheck.ok
+    const checks: Array<Record<string, unknown>> = launchCheck.ok
       ? [
           { key: "static", label: "静态配置", status: "passed" },
           { key: "adapter", label: "后端适配器", status: hasSupportedAdapter(model.providerProtocol) ? "passed" : "warning" },
@@ -861,6 +883,60 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
           status: "failed",
           message: item.message,
         }));
+    let canvasAgentProbeResult: CanvasAgentModelCompatibilityProbeResult | null = null;
+    if (launchCheck.ok && model.taskModes.includes("text.canvas_agent")) {
+      canvasAgentProbeResult = await canvasAgentProbe.probe(model.modelCode);
+      checks.push(...canvasAgentProbeResult.checks.map((check) => ({
+        key: `canvas_agent.${check.key}`,
+        label: check.key === "resolution"
+          ? "Canvas Agent 模型与密钥"
+          : check.key === "stream"
+            ? "Canvas Agent 流式响应"
+            : check.key === "usage"
+              ? "Canvas Agent Usage"
+              : "Canvas Agent 工具调用结构",
+        status: check.status,
+        ...(check.message ? { message: check.message } : {}),
+        latencyMs: canvasAgentProbeResult?.latencyMs ?? 0,
+      })));
+    }
+    if (model.taskModes.includes("text.canvas_agent")) {
+      const compatibilityOk = launchCheck.ok && (canvasAgentProbeResult?.ok ?? false);
+      await deps.db.query(
+        `
+          INSERT INTO canvas_agent_model_compatibility_probes (
+            model_config_id, status, failure_code, latency_ms, checks_json,
+            checked_by_admin_id, checked_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $7)
+          ON CONFLICT (model_config_id)
+          DO UPDATE SET
+            status = EXCLUDED.status,
+            failure_code = EXCLUDED.failure_code,
+            latency_ms = EXCLUDED.latency_ms,
+            checks_json = EXCLUDED.checks_json,
+            checked_by_admin_id = EXCLUDED.checked_by_admin_id,
+            checked_at = EXCLUDED.checked_at,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          model.id,
+          compatibilityOk ? "passed" : "failed",
+          compatibilityOk
+            ? null
+            : canvasAgentProbeResult?.failureCode
+              ?? (launchCheck.ok ? "canvas_agent_model_probe_unavailable" : "canvas_agent_model_static_validation_failed"),
+          canvasAgentProbeResult?.latencyMs ?? 0,
+          JSON.stringify(canvasAgentProbeResult?.checks ?? launchCheck.failedItems.map((item) => ({
+            key: item.key,
+            status: "failed",
+            message: item.message,
+          }))),
+          input.actorAdminAccountId,
+          input.now,
+        ],
+      );
+    }
+    const probeOk = !probeError && (canvasAgentProbeResult?.ok ?? true);
     await appendAuditEvent(deps.db, {
       actorUserId: null,
       actorAdminAccountId: input.actorAdminAccountId,
@@ -873,8 +949,15 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
         modelCode: model.modelCode,
         providerName: model.providerName,
         providerProtocol: model.providerProtocol,
-        ok: launchCheck.ok,
+        ok: launchCheck.ok && probeOk,
         failedKeys: launchCheck.failedItems.map((item) => item.key),
+        ...(canvasAgentProbeResult
+          ? {
+              canvasAgentProbeOk: canvasAgentProbeResult.ok,
+              canvasAgentProbeFailureCode: canvasAgentProbeResult.failureCode,
+              canvasAgentProbeLatencyMs: canvasAgentProbeResult.latencyMs,
+            }
+          : {}),
         actorAdminAccountId: input.actorAdminAccountId,
       },
     });
@@ -882,7 +965,7 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       status: 200,
       body: {
         data: {
-          ok: launchCheck.ok,
+          ok: launchCheck.ok && probeOk,
           checks,
           checkedAt: input.now.toISOString(),
         },
@@ -953,9 +1036,16 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
               'status', p.status
             )
           END AS dispatch_policy_json
+          , probe.status AS compatibility_probe_status
+          , probe.failure_code AS compatibility_probe_failure_code
+          , probe.latency_ms AS compatibility_probe_latency_ms
+          , probe.checks_json AS compatibility_probe_checks_json
+          , probe.checked_at AS compatibility_probe_checked_at
         FROM ai_model_configs m
         LEFT JOIN ai_model_dispatch_policies p
           ON p.model_config_id = m.id
+        LEFT JOIN canvas_agent_model_compatibility_probes probe
+          ON probe.model_config_id = m.id
         ${whereSql}
         ORDER BY m.sort_order ASC, m.updated_at DESC
         LIMIT $${params.length + 1}
@@ -995,9 +1085,16 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
               'status', p.status
             )
           END AS dispatch_policy_json
+          , probe.status AS compatibility_probe_status
+          , probe.failure_code AS compatibility_probe_failure_code
+          , probe.latency_ms AS compatibility_probe_latency_ms
+          , probe.checks_json AS compatibility_probe_checks_json
+          , probe.checked_at AS compatibility_probe_checked_at
         FROM ai_model_configs m
         LEFT JOIN ai_model_dispatch_policies p
           ON p.model_config_id = m.id
+        LEFT JOIN canvas_agent_model_compatibility_probes probe
+          ON probe.model_config_id = m.id
         WHERE m.id = $1
         LIMIT 1
       `,
@@ -1168,6 +1265,12 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       ],
     );
     await upsertDispatchPolicy(input.id, merged.dispatchPolicy, input.now);
+    if (canvasAgentProbeInvalidatedByPatch(input.patch)) {
+      await deps.db.query(
+        "DELETE FROM canvas_agent_model_compatibility_probes WHERE model_config_id = $1",
+        [input.id],
+      );
+    }
     const model = (await getModel(input.id))!;
     await recordRevisionAndAudit({
       model,
@@ -1390,6 +1493,10 @@ export function createAdminModelConfigService(deps: { db: SqlDatabase }) {
       ],
     );
     await upsertDispatchPolicy(input.id, snapshot.dispatchPolicy ?? undefined, input.now);
+    await deps.db.query(
+      "DELETE FROM canvas_agent_model_compatibility_probes WHERE model_config_id = $1",
+      [input.id],
+    );
     const model = (await getModel(input.id))!;
     await recordRevisionAndAudit({
       model,
@@ -1563,7 +1670,40 @@ function modelFromRow(row: AdminModelConfigRow): AdminModelConfigView {
     sortOrder: Number(row.sort_order),
     remark: row.remark,
     dispatchPolicy: dispatchPolicyFromJson(row.dispatch_policy_json),
+    compatibilityProbe: compatibilityProbeFromRow(row),
   };
+}
+
+function compatibilityProbeFromRow(row: AdminModelConfigRow): AdminModelCompatibilityProbeView | null {
+  if (row.compatibility_probe_status !== "passed" && row.compatibility_probe_status !== "failed") {
+    return null;
+  }
+  return {
+    status: row.compatibility_probe_status,
+    failureCode: readString(row.compatibility_probe_failure_code),
+    latencyMs: Math.max(0, Number(row.compatibility_probe_latency_ms ?? 0)),
+    checks: Array.isArray(row.compatibility_probe_checks_json)
+      ? row.compatibility_probe_checks_json.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+      : [],
+    checkedAt: new Date(row.compatibility_probe_checked_at ?? 0).toISOString(),
+  };
+}
+
+function canvasAgentProbeInvalidatedByPatch(patch: Partial<AdminModelWriteInput>) {
+  return [
+    "modelCode",
+    "providerName",
+    "providerModel",
+    "providerProtocol",
+    "invocationMode",
+    "mediaType",
+    "taskModes",
+    "capabilities",
+    "providerConfig",
+    "limits",
+    "uiConfig",
+    "dispatchPolicy",
+  ].some((key) => Object.prototype.hasOwnProperty.call(patch, key));
 }
 
 function dispatchPolicyFromJson(value: unknown): AdminModelDispatchPolicyView | null {
@@ -2141,7 +2281,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
   const providerConfig = input.providerConfig ?? {};
   const apiKeyEnv = readString(providerConfig.apiKeyEnv);
   const apiKey = readString(providerConfig.apiKey);
-  if (!apiKeyEnv && !apiKey) {
+  if (providerRequiresApiKey(input.providerProtocol) && !apiKeyEnv && !apiKey) {
     failedItems.push({ step: "business", field: "apiKey", message: "请填写 API 密钥或选择密钥引用。" });
   } else if (apiKeyEnv && looksLikeSecretValue(apiKeyEnv)) {
     failedItems.push({ step: "business", field: "apiKeyEnv", message: "密钥引用只能保存环境变量名，不能填写明文密钥。" });
@@ -2162,7 +2302,11 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"].includes(providerProtocol);
+}
+
+function providerRequiresApiKey(providerProtocol: string | undefined) {
+  return !["creator_dev", "custom_http"].includes(providerProtocol ?? "");
 }
 
 function looksLikeSecretValue(value: string) {
@@ -2185,7 +2329,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
@@ -2218,7 +2362,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
 
 function modelLaunchCheck(model: AdminModelConfigView) {
   const failedItems: Array<{ key: string; label: string; message: string }> = [];
-  if (!readString(model.providerConfig?.apiKeyEnv) && !readString(model.providerConfig?.apiKey)) {
+  if (providerRequiresApiKey(model.providerProtocol) && !readString(model.providerConfig?.apiKeyEnv) && !readString(model.providerConfig?.apiKey)) {
     failedItems.push({
       key: "apiKey",
       label: "API 密钥",

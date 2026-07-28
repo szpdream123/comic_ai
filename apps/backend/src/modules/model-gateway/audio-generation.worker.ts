@@ -16,6 +16,7 @@ import {
   finalizeTaskAttempt,
 } from "../workflow-task/workflow-task.service.ts";
 import { persistGptImageArtifact } from "./gpt-image.artifact-finalizer.ts";
+import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assignment.guard.ts";
 import { attachProviderRawResponse, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import { translateProviderErrorMessage } from "./provider-error-message.ts";
 import {
@@ -39,6 +40,7 @@ import {
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
 import {
+  advanceProviderRequestStage,
   markProviderRequestFailed,
   markProviderRequestResultUnknown,
   markProviderRequestSucceeded,
@@ -66,8 +68,9 @@ interface AudioTaskRow {
 }
 
 interface AudioPollAdapter extends ProviderAdapter {
-  poll(input: { externalRequestId: string }): Promise<{
+  poll(input: { externalRequestId: string; redactedPayload?: Record<string, unknown> }): Promise<{
     status: "accepted" | "running" | "succeeded" | "failed";
+    externalRequestId?: string;
     artifacts?: MediaGenerationArtifact[];
     redactedResponse: Record<string, unknown>;
   }>;
@@ -108,6 +111,7 @@ export async function processAudioGenerationSubmitJob(
   });
 
   try {
+    await assertCanvasGenerationAssignmentActive(db, snapshot);
     const context = await buildAudioProviderContext(db, claimedRow, snapshot, {
       env: input.env,
       fetchImpl: input.fetchImpl,
@@ -282,7 +286,22 @@ export async function processAudioGenerationPollJob(
     fetchImpl: input.fetchImpl,
     now: input.now,
   });
-  const poll = await context.adapter.poll({ externalRequestId: row.external_request_id });
+  const poll = await context.adapter.poll({
+    externalRequestId: row.external_request_id,
+    redactedPayload: {
+      ...snapshot,
+      providerState: parseRecord(row.provider_response_redacted_json),
+    },
+  });
+  const externalRequestId = readString(poll.externalRequestId) ?? row.external_request_id;
+  if (externalRequestId !== row.external_request_id) {
+    await advanceProviderRequestStage(db, {
+      providerRequestId: row.provider_request_id,
+      externalRequestId,
+      redactedResponse: poll.redactedResponse,
+      now: input.now,
+    });
+  }
   if (poll.status === "accepted" || poll.status === "running") {
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
@@ -290,7 +309,7 @@ export async function processAudioGenerationPollJob(
       providerRequestId: row.provider_request_id,
       progressStage: poll.status === "accepted" ? "provider_accepted" : "provider_rendering",
       progressPercent: poll.status === "accepted" ? 40 : 60,
-      providerStatus: poll.redactedResponse,
+      providerStatus: { ...poll.redactedResponse, externalRequestId },
       now: input.now,
     });
     return { status: "waiting" };
@@ -342,7 +361,7 @@ export async function processAudioGenerationPollJob(
     taskId: row.task_id,
     attemptId: row.attempt_id,
     providerRequestId: row.provider_request_id,
-    externalRequestId: row.external_request_id,
+    externalRequestId,
     artifact,
     providerStatus: poll.redactedResponse,
     now: input.now,
@@ -376,6 +395,7 @@ export async function fetchAudioGenerationArtifactJob(
   const artifact = parseStoredAudioArtifact(parseRecord(row.provider_response_redacted_json).artifact);
   if (!artifact) return { status: "skipped" };
   const snapshot = parseRecord(row.input_snapshot_json);
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
@@ -435,6 +455,7 @@ export async function finalizeAudioGenerationArtifactJob(
   const snapshot = parseRecord(row.input_snapshot_json);
 
   try {
+    await assertCanvasGenerationAssignmentActive(db, snapshot);
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -460,6 +481,24 @@ export async function finalizeAudioGenerationArtifactJob(
       fetchImpl: input.fetchImpl,
       now: input.now,
     });
+    const transcription = readString(artifact.transcript) ?? readString(providerResponse.transcript);
+    const parameters = readRecord(snapshot.parameters);
+    const lyrics = readString(artifact.lyrics)
+      ?? readString(providerResponse.lyrics)
+      ?? readString(parameters.lyrics);
+    const musicTitle = readString(artifact.title)
+      ?? readString(providerResponse.title)
+      ?? readString(parameters.musicTitle);
+    const resultAsset = {
+      ...persisted,
+      ...(transcription ? { transcript: transcription } : {}),
+      ...(lyrics ? { lyrics } : {}),
+      ...(musicTitle ? { musicTitle } : {}),
+      ...(readString(parameters.lyricsMode) ? { lyricsMode: readString(parameters.lyricsMode) } : {}),
+      ...(readString(parameters.mode)
+        ? { audioGenerationMode: readString(parameters.mode) }
+        : {}),
+    };
     const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
     await finalizeTaskAttempt(db, {
       taskId: row.task_id,
@@ -488,7 +527,7 @@ export async function finalizeAudioGenerationArtifactJob(
           taskId: row.task_id,
           attemptId: row.attempt_id,
           providerRequestId: row.provider_request_id,
-          resultAssets: [persisted],
+           resultAssets: [resultAsset],
           providerStatus: {
             provider: "model-gateway",
             externalRequestId: row.external_request_id,
@@ -567,6 +606,10 @@ export async function persistAudioGenerationArtifactJob(
   if (!storageObject || storageObject.status !== "available") {
     return { status: "failed", failureCode: "provider_output_persist_failed" };
   }
+  const snapshot = parseRecord(row.input_snapshot_json);
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
+  const providerResponse = parseRecord(row.provider_response_redacted_json);
+  const artifact = parseStoredAudioArtifact(providerResponse.artifact);
   const url = buildAudioStorageUrl(input.runtime, storageObject.objectKey);
   const persisted = {
     assetId: null,
@@ -579,8 +622,22 @@ export async function persistAudioGenerationArtifactJob(
     previewUrl: url,
     sourceUrl: url,
     downloadUrl: url,
+    ...(readString(artifact?.transcript) || readString(providerResponse.transcript)
+      ? { transcript: readString(artifact?.transcript) ?? readString(providerResponse.transcript) }
+      : {}),
+    ...(readString(artifact?.lyrics) || readString(providerResponse.lyrics) || readString(readRecord(snapshot.parameters).lyrics)
+      ? { lyrics: readString(artifact?.lyrics) ?? readString(providerResponse.lyrics) ?? readString(readRecord(snapshot.parameters).lyrics) }
+      : {}),
+    ...(readString(artifact?.title) || readString(providerResponse.title) || readString(readRecord(snapshot.parameters).musicTitle)
+      ? { musicTitle: readString(artifact?.title) ?? readString(providerResponse.title) ?? readString(readRecord(snapshot.parameters).musicTitle) }
+      : {}),
+    ...(readString(readRecord(snapshot.parameters).lyricsMode)
+      ? { lyricsMode: readString(readRecord(snapshot.parameters).lyricsMode) }
+      : {}),
+    ...(readString(readRecord(snapshot.parameters).mode)
+      ? { audioGenerationMode: readString(readRecord(snapshot.parameters).mode) }
+      : {}),
   };
-  const snapshot = parseRecord(row.input_snapshot_json);
   const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
   await finalizeTaskAttempt(db, {
     taskId: row.task_id,
@@ -613,7 +670,7 @@ export async function persistAudioGenerationArtifactJob(
         taskId: row.task_id,
         attemptId: row.attempt_id,
         providerRequestId: row.provider_request_id,
-        resultAssets: [persisted],
+         resultAssets: [persisted],
         providerStatus: {
           provider: "model-gateway",
           externalRequestId: row.external_request_id,
@@ -687,7 +744,11 @@ async function buildAudioProviderContext(
   const modelCode = readString(snapshot.model);
   if (!modelCode) throw new Error("audio_model_required");
   const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
-  if (!modelConfig || modelConfig.mediaType !== "audio" || modelConfig.providerProtocol !== "aliyun_bailian_audio") {
+  if (
+    !modelConfig
+    || modelConfig.mediaType !== "audio"
+    || !["aliyun_bailian_audio", "apimart_audio"].includes(modelConfig.providerProtocol)
+  ) {
     throw new Error("audio_model_not_configured");
   }
   const text = readString(snapshot.text) ?? readString(snapshot.prompt);
@@ -750,6 +811,7 @@ async function buildAudioProviderContext(
     adapter: createProviderAdapterFromModelConfig({
       providerProtocol: modelConfig.providerProtocol,
       providerModel: modelConfig.providerModel,
+      mediaType: modelConfig.mediaType,
       providerConfig: modelConfig.providerConfig,
     }, input.env, resolveGenerationProviderFetch(input.fetchImpl, "audio")) as AudioPollAdapter,
   };
@@ -774,6 +836,7 @@ async function recordAudioRequestFailureAudit(
   `, [input.row.task_id]);
   if (!providerRequest) return;
   const modelCode = readString(input.snapshot.model) ?? "cosyvoice-v2";
+  const modelSnapshot = readRecord(readRecord(input.snapshot.modelConfigSnapshot).config);
   const text = readString(input.snapshot.text) ?? readString(input.snapshot.prompt) ?? "";
   const payloadRef = buildGenerationProviderPayloadRef({
     targetType: input.snapshot.targetType,
@@ -793,10 +856,10 @@ async function recordAudioRequestFailureAudit(
     taskId: input.row.task_id,
     attemptId: input.row.attempt_id,
     userId: input.row.created_by_user_id,
-    providerName: "aliyun-bailian",
+    providerName: readString(modelSnapshot.providerName) ?? "audio-provider",
     providerOperation: operationNames.canvasAudioGenerate,
     modelId: modelCode,
-    providerModel: modelCode,
+    providerModel: readString(modelSnapshot.providerModel) ?? modelCode,
     requestKey,
     requestHash,
     payloadHash,
@@ -923,7 +986,7 @@ async function findAudioTask(
       ORDER BY request.updated_at DESC, request.created_at DESC
       LIMIT 1
     ) pr ON true
-    LEFT JOIN credit_reservations r ON r.task_id = t.id
+    LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
     WHERE t.id = $1
       AND t.task_type = 'episode_generate_audio'
       AND t.status = ANY($2::text[])
@@ -941,6 +1004,9 @@ function serializeAudioArtifact(artifact: MediaGenerationArtifact) {
     mimeType: readString(artifact.mimeType) ?? null,
     fileExtension: readString(artifact.fileExtension) ?? null,
     url: readString(artifact.url) ?? null,
+    ...(readString(artifact.transcript) ? { transcript: readString(artifact.transcript) } : {}),
+    ...(readString(artifact.lyrics) ? { lyrics: readString(artifact.lyrics) } : {}),
+    ...(readString(artifact.title) ? { title: readString(artifact.title) } : {}),
   };
 }
 
@@ -952,6 +1018,9 @@ function parseStoredAudioArtifact(value: unknown): MediaGenerationArtifact | nul
     mimeType: readString(artifact.mimeType) ?? null,
     fileExtension: readString(artifact.fileExtension) ?? null,
     url: readString(artifact.url),
+    ...(readString(artifact.transcript) ? { transcript: readString(artifact.transcript) } : {}),
+    ...(readString(artifact.lyrics) ? { lyrics: readString(artifact.lyrics) } : {}),
+    ...(readString(artifact.title) ? { title: readString(artifact.title) } : {}),
   };
 }
 

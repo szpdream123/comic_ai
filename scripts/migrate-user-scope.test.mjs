@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import pg from "pg";
 
 describe("user-centric migration runner", { concurrency: false }, () => {
-  it("rolls back the migration ledger and baseline during an empty-schema dry run", async () => {
+  it("rolls back the migration ledger and baseline during an empty-schema dry run", { concurrency: false }, async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");
 
@@ -41,7 +41,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     }
   });
 
-  it("initializes an empty schema and records all migrations", async () => {
+  it("initializes an empty schema and records all migrations", { concurrency: false }, async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");
 
@@ -72,8 +72,15 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 20);
+      assert.equal(migrations.rows[0]?.count, 44);
       assert.equal(users.rows[0]?.count, 1);
+      const characterLibraryTables = await client.query(
+        `SELECT count(*)::int AS count FROM information_schema.tables
+         WHERE table_schema = $1
+           AND table_name IN ('canvas_character_assets','canvas_character_asset_references')`,
+        [schema],
+      );
+      assert.equal(characterLibraryTables.rows[0]?.count, 2);
       const agentAssets = await client.query(
         `SELECT count(*)::int AS count FROM "${schema}"."creator_agent_assets"`,
       );
@@ -128,21 +135,29 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         "20260722-generation-queue-elastic-shards.sql",
         "20260723-correct-generation-queue-lifecycle.sql",
         "20260724-durable-generation-queue-assignment-lifecycle.sql",
+        "20260725-create-canvas-agent-runtime.sql",
         "20260725-generation-queue-worker-leases.sql",
         "20260725-z-generation-queue-admin-commands.sql",
         "20260726-generation-queue-job-cancellations.sql",
         "20260727-generation-queue-publish-cancellation-fencing.sql",
         "20260727-generation-queue-worker-lease-db-clock.sql",
+        "20260728-canvas-actor-principals.sql",
+        "20260728-comfyui-workflow-library.sql",
+        "20260728-z-remove-legacy-workflow-runtime.sql",
       ]]);
       assert.deepEqual(lifecycleLedger.rows.map((row) => row.migration_name), [
         "20260722-generation-queue-elastic-shards.sql",
         "20260723-correct-generation-queue-lifecycle.sql",
         "20260724-durable-generation-queue-assignment-lifecycle.sql",
+        "20260725-create-canvas-agent-runtime.sql",
         "20260725-generation-queue-worker-leases.sql",
         "20260725-z-generation-queue-admin-commands.sql",
         "20260726-generation-queue-job-cancellations.sql",
         "20260727-generation-queue-publish-cancellation-fencing.sql",
         "20260727-generation-queue-worker-lease-db-clock.sql",
+        "20260728-canvas-actor-principals.sql",
+        "20260728-comfyui-workflow-library.sql",
+        "20260728-z-remove-legacy-workflow-runtime.sql",
       ]);
       const audioModel = await client.query(
         `SELECT media_type, provider_protocol, invocation_mode, provider_model, status FROM "${schema}"."ai_model_configs" WHERE model_code = 'cosyvoice-v2'`,

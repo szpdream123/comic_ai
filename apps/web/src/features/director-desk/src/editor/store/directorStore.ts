@@ -4,7 +4,10 @@ import { GEOMETRY_PRIMITIVE_OPTIONS } from "../schema/directorProject";
 import type {
   DirectorAssetRef,
   DirectorAssetSource,
+  DirectorAnimationAssetRef,
   CharacterBodyType,
+  CharacterImportReadiness,
+  CharacterRigProfile,
   DirectorAssetKind,
   DirectorCameraCapture,
   DirectorCameraMotionKeyframe,
@@ -20,6 +23,11 @@ import type {
   SceneSettings,
   ViewMode,
 } from "../schema/directorProject";
+import {
+  isCompleteDirectorCharacterBoneMap,
+  normalizeDirectorCharacterBoneMap,
+  type DirectorCharacterBoneMap,
+} from "../schema/semanticBody";
 import {
   DEFAULT_CAMERA_MOTION_PATH,
   createCameraMotionKeyframe,
@@ -54,6 +62,20 @@ export interface ImportedAssetInput {
   addToScene?: boolean;
   assetSource?: DirectorAssetSource;
   projectionMode?: PanoramaProjectionMode;
+  modelFormat?: "fbx" | "obj" | "glb";
+  characterRigProfile?: CharacterRigProfile;
+  characterImportReadiness?: CharacterImportReadiness;
+  characterBoneNames?: string[];
+  characterBoneMap?: DirectorCharacterBoneMap;
+}
+
+export interface ImportedAnimationAssetInput {
+  name: string;
+  fileName: string;
+  url: string;
+  modelFormat: "fbx" | "glb";
+  rigProfile: CharacterRigProfile;
+  clips: DirectorAnimationAssetRef["clips"];
 }
 
 export interface CameraShotSnapshot {
@@ -171,6 +193,8 @@ export interface DirectorActions {
   updateUniformScale: (id: string, scale: number) => void;
   updateCrowdUniformScale: (crowdId: string, scale: number) => void;
   addImportedAsset: (input: ImportedAssetInput) => void;
+  addImportedAnimationAsset: (input: ImportedAnimationAssetInput) => string;
+  updateCharacterAssetBoneMap: (assetId: string, boneMap: DirectorCharacterBoneMap) => void;
   addObjectFromAsset: (assetId: string) => string | null;
   addPresetCharacter: (bodyType?: CharacterBodyType) => void;
   addCrowdCharacters: (input: CrowdCharactersInput) => string[];
@@ -502,6 +526,7 @@ function migrateDirectorProject(project: DirectorProject): DirectorProject {
 
   return {
     ...normalizedProject,
+    animationAssets: Array.isArray(normalizedProject.animationAssets) ? normalizedProject.animationAssets : [],
     scene,
     cameras: normalizedProject.cameras.map((camera) => ({
       ...camera,
@@ -529,7 +554,7 @@ function migrateDirectorProject(project: DirectorProject): DirectorProject {
       };
 
       const rig = normalizedCharacter.characterRig;
-      if (rig?.rigType === "ue4-mannequin") return normalizedCharacter;
+      if (rig && rig.rigType !== "mannequin") return normalizedCharacter;
 
       return {
         ...normalizedCharacter,
@@ -756,6 +781,7 @@ export function createDefaultDirectorProject({
     version: 1,
     scene: DEFAULT_SCENE,
     assets: includePersistedLocalAssets ? readPersistedLocalModelAssets() : [],
+    animationAssets: [],
     objects: [role, cameraObject],
     cameras: [camera],
     activeCameraId: camera.id,
@@ -2176,6 +2202,11 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
           url: input.url,
           assetSource: input.kind === "panorama" ? undefined : (input.assetSource ?? "local"),
           projectionMode: input.projectionMode,
+          modelFormat: input.modelFormat,
+          characterRigProfile: input.characterRigProfile,
+          characterImportReadiness: input.characterImportReadiness,
+          characterBoneNames: input.characterBoneNames,
+          characterBoneMap: input.characterBoneMap ? normalizeDirectorCharacterBoneMap(input.characterBoneMap) : undefined,
         } satisfies DirectorAssetRef;
 
         if (input.kind === "panorama") {
@@ -2220,6 +2251,52 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
             ...state.project,
             assets: [...state.project.assets, nextAsset],
             objects: [...state.project.objects, nextObject],
+          },
+        };
+      }),
+    addImportedAnimationAsset: (input) => {
+      let animationAssetId = "";
+      commitMutation((state) => {
+        animationAssetId = getNextSequentialId(
+          (state.project.animationAssets ?? []).map((item) => item.id),
+          "animation_",
+          (state.project.animationAssets?.length ?? 0) + 1
+        );
+        const nextAsset: DirectorAnimationAssetRef = {
+          id: animationAssetId,
+          name: input.name,
+          fileName: input.fileName,
+          url: input.url,
+          modelFormat: input.modelFormat,
+          rigProfile: input.rigProfile,
+          clips: input.clips,
+        };
+        return {
+          ...state,
+          project: {
+            ...state.project,
+            animationAssets: [...(state.project.animationAssets ?? []), nextAsset],
+          },
+        };
+      });
+      return animationAssetId;
+    },
+    updateCharacterAssetBoneMap: (assetId, boneMap) =>
+      commitMutation((state) => {
+        const normalizedBoneMap = normalizeDirectorCharacterBoneMap(boneMap);
+        return {
+          ...state,
+          project: {
+            ...state.project,
+            assets: state.project.assets.map((asset) => asset.id === assetId
+              ? {
+                  ...asset,
+                  characterBoneMap: normalizedBoneMap,
+                  characterImportReadiness: isCompleteDirectorCharacterBoneMap(normalizedBoneMap)
+                    ? "ready" as const
+                    : "manual-mapping" as const,
+                }
+              : asset),
           },
         };
       }),

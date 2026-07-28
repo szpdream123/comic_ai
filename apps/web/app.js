@@ -2,7 +2,7 @@ import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
-  ? import("./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1")
+  ? import("./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&asset-reference-mentions=1&storyboard-content-import=1&backend-style-reference=1&model-display-only=1&stable-generation-name=1")
   : null;
 const homeUrl =
   window.location.protocol === "file:"
@@ -35,7 +35,7 @@ async function bootstrap() {
     onRequireLogin: handleRequireLogin,
   });
 
-  void sessionPromise.then(async (session) => {
+  await sessionPromise.then(async (session) => {
     activeSession = session;
     resolvePublicSeoContentForSession(session);
     await workbench?.updateSession?.(session, creatorApi);

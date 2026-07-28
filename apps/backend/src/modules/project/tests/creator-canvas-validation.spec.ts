@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  CANVAS_DOCUMENT_LIMITS,
   CANONICAL_WORKFLOW_NODE_PORTS,
   CanvasValidationError,
   validateCanonicalWorkflowDocumentGraph,
+  validateCanvasDocumentEnvelope,
   validateCanvasDocumentGraph,
+  validateCanvasDocumentProtocol,
 } from "../creator-canvas-validation.ts";
 
 function documentWith(edge = {
@@ -48,6 +51,108 @@ function assertCanvasError(fn: () => void, code: string) {
 }
 
 describe("creator canvas validation", () => {
+  it("rejects documents that exceed structural and serialized limits", () => {
+    assertCanvasError(
+      () => validateCanvasDocumentEnvelope({
+        nodes: Array.from({ length: CANVAS_DOCUMENT_LIMITS.maximumNodes + 1 }, (_, index) => ({ id: `node-${index}` })),
+        edges: [],
+      }),
+      "canvas_node_limit_exceeded",
+    );
+    assertCanvasError(
+      () => validateCanvasDocumentEnvelope({
+        nodes: [],
+        edges: Array.from({ length: CANVAS_DOCUMENT_LIMITS.maximumEdges + 1 }, (_, index) => ({ id: `edge-${index}` })),
+      }),
+      "canvas_edge_limit_exceeded",
+    );
+    assertCanvasError(
+      () => validateCanvasDocumentEnvelope({ data: "x".repeat(CANVAS_DOCUMENT_LIMITS.maximumBytes) }),
+      "canvas_document_too_large",
+    );
+  });
+
+  it("rejects documents with excessive JSON nesting", () => {
+    const root: Record<string, unknown> = {};
+    let cursor = root;
+    for (let index = 0; index < CANVAS_DOCUMENT_LIMITS.maximumJsonDepth; index += 1) {
+      const child: Record<string, unknown> = {};
+      cursor.child = child;
+      cursor = child;
+    }
+    assertCanvasError(
+      () => validateCanvasDocumentEnvelope(root),
+      "canvas_json_depth_exceeded",
+    );
+  });
+
+  it("rejects ephemeral media, local paths, signed URLs, and secret fields in persisted documents", () => {
+    for (const data of [
+      { previewUrl: "data:image/png;base64,AAAA" },
+      { mediaUrl: "blob:http://127.0.0.1/local" },
+      { sourcePath: "C:\\Users\\creator\\image.png" },
+      { url: "https://storage.example.test/image.png?token=secret" },
+      { apiKey: "must-not-persist" },
+      { prompt: "render with sk-canvas-secret-1234567890" },
+      { prompt: "inspect https://storage.example.test/image.png?signature=embedded-secret before rendering" },
+      { prompt: "load C:\\Users\\creator\\embedded.png before rendering" },
+    ]) {
+      assert.throws(
+        () => validateCanvasDocumentEnvelope({ nodes: [{ id: "node", data }], edges: [] }),
+        (error) => error instanceof CanvasValidationError && [
+          "canvas_document_sensitive_field_forbidden",
+          "canvas_document_ephemeral_value_forbidden",
+        ].includes(error.code),
+      );
+    }
+    assert.doesNotThrow(() => validateCanvasDocumentEnvelope({
+      nodes: [{ id: "node", data: { storageObjectId: "stable-id", url: "https://cdn.example.test/image.png" } }],
+      edges: [],
+    }));
+  });
+
+  it("validates versioned node and edge protocol while retaining historical node types", () => {
+    assert.doesNotThrow(() => validateCanvasDocumentProtocol({
+      nodes: [
+        { id: "new", type: "ai-markdown" },
+        { id: "legacy", type: "script" },
+      ],
+      edges: [{
+        id: "reference-1",
+        kind: "reference",
+        sourceNodeId: "new",
+        sourcePortId: "out",
+        targetNodeId: "legacy",
+        targetPortId: "in",
+      }],
+    }));
+    assertCanvasError(
+      () => validateCanvasDocumentProtocol({ nodes: [{ id: "bad", type: "arbitrary-script" }], edges: [] }),
+      "canvas_node_type_invalid",
+    );
+    assertCanvasError(
+      () => validateCanvasDocumentProtocol({
+        nodes: [{ id: "same", type: "ai-text" }, { id: "same", type: "ai-image" }],
+        edges: [],
+      }),
+      "canvas_node_id_invalid",
+    );
+  });
+
+  it("allows reference cycles while rejecting execution cycles", () => {
+    const nodes = [
+      { id: "a", data: { ports: { inputs: [{ id: "in", kind: "text" }], outputs: [{ id: "out", kind: "text" }] } } },
+      { id: "b", data: { ports: { inputs: [{ id: "in", kind: "text" }], outputs: [{ id: "out", kind: "text" }] } } },
+    ];
+    assert.doesNotThrow(() => validateCanvasDocumentGraph({
+      nodes,
+      edges: [
+        { id: "one", kind: "reference", sourceNodeId: "a", sourcePortId: "out", targetNodeId: "b", targetPortId: "in" },
+        { id: "two", kind: "reference", sourceNodeId: "b", sourcePortId: "out", targetNodeId: "a", targetPortId: "in" },
+      ],
+    }));
+  });
+
   it("allows the canonical composition output to feed a video node", () => {
     assert.deepEqual(CANONICAL_WORKFLOW_NODE_PORTS.output.outputs, [{ id: "out_video", kind: "video" }]);
     assert.doesNotThrow(() => validateCanonicalWorkflowDocumentGraph({

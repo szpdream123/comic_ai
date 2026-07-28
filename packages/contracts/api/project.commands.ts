@@ -12,6 +12,7 @@ export const createProjectCommand: ApiCommandContract = {
     scriptInput: "text or uploaded asset",
     aspectRatio: ["9:16", "16:9"],
     resolution: ["720p", "1080p"],
+    projectType: "required project style code",
   },
   responseSchema: { projectId: "uuid" },
   resourceScope: "user:{user_id}",

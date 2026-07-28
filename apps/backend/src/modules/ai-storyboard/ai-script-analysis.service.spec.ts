@@ -5,6 +5,20 @@ import { createAiScriptAnalysisService } from "./ai-script-analysis.service.ts";
 import type { TextChatGatewayLike } from "./ai-storyboard-preview.service.ts";
 
 describe("ai script analysis service", () => {
+  it("places the selected novel-to-script skill before the source text", async () => {
+    const gateway = new FakeTextGateway(["改编后的剧本文本"]);
+    const service = createAiScriptAnalysisService({ gateway });
+
+    for await (const _event of service.generateScriptStream({
+      scriptText: "原始小说章节",
+      packages: { skillPrompt: "官方小说转剧本技能正文" },
+    })) {
+      // Drain the stream so the gateway request completes.
+    }
+
+    assert.equal(gateway.calls[0]?.prompt, "官方小说转剧本技能正文\n\n原始小说章节");
+  });
+
   it("only streams generated script text without asset stages", async () => {
     const gateway = new FakeTextGateway([JSON.stringify({ scriptText: "第一集\n任小野进城。" })]);
     const service = createAiScriptAnalysisService({ gateway });
@@ -13,6 +27,7 @@ describe("ai script analysis service", () => {
     for await (const event of service.generateScriptStream({
       projectId: "40000000-0000-4000-8000-000000000001",
       createdByUserId: "30000000-0000-4000-8000-000000000001",
+      modelCode: "deepseek-noval",
       scriptText: "任小野进城。",
       packages: {
         genrePrompt: "玄幻修仙",
@@ -24,9 +39,9 @@ describe("ai script analysis service", () => {
     }
 
     assert.equal(gateway.calls.length, 1);
-    assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat"]);
+    assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-noval"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [384000]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [8192]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.match(gateway.calls[0]?.prompt ?? "", /通用禁忌/);

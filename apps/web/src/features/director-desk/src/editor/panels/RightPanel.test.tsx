@@ -11,9 +11,12 @@ beforeEach(() => {
 });
 
 it("shows the scene panel in director mode when nothing is selected", () => {
-  render(<RightPanel />);
+  const { container } = render(<RightPanel />);
 
   expect(screen.getByText("3D场景")).toBeInTheDocument();
+  expect(screen.getByLabelText("导入角色模型")).toBeInTheDocument();
+  expect(screen.getByLabelText("导入角色动作")).toBeInTheDocument();
+  expect(container.querySelector(".right-panel-stack")).toContainElement(screen.getByText("3D场景"));
 });
 
 it("shows the role panel when a role is selected", () => {

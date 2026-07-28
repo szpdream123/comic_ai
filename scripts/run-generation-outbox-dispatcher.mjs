@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import Redis from "ioredis";
 import { Client } from "pg";
 
 loadDotEnvFile(join(process.cwd(), ".env"));
@@ -11,6 +12,7 @@ const [
   { markGenerationQueueStagePublished, reserveGenerationQueueStageForPublish },
   { loadGenerationQueueConfig },
   { createGenerationOutboxWakeSignal, generationOutboxWakeChannel },
+  { generationOutboxDispatcherHeartbeatKey, generationOutboxDispatcherHeartbeatTtlMs },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
@@ -18,19 +20,38 @@ const [
     import("../apps/backend/src/modules/model-gateway/generation-queue-shard.store.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-outbox-wakeup.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-outbox-heartbeat.ts"),
   ]);
 
 const config = loadGenerationQueueConfig(process.env);
 const db = await createDevDb();
 const publisher = createBullMQGenerationPublisher(config);
 const wakeSignal = createGenerationOutboxWakeSignal();
+const heartbeatRedis = new Redis(redisConnectionFromUrl(config.redisUrl));
+heartbeatRedis.on("error", () => undefined);
+const heartbeatKey = generationOutboxDispatcherHeartbeatKey(config.queuePrefix);
+const heartbeatTtlMs = generationOutboxDispatcherHeartbeatTtlMs(
+  config.outbox.dispatchIntervalMs,
+);
 const notificationClient = new Client({ connectionString: process.env.DATABASE_URL });
 await notificationClient.connect();
 await notificationClient.query(`LISTEN ${generationOutboxWakeChannel}`);
+await writeDispatcherHeartbeat();
 notificationClient.on("notification", (message) => {
   if (message.channel === generationOutboxWakeChannel) wakeSignal.notify();
 });
 let stopping = false;
+let lastCompletedLoopAt = Date.now();
+const stallTimeoutMs = Math.max(120_000, heartbeatTtlMs * 2);
+const watchdog = setInterval(() => {
+  if (!stopping && Date.now() - lastCompletedLoopAt > stallTimeoutMs) {
+    console.error(
+      `[generation-outbox] Dispatcher stalled for more than ${stallTimeoutMs}ms; exiting for supervisor restart.`,
+    );
+    process.exit(1);
+  }
+}, Math.min(5_000, Math.max(1_000, Math.floor(stallTimeoutMs / 4))));
+watchdog.unref();
 notificationClient.on("error", (error) => {
   console.error(`[generation-outbox] PostgreSQL LISTEN failed for DATABASE_URL: ${error instanceof Error ? error.message : String(error)}`);
   stopping = true;
@@ -65,6 +86,8 @@ try {
         },
       });
     });
+    await writeDispatcherHeartbeat();
+    lastCompletedLoopAt = Date.now();
 
     if (result.processedEventIds.length || result.failedEventIds.length) {
       console.info(
@@ -76,7 +99,9 @@ try {
     await wakeSignal.wait(Math.max(0, config.outbox.dispatchIntervalMs - elapsedMs));
   }
 } finally {
+  clearInterval(watchdog);
   wakeSignal.close();
+  heartbeatRedis.disconnect();
   await Promise.allSettled([
     notificationClient.query(`UNLISTEN ${generationOutboxWakeChannel}`).catch(() => undefined),
     publisher.close(),
@@ -84,6 +109,28 @@ try {
   ]);
   await notificationClient.end().catch(() => undefined);
   console.info("[generation-outbox] Dispatcher stopped.");
+}
+
+async function writeDispatcherHeartbeat() {
+  await heartbeatRedis.set(
+    heartbeatKey,
+    new Date().toISOString(),
+    "PX",
+    heartbeatTtlMs,
+  );
+}
+
+function redisConnectionFromUrl(redisUrl) {
+  const url = new URL(redisUrl);
+  return {
+    host: url.hostname,
+    port: url.port ? Number(url.port) : 6379,
+    username: decodeURIComponent(url.username || ""),
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+    db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
+    tls: url.protocol === "rediss:" ? {} : undefined,
+    maxRetriesPerRequest: null,
+  };
 }
 
 function loadDotEnvFile(envFilePath) {

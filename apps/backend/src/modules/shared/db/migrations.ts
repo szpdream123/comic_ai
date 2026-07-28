@@ -24,11 +24,47 @@ const CUMOB_ASYNC_POLLING_RELATIVE_PATH = ["packages", "db", "migrations", "2026
 const GENERATION_QUEUE_ELASTIC_SHARDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-queue-elastic-shards.sql"];
 const GENERATION_QUEUE_LIFECYCLE_CORRECTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260723-correct-generation-queue-lifecycle.sql"];
 const GENERATION_QUEUE_DURABLE_LIFECYCLE_RELATIVE_PATH = ["packages", "db", "migrations", "20260724-durable-generation-queue-assignment-lifecycle.sql"];
+const CANVAS_AGENT_RUNTIME_RELATIVE_PATH = ["packages", "db", "migrations", "20260725-create-canvas-agent-runtime.sql"];
 const GENERATION_QUEUE_WORKER_LEASES_RELATIVE_PATH = ["packages", "db", "migrations", "20260725-generation-queue-worker-leases.sql"];
 const GENERATION_QUEUE_ADMIN_COMMANDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260725-z-generation-queue-admin-commands.sql"];
 const GENERATION_QUEUE_JOB_CANCELLATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260726-generation-queue-job-cancellations.sql"];
 const GENERATION_QUEUE_PUBLISH_CANCELLATION_FENCING_RELATIVE_PATH = ["packages", "db", "migrations", "20260727-generation-queue-publish-cancellation-fencing.sql"];
 const GENERATION_QUEUE_WORKER_LEASE_DB_CLOCK_RELATIVE_PATH = ["packages", "db", "migrations", "20260727-generation-queue-worker-lease-db-clock.sql"];
+const CANVAS_ACTOR_PRINCIPALS_RELATIVE_PATH = ["packages", "db", "migrations", "20260728-canvas-actor-principals.sql"];
+const COMFYUI_WORKFLOW_LIBRARY_RELATIVE_PATH = ["packages", "db", "migrations", "20260728-comfyui-workflow-library.sql"];
+const LEGACY_WORKFLOW_RUNTIME_CLEANUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260728-z-remove-legacy-workflow-runtime.sql"];
+const CANVAS_GENERATION_RUNTIME_RELATIVE_PATH = ["packages", "db", "migrations", "20260729-canvas-generation-runtime.sql"];
+const CANVAS_USER_CONFIG_LIBRARY_RELATIVE_PATH = ["packages", "db", "migrations", "20260729-canvas-user-config-library.sql"];
+const PROMPT_MARKETPLACE_RELATIVE_PATH = ["packages", "db", "migrations", "20260729-create-prompt-marketplace.sql"];
+const CANVAS_MEDIA_DERIVATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260730-canvas-media-derivations.sql"];
+const UNIFIED_PROMPT_STORAGE_RELATIVE_PATH = ["packages", "db", "migrations", "20260730-z-unify-prompt-storage.sql"];
+const PROMPT_COVER_STORAGE_RELATIVE_PATH = ["packages", "db", "migrations", "20260730-zz-prompt-cover-storage.sql"];
+const CANVAS_GENERATION_BATCH_BILLING_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-canvas-generation-batch-billing.sql"];
+const CANVAS_AGENT_MODEL_PROBES_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-z-canvas-agent-model-compatibility-probes.sql"];
+const PROMPT_RATINGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260801-z-create-prompt-ratings.sql"];
+const PROMPT_RATING_SCORE_RELATIVE_PATH = ["packages", "db", "migrations", "20260801-zz-store-prompt-rating-score.sql"];
+const CANVAS_SETTINGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260802-canvas-settings.sql"];
+const CANVAS_AGENT_CONVERSATION_PINS_RELATIVE_PATH = ["packages", "db", "migrations", "20260803-canvas-agent-conversation-pins.sql"];
+const CANVAS_PROMPT_DIRECTIVE_CONFIGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-canvas-prompt-directive-configs.sql"];
+const CANVAS_AGENT_CONVERSATION_LOCKS_RELATIVE_PATH = ["packages", "db", "migrations", "20260805-canvas-agent-conversation-locks.sql"];
+const PROMPT_SUMMARY_BACKFILL_RELATIVE_PATH = ["packages", "db", "migrations", "20260806-backfill-prompt-summaries.sql"];
+const CANVAS_AGENT_PROVIDER_CONFIG_DRAFTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260807-canvas-agent-provider-config-drafts.sql"];
+const CANVAS_AGENT_MEDIA_PROMPT_PREFERENCES_RELATIVE_PATH = ["packages", "db", "migrations", "20260808-canvas-agent-media-prompt-preferences.sql"];
+const CANVAS_CHARACTER_LIBRARY_RELATIVE_PATH = ["packages", "db", "migrations", "20260809-canvas-character-library.sql"];
+const CANVAS_AGENT_TEXT_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260809-z-enable-canvas-agent-text-model.sql"];
+const CANVAS_AGENT_STRUCTURED_JSON_FALLBACK_RELATIVE_PATH = ["packages", "db", "migrations", "20260809-zz-canvas-agent-structured-json-fallback.sql"];
+const CANVAS_AGENT_KNOWLEDGE_BOUNDARY_TABLES_RELATIVE_PATH = ["packages", "db", "migrations", "20260810-canvas-agent-knowledge-boundary-tables.sql"];
+const CANVAS_AGENT_STEP_INPUT_JSON_RELATIVE_PATH = ["packages", "db", "migrations", "20260810-z-canvas-agent-step-input-json.sql"];
+const PROMPT_SKILL_DEFAULTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260811-prompt-skill-defaults.sql"];
+const CANVAS_AGENT_STEP_SKIP_RELATIVE_PATH = ["packages", "db", "migrations", "20260812-canvas-agent-step-skip.sql"];
+const EXPANDED_PROMPT_SKILL_DEFAULTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260812-expand-prompt-skill-default-categories.sql"];
+const OTHER_PROMPT_DEFAULT_RELATIVE_PATH = ["packages", "db", "migrations", "20260813-seed-other-prompt-default.sql"];
+const REQUIRED_PROJECT_STYLE_RELATIVE_PATH = ["packages", "db", "migrations", "20260814-require-project-style.sql"];
+const CANVAS_GENERATION_BATCH_TEXT_RELATIVE_PATH = ["packages", "db", "migrations", "20260815-canvas-generation-batch-text.sql"];
+const CANVAS_STYLE_REFERENCE_ENABLED_RELATIVE_PATH = ["packages", "db", "migrations", "20260816-canvas-style-reference-enabled.sql"];
+const TEAM_ASSETS_STORAGE_OBJECT_RELATIVE_PATH = ["packages", "db", "migrations", "20260817-team-assets-storage-object.sql"];
+const TEAM_ASSETS_TAGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260818-team-assets-tags.sql"];
+const TEAM_ASSETS_FOLDERS_RELATIVE_PATH = ["packages", "db", "migrations", "20260819-team-assets-folders.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
 const GENERATION_DUE_POLL_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-due-poll.sql"];
@@ -180,6 +216,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       sql: await readFile(join(rootDir, ...GENERATION_QUEUE_DURABLE_LIFECYCLE_RELATIVE_PATH), "utf8"),
     },
     {
+      name: "20260725-create-canvas-agent-runtime.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_RUNTIME_RELATIVE_PATH), "utf8"),
+    },
+    {
       name: "20260725-generation-queue-worker-leases.sql",
       sql: await readFile(join(rootDir, ...GENERATION_QUEUE_WORKER_LEASES_RELATIVE_PATH), "utf8"),
     },
@@ -198,6 +238,146 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260727-generation-queue-worker-lease-db-clock.sql",
       sql: await readFile(join(rootDir, ...GENERATION_QUEUE_WORKER_LEASE_DB_CLOCK_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260728-canvas-actor-principals.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_ACTOR_PRINCIPALS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260728-comfyui-workflow-library.sql",
+      sql: await readFile(join(rootDir, ...COMFYUI_WORKFLOW_LIBRARY_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260728-z-remove-legacy-workflow-runtime.sql",
+      sql: await readFile(join(rootDir, ...LEGACY_WORKFLOW_RUNTIME_CLEANUP_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260729-canvas-generation-runtime.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_GENERATION_RUNTIME_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260729-canvas-user-config-library.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_USER_CONFIG_LIBRARY_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260729-create-prompt-marketplace.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_MARKETPLACE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260730-canvas-media-derivations.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_MEDIA_DERIVATIONS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260730-z-unify-prompt-storage.sql",
+      sql: await readFile(join(rootDir, ...UNIFIED_PROMPT_STORAGE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260730-zz-prompt-cover-storage.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_COVER_STORAGE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260731-canvas-generation-batch-billing.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_GENERATION_BATCH_BILLING_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260731-z-canvas-agent-model-compatibility-probes.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_MODEL_PROBES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260801-z-create-prompt-ratings.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_RATINGS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260801-zz-store-prompt-rating-score.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_RATING_SCORE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260802-canvas-settings.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_SETTINGS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260803-canvas-agent-conversation-pins.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_CONVERSATION_PINS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260804-canvas-prompt-directive-configs.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_PROMPT_DIRECTIVE_CONFIGS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260805-canvas-agent-conversation-locks.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_CONVERSATION_LOCKS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260806-backfill-prompt-summaries.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_SUMMARY_BACKFILL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260807-canvas-agent-provider-config-drafts.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_PROVIDER_CONFIG_DRAFTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260808-canvas-agent-media-prompt-preferences.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_MEDIA_PROMPT_PREFERENCES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260809-canvas-character-library.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_CHARACTER_LIBRARY_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260809-z-enable-canvas-agent-text-model.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_TEXT_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260809-zz-canvas-agent-structured-json-fallback.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_STRUCTURED_JSON_FALLBACK_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260810-canvas-agent-knowledge-boundary-tables.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_KNOWLEDGE_BOUNDARY_TABLES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260810-z-canvas-agent-step-input-json.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_STEP_INPUT_JSON_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260811-prompt-skill-defaults.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_SKILL_DEFAULTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260812-canvas-agent-step-skip.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_STEP_SKIP_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260812-expand-prompt-skill-default-categories.sql",
+      sql: await readFile(join(rootDir, ...EXPANDED_PROMPT_SKILL_DEFAULTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260813-seed-other-prompt-default.sql",
+      sql: await readFile(join(rootDir, ...OTHER_PROMPT_DEFAULT_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260814-require-project-style.sql",
+      sql: await readFile(join(rootDir, ...REQUIRED_PROJECT_STYLE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260815-canvas-generation-batch-text.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_GENERATION_BATCH_TEXT_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260816-canvas-style-reference-enabled.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_STYLE_REFERENCE_ENABLED_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260817-team-assets-storage-object.sql",
+      sql: await readFile(join(rootDir, ...TEAM_ASSETS_STORAGE_OBJECT_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260818-team-assets-tags.sql",
+      sql: await readFile(join(rootDir, ...TEAM_ASSETS_TAGS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260819-team-assets-folders.sql",
+      sql: await readFile(join(rootDir, ...TEAM_ASSETS_FOLDERS_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

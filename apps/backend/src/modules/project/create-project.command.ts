@@ -32,6 +32,7 @@ export interface CreateProjectCommandRequest {
     scriptInput: string;
     aspectRatio: string;
     resolution: string;
+    projectType: string;
   };
   idempotencyKey: string;
   now: Date;
@@ -45,6 +46,7 @@ export interface CreateProjectCommandResponse {
           id: string;
           phase: string;
           name: string;
+          projectType: string;
         };
         script: {
           id: string;
@@ -88,6 +90,7 @@ export function createProjectCommandHandler(deps: {
         scriptInput: request.body.scriptInput,
         aspectRatio: request.body.aspectRatio,
         resolution: request.body.resolution,
+        projectType: request.body.projectType,
         idempotencyKey: request.idempotencyKey,
       });
 
@@ -108,6 +111,7 @@ export function createProjectCommandHandler(deps: {
             id: created.project.id,
             phase: created.project.phase,
             name: created.project.name,
+            projectType: created.project.projectType,
           },
           script: {
             id: created.script.id,

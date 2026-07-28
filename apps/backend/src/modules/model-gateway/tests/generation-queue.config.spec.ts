@@ -5,6 +5,7 @@ import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 import {
   generationPollMaxAttempts,
   generationTimeoutMsFor,
+  generationTimeoutMsForEnv,
 } from "../generation-timeout.policy.ts";
 
 describe("generation queue config", () => {
@@ -47,7 +48,7 @@ describe("generation queue config", () => {
     });
     assert.deepEqual(config.retry, {
       submit: { attempts: 3, backoffMs: 5_000 },
-      poll: { attempts: 3, backoffMs: 5_000 },
+      poll: { attempts: 20, backoffMs: 30_000 },
       finalize: { attempts: 3, backoffMs: 5_000 },
     });
     assert.deepEqual(config.artifactUpload, {
@@ -62,6 +63,16 @@ describe("generation queue config", () => {
     assert.equal(generationTimeoutMsFor("video"), 3 * 60 * 60 * 1000);
     assert.equal(generationPollMaxAttempts("audio"), 120);
     assert.equal(generationPollMaxAttempts("video"), 360);
+  });
+
+  it("configures the image polling window without changing the 60 minute default", () => {
+    assert.equal(generationTimeoutMsForEnv("image", {}), 60 * 60 * 1000);
+    assert.equal(generationTimeoutMsForEnv("image", {
+      GENERATION_IMAGE_TIMEOUT_MS: String(2 * 60 * 60 * 1000),
+    }), 2 * 60 * 60 * 1000);
+    assert.equal(loadGenerationQueueConfig({
+      GENERATION_IMAGE_TIMEOUT_MS: String(2 * 60 * 60 * 1000),
+    }).poll.image.maxAttempts, 240);
   });
 
   it("loads active BullMQ queue and per-account generation settings from env", () => {
@@ -100,6 +111,8 @@ describe("generation queue config", () => {
       GENERATION_QUEUE_HEALTH_WAITING_COUNT_THRESHOLD: "500",
       GENERATION_QUEUE_HEALTH_FAILED_COUNT_THRESHOLD: "25",
       GENERATION_QUEUE_HEALTH_OLDEST_JOB_AGE_MS: "240000",
+      GENERATION_POLL_RETRY_ATTEMPTS: "25",
+      GENERATION_POLL_RETRY_BACKOFF_MS: "45000",
       GENERATION_QUEUE_SHARDING_ENABLED: "true",
       GENERATION_QUEUE_SHARD_CAPACITY: "600",
       GENERATION_QUEUE_SHARD_RATE_LIMIT_MAX: "5",
@@ -154,6 +167,7 @@ describe("generation queue config", () => {
       failedCountThreshold: 25,
       oldestJobAgeMs: 240000,
     });
+    assert.deepEqual(config.retry.poll, { attempts: 25, backoffMs: 45_000 });
     assert.deepEqual(config.poll.video, {
       intervalMs: 30_000,
       maxAttempts: 360,

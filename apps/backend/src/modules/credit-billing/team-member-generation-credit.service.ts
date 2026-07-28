@@ -9,6 +9,12 @@ export function resolveGenerationBillingAmount(
   amountReserved: number | string | null | undefined,
   snapshot: Record<string, unknown>,
 ) {
+  const batchBilling = snapshot.billing;
+  if (batchBilling && typeof batchBilling === "object" && !Array.isArray(batchBilling)
+    && (batchBilling as Record<string, unknown>).mode === "batch_reservation") {
+    const batchAmount = Number(snapshot.cost ?? snapshot.estimatedCredits ?? snapshot.amount ?? 0);
+    if (Number.isFinite(batchAmount) && batchAmount > 0) return batchAmount;
+  }
   const reserved = Number(amountReserved ?? 0);
   if (Number.isFinite(reserved) && reserved > 0) {
     return reserved;

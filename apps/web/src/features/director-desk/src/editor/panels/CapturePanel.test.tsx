@@ -15,6 +15,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearViewportCaptureHandler();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -44,4 +45,24 @@ it("runs four-angle capture from the left screenshot panel", async () => {
     source: "capture-panel",
   });
   expect(await screen.findByText("已导出 1 张截图")).toBeInTheDocument();
+});
+
+it("downloads the project JSON in the current page and releases the object URL", async () => {
+  const user = userEvent.setup();
+  const createObjectURL = vi.fn(() => "blob:director-project");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+  const open = vi.spyOn(window, "open");
+
+  render(<CapturePanel />);
+  await user.click(screen.getByRole("button", { name: "导出工程 JSON" }));
+
+  const clickMock = vi.mocked(HTMLAnchorElement.prototype.click);
+  const anchor = clickMock.mock.instances[clickMock.mock.instances.length - 1] as HTMLAnchorElement;
+  expect(anchor.download).toBe("director-desk-project.json");
+  expect(anchor.href).toBe("blob:director-project");
+  expect(anchor.isConnected).toBe(false);
+  expect(createObjectURL).toHaveBeenCalledOnce();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:director-project");
+  expect(open).not.toHaveBeenCalled();
 });

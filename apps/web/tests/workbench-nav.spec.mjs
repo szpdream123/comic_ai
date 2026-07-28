@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
-import { deriveInitialNavTabForTest, syncWorkbenchRouteStateForTest } from "../src/features/production-workbench/index.js";
+import {
+  deriveInitialNavTabForTest,
+  handleWorkbenchActionForTest,
+  handleNewCanvasHostInputForTest,
+  readWorkbenchRouteTokenForTest,
+  syncWorkbenchRouteStateForTest,
+} from "../src/features/production-workbench/index.js";
 
 test("workbench rail omits the community tab", () => {
   const html = renderProjectDetail({
@@ -24,6 +30,38 @@ test("workbench rail omits the community tab", () => {
 
   assert.doesNotMatch(html, /data-tab="community"/);
   assert.doesNotMatch(html, /data-action="open-community"/);
+});
+
+test("workbench exposes a single Canvas rail entry", () => {
+  const html = renderProjectDetail({
+    state: { project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" } },
+    session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1", phone: "13800138000" } },
+    ui: { activeNavTab: "home", canvasProjectView: "list" },
+  });
+  assert.match(html, /data-action="set-nav-tab"\s+data-tab="tools"/);
+  assert.doesNotMatch(html, /data-action="set-nav-tab"\s+data-tab="new-canvas"/);
+});
+
+test("opening new Canvas shows the project list without auto-creating or opening a project", async () => {
+  let listCalls = 0;
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1", phone: "13800138000" } },
+    api: {
+      async getCanvasProjects() {
+        listCalls += 1;
+        return { projects: [{ id: "canvas-1", title: "分镜草稿" }] };
+      },
+    },
+    ui: { activeNavTab: "home", canvasProjectView: "detail", selectedCanvasProjectId: "" },
+  };
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-new-canvas" } });
+  assert.equal(listCalls, 1);
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
+  assert.equal(workbench.ui.canvasEntryPoint, "new");
+  assert.equal(workbench.ui.canvasProjectView, "list");
+  assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-1");
 });
 
 test("team member sessions omit the team tab from the workbench rail", () => {
@@ -74,6 +112,161 @@ test("team member initial route falls back to the project panel", () => {
   });
 
   assert.equal(nextTab, "project");
+});
+
+test("disabled new Canvas feature hides only the new route and keeps legacy Canvas available", () => {
+  const session = {
+    authenticated: true,
+    features: { newCanvas: false },
+    user: { id: "user-1", phone: "13800000000" },
+  };
+  const html = renderProjectDetail({
+    state: {},
+    session,
+    ui: { activeNavTab: "home", canvasProjectView: "list" },
+  });
+  assert.match(html, /data-tab="tools"/);
+  assert.doesNotMatch(html, /data-tab="new-canvas"/);
+  assert.equal(deriveInitialNavTabForTest("#tools-canvas", session), "tools");
+  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "home");
+
+  const workbench = {
+    session,
+    ui: { activeNavTab: "tools", canvasProjectView: "detail" },
+  };
+  syncWorkbenchRouteStateForTest(workbench, "#tools-canvas");
+  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.canvasProjectView, "detail");
+
+  syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.canvasProjectView, "list");
+  assert.equal(workbench.ui.toast, "新画布当前未启用。");
+});
+
+test("new Canvas path and detail token restore an independent navigation state", () => {
+  const session = {
+    authenticated: true,
+    features: { newCanvas: true },
+    user: { id: "user-1", phone: "13800000000" },
+  };
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/new-canvas/", hash: "" }), "new-canvas");
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/canvas", hash: "" }), "tools");
+  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "new-canvas");
+
+  const workbench = {
+    session,
+    ui: { activeNavTab: "tools", canvasProjectView: "list", selectedCanvasNodeId: "node-1" },
+  };
+  syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
+  assert.equal(workbench.ui.activeNavTab, "new-canvas");
+  assert.equal(workbench.ui.canvasProjectView, "detail");
+
+  syncWorkbenchRouteStateForTest(workbench, "#tools");
+  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.canvasProjectView, "list");
+});
+
+test("Canvas sidebar filter, search, and collapse controls expose working state", async () => {
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1" } },
+    api: {},
+    ui: {
+      activeNavTab: "new-canvas",
+      canvasProjectView: "detail",
+      canvasDocument: {
+        nodes: [
+          { id: "text-1", type: "ai-text", data: { title: "旁白节点" } },
+          { id: "image-1", type: "ai-image", data: { title: "主视觉" } },
+        ],
+        edges: [],
+        viewport: {},
+      },
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "toggle-canvas-node-search" } });
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "toggle-canvas-sidebar" } });
+  handleNewCanvasHostInputForTest(workbench, {
+    value: "image",
+    matches(selector) { return selector === "[data-canvas-node-filter]"; },
+  });
+  handleNewCanvasHostInputForTest(workbench, {
+    value: "主视觉",
+    matches(selector) { return selector === "[data-canvas-node-search]"; },
+    closest() { return null; },
+  });
+
+  assert.equal(workbench.ui.canvasNodeSearchOpen, true);
+  assert.equal(workbench.ui.canvasSidebarCollapsed, true);
+  assert.equal(workbench.ui.canvasNodeFilter, "image");
+  assert.equal(workbench.ui.canvasNodeSearch, "主视觉");
+
+  const html = renderProjectDetail({ state: {}, session: workbench.session, ui: { ...workbench.ui, canvasHostMount: false } });
+  assert.doesNotMatch(html, /canvas-help-panel|toggle-canvas-help|画布说明/);
+  assert.match(html, /data-canvas-node-filter aria-label="筛选画布节点"/);
+  assert.match(html, /data-action="toggle-canvas-sidebar"[^>]+aria-label="展开侧栏"/);
+  assert.match(html, /主视觉/);
+  assert.doesNotMatch(html, /旁白节点/);
+});
+
+test("Canvas storyboard grid controls persist axis counts and custom divider positions", async () => {
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { authenticated: true, features: { newCanvas: true }, user: { id: "user-1" } },
+    api: {},
+    ui: {
+      activeNavTab: "new-canvas",
+      canvasProjectView: "detail",
+      selectedCanvasProjectId: "canvas-1",
+      canvasProjects: [{ id: "canvas-1", title: "分镜测试" }],
+      canvasDocumentsByProject: {},
+      canvasDocument: {
+        version: 1,
+        nodes: [{
+          id: "story-1",
+          type: "ai-storyboard",
+          position: { x: 0, y: 0 },
+          size: { width: 420, height: 356 },
+          data: {
+            storyboardGridMode: "custom",
+            storyboardRows: 2,
+            storyboardCols: 2,
+            storyboardRowPositions: [50],
+            storyboardColPositions: [50],
+            storyboardExtracted: [true, false, false, false],
+          },
+        }],
+        edges: [],
+        viewport: {},
+      },
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: {
+      action: "adjust-canvas-storyboard-grid-axis",
+      nodeId: "story-1",
+      storyboardAxis: "columns",
+      storyboardDelta: "1",
+    },
+  });
+  let node = workbench.ui.canvasDocument.nodes.find((item) => item.id === "story-1");
+  assert.equal(node.data.storyboardCols, 3);
+  assert.deepEqual(node.data.storyboardColPositions, [25, 50]);
+  assert.deepEqual(node.data.storyboardExtracted, [true, false, false, false, false, false]);
+
+  const target = {
+    value: "62.5",
+    dataset: { nodeId: "story-1", storyboardAxis: "columns", storyboardPositionIndex: "1" },
+    matches(selector) { return selector === "[data-canvas-storyboard-position-input]"; },
+  };
+  assert.equal(handleNewCanvasHostInputForTest(workbench, target), true);
+  node = workbench.ui.canvasDocument.nodes.find((item) => item.id === "story-1");
+  assert.deepEqual(node.data.storyboardColPositions, [25, 62.5]);
 });
 
 test("project panel omits the members interior tab", () => {

@@ -17,6 +17,8 @@ import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
+const testPngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+const testMp4Bytes = Buffer.from([0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
 
 function createPhoneAuthDevServer(
   options?: Parameters<typeof createPhoneAuthDevServerBase>[0],
@@ -130,7 +132,7 @@ describe("phone auth dev server storage uploads", () => {
           purpose: "asset-import/scene",
           fileName: "alley.png",
           contentType: "image/png",
-          sizeBytes: 4,
+          sizeBytes: testPngBytes.byteLength,
         }),
       });
       const prepared = await prepareResponse.json();
@@ -143,7 +145,7 @@ describe("phone auth dev server storage uploads", () => {
             "content-type": "image/png",
             cookie,
           },
-          body: Buffer.from([1, 2, 3, 4]),
+          body: testPngBytes,
         },
       );
       const blobBody = await blobResponse.text();
@@ -254,7 +256,7 @@ describe("phone auth dev server storage uploads", () => {
           purpose: "asset-import/character",
           fileName: "team-hero.png",
           contentType: "image/png",
-          sizeBytes: 4,
+          sizeBytes: testPngBytes.byteLength,
         }),
       });
       const prepared = await prepareResponse.json();
@@ -265,7 +267,7 @@ describe("phone auth dev server storage uploads", () => {
           "content-type": "image/png",
           cookie,
         },
-        body: Buffer.from([1, 2, 3, 4]),
+        body: testPngBytes,
       });
       await fetch(`${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`, {
         method: "POST",
@@ -358,7 +360,7 @@ describe("phone auth dev server storage uploads", () => {
           purpose: "episode-role-reference",
           fileName: "hero.png",
           contentType: "image/png",
-          sizeBytes: 4,
+          sizeBytes: testPngBytes.byteLength,
         }),
       });
       const prepared = await prepareResponse.json();
@@ -388,7 +390,7 @@ describe("phone auth dev server storage uploads", () => {
           "content-type": "image/png",
           cookie,
         },
-        body: Buffer.from([1, 2, 3, 4]),
+        body: testPngBytes,
       });
       const completeResponse = await fetch(
         `${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`,
@@ -434,7 +436,7 @@ describe("phone auth dev server storage uploads", () => {
             cookie,
           },
           body: JSON.stringify({
-            assetVersionId: bound.data.fileResource.assetVersionId,
+            uploadSessionId: prepared.uploadSessionId,
             storageObjectId: prepared.storageObjectId,
           }),
         },
@@ -454,7 +456,7 @@ describe("phone auth dev server storage uploads", () => {
       assert.match(bound.data.file.previewUrl, /^(?:https:\/\/|\/uploads\/storage\/)/);
       assert.equal(setFixedResponse.status, 200, JSON.stringify(fixed));
       assert.equal(fixed.data.asset.fixedImageStorageObjectId, prepared.storageObjectId);
-      assert.equal(fixed.data.asset.fixedImageFileId, bound.data.fileResource.assetVersionId);
+      assert.notEqual(fixed.data.asset.fixedImageFileId, bound.data.fileResource.assetVersionId);
       assert.match(fixed.data.asset.fixedImageUrl, /^(?:https:\/\/|\/uploads\/storage\/)/);
     } finally {
       await server.close();
@@ -509,7 +511,7 @@ describe("phone auth dev server storage uploads", () => {
           purpose: "episode-attachments/video",
           fileName: "clip.mp4",
           contentType: "video/mp4",
-          sizeBytes: 4,
+          sizeBytes: testMp4Bytes.byteLength,
         }),
       });
       const prepared = await prepareResponse.json();
@@ -520,7 +522,7 @@ describe("phone auth dev server storage uploads", () => {
           "content-type": "video/mp4",
           cookie,
         },
-        body: Buffer.from([1, 2, 3, 4]),
+        body: testMp4Bytes,
       });
       const completeResponse = await fetch(
         `${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`,
@@ -620,6 +622,7 @@ describe("phone auth dev server storage uploads", () => {
       const storyboardId = (await createShotResponse.json()).shot.id;
 
       async function uploadAndBind(name: string) {
+        const uploadBytes = Buffer.concat([testPngBytes, Buffer.from(name)]);
         const prepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
           method: "POST",
           headers: {
@@ -632,7 +635,7 @@ describe("phone auth dev server storage uploads", () => {
             purpose: "storyboard-image",
             fileName: `${name}.png`,
             contentType: "image/png",
-            sizeBytes: 4,
+            sizeBytes: uploadBytes.byteLength,
           }),
         });
         const prepared = await prepareResponse.json();
@@ -642,7 +645,7 @@ describe("phone auth dev server storage uploads", () => {
             "content-type": "image/png",
             cookie,
           },
-          body: Buffer.from([1, 2, 3, 4]),
+          body: uploadBytes,
         });
         await fetch(`${server.origin}/api/storage/upload-sessions/${prepared.uploadSessionId}/complete`, {
           method: "POST",
@@ -1063,6 +1066,42 @@ describe("phone auth dev server storage uploads", () => {
       });
       const mismatchedMime = await mismatchedMimeResponse.json();
 
+      const disguisedContent = Buffer.from("<script>alert('canvas')</script>");
+      const disguisedPrepareResponse = await fetch(`${server.origin}/api/storage/upload-sessions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "storage-upload-disguised-content",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          purpose: "storyboard-image",
+          fileName: "disguised.png",
+          contentType: "image/png",
+          sizeBytes: disguisedContent.byteLength,
+        }),
+      });
+      const disguisedPrepared = await disguisedPrepareResponse.json();
+      const otherCookie = await login(server.origin, "13800138001");
+      const crossOwnerBlobResponse = await fetch(
+        `${server.origin}/api/storage/upload-sessions/${disguisedPrepared.uploadSessionId}/blob`,
+        {
+          method: "PUT",
+          headers: { "content-type": "image/png", cookie: otherCookie },
+          body: testPngBytes,
+        },
+      );
+      const disguisedBlobResponse = await fetch(
+        `${server.origin}/api/storage/upload-sessions/${disguisedPrepared.uploadSessionId}/blob`,
+        {
+          method: "PUT",
+          headers: { "content-type": "image/png", cookie },
+          body: disguisedContent,
+        },
+      );
+      const disguisedBlob = await disguisedBlobResponse.json();
+
       assert.equal(createProjectResponse.status, 200);
       assert.equal(oversizedVideoResponse.status, 413);
       assert.equal(oversizedVideo.errorCode, "upload_file_too_large");
@@ -1071,6 +1110,10 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(blockedExecutable.errorCode, "upload_type_not_allowed");
       assert.equal(mismatchedMimeResponse.status, 400);
       assert.equal(mismatchedMime.errorCode, "upload_mime_not_allowed");
+      assert.equal(disguisedPrepareResponse.status, 200);
+      assert.equal(crossOwnerBlobResponse.status, 404);
+      assert.equal(disguisedBlobResponse.status, 400);
+      assert.equal(disguisedBlob.errorCode, "upload_content_mismatch");
     } finally {
       await server.close();
     }

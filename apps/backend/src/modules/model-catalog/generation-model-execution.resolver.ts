@@ -17,7 +17,7 @@ export class GenerationModelExecutionResolutionError extends Error {
 }
 
 export interface GenerationModelExecution {
-  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "aliyun-bailian-audio" | "mock";
+  providerExecutor: "gpt-image-2" | "image-http" | "seedance" | "aliyun-bailian-audio" | "apimart-audio" | "mock";
   queueName: string;
   taskMode: string;
   parameters: Record<string, unknown>;
@@ -114,6 +114,9 @@ function providerExecutorFromProtocol(
   }
   if (kind === "audio" && protocol === "aliyun_bailian_audio") {
     return "aliyun-bailian-audio";
+  }
+  if (kind === "audio" && protocol === "apimart_audio") {
+    return "apimart-audio";
   }
   throw new GenerationModelExecutionResolutionError(
     "model_provider_unsupported",
@@ -278,6 +281,13 @@ function taskModeFromParameters(kind: "image" | "video" | "audio", parameters: R
   }
 
   if (kind === "audio") {
+    const audioMode = readString(parameters.mode);
+    if (audioMode === "music" || audioMode === "music-generation" || audioMode === "audio.music_generation") {
+      return "audio.music_generation";
+    }
+    if (audioMode === "transcription" || audioMode === "speech-to-text" || audioMode === "audio.transcription") {
+      return "audio.transcription";
+    }
     return "audio.text_to_speech";
   }
 

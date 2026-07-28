@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import {
+  grantPromptSkillsUsageCredits,
   settleReservationAllocation,
   settleReservationAllocationInTransaction,
 } from "../credit-billing/credit-ledger.service.ts";
@@ -12,6 +13,7 @@ import {
 } from "../credit-billing/team-member-generation-credit.service.ts";
 import { createAssetVersionSnapshot } from "../project/asset-version-record.service.ts";
 import { ensureProjectUploadRecordForStorageObject } from "../project/project-upload-record.service.ts";
+import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assignment.guard.ts";
 import type { AssetType } from "../project/asset.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -129,6 +131,7 @@ async function updateTeamAssetGenerationResult(
       UPDATE team_assets
       SET asset_status = $2,
           asset_url = CASE WHEN $2 = 'active' THEN $3 ELSE asset_url END,
+          storage_object_id = CASE WHEN $2 = 'active' THEN $4 ELSE storage_object_id END,
           resource_size = CASE
             WHEN $2 = 'active' THEN COALESCE(
               (SELECT size_bytes FROM storage_objects WHERE id = $4),
@@ -303,7 +306,7 @@ function resolveGptImageBillingAmount(row: GptImageTaskRow, snapshot: Record<str
 }
 
 interface GptImagePollAdapter {
-  poll(input: { externalRequestId: string }): Promise<ProviderPollResult>;
+  poll(input: { externalRequestId: string; redactedPayload?: Record<string, unknown> }): Promise<ProviderPollResult>;
 }
 
 export async function processGptImageSubmitJob(
@@ -370,6 +373,7 @@ export async function processGptImageSubmitJob(
   });
   let providerRequestId: string | null = null;
   try {
+    await assertCanvasGenerationAssignmentActive(db, snapshot);
     const payloadRef = buildGenerationProviderPayloadRef({
       targetType: snapshot.targetType,
       targetId: snapshot.targetId,
@@ -455,6 +459,7 @@ export async function processGptImageSubmitJob(
         ? {
             providerProtocol: modelConfig.providerProtocol,
             providerModel,
+            mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
           }
         : fallbackGptImageModelConfig(),
@@ -1035,6 +1040,7 @@ export async function processGptImagePollJob(
         ? {
             providerProtocol: modelConfig.providerProtocol,
             providerModel: modelConfig.providerModel,
+            mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
           }
         : fallbackGptImageModelConfig(),
@@ -1046,7 +1052,7 @@ export async function processGptImagePollJob(
         failureCode: "provider_poll_unsupported",
       });
     }
-    const poll = await adapter.poll({ externalRequestId: row.external_request_id });
+    const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
     if (poll.status === "accepted" || poll.status === "running") {
       await markGenerationTaskSnapshotRunning(db, {
         taskId: row.task_id,
@@ -1199,6 +1205,7 @@ export async function finalizeGptImageArtifactJob(
 
   let persisted: PersistedGptImageArtifact;
   try {
+    await assertCanvasGenerationAssignmentActive(db, snapshot);
     await markGenerationTaskSnapshotRunning(db, {
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -1416,6 +1423,15 @@ export async function finalizeGptImageArtifactJob(
       });
     },
   });
+  await grantPromptSkillsUsageCredits(db, {
+    skills: readSnapshotPromptSkills(snapshot),
+    sourceId: row.task_id,
+    payerUserId: row.user_id,
+    teamMemberId: readSnapshotTeamMemberId(snapshot),
+    projectId: row.project_id,
+    modelCode: readString(snapshot.model),
+    now: input.now,
+  });
   await aggregateWorkflowStatus(db, row.workflow_id);
 
   return { status: "succeeded" };
@@ -1447,6 +1463,7 @@ export async function fetchGptImageArtifactJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const artifact = parseArtifactFromProviderResponse(parseProviderResponse(row.provider_response_redacted_json));
   if (!artifact) return { status: "skipped" };
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
@@ -1502,6 +1519,7 @@ export async function persistGptImageArtifactJob(
     return { status: "skipped" };
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
   const providerLabel = "model-gateway";
   const handoff = await findGenerationArtifactHandoff(db, row.task_id);
   const failure = await findGenerationTaskSnapshotFailure(db, row.task_id);
@@ -1518,6 +1536,11 @@ export async function persistGptImageArtifactJob(
   if (!storageObject || storageObject.status !== "available") {
     return { status: "failed", failureCode: "provider_output_persist_failed" };
   }
+  await reopenGptImageQueueFailureAttempt(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  });
 
   const urls = buildDefaultPersistUrls(input.runtime, storageObject.objectKey);
   const storedArtifact: PersistedGptImageArtifact = {
@@ -1600,6 +1623,15 @@ export async function persistGptImageArtifactJob(
         now: input.now,
       });
     },
+  });
+  await grantPromptSkillsUsageCredits(db, {
+    skills: readSnapshotPromptSkills(snapshot),
+    sourceId: row.task_id,
+    payerUserId: row.user_id,
+    teamMemberId: readSnapshotTeamMemberId(snapshot),
+    projectId: row.project_id,
+    modelCode: readString(snapshot.model),
+    now: input.now,
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
 
@@ -1730,7 +1762,7 @@ async function findGptImageTaskForSubmit(db: SqlDatabase, taskId: string) {
       FROM tasks t
       JOIN workflows w
         ON w.id = t.workflow_id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
@@ -1763,7 +1795,7 @@ async function findGptImageTaskForPoll(db: SqlDatabase, taskId: string) {
       FROM tasks t
       JOIN workflows w ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr ON pr.task_id = t.id
-      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status IN ('running', 'result_unknown')
@@ -1803,7 +1835,7 @@ async function findGptImageTaskForPollExpiration(db: SqlDatabase, taskId: string
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
-      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status IN ('running', 'result_unknown')
@@ -1949,11 +1981,11 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
-        AND t.status = 'running'
+        AND t.status IN ('running', 'manual_review_required')
         AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
@@ -1984,7 +2016,7 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
         ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
@@ -1992,7 +2024,7 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
           t.status = 'running'
           OR (
             t.status = 'manual_review_required'
-            AND t.failure_code = 'provider_output_persist_failed'
+            AND t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
           )
         )
         AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
@@ -2038,6 +2070,30 @@ async function reopenManualReviewReservationForSettlement(
         AND amount_reserved > 0
     `,
     [input.reservationId, input.now],
+  );
+}
+
+async function reopenGptImageQueueFailureAttempt(
+  db: SqlDatabase,
+  input: { taskId: string; attemptId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE task_attempts attempt
+      SET status = 'manual_review_required',
+          finished_at = NULL,
+          updated_at = $3
+      FROM tasks task
+      WHERE attempt.id = $2
+        AND attempt.task_id = $1
+        AND attempt.status = 'failed'
+        AND attempt.failure_code = 'generation_queue_error'
+        AND task.id = $1
+        AND task.current_attempt_id = attempt.id
+        AND task.status = 'manual_review_required'
+        AND task.failure_code = 'generation_queue_error'
+    `,
+    [input.taskId, input.attemptId, input.now],
   );
 }
 
@@ -2324,6 +2380,8 @@ function buildWorkerBillingMetadata(
     mediaType: "image",
     kind: "image",
     modelCode: readString(snapshot.model),
+    promptSkill: readObject(snapshot.promptSkill),
+    promptSkills: readArray(snapshot.promptSkills),
     providerExecutor: readString(snapshot.providerExecutor),
     provider: extra.provider,
     targetType: readString(snapshot.targetType),
@@ -2381,6 +2439,16 @@ function readObject(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function readSnapshotPromptSkills(snapshot: Record<string, unknown>) {
+  const promptSkills = readArray(snapshot.promptSkills)
+    .map(readObject)
+    .filter((skill) => Object.keys(skill).length);
+  const legacyPromptSkill = readObject(snapshot.promptSkill);
+  return promptSkills.length || !Object.keys(legacyPromptSkill).length
+    ? promptSkills
+    : [legacyPromptSkill];
 }
 
 function readString(value: unknown) {

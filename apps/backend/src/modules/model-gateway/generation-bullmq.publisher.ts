@@ -312,6 +312,7 @@ export function createBullMQGenerationPublisher(
   const queues = new Map<string, { queue: Queue; lastUsedAt: number }>();
   const connection = redisConnectionFromUrl(config.redisUrl);
   const queueIdleMs = 15 * 60_000;
+  const reportRedisError = createRedisErrorReporter();
 
   function getQueue(queueName: string) {
     assertGenerationQueueName(queueName);
@@ -324,6 +325,7 @@ export function createBullMQGenerationPublisher(
       connection,
       prefix: config.queuePrefix,
     });
+    queue.on("error", reportRedisError);
     queues.set(queueName, { queue, lastUsedAt: Date.now() });
     return queue;
   }
@@ -364,6 +366,31 @@ function redisConnectionFromUrl(redisUrl: string) {
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
     retryStrategy: (attempt: number) => Math.min(attempt * 100, 1_000),
+  };
+}
+
+function createRedisErrorReporter() {
+  const reported = new Set<string>();
+  return (error: unknown) => {
+    const code = typeof (error as { code?: unknown })?.code === "string"
+      ? (error as { code: string }).code
+      : "REDIS_ERROR";
+    const message = error instanceof Error ? error.message : String(error);
+    const connectivityError = [
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EAI_AGAIN",
+      "NR_CLOSED",
+    ].includes(code);
+    const key = `${code}:${message}`;
+    if (connectivityError && reported.has(key)) return;
+    if (connectivityError) reported.add(key);
+    console.error(
+      `[generation-publisher] Redis connection error ${code}: ${message}${connectivityError ? " (duplicate errors suppressed)" : ""}`,
+    );
   };
 }
 

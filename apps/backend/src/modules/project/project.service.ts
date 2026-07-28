@@ -21,6 +21,7 @@ export interface ProjectRecord {
   coverStorageObjectId?: string | null;
   aspectRatio: ProjectAspectRatio;
   resolution: ProjectResolution;
+  projectType: string;
   phase: "script_input" | "asset_review" | "shot_generation" | "export";
   createdByUserId: string;
   createdAt: Date;
@@ -65,6 +66,7 @@ export interface CreateProjectDraftInput {
   scriptInput: string;
   aspectRatio: string;
   resolution: string;
+  projectType: string;
   idempotencyKey: string;
 }
 
@@ -83,6 +85,7 @@ export interface ProjectStore {
     scriptInput: string;
     aspectRatio: ProjectAspectRatio;
     resolution: ProjectResolution;
+    projectType: string;
   }): Promise<ProjectBundle>;
   findProjectBundle(projectId: string): Promise<ProjectBundle | undefined>;
   findProject(projectId: string): Promise<ProjectRecord | undefined>;
@@ -114,6 +117,7 @@ export class InMemoryProjectStore implements ProjectStore {
     scriptInput: string;
     aspectRatio: ProjectAspectRatio;
     resolution: ProjectResolution;
+    projectType: string;
   }): Promise<ProjectBundle> {
     const now = new Date();
     const projectId = randomUUID();
@@ -125,6 +129,7 @@ export class InMemoryProjectStore implements ProjectStore {
       name: input.name,
       aspectRatio: input.aspectRatio,
       resolution: input.resolution,
+      projectType: input.projectType,
       phase: "script_input",
       createdByUserId: input.createdByUserId,
       createdAt: now,
@@ -241,6 +246,7 @@ export async function createProjectDraft(
     scriptInput: input.scriptInput.trim(),
     aspectRatio: input.aspectRatio as ProjectAspectRatio,
     resolution: input.resolution as ProjectResolution,
+    projectType: input.projectType.trim(),
   });
 
   const completed = await beginOrReplayCommand(store.idempotency, {
@@ -279,6 +285,10 @@ export function validateCreateProjectInput(input: CreateProjectDraftInput) {
     fieldErrors.resolution = "resolution_unsupported";
   }
 
+  if (!/^[a-z0-9_-]+$/.test(String(input.projectType ?? "").trim())) {
+    fieldErrors.projectType = "project_style_required";
+  }
+
   return fieldErrors;
 }
 
@@ -290,6 +300,7 @@ export function hashCreateProjectInput(input: CreateProjectDraftInput) {
         scriptInput: input.scriptInput.trim(),
         aspectRatio: input.aspectRatio,
         resolution: input.resolution,
+        projectType: input.projectType.trim(),
       }),
     )
     .digest("hex");

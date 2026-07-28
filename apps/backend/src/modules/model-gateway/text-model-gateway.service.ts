@@ -15,6 +15,7 @@ import {
 import {
   createDefaultTextModelCatalog,
   resolveTextModelCatalogEntry,
+  type ResolvedTextModelCatalogEntry,
   type TextModelCatalogEntry,
 } from "./text-model-catalog.ts";
 import { TextModelGatewayError } from "./text-model-gateway.errors.ts";
@@ -30,9 +31,12 @@ export const textModelGatewayOperationNames = {
 
 export interface TextModelGatewayRequestContext {
   projectId?: string | null;
+  canvasProjectId?: string | null;
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;
+  agentTaskId?: string | null;
+  agentStepId?: string | null;
   createdByUserId?: string | null;
   requestKey: string;
   requestHash: string;
@@ -40,6 +44,18 @@ export interface TextModelGatewayRequestContext {
   payloadSummary?: string;
   providerOperation: typeof textModelGatewayOperationNames.chatCompletions;
   signal?: AbortSignal;
+}
+
+export interface TextModelResolution extends ResolvedTextModelCatalogEntry {
+  providerConfigRevisionId?: string | null;
+  credentialVersionRef?: string | null;
+}
+
+export interface TextModelResolver {
+  resolve(
+    model: string,
+    context: TextModelGatewayRequestContext,
+  ): Promise<TextModelResolution>;
 }
 
 export type TextGatewayFinalUsage =
@@ -80,6 +96,7 @@ export class TextModelGatewayService {
         "createChatCompletionStream"
       >;
       catalog?: readonly TextModelCatalogEntry[];
+      resolver?: TextModelResolver;
       env?: NodeJS.ProcessEnv;
       now?: () => Date;
     },
@@ -90,16 +107,21 @@ export class TextModelGatewayService {
     context: TextModelGatewayRequestContext,
   ): Promise<TextGatewayChatStreamResult> {
     const now = this.config.now ?? (() => new Date());
-    const model = resolveTextModelCatalogEntry(
-      this.config.catalog ?? createDefaultTextModelCatalog(),
-      request.model,
-      this.config.env,
-    );
+    const model: TextModelResolution = this.config.resolver
+      ? await this.config.resolver.resolve(request.model, context)
+      : resolveTextModelCatalogEntry(
+          this.config.catalog ?? createDefaultTextModelCatalog(),
+          request.model,
+          this.config.env,
+        );
     const prepared = await createOrReuseProviderRequest(this.config.db, {
       projectId: context.projectId ?? null,
+      canvasProjectId: context.canvasProjectId ?? null,
       workflowId: context.workflowId ?? null,
       taskId: context.taskId ?? null,
       attemptId: context.attemptId ?? null,
+      agentTaskId: context.agentTaskId ?? null,
+      agentStepId: context.agentStepId ?? null,
       providerName: model.providerName,
       providerOperation: context.providerOperation,
       requestKey: context.requestKey,
@@ -112,7 +134,11 @@ export class TextModelGatewayService {
         messageCount: request.messages.length,
         payloadHash: context.payloadHash,
         payloadSummary: context.payloadSummary ?? null,
+        ...(context.agentTaskId ? { agentTaskId: context.agentTaskId } : {}),
+        ...(context.agentStepId ? { agentStepId: context.agentStepId } : {}),
       },
+      providerConfigRevisionId: model.providerConfigRevisionId ?? null,
+      credentialVersionRef: model.credentialVersionRef ?? null,
       userId: context.createdByUserId!,
       now: now(),
     });
@@ -138,9 +164,12 @@ export class TextModelGatewayService {
     await createUserModelRequestLog(this.config.db, {
       providerRequestId: started.id,
       projectId: context.projectId ?? null,
+      canvasProjectId: context.canvasProjectId ?? null,
       workflowId: context.workflowId ?? null,
       taskId: context.taskId ?? null,
       attemptId: context.attemptId ?? null,
+      agentTaskId: context.agentTaskId ?? null,
+      agentStepId: context.agentStepId ?? null,
       userId: context.createdByUserId ?? null,
       providerName: model.providerName,
       providerOperation: context.providerOperation,

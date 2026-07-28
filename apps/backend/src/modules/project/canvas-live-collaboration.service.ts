@@ -8,6 +8,8 @@ export interface CanvasLiveMember {
 
 export interface CanvasLiveEvent {
   type: "presence" | "revision";
+  eventId?: string;
+  sourceId?: string;
   canvasProjectId: string;
   at: string;
   action?: "snapshot" | "joined" | "left";
@@ -45,6 +47,7 @@ export interface CanvasLiveCollaborationHub {
     member: CanvasLiveMember;
     send: (event: CanvasLiveEvent) => void;
     close?: () => void;
+    afterEventId?: string | null;
   }): () => void;
   publishRevision(input: {
     canvasProjectId: string;
@@ -64,6 +67,7 @@ interface CanvasLiveCollaborationHubOptions {
 }
 
 const revisionEventDedupeLimit = 2_048;
+const revisionBacklogPerCanvasLimit = 512;
 const redisConnectionOptions = {
   connectTimeout: 500,
   commandTimeout: 500,
@@ -98,6 +102,7 @@ export function createCanvasLiveCollaborationHub(
   const subscribersByCanvas = new Map<string, Map<string, CanvasLiveSubscriber>>();
   const seenRevisionEventIds = new Set<string>();
   const revisionEventOrder: string[] = [];
+  const revisionBacklogByCanvas = new Map<string, CanvasLiveRevisionMessage[]>();
   let closed = false;
   let closePromise: Promise<void> | null = null;
 
@@ -138,10 +143,14 @@ export function createCanvasLiveCollaborationHub(
     for (const subscriber of subscribers.values()) sendEvent(subscriber, message);
   };
 
-  const rememberRevisionEvent = (eventId: string) => {
-    if (seenRevisionEventIds.has(eventId)) return false;
-    seenRevisionEventIds.add(eventId);
-    revisionEventOrder.push(eventId);
+  const rememberRevisionEvent = (message: CanvasLiveRevisionMessage) => {
+    if (seenRevisionEventIds.has(message.eventId)) return false;
+    seenRevisionEventIds.add(message.eventId);
+    revisionEventOrder.push(message.eventId);
+    const backlog = revisionBacklogByCanvas.get(message.canvasProjectId) ?? [];
+    backlog.push(message);
+    if (backlog.length > revisionBacklogPerCanvasLimit) backlog.splice(0, backlog.length - revisionBacklogPerCanvasLimit);
+    revisionBacklogByCanvas.set(message.canvasProjectId, backlog);
     if (revisionEventOrder.length > revisionEventDedupeLimit) {
       const expired = revisionEventOrder.shift();
       if (expired) seenRevisionEventIds.delete(expired);
@@ -160,7 +169,7 @@ export function createCanvasLiveCollaborationHub(
   let stopRevisionTransport: (() => void) | undefined;
   try {
     stopRevisionTransport = options.revisionTransport?.subscribe((message) => {
-      if (closed || !isCanvasLiveRevisionMessage(message) || !rememberRevisionEvent(message.eventId)) return;
+      if (closed || !isCanvasLiveRevisionMessage(message) || !rememberRevisionEvent(message)) return;
       broadcastRevision(message);
     });
   } catch (error) {
@@ -186,6 +195,14 @@ export function createCanvasLiveCollaborationHub(
         member,
         members: membersFor(subscribers),
       });
+      const afterEventId = String(input.afterEventId ?? "").trim();
+      if (afterEventId) {
+        const backlog = revisionBacklogByCanvas.get(canvasProjectId) ?? [];
+        const cursor = backlog.findIndex((event) => event.eventId === afterEventId);
+        if (cursor >= 0) {
+          for (const event of backlog.slice(cursor + 1)) sendEvent(subscriber, event);
+        }
+      }
       broadcastPresence(canvasProjectId, "joined", member);
 
       let subscriptionClosed = false;
@@ -211,7 +228,7 @@ export function createCanvasLiveCollaborationHub(
         revisionId: input.revisionId ?? null,
         actorId: String(input.actorId ?? "").trim(),
       };
-      rememberRevisionEvent(event.eventId);
+      rememberRevisionEvent(event);
       broadcastRevision(event);
       try {
         const published = options.revisionTransport?.publish(event);
@@ -233,6 +250,7 @@ export function createCanvasLiveCollaborationHub(
       subscribersByCanvas.clear();
       seenRevisionEventIds.clear();
       revisionEventOrder.length = 0;
+      revisionBacklogByCanvas.clear();
       closePromise = Promise.resolve(options.revisionTransport?.close()).catch(reportTransportError);
       return closePromise;
     },

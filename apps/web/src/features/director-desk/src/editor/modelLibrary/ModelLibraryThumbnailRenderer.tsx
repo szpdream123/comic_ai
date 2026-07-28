@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Box3, Vector3, type Group, type PerspectiveCamera } from "three";
 import { BuiltInLifeModel } from "./BuiltInLifeModel";
 import type { ModelLibraryItem } from "./modelLibraryCatalog";
+import { registerDirectorDeskGpuResources } from "../runtime/directorGpuResources";
 
 const thumbnailCache = new Map<string, string>();
 const THUMBNAIL_STORAGE_PREFIX = "director:model-library-thumbnail:v1:";
@@ -120,7 +121,10 @@ export function ModelLibraryThumbnailRenderer({
         dpr={1}
         frameloop="demand"
         gl={{ alpha: false, antialias: true, preserveDrawingBuffer: true }}
-        onCreated={({ gl }) => gl.setClearColor("#1b2026", 1)}
+        onCreated={({ gl, scene }) => {
+          registerDirectorDeskGpuResources(gl, scene);
+          gl.setClearColor("#1b2026", 1);
+        }}
       >
         <ThumbnailScene key={item.id} item={item} onCapture={handleCapture} />
       </Canvas>

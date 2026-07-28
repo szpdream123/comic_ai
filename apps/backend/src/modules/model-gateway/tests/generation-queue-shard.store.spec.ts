@@ -9,6 +9,7 @@ import {
   generationQueueShardCapacity,
   generationQueueShardRateLimitDurationMs,
   generationQueueShardRateLimitMax,
+  hasReleasedGenerationQueueStageAssignment,
   listGenerationQueueShards,
   markGenerationQueueStagePublished,
   releaseGenerationQueueStage,
@@ -188,6 +189,11 @@ describe("generation queue shard store", { concurrency: false }, () => {
         reason: "completed",
         now: new Date("2026-07-24T00:00:02.000Z"),
       });
+      assert.equal(await hasReleasedGenerationQueueStageAssignment(db, input), true);
+      assert.equal(await hasReleasedGenerationQueueStageAssignment(db, {
+        ...input,
+        redisJobId: `${input.redisJobId}:mismatch`,
+      }), false);
       const publishedAfterFastCompletion = await markGenerationQueueStagePublished(db, {
         assignmentKey,
         redisJobId: input.redisJobId,

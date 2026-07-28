@@ -58,7 +58,7 @@ React Flow is a better long-term fit if the canvas becomes a standalone React mo
 
 - tldraw: excellent infinite whiteboard, weaker for typed workflow ports and execution, production licensing needs review.
 - Excalidraw: good sketching canvas, not suited for model execution workflows.
-- LiteGraph.js: close to ComfyUI, fast for prototypes, but modern product UI would require substantial restyling.
+- LiteGraph.js: fast for prototypes, but modern product UI would require substantial restyling.
 
 ## 3. Existing Project Integration Points
 

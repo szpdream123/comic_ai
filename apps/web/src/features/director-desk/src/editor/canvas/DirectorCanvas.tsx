@@ -17,6 +17,7 @@ import { DoubleSide, Euler, Matrix4, PerspectiveCamera as ThreePerspectiveCamera
 import type { Object3D } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { clearViewportCaptureHandler, setViewportCaptureHandler } from "../io/captureBridge";
+import { postDirectorDeskVideoToHost } from "../io/hostBridge";
 import {
   clearReferenceVideoExportHandler,
   getReferenceVideoFormatLabel,
@@ -38,6 +39,7 @@ import { PilotHud } from "../motion/PilotHud";
 import { exitPointerLockSafely } from "../motion/pointerLock";
 import { getGroundedLabelY } from "../runtime/mannequin/bodyTypes";
 import { getUE4GroundedLabelY } from "../runtime/ue4Mannequin/ue4MannequinRig";
+import { registerDirectorDeskGpuResources } from "../runtime/directorGpuResources";
 import { DirectorKeyboardController } from "./DirectorKeyboardController";
 import { SceneRoot } from "./SceneRoot";
 import { ViewportAspectOverlay } from "./ViewportAspectOverlay";
@@ -662,6 +664,7 @@ function ViewportGizmoOverlay({
         className="viewport-gizmo-canvas"
         camera={{ fov: snapshot.fov, position: [0, 0, 1] }}
         gl={{ alpha: true, antialias: true }}
+        onCreated={({ gl, scene }) => registerDirectorDeskGpuResources(gl, scene)}
       >
         <ViewportGizmoContent onSnapshotChange={onSnapshotChange} snapshot={snapshot} />
       </Canvas>
@@ -755,7 +758,12 @@ function MotionMonitor({
         <small><Move aria-hidden="true" size={11} />拖动</small>
       </header>
       <div className="motion-monitor-canvas-wrap" style={{ aspectRatio }}>
-        <Canvas camera={{ fov: monitorCamera.fov, position: monitorCamera.position }} dpr={[1, 1.5]} gl={{ antialias: true }}>
+        <Canvas
+          camera={{ fov: monitorCamera.fov, position: monitorCamera.position }}
+          dpr={[1, 1.5]}
+          gl={{ antialias: true }}
+          onCreated={({ gl, scene }) => registerDirectorDeskGpuResources(gl, scene)}
+        >
           <ViewportBackground
             backgroundColor={sceneSettings.backgroundColor}
             backgroundBrightness={sceneSettings.backgroundBrightness}
@@ -1105,6 +1113,7 @@ export function DirectorCanvas() {
         stream.getTracks().forEach((track) => track.stop());
 
         const blob = new Blob(chunks, { type: mimeType });
+        postDirectorDeskVideoToHost(blob, fileName);
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
@@ -1238,7 +1247,8 @@ export function DirectorCanvas() {
           onPointerMissed={() => {
             if (!isCameraPiloting && !characterRouteDrawingObjectId) openSceneInspector();
           }}
-          onCreated={({ camera, gl }) => {
+          onCreated={({ camera, gl, scene }) => {
+            registerDirectorDeskGpuResources(gl, scene);
             const perspectiveCamera = camera as ThreePerspectiveCamera;
             viewportCanvasRef.current = gl.domElement;
             perspectiveCamera.lookAt(...DEFAULT_DIRECTOR_VIEW_SNAPSHOT.target);
@@ -1381,7 +1391,10 @@ export function DirectorCanvas() {
               camera={{ fov: activeCameraView.fov, position: activeCameraView.position }}
               dpr={1}
               gl={{ antialias: true, preserveDrawingBuffer: true }}
-              onCreated={({ gl }) => { referenceVideoCanvasRef.current = gl.domElement; }}
+              onCreated={({ gl, scene }) => {
+                registerDirectorDeskGpuResources(gl, scene);
+                referenceVideoCanvasRef.current = gl.domElement;
+              }}
             >
               <ViewportBackground
                 backgroundColor={sceneSettings.backgroundColor}

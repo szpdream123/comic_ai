@@ -201,6 +201,32 @@ export async function reserveGenerationQueueStageForPublish(
   return mapAssignment(row);
 }
 
+export async function hasReleasedGenerationQueueStageAssignment(
+  db: SqlDatabase,
+  input: { assignmentKey: string; taskId: string; redisJobId: string },
+): Promise<boolean> {
+  const row = await queryOne<{ matched: boolean }>(
+    db,
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM generation_queue_stage_assignments
+        WHERE assignment_key = $1
+          AND task_id = $2::uuid
+          AND redis_job_id = $3
+          AND status = 'released'
+          AND release_reason IN ('completed', 'failed')
+      ) AS matched
+    `,
+    [
+      requiredTrimmed(input.assignmentKey, "generation_queue_assignment_key_required"),
+      input.taskId,
+      requiredTrimmed(input.redisJobId, "generation_queue_redis_job_id_required"),
+    ],
+  );
+  return row?.matched === true;
+}
+
 export async function markGenerationQueueStagePublished(
   db: SqlDatabase,
   input: { assignmentKey: string; redisJobId: string; now: Date },

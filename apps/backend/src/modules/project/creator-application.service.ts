@@ -425,6 +425,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     const actor = await resolveUserActorContext(deps.db, {
       sessionToken: input.user.sessionToken,
       projectId,
+      capability: capabilities.projectEdit,
       now: input.now,
     });
       if (
@@ -829,6 +830,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         scriptInput: string;
         aspectRatio: string;
         resolution: string;
+        projectType: string;
       };
       now: Date;
       idempotencyKey: string;
@@ -857,6 +859,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           scriptInput: input.body.scriptInput,
           aspectRatio: input.body.aspectRatio,
           resolution: input.body.resolution,
+          projectType: input.body.projectType,
         },
         idempotencyKey: input.idempotencyKey,
         now: input.now,
@@ -1203,6 +1206,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
       if (actor.teamMember) {
@@ -1629,6 +1633,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         generationTaskId?: string | null;
         generationStatus?: string | null;
         generationResult?: Record<string, unknown> | null;
+        tags?: string[] | null;
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
@@ -1639,8 +1644,14 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId: asset.projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
+      if (input.body.tags !== undefined && (!Array.isArray(input.body.tags)
+        || input.body.tags.length > 12
+        || input.body.tags.some((tag) => typeof tag !== "string" || tag.trim().length === 0 || tag.trim().length > 32))) {
+        return { status: 400, body: { error: "project_asset_tags_invalid" } };
+      }
       const updated = await updateProjectAssetRecord(deps.db, {
         assetId: input.assetId,
         name: input.body.name,
@@ -1655,6 +1666,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         generationTaskId: input.body.generationTaskId ?? undefined,
         generationStatus: input.body.generationStatus ?? undefined,
         generationResult: input.body.generationResult ?? undefined,
+        tags: input.body.tags === undefined
+          ? undefined
+          : [...new Set(input.body.tags.map((tag) => tag.trim()))],
         now: input.now,
       });
       return updated
@@ -2270,6 +2284,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
       const episode = await createEpisodeForProject(deps.db, {
@@ -2314,6 +2329,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
       const episode = await createEpisodeForProject(deps.db, {
@@ -2438,6 +2454,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
       const episode = await updateEpisodeForProject(deps.db, {
@@ -2467,6 +2484,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
         projectId,
+        capability: capabilities.projectEdit,
         now: input.now,
       });
       if (actor.teamMember) {
@@ -4503,6 +4521,7 @@ async function listProjectsForUser(
     cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
+    project_style_code: string;
     phase: string;
     created_by_user_id: string | null;
     created_at: Date | string;
@@ -4516,6 +4535,7 @@ async function listProjectsForUser(
         cover_storage_object_id,
         aspect_ratio,
         resolution,
+        project_style_code,
         phase,
         created_by_user_id,
         created_at,
@@ -4537,6 +4557,7 @@ async function listProjectsForUser(
       coverStorageObjectId: project.cover_storage_object_id,
       aspectRatio: project.aspect_ratio,
       resolution: project.resolution,
+      projectType: project.project_style_code,
       phase: project.phase,
       createdByUserId: project.created_by_user_id,
       createdAt: new Date(project.created_at),
@@ -4623,6 +4644,7 @@ async function updateProjectRecord(
       cover_storage_object_id: string | null;
       aspect_ratio: string;
       resolution: string;
+      project_style_code: string;
       phase: "script_input" | "asset_review" | "shot_generation" | "export";
       created_by_user_id: string | null;
       created_at: Date | string;
@@ -4672,6 +4694,7 @@ async function updateProjectRecord(
       coverStorageObjectId: row.cover_storage_object_id,
       aspectRatio: row.aspect_ratio,
       resolution: row.resolution,
+      projectType: row.project_style_code,
       phase: row.phase,
       createdByUserId: row.created_by_user_id,
       createdAt: new Date(row.created_at),
@@ -4726,6 +4749,7 @@ async function updateProjectAssetRecord(
     generationTaskId?: string | null;
     generationStatus?: string | null;
     generationResult?: Record<string, unknown> | null;
+    tags?: string[];
     now: Date;
   },
 ) {
@@ -4796,6 +4820,9 @@ async function updateProjectAssetRecord(
   }
   if (input.generationResult !== undefined) {
     metadata.generationResult = input.generationResult ?? null;
+  }
+  if (input.tags !== undefined) {
+    metadata.tags = input.tags;
   }
 
   await db.query(
@@ -7593,6 +7620,7 @@ async function loadProjectRecordFromSql(
     cover_storage_object_id: string | null;
     aspect_ratio: ProjectRecord["aspectRatio"];
     resolution: ProjectRecord["resolution"];
+    project_style_code: string;
     phase: ProjectRecord["phase"];
     created_by_user_id: string;
     created_at: Date | string;
@@ -7607,6 +7635,7 @@ async function loadProjectRecordFromSql(
         cover_storage_object_id,
         aspect_ratio,
         resolution,
+        project_style_code,
         phase,
         created_by_user_id,
         created_at,
@@ -7627,6 +7656,7 @@ async function loadProjectRecordFromSql(
         coverStorageObjectId: project.cover_storage_object_id,
         aspectRatio: project.aspect_ratio,
         resolution: project.resolution,
+        projectType: project.project_style_code,
         phase: project.phase,
         createdByUserId: project.created_by_user_id,
         createdAt: new Date(project.created_at),

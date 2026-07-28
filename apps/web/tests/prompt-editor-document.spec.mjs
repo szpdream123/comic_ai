@@ -69,6 +69,17 @@ test("prompt editor normalizes suggestion metadata for inline nodes", () => {
   );
 });
 
+test("prompt editor resolves uploaded image thumbnails from url fields", () => {
+  assert.equal(
+    resolvePromptEditorMentionPreview({ kind: "image", url: "/uploads/image-2.png" }),
+    "/uploads/image-2.png",
+  );
+  assert.equal(
+    resolvePromptEditorMentionPreview({ kind: "image", publicUrl: "/uploads/image-3.png" }),
+    "/uploads/image-3.png",
+  );
+});
+
 test("prompt editor never treats audio or video sources as image thumbnails", () => {
   const audio = normalizePromptEditorSuggestion({
     id: "audio-1",
@@ -174,4 +185,6 @@ test("prompt editor opens mentions at any cursor position and portals the menu o
   assert.match(source, /onMentionsChange\?\.\(collectPromptEditorMentions\(currentEditor\.getJSON\(\)\), \{ initial: true \}\)/);
   assert.match(source, /onMentionsChange\?\.\(collectPromptEditorMentions\(currentEditor\.getJSON\(\)\), \{ initial: false \}\)/);
   assert.match(workbenchSource, /getSuggestions:\s*\(\)\s*=>\s*buildPromptEditorSuggestions\(workbench\)/);
+  assert.match(workbenchSource, /const suggestionAssets = collectPromptMentionSuggestionAssets\(workbench\)\.filter/);
+  assert.match(workbenchSource, /!isAssetScope\(workbench\) \|\| \(\s*String\(item\.assetKind/s);
 });

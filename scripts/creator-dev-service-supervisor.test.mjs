@@ -100,6 +100,70 @@ describe("creator dev service supervisor", () => {
     children[0].emit("exit", 1, null);
     assert.equal(fatal, "phone-auth");
   });
+
+  it("restarts a service when the child process cannot be spawned", () => {
+    const children = [];
+    const timers = [];
+    const spawnErrors = [];
+    const supervisor = createCreatorDevServiceSupervisor({
+      now: () => 0,
+      spawnProcess(name) {
+        const child = fakeChild(name);
+        children.push(child);
+        return child;
+      },
+      setTimeout(run, delayMs) {
+        const timer = { run, delayMs, cleared: false };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+      onSpawnError(name, error) { spawnErrors.push({ name, message: error.message }); },
+      onFatalExit() {},
+    });
+
+    supervisor.start("generation-outbox", [], { restartOnFailure: true });
+    children[0].emit("error", new Error("spawn_failed"));
+    children[0].emit("exit", 1, null);
+    timers[0].run();
+
+    assert.deepEqual(spawnErrors, [{ name: "generation-outbox", message: "spawn_failed" }]);
+    assert.equal(children.length, 2);
+    assert.equal(timers.length, 1);
+  });
+
+  it("stops retrying after the configured restart limit", () => {
+    const children = [];
+    const timers = [];
+    const limits = [];
+    const supervisor = createCreatorDevServiceSupervisor({
+      now: () => 0,
+      spawnProcess(name) {
+        const child = fakeChild(name);
+        children.push(child);
+        return child;
+      },
+      setTimeout(run, delayMs) {
+        const timer = { run, delayMs };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+      maxRestartAttempts: 2,
+      onRestartLimitReached(name, attempts) { limits.push({ name, attempts }); },
+    });
+
+    supervisor.start("generation-worker", [], { restartOnFailure: true });
+    children[0].emit("exit", 1, null);
+    timers[0].run();
+    children[1].emit("exit", 1, null);
+    timers[1].run();
+    children[2].emit("exit", 1, null);
+
+    assert.deepEqual(limits, [{ name: "generation-worker", attempts: 2 }]);
+    assert.equal(timers.length, 2);
+    assert.equal(children.length, 3);
+  });
 });
 
 function fakeChild(name) {

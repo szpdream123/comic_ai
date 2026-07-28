@@ -22,6 +22,7 @@ interface ProjectRow {
   cover_storage_object_id: string | null;
   aspect_ratio: ProjectAspectRatio;
   resolution: ProjectResolution;
+  project_style_code: string;
   phase: ProjectRecord["phase"];
   created_by_user_id: string;
   created_at: Date | string;
@@ -66,6 +67,7 @@ export class SqlProjectStore implements ProjectStore {
     scriptInput: string;
     aspectRatio: ProjectAspectRatio;
     resolution: ProjectResolution;
+    projectType: string;
   }): Promise<ProjectBundle> {
     const now = new Date();
     const projectId = randomUUID();
@@ -79,13 +81,14 @@ export class SqlProjectStore implements ProjectStore {
           name,
           aspect_ratio,
           resolution,
+          project_style_code,
           phase,
           owner_user_id,
           created_by_user_id,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, 'script_input', $5, $5, $6, $6)
+        VALUES ($1, $2, $3, $4, $5, 'script_input', $6, $6, $7, $7)
         RETURNING *
       `,
       [
@@ -93,6 +96,7 @@ export class SqlProjectStore implements ProjectStore {
         input.name,
         input.aspectRatio,
         input.resolution,
+        input.projectType,
         input.createdByUserId,
         now,
       ],
@@ -311,6 +315,7 @@ function projectFromRow(row: ProjectRow): ProjectRecord {
     coverStorageObjectId: row.cover_storage_object_id,
     aspectRatio: row.aspect_ratio,
     resolution: row.resolution,
+    projectType: row.project_style_code,
     phase: row.phase,
     createdByUserId: row.created_by_user_id,
     createdAt: new Date(row.created_at),

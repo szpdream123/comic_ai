@@ -1,4 +1,4 @@
-const LOCAL_MODEL_EXTENSION_RE = /\.(fbx|obj)$/i;
+const LOCAL_MODEL_EXTENSION_RE = /\.(fbx|obj|glb)$/i;
 
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -19,7 +19,7 @@ function readFileAsDataUrl(file: File) {
 
 export async function readLocalModelFile(file: File) {
   if (!LOCAL_MODEL_EXTENSION_RE.test(file.name)) {
-    throw new Error("当前仅支持 FBX / OBJ 模型文件");
+    throw new Error("当前仅支持 FBX / OBJ / GLB 模型文件");
   }
 
   return {

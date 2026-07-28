@@ -34,6 +34,7 @@ import {
   type AiModelConfigRecord,
 } from "../model-catalog/ai-model-config.store.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
+import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assignment.guard.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
 import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
@@ -168,13 +169,13 @@ function resolveRateLimitUserId(userId: string, snapshot: Record<string, unknown
 }
 
 interface SeedancePollAdapter {
-  poll(input: { externalRequestId: string }): Promise<{
+  poll(input: { externalRequestId: string; redactedPayload?: Record<string, unknown> }): Promise<{
     status: "accepted" | "running" | "succeeded" | "failed";
     videoUrl?: string;
     redactedResponse: Record<string, unknown>;
   }>;
   cancel?(input: { externalRequestId: string }): Promise<{
-    status: "canceled" | "not_cancelable" | "failed";
+    status: "canceled" | "not_cancelable" | "unknown";
     redactedResponse: Record<string, unknown>;
   }>;
 }
@@ -234,11 +235,13 @@ export async function processSeedanceVideoSubmitJob(
   }
 
   try {
+    await assertCanvasGenerationAssignmentActive(db, snapshot);
     const adapter = createProviderAdapterFromModelConfig(
       modelConfig
         ? {
             providerProtocol: modelConfig.providerProtocol,
             providerModel: modelConfig.providerModel,
+            mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
           }
         : fallbackSeedanceModelConfig(input.env),
@@ -404,8 +407,9 @@ export async function processSeedanceVideoSubmitJob(
         externalRequestId: providerRequest?.external_request_id ?? null,
       };
     }
+    const submissionFailureCode = readErrorFailureCode(error) ?? "provider_submission_failed";
     const errorMessage = translateProviderErrorMessage(error, {
-      failureCode: readErrorFailureCode(error) ?? "provider_submission_failed",
+      failureCode: submissionFailureCode,
       mediaType: "video",
       phase: "submit",
     });
@@ -441,12 +445,12 @@ export async function processSeedanceVideoSubmitJob(
           providerRequestId: providerRequest.provider_request_id,
           status: "failed",
           responseText: buildSeedanceFailureResponseText({
-            failureCode: "provider_submission_failed",
+            failureCode: submissionFailureCode,
             errorMessage,
           }),
           responseUsage: null,
           finishReasons: [],
-          failureCode: "provider_submission_failed",
+          failureCode: submissionFailureCode,
           now: input.now,
         });
       }
@@ -475,14 +479,14 @@ export async function processSeedanceVideoSubmitJob(
     }
     await failSeedanceTask(db, {
       row: { ...row, attempt_id: claim.attempt.id },
-      failureCode: "provider_submission_failed",
+      failureCode: submissionFailureCode,
       providerRequestId: providerRequest?.provider_request_id ?? null,
       redactedResponse: buildSeedanceBillingMetadata({ ...row, attempt_id: claim.attempt.id }, snapshot, {
         billingEvent: "released",
         outcome: "released",
         provider: "model-gateway",
         providerRequestId: providerRequest?.provider_request_id ?? null,
-        failureCode: "provider_submission_failed",
+        failureCode: submissionFailureCode,
         errorMessage,
         settledAt: input.now,
       }),
@@ -494,10 +498,10 @@ export async function processSeedanceVideoSubmitJob(
       providerRequestId: providerRequest?.provider_request_id ?? null,
       providerStatus: {
         errorMessage,
-        failureCode: providerRequest?.failure_code ?? "provider_submission_failed",
+        failureCode: providerRequest?.failure_code ?? submissionFailureCode,
       },
       failure: {
-        failureCode: "provider_submission_failed",
+        failureCode: submissionFailureCode,
         providerRequestId: providerRequest?.provider_request_id ?? null,
         providerFailureCode: providerRequest?.failure_code ?? null,
         errorMessage,
@@ -509,7 +513,7 @@ export async function processSeedanceVideoSubmitJob(
       },
       now: input.now,
     });
-    return { status: "failed", failureCode: "provider_submission_failed" };
+    return { status: "failed", failureCode: submissionFailureCode };
   } finally {
     await releaseProviderPermit(permit);
   }
@@ -552,7 +556,7 @@ async function resolveSeedanceSubmitConflict(
     [taskId],
   );
 
-  if (!row || row.task_type !== "episode_generate_video" || row.provider_executor !== "seedance") {
+  if (!row || row.task_type !== "episode_generate_video" || !isVideoProviderExecutor(row.provider_executor)) {
     return { status: "settled" };
   }
   if (row.task_status === "queued") {
@@ -655,7 +659,7 @@ export async function failSeedanceVideoTaskBeforeProviderSubmission(
       FROM tasks t
       JOIN workflows w ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr ON pr.task_id = t.id
-      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
         AND t.status = 'running'
         AND t.task_type = 'episode_generate_video'
@@ -777,6 +781,7 @@ export async function processSeedanceVideoPollJob(
       ? {
           providerProtocol: modelConfig.providerProtocol,
           providerModel: modelConfig.providerModel,
+          mediaType: modelConfig.mediaType,
           providerConfig: modelConfig.providerConfig,
         }
       : fallbackSeedanceModelConfig(input.env),
@@ -784,7 +789,7 @@ export async function processSeedanceVideoPollJob(
     resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
   ) as unknown as SeedancePollAdapter;
   try {
-    const poll = await adapter.poll({ externalRequestId: row.external_request_id });
+    const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
 
     if (poll.status === "accepted" || poll.status === "running") {
       await markGenerationTaskSnapshotRunning(db, {
@@ -1144,6 +1149,7 @@ async function cancelSeedanceProviderTask(
         ? {
             providerProtocol: modelConfig.providerProtocol,
             providerModel: modelConfig.providerModel,
+            mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
           }
         : fallbackSeedanceModelConfig(input.env),
@@ -1197,11 +1203,13 @@ export async function cancelGenerationTask(
     return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "generation_task_terminal" };
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
-  if (row.task_status !== "queued") {
-    if (row.task_type !== "episode_generate_video" || readString(snapshot.providerExecutor) !== "seedance") {
+  if (row.external_request_id) {
+    const providerExecutor = readString(snapshot.providerExecutor);
+    const cancelSupported = row.task_type === "episode_generate_video" && providerExecutor === "seedance";
+    if (!cancelSupported) {
       return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "provider_cancel_not_supported" };
     }
-    if (!row.external_request_id || !row.provider_request_id) {
+    if (!row.provider_request_id) {
       return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "provider_task_not_submitted" };
     }
     const providerCancellation = await cancelSeedanceProviderTask(db, {
@@ -1219,9 +1227,13 @@ export async function cancelGenerationTask(
           ? "provider_cancel_failed"
           : providerCancellation.cancelStatus === "not_cancelable"
             ? "provider_task_not_cancelable"
+            : providerCancellation.cancelStatus === "unknown"
+              ? "provider_cancel_unknown"
             : readString(providerCancellation.cancelReason) || "provider_cancel_not_supported",
       };
     }
+  } else if (row.task_status !== "queued") {
+    return { status: "not_cancelable", taskId: row.task_id, taskStatus, reason: "provider_task_not_submitted" };
   }
   const canceled = await markSeedanceTaskCanceled(db, {
     row,
@@ -1344,6 +1356,7 @@ export async function finalizeSeedanceVideoArtifactJob(
   });
 
   try {
+    await assertCanvasGenerationAssignmentActive(db, snapshot);
     var persisted = await persistSeedanceVideoArtifact(db, {
       row,
       snapshot,
@@ -1557,17 +1570,19 @@ export async function recoverSeedanceVideoAfterPollTimeout(
       ? {
           providerProtocol: modelConfig.providerProtocol,
           providerModel: modelConfig.providerModel,
+          mediaType: modelConfig.mediaType,
           providerConfig: modelConfig.providerConfig,
         }
       : fallbackSeedanceModelConfig(input.env),
     input.env,
     resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
   ) as unknown as SeedancePollAdapter;
-  const poll = await adapter.poll({ externalRequestId: row.external_request_id! });
+  const poll = await adapter.poll({ externalRequestId: row.external_request_id!, redactedPayload: snapshot });
   const videoUrl = readString(poll.videoUrl);
   if (poll.status !== "succeeded" || !videoUrl) {
     return { status: "skipped", reason: "provider_result_not_ready" };
   }
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
 
   const claimed = await claimSeedancePollTimeoutRecovery(db, {
     taskId: row.task_id,
@@ -1765,6 +1780,7 @@ export async function fetchSeedanceVideoArtifactJob(
     now: input.now,
   });
   if (existing) return { status: "succeeded" };
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markSeedanceFinalizeLease(db, { taskId: row.task_id, now: input.now });
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
@@ -1814,6 +1830,7 @@ export async function persistSeedanceVideoArtifactJob(
     return { status: "skipped" };
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
+  await assertCanvasGenerationAssignmentActive(db, snapshot);
   const handoff = await findGenerationArtifactHandoff(db, row.task_id);
   const failure = await findGenerationTaskSnapshotFailure(db, row.task_id);
   const storageObjectKey = (handoff?.attemptId === row.attempt_id ? handoff.storageObjectKey : undefined)
@@ -2034,7 +2051,7 @@ async function findSeedanceTaskForSubmit(db: SqlDatabase, taskId: string) {
       FROM tasks t
       JOIN workflows w
         ON w.id = t.workflow_id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
@@ -2068,7 +2085,7 @@ async function findSeedanceTaskForPoll(db: SqlDatabase, taskId: string) {
         ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
@@ -2113,7 +2130,7 @@ async function findSeedanceTaskForPollExpiration(db: SqlDatabase, taskId: string
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
-      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
         AND t.status IN ('running', 'result_unknown')
@@ -2152,7 +2169,7 @@ async function findSeedanceTaskForCancellation(db: SqlDatabase, taskId: string) 
         ORDER BY request.created_at DESC
         LIMIT 1
       ) pr ON TRUE
-      LEFT JOIN credit_reservations r ON r.task_id = t.id
+      LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
       LIMIT 1
     `,
@@ -2367,7 +2384,7 @@ async function findSeedancePollTimeoutRecoveryTask(
         ORDER BY provider.created_at DESC, provider.id DESC
         LIMIT 1
       ) request ON true
-      LEFT JOIN credit_reservations reservation ON reservation.task_id = task.id
+      LEFT JOIN generation_task_credit_reservations reservation ON reservation.task_id = task.id
       LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
       WHERE task.id = $1
         AND task.task_type = 'episode_generate_video'
@@ -2612,7 +2629,7 @@ async function findSeedanceTaskForFinalize(db: SqlDatabase, taskId: string) {
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
        AND pr.status = 'succeeded'
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
@@ -2724,7 +2741,7 @@ async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
         ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
@@ -3087,13 +3104,13 @@ async function buildProviderArtifactDownloadInit(
     env: NodeJS.ProcessEnv;
   },
 ): Promise<RequestInit | undefined> {
-  if (!isLingdongContentEndpoint(input.artifactUrl)) {
-    return undefined;
-  }
   const modelCode = readString(input.snapshot.model);
   const modelConfig = modelCode
     ? await resolveGenerationModelConfigForTask(db, input.snapshot, modelCode)
     : null;
+  if (!isLingdongContentEndpoint(input.artifactUrl)) {
+    return undefined;
+  }
   return buildLingdongArtifactDownloadInit(modelConfig, input.artifactUrl, input.env);
 }
 
@@ -3587,6 +3604,10 @@ function readObject(value: unknown) {
 
 function readString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isVideoProviderExecutor(value: string | null | undefined) {
+  return value === "seedance";
 }
 
 function readErrorFailureCode(error: unknown): string | undefined {

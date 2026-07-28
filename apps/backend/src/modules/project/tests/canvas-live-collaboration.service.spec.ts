@@ -68,6 +68,27 @@ describe("canvas live collaboration hub", () => {
     assert.equal(closeCount, 1);
   });
 
+  it("replays bounded revision events after Last-Event-ID without crossing Canvas scope", () => {
+    const hub = createCanvasLiveCollaborationHub({ instanceId: "replay-instance" });
+    const seed: CanvasLiveEvent[] = [];
+    hub.subscribe({ canvasProjectId: "canvas-a", member: { memberId: "owner", displayName: "Owner" }, send: (event) => seed.push(event) });
+    hub.publishRevision({ canvasProjectId: "canvas-a", actorId: "owner", serverRevision: 1 });
+    hub.publishRevision({ canvasProjectId: "canvas-a", actorId: "owner", serverRevision: 2 });
+    hub.publishRevision({ canvasProjectId: "canvas-b", actorId: "other", serverRevision: 99 });
+    const revisions = seed.filter((event): event is CanvasLiveRevisionMessage => event.type === "revision");
+    const resumed: CanvasLiveEvent[] = [];
+
+    hub.subscribe({
+      canvasProjectId: "canvas-a",
+      member: { memberId: "member", displayName: "Member" },
+      afterEventId: revisions[0]?.eventId,
+      send: (event) => resumed.push(event),
+    });
+
+    assert.deepEqual(resumed.filter((event) => event.type === "revision").map((event) => event.serverRevision), [2]);
+    assert.equal(resumed.some((event) => event.serverRevision === 99), false);
+  });
+
   it("broadcasts revisions across hubs, deduplicates transport echoes, and cleans up transport listeners", async () => {
     const bus = createMemoryRevisionBus({ duplicateDelivery: true });
     const firstTransport = bus.createTransport();

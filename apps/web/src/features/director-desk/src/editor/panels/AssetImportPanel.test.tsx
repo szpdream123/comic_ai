@@ -15,19 +15,20 @@ beforeEach(() => {
   });
 });
 
-it("imports a local OBJ/FBX model from the single local model entry", async () => {
+it("imports a local GLB model from the single local model entry", async () => {
   const user = userEvent.setup();
   render(<AssetImportPanel />);
 
   expect(screen.getByText("导入本地模型")).toBeInTheDocument();
-  expect(screen.queryByText("导入角色模型")).not.toBeInTheDocument();
+  expect(screen.getByText("导入角色模型")).toBeInTheDocument();
+  expect(screen.getByText("导入角色动作")).toBeInTheDocument();
   expect(screen.queryByText("导入场景模型")).not.toBeInTheDocument();
   expect(screen.queryByText("导入道具模型")).not.toBeInTheDocument();
 
   const input = screen.getByLabelText("导入本地模型");
-  expect(input).toHaveAttribute("accept", ".fbx,.obj");
+  expect(input).toHaveAttribute("accept", ".fbx,.obj,.glb");
 
-  const file = new File(["demo"], "football.obj", { type: "model/obj" });
+  const file = new File(["demo"], "football.glb", { type: "model/gltf-binary" });
   await user.upload(input, file);
 
   await waitFor(() => {
@@ -38,6 +39,6 @@ it("imports a local OBJ/FBX model from the single local model entry", async () =
 
   const latestAsset =
     useDirectorStore.getState().project.assets[useDirectorStore.getState().project.assets.length - 1];
-  expect(latestAsset?.fileName).toBe("football.obj");
-  expect(screen.getByText("已导入本地模型: football.obj")).toBeInTheDocument();
+  expect(latestAsset?.fileName).toBe("football.glb");
+  expect(screen.getByText("已导入本地模型: football.glb")).toBeInTheDocument();
 });

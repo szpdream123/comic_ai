@@ -1,31 +1,26 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
+import { assertPromptCanBeDeactivated, ensureOfficialPromptDefault } from "../prompt-marketplace/prompt-skill-default.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 const seedUpdatedAt = new Date("2026-06-06T08:00:00.000Z");
 
-type JsonValue = unknown;
-type ShotPromptStage = "outline";
-
 interface ShotPromptTemplateRow {
   id: string;
   name: string;
-  code: string;
-  stage: ShotPromptStage;
-  model_family: string;
-  tags: JsonValue;
-  variables: JsonValue;
-  json_schema: string;
+  summary: string;
   prompt_content: string;
-  negative_prompt: string | null;
-  sort_order: number | string;
+  cover_image_url?: string | null;
+  cover_storage_object_id: string | null;
   status: string;
-  is_default: boolean;
-  remark: string | null;
+  price_credits: number;
+  usage_count: number;
+  is_published: boolean;
   created_at: Date | string;
   updated_at: Date | string;
+  is_default?: boolean;
 }
 
 interface AdminMutationInput {
@@ -37,51 +32,44 @@ interface AdminMutationInput {
 interface SaveShotPromptTemplateInput extends AdminMutationInput {
   id?: string;
   name: string;
-  code: string;
-  stage?: string;
-  model_family?: string;
-  tags?: string[];
-  variables?: string[];
-  json_schema?: string;
   prompt_content: string;
-  negative_prompt?: string | null;
-  sort_order?: number;
+  cover_image_url?: string | null;
   status?: string;
-  is_default?: boolean;
+  price_credits?: number;
+  usage_count?: number;
+  is_published?: boolean;
   remark?: string | null;
 }
 
 export function createAdminShotPromptService(deps: { db: SqlDatabase }) {
   async function listTemplates(input: {
-    stage?: string | null;
-    modelFamily?: string | null;
     keyword?: string | null;
     status?: string | null;
     pageSize?: number;
   } = {}) {
     await ensureDefaultShotPromptTemplates(deps.db);
+    await ensureOfficialPromptDefault(deps.db, "shot");
     const pageSize = clamp(Number(input.pageSize || 100), 1, 500);
     const keyword = input.keyword?.trim() ? `%${input.keyword.trim().toLowerCase()}%` : null;
     const rows = await deps.db.query<ShotPromptTemplateRow>(
       `
-        SELECT *
-        FROM shot_prompt_templates
-        WHERE deleted_at IS NULL
-          AND ($1::text IS NULL OR stage = $1)
-          AND ($2::text IS NULL OR model_family = $2)
-          AND ($3::text IS NULL OR status = $3)
+        SELECT prompts.*, EXISTS (
+          SELECT 1 FROM prompt_official_defaults prompt_default
+          WHERE prompt_default.prompt_category = 'shot' AND prompt_default.prompt_id = prompts.id
+        ) AS is_default
+        FROM prompts
+        WHERE prompt_category = 'shot' AND deleted_at IS NULL
+          AND ($1::text IS NULL OR status = $1)
           AND (
-            $4::text IS NULL
-            OR lower(name) LIKE $4
-            OR lower(code) LIKE $4
-            OR lower(tags::text) LIKE $4
-            OR lower(prompt_content) LIKE $4
-            OR lower(remark) LIKE $4
+            $2::text IS NULL
+            OR lower(name) LIKE $2
+            OR lower(prompt_content) LIKE $2
+            OR lower(summary) LIKE $2
           )
-        ORDER BY sort_order DESC, updated_at DESC, id ASC
-        LIMIT $5
+        ORDER BY updated_at DESC, id ASC
+        LIMIT $3
       `,
-      [input.stage || null, input.modelFamily || null, input.status || null, keyword, pageSize],
+      [input.status || null, keyword, pageSize],
     );
     return { data: rows.rows.map(templateFromRow) };
   }
@@ -91,81 +79,60 @@ export function createAdminShotPromptService(deps: { db: SqlDatabase }) {
     if (validation) return validation;
     const id = input.id || randomUUID();
     const existing = input.id
-      ? await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM shot_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.id])
+      ? await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'shot' AND deleted_at IS NULL", [input.id])
       : undefined;
-    const duplicate = await queryOne<{ id: string }>(
-      deps.db,
-      "SELECT id FROM shot_prompt_templates WHERE code = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) AND deleted_at IS NULL",
-      [input.code.trim(), input.id || null],
-    );
-    if (duplicate) return error(409, "shot_prompt_template_code_duplicate", "分镜提示词编码已存在");
-
+    const status = input.status || "enabled";
+    const priceCredits = input.price_credits ?? existing?.price_credits ?? 0;
+    const isPublished = status === "disabled" ? false : input.is_published ?? existing?.is_published ?? false;
+    if (existing && (status === "disabled" || !isPublished)) await assertPromptCanBeDeactivated(deps.db, existing.id);
     await deps.db.query(
       `
-        INSERT INTO shot_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, json_schema,
-          prompt_content, negative_prompt, sort_order, status, is_default, remark,
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, cover_image_url, prompt_content, status,
+          is_official, price_credits, is_published, published_at,
           created_by_admin_id, updated_by_admin_id, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $16)
+        VALUES ($1, 'shot', $2, $3, $4, $5, $6, true, $7, $8, CASE WHEN $8 THEN $10::timestamptz ELSE NULL END, $9, $9, $10, $10)
         ON CONFLICT (id)
         DO UPDATE SET
           name = EXCLUDED.name,
-          code = EXCLUDED.code,
-          stage = EXCLUDED.stage,
-          model_family = EXCLUDED.model_family,
-          tags = EXCLUDED.tags,
-          variables = EXCLUDED.variables,
-          json_schema = EXCLUDED.json_schema,
+          summary = EXCLUDED.summary,
+          cover_image_url = EXCLUDED.cover_image_url,
           prompt_content = EXCLUDED.prompt_content,
-          negative_prompt = EXCLUDED.negative_prompt,
-          sort_order = EXCLUDED.sort_order,
           status = EXCLUDED.status,
-          is_default = EXCLUDED.is_default,
-          remark = EXCLUDED.remark,
+          price_credits = EXCLUDED.price_credits,
+          is_published = EXCLUDED.is_published,
+          published_at = EXCLUDED.published_at,
           updated_by_admin_id = EXCLUDED.updated_by_admin_id,
           updated_at = EXCLUDED.updated_at
       `,
       [
         id,
         input.name.trim(),
-        input.code.trim(),
-        input.stage || "outline",
-        input.model_family || "general",
-        JSON.stringify(input.tags || []),
-        JSON.stringify(input.variables || []),
-        input.json_schema?.trim() || "",
+        input.remark?.trim() || "",
+        input.cover_image_url?.trim() || null,
         input.prompt_content.trim(),
-        input.negative_prompt?.trim() || null,
-        Number(input.sort_order || 0),
-        input.status || "enabled",
-        Boolean(input.is_default),
-        input.remark?.trim() || null,
+        status,
+        priceCredits,
+        isPublished,
         input.actorAdminAccountId,
         input.now,
       ],
     );
-    if (input.is_default) {
-      await clearStageDefaults({
-        id,
-        stage: input.stage || "outline",
-        actorAdminAccountId: input.actorAdminAccountId,
-        now: input.now,
-      });
+    if (input.usage_count !== undefined) {
+      await deps.db.query("UPDATE prompts SET usage_count = $2 WHERE id = $1", [id, input.usage_count]);
     }
     await audit(input, existing ? "admin.shot_prompt.template.updated" : "admin.shot_prompt.template.created", id);
     return templateResponse(id);
   }
 
   async function copyTemplate(input: AdminMutationInput & { id: string }) {
-    const existing = await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM shot_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'shot' AND deleted_at IS NULL", [input.id]);
     if (!existing) return error(404, "shot_prompt_template_not_found", "分镜提示词不存在");
     return saveTemplate({
       ...templateFromRow(existing),
       id: undefined,
       name: `${existing.name} 副本`,
-      code: await uniqueCopyCode(existing.code),
-      is_default: false,
       actorAdminAccountId: input.actorAdminAccountId,
       reason: input.reason || "copy shot prompt template",
       now: input.now,
@@ -174,10 +141,11 @@ export function createAdminShotPromptService(deps: { db: SqlDatabase }) {
 
   async function changeTemplateStatus(input: AdminMutationInput & { id: string; status: string }) {
     if (!["enabled", "disabled"].includes(input.status)) return error(400, "invalid_shot_prompt_status", "状态不支持");
-    const existing = await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM shot_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'shot' AND deleted_at IS NULL", [input.id]);
     if (!existing) return error(404, "shot_prompt_template_not_found", "分镜提示词不存在");
+    if (input.status === "disabled") await assertPromptCanBeDeactivated(deps.db, input.id);
     await deps.db.query(
-      "UPDATE shot_prompt_templates SET status = $2, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1",
+      "UPDATE prompts SET status = $2, is_published = CASE WHEN $2 = 'disabled' THEN false ELSE is_published END, published_at = CASE WHEN $2 = 'disabled' THEN NULL ELSE published_at END, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1 AND prompt_category = 'shot'",
       [input.id, input.status, input.actorAdminAccountId, input.now],
     );
     await audit(input, "admin.shot_prompt.template.status_changed", input.id, { status: input.status });
@@ -185,22 +153,8 @@ export function createAdminShotPromptService(deps: { db: SqlDatabase }) {
   }
 
   async function templateResponse(id: string) {
-    const row = await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM shot_prompt_templates WHERE id = $1", [id]);
+    const row = await queryOne<ShotPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'shot'", [id]);
     return { status: 200, body: { data: row ? templateFromRow(row) : { id } } };
-  }
-
-  async function clearStageDefaults(input: { id: string; stage: string; actorAdminAccountId: string; now: Date }) {
-    await deps.db.query(
-      `
-        UPDATE shot_prompt_templates
-        SET is_default = false, updated_by_admin_id = $3, updated_at = $4
-        WHERE deleted_at IS NULL
-          AND stage = $2
-          AND id <> $1
-          AND is_default = true
-      `,
-      [input.id, input.stage, input.actorAdminAccountId, input.now],
-    );
   }
 
   async function audit(input: AdminMutationInput, eventType: string, targetId: string, metadata: Record<string, unknown> = {}) {
@@ -216,15 +170,6 @@ export function createAdminShotPromptService(deps: { db: SqlDatabase }) {
     });
   }
 
-  async function uniqueCopyCode(code: string) {
-    for (let index = 1; index < 100; index += 1) {
-      const candidate = `${code}_copy${index === 1 ? "" : index}`;
-      const existing = await queryOne<{ id: string }>(deps.db, "SELECT id FROM shot_prompt_templates WHERE code = $1", [candidate]);
-      if (!existing) return candidate;
-    }
-    return `${code}_copy_${Date.now()}`;
-  }
-
   return {
     listTemplates,
     saveTemplate,
@@ -237,51 +182,40 @@ export async function ensureDefaultShotPromptTemplates(db: SqlDatabase) {
   for (const item of defaultShotPromptTemplates) {
     await db.query(
       `
-        INSERT INTO shot_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, json_schema,
-          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, 'enabled', $12, $13, $14, $14)
-        ON CONFLICT (code) DO NOTHING
+        VALUES ($1, 'shot', $2, $3, $4, 'enabled', true, true, $5, $5, $5)
+        ON CONFLICT (id) DO NOTHING
       `,
       [
         item.id,
         item.name,
-        item.code,
-        item.stage,
-        item.model_family,
-        JSON.stringify(item.tags),
-        JSON.stringify(item.variables),
-        item.json_schema,
-        item.prompt_content,
-        item.negative_prompt || null,
-        item.sort_order,
-        item.is_default,
         item.remark,
+        item.prompt_content,
         seedUpdatedAt,
       ],
     );
   }
+  await ensureOfficialPromptDefault(db, "shot", seedUpdatedAt);
 }
 
 function validateTemplatePayload(input: SaveShotPromptTemplateInput) {
-  if (!input.name?.trim() || !input.code?.trim()) {
-    return error(400, "shot_prompt_template_required", "名称和编码必填");
-  }
-  if (!/^[a-z0-9_]+$/.test(input.code.trim())) {
-    return error(400, "invalid_shot_prompt_code", "编码只能包含小写字母、数字和下划线");
-  }
-  if (input.stage && input.stage !== "outline") {
-    return error(400, "invalid_shot_prompt_stage", "分镜提示词阶段不支持");
-  }
-  if (input.model_family && !["general", "doubao", "seedream"].includes(input.model_family)) {
-    return error(400, "invalid_shot_prompt_model_family", "模型族不支持");
+  if (!input.name?.trim()) {
+    return error(400, "shot_prompt_template_required", "名称必填");
   }
   if (!input.prompt_content?.trim() || input.prompt_content.trim().length < 20) {
     return error(400, "shot_prompt_content_required", "分镜提示词正文不得为空，建议不少于 20 字");
   }
   if (input.status && !["enabled", "disabled"].includes(input.status)) {
     return error(400, "invalid_shot_prompt_status", "状态不支持");
+  }
+  if (input.price_credits !== undefined && (!Number.isInteger(input.price_credits) || input.price_credits < 0 || input.price_credits > 99_999)) {
+    return error(400, "invalid_shot_prompt_price", "积分价格必须是 0 到 99999 的整数");
+  }
+  if (input.usage_count !== undefined && (!Number.isInteger(input.usage_count) || input.usage_count < 0 || input.usage_count > 2_147_483_647)) {
+    return error(400, "invalid_shot_prompt_usage_count", "使用次数必须是非负整数");
   }
   return null;
 }
@@ -290,31 +224,27 @@ function templateFromRow(row: ShotPromptTemplateRow) {
   return {
     id: row.id,
     name: row.name,
-    code: row.code,
-    stage: row.stage,
-    model_family: row.model_family,
-    modelFamily: row.model_family,
-    tags: arrayFromJson(row.tags),
-    variables: arrayFromJson(row.variables),
-    json_schema: row.json_schema || "",
-    jsonSchema: row.json_schema || "",
+    prompt_category: "shot",
+    category: "shot",
+    summary: row.summary || "",
+    cover_image_url: row.cover_image_url || "",
+    coverImageUrl: row.cover_image_url || "",
+    cover_storage_object_id: row.cover_storage_object_id,
+    coverStorageObjectId: row.cover_storage_object_id,
     prompt_content: row.prompt_content,
     promptContent: row.prompt_content,
-    negative_prompt: row.negative_prompt || "",
-    negativePrompt: row.negative_prompt || "",
-    sort_order: Number(row.sort_order || 0),
-    sortOrder: Number(row.sort_order || 0),
     status: row.status,
-    is_default: Boolean(row.is_default),
+    price_credits: row.price_credits,
+    priceCredits: row.price_credits,
+    usage_count: row.usage_count,
+    usageCount: row.usage_count,
+    is_published: row.is_published,
+    isPublished: row.is_published,
     isDefault: Boolean(row.is_default),
-    remark: row.remark || "",
+    remark: row.summary || "",
     created_at: dateString(row.created_at),
     updated_at: dateString(row.updated_at),
   };
-}
-
-function arrayFromJson(value: JsonValue): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function dateString(value: Date | string) {
@@ -334,38 +264,16 @@ function stableUuid(seed: string) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-function template(input: {
-  name: string;
-  code: string;
-  stage: ShotPromptStage;
-  model_family?: string;
-  tags: string[];
-  variables: string[];
-  json_schema: string;
-  prompt_content: string;
-  negative_prompt?: string;
-  sort_order: number;
-  is_default?: boolean;
-  remark: string;
-}) {
+function template(input: { name: string; prompt_content: string; remark: string }) {
   return {
-    id: stableUuid(`shot-prompt-template:${input.code}`),
-    model_family: "general",
-    is_default: false,
+    id: stableUuid(`shot-prompt-template:${input.name}`),
     ...input,
   };
 }
 
-const defaultNegativePrompt = "避免文字水印、logo、乱码字幕、人物换脸、服装突变、发型突变、肢体畸形、多手多脚、多人关系错位、道具消失、画面主体不清、构图混乱、低清晰度、过曝、模糊、镜头动作过多。";
-
 const defaultShotPromptTemplates = [
   template({
     name: "抖音爆款短剧分镜",
-    code: "long_story_precise_breakdown",
-    stage: "outline",
-    tags: ["抖音短剧", "强钩子", "反转", "4-15秒"],
-    variables: ["{{story_text}}"],
-    json_schema: "shots[].shot_no, duration_seconds, plot_function, visual_content, shot_size, camera_move, action_expression, dialogue_voiceover, subtitle, sound_bgm, transition, hook_note",
     prompt_content: `你是一位资深抖音短剧导演和爆款短视频编剧，擅长把剧情文本改造成适合抖音传播的竖屏分镜脚本。你的目标不是机械拆分剧情，而是根据剧情节奏、人物冲突、情绪递进和反转节点，把故事拆成一组具有完播吸引力的短视频分镜。
 
 请将我提供的剧情改写为抖音短剧分镜脚本。每个分镜时长控制在 4-15 秒之间，根据剧情自然划分，不要平均切分。首镜必须在 4-6 秒内制造悬念、冲突、反差或强烈情绪，让观众愿意继续看。中段要持续推进矛盾，每 2-4 个镜头出现一次新的信息、阻碍、误会、情绪变化或关系转折。结尾必须有反转、悬念、情绪爆点或下一集钩子。
@@ -382,8 +290,6 @@ plot_function 从“钩子、铺垫、冲突、升级、误会、反转、高潮
 
 剧情如下：
 {{story_text}}`,
-    sort_order: 900,
-    is_default: true,
     remark: "擅长强钩子、强冲突、强反转，适合 30 秒到 3 分钟抖音竖屏短剧。",
   }),
 

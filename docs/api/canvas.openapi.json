@@ -1,0 +1,1153 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Comic AI Canvas API",
+    "version": "1.0.0"
+  },
+  "security": [
+    { "cookieAuth": [] }
+  ],
+  "paths": {
+    "/api/creator/canvases": {
+      "get": {
+        "operationId": "listCanvases",
+        "parameters": [
+          {
+            "name": "includeDeleted",
+            "in": "query",
+            "schema": { "type": "boolean", "default": false }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible canvases",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasListEnvelope" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "operationId": "createCanvas",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateCanvasRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created canvas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasEnvelope" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/creator/canvases/{canvasId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" }
+      ],
+      "get": {
+        "operationId": "getCanvas",
+        "responses": {
+          "200": {
+            "description": "Canvas metadata",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasEnvelope" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "operationId": "updateCanvas",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateCanvasRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated canvas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCanvas",
+        "responses": {
+          "200": {
+            "description": "Soft-deleted canvas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteCanvasEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/creator/canvases/{canvasId}/restore": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" }
+      ],
+      "post": {
+        "operationId": "restoreCanvas",
+        "responses": {
+          "200": {
+            "description": "Restored canvas",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/creator/canvases/{canvasId}/document": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" }
+      ],
+      "get": {
+        "operationId": "getCanvasDocument",
+        "responses": {
+          "200": {
+            "description": "Current canvas document",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasDocumentEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "put": {
+        "operationId": "saveCanvasDocument",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SaveCanvasDocumentRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved canvas document",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasDocumentEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "413": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/creator/canvases/{canvasId}/revisions": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" },
+        {
+          "name": "limit",
+          "in": "query",
+          "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }
+        },
+        {
+          "name": "beforeRevision",
+          "in": "query",
+          "schema": { "type": "integer", "minimum": 1 }
+        }
+      ],
+      "get": {
+        "operationId": "listCanvasRevisions",
+        "responses": {
+          "200": {
+            "description": "Canvas revision metadata",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasRevisionListEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/creator/canvases/{canvasId}/revisions/{revisionId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" },
+        { "$ref": "#/components/parameters/RevisionId" }
+      ],
+      "get": {
+        "operationId": "getCanvasRevision",
+        "responses": {
+          "200": {
+            "description": "Canvas revision with document",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasRevisionEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
+    ,"/api/canvas/{canvasId}/generation-history": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" }
+      ],
+      "get": {
+        "operationId": "listCanvasGenerationHistory",
+        "parameters": [
+          { "name": "nodeKey", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "mediaKind", "in": "query", "schema": { "type": "string" } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["json"] } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canvas generation history page or JSON export",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasGenerationHistoryEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCanvasGenerationHistory",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DeleteCanvasGenerationHistoryRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Soft-deleted generation history",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteCanvasGenerationHistoryEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/canvas/{canvasId}/generation-history/{entryId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" },
+        {
+          "name": "entryId",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteCanvasGenerationRun",
+        "responses": {
+          "200": {
+            "description": "Soft-deleted generation run",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteCanvasGenerationRunEnvelope" }
+              }
+            }
+          },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/canvas/{canvasId}/artifacts/{artifactId}/tags": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" },
+        {
+          "name": "artifactId",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string", "format": "uuid" }
+        }
+      ],
+      "patch": {
+        "operationId": "updateCanvasArtifactTags",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateCanvasArtifactTagsRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Canvas artifact tags",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasArtifactTagsEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/canvas/{canvasId}/head": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "get": { "operationId": "getCanvasHead", "responses": { "200": { "description": "Current document head", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CanvasRuntimeEnvelope" } } } }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/live": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "get": { "operationId": "streamCanvasLiveEvents", "responses": { "200": { "description": "Canvas SSE stream", "content": { "text/event-stream": { "schema": { "type": "string" } } } }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/telemetry/frontend-errors": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "post": { "operationId": "recordCanvasFrontendError", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "202": { "$ref": "#/components/responses/CanvasRuntime" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/nodes/{nodeId}/run": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/NodeId" }],
+      "post": { "operationId": "runCanvasNode", "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "$ref": "#/components/requestBodies/CanvasNodeRun" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "202": { "$ref": "#/components/responses/CanvasRuntime" }, "400": { "$ref": "#/components/responses/Error" }, "410": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/nodes/{nodeId}/runs": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/NodeId" }],
+      "get": { "operationId": "listCanvasNodeRuns", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/artifacts/{artifactId}/select": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/ArtifactId" }],
+      "post": { "operationId": "selectCanvasArtifact", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/generation-batches": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "post": { "operationId": "createCanvasGenerationBatch", "parameters": [{ "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "$ref": "#/components/requestBodies/CreateCanvasGenerationBatch" }, "responses": { "201": { "$ref": "#/components/responses/CanvasRuntime" }, "400": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/generation-batches/{batchId}": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/BatchId" }],
+      "get": { "operationId": "getCanvasGenerationBatch", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/generation-batches/{batchId}/reconcile": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/BatchId" }],
+      "post": { "operationId": "reconcileCanvasGenerationBatch", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/generation-batches/{batchId}/cancel": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/BatchId" }],
+      "post": { "operationId": "cancelCanvasGenerationBatch", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/conversations": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "get": { "operationId": "listCanvasConversations", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } },
+      "post": { "operationId": "createCanvasConversation", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "201": { "$ref": "#/components/responses/CanvasRuntime" } } },
+      "patch": { "operationId": "updateCanvasConversation", "requestBody": { "$ref": "#/components/requestBodies/UpdateCanvasConversation" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } },
+      "delete": { "operationId": "deleteCanvasConversation", "parameters": [{ "$ref": "#/components/parameters/ConversationIdQuery" }], "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/conversations/{conversationId}/messages": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/ConversationId" }],
+      "get": { "operationId": "listCanvasConversationMessages", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } },
+      "post": { "operationId": "createCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "202": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/conversations/{conversationId}/file-grants": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/ConversationId" }],
+      "get": { "operationId": "listCanvasConversationFileGrants", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } },
+      "post": { "operationId": "createCanvasConversationFileGrant", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "201": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/conversations/{conversationId}/file-grants/{grantId}": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/ConversationId" }, { "$ref": "#/components/parameters/GrantId" }],
+      "delete": { "operationId": "deleteCanvasConversationFileGrant", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/events": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }],
+      "get": { "operationId": "listCanvasAgentTaskEvents", "responses": { "200": { "description": "Agent events as JSON or SSE", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CanvasRuntimeEnvelope" } }, "text/event-stream": { "schema": { "type": "string" } } } } } }
+    },
+    "/api/canvas/{canvasId}/agent-models": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "get": { "operationId": "listCanvasAgentModels", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/approve": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "approveCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/pause": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "pauseCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/resume": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "resumeCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/stop": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "stopCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/replan": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "replanCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/interject": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "interjectCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/agent-tasks/{taskId}/rewind": { "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/TaskId" }], "post": { "operationId": "rewindCanvasAgentTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } } },
+    "/api/canvas/{canvasId}/derivations": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "post": { "operationId": "createCanvasDerivation", "requestBody": { "$ref": "#/components/requestBodies/CreateCanvasDerivation" }, "responses": { "201": { "$ref": "#/components/responses/CanvasRuntime" }, "400": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/derivations/{derivationId}": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/DerivationId" }],
+      "get": { "operationId": "getCanvasDerivation", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/derivations/{derivationId}/attach-task": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/DerivationId" }],
+      "post": { "operationId": "attachCanvasDerivationTask", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/derivations/{derivationId}/complete": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/DerivationId" }],
+      "post": { "operationId": "completeCanvasDerivation", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/derivations/{derivationId}/fail": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/DerivationId" }],
+      "post": { "operationId": "failCanvasDerivation", "requestBody": { "$ref": "#/components/requestBodies/CanvasRuntimeCommand" }, "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/annotation-layers": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }],
+      "get": { "operationId": "listCanvasAnnotationLayers", "responses": { "200": { "$ref": "#/components/responses/CanvasRuntime" } } },
+      "post": { "operationId": "createCanvasAnnotationLayer", "requestBody": { "$ref": "#/components/requestBodies/CreateCanvasAnnotationLayer" }, "responses": { "201": { "$ref": "#/components/responses/CanvasRuntime" } } }
+    },
+    "/api/canvas/{canvasId}/nodes/{nodeId}/director-artifacts": {
+      "parameters": [{ "$ref": "#/components/parameters/CanvasId" }, { "$ref": "#/components/parameters/NodeId" }],
+      "post": { "operationId": "createCanvasDirectorArtifact", "requestBody": { "$ref": "#/components/requestBodies/CreateCanvasDirectorArtifact" }, "responses": { "201": { "$ref": "#/components/responses/CanvasRuntime" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/canvas/{canvasId}/settings": {
+      "parameters": [
+        { "$ref": "#/components/parameters/CanvasId" }
+      ],
+      "get": {
+        "operationId": "getCanvasSettings",
+        "responses": {
+          "200": {
+            "description": "Canvas settings and revision",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasSettingsEnvelope" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "operationId": "updateCanvasSettings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateCanvasSettingsRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Canvas settings",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CanvasSettingsEnvelope" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "403": { "$ref": "#/components/responses/Error" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "auth_session"
+      }
+    },
+    "parameters": {
+      "CanvasId": {
+        "name": "canvasId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "RevisionId": {
+        "name": "revisionId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "NodeId": { "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string" } },
+      "BatchId": { "name": "batchId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "ConversationId": { "name": "conversationId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "ConversationIdQuery": { "name": "conversationId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "GrantId": { "name": "grantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "TaskId": { "name": "taskId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "DerivationId": { "name": "derivationId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "ArtifactId": { "name": "artifactId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 200 } }
+    },
+    "requestBodies": {
+      "CanvasRuntimeCommand": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CanvasRuntimeCommand" } } } },
+      "CanvasNodeRun": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CanvasNodeRunRequest" } } } },
+      "CreateCanvasGenerationBatch": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCanvasGenerationBatchRequest" } } } },
+      "UpdateCanvasConversation": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCanvasConversationRequest" } } } },
+      "CreateCanvasDerivation": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCanvasDerivationRequest" } } } },
+      "CreateCanvasAnnotationLayer": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCanvasAnnotationLayerRequest" } } } },
+      "CreateCanvasDirectorArtifact": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCanvasDirectorArtifactRequest" } } } }
+    },
+    "responses": {
+      "CanvasRuntime": { "description": "Canvas runtime response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CanvasRuntimeEnvelope" } } } },
+      "Error": {
+        "description": "Canvas API error",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Canvas": {
+        "type": "object",
+        "required": ["id", "projectId", "title", "createdAt", "status"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "projectId": { "type": "null", "deprecated": true },
+          "title": { "type": "string", "maxLength": 50 },
+          "createdAt": { "type": "string" },
+          "status": { "enum": ["draft", "active", "archived", "deleted"] }
+        },
+        "additionalProperties": false
+      },
+      "CreateCanvasRequest": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "maxLength": 50 },
+          "status": { "enum": ["draft", "active", "archived"] }
+        },
+        "additionalProperties": false
+      },
+      "UpdateCanvasRequest": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "maxLength": 50 },
+          "expectedTitle": { "type": "string", "maxLength": 50 },
+          "status": { "enum": ["draft", "active", "archived"] }
+        },
+        "additionalProperties": false
+      },
+      "CanvasDocument": {
+        "type": "object",
+        "required": ["version", "canvasProjectId", "viewport", "nodes", "edges"],
+        "properties": {
+          "version": { "type": "integer", "minimum": 1 },
+          "canvasProjectId": { "type": "string", "format": "uuid" },
+          "viewport": { "type": "object" },
+          "nodes": { "type": "array", "items": { "type": "object" } },
+          "edges": { "type": "array", "items": { "type": "object" } },
+          "groups": { "type": "array", "items": {} },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      },
+      "CanvasDocumentRecord": {
+        "type": "object",
+        "required": ["canvasProjectId", "serverRevision", "document"],
+        "properties": {
+          "canvasProjectId": { "type": "string", "format": "uuid" },
+          "serverRevision": { "type": "integer", "minimum": 1 },
+          "document": { "$ref": "#/components/schemas/CanvasDocument" },
+          "session": { "type": "object" }
+        }
+      },
+      "SaveCanvasDocumentRequest": {
+        "type": "object",
+        "required": ["clientRevision", "document"],
+        "properties": {
+          "clientRevision": { "type": "integer", "minimum": 0 },
+          "document": { "$ref": "#/components/schemas/CanvasDocument" },
+          "events": { "type": "array", "items": { "type": "object" } }
+        },
+        "additionalProperties": false
+      },
+      "CanvasRevisionMetadata": {
+        "type": "object",
+        "required": ["id", "canvasProjectId", "serverRevision", "operation", "summary", "createdAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "canvasProjectId": { "type": "string", "format": "uuid" },
+          "serverRevision": { "type": "integer", "minimum": 1 },
+          "operation": { "type": "string" },
+          "summary": { "type": "object" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CanvasRevision": {
+        "allOf": [
+          { "$ref": "#/components/schemas/CanvasRevisionMetadata" },
+          {
+            "type": "object",
+            "required": ["document"],
+            "properties": {
+              "document": { "$ref": "#/components/schemas/CanvasDocument" }
+            }
+          }
+        ]
+      },
+      "CanvasEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["project"],
+            "properties": { "project": { "$ref": "#/components/schemas/Canvas" } }
+          }
+        }
+      },
+      "CanvasListEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["projects"],
+            "properties": {
+              "projects": { "type": "array", "items": { "$ref": "#/components/schemas/Canvas" } }
+            }
+          }
+        }
+      },
+      "DeleteCanvasEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["deletedProjectId"],
+            "properties": { "deletedProjectId": { "type": "string", "format": "uuid" } }
+          }
+        }
+      },
+      "CanvasDocumentEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["canvas"],
+            "properties": {
+              "canvas": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/CanvasDocumentRecord" },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "CanvasRevisionListEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["revisions", "hasMore", "nextCursor"],
+            "properties": {
+              "revisions": { "type": "array", "items": { "$ref": "#/components/schemas/CanvasRevisionMetadata" } },
+              "hasMore": { "type": "boolean" },
+              "nextCursor": { "type": ["integer", "null"] }
+            }
+          }
+        }
+      },
+      "CanvasRevisionEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["revision"],
+            "properties": { "revision": { "$ref": "#/components/schemas/CanvasRevision" } }
+          }
+        }
+      },
+      "CanvasGenerationHistoryItem": {
+        "type": "object",
+        "required": ["id", "nodeKey", "runNo", "status", "mediaKind", "artifacts", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "nodeKey": { "type": "string" },
+          "runNo": { "type": "integer", "minimum": 0 },
+          "status": { "type": "string" },
+          "mediaKind": { "type": "string" },
+          "modelCode": { "type": ["string", "null"] },
+          "targetType": { "type": ["string", "null"] },
+          "targetId": { "type": ["string", "null"] },
+          "inputSnapshot": {},
+          "outputSnapshot": {},
+          "failure": {},
+          "taskId": { "type": ["string", "null"] },
+          "artifacts": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      },
+      "CanvasGenerationHistoryEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["items", "nextCursor"],
+                "properties": {
+                  "items": { "type": "array", "items": { "$ref": "#/components/schemas/CanvasGenerationHistoryItem" } },
+                  "nextCursor": { "type": ["string", "null"] }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["version", "canvasProjectId", "exportedAt", "items"],
+                "properties": {
+                  "version": { "type": "integer", "const": 1 },
+                  "canvasProjectId": { "type": "string", "format": "uuid" },
+                  "exportedAt": { "type": "string", "format": "date-time" },
+                  "items": { "type": "array", "items": { "$ref": "#/components/schemas/CanvasGenerationHistoryItem" } }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "DeleteCanvasGenerationRunEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["id", "deleted"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "deleted": { "const": true }
+            }
+          }
+        }
+      },
+      "DeleteCanvasGenerationHistoryRequest": {
+        "type": "object",
+        "required": ["scope"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["all", "node"] },
+          "nodeKey": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "DeleteCanvasGenerationHistoryEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": {
+            "type": "object",
+            "required": ["scope", "nodeKey", "deletedCount"],
+            "properties": {
+              "scope": { "type": "string", "enum": ["all", "node"] },
+              "nodeKey": { "type": ["string", "null"] },
+              "deletedCount": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      },
+      "CanvasSettings": {
+        "type": "object",
+        "required": ["schemaVersion", "appearance", "visualStyle", "promptSuffixes", "defaultModels", "generation"],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "appearance": {
+            "type": "object",
+            "required": ["mascotEnabled", "mascotPosition", "canvasBackground", "customBackgroundStorageObjectId", "customBackgroundOpacity", "customBackgroundIsDark"],
+            "properties": {
+              "mascotEnabled": { "type": "boolean" },
+              "mascotPosition": {
+                "oneOf": [
+                  { "type": "null" },
+                  {
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                      "x": { "type": "number", "minimum": 0, "maximum": 1 },
+                      "y": { "type": "number", "minimum": 0, "maximum": 1 }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "canvasBackground": { "type": "string", "enum": ["default", "solar-system", "nebula", "off-white", "frosted-glass", "custom"] },
+              "customBackgroundStorageObjectId": { "type": ["string", "null"], "format": "uuid" },
+              "customBackgroundOpacity": { "type": "number", "minimum": 0.05, "maximum": 1 },
+              "customBackgroundIsDark": { "type": ["boolean", "null"] }
+            },
+            "additionalProperties": false
+          },
+          "visualStyle": {
+            "type": "object",
+            "required": ["styleId", "prompt", "locked", "styleReferenceAssetId", "styleReferenceEnabled"],
+            "properties": {
+              "styleId": { "type": ["string", "null"] },
+              "prompt": { "type": "string", "maxLength": 20000 },
+              "locked": { "type": "boolean" },
+              "styleReferenceAssetId": { "type": ["string", "null"], "format": "uuid" },
+              "styleReferenceEnabled": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          "promptSuffixes": { "$ref": "#/components/schemas/CanvasMediaStringMap" },
+          "defaultModels": { "$ref": "#/components/schemas/CanvasMediaModelMap" },
+          "generation": { "$ref": "#/components/schemas/CanvasGenerationDefaults" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasMediaStringMap": {
+        "type": "object",
+        "required": ["text", "image", "video", "audio"],
+        "properties": {
+          "text": { "type": "string", "maxLength": 20000 },
+          "image": { "type": "string", "maxLength": 20000 },
+          "video": { "type": "string", "maxLength": 20000 },
+          "audio": { "type": "string", "maxLength": 20000 }
+        },
+        "additionalProperties": false
+      },
+      "CanvasMediaModelMap": {
+        "type": "object",
+        "required": ["text", "image", "video", "audio"],
+        "properties": {
+          "text": { "type": ["string", "null"] },
+          "image": { "type": ["string", "null"] },
+          "video": { "type": ["string", "null"] },
+          "audio": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "CanvasGenerationDefaults": {
+        "type": "object",
+        "required": ["imageAspectRatio", "imageSize", "imageFollowNode", "videoResolution", "videoDuration", "videoFollowNode"],
+        "properties": {
+          "imageAspectRatio": { "type": "string", "maxLength": 40 },
+          "imageSize": { "type": "string", "maxLength": 40 },
+          "imageFollowNode": { "type": "boolean" },
+          "videoResolution": { "type": "string", "maxLength": 40 },
+          "videoDuration": { "type": "integer", "minimum": 1, "maximum": 3600 },
+          "videoFollowNode": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasSettingsPatch": {
+        "type": "object",
+        "properties": {
+          "appearance": { "$ref": "#/components/schemas/CanvasAppearancePatch" },
+          "visualStyle": { "$ref": "#/components/schemas/CanvasVisualStylePatch" },
+          "promptSuffixes": { "$ref": "#/components/schemas/CanvasMediaStringPatch" },
+          "defaultModels": { "$ref": "#/components/schemas/CanvasMediaModelPatch" },
+          "generation": { "$ref": "#/components/schemas/CanvasGenerationDefaultsPatch" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasAppearancePatch": {
+        "type": "object",
+        "properties": {
+          "mascotEnabled": { "type": "boolean" },
+          "mascotPosition": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "required": ["x", "y"],
+                "properties": {
+                  "x": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "y": { "type": "number", "minimum": 0, "maximum": 1 }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "canvasBackground": { "type": "string", "enum": ["default", "solar-system", "nebula", "off-white", "frosted-glass", "custom"] },
+          "customBackgroundStorageObjectId": { "type": ["string", "null"], "format": "uuid" },
+          "customBackgroundOpacity": { "type": "number", "minimum": 0.05, "maximum": 1 },
+          "customBackgroundIsDark": { "type": ["boolean", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "CanvasVisualStylePatch": {
+        "type": "object",
+        "properties": {
+          "styleId": { "type": ["string", "null"] },
+          "prompt": { "type": "string", "maxLength": 20000 },
+          "locked": { "type": "boolean" },
+          "styleReferenceAssetId": { "type": ["string", "null"], "format": "uuid" },
+          "styleReferenceEnabled": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasMediaStringPatch": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "maxLength": 20000 },
+          "image": { "type": "string", "maxLength": 20000 },
+          "video": { "type": "string", "maxLength": 20000 },
+          "audio": { "type": "string", "maxLength": 20000 }
+        },
+        "additionalProperties": false
+      },
+      "CanvasMediaModelPatch": {
+        "type": "object",
+        "properties": {
+          "text": { "type": ["string", "null"] },
+          "image": { "type": ["string", "null"] },
+          "video": { "type": ["string", "null"] },
+          "audio": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
+      "CanvasGenerationDefaultsPatch": {
+        "type": "object",
+        "properties": {
+          "imageAspectRatio": { "type": "string", "maxLength": 40 },
+          "imageSize": { "type": "string", "maxLength": 40 },
+          "imageFollowNode": { "type": "boolean" },
+          "videoResolution": { "type": "string", "maxLength": 40 },
+          "videoDuration": { "type": "integer", "minimum": 1, "maximum": 3600 },
+          "videoFollowNode": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasProductLimits": {
+        "type": "object",
+        "required": ["document", "generation", "member"],
+        "properties": {
+          "document": {
+            "type": "object",
+            "required": ["maximumBytes", "maximumNodes", "maximumEdges", "maximumJsonDepth"],
+            "properties": {
+              "maximumBytes": { "type": "integer", "const": 5242880 },
+              "maximumNodes": { "type": "integer", "const": 2000 },
+              "maximumEdges": { "type": "integer", "const": 5000 },
+              "maximumJsonDepth": { "type": "integer", "const": 64 }
+            },
+            "additionalProperties": false
+          },
+          "generation": {
+            "type": "object",
+            "required": ["maximumBatchNodes", "billingPolicy", "reservationPolicy", "modelLimitsPolicy"],
+            "properties": {
+              "maximumBatchNodes": { "type": "integer", "const": 100 },
+              "billingPolicy": { "type": "string", "const": "existing_credit_ledger" },
+              "reservationPolicy": { "type": "string", "const": "reserve_before_dispatch" },
+              "modelLimitsPolicy": { "type": "string", "const": "active_model_config" }
+            },
+            "additionalProperties": false
+          },
+          "member": {
+            "type": "object",
+            "required": ["billingPolicy"],
+            "properties": {
+              "billingPolicy": { "type": "string", "const": "team_member_allocated_credits" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateCanvasSettingsRequest": {
+        "type": "object",
+        "required": ["expectedRevision", "patch"],
+        "properties": {
+          "expectedRevision": { "type": "integer", "minimum": 1 },
+          "patch": { "$ref": "#/components/schemas/CanvasSettingsPatch" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasSettingsRecord": {
+        "type": "object",
+        "required": ["canvasId", "revision", "settings", "limits", "updatedByPrincipalKey", "updatedByTeamMemberId", "updatedAt"],
+        "properties": {
+          "canvasId": { "type": "string", "format": "uuid" },
+          "revision": { "type": "integer", "minimum": 1 },
+          "settings": { "$ref": "#/components/schemas/CanvasSettings" },
+          "limits": { "$ref": "#/components/schemas/CanvasProductLimits" },
+          "updatedByPrincipalKey": { "type": ["string", "null"] },
+          "updatedByTeamMemberId": { "type": ["string", "null"], "format": "uuid" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CanvasSettingsEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": { "$ref": "#/components/schemas/CanvasSettingsRecord" }
+        }
+      },
+      "UpdateCanvasArtifactTagsRequest": {
+        "type": "object",
+        "required": ["tags"],
+        "properties": {
+          "tags": {
+            "type": "array",
+            "maxItems": 12,
+            "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CanvasArtifactTagsResponse": {
+        "type": "object",
+        "required": ["artifactId", "assetVersionId", "tags", "actor"],
+        "properties": {
+          "artifactId": { "type": "string", "format": "uuid" },
+          "assetVersionId": { "type": "string", "format": "uuid" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "actor": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "CanvasArtifactTagsEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": { "$ref": "#/components/schemas/CanvasArtifactTagsResponse" }
+        }
+      },
+      "CanvasRuntimeEnvelope": {
+        "type": "object",
+        "required": ["requestId", "data"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "data": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      },
+      "CanvasRuntimeCommand": {
+        "type": "object",
+        "properties": { "clientMutationId": { "type": "string", "maxLength": 200 } },
+        "additionalProperties": true
+      },
+      "CanvasNodeRunRequest": {
+        "allOf": [
+          { "$ref": "#/components/schemas/CanvasRuntimeCommand" },
+          { "type": "object", "properties": { "kind": { "enum": ["text", "image", "video", "audio", "director"] }, "mediaKind": { "enum": ["text", "image", "video", "audio"] }, "modelCode": { "type": "string" } } }
+        ]
+      },
+      "CreateCanvasGenerationBatchRequest": {
+        "type": "object",
+        "required": ["nodes"],
+        "properties": {
+          "clientMutationId": { "type": "string", "maxLength": 200 },
+          "nodes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["nodeKey", "mediaKind"],
+              "properties": { "nodeKey": { "type": "string" }, "mediaKind": { "enum": ["text", "image", "video", "audio"] }, "dependsOn": { "type": "array", "items": { "type": "string" } }, "payload": { "type": "object", "additionalProperties": true } },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateCanvasConversationRequest": {
+        "type": "object",
+        "required": ["conversationId"],
+        "properties": { "conversationId": { "type": "string", "format": "uuid" }, "title": { "type": "string" }, "status": { "enum": ["active", "archived"] }, "pinned": { "type": "boolean" }, "clientMutationId": { "type": "string", "maxLength": 200 } },
+        "additionalProperties": false
+      },
+      "CreateCanvasDerivationRequest": {
+        "type": "object",
+        "required": ["nodeKey", "derivationType", "baseCanvasRevision", "source"],
+        "properties": {
+          "nodeKey": { "type": "string" }, "derivationType": { "type": "string" }, "baseCanvasRevision": { "type": "integer", "minimum": 1 }, "taskId": { "type": "string", "format": "uuid" }, "requestSnapshot": { "type": "object", "additionalProperties": true },
+          "source": { "type": "object", "required": ["assetId", "assetVersionId", "storageObjectId"], "properties": { "assetId": { "type": ["string", "null"], "format": "uuid" }, "assetVersionId": { "type": ["string", "null"], "format": "uuid" }, "storageObjectId": { "type": ["string", "null"], "format": "uuid" } }, "additionalProperties": false }
+        },
+        "additionalProperties": false
+      },
+      "CreateCanvasAnnotationLayerRequest": {
+        "type": "object",
+        "required": ["nodeKey", "layerKind"],
+        "properties": { "nodeKey": { "type": "string" }, "layerKind": { "enum": ["mask", "raster_annotation", "vector_annotation"] }, "projectionPolicy": { "enum": ["retain", "reproject", "discard"] }, "clientMutationId": { "type": "string", "maxLength": 200 } },
+        "additionalProperties": true
+      },
+      "CreateCanvasDirectorArtifactRequest": {
+        "type": "object",
+        "required": ["storageObjectId", "directorDeskKey"],
+        "properties": { "storageObjectId": { "type": "string", "format": "uuid" }, "directorDeskKey": { "type": "string", "minLength": 1 }, "artifactKind": { "enum": ["image", "video"] }, "expectedRevision": { "type": "integer", "minimum": 1 }, "metadata": { "type": "object", "additionalProperties": true }, "clientMutationId": { "type": "string", "maxLength": 200 } },
+        "additionalProperties": false
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["requestId", "errorCode", "message", "details"],
+        "properties": {
+          "requestId": { "type": "string", "format": "uuid" },
+          "errorCode": { "type": "string" },
+          "message": { "type": "string" },
+          "details": { "type": "object" }
+        }
+      }
+    }
+  }
+}

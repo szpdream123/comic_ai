@@ -10,6 +10,13 @@ test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);
   assert.match(script, /死信任务已重放/);
+  assert.match(script, /死信处理工作台/);
+  assert.match(script, /死信与队列/);
+  assert.match(script, /openDeadLetterWorkbench/);
+  assert.match(script, /failedSampleSize=100/);
+  assert.match(script, /canReplayDeadLetterJob/);
+  assert.match(script, /先处置业务任务/);
+  assert.match(script, /隔离仓库，无需消费者/);
 });
 
 test("admin shell keeps the final Chinese page contract and standalone branding", () => {
@@ -60,6 +67,7 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/audit-events",
     "/api/admin/exports/audit-events.csv",
     "/api/admin/ops/items",
+    "/api/admin/ops/canvas-agent-metrics",
     "/api/admin/ops/generation-queues",
     "/api/admin/ops/tasks/retry-finalize",
     "/api/admin/ops/tasks/retry-persist-asset",
@@ -67,6 +75,8 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/ops/tasks/retry",
     "/api/admin/ops/tasks/recover",
     "resume_provider_poll",
+    "episode_generate_image",
+    "恢复轮询",
     "rebuild_finalize",
     "补投递到生成队列",
     "重新拉取供应商状态",
@@ -1826,6 +1836,32 @@ test("admin dashboard prioritizes platform health, production flow, and actionab
   assert.doesNotMatch(script, /function metric\(/);
 });
 
+test("admin dashboard exposes live Redis and BullMQ queue health refresh", () => {
+  for (const contract of [
+    "/api/admin/dashboard/queue-health",
+    "loadDashboardQueueHealth",
+    "dashboardQueueHealthHtml",
+    "刷新健康度",
+    "Redis",
+    "BullMQ",
+    "Redis 命名空间",
+    "数据库 outbox 待投递",
+    "Dispatcher",
+    "运行中",
+    "无心跳",
+    "Outbox 调度器离线",
+    "Outbox 投递卡住",
+    "Outbox 超时未投递",
+    "生成队列链路中断",
+    "等待",
+    "执行中",
+    "延迟",
+    "失败",
+  ]) {
+    assert.match(script + html, new RegExp(escapeRegExp(contract)));
+  }
+});
+
 test("admin risk workspace exposes project-aware task, queue, payment, and audit operations", () => {
   for (const contract of [
     "异常任务处置中心",
@@ -1869,256 +1905,112 @@ test("admin risk workspace exposes project-aware task, queue, payment, and audit
 });
 
 
-test("admin prompt manager separates script prompts and image prompt styles", () => {
+test("admin prompt manager uses the unified prompt field set", () => {
+  const manager = script.slice(
+    script.indexOf("const promptManagementTabs"),
+    script.indexOf("const promptMarketplaceCategoryLabels"),
+  );
   for (const contract of [
-    "promptManagementMode",
-    "batchImagePromptTarget",
-    "batchImagePromptKeywords",
-    "script",
-    "image",
+    "promptManagerItemsPage",
+    "promptManagerItemRow",
+    "名称与简介",
+    "搜索名称 / 简介 / 正文",
+    "官方提示词",
+    "用户提示词",
+    "设为默认",
+    "setOfficialPromptDefault",
+  ]) assert.match(manager, new RegExp(escapeRegExp(contract)));
+  for (const legacy of [
     "batchImage",
-    "剧本提示词",
-    "生图题词",
-    "批量生图提示词",
-    "人物提示词",
-    "场景提示词",
-    "分镜提示词",
-    "promptManagementTabs",
-    "batchImagePromptTargets",
-    "batchImagePromptTemplatesPage",
-    "loadBatchImagePromptTemplates",
-    "saveBatchImagePromptTemplates",
-    "batchImagePromptTemplatesFromSettings",
-    "batchImagePromptTemplateRow",
-    "batchImagePromptTemplateById",
-    "openBatchImagePromptTemplateDrawer",
-    "openBatchCharacterPromptTemplateDrawer",
-    "openBatchScenePromptTemplateDrawer",
-    "openBatchPropPromptTemplateDrawer",
-    "copyBatchImagePromptTemplate",
-    "moveBatchImagePromptTemplate",
-    "batchImagePromptPreview",
-    "creator.batch_image_prompt_preset_categories",
-    "batchImagePromptPresetCategoriesConfigKey",
-    "batchImagePromptPresetCategories",
-    "batchImagePromptLoadError",
-    "updateBatchImagePromptTarget",
-    "updateBatchImagePromptKeyword",
-    "batchImagePromptScope",
-    "角色",
-    "场景",
-    "道具",
-    "scriptPromptPackages",
-    "imagePromptStyles",
-    "imagePromptStyleFallback",
-    "normalizeImagePromptStyle",
-    "normalizedImagePromptCategory",
-    "batchImagePromptStyleCodes",
-    "batchImagePromptStyleNames",
-    "loadPromptManagement",
-    "loadScriptPrompts",
-    "loadImagePromptStyles",
-    "/api/admin/storyboard-prompt/packages",
-    "/api/admin/batch-image-prompt-presets",
-    "openScriptPromptPackageDrawer",
-    "copyScriptPromptPackage",
-    "toggleScriptPromptPackageStatus",
-    "script-prompt-package-form",
-    "admin-ui-script-prompt-package",
-    "admin-ui-script-prompt-copy",
-    "admin-ui-script-prompt-status",
-    "新增剧本提示词",
-    "保存剧本提示词",
-    "/api/admin/image-prompt/styles",
-    "openImagePromptStyleDrawer",
-    "copyImagePromptStyle",
-    "toggleImagePromptStyleStatus",
-    "cover_image_url",
-    "coverImageUrl",
-    "batch",
-    "prompt-cover-thumb",
-    "prompt-cover-empty",
-    "prompt-cover-col",
-    "readPromptCoverFile",
-    "type=\"file\"",
-    "accept=\"image/*\"",
-    "/admin/assets/prompt-covers/${code}.webp",
-    "封面",
-    "portrait_photography",
-    "anime_2d",
-    "cinematic_portrait",
-    "chinese_style",
-    "animation",
-    "three_d_render",
-    "national_xia",
-    "brother_style",
-    "chinese_wuxia",
-    "china_ancient",
-    "cyberpunk",
-    "cg_animation",
-    "ink_wash",
-    "oil_painting",
-    "classic_art",
-    "watercolor",
-    "cartoon",
-    "flat_illustration",
-    "landscape",
-    "hong_kong_anime",
-    "pixel_art",
-    "fluorescent_painting",
-    "colored_pencil",
-    "figurine",
-    "children_drawing",
-    "abstract_art",
-    "sharp_pen_illustration",
-    "国风仙侠",
-    "废土科幻",
-    "国风3D",
-    "中国古代国风动漫",
-    "批量生图样式",
-    "ink_print",
-    "printmaking",
-    "monet_impressionism",
-    "picasso_cubism",
-    "rembrandt_lighting",
-    "matisse_fauvism",
-    "baroque",
-    "retro_anime",
-    "picture_book",
-    "电影写真",
-    "中国风",
-    "赛博朋克",
-    "水墨画",
-    "绘本插画风格",
-    "豆包生图",
-    "避免文字、水印、logo",
+    "<th>编码</th>",
+    "模型族",
+    "<th>排序</th>",
+    "copyPrompt",
+    "item.tags",
+    "item.code",
+    "sort_order",
+    "is_default",
+    "json_schema",
+    "negative_prompt",
+  ]) assert.doesNotMatch(manager, new RegExp(escapeRegExp(legacy)));
+});
+
+test("admin prompt editors only submit unified prompt fields", () => {
+  assert.match(script, /function promptPublishingFields\(item\)[\s\S]*?name="price_credits"[\s\S]*?min="0" max="99999" step="1"[\s\S]*?name="usage_count"[\s\S]*?min="0" max="2147483647" step="1"[\s\S]*?name="is_published"/);
+  assert.match(script, /item\?\.price_credits \?\? item\?\.priceCredits \?\? 0/);
+  assert.match(script, /item\?\.usage_count \?\? item\?\.usageCount \?\? 0/);
+  assert.match(script, /item\?\.is_published \?\? item\?\.isPublished/);
+  assert.match(script, /function promptPublishingPayloadFromForm\(form\)[\s\S]*?Number\.isInteger\(priceCredits\)[\s\S]*?priceCredits > 99999[\s\S]*?Number\.isInteger\(usageCount\)[\s\S]*?usageCount > 2147483647[\s\S]*?price_credits: priceCredits[\s\S]*?usage_count: usageCount[\s\S]*?is_published: form\.get\("is_published"\) === "on"/);
+  assert.equal((script.match(/\$\{promptPublishingFields\(existing\)\}/g) || []).length, 7);
+  assert.equal((script.match(/\.\.\.promptPublishingPayloadFromForm\(form\)/g) || []).length, 7);
+  const editorRanges = [
+    ["function openScriptPromptPackageDrawer", "async function toggleScriptPromptPackageStatus"],
+    ["function openImagePromptStyleDrawer", "async function toggleImagePromptStyleStatus"],
+    ["function openCharacterPromptTemplateDrawer", "async function toggleCharacterPromptTemplateStatus"],
+    ["function openScenePromptTemplateDrawer", "async function toggleScenePromptTemplateStatus"],
+    ["function openPropPromptTemplateDrawer", "async function togglePropPromptTemplateStatus"],
+    ["function openShotPromptTemplateDrawer", "async function toggleShotPromptTemplateStatus"],
+  ];
+  for (const [startMarker, endMarker] of editorRanges) {
+    const editor = script.slice(script.indexOf(startMarker), script.indexOf(endMarker));
+    for (const field of ["name", "cover_image_url", "remark", "prompt_content", "status", "promptPublishingFields(existing)"]) assert.match(editor, new RegExp(escapeRegExp(field)));
+    for (const legacy of ["code:", "stage:", "model_family:", "variables:", "json_schema:", "negative_prompt:", "key_points:", "is_default:", "sort_order:", "localStorage", "Fallback"]) assert.doesNotMatch(editor, new RegExp(escapeRegExp(legacy)));
+  }
+});
+
+test("admin prompt loading has no legacy fixture or local fallback", () => {
+  const loaders = script.slice(
+    script.indexOf("async function loadCharacterPromptTemplates"),
+    script.indexOf("async function loadSettings"),
+  );
+  assert.doesNotMatch(loaders, /PromptTemplateFallback|imagePromptStyleFallback|localStorage|model_family|negative_prompt|json_schema|sort_order|is_default/);
+  assert.match(loaders, /state\.characterPromptTemplates = \[\]/);
+  assert.match(loaders, /state\.scenePromptTemplates = \[\]/);
+  assert.match(loaders, /state\.propPromptTemplates = \[\]/);
+  assert.match(loaders, /state\.shotPromptTemplates = \[\]/);
+});
+
+test("admin prompt manager separates official and user prompts with edit and delete controls", () => {
+  for (const contract of [
+    'official',
+    'private',
+    '官方提示词',
+    '用户提示词',
+    'promptMarketplaceItems',
+    'loadPromptMarketplace',
+    '/api/admin/prompt-marketplace',
+    '/api/admin/prompt-marketplace/items/',
+    'promptMarketplacePage',
+    'promptCategoryTabs',
+    'promptMarketplaceCategoryLabels',
+    'promptMarketplaceSource',
+    'openPromptMarketplaceItemDrawer',
+    'deletePromptMarketplaceItem',
+    '价格',
+    '使用次数',
+    '用户提示词正文受保护',
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
-  assert.match(script, /{ key: "shot", label: "分镜提示词"[\s\S]*{ key: "batchImage", label: "批量生图提示词"/);
-  assert.doesNotMatch(script, /个视角预设|batchImagePromptPresetCount/);
-  assert.doesNotMatch(script, /openCharacterPromptTemplateDrawer\(\)" .*新增角色提示词/);
-  assert.match(script, /function batchImagePromptTemplatesPage\(\)[\s\S]*?<th>名称<\/th><th>编码<\/th><th>排序<\/th><th class="actions">操作<\/th>/);
-  assert.match(script, /function openBatchCharacterPromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("character"/);
-  assert.match(script, /function openBatchScenePromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("scene"/);
-  assert.match(script, /function openBatchPropPromptTemplateDrawer\([\s\S]*?return openBatchImagePresetDrawer\("prop"/);
-  assert.match(script, /function openBatchImagePresetDrawer\([\s\S]*?编辑\$\{title\}预设[\s\S]*?<span>名称<\/span>[\s\S]*?<span>编码<\/span>[\s\S]*?<span>正文内容<\/span><textarea name="prompt_content"/);
-  assert.match(script, /function batchImagePromptTemplatePayloadItem\([\s\S]*?prompt_content: promptContent/);
-});
-
-test("admin prompt manager adds the shot prompt workflow tab", () => {
-  for (const contract of [
-    "shotPromptStage",
-    "shotPromptKeyword",
-    "shotPromptTemplates",
-    "loadShotPromptTemplates",
-    "admin-shot-prompt-templates",
-    "shotPromptStages",
-    "outline",
-    "shotPromptTemplatesPage",
-    "shotPromptPreview",
-    "openShotPromptTemplateDrawer",
-    "copyShotPromptTemplate",
-    "toggleShotPromptTemplateStatus",
-    "shot-prompt-template-form",
-    "admin-ui-shot-prompt-template",
-    "admin-ui-shot-prompt-copy",
-    "admin-ui-shot-prompt-status",
-    "{{story_text}}",
-    "long_story_precise_breakdown",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-  for (const deprecated of ["shot_panel_breakdown", "shot_camera_language", "shot_image_prompt", "stage: \"camera\"", "stage: \"image\""]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
-});
-
-test("admin prompt manager supports editing prop prompts and choosing defaults", () => {
-  for (const contract of [
-    "openPropPromptTemplateDrawer",
-    "copyPropPromptTemplate",
-    "togglePropPromptTemplateStatus",
-    "setPropPromptTemplateDefault",
-    "prop-prompt-template-form",
-    "admin-ui-prop-prompt-template",
-    "admin-ui-prop-prompt-copy",
-    "admin-ui-prop-prompt-status",
-    "admin-ui-prop-prompt-default",
-    "/api/admin/prop-prompt/templates",
-    "setCharacterPromptTemplateDefault",
-    "setScenePromptTemplateDefault",
-    "setShotPromptTemplateDefault",
-    "setScriptPromptPackageDefault",
-    "setImagePromptStyleDefault",
-    "设为默认",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-});
-
-test("admin script prompt default action marks taboo packages as global defaults", () => {
-  for (const contract of [
-    "const isTaboo = (existing.package_type || existing.packageType) === \"taboo\"",
-    "payload.is_default = Boolean(existing.is_default || existing.isDefault)",
-    "is_global_default: isTaboo",
-    "isGlobalDefault: isTaboo",
-    "payload.is_global_default = Boolean(existing.is_global_default || existing.isGlobalDefault)",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-});
-
-test("admin image prompt default editor keeps the current default locked", () => {
-  for (const contract of [
-    "const isLockedDefault = Boolean(existing?.is_default || existing?.isDefault)",
-    "name=\"is_default\" type=\"checkbox\" ${isLockedDefault ? \"checked disabled\" : \"\"}",
-    "is_default: isLockedDefault || form.get(\"is_default\") === \"on\"",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-});
-
-test("admin image prompt editor submits the required batch preset target", () => {
-  for (const contract of [
-    "existing?.batch_preset_target || existing?.batchPresetTarget",
-    "name=\"batch_preset_target\"",
-    "targetField.classList.toggle(\"hidden\", !isBatch)",
-    "targetInput.required = isBatch",
-    "batch_preset_target: category === \"batch\" ? String(form.get(\"batch_preset_target\") || \"\") : null",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-});
-
-test("admin image prompt list accepts both flat and nested data payloads", () => {
-  for (const contract of [
-    "Array.isArray(result.data)",
-    "Array.isArray(result.data?.data)",
-    "result.data.data",
-    "is_default: true",
-    "isDefault: true",
-    "result.meta?.total",
-    "page_size: String(Number(state.imagePromptPageSize || 500))",
-    "if (normalizedCategory !== \"all\") params.set(\"category\", normalizedCategory)",
-    "state.imagePromptStyles = []",
-    "state.imagePromptTotal = 0",
-    "showToast(error.payload?.error?.message || \"默认提示词更新失败\")",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-});
-
-test("admin prompt manager lands the character prompt workflow menu", () => {
-  for (const contract of [
-    "characterPromptStage",
-    "characterPromptKeyword",
-    "characterPromptTemplates",
-    "loadCharacterPromptTemplates",
-    "/api/admin/character-prompt/templates",
-    "characterPromptStages",
-    "extract",
-    "characterPromptTemplatesPage",
-    "characterPromptPreview",
-    "composeCharacterPromptFromPreview",
-    "/api/admin/character-prompt/compose",
-    "openCharacterPromptTemplateDrawer",
-    "copyCharacterPromptTemplate",
-    "toggleCharacterPromptTemplateStatus",
-    "character-prompt-template-form",
-    "admin-ui-character-prompt-template",
-    "admin-ui-character-prompt-copy",
-    "admin-ui-character-prompt-status",
-    "{{chunk_id}}",
-    "{{novel_chunk}}",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-  for (const deprecated of ["novel_character_merge", "character_grid_sheet", "{{all_chunk_character_json}}", "{{character_profile_json}}", "cinematic realistic character design sheet", "stage: \"merge\"", "stage: \"grid\""]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
+  assert.doesNotMatch(html, /提示词广场/);
+  assert.match(html, /\.prompt-marketplace-admin\s*\{[\s\S]*?display:\s*block;/);
+  assert.match(html, /\.prompt-marketplace-admin\s*>\s*\.section\s*\{[\s\S]*?width:\s*100%;/);
+  const marketplace = script.slice(script.indexOf("function promptMarketplacePage"), script.indexOf("function scriptPromptsPage"));
+  assert.doesNotMatch(marketplace, /item\.tags|\/ 标签/);
+  assert.match(marketplace, /搜索名称 \/ 简介 \/ 发布者/);
+  assert.match(script, /全部分类/);
+  assert.match(marketplace, /promptCategoryTabs/);
+  assert.match(script, /onclick="updatePromptMarketplaceCategory/);
+  assert.match(marketplace, /官方提示词管理/);
+  assert.match(marketplace, /用户提示词管理/);
+  assert.match(script, /params\.set\("source", state\.promptMarketplaceSource\)/);
+  assert.match(marketplace, /source === "official" \? item\.official === true : item\.official !== true/);
+  assert.match(marketplace, /onclick="openPromptMarketplaceItemDrawer/);
+  assert.match(marketplace, /onclick="deletePromptMarketplaceItem/);
+  assert.match(marketplace, /method: "DELETE"/);
+  assert.match(marketplace, /window\.confirm\(/);
+  assert.match(marketplace, /name="prompt_content"/);
+  assert.match(marketplace, /promptPublishingPayloadFromForm\(form\)/);
 });
 
 test("admin system settings manages a separate enterprise contact qr", () => {
@@ -2134,29 +2026,18 @@ test("admin system settings manages a separate enterprise contact qr", () => {
   }
 });
 
-test("admin prompt manager lands the long novel scene prompt workflow menu", () => {
+test("admin model list exposes persisted Canvas Agent compatibility diagnostics", () => {
   for (const contract of [
-    "scenePromptStage",
-    "scenePromptKeyword",
-    "scenePromptTemplates",
-    "loadScenePromptTemplates",
-    "/api/admin/scene-prompt/templates",
-    "scenePromptStages",
-    "split",
-    "location_id",
-    "visual_motifs",
-    "continuity_notes",
-    "{{novel_chapter}}",
-    "scene_split_long_novel",
-    "openScenePromptTemplateDrawer",
-    "copyScenePromptTemplate",
-    "toggleScenePromptTemplateStatus",
-    "scene-prompt-template-form",
-    "admin-ui-scene-prompt-template",
-    "admin-ui-scene-prompt-copy",
-    "admin-ui-scene-prompt-status",
-  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
-  for (const deprecated of ["scene_extract_elements", "scene_merge_library", "scene_detail_breakdown", "scene_image_concept_art", "{{scene_json}}", "{{scene_library_json}}", "{{scene_detail_json}}"]) assert.doesNotMatch(script, new RegExp(escapeRegExp(deprecated)));
+    "兼容性诊断",
+    "modelCompatibilityProbeMarkup",
+    "model.compatibilityProbe",
+    "探测后才会自动隔离失败模型",
+    "已隔离",
+    "probeModelCompatibility",
+    "/api/admin/models/${encodeURIComponent(modelId)}/probe",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
 });
 
 function escapeRegExp(value) {

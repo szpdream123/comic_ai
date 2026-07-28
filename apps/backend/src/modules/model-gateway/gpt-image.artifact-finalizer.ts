@@ -61,6 +61,7 @@ export async function persistGptImageArtifact(
   let pendingStorageObjectKey: string | null = null;
 
   try {
+    const artifactFetchImpl = await resolveArtifactFetch(input);
     const bytes = decodeImageArtifactBytes(input.artifact);
     const uploaded = bytes
       ? await uploadProviderArtifactBytesToStorage(db, {
@@ -86,7 +87,7 @@ export async function persistGptImageArtifact(
             runtime: input.runtime,
             metadata: artifactMetadata,
             env: input.env,
-            fetchImpl: input.fetchImpl,
+            fetchImpl: artifactFetchImpl,
             createdByUserId: input.task.createdByUserId,
             maxBytes: maxArtifactBytes,
             requiredContentTypePrefix: mediaKind === "audio" ? "audio/" : undefined,
@@ -160,6 +161,16 @@ export async function persistGptImageArtifact(
     }
     throw error;
   }
+}
+
+async function resolveArtifactFetch(input: {
+  snapshot: Record<string, unknown>;
+  artifact: MediaGenerationArtifact;
+  db: SqlDatabase;
+  env: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+}) {
+  return input.fetchImpl;
 }
 
 export function serializeGptImageArtifactForProviderResponse(artifact: MediaGenerationArtifact) {

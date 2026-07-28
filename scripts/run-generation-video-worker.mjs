@@ -15,7 +15,7 @@ const [
   { handleGenerationFinalizeArtifactJob, handleGenerationPollAudioJob, handleGenerationPollImageJob, handleGenerationPollVideoJob, handleGenerationSubmitAudioJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob },
   { failGenerationTaskAfterQueueError },
   { loadGenerationQueueConfig },
-  { listGenerationQueueShards, markGenerationQueueStagePublished, releaseGenerationQueueStage, reserveGenerationQueueStageForPublish },
+  { hasReleasedGenerationQueueStageAssignment, listGenerationQueueShards, markGenerationQueueStagePublished, releaseGenerationQueueStage, reserveGenerationQueueStageForPublish },
   { createGenerationShardWorkerRunner, prioritizeGenerationShards },
   { reconcileGenerationQueueWorkerLeases, releaseGenerationQueueWorkerLeases },
   { createGenerationWorkerOperationTracker },
@@ -27,6 +27,7 @@ const [
   { processAudioGenerationSubmitJob, processAudioGenerationPollJob, fetchAudioGenerationArtifactJob, finalizeAudioGenerationArtifactJob, persistAudioGenerationArtifactJob, expireAudioGenerationPollJob },
   { scheduleGenerationProviderPoll },
   { generationTimeoutMsFor },
+  { runGenerationQueueJobWithRetryPolicy, shouldSettleGenerationTaskAfterQueueError },
   { recordGenerationSkippedSuccessor },
 ] = await Promise.all([
   import("../apps/backend/src/modules/shared/db/dev-db.ts"),
@@ -47,6 +48,7 @@ const [
   import("../apps/backend/src/modules/model-gateway/audio-generation.worker.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-due-poll.service.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-timeout.policy.ts"),
+  import("../apps/backend/src/modules/model-gateway/generation-queue-retry.policy.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-stage-successor.store.ts"),
 ]);
 
@@ -65,13 +67,18 @@ const workerPublisher = createShardAwareWorkerPublisher({
   markPublished: markGenerationQueueStagePublished,
 });
 const connection = redisConnectionFromUrl(config.redisUrl);
-const rateLimitRedis = new Redis(connection);
+const redisErrorReporter = createRedisErrorReporter("generation-video");
+const rateLimitRedis = new Redis(redisClientConnectionFromUrl(config.redisUrl));
 const queueDirectoryRedis = new Redis({
-  ...connection,
+  ...redisClientConnectionFromUrl(config.redisUrl),
   commandTimeout: 2_000,
   connectTimeout: 2_000,
   maxRetriesPerRequest: 1,
 });
+rateLimitRedis.on("error", redisErrorReporter);
+queueDirectoryRedis.on("error", redisErrorReporter);
+rateLimitRedis.on("ready", redisErrorReporter.reset);
+queueDirectoryRedis.on("ready", redisErrorReporter.reset);
 const rateLimiter = createRedisProviderRateLimiter(rateLimitRedis, {
   keyPrefix: process.env.REDIS_KEY_PREFIX?.trim() || config.queuePrefix,
 });
@@ -238,7 +245,7 @@ console.info(
 
 const submitImageWorker = new Worker(
   config.queues.submitImage,
-  async (job) => runWithDatabaseContext(async () => (job.data?.mediaType === "audio"
+  async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => (job.data?.mediaType === "audio"
     ? handleGenerationSubmitAudioJob({
       job,
       config,
@@ -252,7 +259,7 @@ const submitImageWorker = new Worker(
       publisher: workerPublisher,
       processors,
       now: new Date(),
-    }))),
+    })))),
   {
     ...workerOptions,
     concurrency: config.submit.image.concurrency,
@@ -265,13 +272,13 @@ const submitImageWorker = new Worker(
 
 const submitVideoWorker = new Worker(
   config.queues.submitVideo,
-  async (job) => runWithDatabaseContext(async () => handleGenerationSubmitVideoJob({
+  async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationSubmitVideoJob({
       job,
       config,
       publisher: workerPublisher,
       processors,
       now: new Date(),
-    })),
+    }))),
   {
     ...workerOptions,
     concurrency: config.submit.video.concurrency,
@@ -284,13 +291,13 @@ const submitVideoWorker = new Worker(
 
 const pollImageWorker = new Worker(
   config.queues.pollImage,
-  async (job) => runWithDatabaseContext(async () => handleGenerationPollImageJob({
+  async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationPollImageJob({
     job,
     config,
     publisher: workerPublisher,
     processors,
     now: new Date(),
-  })),
+  }))),
   {
     ...workerOptions,
     concurrency: config.poll.image.concurrency,
@@ -303,13 +310,13 @@ const pollImageWorker = new Worker(
 
 const pollWorker = new Worker(
   config.queues.pollVideo,
-  async (job) => runWithDatabaseContext(async () => handleGenerationPollVideoJob({
+  async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationPollVideoJob({
     job,
     config,
     publisher: workerPublisher,
     processors,
     now: new Date(),
-  })),
+  }))),
   {
     ...workerOptions,
     concurrency: config.poll.video.concurrency,
@@ -322,13 +329,13 @@ const pollWorker = new Worker(
 
 const pollAudioWorker = new Worker(
   config.queues.pollAudio,
-  async (job) => runWithDatabaseContext(async () => handleGenerationPollAudioJob({
+  async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationPollAudioJob({
     job,
     config,
     publisher: workerPublisher,
     processors,
     now: new Date(),
-  })),
+  }))),
   {
     ...workerOptions,
     concurrency: config.poll.audio.concurrency,
@@ -341,14 +348,14 @@ const pollAudioWorker = new Worker(
 
 const finalizeArtifactWorker = new Worker(
   config.queues.finalizeArtifact,
-  async (job) => runWithDatabaseContext(async () => handleGenerationFinalizeArtifactJob({
+  async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => handleGenerationFinalizeArtifactJob({
       job: withDefaultStorageBucket(job, storageRuntime.bucket),
       config,
       publisher: workerPublisher,
       processors,
       finalizeRateLimiter: rateLimiter,
       now: new Date(),
-    })),
+    }))),
   {
     ...workerOptions,
     concurrency: config.finalize.artifact.concurrency,
@@ -397,7 +404,7 @@ const dynamicShardRunner = config.sharding.enabled
       createWorker: (spec) => {
         const worker = new Worker(
           spec.queueName,
-          async (job) => runWithDatabaseContext(async () => {
+           async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => {
             const data = job.data?.mediaType;
             if (spec.stage === "submit") {
               return data === "video"
@@ -421,7 +428,7 @@ const dynamicShardRunner = config.sharding.enabled
               finalizeRateLimiter: rateLimiter,
               now: new Date(),
             });
-          }),
+           })),
           {
             ...workerOptions,
             concurrency: spec.stage === "submit"
@@ -433,9 +440,11 @@ const dynamicShardRunner = config.sharding.enabled
           },
         );
         worker.on("completed", (job) => { trackGenerationAssignmentRelease(job, "completed"); });
+        worker.on("error", redisErrorReporter);
+        worker.on("ready", redisErrorReporter.reset);
         worker.on("failed", (job, error) => {
           const attempts = Math.max(1, Number(job?.opts?.attempts ?? 1));
-          if (Number(job?.attemptsMade ?? 0) >= attempts) {
+           if (shouldSettleGenerationTaskAfterQueueError(error, job?.attemptsMade, attempts)) {
             trackGenerationAssignmentRelease(job, "failed");
             const taskId = job?.data?.taskId;
             if (taskId) {
@@ -460,6 +469,8 @@ if (dynamicShardRunner) {
 
 const exhaustedGenerationJobs = new Set();
 for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pollWorker, pollAudioWorker, finalizeArtifactWorker]) {
+  worker.on("error", redisErrorReporter);
+  worker.on("ready", redisErrorReporter.reset);
   worker.on("completed", (job) => {
     trackGenerationAssignmentRelease(job, "completed");
   });
@@ -467,7 +478,7 @@ for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pol
     console.error(`[generation-video] job failed queue=${worker.name} id=${job?.id ?? "unknown"} ${error.message}`);
     const taskId = job?.data?.taskId;
     const configuredAttempts = Math.max(1, Number(job?.opts?.attempts ?? 1));
-    if (!taskId || Number(job.attemptsMade ?? 0) < configuredAttempts) {
+    if (!taskId || !shouldSettleGenerationTaskAfterQueueError(error, job.attemptsMade, configuredAttempts)) {
       return;
     }
     trackGenerationAssignmentRelease(job, "failed");
@@ -551,6 +562,11 @@ function createShardAwareWorkerPublisher({ config, db, publisher, storageBucket,
         onMarkPublishedError: (error, assignment) => {
           console.error(`[generation-video] failed to mark shard assignment published=${assignment.assignmentKey} ${error instanceof Error ? error.message : String(error)}`);
         },
+      }).catch(async (error) => {
+        const alreadyReleased = error instanceof Error
+          && error.message === "generation_queue_assignment_already_released"
+          && await hasReleasedGenerationQueueStageAssignment(db, { assignmentKey, taskId, redisJobId });
+        if (!alreadyReleased) throw error;
       });
     },
   };
@@ -707,6 +723,54 @@ function redisConnectionFromUrl(redisUrl) {
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: tlsEnabled ? {} : undefined,
   };
+}
+
+function redisClientConnectionFromUrl(redisUrl) {
+  return {
+    ...redisConnectionFromUrl(redisUrl),
+    connectTimeout: 2_000,
+    commandTimeout: 5_000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    retryStrategy: (attempt) => Math.min(attempt * 1_000, 5_000),
+  };
+}
+
+function createRedisErrorReporter(scope) {
+  const reported = new Set();
+  let recoveryTimer = null;
+  const reporter = (error) => {
+    const code = typeof error?.code === "string" ? error.code : "REDIS_ERROR";
+    const message = error instanceof Error ? error.message : String(error);
+    const isConnectivityError = [
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EAI_AGAIN",
+      "NR_CLOSED",
+    ].includes(code);
+    const key = `${code}:${message}`;
+    if (isConnectivityError && reported.has(key)) return;
+    if (isConnectivityError) reported.add(key);
+    console.error(`[${scope}] Redis connection error ${code}: ${message}${isConnectivityError ? " (duplicate errors suppressed)" : ""}`);
+    if (isConnectivityError && !recoveryTimer) {
+      recoveryTimer = setTimeout(() => {
+        console.error(`[${scope}] Redis remained unavailable for 10s; stopping this worker once.`);
+        process.exit(1);
+      }, 10_000);
+      recoveryTimer.unref?.();
+    }
+  };
+  reporter.reset = () => {
+    reported.clear();
+    if (recoveryTimer) {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    }
+  };
+  return reporter;
 }
 
 async function readGenerationQueueRunnableCounts(redis, queueNames, prefix) {

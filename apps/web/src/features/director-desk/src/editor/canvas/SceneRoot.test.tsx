@@ -4,9 +4,16 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { VIEWPORT_CAMERA_VISUAL_SCALE } from "../schema/cameraGeometry";
 import { getObjectMotionSnapshot } from "../schema/objectMotion";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
-import { getImportedModelNormalization, SceneRoot } from "./SceneRoot";
+import { getImportedModelLoaderKind, getImportedModelNormalization, SceneRoot } from "./SceneRoot";
 
 const mockCharacterModelShouldSuspend = vi.hoisted(() => ({ current: false }));
+
+it("selects the GLTF loader for local GLB assets", () => {
+  expect(getImportedModelLoaderKind("living-room.fbx")).toBe("fbx");
+  expect(getImportedModelLoaderKind("living-room.obj")).toBe("obj");
+  expect(getImportedModelLoaderKind("living-room.glb")).toBe("glb");
+  expect(getImportedModelLoaderKind("living-room.gltf")).toBeNull();
+});
 
 vi.mock("@react-three/fiber", async () => {
   const actual = await vi.importActual<typeof import("@react-three/fiber")>("@react-three/fiber");

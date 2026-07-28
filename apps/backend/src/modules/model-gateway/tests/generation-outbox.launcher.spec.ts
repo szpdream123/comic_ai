@@ -20,6 +20,11 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /LISTEN.*generationOutboxWakeChannel/);
     assert.match(launcherScript, /wakeSignal\.wait/);
     assert.match(launcherScript, /dispatchIntervalMs/);
+    assert.match(launcherScript, /generationOutboxDispatcherHeartbeatKey/);
+    assert.match(launcherScript, /writeDispatcherHeartbeat/);
+    assert.match(launcherScript, /Dispatcher stalled/);
+    assert.match(launcherScript, /Math\.max\(120_000, heartbeatTtlMs \* 2\)/);
+    assert.match(launcherScript, /process\.exit\(1\)/);
     assert.doesNotMatch(launcherScript, /repairQueuedGenerationTaskOutbox/);
     assert.doesNotMatch(launcherScript, /repairRunningSeedancePollJobs/);
     assert.doesNotMatch(launcherScript, /enqueueDueGenerationPolls/);
@@ -42,6 +47,11 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /repairQueuedGenerationTaskOutbox/);
     assert.match(launcherScript, /repairRunningSeedancePollJobs/);
     assert.match(launcherScript, /enqueueDueGenerationPolls/);
+    assert.match(launcherScript, /reconcileActiveCanvasGenerationBatches/);
+    assert.match(launcherScript, /createCanvasGenerationBatchDispatch/);
+    assert.match(launcherScript, /restoreCanvasActorScope/);
+    assert.match(launcherScript, /reconcileCanvasMediaDerivations/);
+    assert.match(launcherScript, /findGenerationArtifactHandoff/);
     assert.match(launcherScript, /retireIdleGenerationQueueShards/);
     assert.match(launcherScript, /runMaintenanceStep/);
     assert.match(launcherScript, /stepFailed=/);

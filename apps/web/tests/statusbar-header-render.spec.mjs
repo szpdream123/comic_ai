@@ -63,10 +63,11 @@ test("global statusbar renders the themed outline user avatar", () => {
   assert.match(avatar, /statusbar-avatar-icon user-avatar-icon/);
   assert.match(avatar, /<circle cx="12" cy="8" r="5"><\/circle>/);
   assert.match(avatar, /<path d="M20 21a8 8 0 0 0-16 0"><\/path>/);
-  assert.match(avatar, /statusbar-avatar-status/);
+  assert.doesNotMatch(avatar, /statusbar-avatar-status/);
   assert.doesNotMatch(avatar, /statusbar-avatar-glyph/);
   assert.doesNotMatch(avatar, />测试用户</);
   assert.match(css, /\.statusbar-avatar\s*\{[\s\S]*?aspect-ratio:\s*1/);
+  assert.match(css, /\.statusbar-avatar\s*\{[\s\S]*?background:\s*var\(--theme-statusbar-button-background\)/);
   assert.match(css, /\.workbench-main\.home-mode \.statusbar-avatar\s*\{[\s\S]*?height:\s*3rem/);
 });
 

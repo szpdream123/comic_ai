@@ -1401,6 +1401,12 @@ textarea:focus-visible {
   display: none;
 }
 
+.director-mobile-panel-actions,
+.director-mobile-panel-backdrop,
+.director-mobile-panel-close {
+  display: none;
+}
+
 .left-sidebar,
 .right-sidebar,
 .director-sidebar {
@@ -1494,6 +1500,17 @@ textarea:focus-visible {
 
 .director-sidebar .panel-card:last-child {
   border-bottom: 0;
+}
+
+.right-panel-stack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.right-panel-stack > .right-inspector {
+  min-height: 0;
 }
 
 .panel-card h2,
@@ -6110,6 +6127,10 @@ textarea:focus-visible {
   text-align: center;
 }
 
+.pilot-touch-help {
+  display: none;
+}
+
 .pilot-hud-actions {
   position: absolute;
   bottom: 22px;
@@ -6700,7 +6721,8 @@ textarea:focus-visible {
 
 @media (max-width: 600px) {
   .top-bar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 34px minmax(0, 1fr) 36px;
+    column-gap: 6px;
     min-height: 58px;
     padding: 0 8px;
   }
@@ -6752,18 +6774,148 @@ textarea:focus-visible {
   }
 
   .top-bar-center {
+    min-width: 0;
     gap: 3px;
   }
 
+  .mode-toggle {
+    width: min(100%, 180px);
+  }
+
   .mode-toggle-button.ui-segmented-item {
+    width: 50%;
     height: 32px;
     padding: 0 6px;
     font-size: 10px;
   }
 
+  .top-bar-actions {
+    gap: 0;
+  }
+
+  .pilot-status {
+    top: 8px;
+    left: 8px;
+    transform: none;
+  }
+
+  .pilot-shot-panel {
+    top: 8px;
+    right: 8px;
+    width: 150px;
+    max-height: 116px;
+    padding: 8px;
+  }
+
+  .pilot-shot-list {
+    max-height: 62px;
+  }
+
+  .pilot-keyboard-help {
+    display: none;
+  }
+
+  .pilot-touch-help {
+    position: absolute;
+    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 52px);
+    left: 50%;
+    display: flex;
+    gap: 12px;
+    padding: 6px 9px;
+    border: 1px solid rgb(255 255 255 / 0.12);
+    border-radius: 8px;
+    color: rgb(255 255 255 / 0.72);
+    background: rgb(0 0 0 / 0.58);
+    font-size: 10px;
+    white-space: nowrap;
+    transform: translateX(-50%);
+    backdrop-filter: blur(10px);
+  }
+
+  .director-shell.is-camera-piloting .pilot-hud-actions {
+    right: 8px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: 8px;
+    gap: 8px;
+    width: auto;
+  }
+
+  .pilot-hud-actions button {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 44px;
+  }
+
+  .pilot-hud-shortcut-label {
+    display: none;
+  }
+
   .left-sidebar,
   .right-sidebar {
     display: none;
+  }
+
+  .director-mobile-panel-actions {
+    position: absolute;
+    top: max(12px, env(safe-area-inset-top));
+    left: 50%;
+    z-index: 43;
+    display: flex;
+    gap: 8px;
+    transform: translateX(-50%);
+  }
+
+  .director-mobile-panel-actions button,
+  .director-mobile-panel-close {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid rgb(var(--border-rgb) / 0.46);
+    border-radius: 8px;
+    color: rgb(var(--text-rgb));
+    background: rgb(var(--panel-rgb) / 0.94);
+    box-shadow: 0 8px 24px rgb(var(--overlay-rgb) / 0.24);
+  }
+
+  .director-mobile-panel-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 44;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: rgb(var(--overlay-rgb) / 0.48);
+  }
+
+  .director-shell-fullbleed > .director-sidebar.is-mobile-open {
+    --left-sidebar-width: 100%;
+    --right-sidebar-width: 100%;
+    --left-sidebar-content-width: calc(100% - 32px);
+    --right-sidebar-content-width: calc(100% - 32px);
+    right: 0;
+    left: auto;
+    z-index: 45;
+    display: flex;
+    width: min(92vw, 380px);
+    max-width: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-left: 1px solid rgb(var(--border-rgb) / 0.36);
+    border-right: 0;
+    box-shadow: -18px 0 44px rgb(var(--overlay-rgb) / 0.3);
+  }
+
+  .director-sidebar.is-mobile-open > .director-mobile-panel-close {
+    flex: 0 0 auto;
+    align-self: flex-end;
+    margin: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 0 0;
   }
 
   .director-shell:not(.is-camera-piloting):not(.is-camera-previewing) .viewport-toolbar,

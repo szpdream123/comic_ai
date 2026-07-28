@@ -5,8 +5,9 @@ import {
   resolveEpisodeProjectStyleCode,
   resolveProjectGalleryPageSize,
   renderSingleEpisodeAiPreview,
+  normalizeCanvasLibraryAsset,
   WORKBENCH_THEME_OPTIONS,
-} from "./project-detail.js?single-episode-limit=2&single-episode-help=1";
+} from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1";
 import { buildProjectCreateRequest } from "./project-create-request.js";
 import { normalizeNovelStyleScriptText, truncateScriptTextByCharacters } from "./script-text-normalizer.js?single-episode-limit=2";
 import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
@@ -35,7 +36,7 @@ import {
   renderStoryboardPanel,
   renderStoryboardGenerationEntryForPolling,
   renderStoryboardStageForPartialUpdate,
-} from "./episode-workbench-rebuilt.js?video-category=2";
+} from "./episode-workbench-rebuilt.js?video-category=2&storyboard-style-picker=1";
 import {
   isStoryboardPromptClearedForSelection,
   resolveEpisodeWorkbenchPrompt,
@@ -46,21 +47,92 @@ import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategor
 import { defaultUploadLimits, resolveApiUrl, validateUploadFile } from "../../shared/creator-api.js";
 import { PUBLIC_SEO_PAGE_BY_ID } from "../../shared/public-seo-content.js";
 import { resolveGenerationCreditCost } from "./generation-control-menu.js";
+import { syncSelectionPickerSelection } from "./selection-picker-modal.js";
+import {
+  EPISODE_PROMPT_SKILL_CATEGORIES,
+  normalizeEpisodePromptSkills,
+  syncEpisodePromptSkillDraft,
+} from "./episode-prompt-skill-modal.js";
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 import {
   getScriptManagementVisibleCards,
   resolveScriptLibraryPagination,
 } from "./script-page.js";
-import { mountCanvasWorkflowIfPresent, refreshCanvasWorkflowGraph, refreshCanvasWorkflowNode } from "./canvas/canvas-x6-graph.js";
-import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
 import {
+  applyCanvasWorkflowHistory,
+  mountCanvasWorkflowIfPresent,
+  playCanvasNodeExitMotion,
+  refreshCanvasWorkflowGraph,
+  refreshCanvasWorkflowNode,
+  applyCanvasGraphEdgeStyle,
+  applyCanvasGraphEdgeVisibility,
+  applyCanvasGraphViewportPreferences,
+  selectedCanvasWorkflowNodeIds,
+  alignSelectedCanvasNodes,
+  distributeSelectedCanvasNodes,
+  syncCanvasGraphViewport,
+} from "./canvas/canvas-x6-graph.js";
+import { disposeCanvasGraph, mountNewCanvas, unmountNewCanvas } from "../new-canvas/index.js";
+import {
+  applyCanvasPanoramaZoom,
+  calculateCanvasStoryboardSourceRect,
+  normalizeCanvasPanoramaView,
+  normalizeCanvasStoryboardCells,
+  normalizeCanvasStoryboardGrid,
+  resizeCanvasStoryboardGridPositions,
+  updateCanvasStoryboardGridPosition,
+} from "../new-canvas/special-media-nodes.js";
+import { CANVAS_NODE_SIZES, createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
+import {
+  canvasAssetNodeData,
+  canvasAssetsFromGenerationHistory,
+} from "./canvas/canvas-asset-library.js";
+import {
+  copyCanvasAsset,
+  downloadCanvasAsset,
+} from "./canvas/canvas-asset-transfer.js";
+import { upsertCanvasPromptReference } from "./canvas/canvas-prompt-reference.js";
+import {
+  normalizeCanvasAnimationNode,
+  normalizeCanvasAnimationState,
+  resolveCanvasAnimationSheetAspectRatio,
+} from "./canvas/canvas-animation-node.js";
+import {
+  canvasGroupRunnableNodeIds,
+  updateCanvasGroupData,
+} from "./canvas/canvas-group-node.js";
+import {
+  calculateCanvasAudioSeekPosition,
+  captureCanvasVideoFrame,
+  isCanvasVideoFrameSecurityError,
+  reconcileCanvasMediaDocumentSources,
+  resolveCanvasMediaActionBody,
+} from "./canvas/canvas-media-node.js";
+import {
+  buildCanvasMarkdownTextPatch,
+  copyCanvasMarkdownText,
+  formatCanvasMarkdownTextStats,
+  normalizeCanvasMarkdownViewMode,
+} from "./canvas/canvas-markdown-node.js";
+import {
+  addConnectedCanvasNode,
   addCanvasNode,
+  arrangeCanvasDocumentOnGrid,
+  applyCanvasSettingsToTemplate,
   applyCanvasRunResult,
   buildCanvasRunPreview,
+  canvasUploadNodeAcceptsMedia,
   connectCanvasNodes,
+  createCanvasClipboardSnapshot,
   disconnectCanvasNodes,
+  duplicateCanvasNodes,
+  groupCanvasNodes,
+  pasteCanvasClipboardSnapshot,
+  ungroupCanvasNodes,
+  resolveCompatibleCanvasNodeTemplates,
   resolveCanvasNodeTemplates,
   removeCanvasNode,
+  resolveCanvasNodePlacement,
   updateCanvasViewport,
   updateCanvasNodeData,
   updateCanvasNodePosition,
@@ -91,11 +163,11 @@ const ENABLE_EPISODE_EVENT_TRACKING = false;
 const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const DIRECTOR_DESK_MODULE_URL = "/director-desk/director-desk.js";
-const NEW_CANVAS_MODULE_URL = "/new-canvas/app.js";
-const NEW_CANVAS_STYLESHEET_URL = "/new-canvas/app.css";
-const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260722-1";
+const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260727-2";
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
 const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
+const CANVAS_LIVE_RECONNECT_BASE_MS = 800;
+const CANVAS_LIVE_RECONNECT_MAX_MS = 8000;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const EPISODE_BATCH_IMAGE_LIMIT = 30;
 const EPISODE_BATCH_VIDEO_LIMIT = 10;
@@ -105,7 +177,7 @@ const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const PUBLIC_NAV_PATHS = {
   home: "/",
   tools: "/canvas",
-  "new-canvas": "/new-canvas/",
+  "new-canvas": "/new-canvas",
   script: "/script",
   project: "/projects",
   library: "/assets",
@@ -819,6 +891,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     onRequireLogin,
     uploadTasks: new Map(),
     librarySearchTimer: null,
+    promptPlazaSearchTimer: null,
     projectSearchTimer: null,
     toastDismissTimers: new Map(),
     toastSequence: 0,
@@ -843,6 +916,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     canvasSaveTimer: null,
     canvasSaveInFlight: null,
     canvasSaveQueuedDocument: null,
+    canvasAssetTransferControllers: new Map(),
     creditRefreshInFlight: null,
     projectGalleryMeasureFrame: null,
     creditLedgerRequestId: 0,
@@ -897,6 +971,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       episodeAssetCreateModal: null,
       episodeWorkbenchAttachments: [],
       episodeWorkbenchSelectedAttachmentIds: [],
+      storyboardMediaComposerDrafts: {},
       episodeWorkbenchScrollTarget: null,
       episodeWorkbenchConversationScrollMode: null,
       episodeWorkbenchCenterWidthRatio: EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH,
@@ -984,6 +1059,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       assetGeneratorEditingAsset: null,
       assetGeneratorName: "废土角色(1)",
       assetGeneratorPrompt: "",
+      assetGeneratorStoryboardPrompt: "",
       assetGeneratorPreviewUrl: "",
       assetGeneratorPreviewFile: null,
       assetGeneratorStoryboardId: null,
@@ -1047,6 +1123,34 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
         genre: [],
         emotion: [],
       },
+      scriptConversionOfficialSkills: [],
+      scriptConversionPersonalSkills: [],
+      scriptConversionSkillLoading: false,
+      scriptConversionSkillModalOpen: false,
+      scriptConversionSkillTab: "official",
+      scriptConversionSkillDraftId: "",
+      selectedScriptConversionSkillId: "",
+      episodePromptOfficialSkills: [],
+      episodePromptPrivateSkills: [],
+      storyboardPromptOfficialSkills: [],
+      storyboardPromptPrivateSkills: [],
+      selectedStoryboardPromptSkillId: "",
+      episodeBatchOfficialImageStyleSkills: [],
+      episodeBatchPrivateImageStyleSkills: [],
+      assetImageStyleSkillId: "project-style",
+      assetImageStyleSkillProjectId: null,
+      assetImageStyleSkillModalOpen: false,
+      assetImageStyleSkillTab: "official",
+      assetImageStyleSkillDraftId: "project-style",
+      episodePromptSkillLoading: false,
+      episodePromptSkillModalOpen: false,
+      episodePromptSkillSourceTab: "official",
+      episodePromptSkillCategory: "script",
+      episodePromptSkillDraftIds: {},
+      storyboardPromptSkillModalOpen: false,
+      storyboardPromptSkillSourceTab: "official",
+      storyboardPromptSkillDraftId: "",
+      selectedEpisodePromptSkillIds: {},
       renameEpisodeId: null,
       renameEpisodeName: "",
       renameEpisodeNotice: "",
@@ -1070,8 +1174,44 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       canvasServerRevision: null,
       canvasSaveStatus: "idle",
       canvasSaveError: "",
+      canvasRevisionConflict: null,
+      canvasLiveMembers: [],
+      canvasLiveStatus: "idle",
+      canvasAssetTransfers: {},
       canvasDocumentsByProject: null,
       canvasProjectMenuId: null,
+      canvasAssetSource: "outputs",
+      canvasAssetMediaFilter: "all",
+      canvasAssetLayoutColumns: 3,
+      canvasAssetTagFilter: "",
+      canvasGlobalAssetFolderFilter: "all",
+      canvasAssetVisibleCount: 48,
+      canvasLibraryAssets: [],
+      canvasLibraryAssetsLoaded: false,
+      canvasLibraryAssetsLoading: false,
+      canvasLibraryAssetsError: "",
+      canvasGlobalAssetCategory: "character",
+      canvasAssetProjectId: null,
+      canvasAssetProjects: [],
+      canvasAssetProjectsLoaded: false,
+      canvasAssetProjectsLoading: false,
+      canvasAssetProjectAssets: [],
+      canvasAssetProjectAssetsLoading: false,
+      canvasAssetProjectAssetsError: "",
+      canvasProjectAssetEdits: {},
+      canvasDramaDrawerOpen: false,
+      canvasDramaProjectId: null,
+      canvasDramaEpisodes: [],
+      canvasDramaEpisodesLoading: false,
+      canvasDramaEpisodesError: "",
+      canvasDramaEpisodeId: null,
+      canvasDramaAssets: [],
+      canvasDramaAssetsLoading: false,
+      canvasDramaAssetsError: "",
+      canvasDramaAssetCreate: { assetType: "role", name: "" },
+      canvasDramaAssetEdits: {},
+      canvasProjectStatusFilter: "active",
+      canvasRecentProjectIds: [],
       renameCanvasProjectId: null,
       renameCanvasProjectName: "",
       renameCanvasProjectNotice: "",
@@ -1171,6 +1311,23 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       episodeCardMenuId: null,
       activeNavTab: deriveInitialNavTab(readWorkbenchRouteToken(window.location), session),
       projectPanelMode: deriveInitialProjectPanelMode(readWorkbenchRouteToken(window.location)),
+      promptPlazaType: "all",
+      promptPlazaQuery: "",
+      promptPlazaSection: "marketplace",
+      promptMarketplacePage: 1,
+      promptMarketplaceMeta: { page: 1, pageSize: 12, total: 0, totalPages: 1, hasNext: false },
+      promptMarketplaceRankings: [],
+      promptMarketplaceRankingItemId: null,
+      promptLibraryPage: 1,
+      promptMarketplaceCreateOpen: false,
+      promptMarketplaceItems: [],
+      promptMarketplaceLibrary: [],
+      promptMarketplaceLoading: true,
+      promptMarketplaceError: "",
+      promptMarketplaceDeleteConfirm: null,
+      promptMarketplacePurchaseConfirm: null,
+      promptMarketplaceEditItem: null,
+      activePromptMarketplaceItem: null,
       libraryTeamRoute: deriveInitialLibraryTeamRoute(readWorkbenchRouteToken(window.location)),
       libraryTeamAssetScope: "official",
       libraryCategory: "character",
@@ -1221,6 +1378,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       customerSupportConfig: null,
     },
   };
+  const initialRouteToken = readWorkbenchRouteToken(window.location);
+  if (!isNewCanvasEnabled(workbench.session) && ["new-canvas", "new-canvas-canvas"].includes(initialRouteToken)) {
+    workbench.ui.activeNavTab = "home";
+    workbench.ui.canvasProjectView = "list";
+    workbench.ui.toast = "新画布当前未启用。";
+  }
   installWorkbenchToastQueue(workbench);
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
   syncWorkbenchDisplayCreditBalance(workbench, session);
@@ -1228,12 +1391,27 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   workbench.onCanvasNodeSelected = () => {
     workbench.ui.canvasEditorOpen = true;
     workbench.ui.canvasRunPreview = null;
+    if (workbench.newCanvasInstance && shouldMountNewCanvas(workbench)) {
+      void workbench.newCanvasInstance.update({ ui: workbench.ui, selectionOnly: true });
+      return;
+    }
     render(workbench);
   };
   workbench.updateCanvasDocument = (canvasDocument) => updateActiveCanvasDocument(workbench, canvasDocument);
+  workbench.onCanvasConnectionDrop = (event, connection, stage) => (
+    openCanvasConnectionDropMenu(workbench, stage, event, connection)
+  );
+  workbench.saveCanvasNow = () => saveProjectCanvasNow(workbench);
+  workbench.applyCharacterNodeCapture = (input = {}) => applyCanvasCharacterNodeCapture(workbench, input);
+  workbench.restoreCharacterNodes = (nodeIds = []) => restoreCanvasCharacterNodes(workbench, nodeIds);
+  workbench.focusCharacterNode = (nodeId) => focusCanvasCharacterNode(workbench, nodeId);
   installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("pointerdown", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    trackCanvasRightPanGesture(workbench, eventTarget, event);
+    if (isCanvasX6InteractionTarget(eventTarget)) {
+      return;
+    }
     const quickAssetToggle = eventTarget?.closest?.(".episode-replica-right-toggle.is-expand");
     if (quickAssetToggle) {
       startEpisodeQuickAssetToggleDrag(workbench, event, quickAssetToggle);
@@ -1279,15 +1457,18 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       startCanvasUploadNodeLongPressDrag(workbench, event, canvasNodeTarget);
       return;
     }
-    if (shouldStartCanvasPan(eventTarget, event)) {
+    if (shouldStartCanvasPan(eventTarget, event, workbench)) {
       workbench.canvasPointerHandledAt = Date.now();
       startCanvasPan(workbench, event);
     }
   });
   root.addEventListener("pointermove", (event) => {
+    updateCanvasRightPanGesture(workbench, event);
     updateEpisodeWorkbenchResizeHover(workbench, event);
     updateHomeHeroPointerAura(workbench, event);
   });
+  root.addEventListener("pointerup", (event) => finishCanvasRightPanGesture(workbench, event));
+  root.addEventListener("pointercancel", () => { workbench.canvasRightPanGesture = null; });
   window.addEventListener("resize", () => {
     scheduleProjectGalleryMeasurement(workbench);
     syncEpisodeWorkbenchLayoutVars(workbench);
@@ -1300,12 +1481,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     syncWorkbenchHashRoute(workbench, readWorkbenchRouteToken(window.location));
   });
   root.addEventListener("wheel", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const stage = eventTarget?.closest?.(".canvas-stage");
-    if (!stage || isCanvasInteractionOverlayTarget(eventTarget)) {
+    if (!stage || isCanvasX6InteractionTarget(eventTarget, event) || isCanvasInteractionOverlayTarget(eventTarget)) {
       return;
     }
     event.preventDefault();
+    const viewport = normalizeCanvasViewport(ensureWorkbenchCanvasDocument(workbench).viewport);
+    if (viewport.interactionMode === "classic" && !event.ctrlKey) {
+      updateCanvasViewportAndRender(workbench, {
+        x: Math.round(viewport.x - Number(event.deltaX ?? 0)),
+        y: Math.round(viewport.y - Number(event.deltaY ?? 0)),
+      }, { render: false });
+      return;
+    }
     zoomCanvasAtPoint(workbench, event.deltaY < 0 ? 1 : -1, {
       clientX: event.clientX,
       clientY: event.clientY,
@@ -1316,7 +1505,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     if (Date.now() - Number(workbench.canvasPointerHandledAt ?? 0) < 450) {
       return;
     }
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (isCanvasX6InteractionTarget(eventTarget, event)) {
+      return;
+    }
     const canvasEdgeTarget = eventTarget?.closest?.(".canvas-flow-edge[data-canvas-edge-id]");
     if (canvasEdgeTarget) {
       startCanvasEdgeDisconnectDrag(workbench, event, canvasEdgeTarget);
@@ -1351,7 +1543,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       startCanvasNodeDrag(workbench, event, canvasNodeTarget);
       return;
     }
-    if (shouldStartCanvasPan(eventTarget, event)) {
+    if (shouldStartCanvasPan(eventTarget, event, workbench)) {
       startCanvasPan(workbench, event);
       return;
     }
@@ -1365,7 +1557,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     event.preventDefault();
   });
   root.addEventListener("click", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (isCanvasX6InteractionTarget(eventTarget, event)) {
+      return;
+    }
     const quickAssetToggle = eventTarget?.closest?.(".episode-replica-right-toggle");
     if (
       quickAssetToggle
@@ -1435,6 +1630,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
           return;
         }
         workbench.ui.canvasAddMenuOpen = false;
+        workbench.ui.canvasZoomMenuOpen = false;
         workbench.ui.canvasContextMenu = null;
         workbench.ui.canvasScriptPicker = null;
         workbench.ui.selectedCanvasNodeId = null;
@@ -1554,6 +1750,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
         workbench.ui.canvasAddMenuOpen = false;
         render(workbench);
       }
+      if (workbench.ui.canvasZoomMenuOpen) {
+        workbench.ui.canvasZoomMenuOpen = false;
+        render(workbench);
+      }
       if (workbench.ui.canvasContextMenu) {
         workbench.ui.canvasContextMenu = null;
         render(workbench);
@@ -1563,6 +1763,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
       actionTarget.matches?.('input[data-action="upload-asset-generator-image"]') ||
+      actionTarget.matches?.('input[data-action="upload-prompt-marketplace-cover"]') ||
       actionTarget.matches?.('input[data-action="toggle-membership-payment-agreement"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-project"]') ||
       actionTarget.matches?.('input[data-action="toggle-team-member-script"]') ||
@@ -1595,12 +1796,18 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     });
   });
   root.addEventListener("contextmenu", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const stage = eventTarget?.closest?.(".canvas-stage");
     if (!stage) {
       return;
     }
+    if (canvasEditableContextHasSelection(eventTarget)) {
+      return;
+    }
     event.preventDefault();
+    if (consumeCanvasRightPanContextMenuSuppression(workbench)) {
+      return;
+    }
     const rect = stage.getBoundingClientRect?.();
     const point = canvasPointFromClient(
       stage,
@@ -1609,9 +1816,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       ensureWorkbenchCanvasDocument(workbench).viewport,
     );
     const nodeTarget = eventTarget?.closest?.(
-      ".canvas-lib-node[data-canvas-node-id], .canvas-node-editor[data-node-id]",
+      ".canvas-lib-node[data-canvas-node-id], .canvas-x6-special-node[data-node-id], .canvas-node-editor[data-node-id]",
     );
     const nodeId = nodeTarget?.dataset?.canvasNodeId ?? nodeTarget?.dataset?.nodeId ?? "";
+    const canvasNode = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((node) => node.id === nodeId);
     workbench.ui.canvasAddMenuOpen = false;
     workbench.ui.selectedCanvasNodeId = nodeId || workbench.ui.selectedCanvasNodeId;
     workbench.ui.canvasEditorOpen = nodeId ? false : workbench.ui.canvasEditorOpen;
@@ -1624,12 +1832,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       stageHeight: Math.round(rect?.height ?? 0),
       mode: nodeId ? "node" : "add",
       nodeId,
+      characterCaptureEligible: isCanvasCharacterReferenceNode(canvasNode),
+      mediaCopyEligible: Boolean(canvasNodeStorageObjectId(canvasNode, workbench.ui.canvasAssets)),
+      grouped: canvasNode?.type === "group" || Boolean(canvasNode?.parentGroupId),
     };
-    render(workbench);
+    if (!updateMountedNewCanvasSurface(workbench, { interactionOnly: true })) {
+      render(workbench);
+    }
   });
 
   root.addEventListener("dblclick", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (eventTarget?.matches?.('[data-role="script-reader-title-input"]')) {
       return;
     }
@@ -1651,7 +1864,29 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("keydown", (event) => {
-    const searchTarget = resolveEventElement(event.target);
+    const searchTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (searchTarget?.matches?.("[data-canvas-zoom-value-input]") && event.key === "Enter") {
+      event.preventDefault();
+      void handleAction(workbench, {
+        dataset: { action: "set-canvas-viewport", viewportPatch: "zoom-value" },
+        value: searchTarget.value,
+      });
+      return;
+    }
+    if (searchTarget?.matches?.("[data-canvas-asset-tag-input]")) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        void commitCanvasAssetTagInput(workbench, searchTarget).catch((error) => {
+          workbench.ui.toast = `标签更新失败：${friendlyError(error)}`;
+          render(workbench);
+        });
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        workbench.ui.canvasAssetTagEditorKey = "";
+        render(workbench);
+      }
+      return;
+    }
     if (searchTarget?.matches?.('[data-action="search-projects"]') && event.key === "Enter") {
       event.preventDefault();
       void applyProjectSearch(workbench, searchTarget.value).catch((error) => {
@@ -1660,7 +1895,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       });
       return;
     }
-    const target = resolveEventElement(event.target);
+    const canvasKeyAction = resolveCanvasKeyboardAction(workbench, event, searchTarget);
+    if (canvasKeyAction) {
+      event.preventDefault();
+      void handleAction(workbench, { dataset: { action: canvasKeyAction } });
+      return;
+    }
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.matches?.('[data-role="script-reader-title-input"]')) {
       return;
     }
@@ -1695,6 +1936,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       !workbench.ui.openGenerationSelectMenu &&
       !workbench.ui.musePromptMenu &&
       !workbench.ui.singleEpisodeLookPanel &&
+      !workbench.ui.scriptConversionSkillModalOpen &&
+      !workbench.ui.episodePromptSkillModalOpen &&
+      !workbench.ui.storyboardPromptSkillModalOpen &&
+      !workbench.ui.assetImageStyleSkillModalOpen &&
       !workbench.ui.singleEpisodeScriptImportMenu &&
       !workbench.ui.isFirstFrameMenuOpen &&
       !workbench.ui.activeGenerationFrameMenu &&
@@ -1704,6 +1949,30 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       !workbench.ui.teamMemberDraft?.resourcePickerType &&
       !workbench.ui.editMemberModal?.resourcePickerType
     ) {
+      return;
+    }
+    if (workbench.ui.scriptConversionSkillModalOpen) {
+      workbench.ui.scriptConversionSkillModalOpen = false;
+      workbench.ui.scriptConversionSkillDraftId = "";
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.episodePromptSkillModalOpen) {
+      workbench.ui.episodePromptSkillModalOpen = false;
+      workbench.ui.episodePromptSkillDraftIds = {};
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.storyboardPromptSkillModalOpen) {
+      workbench.ui.storyboardPromptSkillModalOpen = false;
+      workbench.ui.storyboardPromptSkillDraftId = String(workbench.ui.selectedStoryboardPromptSkillId ?? "");
+      render(workbench);
+      return;
+    }
+    if (workbench.ui.assetImageStyleSkillModalOpen) {
+      workbench.ui.assetImageStyleSkillModalOpen = false;
+      workbench.ui.assetImageStyleSkillDraftId = resolveAssetImageStyleSkillId(workbench);
+      render(workbench);
       return;
     }
     if (workbench.ui.teamMemberDraft?.resourcePickerType) {
@@ -1757,7 +2026,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("change", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!isAudioAssetImportFileInput(target)) {
       return;
     }
@@ -1770,7 +2039,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   }, true);
 
   root.addEventListener("change", async (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+
+    if (target?.matches?.("[data-canvas-zoom-value-input]")) {
+      await handleAction(workbench, {
+        dataset: { action: "set-canvas-viewport", viewportPatch: "zoom-value" },
+        value: target.value,
+      });
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="upload-prompt-marketplace-cover"]')) {
+      await uploadPromptMarketplaceCoverFile(workbench, target);
+      return;
+    }
 
     if (target?.matches?.('input[data-action="toggle-membership-payment-agreement"]')) {
       void handleAction(workbench, target).catch((error) => {
@@ -2018,6 +2300,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
+    if (target?.matches?.("[data-canvas-markdown-input]")) {
+      const [file] = [...(target.files ?? [])];
+      const nodeId = target.dataset.nodeId ?? "";
+      target.value = "";
+      if (!file || !nodeId) return;
+      await importCanvasMarkdownFile(workbench, nodeId, file);
+      return;
+    }
+
     if (target?.matches?.(".team-asset-local-upload-input")) {
       const files = [...(target.files ?? [])];
       const category = target.dataset.libraryCategory ?? workbench.ui.libraryCategory ?? "character";
@@ -2097,7 +2388,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("dragstart", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const assetButton = target?.closest?.("[data-drag-asset='episode-quick-asset']");
     if (!assetButton) {
       return;
@@ -2114,7 +2405,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("dragover", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"]');
     if (!zone) {
       return;
@@ -2127,7 +2418,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("dragleave", (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"]');
     if (!zone) {
       return;
@@ -2140,7 +2431,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("drop", async (event) => {
-    const eventTarget = resolveEventElement(event.target);
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"]');
     if (!zone) {
       return;
@@ -2217,7 +2508,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("paste", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.matches?.("[data-canvas-text-input][contenteditable='true']")) {
       return;
     }
@@ -2231,7 +2522,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("compositionstart", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (target?.matches?.("[data-prompt-plaza-search-input]")) {
+      workbench.promptPlazaSearchComposing = true;
+    }
     if (target?.matches?.("[data-library-search-input]")) {
       workbench.librarySearchComposing = true;
     }
@@ -2244,7 +2538,15 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("compositionend", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (target?.matches?.("[data-prompt-plaza-search-input]")) {
+      workbench.promptPlazaSearchComposing = false;
+      workbench.ui.promptPlazaQuery = target.value ?? "";
+      workbench.ui.promptMarketplacePage = 1;
+      workbench.ui.promptLibraryPage = 1;
+      schedulePromptMarketplaceSearch(workbench);
+      return;
+    }
     if (target?.matches?.('[data-action="search-projects"]')) {
       workbench.projectSearchComposing = false;
       workbench.ui.projectSearchDraft = target.value;
@@ -2268,7 +2570,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("input", async (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+
+    if (target?.matches?.("[data-prompt-plaza-search-input]")) {
+      if (!workbench.promptPlazaSearchComposing) {
+        workbench.ui.promptPlazaQuery = target.value ?? "";
+        workbench.ui.promptMarketplacePage = 1;
+        workbench.ui.promptLibraryPage = 1;
+        schedulePromptMarketplaceSearch(workbench);
+      }
+      return;
+    }
 
     if (target?.matches?.('input[data-action="change-account-settings-field"]')) {
       const field = String(target.dataset.field ?? "").trim();
@@ -2282,6 +2594,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
         ...createDefaultAccountSettingsForm(workbench.session, workbench.ui.accountSettingsForm),
         [field]: target.value ?? "",
       };
+      return;
+    }
+
+    if (target?.matches?.("[data-canvas-node-filter], [data-canvas-node-search]")) {
+      handleNewCanvasHostInput(workbench, target);
       return;
     }
 
@@ -2722,6 +3039,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
     if (target?.matches?.("#asset-generator-prompt-input, [data-asset-generator-prompt-input]")) {
       workbench.ui.assetGeneratorPrompt = target.value;
+      if (workbench.ui.assetGeneratorTarget === "storyboard") {
+        workbench.ui.assetGeneratorStoryboardPrompt = target.value;
+      }
       const counter = target.closest?.(".asset-generator-prompt")?.querySelector?.(".asset-generator-prompt-count")
         ?? workbench.root.querySelector(".asset-generator-prompt-count");
       if (counter) {
@@ -2830,14 +3150,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("mousedown", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.closest?.(".episode-replica-prompt")) {
       dismissPromptMentionPreview(workbench);
     }
   });
 
   root.addEventListener("mouseup", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.closest?.(".episode-replica-prompt")) {
       dismissPromptMentionPreview(workbench);
       return;
@@ -2854,7 +3174,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("focusout", async (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.matches?.(".episode-replica-shot-desc-input")) {
       return;
     }
@@ -2886,14 +3206,30 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     }));
 
     try {
-      await workbench.api.updateShot({
-        shotId: storyboard.linkedShotId,
-        description: nextDescription,
-      });
+      const { savedVideoDraft } = await persistStoryboardCardDescription(
+        workbench,
+        storyboard,
+        nextDescription,
+      );
       updateStoryboardById(workbench, storyboardId, (currentStoryboard) => ({
         ...currentStoryboard,
         description: nextDescription,
         sceneAnalysis: nextDescription,
+        ...(savedVideoDraft
+          ? {
+              generationDrafts: [
+                ...normalizeEpisodeStoryboardGenerationDrafts(currentStoryboard.generationDrafts)
+                  .filter((draft) => draft.mode !== "video"),
+                savedVideoDraft,
+              ],
+              videoPromptDraft: savedVideoDraft,
+              generationState: {
+                ...currentStoryboard.generationState,
+                prompt: nextDescription,
+                videoPrompt: nextDescription,
+              },
+            }
+          : {}),
       }));
       workbench.ui.toast = "修改成功";
       render(workbench);
@@ -2904,7 +3240,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("keyup", (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.matches?.("#video-prompt-input")) {
       return;
     }
@@ -2918,7 +3254,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
 
   root.addEventListener("focusout", async (event) => {
-    const target = resolveEventElement(event.target);
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (target?.matches?.("[data-canvas-asset-tag-input]")) {
+      const nextFocused = resolveEventElement(event.relatedTarget);
+      if (nextFocused?.closest?.(".canvas-asset-tag-editor") === target.closest?.(".canvas-asset-tag-editor")) {
+        return;
+      }
+      try {
+        await commitCanvasAssetTagInput(workbench, target);
+      } catch (error) {
+        workbench.ui.toast = `标签更新失败：${friendlyError(error)}`;
+        render(workbench);
+      }
+      return;
+    }
     if (target?.matches?.("[data-canvas-prompt-input], [data-canvas-title-input], [data-canvas-text-input]")) {
       refreshCanvasGraphFromDocument(workbench);
       scheduleProjectCanvasSave(workbench, { delayMs: 0 });
@@ -2963,6 +3312,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   loadAuthenticatedWorkbenchShellData(workbench);
   await refresh(workbench);
   render(workbench);
+  scheduleLazySurfaceLoad(workbench);
   if (consumeOpenCreateAfterLoginFlag() && hasActiveSessionUser(workbench.session)) {
     await openProjectCreateModal(workbench);
   }
@@ -2972,6 +3322,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     loadAuthenticatedWorkbenchShellData(workbench);
     await refresh(workbench);
     render(workbench);
+    scheduleLazySurfaceLoad(workbench);
   };
   workbench.disposeTaskCenterPolling = () => {
     if (workbench.taskCenterPollTimer && typeof window !== "undefined") {
@@ -2981,7 +3332,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     workbench.taskCenterPollAbortController?.abort?.();
     workbench.taskCenterPollAbortController = null;
   };
+  workbench.disposeCanvasLiveSubscription = () => stopCanvasLiveSubscription(workbench);
+  workbench.disposeCanvasAssetTransfers = () => stopAllCanvasAssetTransfers(workbench);
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeTaskCenterPolling, { once: true });
+  globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasLiveSubscription, { once: true });
+  globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasAssetTransfers, { once: true });
   return workbench;
 }
 
@@ -3071,7 +3426,7 @@ async function refresh(workbench) {
   const isProjectDetail =
     visibleTab === "project" && workbench.ui.projectPanelMode !== "library";
   const isTeamSurface = visibleTab === "team";
-  const isToolsSurface = visibleTab === "tools";
+  const isToolsSurface = isCanvasNavTab(visibleTab);
   const isScriptSurface = visibleTab === "script";
   const isAssetLibrarySurface = visibleTab === "library";
   const isEpisodeWorkbenchSurface =
@@ -3250,6 +3605,12 @@ function scheduleLazySurfaceLoad(workbench, options = {}) {
   const renderOptions = options.preserveNavigationShell === true
     ? { preserveNavigationShell: true }
     : {};
+  if (workbench.ui.activeNavTab === "prompts") {
+    runLazyWorkbenchTask(workbench, "prompt marketplace", async () => {
+      await syncPromptMarketplace(workbench);
+      render(workbench, renderOptions);
+    });
+  }
   if (!hasActiveSessionUser(workbench.session)) {
     return;
   }
@@ -3260,10 +3621,14 @@ function scheduleLazySurfaceLoad(workbench, options = {}) {
       render(workbench, renderOptions);
     });
   }
-  if (visibleTab === "tools") {
+  if (isCanvasNavTab(visibleTab)) {
     runLazyWorkbenchTask(workbench, "canvas projects", async () => {
       await syncCanvasProjectsFromApi(workbench);
       await ensureCanvasGenerationConfig(workbench);
+      if (workbench.ui.canvasProjectView === "detail") {
+        await loadCanvasSettingsRecord(workbench);
+        await loadAppliedCanvasToolbar(workbench);
+      }
       render(workbench, renderOptions);
     });
   }
@@ -3770,6 +4135,10 @@ function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
 
 function isTeamMemberSession(session) {
   return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+}
+
+function isNewCanvasEnabled(session = {}) {
+  return (session?.features?.newCanvas ?? session?.user?.features?.newCanvas) !== false;
 }
 
 function hasEffectiveTeamMemberManagementAccess(workbench) {
@@ -4665,6 +5034,370 @@ async function syncStoryboardPromptPackages(workbench) {
   }
 }
 
+const promptMarketplaceSyncPromises = new WeakMap();
+
+async function syncPromptMarketplace(workbench) {
+  const request = {
+    category: workbench.ui.promptPlazaType || "all",
+    query: String(workbench.ui.promptPlazaQuery || "").trim(),
+    page: Math.max(1, Number(workbench.ui.promptMarketplacePage || 1)),
+    pageSize: Math.max(1, Number(workbench.ui.promptMarketplaceMeta?.pageSize || 12)),
+  };
+  const requestKey = JSON.stringify(request);
+  const pendingSync = promptMarketplaceSyncPromises.get(workbench);
+  if (pendingSync?.key === requestKey) return pendingSync.promise;
+  if (typeof workbench.api?.getPromptMarketplace !== "function") {
+    workbench.ui.promptMarketplaceItems = [];
+    workbench.ui.promptMarketplaceLibrary = [];
+    workbench.ui.promptMarketplaceRankings = [];
+    workbench.ui.promptMarketplaceMeta = { page: 1, pageSize: request.pageSize, total: 0, totalPages: 1, hasNext: false };
+    workbench.ui.promptMarketplaceLoading = false;
+    return;
+  }
+  const requestToken = (workbench.promptMarketplaceRequestToken ?? 0) + 1;
+  workbench.promptMarketplaceRequestToken = requestToken;
+  const syncPromise = (async () => {
+    workbench.ui.promptMarketplaceLoading = true;
+    workbench.ui.promptMarketplaceError = "";
+    try {
+      const [catalog, library] = await Promise.all([
+        workbench.api.getPromptMarketplace(request),
+        typeof workbench.api.getPromptMarketplaceLibrary === "function"
+          ? workbench.api.getPromptMarketplaceLibrary()
+          : Promise.resolve({ items: [] }),
+      ]);
+      if (workbench.promptMarketplaceRequestToken !== requestToken) return;
+      const pagination = catalog?.pagination || {};
+      const page = Math.max(1, Number(pagination.page || request.page));
+      const pageSize = Math.max(1, Number(pagination.pageSize || request.pageSize));
+      const total = Math.max(0, Number(pagination.total || 0));
+      const totalPages = Math.max(1, Number(pagination.totalPages || Math.ceil(total / pageSize) || 1));
+      workbench.ui.promptMarketplaceItems = Array.isArray(catalog?.items) ? catalog.items : [];
+      workbench.ui.promptMarketplaceRankings = Array.isArray(catalog?.ranking) ? catalog.ranking : [];
+      workbench.ui.promptMarketplacePage = page;
+      workbench.ui.promptMarketplaceMeta = {
+        page,
+        pageSize,
+        total,
+        totalPages,
+        hasNext: Boolean(pagination.hasNext ?? page < totalPages),
+      };
+      workbench.ui.promptMarketplaceLibrary = Array.isArray(library?.items) ? library.items : [];
+    } catch (error) {
+      if (workbench.promptMarketplaceRequestToken !== requestToken) return;
+      workbench.ui.promptMarketplaceItems = [];
+      workbench.ui.promptMarketplaceRankings = [];
+      workbench.ui.promptMarketplaceLibrary = [];
+      workbench.ui.promptMarketplaceError = error?.payload?.error?.message ?? error?.message ?? "提示词市场加载失败";
+    } finally {
+      if (workbench.promptMarketplaceRequestToken === requestToken) {
+        workbench.ui.promptMarketplaceLoading = false;
+      }
+    }
+  })();
+  promptMarketplaceSyncPromises.set(workbench, { key: requestKey, promise: syncPromise });
+  try {
+    await syncPromise;
+  } finally {
+    if (promptMarketplaceSyncPromises.get(workbench)?.promise === syncPromise) {
+      promptMarketplaceSyncPromises.delete(workbench);
+    }
+  }
+}
+
+async function syncScriptConversionSkills(workbench) {
+  if (
+    typeof workbench.api?.getPromptMarketplace !== "function" ||
+    typeof workbench.api?.getPromptMarketplaceLibrary !== "function"
+  ) {
+    workbench.ui.scriptConversionOfficialSkills = [];
+    workbench.ui.scriptConversionPersonalSkills = [];
+    workbench.ui.scriptConversionSkillLoading = false;
+    workbench.ui.selectedScriptConversionSkillId = "";
+    return;
+  }
+  workbench.ui.scriptConversionSkillLoading = true;
+  try {
+    const [catalog, library] = await Promise.all([
+      workbench.api.getPromptMarketplace({ category: "script", page: 1, pageSize: 100 }),
+      workbench.api.getPromptMarketplaceLibrary(),
+    ]);
+    const officialSkills = (Array.isArray(catalog?.items) ? catalog.items : [])
+      .filter((item) => item?.category === "script" && item?.official === true);
+    const personalSkills = (Array.isArray(library?.items) ? library.items : [])
+      .filter((item) => item?.category === "script");
+    const availableSkills = [...officialSkills, ...personalSkills];
+    const selectedSkillId = String(workbench.ui.selectedScriptConversionSkillId ?? "");
+    workbench.ui.scriptConversionOfficialSkills = officialSkills;
+    workbench.ui.scriptConversionPersonalSkills = personalSkills;
+    workbench.ui.selectedScriptConversionSkillId = availableSkills.some((item) => String(item?.id ?? "") === selectedSkillId)
+      ? selectedSkillId
+      : String(
+        personalSkills.find((item) => item?.isDefault === true)?.id
+        ?? officialSkills.find((item) => item?.isDefault === true)?.id
+        ?? officialSkills[0]?.id
+        ?? personalSkills[0]?.id
+        ?? "",
+      );
+  } catch (error) {
+    workbench.ui.scriptConversionOfficialSkills = [];
+    workbench.ui.scriptConversionPersonalSkills = [];
+    workbench.ui.selectedScriptConversionSkillId = "";
+    workbench.ui.uploadNotice = error?.payload?.error?.message ?? error?.message ?? "小说转剧本技能加载失败";
+  } finally {
+    workbench.ui.scriptConversionSkillLoading = false;
+  }
+}
+
+async function syncEpisodePromptSkills(workbench) {
+  if (
+    typeof workbench.api?.getPromptMarketplace !== "function" ||
+    typeof workbench.api?.getPromptMarketplaceLibrary !== "function"
+  ) {
+    workbench.ui.episodePromptOfficialSkills = [];
+    workbench.ui.episodePromptPrivateSkills = [];
+    workbench.ui.episodePromptSkillLoading = false;
+    return;
+  }
+  workbench.ui.episodePromptSkillLoading = true;
+  try {
+    const [catalog, library] = await Promise.all([
+      workbench.api.getPromptMarketplace({ category: "all", page: 1, pageSize: 100 }),
+      workbench.api.getPromptMarketplaceLibrary(),
+    ]);
+    const categoryIds = new Set(EPISODE_PROMPT_SKILL_CATEGORIES.map((item) => item.id));
+    const officialSkills = normalizeEpisodePromptSkills(catalog?.items, "official")
+      .filter((item) => categoryIds.has(item.category) && (catalog?.items ?? []).some((source) => String(source?.id ?? "") === item.id && source?.official === true));
+    const privateSkills = normalizeEpisodePromptSkills(library?.items, "private")
+      .filter((item) => categoryIds.has(item.category));
+    const allSkills = [...officialSkills, ...privateSkills];
+    const current = workbench.ui.selectedEpisodePromptSkillIds && typeof workbench.ui.selectedEpisodePromptSkillIds === "object"
+      ? workbench.ui.selectedEpisodePromptSkillIds
+      : {};
+    workbench.ui.episodePromptOfficialSkills = officialSkills;
+    workbench.ui.episodePromptPrivateSkills = privateSkills;
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...current,
+      ...Object.fromEntries(EPISODE_PROMPT_SKILL_CATEGORIES.map((category) => {
+        const selectedId = String(current[category.id] ?? "");
+        const selected = allSkills.find((item) => item.id === selectedId && item.category === category.id);
+        const fallback = privateSkills.find((item) => item.category === category.id && item.isDefault)
+          ?? officialSkills.find((item) => item.category === category.id && item.isDefault)
+          ?? officialSkills.find((item) => item.category === category.id)
+          ?? privateSkills.find((item) => item.category === category.id);
+        return [category.id, selected?.id ?? fallback?.id ?? ""];
+      })),
+    };
+  } catch (error) {
+    workbench.ui.episodePromptOfficialSkills = [];
+    workbench.ui.episodePromptPrivateSkills = [];
+    workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "创作技能加载失败";
+  } finally {
+    workbench.ui.episodePromptSkillLoading = false;
+  }
+}
+
+async function syncStoryboardPromptSkills(workbench) {
+  if (
+    typeof workbench.api?.getPromptMarketplace !== "function" ||
+    typeof workbench.api?.getPromptMarketplaceLibrary !== "function"
+  ) {
+    workbench.ui.storyboardPromptOfficialSkills = [];
+    workbench.ui.storyboardPromptPrivateSkills = [];
+    workbench.ui.selectedStoryboardPromptSkillId = "";
+    return;
+  }
+  try {
+    const [catalog, library] = await Promise.all([
+      workbench.api.getPromptMarketplace({ category: "storyboard", page: 1, pageSize: 100 }),
+      workbench.api.getPromptMarketplaceLibrary(),
+    ]);
+    const officialSkills = normalizeStoryboardPromptSkills(catalog?.items, "official")
+      .filter((item) => item.official);
+    const privateSkills = normalizeStoryboardPromptSkills(library?.items, "private");
+    const availableSkills = [...officialSkills, ...privateSkills];
+    const selectedId = String(workbench.ui.selectedStoryboardPromptSkillId ?? "");
+    const selected = availableSkills.find((item) => item.id === selectedId);
+    const fallback = privateSkills.find((item) => item.isDefault)
+      ?? officialSkills.find((item) => item.isDefault)
+      ?? officialSkills[0]
+      ?? privateSkills[0]
+      ?? null;
+    workbench.ui.storyboardPromptOfficialSkills = officialSkills;
+    workbench.ui.storyboardPromptPrivateSkills = privateSkills;
+    workbench.ui.selectedStoryboardPromptSkillId = selected?.id ?? fallback?.id ?? "";
+  } catch (error) {
+    workbench.ui.storyboardPromptOfficialSkills = [];
+    workbench.ui.storyboardPromptPrivateSkills = [];
+    workbench.ui.selectedStoryboardPromptSkillId = "";
+    workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "故事板提示词加载失败";
+  }
+}
+
+function normalizeStoryboardPromptSkills(items = [], source = "") {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => String(item?.category ?? item?.promptCategory ?? "") === "storyboard")
+    .map((item) => ({
+      id: String(item?.id ?? ""),
+      title: String(item?.title ?? item?.name ?? "未命名提示词"),
+      summary: String(item?.summary ?? ""),
+      preview:
+        String(item?.coverImageUrl ?? "").trim() ||
+        String(item?.cover_image_url ?? "").trim() ||
+        String(item?.thumbnailUrl ?? "").trim() ||
+        String(item?.thumbnail_url ?? "").trim() ||
+        String(item?.previewUrl ?? "").trim() ||
+        String(item?.preview ?? "").trim() ||
+        (item?.coverStorageObjectId ?? item?.cover_storage_object_id
+          ? `/api/storage/objects/${encodeURIComponent(String(item.coverStorageObjectId ?? item.cover_storage_object_id))}/content?proxy=1`
+          : ""),
+      category: "storyboard",
+      priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
+      source,
+      official: item?.official === true,
+      isDefault: item?.isDefault === true || item?.is_default === true,
+    }))
+    .filter((item) => item.id);
+}
+
+async function syncEpisodeBatchImageStyleSkills(workbench) {
+  if (
+    typeof workbench.api?.getPromptMarketplace !== "function" ||
+    typeof workbench.api?.getPromptMarketplaceLibrary !== "function"
+  ) {
+    workbench.ui.episodeBatchOfficialImageStyleSkills = [];
+    workbench.ui.episodeBatchPrivateImageStyleSkills = [];
+    return;
+  }
+  try {
+    const [catalog, library] = await Promise.all([
+      workbench.api.getPromptMarketplace({ category: "image_style", page: 1, pageSize: 100 }),
+      workbench.api.getPromptMarketplaceLibrary(),
+    ]);
+    const officialSkills = normalizeEpisodeBatchImageStyleSkills(catalog?.items, "official")
+      .filter((item) => item.official);
+    const privateSkills = normalizeEpisodeBatchImageStyleSkills(library?.items, "private");
+    const availableSkills = [...officialSkills, ...privateSkills];
+    const currentId = String(workbench.ui.selectedEpisodePromptSkillIds?.image_style ?? "");
+    const selected = availableSkills.find((item) => item.id === currentId);
+    workbench.ui.episodeBatchOfficialImageStyleSkills = officialSkills;
+    workbench.ui.episodeBatchPrivateImageStyleSkills = privateSkills;
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: selected?.id ?? "",
+    };
+  } catch (error) {
+    workbench.ui.episodeBatchOfficialImageStyleSkills = [];
+    workbench.ui.episodeBatchPrivateImageStyleSkills = [];
+    workbench.ui.toast = error?.payload?.error?.message ?? error?.message ?? "生图风格技能加载失败";
+  }
+}
+
+function normalizeEpisodeBatchImageStyleSkills(items = [], source = "") {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => String(item?.category ?? item?.promptCategory ?? "") === "image_style")
+    .map((item) => {
+      const promptContent = String(item?.prompt_content ?? item?.promptContent ?? "").trim();
+      return {
+        id: String(item?.id ?? ""),
+        label: String(item?.title ?? item?.name ?? "未命名技能"),
+        preview: String(item?.coverImageUrl ?? item?.cover_image_url ?? ""),
+        ...(promptContent ? { prompt_content: promptContent, promptContent } : {}),
+        priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
+        isDefault: item?.isDefault === true || item?.is_default === true,
+        official: item?.official === true,
+        source,
+      };
+    })
+    .filter((item) => item.id && item.label);
+}
+
+function resolveAssetImageStyleSkillId(workbench) {
+  const selectedProjectId = String(workbench.ui.assetImageStyleSkillProjectId ?? "");
+  const activeProjectId = String(resolveActiveProjectId(workbench) ?? "");
+  if (selectedProjectId && activeProjectId && selectedProjectId !== activeProjectId) {
+    return "project-style";
+  }
+  const selectedId = String(workbench.ui.assetImageStyleSkillId ?? "project-style");
+  if (selectedId === "project-style") return selectedId;
+  const available = [
+    ...(workbench.ui.episodeBatchOfficialImageStyleSkills ?? []),
+    ...(workbench.ui.episodeBatchPrivateImageStyleSkills ?? []),
+  ];
+  return available.some((item) => String(item?.id ?? "") === selectedId)
+    ? selectedId
+    : "project-style";
+}
+
+function resolveSelectedImageStyle(workbench) {
+  const selectedId = resolveAssetImageStyleSkillId(workbench);
+  if (selectedId === "project-style") {
+    return resolveEpisodeGenerationStyle(workbench);
+  }
+  return [
+    ...(Array.isArray(workbench.ui.episodeBatchOfficialImageStyleSkills) ? workbench.ui.episodeBatchOfficialImageStyleSkills : []),
+    ...(Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills) ? workbench.ui.episodeBatchPrivateImageStyleSkills : []),
+  ].find((style) => String(style?.id ?? "").trim() === selectedId) ?? null;
+}
+
+function resolveStoryboardGeneratorStyle(workbench) {
+  const selectedCode = String(workbench.ui.assetGeneratorStyleCode ?? "").trim();
+  if (selectedCode) {
+    const selectedStyle = (workbench.ui.projectStyles ?? []).find((style) => (
+      String(style?.code ?? style?.id ?? "").trim() === selectedCode
+    ));
+    if (selectedStyle) {
+      return selectedStyle;
+    }
+  }
+  return resolveEpisodeGenerationStyle(workbench);
+}
+
+function buildImageStyleGenerationReference(style) {
+  const preview = String(
+    style?.preview ??
+    style?.previewUrl ??
+    style?.coverImageUrl ??
+    style?.cover_image_url ??
+    style?.image ??
+    "",
+  ).trim();
+  if (!preview) {
+    return null;
+  }
+  const label = String(style?.label ?? style?.name ?? style?.title ?? "图片风格").trim() || "图片风格";
+  const referenceName = `引入 ${label}`;
+  return {
+    id: `batch-style-reference:${style?.id ?? style?.code ?? "selected"}`,
+    kind: "image",
+    type: "image",
+    name: referenceName,
+    originalName: "图片风格参考图",
+    isGenerationStyleReference: true,
+    description: String(style?.prompt_content ?? style?.promptContent ?? "").trim(),
+    preview,
+    url: preview,
+    src: preview,
+  };
+}
+
+function appendSelectedImageStylePrompt(prompt, style) {
+  const basePrompt = String(prompt ?? "").trim();
+  const stylePrompt = String(style?.prompt_content ?? style?.promptContent ?? "").trim();
+  const styleReference = buildImageStyleGenerationReference(style);
+  const referenceName = styleReference?.name ?? "";
+  if (!stylePrompt && !referenceName) {
+    return basePrompt;
+  }
+  if (stylePrompt) {
+    return appendImageGenerationStylePrompt(basePrompt, style, referenceName);
+  }
+  const contentLines = basePrompt
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*图片风格：/u.test(line));
+  return [...contentLines, `图片风格：【@${referenceName}】`].filter(Boolean).join("\n");
+}
+
 function resolveEpisodeBatchPublicStyles(workbench) {
   const styles = Array.isArray(workbench.ui.projectStyles) ? workbench.ui.projectStyles : [];
   return styles
@@ -4693,11 +5426,15 @@ function resolveEpisodeBatchSelectedStyle(workbench, styleId, modal = null) {
 }
 
 function resolveEpisodeBatchStyleSelection(modal, styleTab) {
+  const currentStyleId = String(modal?.selectedStyleId ?? "").trim();
+  if (currentStyleId) {
+    return currentStyleId;
+  }
   const list =
     styleTab === "custom"
       ? Array.isArray(modal?.customStyles) ? modal.customStyles : []
       : Array.isArray(modal?.publicStyles) ? modal.publicStyles : [];
-  return list[0]?.id ?? "";
+  return modal?.projectStyle?.id ?? list.find((style) => style?.isDefault)?.id ?? list[0]?.id ?? "";
 }
 
 function resolveStoryboardPromptPackageList(payload) {
@@ -4764,7 +5501,16 @@ export function resolveEpisodeGenerationStyle(workbench) {
     ? ""
     : String(workbench.ui.episodeGenerationStyleCode ?? "").trim();
   const projectCode = resolveEpisodeProjectStyleCode(workbench.state ?? {}, workbench.ui ?? {});
-  for (const code of [selectedCode, projectCode]) {
+  const candidateCodes = [selectedCode, projectCode].flatMap((code) => {
+    if (code === "anime") {
+      return [code, "animation"];
+    }
+    if (code === "animation") {
+      return [code, "anime"];
+    }
+    return [code];
+  });
+  for (const code of candidateCodes) {
     if (!code) {
       continue;
     }
@@ -4794,34 +5540,118 @@ function appendImageGenerationStylePrompt(prompt, style, referenceName = "") {
   if (!stylePrompt) {
     return baseLines.filter(Boolean).join("\n") || null;
   }
-  const referenceToken = referenceName ? `【@${referenceName}】` : "";
+  const referenceInstruction = referenceName ? `参考【@${referenceName}】不要出现参考图内容，` : "";
   const punctuation = /[。！？.!?]$/u.test(stylePrompt) ? "" : "。";
-  return [...baseLines, `图片风格：${referenceToken}${stylePrompt}${punctuation}`]
+  return [...baseLines, `图片风格：${referenceInstruction}${stylePrompt}${punctuation}`]
     .filter(Boolean)
     .join("\n");
 }
 
-function isImportedAssetGenerationStyleReference(workbench, item) {
-  if (
+function isAutomaticImageStyleReference(item) {
+  return Boolean(
     item?.isGenerationStyleReference === true ||
     String(item?.id ?? "").startsWith("quick-ref:style:") ||
     String(item?.id ?? "").startsWith("batch-style-reference:") ||
+    String(item?.id ?? "").startsWith("storyboard-generator-style:") ||
     String(item?.originalName ?? "").trim() === "图片风格参考图"
-  ) {
-    return true;
-  }
-  if (!/^\s*图片风格：/mu.test(getCurrentScopePrompt(workbench))) {
+  );
+}
+
+function isProjectImageStyleReference(workbench, item) {
+  const referenceUrl = normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item));
+  if (!referenceUrl) {
     return false;
   }
-  const referenceUrl = normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item));
-  return Boolean(referenceUrl) && (workbench.ui.projectStyles ?? []).some((style) => (
+  return (workbench.ui.projectStyles ?? []).some((style) => (
     normalizeGenerationReferenceIdentity(
       style?.coverImageUrl ?? style?.cover_image_url ?? style?.image ?? "",
     ) === referenceUrl
   ));
 }
 
-function syncImportedAssetGenerationStyle(workbench, style) {
+function annotateAutomaticImageStyleReferences(workbench, prompt, references = []) {
+  const hasImageStylePrompt = /^\s*图片风格：/mu.test(String(prompt ?? ""));
+  return references.map((item) => (
+    isAutomaticImageStyleReference(item) || (hasImageStylePrompt && isProjectImageStyleReference(workbench, item))
+      ? { ...item, isGenerationStyleReference: true }
+      : item
+  ));
+}
+
+function collectAssetGeneratorPromptReferences(asset) {
+  const replayTask = resolveAssetGeneratorReplayTask(asset);
+  const parameterSources = [
+    asset?.parameters,
+    asset?.payload?.parameters,
+    replayTask?.parameters,
+  ].filter((item) => item && typeof item === "object");
+  const parameterReferences = parameterSources.flatMap((parameters) => [
+    ...(Array.isArray(parameters.references) ? parameters.references : []),
+    ...(Array.isArray(parameters.quickReferences) ? parameters.quickReferences : []),
+    ...(Array.isArray(parameters.referenceImages) ? parameters.referenceImages : []),
+    parameters.imageReference,
+  ]).filter(Boolean);
+  return dedupeOrderedGenerationReferenceItems([
+    ...collectConversationEditItems(asset, "quickReferenceItems"),
+    ...collectConversationEditItems(asset, "attachmentItems"),
+    ...collectConversationEditItems(asset, "referenceUploads"),
+    ...parameterReferences,
+  ]);
+}
+
+function stripAutomaticImageStylePromptForWorkbench(workbench, prompt, references = []) {
+  return stripAutomaticImageStylePrompt(
+    prompt,
+    annotateAutomaticImageStyleReferences(workbench, prompt, references),
+  );
+}
+
+function isImportedAssetGenerationStyleReference(workbench, item) {
+  if (
+    isAutomaticImageStyleReference(item)
+  ) {
+    return true;
+  }
+  if (!/^\s*图片风格：/mu.test(getCurrentScopePrompt(workbench))) {
+    return false;
+  }
+  return isProjectImageStyleReference(workbench, item);
+}
+
+function stripAutomaticImageStylePrompt(prompt, references = []) {
+  const imageReferences = references.filter((item) => resolveGenerationReferenceMediaKind(item) === "image");
+  const referenceNames = new Set(
+    references
+      .filter(isAutomaticImageStyleReference)
+      .flatMap((item) => {
+        const name = String(item?.name ?? "").trim();
+        const originalName = String(item?.originalName ?? "").trim();
+        const tokenName = String(item?.token ?? "").replace(/^【@|】$/gu, "").trim();
+        const imageIndex = imageReferences.indexOf(item);
+        return [
+          name,
+          originalName,
+          tokenName,
+          imageIndex >= 0 ? `图${imageIndex + 1}` : "",
+          name && !name.startsWith("引入 ") ? `引入 ${name}` : "",
+        ];
+      })
+      .filter(Boolean),
+  );
+  if (!referenceNames.size) {
+    return String(prompt ?? "").trim();
+  }
+  return String(prompt ?? "")
+    .split(/\r?\n/u)
+    .filter((line) => (
+      !/^\s*图片风格：/u.test(line) ||
+      ![...referenceNames].some((name) => line.includes(`【@${name}】`))
+    ))
+    .join("\n")
+    .trim();
+}
+
+function syncImportedAssetGenerationStyle(workbench, style, options = {}) {
   if (!isAssetScope(workbench)) {
     return;
   }
@@ -4829,48 +5659,37 @@ function syncImportedAssetGenerationStyle(workbench, style) {
   const quickReferenceItems = Array.isArray(assetPromptDraft.quickReferenceItems)
     ? assetPromptDraft.quickReferenceItems
     : [];
-  if (!quickReferenceItems.some((item) => isImportedAssetGenerationStyleReference(workbench, item))) {
+  if (
+    options.force !== true &&
+    !quickReferenceItems.some((item) => isImportedAssetGenerationStyleReference(workbench, item))
+  ) {
     return;
   }
-  const stylePreview = String(
-    style?.coverImageUrl ?? style?.cover_image_url ?? style?.image ?? "",
-  ).trim();
-  const styleReferenceName = stylePreview ? "图片风格参考图" : "";
-  const styleReference = stylePreview
-    ? {
-        id: `quick-ref:style:${style?.code ?? style?.id ?? "selected"}`,
-        kind: "image",
-        type: "image",
-        name: style?.name ?? "画风",
-        originalName: styleReferenceName,
-        isGenerationStyleReference: true,
-        description: String(style?.prompt_content ?? style?.promptContent ?? "").trim(),
-        preview: stylePreview,
-        url: stylePreview,
-        src: stylePreview,
-      }
-    : null;
-  const nextQuickReferenceItems = [
-    ...quickReferenceItems.filter((item) => !isImportedAssetGenerationStyleReference(workbench, item)),
-    ...(styleReference ? [styleReference] : []),
-  ];
+  const nextQuickReferenceItems = quickReferenceItems.filter(
+    (item) => !isImportedAssetGenerationStyleReference(workbench, item),
+  );
   workbench.ui.assetPromptDraft = {
     ...assetPromptDraft,
     quickReferenceItems: nextQuickReferenceItems,
   };
-  const nextPrompt = appendImageGenerationStylePrompt(
+}
+
+function clearImportedAssetGenerationStyle(workbench) {
+  if (!isAssetScope(workbench)) return;
+  const assetPromptDraft = workbench.ui.assetPromptDraft ?? {};
+  const quickReferenceItems = assetPromptDraft.quickReferenceItems ?? [];
+  const automaticStyleReferences = quickReferenceItems
+    .filter((item) => isImportedAssetGenerationStyleReference(workbench, item));
+  workbench.ui.assetPromptDraft = {
+    ...assetPromptDraft,
+    quickReferenceItems: (assetPromptDraft.quickReferenceItems ?? [])
+      .filter((item) => !isImportedAssetGenerationStyleReference(workbench, item)),
+  };
+  const nextPrompt = stripAutomaticImageStylePrompt(
     getCurrentScopePrompt(workbench),
-    style,
-    styleReferenceName,
+    quickReferenceItems,
   );
-  setCurrentScopePrompt(
-    workbench,
-    normalizePromptByImageReferenceOrder(
-      workbench,
-      nextPrompt,
-      workbench.ui.assetPromptDraft,
-    ),
-  );
+  setCurrentScopePrompt(workbench, nextPrompt);
 }
 
 function appendStoryboardImageStylePrompt(prompt, style, referenceName = "") {
@@ -4897,64 +5716,59 @@ function isStoryboardGeneratorStyleReference(item) {
   );
 }
 
+function stripStoryboardGeneratorAutomaticStylePrompt(workbench, prompt, references = []) {
+  const styleReferenceNames = references
+    .filter((item) => isStoryboardGeneratorStyleReference(item))
+    .flatMap((item) => [item?.name, item?.originalName])
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  const automaticStyleContents = [
+    ...(workbench.ui.projectStyles ?? []),
+    ...(workbench.ui.episodeBatchOfficialImageStyleSkills ?? []),
+    ...(workbench.ui.episodeBatchPrivateImageStyleSkills ?? []),
+  ]
+    .map((style) => String(style?.prompt_content ?? style?.promptContent ?? "").trim())
+    .filter(Boolean);
+  return String(prompt ?? "")
+    .split(/\r?\n/u)
+    .filter((line) => {
+      if (!/^\s*图片风格：/u.test(line)) return true;
+      if (/【@(?:图片风格参考图|引入 [^】]+)】/u.test(line)) return false;
+      if (styleReferenceNames.some((name) => line.includes(`【@${name}】`))) return false;
+      return !automaticStyleContents.some((content) => line.includes(content));
+    })
+    .join("\n");
+}
+
 function syncStoryboardGeneratorStyle(workbench, style) {
-  const styleCode = String(style?.code ?? style?.id ?? "selected").trim() || "selected";
-  const stylePreview = String(
-    style?.coverImageUrl ?? style?.cover_image_url ?? style?.image ?? "",
-  ).trim();
-  const styleIdentity = normalizeGenerationReferenceIdentity(stylePreview);
-  let matchedStyleReference = false;
-  const references = (workbench.ui.assetGeneratorStoryboardReferences ?? [])
-    .filter((item) => !isStoryboardGeneratorStyleReference(item))
-    .map((item) => {
-      const matchesStylePreview = Boolean(styleIdentity) &&
-        normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item)) === styleIdentity;
-      if (!matchesStylePreview) {
-        return item;
-      }
-      matchedStyleReference = true;
-      return {
-        ...item,
-        id: `storyboard-generator-style:${styleCode}`,
-        assetId: `storyboard-generator-style:${styleCode}`,
-        role: "style",
-        originalName: "图片风格参考图",
-        isGenerationStyleReference: true,
-        description: String(style?.prompt_content ?? style?.promptContent ?? "").trim(),
-      };
-    });
-  if (stylePreview && !matchedStyleReference) {
-    references.push({
-      id: `storyboard-generator-style:${styleCode}`,
-      assetId: `storyboard-generator-style:${styleCode}`,
-      role: "style",
-      kind: "image",
-      type: "image",
-      name: style?.name ?? "画风",
-      originalName: "图片风格参考图",
-      isGenerationStyleReference: true,
-      description: String(style?.prompt_content ?? style?.promptContent ?? "").trim(),
-      preview: stylePreview,
-      previewUrl: stylePreview,
-      url: stylePreview,
-      src: stylePreview,
-    });
+  const previousStoryboardReferences = normalizeStoryboardGeneratorImageReferences(
+    workbench.ui.assetGeneratorStoryboardReferences ?? [],
+  );
+  const previousReferences = normalizeStoryboardGeneratorImageReferences([
+    ...previousStoryboardReferences,
+    ...(workbench.ui.assetGeneratorStoryboardUploadReferences ?? []),
+  ]);
+  const nextStoryboardReferences = normalizeStoryboardGeneratorImageReferences(
+    (workbench.ui.assetGeneratorStoryboardReferences ?? [])
+      .filter((item) => !isStoryboardGeneratorStyleReference(item)),
+  );
+  const nextReferences = normalizeStoryboardGeneratorImageReferences([
+    ...nextStoryboardReferences,
+    ...(workbench.ui.assetGeneratorStoryboardUploadReferences ?? []),
+  ]);
+  workbench.ui.assetGeneratorStoryboardReferences = nextStoryboardReferences;
+  for (const promptKey of ["assetGeneratorPrompt", "assetGeneratorStoryboardPrompt"]) {
+    workbench.ui[promptKey] = reindexStoryboardGeneratorPromptReferences(
+      stripStoryboardGeneratorAutomaticStylePrompt(workbench, workbench.ui[promptKey], previousReferences),
+      previousReferences,
+      nextReferences,
+    );
   }
-  workbench.ui.assetGeneratorStoryboardReferences = normalizeStoryboardGeneratorImageReferences(references);
-  const styleReference = workbench.ui.assetGeneratorStoryboardReferences.find((item) =>
-    isStoryboardGeneratorStyleReference(item) || (
-      Boolean(styleIdentity) &&
-      normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item)) === styleIdentity
-    ),
-  );
-  workbench.ui.assetGeneratorPrompt = normalizeStoryboardGeneratorPrompt(
-    appendStoryboardImageStylePrompt(
-      workbench.ui.assetGeneratorPrompt,
-      style,
-      styleReference?.name ?? "",
-    ),
-    workbench.ui.assetGeneratorStoryboardReferences,
-  );
+}
+
+function clearStoryboardGeneratorStyle(workbench) {
+  syncStoryboardGeneratorStyle(workbench, null);
+  workbench.ui.assetGeneratorStyleCode = "";
 }
 
 async function loadTeamSurface(workbench) {
@@ -5367,9 +6181,6 @@ function replaceNavigationSurface(workbench, nextMarkup) {
       const active = nextTab?.classList.contains("active") === true;
       tab.classList.toggle("active", active);
       tab.setAttribute("aria-selected", String(active));
-      if (nextTab?.dataset.newCanvasHref) {
-        tab.dataset.newCanvasHref = nextTab.dataset.newCanvasHref;
-      }
     });
   } else {
     currentRail.replaceWith(nextRail);
@@ -5381,17 +6192,6 @@ function replaceNavigationSurface(workbench, nextMarkup) {
     currentMain.replaceWith(nextMain);
   } else {
     currentMain.className = nextMain.className;
-    const currentNewCanvasMount = currentMain.querySelector("[data-new-canvas-mount]");
-    const nextNewCanvasMount = nextMain.querySelector("[data-new-canvas-mount]");
-    if (
-      currentNewCanvasMount &&
-      nextNewCanvasMount &&
-      currentNewCanvasMount.dataset.projectId === nextNewCanvasMount.dataset.projectId &&
-      currentNewCanvasMount.dataset.episodeId === nextNewCanvasMount.dataset.episodeId
-    ) {
-      currentNewCanvasMount.remove();
-      nextNewCanvasMount.replaceWith(currentNewCanvasMount);
-    }
     let retainedStatusbar = currentStatusbar;
     if (currentStatusbar.innerHTML === nextStatusbar.innerHTML) {
       currentStatusbar.className = nextStatusbar.className;
@@ -5421,9 +6221,201 @@ function replaceNavigationSurface(workbench, nextMarkup) {
   return true;
 }
 
+function shouldMountNewCanvas(workbench) {
+  return isCanvasNavTab(workbench?.ui?.activeNavTab)
+    && workbench.ui.canvasProjectView === "detail";
+}
+
+function disposeNewCanvasMount(workbench) {
+  workbench.newCanvasMountToken = Symbol("new-canvas-disposed");
+  const host = workbench.newCanvasMount ?? workbench.newCanvasPendingHost ?? null;
+  workbench.newCanvasMount = null;
+  workbench.newCanvasPendingHost = null;
+  workbench.newCanvasInstance = null;
+  if (host) {
+    void unmountNewCanvas(host).catch((error) => {
+      console.warn("[creator-app] new canvas unmount failed", error);
+    });
+    return;
+  }
+  disposeCanvasGraph(workbench.canvasGraph);
+  workbench.canvasGraph = null;
+}
+
+function prepareNewCanvasMountForRender(workbench, shouldPreserve) {
+  const host = workbench.newCanvasMount;
+  const selectedProjectId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+  if (
+    !shouldPreserve
+    || !host?.isConnected
+    || String(host.dataset.canvasProjectId ?? "") !== selectedProjectId
+  ) {
+    if (host || workbench.newCanvasPendingHost) {
+      disposeNewCanvasMount(workbench);
+    }
+    return null;
+  }
+  host.remove();
+  return host;
+}
+
+function restoreNewCanvasMountAfterRender(workbench, preservedHost) {
+  if (!preservedHost || !shouldMountNewCanvas(workbench)) {
+    return false;
+  }
+  const replacementHost = workbench.root?.querySelector?.("[data-new-canvas-mount]");
+  if (!replacementHost) {
+    disposeNewCanvasMount(workbench);
+    return false;
+  }
+  replacementHost.replaceWith(preservedHost);
+  workbench.newCanvasMount = preservedHost;
+  void workbench.newCanvasInstance?.update?.({
+    state: workbench.state,
+    session: workbench.session,
+    api: workbench.api,
+    ui: workbench.ui,
+  }).catch((error) => {
+    console.warn("[creator-app] new canvas update failed", error);
+  });
+  return true;
+}
+
+async function syncNewCanvasMount(workbench) {
+  if (!shouldMountNewCanvas(workbench)) {
+    disposeNewCanvasMount(workbench);
+    return null;
+  }
+  const host = workbench.root?.querySelector?.("[data-new-canvas-mount]");
+  if (!host) {
+    return null;
+  }
+  const token = Symbol("new-canvas-mount");
+  workbench.newCanvasMountToken = token;
+  workbench.newCanvasPendingHost = host;
+  try {
+    const instance = await mountNewCanvas(host, {
+      workbench,
+      canvasProjectId: workbench.ui.selectedCanvasProjectId,
+      onDirectorDeskNotify({ message, tone }) {
+        showWorkbenchToast(workbench, message, { tone });
+        render(workbench);
+      },
+      onAction(event, { actionTarget: resolvedActionTarget } = {}) {
+        event.stopPropagation();
+        const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+        const actionTarget = resolvedActionTarget?.matches?.("[data-action]")
+          ? resolvedActionTarget
+          : eventTarget?.closest?.("[data-action]");
+        if (!actionTarget) {
+          return;
+        }
+        void runNewCanvasHostAction(workbench, () => handleAction(workbench, actionTarget)).catch((error) => {
+          workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+          render(workbench);
+        });
+      },
+      onInput(_event, context) {
+        handleNewCanvasHostInput(workbench, context.target);
+      },
+      onChange(_event, context) {
+        void runNewCanvasHostAction(workbench, () => handleNewCanvasHostChange(workbench, context.target)).catch((error) => {
+          workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+          render(workbench);
+        });
+      },
+      onCanvasAssetDrop(input) {
+        handleNewCanvasAssetDrop(workbench, input);
+      },
+      onCanvasExternalDrop(input) {
+        void handleNewCanvasExternalDrop(workbench, input).catch((error) => {
+          workbench.ui.toast = `素材导入失败：${friendlyError(error)}`;
+          render(workbench);
+        });
+      },
+      onCanvasBlankDoubleClick(input) {
+        addCanvasNodeFromShortcut(workbench, "source-text", input?.position);
+      },
+      onCanvasStoryboardCellDrop(input) {
+        void handleNewCanvasStoryboardCellDrop(workbench, input).catch((error) => {
+          workbench.ui.toast = `分镜提取失败：${friendlyError(error)}`;
+          render(workbench);
+        });
+      },
+      onRender({ graph }) {
+        if (workbench.newCanvasMountToken === token) {
+          workbench.canvasGraph = graph ?? null;
+        }
+      },
+      onDispose({ graph }) {
+        if (workbench.canvasGraph === graph) {
+          workbench.canvasGraph = null;
+        }
+      },
+    });
+    if (workbench.newCanvasMountToken !== token || !host.isConnected) {
+      await unmountNewCanvas(host);
+      return null;
+    }
+    workbench.newCanvasPendingHost = null;
+    workbench.newCanvasMount = host;
+    workbench.newCanvasInstance = instance;
+    host.dataset.canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "");
+    return instance;
+  } catch (error) {
+    if (workbench.newCanvasMountToken === token) {
+      workbench.newCanvasPendingHost = null;
+      workbench.ui.toast = `画布加载失败：${friendlyError(error)}`;
+      console.warn("[creator-app] new canvas mount failed", error);
+    }
+    return null;
+  }
+}
+
+async function runNewCanvasHostAction(workbench, action) {
+  workbench.newCanvasHostActionDepth = Number(workbench.newCanvasHostActionDepth ?? 0) + 1;
+  try {
+    return await action();
+  } finally {
+    workbench.newCanvasHostActionDepth = Math.max(0, Number(workbench.newCanvasHostActionDepth ?? 1) - 1);
+  }
+}
+
+function updateMountedNewCanvasSurface(workbench, options = {}) {
+  const host = workbench.newCanvasMount;
+  const selectedProjectId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+  if (
+    !workbench.newCanvasInstance
+    || !shouldMountNewCanvas(workbench)
+    || !host?.isConnected
+    || String(host.dataset.canvasProjectId ?? "") !== selectedProjectId
+  ) {
+    return false;
+  }
+  syncPersistentWorkbenchToastState(workbench);
+  if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") persistWorkbenchState(workbench);
+  void workbench.newCanvasInstance.update({
+    state: workbench.state,
+    session: workbench.session,
+    api: workbench.api,
+    ui: workbench.ui,
+    ...options,
+  }).catch((error) => {
+    console.warn("[creator-app] new canvas surface update failed", error);
+  });
+  return true;
+}
+
+function updateNewCanvasSurfaceForHostAction(workbench) {
+  if (Number(workbench.newCanvasHostActionDepth ?? 0) < 1) return false;
+  return updateMountedNewCanvasSurface(workbench);
+}
+
 function render(workbench, options = {}) {
+  if (updateNewCanvasSurfaceForHostAction(workbench)) return;
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
   const isDirectorDeskSurface = workbench.ui?.activeNavTab === "director";
+  const preservedNewCanvasMount = prepareNewCanvasMountForRender(workbench, shouldMountNewCanvas(workbench));
   syncPersistentWorkbenchToastState(workbench);
   applyWorkbenchTheme(workbench.ui?.selectedWorkbenchTheme);
   updateDocumentSeo(workbench);
@@ -5443,7 +6435,7 @@ function render(workbench, options = {}) {
       workbench.ui.selectedStoryboardId,
     );
     syncActiveCanvasDocument(workbench);
-    const nextMarkup = renderProductionWorkbench({
+    const nextMarkup = renderProjectDetail({
       state: workbench.state,
       session: workbench.session,
       api: workbench.api,
@@ -5451,6 +6443,7 @@ function render(workbench, options = {}) {
         ...workbench.ui,
         storyboards: activeStoryboards,
         selectedStoryboard,
+        canvasHostMount: shouldMountNewCanvas(workbench),
       },
     });
     if (!replaceNavigationSurface(workbench, nextMarkup)) {
@@ -5478,9 +6471,11 @@ function render(workbench, options = {}) {
     if (preservedDirectorDeskMount) {
       disposeDirectorDeskModule(workbench);
     }
+    if (preservedNewCanvasMount) {
+      disposeNewCanvasMount(workbench);
+    }
     disposeHomeLiquidEther(workbench);
     disposeHomeLightfall(workbench);
-    disposeNewCanvasModule(workbench);
     return;
   }
   applyPostRenderEffects(workbench);
@@ -5489,101 +6484,49 @@ function render(workbench, options = {}) {
   if (!restoreDirectorDeskMountAfterRender(workbench, preservedDirectorDeskMount)) {
     syncDirectorDeskModule(workbench);
   }
-  syncNewCanvasModule(workbench);
+  const restoredNewCanvasMount = restoreNewCanvasMountAfterRender(workbench, preservedNewCanvasMount);
   syncHomeLiquidEther(workbench);
   syncHomeLightfall(workbench);
   scheduleProjectGalleryMeasurement(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, singleEpisodeAiScrollState);
-  mountCanvasWorkflowIfPresent(workbench);
+  if (shouldMountNewCanvas(workbench) && !restoredNewCanvasMount) {
+    void syncNewCanvasMount(workbench);
+  } else {
+    mountCanvasWorkflowIfPresent(workbench);
+  }
   updateVisibleCanvasEdges(workbench.root?.querySelector?.(".canvas-stage"));
+  syncCanvasAssetIncrementalLoading(workbench);
+  syncCanvasLiveSubscription(workbench);
   resumeCanvasGenerationPollingIfNeeded(workbench);
   resumeEpisodeStoryboardGenerationPollingIfNeeded(workbench);
 }
 
+function resetCanvasAssetVisibleCount(workbench) {
+  workbench.ui.canvasAssetVisibleCount = 48;
+}
+
+function syncCanvasAssetIncrementalLoading(workbench) {
+  workbench.disposeCanvasAssetIncrementalLoading?.();
+  workbench.disposeCanvasAssetIncrementalLoading = null;
+  const sentinel = workbench.root?.querySelector?.("[data-canvas-asset-load-more-sentinel]");
+  const total = Number(sentinel?.dataset?.canvasAssetTotal ?? 0);
+  if (!sentinel || !Number.isFinite(total) || total <= 0 || typeof globalThis.IntersectionObserver !== "function") return;
+  const scrollRoot = sentinel.closest?.(".canvas-element-list") ?? null;
+  const observer = new globalThis.IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    observer.disconnect();
+    workbench.disposeCanvasAssetIncrementalLoading = null;
+    const current = Math.max(48, Number(workbench.ui.canvasAssetVisibleCount ?? 48) || 48);
+    if (current >= total) return;
+    workbench.ui.canvasAssetVisibleCount = Math.min(total, current + 48);
+    render(workbench);
+  }, { root: scrollRoot, rootMargin: "300px" });
+  observer.observe(sentinel);
+  workbench.disposeCanvasAssetIncrementalLoading = () => observer.disconnect();
+}
+
 let directorDeskModulePromise = null;
-let newCanvasModulePromise = null;
-let newCanvasStylesheetPromise = null;
 let promptEditorModulePromise = null;
-
-function loadNewCanvasStylesheet() {
-  if (newCanvasStylesheetPromise) return newCanvasStylesheetPromise;
-  const existing = document.querySelector(`link[href="${NEW_CANVAS_STYLESHEET_URL}"]`);
-  if (existing) return Promise.resolve();
-  newCanvasStylesheetPromise = new Promise((resolve, reject) => {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.href = NEW_CANVAS_STYLESHEET_URL;
-    link.addEventListener("load", resolve, { once: true });
-    link.addEventListener("error", () => reject(new Error("new_canvas_stylesheet_load_failed")), { once: true });
-    document.head.appendChild(link);
-  }).catch((error) => {
-    newCanvasStylesheetPromise = null;
-    throw error;
-  });
-  return newCanvasStylesheetPromise;
-}
-
-function loadNewCanvasModule() {
-  if (!newCanvasModulePromise) {
-    newCanvasModulePromise = Promise.all([
-      loadNewCanvasStylesheet(),
-      import(NEW_CANVAS_MODULE_URL),
-    ]).then(([, module]) => module).catch((error) => {
-      newCanvasModulePromise = null;
-      throw error;
-    });
-  }
-  return newCanvasModulePromise;
-}
-
-function disposeNewCanvasModule(workbench) {
-  workbench.newCanvasMountToken = Symbol("new-canvas-disposed");
-  try {
-    workbench.newCanvasUnmount?.();
-  } catch (error) {
-    console.warn("[creator-app] new canvas unmount failed", error);
-  }
-  workbench.newCanvasMount = null;
-  workbench.newCanvasUnmount = null;
-  workbench.newCanvasCanvasProjectId = null;
-}
-
-function syncNewCanvasModule(workbench) {
-  const mount = workbench.root?.querySelector?.("[data-new-canvas-mount]");
-  if (!mount) {
-    disposeNewCanvasModule(workbench);
-    return;
-  }
-  const canvasProjectId = String(mount.dataset.canvasProjectId ?? "").trim();
-  if (
-    workbench.newCanvasMount === mount &&
-    workbench.newCanvasCanvasProjectId === canvasProjectId &&
-    typeof workbench.newCanvasUnmount === "function"
-  ) return;
-  disposeNewCanvasModule(workbench);
-  const token = Symbol("new-canvas-mount");
-  workbench.newCanvasMountToken = token;
-  loadNewCanvasModule()
-    .then((module) => {
-      if (workbench.newCanvasMountToken !== token || !mount.isConnected) return;
-      workbench.newCanvasMount = mount;
-      workbench.newCanvasCanvasProjectId = canvasProjectId;
-      workbench.newCanvasUnmount = module.mountNewCanvas(mount, {
-        embedded: true,
-        canvasProjectId,
-        onNavigate: (tab) => {
-          const normalized = String(tab ?? "").trim();
-          if (!["home", "project"].includes(normalized)) return;
-          void handleAction(workbench, { dataset: { action: "set-nav-tab", tab: normalized } });
-        },
-      });
-    })
-    .catch((error) => {
-      if (workbench.newCanvasMountToken !== token || !mount.isConnected) return;
-      console.error("[creator-app] new canvas load failed", error);
-      mount.innerHTML = `<div class="new-canvas-native-loading" role="alert">画布加载失败，请刷新后重试。</div>`;
-    });
-}
 
 function loadDirectorDeskModule() {
   if (!directorDeskModulePromise) {
@@ -6487,7 +7430,7 @@ function isEpisodeWorkbenchCenterResizeHotzone(event, centerPanel) {
 }
 
 function updateEpisodeWorkbenchResizeHover(workbench, event) {
-  const centerPanel = resolveEventElement(event.target)?.closest?.(".episode-replica-center");
+  const centerPanel = resolveEventElement(event.composedPath?.()[0] ?? event.target)?.closest?.(".episode-replica-center");
   const activePanels = workbench.root?.querySelectorAll?.(".episode-replica-center.is-resize-target") ?? [];
   activePanels.forEach((panel) => panel.classList.remove("is-resize-target"));
   if (!centerPanel || workbench.ui.projectPanelMode !== "episode-workbench") {
@@ -6619,6 +7562,26 @@ function scheduleAssetLibrarySearch(workbench) {
       render(workbench, { focusLibrarySearch: true });
     }
   }, 250);
+}
+
+function schedulePromptMarketplaceSearch(workbench) {
+  if (workbench.promptPlazaSearchTimer) {
+    clearTimeout(workbench.promptPlazaSearchTimer);
+  }
+  workbench.promptPlazaSearchTimer = setTimeout(async () => {
+    workbench.promptPlazaSearchTimer = null;
+    await syncPromptMarketplace(workbench);
+    render(workbench, { preserveNavigationShell: true });
+    const input = workbench.root?.querySelector?.("[data-prompt-plaza-search-input]");
+    input?.focus?.({ preventScroll: true });
+    input?.setSelectionRange?.(input.value.length, input.value.length);
+  }, 280);
+}
+
+function cancelPromptMarketplaceSearch(workbench) {
+  if (!workbench.promptPlazaSearchTimer) return;
+  clearTimeout(workbench.promptPlazaSearchTimer);
+  workbench.promptPlazaSearchTimer = null;
 }
 
 function scheduleProjectSearch(workbench, value) {
@@ -7050,6 +8013,10 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
       projectStyles: workbench.ui.projectStyles ?? [],
       projectStyleCode: resolveEpisodeProjectStyleCode(workbench.state ?? {}, workbench.ui ?? {}),
       selectedProjectStyleCode: resolveEpisodeGenerationStyle(workbench)?.code ?? "",
+      assetImageStyleSkillId: resolveAssetImageStyleSkillId(workbench),
+      assetImageStyleSkillModalOpen: Boolean(workbench.ui.assetImageStyleSkillModalOpen),
+      assetImageStyleOfficialSkills: workbench.ui.episodeBatchOfficialImageStyleSkills ?? [],
+      assetImageStylePrivateSkills: workbench.ui.episodeBatchPrivateImageStyleSkills ?? [],
     },
     mediaMode,
     videoMode: workbench.ui.videoGenerationMode ?? "reference-video",
@@ -7358,6 +8325,7 @@ async function syncStoryboardGeneratorPromptEditor(workbench) {
       mentionReferences: references,
       onChange({ length, prompt }) {
         workbench.ui.assetGeneratorPrompt = prompt;
+        workbench.ui.assetGeneratorStoryboardPrompt = prompt;
         const counter = editorHost.closest?.(".asset-generator-prompt")?.querySelector?.(".asset-generator-prompt-count");
         if (counter) {
           counter.textContent = `${length}/5000`;
@@ -7395,14 +8363,18 @@ function buildStoryboardGeneratorPromptEditorReferences(workbench) {
   return normalizeStoryboardGeneratorImageReferences([
     ...(workbench.ui.assetGeneratorStoryboardReferences ?? []),
     ...(workbench.ui.assetGeneratorStoryboardUploadReferences ?? []),
-  ]).map((item) => ({
-    ...item,
-    assetKind: "image",
-    kind: "image",
-    label: item.name,
-    preview: resolveApiUrl(resolveGenerationReferenceUrl(item)),
-    referenceId: item.id,
-  }));
+  ]).map((item) => {
+    const referenceId = String(item.id ?? "").trim();
+    return {
+      ...item,
+      assetId: referenceId,
+      assetKind: "image",
+      kind: "image",
+      label: item.name,
+      preview: resolveApiUrl(resolveGenerationReferenceUrl(item)),
+      referenceId,
+    };
+  });
 }
 
 function getCurrentPromptGenerationState(workbench) {
@@ -7416,10 +8388,13 @@ function getCurrentPromptGenerationState(workbench) {
 }
 
 function buildPromptEditorSuggestions(workbench) {
-  if ((workbench.ui.museScopeMode ?? "storyboard") !== "storyboard") {
-    return [];
-  }
-  return collectPromptMentionSuggestionAssets(workbench).map((item) => {
+  const suggestionAssets = collectPromptMentionSuggestionAssets(workbench).filter((item) => (
+    !isAssetScope(workbench) || (
+      String(item.assetKind ?? item.kind ?? "").trim() === "image" &&
+      isAssetScopeUploadedImageReference(workbench, item)
+    )
+  ));
+  return suggestionAssets.map((item) => {
     const assetKind = item.assetKind ?? item.kind ?? "character";
     const currentMediaAlias = resolvePromptMentionCurrentMediaAlias(workbench, item, assetKind);
     const label = currentMediaAlias?.name ?? item.name ?? item.label ?? "素材";
@@ -7440,6 +8415,9 @@ function buildPromptEditorSuggestions(workbench) {
 function collectPromptMentionSuggestionAssets(workbench) {
   return collectPromptMentionAssets(workbench).filter((item) => {
     const assetKind = item.assetKind ?? item.kind ?? "character";
+    if (isAssetScope(workbench)) {
+      return isAssetScopeUploadedImageReference(workbench, item);
+    }
     if (assetKind === "image" || assetKind === "audio" || assetKind === "video") {
       return true;
     }
@@ -7447,9 +8425,25 @@ function collectPromptMentionSuggestionAssets(workbench) {
   });
 }
 
+function isAssetScopeUploadedImageReference(workbench, item) {
+  if (String(item?.assetKind ?? item?.kind ?? "").trim() !== "image") {
+    return false;
+  }
+  if (isAutomaticImageStyleReference(item)) {
+    return false;
+  }
+  const sourceAssetKind = String(item?.sourceAssetKind ?? "").trim();
+  if (sourceAssetKind === "other" && resolveGenerationReferenceMediaKind(item) !== "image") {
+    return false;
+  }
+  return true;
+}
+
 export function resolvePromptEditorMentionReferences(workbench, prompt, mentionReferences = []) {
   const references = Array.isArray(mentionReferences) ? mentionReferences : [];
-  const assets = collectPromptMentionAssets(workbench);
+  const assets = isAssetScope(workbench)
+    ? collectPromptMentionSuggestionAssets(workbench)
+    : collectPromptMentionAssets(workbench);
   const result = [];
   const seenNames = new Set();
   for (const match of String(prompt ?? "").matchAll(/【@([^】]+)】/gu)) {
@@ -7462,10 +8456,16 @@ export function resolvePromptEditorMentionReferences(workbench, prompt, mentionR
       String(item?.name ?? "").trim() === name || String(item?.token ?? "").trim() === `【@${name}】`
     )) ?? null;
     const matchedAsset = assets.find((item) => doesPromptMentionMatchAssetName(item, name)) ?? null;
+    const matchedReferenceAsset = currentReference
+      ? assets.find((item) => isPromptMentionSameMediaAsset(item, currentReference))
+      : null;
+    if (isAssetScope(workbench) && !matchedAsset && !matchedReferenceAsset) {
+      continue;
+    }
     const assetKind = String(
-      currentReference?.assetKind ?? currentReference?.kind ?? matchedAsset?.assetKind ?? matchedAsset?.kind ?? "character",
+      matchedAsset?.assetKind ?? matchedAsset?.kind ?? currentReference?.assetKind ?? currentReference?.kind ?? "character",
     ).trim() || "character";
-    const assetId = currentReference?.assetId ?? matchedAsset?.assetId ?? matchedAsset?.id ?? null;
+    const assetId = matchedAsset?.assetId ?? matchedAsset?.id ?? currentReference?.assetId ?? null;
     const matchedAssetPreview = matchedAsset
       ? resolvePromptEditorMentionPreview(matchedAsset, assetKind)
       : "";
@@ -7556,7 +8556,7 @@ export function reconcilePromptMentionMediaItemsForTest(items = [], mentions = [
     }
     const itemAssetId = String(item?.assetId ?? "").trim();
     return [...activeAssetIds].some((assetId) => (
-      assetId === itemAssetId || itemId.endsWith(`:${assetId}`)
+      assetId === itemAssetId || assetId === itemId || itemId.endsWith(`:${assetId}`)
     ));
   });
 }
@@ -7725,7 +8725,11 @@ function renderEpisodeWorkbenchStageBodyOnly(workbench) {
   preserveEpisodeWorkbenchStageBodyScroll(stageBody, () => {
     stageBody.innerHTML = html;
   });
-  if (requestedScrollMode === "latest" || requestedScrollMode === "bottom") {
+  const shouldScrollConversationToTop = requestedScrollMode === "top";
+  if (shouldScrollConversationToTop) {
+    stageBody.scrollTop = 0;
+    workbench.ui.episodeWorkbenchConversationScrollMode = null;
+  } else if (requestedScrollMode === "latest" || requestedScrollMode === "bottom") {
     keepEpisodeWorkbenchConversationPinnedToBottom(workbench);
     workbench.ui.episodeWorkbenchConversationScrollMode = null;
   }
@@ -8011,6 +9015,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "open-episode-batch-actions",
     "close-episode-batch-modal",
     "close-single-episode-modal",
+    "close-script-conversion-skill-modal",
+    "set-script-conversion-skill-tab",
+    "select-script-conversion-skill-draft",
+    "confirm-script-conversion-skill",
+    "close-episode-prompt-skill-modal",
+    "set-episode-prompt-skill-source",
+    "set-episode-prompt-skill-category",
+    "select-episode-prompt-skill-draft",
+    "clear-episode-prompt-skill-draft",
+    "confirm-episode-prompt-skills",
+    "open-storyboard-prompt-skill-modal",
+    "close-storyboard-prompt-skill-modal",
+    "set-storyboard-prompt-skill-source",
+    "select-storyboard-prompt-skill-draft",
+    "confirm-storyboard-prompt-skill",
     "close-ai-storyboard-preview",
     "toggle-single-episode-script-picker",
     "toggle-single-episode-import-menu",
@@ -8039,18 +9058,57 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "save-manual-script-analysis",
     "regenerate-manual-script-analysis",
     "toggle-canvas-add-menu",
+    "set-canvas-tool",
     "add-canvas-node",
     "add-canvas-template",
     "delete-canvas-node",
+    "duplicate-canvas-node",
+    "cut-canvas-selection",
+    "copy-canvas-selection",
+    "paste-canvas-selection",
+    "undo-canvas-change",
+    "redo-canvas-change",
+    "group-canvas-selection",
+    "ungroup-canvas-selection",
     "edit-canvas-text-node",
     "format-canvas-text-node",
+    "set-canvas-markdown-mode",
+    "copy-canvas-markdown-text",
+    "toggle-canvas-markdown-fullscreen",
+    "set-canvas-markdown-fullscreen-mode",
+    "pick-canvas-markdown-file",
+    "export-canvas-markdown",
+    "open-canvas-prompt-reference-picker",
+    "close-canvas-prompt-reference-picker",
+    "set-canvas-prompt-reference-tab",
+    "select-canvas-prompt-reference",
+    "confirm-canvas-prompt-reference",
+    "create-canvas-node-from-prompt-reference",
     "open-canvas-script-picker",
     "select-canvas-script-source",
     "apply-canvas-script-episode",
     "select-canvas-node",
     "set-canvas-sidebar-mode",
+    "set-canvas-asset-source",
+    "add-canvas-library-asset",
+    "toggle-canvas-node-search",
+    "toggle-canvas-sidebar",
+    "toggle-canvas-snap",
     "set-canvas-viewport",
+    "set-canvas-edge-style",
+    "set-canvas-interaction-mode",
+    "toggle-canvas-audio-play",
+    "seek-canvas-audio",
+    "toggle-canvas-video-fullscreen",
+    "close-canvas-video-fullscreen",
+    "request-canvas-video-native-fullscreen",
+    "capture-canvas-video-frame",
+    "set-canvas-group-color",
     "run-canvas-node",
+    "run-canvas-selection",
+    "open-canvas-director",
+    "sync-canvas-director-frame",
+    "export-canvas-director-video",
     "open-canvas-project",
     "create-canvas-project",
     "toggle-canvas-project-menu",
@@ -8664,10 +9722,696 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "set-canvas-sidebar-mode") {
-    workbench.ui.canvasSidebarMode = target.dataset.canvasSidebarMode === "assets" ? "assets" : "nodes";
+  if (action === "toggle-canvas-zoom-menu") {
+    workbench.ui.canvasZoomMenuOpen = workbench.ui.canvasZoomMenuOpen !== true;
     workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.canvasScriptPicker = null;
     render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-sidebar-mode") {
+    const requestedMode = target.dataset.canvasSidebarMode;
+    workbench.ui.canvasSidebarMode = ["assets", "history"].includes(requestedMode) ? requestedMode : "nodes";
+    if (workbench.ui.canvasSidebarMode === "assets") resetCanvasAssetVisibleCount(workbench);
+    workbench.ui.canvasAddMenuOpen = false;
+    if (["assets", "history"].includes(workbench.ui.canvasSidebarMode)) {
+      workbench.ui.canvasAssetsLoading = true;
+      render(workbench);
+      await loadCanvasGenerationAssets(workbench, {
+        reset: true,
+        ...(workbench.ui.canvasSidebarMode === "history" && normalizeCanvasHistoryFilterValue(workbench.ui.canvasHistoryFilter) !== "all"
+          ? { mediaKind: normalizeCanvasHistoryFilterValue(workbench.ui.canvasHistoryFilter) }
+          : {}),
+      });
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-asset-source") {
+    const requestedSource = String(target.dataset.canvasAssetSource ?? "outputs").trim().toLowerCase();
+    workbench.ui.canvasAssetSource = ["outputs", "project", "global", "drama"].includes(requestedSource)
+      ? requestedSource
+      : "outputs";
+    workbench.ui.canvasAssetSearch = "";
+    workbench.ui.canvasAssetMediaFilter = "all";
+    workbench.ui.canvasAssetTagFilter = "";
+    resetCanvasAssetVisibleCount(workbench);
+    workbench.ui.canvasLibraryAssetsError = "";
+    if (workbench.ui.canvasAssetSource === "global" && workbench.ui.canvasLibraryAssetsLoaded !== true) {
+      workbench.ui.canvasLibraryAssetsLoading = true;
+      render(workbench);
+      await loadCanvasLibraryAssets(workbench);
+    }
+    if (workbench.ui.canvasAssetSource === "project") {
+      workbench.ui.canvasAssetProjectAssetsError = "";
+      workbench.ui.canvasAssetProjectsLoading = workbench.ui.canvasAssetProjectsLoaded !== true;
+      workbench.ui.canvasAssetProjectAssetsLoading = true;
+      render(workbench);
+      await loadCanvasProjectAssets(workbench);
+    }
+    if (workbench.ui.canvasAssetSource === "drama" && workbench.ui.canvasAssetProjectsLoaded !== true) {
+      workbench.ui.canvasAssetProjectsLoading = true;
+      render(workbench);
+      await loadCanvasAssetProjects(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-canvas-drama-drawer") {
+    workbench.ui.canvasDramaDrawerOpen = !workbench.ui.canvasDramaDrawerOpen;
+    if (workbench.ui.canvasDramaDrawerOpen) {
+      render(workbench);
+      await loadCanvasDramaEpisodes(workbench);
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "create-canvas-drama-asset") {
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const draft = workbench.ui.canvasDramaAssetCreate ?? {};
+    const assetType = String(draft.assetType ?? "role").trim();
+    const name = String(draft.name ?? "").trim();
+    if (!episodeId || typeof workbench.api?.createEpisodeAsset !== "function") {
+      workbench.ui.toast = "请先选择可编辑的剧集。";
+      render(workbench);
+      return;
+    }
+    if (!["role", "scene", "prop"].includes(assetType) || !name) {
+      workbench.ui.toast = "请填写资产名称并选择资产类型。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在新建短剧资产...", async () => {
+      await workbench.api.createEpisodeAsset(episodeId, { assetType, name });
+      workbench.ui.canvasDramaAssetCreate = { assetType, name: "" };
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: "短剧资产已新建。" });
+    return;
+  }
+
+  if (action === "trigger-canvas-drama-asset-import") {
+    const input = target.closest?.(".canvas-drama-asset-create")?.querySelector?.("[data-canvas-drama-asset-file]");
+    input?.click?.();
+    return;
+  }
+
+  if (action === "trigger-canvas-drama-asset-fixed-image-upload") {
+    const input = target.closest?.("article")?.querySelector?.("[data-canvas-drama-asset-fixed-image-file]");
+    input?.click?.();
+    return;
+  }
+
+  if (action === "clear-canvas-drama-asset-fixed-image") {
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    if (!episodeId || !assetId || typeof workbench.api?.clearFixedImage !== "function") {
+      workbench.ui.toast = "固定图解绑接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定解绑这个短剧资产的固定图吗？")) return;
+    await runAction(workbench, "正在解绑固定图...", async () => {
+      await workbench.api.clearFixedImage(episodeId, assetId);
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: "固定图已解绑。" });
+    return;
+  }
+
+  if (action === "clear-canvas-drama-asset-category") {
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const assetType = String(workbench.ui.canvasDramaAssetCreate?.assetType ?? "role").trim();
+    const assets = (workbench.ui.canvasDramaAssets ?? []).filter((asset) => asset?.assetType === assetType);
+    if (!episodeId || !["role", "scene", "prop"].includes(assetType) || typeof workbench.api?.deleteEpisodeAssetsByType !== "function") {
+      workbench.ui.toast = "短剧资产分类清空接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    if (!assets.length) {
+      workbench.ui.toast = "当前分类没有可清空的资产。";
+      render(workbench);
+      return;
+    }
+    const label = assetType === "scene" ? "场景" : assetType === "prop" ? "道具" : "角色";
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm(`确定清空当前剧集的全部${label}资产吗？`)) return;
+    await runAction(workbench, `正在清空${label}资产...`, async () => {
+      await workbench.api.deleteEpisodeAssetsByType(episodeId, assetType);
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: `已清空${label}资产。` });
+    return;
+  }
+
+  if (action === "save-canvas-drama-asset-description") {
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const description = String(workbench.ui.canvasDramaAssetEdits?.[assetId]?.description ?? "").trim();
+    if (!episodeId || !assetId || typeof workbench.api?.updateEpisodeAsset !== "function") {
+      workbench.ui.toast = "短剧资产更新接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在保存资产简介...", async () => {
+      await workbench.api.updateEpisodeAsset(episodeId, assetId, { description });
+      const edits = { ...(workbench.ui.canvasDramaAssetEdits ?? {}) };
+      delete edits[assetId];
+      workbench.ui.canvasDramaAssetEdits = edits;
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: "资产简介已保存。" });
+    return;
+  }
+
+  if (action === "delete-canvas-drama-asset") {
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    if (!episodeId || !assetId || typeof workbench.api?.deleteEpisodeAsset !== "function") {
+      workbench.ui.toast = "短剧资产删除接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定删除这个短剧资产吗？")) return;
+    await runAction(workbench, "正在删除短剧资产...", async () => {
+      await workbench.api.deleteEpisodeAsset(episodeId, assetId);
+      const edits = { ...(workbench.ui.canvasDramaAssetEdits ?? {}) };
+      delete edits[assetId];
+      workbench.ui.canvasDramaAssetEdits = edits;
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: "短剧资产已删除。" });
+    return;
+  }
+
+  if (action === "set-canvas-asset-media-filter") {
+    const mediaKind = String(target.dataset.canvasAssetMediaFilter ?? "all").trim().toLowerCase();
+    workbench.ui.canvasAssetMediaFilter = ["all", "image", "video", "audio"].includes(mediaKind)
+      ? mediaKind
+      : "all";
+    resetCanvasAssetVisibleCount(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-asset-tag-filter") {
+    workbench.ui.canvasAssetTagFilter = String(target.dataset.canvasAssetTag ?? "").trim();
+    resetCanvasAssetVisibleCount(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-asset-layout-columns") {
+    const current = Number(workbench.ui.canvasAssetLayoutColumns ?? 3);
+    const direction = Number(target.dataset.canvasAssetLayoutColumns ?? 0);
+    workbench.ui.canvasAssetLayoutColumns = Math.min(6, Math.max(2, current + direction));
+    render(workbench);
+    return;
+  }
+
+  if (action === "delete-canvas-global-asset") {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const isTeamMember = String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+    if (!assetId || isTeamMember || typeof workbench.api?.deleteTeamAsset !== "function") {
+      workbench.ui.toast = isTeamMember ? "团队子账户不能删除全局资产。" : "全局资产删除接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定删除这个全局资产吗？")) return;
+    await runAction(workbench, "正在删除全局资产...", async () => {
+      await workbench.api.deleteTeamAsset(assetId);
+      workbench.ui.canvasLibraryAssets = (workbench.ui.canvasLibraryAssets ?? [])
+        .filter((asset) => String(asset?.assetId ?? "") !== assetId);
+      workbench.ui.canvasLibraryAssetsLoaded = false;
+      workbench.ui.canvasLibraryAssetsLoading = true;
+      await loadCanvasLibraryAssets(workbench);
+    }, { successToast: "全局资产已删除。" });
+    return;
+  }
+
+  if (action === "delete-canvas-project-asset") {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const projectId = String(workbench.ui.canvasAssetProjectId ?? "").trim();
+    if (!assetId || !projectId || typeof workbench.api?.deleteProjectAsset !== "function") {
+      workbench.ui.toast = "项目资产删除接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定删除这个项目资产吗？")) return;
+    await runAction(workbench, "正在删除项目资产...", async () => {
+      await workbench.api.deleteProjectAsset(assetId);
+      workbench.ui.canvasAssetProjectAssetsLoading = true;
+      await loadCanvasProjectAssets(workbench, projectId);
+      resetCanvasAssetVisibleCount(workbench);
+    }, { successToast: "项目资产已删除。" });
+    return;
+  }
+
+  if (action === "save-canvas-project-asset-details") {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const projectId = String(workbench.ui.canvasAssetProjectId ?? "").trim();
+    const draft = workbench.ui.canvasProjectAssetEdits?.[assetId] ?? {};
+    const name = String(draft.name ?? "").trim();
+    const description = String(draft.description ?? "").trim();
+    if (!assetId || !projectId || !name || typeof workbench.api?.updateProjectAsset !== "function") {
+      workbench.ui.toast = name ? "项目资产更新接口暂不可用。" : "请输入资产名称。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在保存项目资产...", async () => {
+      await workbench.api.updateProjectAsset(assetId, { name, description });
+      const edits = { ...(workbench.ui.canvasProjectAssetEdits ?? {}) };
+      delete edits[assetId];
+      workbench.ui.canvasProjectAssetEdits = edits;
+      await loadCanvasProjectAssets(workbench, projectId);
+    }, { successToast: "项目资产已保存。" });
+    return;
+  }
+
+  if (action === "trigger-canvas-project-asset-replace") {
+    target.closest?.(".canvas-library-asset-item")?.querySelector?.("[data-canvas-project-asset-replace-file]")?.click?.();
+    return;
+  }
+
+  if (action === "move-canvas-global-asset-folder") {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const folderName = String(target.closest?.(".canvas-library-asset-item")?.querySelector?.("[data-canvas-global-asset-folder-input]")?.value ?? "").trim();
+    const isTeamMember = String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+    if (!assetId || isTeamMember || typeof workbench.api?.updateTeamAsset !== "function") {
+      workbench.ui.toast = isTeamMember ? "团队子账户不能移动全局资产。" : "全局资产文件夹接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    if (folderName.length > 64) {
+      workbench.ui.toast = "文件夹名称不能超过 64 个字符。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在移动全局资产...", async () => {
+      await workbench.api.updateTeamAsset(assetId, { folderName });
+      workbench.ui.canvasLibraryAssetsLoaded = false;
+      workbench.ui.canvasLibraryAssetsLoading = true;
+      await loadCanvasLibraryAssets(workbench);
+    }, { successToast: folderName ? `已移至“${folderName}”。` : "已移至未分类。" });
+    return;
+  }
+
+  if (action === "edit-canvas-library-asset-tags" || action === "edit-canvas-global-asset-tags") {
+    const source = String(target.dataset.assetSource ?? workbench.ui.canvasAssetSource ?? "").trim();
+    const libraryAssetId = String(target.dataset.libraryAssetId ?? "").trim();
+    const asset = findCanvasTagAsset(workbench, source, libraryAssetId);
+    const isTeamMember = String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+    if (!asset || (source === "global" && isTeamMember)) {
+      workbench.ui.toast = isTeamMember ? "团队子账户不能编辑全局资产标签。" : "资产标签接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    const editorKey = canvasAssetTagEditorKey(source, libraryAssetId);
+    workbench.ui.canvasAssetTagEditorKey = workbench.ui.canvasAssetTagEditorKey === editorKey ? "" : editorKey;
+    render(workbench);
+    if (workbench.ui.canvasAssetTagEditorKey) focusCanvasAssetTagInput(workbench, editorKey);
+    return;
+  }
+
+  if (action === "remove-canvas-library-asset-tag") {
+    const source = String(target.dataset.assetSource ?? workbench.ui.canvasAssetSource ?? "").trim();
+    const libraryAssetId = String(target.dataset.libraryAssetId ?? "").trim();
+    const tag = String(target.dataset.canvasAssetTag ?? "").trim();
+    const asset = findCanvasTagAsset(workbench, source, libraryAssetId);
+    if (!asset || !tag) return;
+    await saveCanvasAssetTags(workbench, {
+      source,
+      libraryAssetId,
+      tags: (asset.tags ?? []).filter((item) => item !== tag),
+    });
+    return;
+  }
+
+  if (action === "save-canvas-project-asset-to-global") {
+    const libraryAsset = findCanvasLibraryAsset(workbench, target.dataset.libraryAssetId);
+    if (libraryAsset?.source !== "project" || !libraryAsset.assetVersionId
+      || typeof workbench.api?.importProjectAssetToTeamLibrary !== "function") {
+      workbench.ui.toast = "该项目资产暂不能保存到全局。";
+      render(workbench);
+      return;
+    }
+    await runAction(workbench, "正在保存到全局资产...", async () => {
+      const payload = await workbench.api.importProjectAssetToTeamLibrary({
+        assetVersionId: libraryAsset.assetVersionId,
+        name: libraryAsset.title,
+      });
+      const asset = payload?.asset ?? payload?.data?.asset;
+      const globalAsset = normalizeCanvasLibraryAsset(asset, {
+        source: "global",
+        category: asset?.category ?? "image",
+      });
+      if (!globalAsset) throw new Error("全局资产复制结果不完整");
+      workbench.ui.canvasLibraryAssets = [
+        globalAsset,
+        ...(workbench.ui.canvasLibraryAssets ?? []).filter((item) => String(item?.assetId ?? "") !== String(globalAsset.assetId ?? "")),
+      ];
+      workbench.ui.canvasLibraryAssetsLoaded = true;
+    }, { successToast: "项目资产已保存到全局资产。" });
+    return;
+  }
+
+  if (action === "use-canvas-library-asset-as-style-reference") {
+    const canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "").trim();
+    const libraryAsset = findCanvasLibraryAsset(workbench, target.dataset.libraryAssetId);
+    const source = libraryAsset?.source === "project" && libraryAsset.assetVersionId
+      ? { kind: "project_asset_version", sourceId: libraryAsset.assetVersionId }
+      : libraryAsset?.source === "drama" && libraryAsset.assetVersionId
+        ? { kind: "drama_asset_version", sourceId: libraryAsset.assetVersionId }
+      : libraryAsset?.source === "global" && libraryAsset.storageObjectId && libraryAsset.assetId
+        ? { kind: "team_asset", sourceId: libraryAsset.assetId }
+        : null;
+    if (!canvasProjectId || libraryAsset?.kind !== "image" || !source
+      || typeof workbench.api?.importCanvasStyleReferenceAsset !== "function"
+      || typeof workbench.api?.updateCanvasSettings !== "function") {
+      workbench.ui.toast = "该图片暂不能设为风格母图。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.canvasStyleReferenceMaterializingAssetId = libraryAsset.id;
+    await runAction(workbench, "正在复制风格母图...", async () => {
+      const payload = await workbench.api.importCanvasStyleReferenceAsset(canvasProjectId, {
+        source,
+        label: libraryAsset.title,
+      });
+      const asset = payload?.asset ?? payload?.data?.asset;
+      if (!asset?.assetId || !asset?.assetVersionId) throw new Error("风格母图物化结果不完整");
+      const currentAssets = Array.isArray(workbench.ui.canvasAssets) ? workbench.ui.canvasAssets : [];
+      workbench.ui.canvasAssets = [
+        asset,
+        ...currentAssets.filter((item) => String(item?.assetId ?? "") !== String(asset.assetId)),
+      ];
+      let settings = workbench.ui.canvasSettingsRecord;
+      if (!settings?.settings || !Number.isFinite(Number(settings.revision))) {
+        settings = await loadCanvasSettingsRecord(workbench);
+      }
+      if (!settings?.settings || !Number.isFinite(Number(settings.revision))) {
+        throw new Error("画布设置暂不可用");
+      }
+      const saved = await workbench.api.updateCanvasSettings(canvasProjectId, {
+        expectedRevision: Number(settings.revision),
+        patch: {
+          visualStyle: {
+            ...(settings.settings.visualStyle ?? {}),
+            styleReferenceAssetId: asset.assetId,
+            styleReferenceEnabled: true,
+          },
+        },
+      });
+      workbench.ui.canvasSettingsRecord = saved?.settings ? saved : saved?.data ?? saved;
+    }, { successToast: "已设为当前画布的风格母图。" });
+    workbench.ui.canvasStyleReferenceMaterializingAssetId = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "trigger-canvas-global-asset-upload") {
+    const input = target.closest?.(".canvas-global-asset-tools")?.querySelector?.("[data-canvas-global-asset-file]");
+    input?.click?.();
+    return;
+  }
+
+  if (action === "trigger-canvas-project-asset-upload") {
+    const input = target.closest?.(".canvas-project-asset-tools")?.querySelector?.("[data-canvas-project-asset-file]");
+    input?.click?.();
+    return;
+  }
+
+  if (action === "toggle-canvas-node-search") {
+    workbench.ui.canvasNodeSearchOpen = workbench.ui.canvasNodeSearchOpen !== true;
+    if (!workbench.ui.canvasNodeSearchOpen) {
+      workbench.ui.canvasNodeSearch = "";
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-canvas-sidebar") {
+    workbench.ui.canvasSidebarCollapsed = workbench.ui.canvasSidebarCollapsed !== true;
+    render(workbench);
+    return;
+  }
+
+  if (action === "arrange-canvas-nodes") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const visibleNodeCount = canvasDocument.nodes?.filter?.((node) => !node?.data?.hiddenByCharacterId).length ?? 0;
+    if (!visibleNodeCount) {
+      workbench.ui.toast = "当前画布没有可整理的节点。";
+      render(workbench);
+      return;
+    }
+    updateActiveCanvasDocument(workbench, arrangeCanvasDocumentOnGrid(canvasDocument));
+    refreshCanvasWorkflowGraph(workbench);
+    const graph = workbench.canvasGraph;
+    workbench.ui.toast = `已整理 ${visibleNodeCount} 个画布节点。`;
+    if (typeof graph?.zoomToFit !== "function") {
+      graph?.centerContent?.();
+      render(workbench);
+      return;
+    }
+    graph.zoomToFit({ padding: 64, minScale: 0.35, maxScale: 1 });
+    const syncArrangedViewport = () => {
+      syncCanvasGraphViewport(graph, workbench);
+      const zoom = Number(workbench.ui.canvasDocument?.viewport?.zoom ?? 1);
+      const zoomPercent = Math.round(zoom * 100);
+      const canvasRoot = workbench.newCanvasMount?.shadowRoot ?? workbench.root;
+      const zoomTrigger = canvasRoot?.querySelector?.("[data-canvas-zoom-trigger]");
+      if (zoomTrigger) {
+        zoomTrigger.textContent = `${zoomPercent}%`;
+        zoomTrigger.setAttribute("aria-label", `画布缩放比例 ${zoomPercent}%`);
+      }
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(syncArrangedViewport);
+    else setTimeout(syncArrangedViewport, 0);
+    return;
+  }
+
+  if (action === "set-canvas-animation-preview-mode" || action === "set-canvas-animation-action") {
+    const nodeId = String(target.dataset.nodeId ?? "");
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const node = document.nodes?.find?.((item) => item.id === nodeId && item.type === "ai-animation");
+    if (!node) return;
+    const patch = action === "set-canvas-animation-preview-mode"
+      ? { animationPreviewMode: target.dataset.previewMode === "sheet" ? "sheet" : "playing" }
+      : { animationAction: normalizeCanvasAnimationState({ animationAction: target.dataset.animationAction }).action };
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(document, nodeId, patch));
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    workbench.ui.canvasRunPreview = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-panorama-mode") {
+    const nodeId = String(target.dataset.nodeId ?? "");
+    const mode = target.dataset.panoramaMode === "3d" ? "3d" : "image";
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
+      panoramaMode: mode,
+      previewMode: mode,
+    }));
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    render(workbench);
+    return;
+  }
+
+  if (action === "zoom-canvas-panorama" || action === "reset-canvas-panorama-view") {
+    const nodeId = String(target.dataset.nodeId ?? "");
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const node = document.nodes?.find?.((item) => item.id === nodeId);
+    if (!node) return;
+    const view = action === "reset-canvas-panorama-view"
+      ? normalizeCanvasPanoramaView()
+      : applyCanvasPanoramaZoom(node.data?.panoramaView, target.dataset.panoramaZoom === "in" ? -120 : 120);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(document, nodeId, { panoramaView: view }));
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-canvas-panorama-fullscreen") {
+    const body = target.closest?.("[data-canvas-panorama-body]");
+    const ownerDocument = body?.ownerDocument;
+    if (ownerDocument?.fullscreenElement) {
+      await ownerDocument.exitFullscreen?.();
+    } else {
+      await body?.requestFullscreen?.();
+    }
+    return;
+  }
+
+  if (action === "pick-canvas-panorama-file" || action === "pick-canvas-storyboard-image") {
+    const body = target.closest?.(action === "pick-canvas-panorama-file" ? "[data-canvas-panorama-body]" : "[data-canvas-storyboard-body]");
+    body?.querySelector?.(action === "pick-canvas-panorama-file" ? "[data-canvas-panorama-input]" : "[data-canvas-storyboard-input]")?.click?.();
+    return;
+  }
+
+  if (action === "capture-canvas-panorama-view") {
+    await captureCanvasPanoramaView(workbench, String(target.dataset.nodeId ?? ""));
+    return;
+  }
+
+  if (action === "set-canvas-storyboard-grid-mode" || action === "toggle-canvas-storyboard-edit" || action === "select-canvas-storyboard-cell" || action === "adjust-canvas-storyboard-grid-axis") {
+    const nodeId = String(target.dataset.nodeId ?? "");
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const node = document.nodes?.find?.((item) => item.id === nodeId);
+    if (!node) return;
+    const grid = normalizeCanvasStoryboardGrid(node);
+    const patch = action === "set-canvas-storyboard-grid-mode"
+      ? target.dataset.storyboardGridMode === "custom"
+        ? {
+            storyboardGridMode: "custom",
+            storyboardRows: grid.rows,
+            storyboardCols: grid.columns,
+            storyboardRowPositions: resizeCanvasStoryboardGridPositions(node.data?.storyboardRowPositions, grid.rows),
+            storyboardColPositions: resizeCanvasStoryboardGridPositions(node.data?.storyboardColPositions, grid.columns),
+          }
+        : { storyboardGridMode: "uniform" }
+      : action === "toggle-canvas-storyboard-edit"
+        ? { storyboardEditing: node.data?.storyboardEditing !== true }
+        : action === "select-canvas-storyboard-cell"
+          ? { storyboardSelectedCell: Math.max(0, Number(target.dataset.storyboardCellIndex ?? 0) || 0) }
+          : buildCanvasStoryboardAxisPatch(node, target.dataset.storyboardAxis, target.dataset.storyboardDelta);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(document, nodeId, patch));
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    render(workbench);
+    return;
+  }
+
+  if (action === "extract-canvas-storyboard-cell") {
+    await extractCanvasStoryboardCell(
+      workbench,
+      String(target.dataset.nodeId ?? ""),
+      Math.max(0, Number(target.dataset.storyboardCellIndex ?? 0) || 0),
+    );
+    return;
+  }
+
+  if (action === "retry-canvas-panorama") {
+    await handleAction(workbench, { dataset: { action: "run-canvas-node", nodeId: String(target.dataset.nodeId ?? "") } });
+    return;
+  }
+
+  if (action === "load-more-canvas-generation-history") {
+    if (!workbench.ui.canvasHistoryNextCursor || workbench.ui.canvasAssetsLoading) return;
+    workbench.ui.canvasAssetsLoading = true;
+    render(workbench);
+    await loadCanvasGenerationAssets(workbench, {
+      append: true,
+      cursor: workbench.ui.canvasHistoryNextCursor,
+      ...(workbench.ui.canvasSidebarMode === "history" && normalizeCanvasHistoryFilterValue(workbench.ui.canvasHistoryFilter) !== "all"
+        ? { mediaKind: normalizeCanvasHistoryFilterValue(workbench.ui.canvasHistoryFilter) }
+        : {}),
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "export-canvas-generation-history") {
+    const canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "");
+    if (!canvasProjectId || typeof workbench.api.exportCanvasGenerationHistory !== "function") return;
+    await runAction(workbench, "正在导出生成历史...", async () => {
+      const payload = await workbench.api.exportCanvasGenerationHistory(canvasProjectId, {
+        search: String(workbench.ui.canvasAssetSearch ?? "").trim(),
+      });
+      const project = normalizeCanvasProjects(workbench.ui).find((item) => item.id === canvasProjectId);
+      downloadJsonDocument(payload, `${project?.title ?? "canvas"}-generation-history.json`);
+    }, { successToast: "生成历史已导出。" });
+    return;
+  }
+
+  if (action === "toggle-canvas-history-record") {
+    const runId = String(target.dataset.runId ?? "").trim();
+    if (!runId) return;
+    const expanded = new Set(Array.isArray(workbench.ui.canvasHistoryExpandedIds) ? workbench.ui.canvasHistoryExpandedIds : []);
+    if (expanded.has(runId)) expanded.delete(runId);
+    else expanded.add(runId);
+    workbench.ui.canvasHistoryExpandedIds = [...expanded];
+    render(workbench);
+    return;
+  }
+
+  if (action === "copy-canvas-history-text") {
+    const runId = String(target.dataset.runId ?? "").trim();
+    const run = (Array.isArray(workbench.ui.canvasGenerationHistoryItems) ? workbench.ui.canvasGenerationHistoryItems : [])
+      .find((item) => String(item?.id ?? "") === runId);
+    const output = resolveCanvasHistoryOutputText(run?.outputSnapshot);
+    if (!output) {
+      workbench.ui.toast = "这条记录没有可复制的文本输出。";
+      render(workbench);
+      return;
+    }
+    try {
+      await copyTextToClipboard(output);
+      workbench.ui.toast = "输出已复制。";
+    } catch {
+      workbench.ui.toast = "复制输出失败，请检查剪贴板权限。";
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "copy-canvas-asset" || action === "download-canvas-asset") {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    if (!assetId) return;
+    await startCanvasAssetTransfer(workbench, assetId, action === "copy-canvas-asset" ? "copy" : "download");
+    return;
+  }
+
+  if (action === "copy-canvas-node-media") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "").trim();
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId);
+    const storageObjectId = canvasNodeStorageObjectId(node, workbench.ui.canvasAssets);
+    workbench.ui.canvasContextMenu = null;
+    if (!storageObjectId) {
+      workbench.ui.toast = "当前媒体没有可复制的稳定存储版本。";
+      render(workbench);
+      return;
+    }
+    try {
+      await copyCanvasAsset({ storageObjectId });
+      workbench.ui.toast = "媒体已复制到剪贴板。";
+    } catch (error) {
+      workbench.ui.toast = `媒体复制失败：${friendlyError(error)}`;
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "cancel-canvas-asset-transfer") {
+    cancelCanvasAssetTransfer(workbench, String(target.dataset.assetId ?? ""));
+    return;
+  }
+
+  if (action === "delete-canvas-generation-run") {
+    const canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "");
+    const runId = String(target.dataset.runId ?? "");
+    if (!canvasProjectId || !runId || typeof workbench.api.deleteCanvasGenerationRun !== "function") return;
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("确定删除这条生成记录及其画布产物吗？")) return;
+    await runAction(workbench, "正在删除生成记录...", async () => {
+      await workbench.api.deleteCanvasGenerationRun(canvasProjectId, runId);
+      await loadCanvasGenerationAssets(workbench, { reset: true });
+    }, { successToast: "生成记录已删除。" });
+    return;
+  }
+
+  if (action === "delete-canvas-node-generation-history" || action === "delete-all-canvas-generation-history") {
+    const canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "");
+    const nodeKey = String(target.dataset.nodeKey ?? workbench.ui.selectedCanvasNodeId ?? "").trim();
+    const scope = action === "delete-all-canvas-generation-history" ? "all" : "node";
+    if (!canvasProjectId || (scope === "node" && !nodeKey) || typeof workbench.api.deleteCanvasGenerationHistory !== "function") return;
+    const message = scope === "all"
+      ? "确定清空当前画布的全部生成历史及画布产物吗？"
+      : "确定删除当前节点的全部生成历史及画布产物吗？";
+    if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm(message)) return;
+    await runAction(workbench, "正在删除生成历史...", async () => {
+      await workbench.api.deleteCanvasGenerationHistory(canvasProjectId, {
+        scope,
+        ...(scope === "node" ? { nodeKey } : {}),
+      });
+      await loadCanvasGenerationAssets(workbench, { reset: true });
+    }, { successToast: scope === "all" ? "生成历史已清空。" : "节点生成历史已删除。" });
     return;
   }
 
@@ -8675,8 +10419,27 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
     const viewport = canvasDocument.viewport ?? {};
     const patchName = target.dataset.viewportPatch ?? "";
+    if (patchName === "zoom-value") {
+      const zoomPercent = Number(target.dataset.viewportValue ?? target.value ?? 100);
+      if (Number.isFinite(zoomPercent)) {
+        const zoom = Math.min(8, Math.max(0.1, Math.round(zoomPercent) / 100));
+        updateActiveCanvasDocument(workbench, {
+          ...canvasDocument,
+          viewport: { ...viewport, zoom },
+        });
+        applyCanvasGraphViewport(workbench);
+        render(workbench);
+      }
+      return;
+    }
     if (patchName === "zoom-in" || patchName === "zoom-out") {
       zoomCanvasAtPoint(workbench, patchName === "zoom-in" ? 1 : -1);
+      return;
+    }
+    if (patchName === "toggle-snap") {
+      updateCanvasViewportAndRender(workbench, {
+        snapEnabled: viewport.snapEnabled !== false ? false : true,
+      });
       return;
     }
     const patch = resolveCanvasViewportPatch(viewport, patchName);
@@ -8684,17 +10447,507 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "zoom-canvas-in" || action === "zoom-canvas-out") {
+    zoomCanvasAtPoint(workbench, action === "zoom-canvas-in" ? 1 : -1);
+    return;
+  }
+
+  if (action === "set-canvas-edge-style") {
+    workbench.ui.canvasEdgeStyle = target.dataset.edgeStyle === "orthogonal" ? "orthogonal" : "curve";
+    applyCanvasGraphEdgeStyle(workbench.canvasGraph, workbench.ui.canvasEdgeStyle);
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-canvas-edges") {
+    workbench.ui.canvasEdgesHidden = workbench.ui.canvasEdgesHidden !== true;
+    applyCanvasGraphEdgeVisibility(workbench.canvasGraph, workbench.ui.canvasEdgesHidden !== true);
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-canvas-snap") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const viewport = canvasDocument.viewport ?? {};
+    updateCanvasViewportAndRender(workbench, {
+      snapEnabled: viewport.snapEnabled !== false ? false : true,
+    });
+    return;
+  }
+
+  if (action === "set-canvas-interaction-mode") {
+    const interactionMode = ["hand", "classic"].includes(target.dataset.interactionMode)
+      ? target.dataset.interactionMode
+      : "default";
+    updateCanvasViewportAndRender(workbench, { interactionMode });
+    refreshCanvasGraphFromDocument(workbench);
+    return;
+  }
+
+  if (action === "fit-canvas-view") {
+    const graph = workbench.canvasGraph;
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const canvasRoot = workbench.newCanvasMount?.shadowRoot ?? workbench.root;
+    const graphMount = canvasRoot?.querySelector?.("[data-canvas-x6-mount]");
+    const stage = canvasRoot?.querySelector?.(".canvas-stage");
+    const graphRect = graphMount?.getBoundingClientRect?.() ?? stage?.getBoundingClientRect?.() ?? {};
+    const graphFitNodes = resolveCanvasGraphFitNodes(graph);
+    const fittedViewport = resolveCanvasFitViewport({
+      ...canvasDocument,
+      nodes: graphFitNodes.length ? graphFitNodes : canvasDocument.nodes,
+    }, {
+      width: Number(graphRect.width ?? graphMount?.clientWidth ?? stage?.clientWidth ?? 0),
+      height: Number(graphRect.height ?? graphMount?.clientHeight ?? stage?.clientHeight ?? 0),
+    });
+    if (typeof graph?.zoomTo === "function" && typeof graph?.translate === "function") {
+      graph.zoomTo(fittedViewport.zoom);
+      graph.translate(fittedViewport.x, fittedViewport.y);
+    } else {
+      graph?.centerContent?.();
+    }
+    const syncFittedViewport = () => {
+      for (let pass = 0; pass < 4; pass += 1) {
+        const delta = centerCanvasGraphNodesInMount(graph, graphMount);
+        if (!delta || (Math.abs(delta.x) < 0.5 && Math.abs(delta.y) < 0.5)) break;
+      }
+      syncCanvasGraphViewport(graph, workbench);
+      const zoomPercent = Math.round(Number(workbench.ui.canvasDocument?.viewport?.zoom ?? fittedViewport.zoom) * 100);
+      const zoomTrigger = canvasRoot?.querySelector?.("[data-canvas-zoom-trigger]");
+      if (zoomTrigger) {
+        zoomTrigger.textContent = `${zoomPercent}%`;
+        zoomTrigger.setAttribute("aria-label", `画布缩放比例 ${zoomPercent}%`);
+      }
+      const zoomInput = canvasRoot?.querySelector?.("[data-canvas-zoom-value-input]");
+      if (zoomInput) zoomInput.value = String(zoomPercent);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(syncFittedViewport);
+    else setTimeout(syncFittedViewport, 0);
+    return;
+  }
+
+  if (action === "toggle-canvas-minimap") {
+    workbench.ui.canvasMinimapHidden = workbench.ui.canvasMinimapHidden !== true;
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-canvas-node-editor") {
+    const nodeId = selectedCanvasWorkflowNodeIds(workbench)[0] ?? workbench.ui.selectedCanvasNodeId;
+    if (nodeId) {
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      workbench.ui.canvasEditorOpen = true;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action.startsWith("add-canvas-shortcut-")) {
+    const match = /^add-canvas-shortcut-(generator|source)-([1-7])$/.exec(action);
+    const generatorTypes = ["ai-text", "ai-image", "ai-video", "ai-audio", "ai-panorama", "ai-animation", "ai-director"];
+    const sourceTypes = ["source-text", "source-image", "source-video", "source-audio", "ai-markdown"];
+    const nodeType = match
+      ? (match[1] === "source" ? sourceTypes : generatorTypes)[Number(match[2]) - 1]
+      : null;
+    if (nodeType) addCanvasNodeFromShortcut(workbench, nodeType);
+    return;
+  }
+
+  if (action === "align-canvas-nodes" || action === "distribute-canvas-nodes") {
+    const axis = String(target.dataset.axis ?? "left");
+    const changed = action === "align-canvas-nodes"
+      ? alignSelectedCanvasNodes(workbench, axis)
+      : distributeSelectedCanvasNodes(workbench, axis);
+    if (!changed) {
+      workbench.ui.toast = action === "align-canvas-nodes" ? "至少选择两个节点后才能对齐。" : "至少选择三个节点后才能分布。";
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "run-canvas-selection") {
+    const selectedIds = selectedCanvasWorkflowNodeIds(workbench);
+    const nodes = buildCanvasGenerationBatchNodes(workbench, selectedIds);
+    if (selectedIds.length < 2 || nodes.length < 2) {
+      workbench.ui.toast = "请选择至少两个已配置的文本、图片、视频或音频节点。";
+      render(workbench);
+      return;
+    }
+    const savedCanvas = await saveProjectCanvasNow(workbench);
+    const canvasProjectId = resolveCanvasRunProjectId(workbench, savedCanvas);
+    if (!canvasProjectId || typeof workbench.api?.createCanvasGenerationBatch !== "function") {
+      workbench.ui.toast = "批量生成接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.canvasBatchSubmitting = true;
+    render(workbench);
+    try {
+      const payload = await workbench.api.createCanvasGenerationBatch(canvasProjectId, { nodes });
+      workbench.ui.canvasGenerationBatch = payload?.batch ?? payload ?? null;
+      let nextDocument = ensureWorkbenchCanvasDocument(workbench);
+      for (const node of nodes) {
+        nextDocument = updateCanvasNodeData(nextDocument, node.nodeKey, { status: "queued" });
+      }
+      updateActiveCanvasDocument(workbench, nextDocument);
+      workbench.ui.toast = `已提交 ${nodes.length} 个节点批量运行。`;
+    } catch (error) {
+      workbench.ui.toast = friendlyError(error);
+    } finally {
+      workbench.ui.canvasBatchSubmitting = false;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "open-canvas-director" || action === "sync-canvas-director-frame" || action === "export-canvas-director-video") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId && item.type === "ai-director");
+    if (!node) return;
+    const handler = action === "sync-canvas-director-frame"
+      ? workbench.onDirectorDeskSyncFrame
+      : action === "export-canvas-director-video"
+        ? workbench.onDirectorDeskExportVideo
+        : workbench.onDirectorDeskOpen;
+    if (typeof handler !== "function") {
+      workbench.ui.toast = "导演台当前不可用。";
+      render(workbench);
+      return;
+    }
+    await handler(node);
+    return;
+  }
+
+  if (action === "toggle-canvas-audio-play" || action === "seek-canvas-audio") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const body = resolveCanvasMediaActionBody(target, {
+      mediaKind: "audio",
+      nodeId,
+      root: workbench.root,
+    });
+    const audio = body?.querySelector?.("[data-canvas-audio-player]");
+    if (!audio) return;
+    if (action === "seek-canvas-audio") {
+      const clientX = Number(target.dataset.canvasSeekClientX);
+      delete target.dataset.canvasSeekClientX;
+      const position = calculateCanvasAudioSeekPosition(clientX, target, audio.duration);
+      if (Number.isFinite(position.time)) audio.currentTime = position.time;
+      return;
+    }
+    if (audio.paused) await audio.play?.();
+    else audio.pause?.();
+    const playing = !audio.paused;
+    target.setAttribute?.("aria-pressed", String(playing));
+    target.setAttribute?.("aria-label", playing ? "暂停音频" : "播放音频");
+    const glyph = target.querySelector?.("span");
+    if (glyph) glyph.textContent = playing ? "Ⅱ" : "▶";
+    return;
+  }
+
+  if (action === "toggle-canvas-video-fullscreen") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => (
+      item.id === nodeId && (item.type === "video" || item.type === "ai-video" || item.type === "source-video" || item.data?.mediaKind === "video")
+    ));
+    if (!node) return;
+    const current = workbench.ui.canvasVideoFullscreen;
+    workbench.ui.canvasVideoFullscreen = current?.open === true && current.nodeId === nodeId
+      ? null
+      : { open: true, nodeId };
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-canvas-video-fullscreen") {
+    const ownerDocument = target.ownerDocument ?? globalThis.document;
+    if (ownerDocument?.fullscreenElement) await ownerDocument.exitFullscreen?.();
+    workbench.ui.canvasVideoFullscreen = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "request-canvas-video-native-fullscreen") {
+    const overlay = target.closest?.("[data-canvas-video-fullscreen]");
+    const video = overlay?.querySelector?.("[data-canvas-video-fullscreen-player]");
+    const ownerDocument = video?.ownerDocument ?? globalThis.document;
+    if (ownerDocument?.fullscreenElement) await ownerDocument.exitFullscreen?.();
+    else await video?.requestFullscreen?.();
+    return;
+  }
+
+  if (action === "capture-canvas-video-frame") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const body = resolveCanvasMediaActionBody(target, {
+      mediaKind: "video",
+      nodeId,
+      root: workbench.root,
+    });
+    const video = body?.querySelector?.("[data-canvas-video-player]");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId);
+    if (!video || !node) return;
+    try {
+      const frame = await captureCanvasVideoFrame(video);
+      const file = new File(
+        [frame.blob],
+        `${String(node.data?.title ?? "video-frame").slice(0, 60)}-${Math.round(frame.currentTime * 1000)}.png`,
+        { type: frame.blob.type || "image/png" },
+      );
+      await handleNewCanvasExternalDrop(workbench, {
+        files: [file],
+        position: {
+          x: Number(node.position?.x ?? 0) + Number(node.size?.width ?? 420) + 36,
+          y: Number(node.position?.y ?? 0),
+        },
+      });
+      workbench.ui.toast = `已截取 ${frame.currentTime.toFixed(2)} 秒画面并创建图片源节点。`;
+      render(workbench);
+    } catch (error) {
+      workbench.ui.toast = isCanvasVideoFrameSecurityError(error)
+        ? "该视频不允许浏览器截帧，请先导入到本地存储。"
+        : friendlyError(error);
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "toggle-canvas-markdown-fullscreen" || action === "set-canvas-markdown-fullscreen-mode") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId && ["markdown", "ai-markdown"].includes(item.type));
+    if (!node) return;
+    if (action === "set-canvas-markdown-fullscreen-mode") {
+      workbench.ui.canvasMarkdownFullscreen = {
+        open: true,
+        nodeId,
+        viewMode: normalizeCanvasMarkdownViewMode(target.dataset.mode, "edit"),
+      };
+    } else {
+      const current = workbench.ui.canvasMarkdownFullscreen;
+      workbench.ui.canvasMarkdownFullscreen = current?.open === true && current.nodeId === nodeId
+        ? null
+        : {
+            open: true,
+            nodeId,
+            viewMode: normalizeCanvasMarkdownViewMode(current?.viewMode, node.data?.markdownViewMode ?? "edit"),
+          };
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "copy-canvas-markdown-text") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId && ["markdown", "ai-markdown"].includes(item.type));
+    if (!node) return;
+    const result = await copyCanvasMarkdownText(node);
+    workbench.ui.toast = result.ok ? "Markdown 已复制。" : result.reason === "empty" ? "Markdown 内容为空。" : "Markdown 复制失败。";
+    if (workbench.ui.canvasMarkdownFullscreen?.nodeId === nodeId) {
+      workbench.ui.canvasMarkdownFullscreen = {
+        ...workbench.ui.canvasMarkdownFullscreen,
+        copied: result.ok,
+      };
+      render(workbench);
+    } else {
+      target.textContent = result.ok ? "已复制" : "复制";
+      target.setAttribute?.("aria-label", result.ok ? "已复制" : "复制文本");
+    }
+    return;
+  }
+
+  if (action === "set-canvas-group-color") {
+    const groupId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const nextDocument = updateCanvasGroupData(document, groupId, { color: target.dataset.groupColor });
+    if (nextDocument === document) return;
+    updateActiveCanvasDocument(workbench, nextDocument);
+    workbench.ui.selectedCanvasNodeId = groupId;
+    refreshCanvasWorkflowNode(workbench, groupId);
+    render(workbench);
+    return;
+  }
+
+  if (action === "run-canvas-group") {
+    const groupId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const group = document.nodes?.find?.((node) => node.id === groupId && node.type === "group");
+    const nodeIds = canvasGroupRunnableNodeIds(document, group);
+    const nodes = buildCanvasGenerationBatchNodes(workbench, nodeIds);
+    if (!nodes.length) {
+      workbench.ui.toast = "分组内没有已配置的可运行节点。";
+      render(workbench);
+      return;
+    }
+    const savedCanvas = await saveProjectCanvasNow(workbench);
+    const canvasProjectId = resolveCanvasRunProjectId(workbench, savedCanvas);
+    if (!canvasProjectId || typeof workbench.api?.createCanvasGenerationBatch !== "function") {
+      workbench.ui.toast = "批量生成接口暂不可用。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.canvasBatchSubmitting = true;
+    render(workbench);
+    try {
+      const payload = await workbench.api.createCanvasGenerationBatch(canvasProjectId, { nodes });
+      workbench.ui.canvasGenerationBatch = payload?.batch ?? payload ?? null;
+      let nextDocument = ensureWorkbenchCanvasDocument(workbench);
+      for (const node of nodes) nextDocument = updateCanvasNodeData(nextDocument, node.nodeKey, { status: "queued" });
+      updateActiveCanvasDocument(workbench, nextDocument);
+      workbench.ui.toast = `已提交分组内 ${nodes.length} 个节点。`;
+    } catch (error) {
+      workbench.ui.toast = friendlyError(error);
+    } finally {
+      workbench.ui.canvasBatchSubmitting = false;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "undo-canvas-change" || action === "redo-canvas-change") {
+    const direction = action === "undo-canvas-change" ? "undo" : "redo";
+    if (!applyCanvasWorkflowHistory(workbench, direction)) {
+      workbench.ui.toast = direction === "undo" ? "当前没有可撤销的操作。" : "当前没有可重做的操作。";
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "add-canvas-node-to-character-library") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId);
+    workbench.ui.canvasContextMenu = null;
+    if (!node || !isCanvasCharacterReferenceNode(node) || typeof workbench.onCharacterCapture !== "function") {
+      workbench.ui.toast = "当前节点不能添加到角色库。";
+      render(workbench);
+      return;
+    }
+    workbench.onCharacterCapture(node);
+    return;
+  }
+
+  if (action === "copy-canvas-selection") {
+    const selectedIds = selectedCanvasWorkflowNodeIds(workbench);
+    const fallbackId = String(workbench.ui.selectedCanvasNodeId ?? "");
+    workbench.canvasClipboardNodeIds = selectedIds.length ? selectedIds : fallbackId ? [fallbackId] : [];
+    workbench.canvasClipboardSnapshot = createCanvasClipboardSnapshot(
+      ensureWorkbenchCanvasDocument(workbench),
+      workbench.canvasClipboardNodeIds,
+    );
+    workbench.ui.toast = workbench.canvasClipboardNodeIds.length
+      ? `已复制 ${workbench.canvasClipboardNodeIds.length} 个节点。`
+      : "请先选择要复制的节点。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "cut-canvas-selection") {
+    const selectedIds = selectedCanvasWorkflowNodeIds(workbench);
+    const fallbackId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const nodeIds = selectedIds.length ? selectedIds : fallbackId ? [fallbackId] : [];
+    if (!nodeIds.length) {
+      workbench.ui.toast = "请先选择要剪切的节点。";
+      render(workbench);
+      return;
+    }
+    workbench.canvasClipboardNodeIds = nodeIds;
+    workbench.canvasClipboardSnapshot = createCanvasClipboardSnapshot(ensureWorkbenchCanvasDocument(workbench), nodeIds);
+    await playCanvasNodeExitMotion(workbench.canvasGraph, nodeIds);
+    let nextDocument = ensureWorkbenchCanvasDocument(workbench);
+    for (const nodeId of nodeIds) nextDocument = removeCanvasNode(nextDocument, nodeId);
+    updateActiveCanvasDocument(workbench, nextDocument);
+    workbench.ui.selectedCanvasNodeId = nextDocument.nodes[0]?.id ?? null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.toast = `已剪切 ${nodeIds.length} 个节点。`;
+    render(workbench);
+    return;
+  }
+
+  if (action === "duplicate-canvas-node") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const result = duplicateCanvasNodes(ensureWorkbenchCanvasDocument(workbench), nodeId ? [nodeId] : []);
+    if (!result.nodeIds.length) return;
+    updateActiveCanvasDocument(workbench, result.document);
+    workbench.ui.selectedCanvasNodeId = result.nodeIds.at(-1) ?? null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.toast = "已复制节点。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "paste-canvas-selection") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const result = workbench.canvasClipboardSnapshot?.nodes?.length
+      ? pasteCanvasClipboardSnapshot(canvasDocument, workbench.canvasClipboardSnapshot)
+      : duplicateCanvasNodes(canvasDocument, workbench.canvasClipboardNodeIds ?? []);
+    if (!result.nodeIds.length) {
+      workbench.ui.toast = "剪贴板中没有可粘贴的节点。";
+      render(workbench);
+      return;
+    }
+    updateActiveCanvasDocument(workbench, result.document);
+    workbench.canvasClipboardNodeIds = result.nodeIds;
+    workbench.canvasClipboardSnapshot = createCanvasClipboardSnapshot(result.document, result.nodeIds);
+    workbench.ui.selectedCanvasNodeId = result.nodeIds.at(-1) ?? null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.toast = `已粘贴 ${result.nodeIds.length} 个节点。`;
+    render(workbench);
+    return;
+  }
+
+  if (action === "group-canvas-selection") {
+    const selectedIds = selectedCanvasWorkflowNodeIds(workbench);
+    const fallbackId = String(workbench.ui.selectedCanvasNodeId ?? "");
+    const result = groupCanvasNodes(
+      ensureWorkbenchCanvasDocument(workbench),
+      selectedIds.length ? selectedIds : fallbackId ? [fallbackId] : [],
+    );
+    if (!result.groupId) {
+      workbench.ui.toast = "请先选择要分组的节点。";
+      render(workbench);
+      return;
+    }
+    updateActiveCanvasDocument(workbench, result.document);
+    workbench.ui.selectedCanvasNodeId = result.groupId;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.toast = "已创建节点分组。";
+    render(workbench);
+    return;
+  }
+
+  if (action === "ungroup-canvas-selection") {
+    const selectedIds = selectedCanvasWorkflowNodeIds(workbench);
+    const fallbackId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const result = ungroupCanvasNodes(
+      ensureWorkbenchCanvasDocument(workbench),
+      selectedIds.length ? selectedIds : fallbackId ? [fallbackId] : [],
+    );
+    if (!result.groupIds.length) {
+      workbench.ui.toast = "所选节点不在分组中。";
+      render(workbench);
+      return;
+    }
+    updateActiveCanvasDocument(workbench, result.document);
+    workbench.ui.selectedCanvasNodeId = result.nodeIds.at(-1) ?? null;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.toast = `已取消 ${result.groupIds.length} 个节点分组。`;
+    render(workbench);
+    return;
+  }
+
   if (action === "add-canvas-node") {
     const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
     const nodeKind = target.dataset.nodeKind ?? "send";
-    const offset = canvasDocument.nodes.length * 36;
     const contextMenu = workbench.ui.canvasContextMenu;
-    updateActiveCanvasDocument(workbench, addCanvasNode(canvasDocument, {
+    const position = resolveCanvasNodePlacement(canvasDocument, {
       type: nodeKind,
       position: {
-        x: Number.isFinite(Number(contextMenu?.canvasX)) ? Number(contextMenu.canvasX) : 220 + offset,
-        y: Number.isFinite(Number(contextMenu?.canvasY)) ? Number(contextMenu.canvasY) : 180 + offset,
+        x: Number.isFinite(Number(contextMenu?.canvasX)) ? Number(contextMenu.canvasX) : 220,
+        y: Number.isFinite(Number(contextMenu?.canvasY)) ? Number(contextMenu.canvasY) : 180,
       },
+    });
+    updateActiveCanvasDocument(workbench, addCanvasNode(canvasDocument, {
+      type: nodeKind,
+      position,
     }));
     workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
     workbench.ui.canvasEditorOpen = true;
@@ -8707,31 +10960,69 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "add-canvas-template") {
+  if (action === "set-canvas-tool") {
+    const tool = ["select", "connect"].includes(target.dataset.canvasTool)
+      ? target.dataset.canvasTool
+      : "select";
+    workbench.ui.canvasActiveTool = tool;
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "add-canvas-template" || action === "add-canvas-library-asset") {
     const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
     const templates = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig);
+    const isLibraryAsset = action === "add-canvas-library-asset";
+    const libraryAssetId = target.dataset.libraryAssetId ?? "";
+    const libraryAsset = isLibraryAsset
+      ? findCanvasLibraryAsset(workbench, libraryAssetId)
+      : null;
+    const libraryNodeKind = libraryAsset?.kind === "video" ? "source-video" : libraryAsset?.kind === "audio" ? "source-audio" : "source-image";
     const template =
       templates.find((item) => item.id === target.dataset.templateId) ??
-      templates.find((item) => item.type === (target.dataset.nodeKind ?? "")) ??
+      templates.find((item) => item.type === (isLibraryAsset ? libraryNodeKind : target.dataset.nodeKind ?? "")) ??
       templates.find((item) => item.type === "send");
-    const offset = canvasDocument.nodes.length * 36;
     const contextMenu = workbench.ui.canvasContextMenu;
-    const assetId = target.dataset.assetId ?? "";
-    updateActiveCanvasDocument(workbench, addCanvasNode(canvasDocument, {
-      type: template?.type ?? target.dataset.nodeKind ?? "send",
-      position: {
-        x: Number.isFinite(Number(contextMenu?.canvasX)) ? Number(contextMenu.canvasX) : 220 + offset,
-        y: Number.isFinite(Number(contextMenu?.canvasY)) ? Number(contextMenu.canvasY) : 180 + offset,
+    const assetId = target.dataset.assetId ?? target.dataset.libraryAssetId ?? "";
+    const selectedAsset = assetId
+      ? [...(Array.isArray(workbench.ui.canvasAssets) ? workbench.ui.canvasAssets : []), ...resolveCanvasSidebarLibraryAssets(workbench)]
+        .find((asset) => String(asset?.id ?? "") === String(assetId))
+      : null;
+    const configuredTemplate = applyCanvasSettingsToTemplate({
+      ...template,
+      defaultData: {
+        ...(template?.defaultData ?? {}),
+        ...(selectedAsset ? canvasAssetNodeData(selectedAsset) : {}),
       },
-      template: {
-        ...template,
-        defaultData: {
-          ...(template?.defaultData ?? {}),
-          ...(assetId ? { assetId, source: "project_asset", title: target.textContent?.trim?.() || template?.title } : {}),
+    }, workbench.ui.canvasSettingsRecord);
+    const nodeInput = {
+      type: template?.type ?? (isLibraryAsset ? libraryNodeKind : target.dataset.nodeKind) ?? "send",
+      position: resolveCanvasNodePlacement(canvasDocument, {
+        type: template?.type ?? target.dataset.nodeKind ?? "send",
+        position: {
+          x: Number.isFinite(Number(contextMenu?.canvasX)) ? Number(contextMenu.canvasX) : 220,
+          y: Number.isFinite(Number(contextMenu?.canvasY)) ? Number(contextMenu.canvasY) : 180,
         },
-      },
-    }));
-    workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
+      }),
+      template: configuredTemplate,
+    };
+    const result = contextMenu?.mode === "connection"
+      ? addConnectedCanvasNode(canvasDocument, {
+          ...nodeInput,
+          sourceNodeId: contextMenu.sourceNodeId,
+          sourcePortId: contextMenu.sourcePortId,
+        })
+      : { ok: true, document: addCanvasNode(canvasDocument, nodeInput) };
+    if (!result.ok) {
+      workbench.ui.toast = canvasConnectionReasonLabel(result.reason);
+      workbench.ui.canvasContextMenu = null;
+      render(workbench);
+      return;
+    }
+    updateActiveCanvasDocument(workbench, result.document);
+    workbench.ui.selectedCanvasNodeId = result.edge?.targetNodeId ?? workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
     workbench.ui.canvasEditorOpen = true;
     workbench.ui.canvasRunPreview = null;
     workbench.ui.canvasAddMenuOpen = false;
@@ -8778,7 +11069,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
-      title: node.type === "script" ? "剧本源" : "文本源",
+      title: node.data?.title ?? (node.type === "script" ? "剧本源" : "文本源"),
       text: node.data?.text ?? "",
       textHtml: node.data?.textHtml ?? canvasPlainTextToParagraphHtml(node.data?.text ?? ""),
       source: node.data?.source ?? "manual_self_written",
@@ -8804,6 +11095,87 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const nodeId = target.dataset.nodeId ?? workbench.ui.editingCanvasTextNodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
     const command = target.dataset.formatCommand ?? "";
     applyCanvasTextFormatCommand(workbench, nodeId, command);
+    return;
+  }
+
+  if (action === "set-canvas-markdown-mode") {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+    const mode = target.dataset.mode === "preview" ? "preview" : "edit";
+    if (!nodeId) return;
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, { markdownViewMode: mode }));
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    workbench.ui.editingCanvasTextNodeId = mode === "edit" ? nodeId : null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "pick-canvas-markdown-file") {
+    const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+    workbench.root?.querySelector?.(`[data-canvas-markdown-input][data-node-id="${cssEscape(nodeId)}"]`)?.click?.();
+    return;
+  }
+
+  if (action === "export-canvas-markdown") {
+    const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+    exportCanvasMarkdownFile(workbench, nodeId);
+    return;
+  }
+
+  if (action === "open-canvas-prompt-reference-picker") {
+    const nodeId = target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+    workbench.ui.canvasPromptReferencePicker = {
+      open: true,
+      nodeId,
+      activeTab: "character",
+      selectedId: "",
+      items: [],
+      loading: true,
+      error: "",
+    };
+    render(workbench);
+    try {
+      workbench.ui.canvasPromptReferencePicker.items = await loadCanvasPromptReferenceItems(workbench);
+    } catch (error) {
+      workbench.ui.canvasPromptReferencePicker.error = friendlyError(error);
+    } finally {
+      workbench.ui.canvasPromptReferencePicker.loading = false;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "close-canvas-prompt-reference-picker") {
+    workbench.ui.canvasPromptReferencePicker = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-canvas-prompt-reference-tab") {
+    const picker = workbench.ui.canvasPromptReferencePicker;
+    if (!picker) return;
+    picker.activeTab = target.dataset.pickerTab ?? "character";
+    picker.selectedId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-canvas-prompt-reference") {
+    const picker = workbench.ui.canvasPromptReferencePicker;
+    if (!picker) return;
+    picker.selectedId = target.dataset.pickerItemId ?? "";
+    const selected = picker.items?.find?.((item) => String(item.id) === String(picker.selectedId));
+    syncSelectionPickerSelection(workbench.root, {
+      pickerId: "canvas-prompt-reference-picker",
+      selectedId: picker.selectedId,
+      secondaryConfirmDisabled: !["character", "scene", "prop"].includes(selected?.group),
+    });
+    return;
+  }
+
+  if (action === "confirm-canvas-prompt-reference" || action === "create-canvas-node-from-prompt-reference") {
+    applyCanvasPromptReferenceSelection(workbench, { createNode: action === "create-canvas-node-from-prompt-reference" });
+    render(workbench);
     return;
   }
 
@@ -8877,6 +11249,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
+    await playCanvasNodeExitMotion(workbench.canvasGraph, [nodeId]);
     updateActiveCanvasDocument(workbench, removeCanvasNode(canvasDocument, nodeId));
     workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes[0]?.id ?? null;
     workbench.ui.canvasEditorOpen = false;
@@ -8914,7 +11287,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         render(workbench);
         return;
       }
-      const creditCost = resolveCanvasRunCreditCost(model, preview.mediaKind);
+      const creditCost = preview.plainTextTranscription
+        ? 0
+        : resolveCanvasRunCreditCost(model, preview.mediaKind);
       const balance = resolveWorkbenchCreditBalance(workbench);
       if (Number.isFinite(balance) && balance < creditCost) {
         workbench.ui.selectedCanvasNodeId = nodeId;
@@ -8973,6 +11348,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         setWorkbenchCreditBalance(workbench, serverBalance);
       }
       updateActiveCanvasDocument(workbench, applyCanvasRunResult(workbench.ui.canvasDocument, preview, task));
+      if (task?.localConversion === true && task?.canvas?.document) {
+        const serverDocument = applyCanvasRunResult(
+          normalizeStandaloneCanvasDocument(task.canvas.document, canvasDocument.canvasProjectId),
+          preview,
+          task,
+        );
+        updateActiveCanvasDocument(workbench, serverDocument, { scheduleSave: false });
+        workbench.ui.canvasServerRevision = Number(task.canvas.serverRevision ?? workbench.ui.canvasServerRevision ?? 1) || 1;
+        workbench.ui.canvasSaveStatus = "saved";
+      }
       if (task) {
         const submittedTaskId = task?.platform?.tasks?.[0]?.taskId ?? task?.taskId ?? task?.id ?? null;
         if (submittedTaskId) {
@@ -10893,9 +13278,230 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "set-prompt-plaza-type") {
+    cancelPromptMarketplaceSearch(workbench);
+    const type = String(target.dataset.type ?? "all").trim();
+    workbench.ui.promptPlazaType = ["all", "script", "shot", "scene_extract", "character_extract", "prop_extract", "image_style", "storyboard", "other"].includes(type) ? type : "all";
+    workbench.ui.promptMarketplacePage = 1;
+    workbench.ui.promptLibraryPage = 1;
+    workbench.ui.promptMarketplaceRankingItemId = null;
+    await syncPromptMarketplace(workbench);
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "set-prompt-plaza-section") {
+    const section = String(target.dataset.section ?? "marketplace");
+    workbench.ui.promptPlazaSection = ["marketplace", "library"].includes(section) ? section : "marketplace";
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "open-prompt-marketplace-ranking-item") {
+    const itemId = String(target.dataset.promptId ?? "").trim();
+    const availableItems = [
+      ...(workbench.ui.promptMarketplaceRankings ?? []),
+      ...(workbench.ui.promptMarketplaceItems ?? []),
+    ];
+    if (!availableItems.some((item) => String(item.id) === itemId)) return;
+    workbench.ui.promptMarketplaceRankingItemId = itemId;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "close-prompt-marketplace-ranking-item") {
+    workbench.ui.promptMarketplaceRankingItemId = null;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "set-prompt-library-page") {
+    workbench.ui.promptLibraryPage = Math.max(1, Number(target.dataset.page ?? 1) || 1);
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "set-prompt-marketplace-page") {
+    cancelPromptMarketplaceSearch(workbench);
+    const totalPages = Math.max(1, Number(workbench.ui.promptMarketplaceMeta?.totalPages || 1));
+    const page = Math.min(totalPages, Math.max(1, Number(target.dataset.page || 1)));
+    if (page === Number(workbench.ui.promptMarketplacePage || 1)) return;
+    workbench.ui.promptMarketplacePage = page;
+    workbench.ui.promptMarketplaceRankingItemId = null;
+    await syncPromptMarketplace(workbench);
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "open-prompt-marketplace-create") {
+    workbench.ui.promptMarketplaceCreateOpen = true;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "close-prompt-marketplace-create") {
+    workbench.ui.promptMarketplaceCreateOpen = false;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "open-edit-prompt-marketplace-item") {
+    const itemId = String(target.dataset.promptId ?? "").trim();
+    const item = (workbench.ui.promptMarketplaceLibrary ?? []).find((candidate) => candidate.id === itemId && candidate.owned === true);
+    if (!item) return;
+    workbench.ui.promptMarketplaceEditItem = item;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "close-edit-prompt-marketplace-item") {
+    workbench.ui.promptMarketplaceEditItem = null;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "purchase-prompt-marketplace-item") {
+    const itemId = String(target.dataset.promptId ?? "").trim();
+    if (!itemId || typeof workbench.api?.purchasePromptMarketplaceItem !== "function") return;
+    const item = [
+      ...(workbench.ui.promptMarketplaceRankings ?? []),
+      ...(workbench.ui.promptMarketplaceItems ?? []),
+    ].find((candidate) => String(candidate.id) === itemId);
+    if (!item) return;
+    await addPromptMarketplaceItemToLibrary(workbench, itemId);
+    return;
+  }
+
+  if (action === "set-prompt-marketplace-default" || action === "clear-prompt-marketplace-default") {
+    const itemId = String(target.dataset.promptId ?? "").trim();
+    const category = String(target.dataset.promptCategory ?? "").trim();
+    const clearDefault = action === "clear-prompt-marketplace-default";
+    const apiMethod = clearDefault ? "clearPromptMarketplaceDefault" : "setPromptMarketplaceDefault";
+    if (!category || (!clearDefault && !itemId) || typeof workbench.api?.[apiMethod] !== "function") return;
+    await runAction(workbench, clearDefault ? "正在取消默认技能..." : "正在设置默认技能...", async () => {
+      if (clearDefault) {
+        await workbench.api.clearPromptMarketplaceDefault(category);
+      } else {
+        await workbench.api.setPromptMarketplaceDefault(category, itemId);
+      }
+      await Promise.all([syncPromptMarketplace(workbench), syncEpisodePromptSkills(workbench)]);
+      workbench.ui.promptPlazaSection = "library";
+      workbench.ui.toast = clearDefault ? "已取消该分类的私人默认技能。" : "已设为该分类的私人默认技能。";
+    });
+    return;
+  }
+
+  if (action === "use-prompt-marketplace-item") {
+    const itemId = String(target.dataset.promptId ?? "").trim();
+    if (!itemId || typeof workbench.api?.usePromptMarketplaceItem !== "function") return;
+    await runAction(workbench, "正在启用提示词...", async () => {
+      const result = await workbench.api.usePromptMarketplaceItem(itemId);
+      workbench.ui.activePromptMarketplaceItem = result ?? { itemId };
+      const item = (workbench.ui.promptMarketplaceLibrary ?? []).find((candidate) => candidate.id === itemId);
+      if (item) item.usageCount = Number(item.usageCount || 0) + 1;
+      workbench.ui.toast = "提示词已启用，生成时将通过安全引用使用正文。";
+    });
+    return;
+  }
+
+  if (action === "rate-prompt-marketplace-item") {
+    const itemId = String(target.dataset.promptId ?? "").trim();
+    const rating = Number(target.dataset.rating ?? 0);
+    if (!itemId || typeof workbench.api?.ratePromptMarketplaceItem !== "function") return;
+    await runAction(workbench, "正在提交评价...", async () => {
+      await workbench.api.ratePromptMarketplaceItem(itemId, rating);
+      await syncPromptMarketplace(workbench);
+      workbench.ui.promptPlazaSection = "library";
+      workbench.ui.toast = `已提交 ${rating} 星推荐。`;
+    });
+    return;
+  }
+
+  if (action === "request-delete-prompt-marketplace-item") {
+    workbench.ui.promptMarketplaceDeleteConfirm = {
+      itemId: String(target.dataset.promptId ?? ""),
+      owned: target.dataset.owned === "true",
+    };
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "cancel-delete-prompt-marketplace-item") {
+    workbench.ui.promptMarketplaceDeleteConfirm = null;
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
+  if (action === "confirm-delete-prompt-marketplace-item") {
+    const draft = workbench.ui.promptMarketplaceDeleteConfirm ?? {};
+    const itemId = String(draft.itemId ?? "");
+    if (!itemId) return;
+    await runAction(workbench, "正在删除提示词...", async () => {
+      if (draft.owned) {
+        await workbench.api.deletePromptMarketplaceItem(itemId);
+      } else {
+        await workbench.api.removePromptMarketplaceLibraryItem(itemId);
+      }
+      workbench.ui.promptMarketplaceDeleteConfirm = null;
+      await syncPromptMarketplace(workbench);
+      workbench.ui.promptPlazaSection = "library";
+      workbench.ui.toast = draft.owned
+        ? "提示词已删除并停止发布。"
+        : "已从私人库删除，可随时从广场免费添加。";
+    });
+    return;
+  }
+
+  if (action === "create-prompt-marketplace-item") {
+    const form = target.closest?.("form") ?? workbench.root?.querySelector?.("#prompt-marketplace-create-form");
+    if (!form || typeof workbench.api?.createPromptMarketplaceItem !== "function") return;
+    if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
+    const data = new FormData(form);
+    const input = buildPromptMarketplacePublishInput(data);
+    await runAction(workbench, input.publish ? "正在发布提示词..." : "正在保存提示词...", async () => {
+      await workbench.api.createPromptMarketplaceItem(input);
+      form.reset?.();
+      await syncPromptMarketplace(workbench);
+      workbench.ui.promptPlazaSection = "library";
+      workbench.ui.promptMarketplaceCreateOpen = false;
+      workbench.ui.promptLibraryPage = 1;
+      workbench.ui.toast = input.publish
+        ? "提示词已保存并发布到广场。"
+        : "提示词已保存到私人提示词库。";
+    });
+    return;
+  }
+
+  if (action === "update-prompt-marketplace-item") {
+    const itemId = String(workbench.ui.promptMarketplaceEditItem?.id ?? "").trim();
+    const form = target.closest?.("form") ?? workbench.root?.querySelector?.("#prompt-marketplace-edit-form");
+    if (!itemId || !form || typeof workbench.api?.updatePromptMarketplaceItem !== "function") return;
+    if (typeof form.reportValidity === "function" && !form.reportValidity()) return;
+    const input = buildPromptMarketplacePublishInput(new FormData(form));
+    await runAction(workbench, "正在保存提示词...", async () => {
+      await workbench.api.updatePromptMarketplaceItem(itemId, input);
+      await syncPromptMarketplace(workbench);
+      workbench.ui.promptMarketplaceEditItem = null;
+      workbench.ui.promptPlazaSection = "library";
+      workbench.ui.toast = input.publish ? "提示词已更新并发布到广场。" : "提示词已更新并保存到私人提示词库。";
+    });
+    return;
+  }
+
   if (action === "set-nav-tab") {
     const nextTab = target.dataset.tab ?? "home";
     const navigationRenderOptions = { preserveNavigationShell: true };
+    if (nextTab === "new-canvas" && !isNewCanvasEnabled(workbench.session)) {
+      workbench.ui.activeNavTab = "home";
+      workbench.ui.canvasProjectView = "list";
+      workbench.ui.toast = "新画布当前未启用。";
+      globalThis.window?.history?.replaceState?.(null, "", "/");
+      render(workbench, navigationRenderOptions);
+      return;
+    }
+    if (!isCanvasNavTab(nextTab)) {
+      stopCanvasLiveSubscription(workbench);
+    }
     if (workbench.ui.singleEpisodeAiChecking || workbench.ui.singleEpisodeAiPreview?.status === "loading") {
       cancelSingleEpisodeAiPreviewRequest(workbench);
       workbench.ui.singleEpisodeAiChecking = false;
@@ -10933,7 +13539,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.teamDashboardTab = "member-consumption";
       workbench.ui.teamDashboardDateRange = "today";
     }
-    if (workbench.ui.activeNavTab === "tools") {
+    if (isCanvasNavTab(workbench.ui.activeNavTab)) {
+      workbench.ui.canvasEntryPoint = workbench.ui.activeNavTab === "new-canvas" ? "new" : "legacy";
       workbench.ui.canvasProjectView = "list";
       workbench.ui.selectedCanvasNodeId = null;
       workbench.ui.canvasEditorOpen = false;
@@ -10968,6 +13575,33 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-new-canvas") {
+    if (!isNewCanvasEnabled(workbench.session)) {
+      workbench.ui.activeNavTab = "home";
+      workbench.ui.canvasProjectView = "list";
+      workbench.ui.toast = "新画布当前未启用。";
+      globalThis.window?.history?.replaceState?.(null, "", "/");
+      render(workbench, { preserveNavigationShell: true });
+      return;
+    }
+    workbench.ui.activeNavTab = "new-canvas";
+    workbench.ui.canvasEntryPoint = "new";
+    workbench.ui.canvasProjectView = "list";
+    workbench.ui.selectedCanvasNodeId = null;
+    workbench.ui.canvasEditorOpen = false;
+    workbench.ui.canvasAddMenuOpen = false;
+    workbench.ui.canvasContextMenu = null;
+    workbench.ui.canvasProjectMenuId = null;
+    await syncCanvasProjectsFromApi(workbench);
+    if (globalThis.window?.history?.pushState) {
+      globalThis.window.history.pushState(null, "", "/new-canvas");
+    } else if (globalThis.window?.location) {
+      globalThis.window.location.hash = "new-canvas";
+    }
+    render(workbench, { preserveNavigationShell: true });
+    return;
+  }
+
   if (action === "open-home-seo-panel") {
     const panel = String(target.dataset.seoPanel ?? "features").trim() || "features";
     const panelElement = Array.from(workbench.root.querySelectorAll(".seo-disclosure-panel"))
@@ -10981,9 +13615,35 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-canvas-project") {
+    if (workbench.ui.activeNavTab === "new-canvas" && !isNewCanvasEnabled(workbench.session)) {
+      workbench.ui.activeNavTab = "home";
+      workbench.ui.canvasProjectView = "list";
+      workbench.ui.toast = "新画布当前未启用。";
+      render(workbench);
+      return;
+    }
     const projectId = target.dataset.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID;
+    const currentProjectId = resolveCanvasSaveProjectId(workbench);
+    if (
+      workbench.ui.canvasProjectView === "detail" &&
+      currentProjectId &&
+      String(currentProjectId) !== String(projectId)
+    ) {
+      try {
+        await flushProjectCanvasSave(workbench);
+      } catch (error) {
+        workbench.ui.toast = workbench.ui.canvasSaveError || `画布切换已取消：${friendlyError(error)}`;
+        render(workbench);
+        return;
+      }
+    }
+    if (String(currentProjectId ?? "") !== String(projectId)) {
+      stopCanvasLiveSubscription(workbench);
+      stopAllCanvasAssetTransfers(workbench);
+    }
     workbench.ui.selectedCanvasProjectId = projectId;
     workbench.ui.activeCanvasProjectId = projectId;
+    touchRecentCanvasProject(workbench.ui, projectId);
     const loadedStandaloneCanvas = await loadStandaloneCanvasProject(workbench, projectId).catch((error) => {
       workbench.ui.toast = `画布加载失败：${friendlyError(error)}`;
       return false;
@@ -10998,14 +13658,23 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.toast = "";
     }
     if (typeof window !== "undefined") {
-      window.location.hash = "tools-canvas";
+      window.location.hash = canvasDetailRouteToken(workbench);
     }
     await ensureCanvasGenerationConfig(workbench);
+    await loadCanvasSettingsRecord(workbench);
+    await loadAppliedCanvasToolbar(workbench);
     render(workbench);
     return;
   }
 
   if (action === "create-canvas-project") {
+    if (workbench.ui.activeNavTab === "new-canvas" && !isNewCanvasEnabled(workbench.session)) {
+      workbench.ui.activeNavTab = "home";
+      workbench.ui.canvasProjectView = "list";
+      workbench.ui.toast = "新画布当前未启用。";
+      render(workbench);
+      return;
+    }
     if (isTeamMemberSession(workbench.session)) {
       workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
       render(workbench);
@@ -11024,6 +13693,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     await runAction(workbench, "正在创建画布...", async () => {
       const project = await createCanvasProject(workbench);
+      touchRecentCanvasProject(workbench.ui, project?.id);
       workbench.ui.canvasProjectView = "detail";
       workbench.ui.selectedCanvasNodeId = null;
       workbench.ui.canvasEditorOpen = false;
@@ -11031,9 +13701,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.canvasContextMenu = null;
       workbench.ui.canvasProjectMenuId = null;
       if (typeof window !== "undefined") {
-        window.location.hash = "tools-canvas";
+        window.location.hash = canvasDetailRouteToken(workbench);
       }
       await ensureCanvasGenerationConfig(workbench);
+      await loadCanvasSettingsRecord(workbench);
+      await loadAppliedCanvasToolbar(workbench);
       return project;
     }, {
       successToast: "已创建画布。",
@@ -11098,6 +13770,28 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-canvas-project-archive") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法归档画布。";
+      workbench.ui.canvasProjectMenuId = null;
+      render(workbench);
+      return;
+    }
+    const projectId = String(target.dataset.canvasProjectId ?? "");
+    const status = target.dataset.canvasProjectStatus === "active" ? "active" : "archived";
+    if (!projectId || typeof workbench.api.updateCanvasProject !== "function") return;
+    await runAction(workbench, status === "archived" ? "正在归档画布..." : "正在恢复画布...", async () => {
+      const payload = await workbench.api.updateCanvasProject(projectId, { status });
+      applyCanvasProjectPatch(workbench, payload?.project ?? { id: projectId, status });
+      workbench.ui.canvasProjectMenuId = null;
+      if (status === "archived") {
+        workbench.ui.canvasRecentProjectIds = (workbench.ui.canvasRecentProjectIds ?? []).filter((id) => id !== projectId);
+      }
+      persistWorkbenchState(workbench);
+    }, { successToast: status === "archived" ? "画布已归档。" : "画布已恢复。" });
+    return;
+  }
+
   if (action === "delete-canvas-project") {
     if (isTeamMemberSession(workbench.session)) {
       workbench.ui.toast = "子账户无法删除画布。";
@@ -11144,14 +13838,29 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "back-to-canvas-projects") {
+    try {
+      await flushProjectCanvasSave(workbench);
+    } catch (error) {
+      workbench.ui.toast = workbench.ui.canvasSaveError || `返回列表已取消：${friendlyError(error)}`;
+      render(workbench);
+      return;
+    }
+    stopCanvasLiveSubscription(workbench);
+    stopAllCanvasAssetTransfers(workbench);
     workbench.ui.canvasProjectView = "list";
     workbench.ui.selectedCanvasNodeId = null;
     workbench.ui.canvasEditorOpen = false;
     workbench.ui.canvasAddMenuOpen = false;
     workbench.ui.canvasContextMenu = null;
     workbench.ui.toast = "";
-    window.location.hash = "tools";
+    window.location.hash = canvasListRouteToken(workbench);
     render(workbench);
+    return;
+  }
+
+  if (action === "resolve-canvas-revision-conflict") {
+    const version = target.dataset.canvasConflictVersion === "server" ? "server" : "local";
+    await resolveCanvasRevisionConflict(workbench, version);
     return;
   }
 
@@ -11200,16 +13909,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.scriptSubmitLabel = scriptModalMode === "manual" ? "开始分析" : "创建剧本";
     workbench.ui.uploadNotice = "";
     workbench.ui.toast = "";
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.episodePromptSkillDraftIds = {};
     render(workbench);
-    if (
-      scriptModalMode === "manual" &&
-      (!hasStoryboardPromptPackagesForType(workbench, "genre") ||
-        !hasStoryboardPromptPackagesForType(workbench, "emotion"))
-    ) {
-      runLazyWorkbenchTask(workbench, "storyboard prompt packages", async () => {
-        await syncStoryboardPromptPackages(workbench);
-        render(workbench);
-      });
+    if (scriptModalMode === "manual") {
+      await Promise.allSettled([
+        syncScriptConversionSkills(workbench),
+        loadGlobalGenerationConfig(workbench, { fresh: true, mediaType: "text" }),
+      ]);
+      render(workbench);
     }
     return;
   }
@@ -11284,6 +13992,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.uploadNotice = "";
     workbench.ui.toast = "";
     workbench.ui.singleEpisodeLookPanel = "";
+    workbench.ui.scriptConversionSkillModalOpen = false;
+    workbench.ui.scriptConversionSkillDraftId = "";
     render(workbench);
     return;
   }
@@ -12107,10 +14817,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     stopLipSyncAudioPreview(workbench);
     closeAssetImportOverlays(workbench);
     const nextScopeMode = target.dataset.mode === "assets" ? "assets" : "storyboard";
-    if (workbench.ui.museScopeMode === nextScopeMode) {
+    const previousScopeMode = workbench.ui.museScopeMode ?? "storyboard";
+    if (previousScopeMode === nextScopeMode) {
       render(workbench);
       return;
     }
+    clearEpisodeWorkbenchScopeComposer(workbench, previousScopeMode);
     workbench.ui.museScopeMode = nextScopeMode;
     if (workbench.ui.museScopeMode === "assets") {
       workbench.ui.episodeMediaMode = "image";
@@ -12122,7 +14834,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.videoAudioEnabled = false;
       workbench.ui.videoMusicEnabled = false;
       workbench.ui.videoLipSyncEnabled = false;
-      clearAssetPromptDraftForCurrentSelection(workbench);
+      workbench.ui.assetPromptDraft = {
+        scopeMode: "assets",
+        prompt: "",
+        quickReferenceItems: [],
+        mentionReferences: [],
+        selectionContext: {
+          ...resolveEpisodeAssetSelectionContext(workbench),
+        },
+      };
     } else {
       workbench.ui.museBoardMode = "operation";
       if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
@@ -12284,22 +15004,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (resultAction === "edit") {
-      const promptPreview = String(imageResult?.promptPreview ?? "").trim();
-      const quickReferenceItems = Array.isArray(imageResult?.quickReferenceItems)
-        ? hydrateQuickReferencePreviews(workbench, imageResult.quickReferenceItems)
-        : [];
-      setCurrentScopePrompt(workbench, promptPreview);
-      workbench.ui.assetPromptDraft = {
-        ...(workbench.ui.assetPromptDraft ?? {}),
-        scopeMode: "assets",
-        prompt: promptPreview,
-        quickReferenceItems,
-        mentionReferences: [],
-        selectionContext:
-          imageResult?.selectionContext && typeof imageResult.selectionContext === "object"
-            ? imageResult.selectionContext
-            : (workbench.ui.assetPromptDraft?.selectionContext ?? {}),
-      };
+      applyAssetConversationEditDraft(workbench, imageResult);
       workbench.ui.isStoryboardDescriptionModalOpen = false;
       workbench.ui.toast = "已回填上一次发送内容，可继续编辑。";
       render(workbench);
@@ -12786,7 +15491,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     if (mode === "image") {
-      const loadTasks = [refreshEpisodeBatchGenerationConfig(workbench)];
+      const loadTasks = [
+        refreshEpisodeBatchGenerationConfig(workbench),
+        syncEpisodeBatchImageStyleSkills(workbench),
+      ];
       if (
         (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) &&
         typeof workbench.api?.getProjectStyles === "function"
@@ -12864,10 +15572,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     const styleTab = target.dataset.tab === "custom" ? "custom" : "public";
+    const selectedStyleId = resolveEpisodeBatchStyleSelection(workbench.ui.episodeBatchModal, styleTab);
+    const isProjectStyle = selectedStyleId === String(workbench.ui.episodeBatchModal.projectStyle?.id ?? "").trim();
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: isProjectStyle ? "" : selectedStyleId,
+    };
+    if (workbench.ui.episodeBatchModal.mode === "image") {
+      workbench.ui.assetImageStyleSkillId = isProjectStyle ? "project-style" : selectedStyleId || "project-style";
+      workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    }
     workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
       ...workbench.ui.episodeBatchModal,
       styleTab,
-      selectedStyleId: resolveEpisodeBatchStyleSelection(workbench.ui.episodeBatchModal, styleTab),
+      selectedStyleId,
     });
     if (!syncEpisodeBatchModalOnly(workbench)) {
       render(workbench);
@@ -12879,9 +15597,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!workbench.ui.episodeBatchModal) {
       return;
     }
+    const selectedStyleId = target.dataset.styleId ?? workbench.ui.episodeBatchModal.selectedStyleId;
+    const isProjectStyle = selectedStyleId === String(workbench.ui.episodeBatchModal.projectStyle?.id ?? "").trim();
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: isProjectStyle ? "" : selectedStyleId,
+    };
+    if (workbench.ui.episodeBatchModal.mode === "image") {
+      workbench.ui.assetImageStyleSkillId = isProjectStyle ? "project-style" : selectedStyleId || "project-style";
+      workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    }
     workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
       ...workbench.ui.episodeBatchModal,
-      selectedStyleId: target.dataset.styleId ?? workbench.ui.episodeBatchModal.selectedStyleId,
+      selectedStyleId,
     });
     if (!syncEpisodeBatchModalOnly(workbench)) {
       render(workbench);
@@ -12999,17 +15727,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const nextAssets = cloneImportedAssets(workbench.ui.importedAssets);
     const batchResults = { ...(workbench.ui.episodeBatchResults ?? {}) };
     const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, modal?.selectedStyleId, modal);
-    const selectedStylePreview = String(selectedStyle?.coverImageUrl ?? selectedStyle?.preview ?? "").trim();
 
     for (const [index, item] of items.entries()) {
       const assetKind = item.kind || inferEpisodeAssetKind(item.name);
       const imageUrl = resolveApiUrl(item.previewUrl ?? item.preview ?? item.sourceUrl ?? imageUrlSeeds[assetKind] ?? imageUrlSeeds.character);
       const itemPrompt = String(item.description ?? "").trim() || `${resolveEpisodeAssetKindLabel(assetKind)} ${item.name ?? ""} 固定图生成`;
-      const composedPrompt = appendImageGenerationStylePrompt(
-        itemPrompt,
-        selectedStyle,
-        selectedStylePreview ? "图1" : "",
-      );
+      const composedPrompt = itemPrompt;
       const selectionContext = {
         episodeId: workbench.ui.selectedEpisodeId ?? "episode-primary",
         episodeTitle: null,
@@ -13425,6 +16148,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (nextBoardMode) {
       workbench.ui.museBoardMode = nextBoardMode;
     }
+    const previousMediaMode = workbench.ui.episodeMediaMode ?? "image";
+    if (previousMediaMode !== nextMediaMode) {
+      switchStoryboardComposerMediaMode(workbench, previousMediaMode, nextMediaMode);
+    }
     workbench.ui.episodeMediaMode = nextMediaMode;
     if (boardModeChanged) {
       clearStoryboardBoardModeComposer(workbench);
@@ -13471,6 +16198,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-video-generation-mode") {
+    switchStoryboardComposerMediaMode(
+      workbench,
+      workbench.ui.episodeMediaMode ?? "image",
+      "video",
+    );
     workbench.ui.episodeMediaMode = "video";
     workbench.ui.videoGenerationMode = target.dataset.mode ?? "reference-video";
     syncEpisodeVideoGenerationModeTabsOnly(workbench);
@@ -13507,7 +16239,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "set-canvas-audio-generation-mode") {
+    const nodeId = target.dataset.nodeId ?? "";
+    const mode = target.dataset.mode ?? "text-to-speech";
+    applyCanvasAudioGenerationMode(workbench, nodeId, mode);
+    render(workbench);
+    return;
+  }
+
   if (action === "set-image-generation-mode") {
+    switchStoryboardComposerMediaMode(
+      workbench,
+      workbench.ui.episodeMediaMode ?? "image",
+      "image",
+    );
     workbench.ui.episodeMediaMode = "image";
     workbench.ui.imageGenerationMode = target.dataset.mode ?? "single-image";
     if (workbench.ui.imageGenerationMode === "multi-image") {
@@ -13716,6 +16461,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-single-episode-modal") {
     cancelSingleEpisodeAiPreviewRequest(workbench);
     workbench.ui.singleEpisodeAiChecking = false;
+    workbench.ui.scriptConversionSkillModalOpen = false;
+    workbench.ui.scriptConversionSkillDraftId = "";
     resetSingleEpisodeModalState(workbench);
     render(workbench);
     return;
@@ -13955,14 +16702,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "regenerate-manual-script-analysis") {
     const preview = workbench.ui.singleEpisodeAiPreview ?? {};
-    const packages = preview.packages ?? {};
     workbench.ui.isScriptModalOpen = true;
     workbench.ui.scriptModalMode = "manual";
     workbench.ui.scriptManualDraft = String(preview.sourceScript ?? workbench.ui.singleEpisodeScript ?? "");
-    workbench.ui.selectedSingleEpisodeLookPackageIds = {
-      genre: packages.genrePackageId ? [String(packages.genrePackageId)] : [],
-      emotion: packages.emotionPackageId ? [String(packages.emotionPackageId)] : [],
-    };
+    workbench.ui.selectedScriptConversionSkillId = String(preview.skillId ?? workbench.ui.selectedScriptConversionSkillId ?? "");
     await handleAction(workbench, { dataset: { action: "confirm-single-episode" } });
     return;
   }
@@ -13996,6 +16739,285 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-script-conversion-skill-modal") {
+    const selectedSkillId = String(workbench.ui.selectedScriptConversionSkillId ?? "");
+    const personalSkillIds = new Set(
+      (workbench.ui.scriptConversionPersonalSkills ?? []).map((item) => String(item?.id ?? "")),
+    );
+    workbench.ui.scriptConversionSkillDraftId = selectedSkillId;
+    workbench.ui.scriptConversionSkillTab = personalSkillIds.has(selectedSkillId) ? "personal" : "official";
+    workbench.ui.scriptConversionSkillModalOpen = true;
+    workbench.ui.singleEpisodeLookPanel = "";
+    workbench.ui.singleEpisodeScriptImportMenu = "";
+    workbench.ui.openGenerationSelectMenu = null;
+    workbench.ui.musePromptMenu = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-script-conversion-skill-modal") {
+    workbench.ui.scriptConversionSkillModalOpen = false;
+    workbench.ui.scriptConversionSkillDraftId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-script-conversion-skill-tab") {
+    workbench.ui.scriptConversionSkillTab = target.dataset.pickerTab === "personal" ? "personal" : "official";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-script-conversion-skill-draft") {
+    workbench.ui.scriptConversionSkillDraftId = String(target.dataset.pickerItemId ?? "");
+    syncSelectionPickerSelection(workbench.root, {
+      pickerId: "script-conversion-skill-picker",
+      selectedId: workbench.ui.scriptConversionSkillDraftId,
+    });
+    return;
+  }
+
+  if (action === "confirm-script-conversion-skill") {
+    const skillId = String(workbench.ui.scriptConversionSkillDraftId ?? "");
+    const availableSkillIds = new Set([
+      ...(workbench.ui.scriptConversionOfficialSkills ?? []),
+      ...(workbench.ui.scriptConversionPersonalSkills ?? []),
+    ].map((item) => String(item?.id ?? "")));
+    if (!skillId || !availableSkillIds.has(skillId)) {
+      return;
+    }
+    workbench.ui.selectedScriptConversionSkillId = skillId;
+    workbench.ui.scriptConversionSkillModalOpen = false;
+    workbench.ui.scriptConversionSkillDraftId = "";
+    workbench.ui.uploadNotice = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-asset-image-style-skill-modal") {
+    await syncEpisodeBatchImageStyleSkills(workbench);
+    const selectedId = resolveAssetImageStyleSkillId(workbench);
+    const privateIds = new Set((workbench.ui.episodeBatchPrivateImageStyleSkills ?? []).map((item) => String(item?.id ?? "")));
+    workbench.ui.assetImageStyleSkillDraftId = selectedId;
+    workbench.ui.assetImageStyleSkillTab = privateIds.has(selectedId) ? "private" : "official";
+    workbench.ui.assetImageStyleSkillModalOpen = true;
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.storyboardPromptSkillModalOpen = false;
+    workbench.ui.scriptConversionSkillModalOpen = false;
+    workbench.ui.episodeBatchModal = null;
+    workbench.ui.assetGeneratorOpenMenu = "";
+    workbench.ui.openGenerationSelectMenu = null;
+    workbench.ui.isVideoModelMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-asset-image-style-skill-modal") {
+    workbench.ui.assetImageStyleSkillModalOpen = false;
+    workbench.ui.assetImageStyleSkillDraftId = resolveAssetImageStyleSkillId(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-asset-image-style-skill-tab") {
+    workbench.ui.assetImageStyleSkillTab = target.dataset.pickerTab === "private" ? "private" : "official";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-asset-image-style-skill-draft") {
+    const skillId = String(target.dataset.pickerItemId ?? "");
+    const availableIds = new Set([
+      "project-style",
+      ...(workbench.ui.episodeBatchOfficialImageStyleSkills ?? []).map((item) => String(item?.id ?? "")),
+      ...(workbench.ui.episodeBatchPrivateImageStyleSkills ?? []).map((item) => String(item?.id ?? "")),
+    ]);
+    if (!availableIds.has(skillId)) return;
+    workbench.ui.assetImageStyleSkillDraftId = skillId;
+    syncSelectionPickerSelection(workbench.root, {
+      pickerId: "asset-image-style-skill-picker",
+      selectedId: skillId,
+    });
+    return;
+  }
+
+  if (action === "confirm-asset-image-style-skill") {
+    const skillId = String(workbench.ui.assetImageStyleSkillDraftId ?? "project-style");
+    const availableIds = new Set([
+      "project-style",
+      ...(workbench.ui.episodeBatchOfficialImageStyleSkills ?? []).map((item) => String(item?.id ?? "")),
+      ...(workbench.ui.episodeBatchPrivateImageStyleSkills ?? []).map((item) => String(item?.id ?? "")),
+    ]);
+    if (!availableIds.has(skillId)) return;
+    workbench.ui.assetImageStyleSkillId = skillId;
+    workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: skillId === "project-style" ? "" : skillId,
+    };
+    workbench.ui.assetImageStyleSkillModalOpen = false;
+    if (workbench.ui.assetGeneratorTarget === "storyboard") {
+      if (skillId === "project-style") {
+        const projectStyle = resolveEpisodeGenerationStyle(workbench);
+        if (projectStyle) {
+          workbench.ui.assetGeneratorStyleCode = String(projectStyle.code ?? projectStyle.id ?? "").trim();
+          syncStoryboardGeneratorStyle(workbench, projectStyle);
+        }
+      } else {
+        clearStoryboardGeneratorStyle(workbench);
+      }
+    } else if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
+      if (skillId === "project-style") {
+        const projectStyle = resolveEpisodeGenerationStyle(workbench);
+        if (projectStyle) syncImportedAssetGenerationStyle(workbench, projectStyle, { force: true });
+      } else {
+        clearImportedAssetGenerationStyle(workbench);
+      }
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-episode-prompt-skill-modal") {
+    workbench.ui.episodePromptSkillDraftIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+    };
+    workbench.ui.episodePromptSkillSourceTab = "official";
+    workbench.ui.episodePromptSkillCategory = "script";
+    workbench.ui.episodePromptSkillModalOpen = true;
+    workbench.ui.singleEpisodeScriptImportMenu = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "open-storyboard-prompt-skill-modal") {
+    await syncStoryboardPromptSkills(workbench);
+    const selectedId = String(workbench.ui.selectedStoryboardPromptSkillId ?? "").trim();
+    const privateIds = new Set(
+      normalizeStoryboardPromptSkills(workbench.ui.storyboardPromptPrivateSkills, "private")
+        .map((skill) => skill.id),
+    );
+    workbench.ui.storyboardPromptSkillDraftId = selectedId;
+    workbench.ui.storyboardPromptSkillSourceTab = privateIds.has(selectedId) ? "private" : "official";
+    workbench.ui.storyboardPromptSkillModalOpen = true;
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.assetImageStyleSkillModalOpen = false;
+    workbench.ui.assetGeneratorOpenMenu = "";
+    workbench.ui.openGenerationSelectMenu = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-storyboard-prompt-skill-modal") {
+    workbench.ui.storyboardPromptSkillModalOpen = false;
+    workbench.ui.storyboardPromptSkillDraftId = String(workbench.ui.selectedStoryboardPromptSkillId ?? "");
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-storyboard-prompt-skill-source") {
+    workbench.ui.storyboardPromptSkillSourceTab = target.dataset.pickerTab === "private" ? "private" : "official";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-storyboard-prompt-skill-draft") {
+    const skillId = String(target.dataset.pickerItemId ?? "");
+    const availableSkillIds = new Set([
+      ...normalizeStoryboardPromptSkills(workbench.ui.storyboardPromptOfficialSkills, "official"),
+      ...normalizeStoryboardPromptSkills(workbench.ui.storyboardPromptPrivateSkills, "private"),
+    ].map((item) => item.id));
+    if (!availableSkillIds.has(skillId)) return;
+    workbench.ui.storyboardPromptSkillDraftId = skillId;
+    syncSelectionPickerSelection(workbench.root, {
+      pickerId: "storyboard-prompt-skill-picker",
+      selectedId: skillId,
+    });
+    return;
+  }
+
+  if (action === "confirm-storyboard-prompt-skill") {
+    const skillId = String(workbench.ui.storyboardPromptSkillDraftId ?? "");
+    const availableSkillIds = new Set([
+      ...normalizeStoryboardPromptSkills(workbench.ui.storyboardPromptOfficialSkills, "official"),
+      ...normalizeStoryboardPromptSkills(workbench.ui.storyboardPromptPrivateSkills, "private"),
+    ].map((item) => item.id));
+    if (!skillId || !availableSkillIds.has(skillId)) return;
+    workbench.ui.selectedStoryboardPromptSkillId = skillId;
+    workbench.ui.storyboardPromptSkillModalOpen = false;
+    workbench.ui.storyboardPromptSkillDraftId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-episode-prompt-skill-modal") {
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.episodePromptSkillDraftIds = {};
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-episode-prompt-skill-source") {
+    workbench.ui.episodePromptSkillSourceTab = target.dataset.skillSource === "private" ? "private" : "official";
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-episode-prompt-skill-category") {
+    const category = String(target.dataset.skillCategory ?? "");
+    if (EPISODE_PROMPT_SKILL_CATEGORIES.some((item) => item.id === category)) {
+      workbench.ui.episodePromptSkillCategory = category;
+      if (target.dataset.skillSource === "private" || target.dataset.skillSource === "official") {
+        workbench.ui.episodePromptSkillSourceTab = target.dataset.skillSource;
+      }
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "select-episode-prompt-skill-draft") {
+    const category = String(target.dataset.skillCategory ?? "");
+    const skillId = String(target.dataset.episodeSkillId ?? "");
+    const skills = [
+      ...normalizeEpisodePromptSkills(workbench.ui.episodePromptOfficialSkills, "official"),
+      ...normalizeEpisodePromptSkills(workbench.ui.episodePromptPrivateSkills, "private"),
+    ];
+    if (!skills.some((item) => item.id === skillId && item.category === category)) {
+      return;
+    }
+    workbench.ui.episodePromptSkillDraftIds = {
+      ...(workbench.ui.episodePromptSkillDraftIds ?? {}),
+      [category]: skillId,
+    };
+    syncEpisodePromptSkillDraft(workbench.root, {
+      category,
+      selectedId: skillId,
+      skills,
+      draftSelections: workbench.ui.episodePromptSkillDraftIds,
+    });
+    return;
+  }
+
+  if (action === "clear-episode-prompt-skill-draft") {
+    const category = String(target.dataset.skillCategory ?? "");
+    workbench.ui.episodePromptSkillDraftIds = {
+      ...(workbench.ui.episodePromptSkillDraftIds ?? {}),
+      [category]: "",
+    };
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-episode-prompt-skills") {
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.episodePromptSkillDraftIds ?? {}),
+    };
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.episodePromptSkillDraftIds = {};
+    render(workbench);
+    return;
+  }
+
   if (action === "confirm-single-episode" || action === "confirm-single-episode-storyboard") {
     const isManualScriptAnalysis =
       workbench.ui.isScriptModalOpen &&
@@ -14021,16 +17043,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     const projectId = String(workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? "").trim() || null;
-    const packages = {
-      genrePackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "genre"),
-      emotionPackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "emotion"),
-    };
+    const skillId = isManualScriptAnalysis
+      ? String(workbench.ui.selectedScriptConversionSkillId ?? "").trim()
+      : "";
+    const episodeSkills = !isManualScriptAnalysis && workbench.ui.selectedEpisodePromptSkillIds && typeof workbench.ui.selectedEpisodePromptSkillIds === "object"
+      ? Object.fromEntries(Object.entries(workbench.ui.selectedEpisodePromptSkillIds)
+          .map(([category, id]) => [category, String(id ?? "").trim()])
+          .filter(([, id]) => Boolean(id)))
+      : {};
+    const hasEpisodeSkills = Object.keys(episodeSkills).length > 0;
+    const hasLegacyPromptPackages = Array.isArray(workbench.ui.storyboardPromptPackages)
+      && workbench.ui.storyboardPromptPackages.length > 0;
+    const packages = isManualScriptAnalysis || hasEpisodeSkills || !hasLegacyPromptPackages
+      ? null
+      : {
+          genrePackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "genre"),
+          emotionPackageId: resolveSingleEpisodeSelectedPromptPackageId(workbench, "emotion"),
+        };
     const hasRequiredProjectContext = isManualScriptAnalysis || Boolean(projectId);
-    if (!hasRequiredProjectContext || !packages.genrePackageId || !packages.emotionPackageId) {
+    const hasLegacyPackages = Boolean(packages?.genrePackageId && packages?.emotionPackageId);
+    const hasRequiredConversionSkill = isManualScriptAnalysis ? Boolean(skillId) : Boolean(episodeSkills.script);
+    if (!hasRequiredProjectContext || (!skipScriptStage && !hasRequiredConversionSkill && !hasLegacyPackages)) {
       if (isManualScriptAnalysis) {
-        workbench.ui.uploadNotice = "请先选择题材包和情绪包后再开始分析。";
+        workbench.ui.uploadNotice = "请先选择小说转剧本技能后再开始分析。";
       } else {
-        showWorkbenchToast(workbench, "请先选择题材、情绪看点后再生成。", { tone: "error" });
+        showWorkbenchToast(workbench, "请先在创作技能中选择转剧本提示词。", { tone: "error" });
       }
       render(workbench);
       return;
@@ -14052,6 +17089,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           : "single-episode-storyboard",
       sourceScript: nextScript,
       packages,
+      skillId: skillId || null,
+      skills: episodeSkills,
       projectId,
       data: (() => {
         const previewTables = createSingleEpisodeAiLiveDisplayTables();
@@ -14095,7 +17134,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.singleEpisodeAiPreviewAbortController = abortController;
       const previewInput = {
         scriptText: nextScript,
-        packages,
+        ...(isManualScriptAnalysis
+          ? { skillId, modelCode: "deepseek-noval" }
+          : hasEpisodeSkills
+            ? { skills: episodeSkills, modelCode: skipScriptStage ? "deepseek-noval" : "deepseek-script" }
+            : { packages }),
         ...(skipScriptStage ? { skipScriptStage: true } : {}),
       };
       let preview = null;
@@ -14237,6 +17280,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.singleEpisodeAiPreviewAbortController = null;
       }
       clearSingleEpisodeAiPreviewRenderTimer(workbench);
+      const errorCode = String(error?.errorCode ?? error?.message ?? "");
+      if (
+        isManualScriptAnalysis &&
+        ["generation_membership_required", "membership_required", "membership_expired", "insufficient_credits"].includes(errorCode)
+      ) {
+        const message = friendlyError(error);
+        workbench.ui.isScriptModalOpen = true;
+        workbench.ui.scriptModalMode = "manual";
+        workbench.ui.scriptTab = "script-library";
+        workbench.ui.uploadNotice = message;
+        workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+        showWorkbenchToast(workbench, message, { tone: "error" });
+        render(workbench);
+        return;
+      }
       if (!isManualScriptAnalysis && workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
         workbench.ui.singleEpisodeAiChecking = false;
         workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
@@ -15417,6 +18475,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorName = "";
     workbench.ui.assetGeneratorPrompt = "";
+    workbench.ui.assetGeneratorStoryboardPrompt = "";
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
     workbench.ui.assetGeneratorRetryPreviewUrl = "";
@@ -15452,6 +18511,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     ) {
       await syncProjectStyles(workbench);
     }
+    await Promise.all([
+      syncEpisodeBatchImageStyleSkills(workbench),
+      syncStoryboardPromptSkills(workbench),
+    ]);
     workbench.ui.assetGeneratorName = String(
       target.dataset.storyboardName ??
         `分镜 ${String(storyboard.index ?? 1)}: ${String(storyboard.displayTitle ?? storyboard.title ?? "")}`,
@@ -15474,10 +18537,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         includeStoryboardImage: false,
         includeStoryboardMaterials: true,
       }).map((item) => {
+        const itemUrl = normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item));
         const sourceReference = storyboardMaterialReferences.find((reference) => (
+          normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(reference)) === itemUrl
+        )) ?? storyboardMaterialReferences.find((reference) => (
           String(reference?.assetId ?? reference?.id ?? "") === String(item?.assetId ?? "")
-          || normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(reference))
-            === normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item))
         ));
         return {
           ...item,
@@ -15485,10 +18549,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         };
       }),
     );
-    workbench.ui.assetGeneratorPrompt = normalizeStoryboardGeneratorPrompt(
+    workbench.ui.assetGeneratorStoryboardPrompt = normalizeStoryboardGeneratorPrompt(
       storyboardPrompt,
       workbench.ui.assetGeneratorStoryboardReferences,
     );
+    workbench.ui.assetGeneratorPrompt = workbench.ui.assetGeneratorStoryboardPrompt;
     syncStoryboardGeneratorStyle(workbench, projectStyle);
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
@@ -15496,6 +18561,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.assetGeneratorOpenMenu = "";
     workbench.ui.openGenerationSelectMenu = null;
     try {
       await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
@@ -15525,6 +18591,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorName = "";
     workbench.ui.assetGeneratorPrompt = "";
+    workbench.ui.assetGeneratorStoryboardPrompt = "";
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
     workbench.ui.assetGeneratorRetryPreviewUrl = "";
@@ -15549,12 +18616,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorEditingAsset = null;
     workbench.ui.assetGeneratorName = "";
     workbench.ui.assetGeneratorPrompt = "";
+    workbench.ui.assetGeneratorStoryboardPrompt = "";
     workbench.ui.assetGeneratorPreviewUrl = "";
     workbench.ui.assetGeneratorPreviewFile = null;
     workbench.ui.assetGeneratorStoryboardId = null;
     workbench.ui.assetGeneratorStoryboardReferences = [];
     workbench.ui.assetGeneratorStoryboardUploadReferences = [];
     workbench.ui.assetGeneratorStyleCode = "";
+    workbench.ui.episodePromptSkillModalOpen = false;
+    workbench.ui.episodePromptSkillDraftIds = {};
+    workbench.ui.storyboardPromptSkillModalOpen = false;
+    workbench.ui.storyboardPromptSkillDraftId = "";
     workbench.ui.assetGeneratorRetryPreviewUrl = "";
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
@@ -15588,6 +18660,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     workbench.ui.assetGeneratorStyleCode = styleCode;
+    workbench.ui.assetImageStyleSkillId = "project-style";
+    workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: "",
+    };
     syncStoryboardGeneratorStyle(workbench, style);
     workbench.ui.openGenerationSelectMenu = null;
     render(workbench);
@@ -15619,6 +18697,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     ]);
     workbench.ui.assetGeneratorPrompt = reindexStoryboardGeneratorPromptReferences(
       workbench.ui.assetGeneratorPrompt,
+      previousReferences,
+      nextReferences,
+    );
+    workbench.ui.assetGeneratorStoryboardPrompt = reindexStoryboardGeneratorPromptReferences(
+      workbench.ui.assetGeneratorStoryboardPrompt,
       previousReferences,
       nextReferences,
     );
@@ -15656,7 +18739,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const nextName = String(workbench.ui.assetGeneratorName ?? "").trim();
     const prompt = String(workbench.ui.assetGeneratorPrompt ?? "").trim();
     if (assetGeneratorTarget === "storyboard") {
-      if (!prompt) {
+      if (!prompt && !String(workbench.ui.assetGeneratorStoryboardPrompt ?? "").trim()) {
         workbench.ui.toast = "请输入提示词。";
         render(workbench);
         return;
@@ -15769,11 +18852,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const storedDescription = String(
       workbench.ui.assetGeneratorEditingAsset?.description ?? workbench.ui.assetGeneratorEditingAsset?.prompt ?? "",
     ).trim();
-    const prompt = String(
+    const prompt = stripAutomaticImageStylePromptForWorkbench(
+      workbench,
       currentPrompt && currentPrompt !== storedDescription
         ? currentPrompt
         : replayTask?.prompt ?? currentPrompt,
-    ).trim();
+      collectAssetGeneratorPromptReferences(workbench.ui.assetGeneratorEditingAsset),
+    );
     if (!nextName) {
       workbench.ui.toast = "请输入资产名称。";
       render(workbench);
@@ -17246,6 +20331,69 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   });
 }
 
+function buildPromptMarketplacePublishInput(data) {
+  return {
+    title: String(data.get("title") ?? "").trim(),
+    category: String(data.get("category") ?? "script"),
+    summary: String(data.get("summary") ?? "").trim(),
+    content: String(data.get("content") ?? "").trim(),
+    coverImageUrl: String(data.get("coverImageUrl") ?? "").trim(),
+    coverStorageObjectId: String(data.get("coverStorageObjectId") ?? "").trim() || null,
+    priceCredits: Number(data.get("priceCredits") ?? 0),
+    publish: data.get("publish") === "on",
+  };
+}
+
+async function uploadPromptMarketplaceCoverFile(workbench, input) {
+  const file = input.files?.[0];
+  const form = input.closest?.("form");
+  if (!file || !form || typeof workbench.api?.uploadFile !== "function") return;
+  if (!String(file.type || "").startsWith("image/")) {
+    workbench.ui.toast = "请选择图片文件。";
+    input.value = "";
+    return;
+  }
+  input.disabled = true;
+  try {
+    const result = await workbench.api.uploadFile(file, {
+      category: "prompt-marketplace-covers",
+      projectId: null,
+      uploadLimits: defaultUploadLimits,
+    });
+    const upload = result?.upload ?? result ?? {};
+    const coverImageUrl = result?.urls?.previewUrl ?? result?.urls?.sourceUrl ?? upload?.previewUrl ?? upload?.publicUrl ?? upload?.sourceUrl ?? "";
+    const coverImageInput = form.querySelector('input[name="coverImageUrl"]');
+    const coverStorageObjectInput = form.querySelector('input[name="coverStorageObjectId"]');
+    if (coverImageInput) coverImageInput.value = coverImageUrl;
+    if (coverStorageObjectInput) coverStorageObjectInput.value = upload?.storageObjectId ?? result?.storageObject?.id ?? "";
+    const preview = form.querySelector(".prompt-marketplace-cover-upload-preview, .prompt-marketplace-cover-upload-empty");
+    if (preview && coverImageUrl) {
+      const image = document.createElement("img");
+      image.className = "prompt-marketplace-cover-upload-preview";
+      image.alt = "封面预览";
+      image.loading = "lazy";
+      image.src = resolveApiUrl(coverImageUrl);
+      preview.replaceWith(image);
+    }
+  } catch (error) {
+    workbench.ui.toast = `封面上传失败：${friendlyError(error)}`;
+    render(workbench);
+  } finally {
+    input.disabled = false;
+    input.value = "";
+  }
+}
+
+async function addPromptMarketplaceItemToLibrary(workbench, itemId) {
+  await runAction(workbench, "正在添加提示词...", async () => {
+    const result = await workbench.api.purchasePromptMarketplaceItem(itemId);
+    if (Number.isFinite(Number(result?.creditBalance))) {
+      setWorkbenchCreditBalance(workbench, Number(result.creditBalance), { syncGenerationConfig: false });
+    }
+    await syncPromptMarketplace(workbench);
+  }, { successToast: "已免费加入私人提示词库。" });
+}
+
 const handleAction = handleProductionWorkbenchAction;
 
 function createDefaultCanvasProjectRecord(input = {}) {
@@ -17270,12 +20418,1264 @@ function normalizeCanvasProjects(ui = {}) {
   }));
 }
 
+function touchRecentCanvasProject(ui, projectId) {
+  const id = String(projectId ?? "").trim();
+  if (!id) return [];
+  const availableIds = new Set(normalizeCanvasProjects(ui).map((project) => project.id));
+  const recent = [id, ...(Array.isArray(ui.canvasRecentProjectIds) ? ui.canvasRecentProjectIds : [])]
+    .map(String)
+    .filter((candidate, index, items) => availableIds.has(candidate) && items.indexOf(candidate) === index)
+    .slice(0, 5);
+  ui.canvasRecentProjectIds = recent;
+  return recent;
+}
+
+function downloadJsonDocument(payload, fileName) {
+  const documentRef = globalThis.document;
+  const urlApi = globalThis.URL;
+  if (!documentRef?.createElement || typeof globalThis.Blob !== "function" || typeof urlApi?.createObjectURL !== "function") {
+    return false;
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = urlApi.createObjectURL(blob);
+  const anchor = documentRef.createElement("a");
+  anchor.href = url;
+  anchor.download = String(fileName ?? "canvas-generation-history.json").replace(/[\\/:*?"<>|]+/g, "-");
+  anchor.hidden = true;
+  documentRef.body?.append?.(anchor);
+  anchor.click?.();
+  anchor.remove?.();
+  urlApi.revokeObjectURL?.(url);
+  return true;
+}
+
+function updateCanvasAssetTransferState(workbench, assetId, patch) {
+  const key = String(assetId ?? "").trim();
+  if (!key) return null;
+  const previous = workbench.ui.canvasAssetTransfers?.[key] ?? {};
+  const next = { ...previous, ...patch, updatedAt: Date.now() };
+  workbench.ui.canvasAssetTransfers = {
+    ...(workbench.ui.canvasAssetTransfers && typeof workbench.ui.canvasAssetTransfers === "object"
+      ? workbench.ui.canvasAssetTransfers
+      : {}),
+    [key]: next,
+  };
+  return next;
+}
+
+async function startCanvasAssetTransfer(workbench, assetId, mode) {
+  const key = String(assetId ?? "").trim();
+  const asset = (Array.isArray(workbench.ui.canvasAssets) ? workbench.ui.canvasAssets : [])
+    .find((item) => String(item?.id ?? "") === key);
+  const storageObjectId = String(asset?.storageObjectId ?? "").trim();
+  if (!asset || !storageObjectId || !new Set(["copy", "download"]).has(mode)) {
+    workbench.ui.toast = "当前资产没有可传输的稳定存储版本。";
+    render(workbench);
+    return false;
+  }
+  if (workbench.canvasAssetTransferControllers?.has(key)) return false;
+
+  const controller = new AbortController();
+  workbench.canvasAssetTransferControllers ??= new Map();
+  workbench.canvasAssetTransferControllers.set(key, controller);
+  updateCanvasAssetTransferState(workbench, key, {
+    mode,
+    status: "running",
+    loaded: 0,
+    total: null,
+    progress: null,
+    error: "",
+  });
+  render(workbench);
+  let lastRenderedAt = 0;
+  const onProgress = (event) => {
+    updateCanvasAssetTransferState(workbench, key, event);
+    const now = Date.now();
+    if (now - lastRenderedAt >= 120 || event.progress === 1) {
+      lastRenderedAt = now;
+      render(workbench);
+    }
+  };
+
+  try {
+    const transfer = mode === "copy" ? copyCanvasAsset : downloadCanvasAsset;
+    await transfer({
+      storageObjectId,
+      fileName: asset.title,
+      signal: controller.signal,
+      onProgress,
+    });
+    updateCanvasAssetTransferState(workbench, key, {
+      mode,
+      status: "succeeded",
+      progress: 1,
+      error: "",
+    });
+    workbench.ui.toast = mode === "copy" ? "资产已复制到剪贴板。" : "资产下载已开始。";
+    return true;
+  } catch (error) {
+    const canceled = controller.signal.aborted || error?.name === "AbortError" || error?.errorCode === "canvas_asset_transfer_cancelled";
+    updateCanvasAssetTransferState(workbench, key, {
+      mode,
+      status: canceled ? "canceled" : "failed",
+      error: canceled ? "" : friendlyError(error),
+    });
+    workbench.ui.toast = canceled ? "资产传输已取消。" : `资产传输失败：${friendlyError(error)}`;
+    return false;
+  } finally {
+    if (workbench.canvasAssetTransferControllers?.get(key) === controller) {
+      workbench.canvasAssetTransferControllers.delete(key);
+    }
+    render(workbench);
+  }
+}
+
+function cancelCanvasAssetTransfer(workbench, assetId) {
+  const key = String(assetId ?? "").trim();
+  const controller = workbench.canvasAssetTransferControllers?.get(key);
+  if (!controller) return false;
+  controller.abort();
+  workbench.canvasAssetTransferControllers.delete(key);
+  updateCanvasAssetTransferState(workbench, key, { status: "canceled", error: "" });
+  workbench.ui.toast = "资产传输已取消。";
+  render(workbench);
+  return true;
+}
+
+function stopAllCanvasAssetTransfers(workbench) {
+  for (const [assetId, controller] of workbench.canvasAssetTransferControllers?.entries?.() ?? []) {
+    controller.abort?.();
+    updateCanvasAssetTransferState(workbench, assetId, { status: "canceled", error: "" });
+  }
+  workbench.canvasAssetTransferControllers?.clear?.();
+}
+
+function handleNewCanvasHostInput(workbench, target) {
+  if (target?.matches?.("[data-canvas-storyboard-position-input]")) {
+    return updateCanvasStoryboardPositionFromInput(workbench, target, { renderAfter: false });
+  }
+  if (target?.matches?.("[data-canvas-drama-asset-name]")) {
+    workbench.ui.canvasDramaAssetCreate = {
+      ...(workbench.ui.canvasDramaAssetCreate ?? {}),
+      name: String(target.value ?? "").slice(0, 120),
+    };
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-drama-asset-description]")) {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    if (!assetId) return false;
+    workbench.ui.canvasDramaAssetEdits = {
+      ...(workbench.ui.canvasDramaAssetEdits ?? {}),
+      [assetId]: {
+        ...(workbench.ui.canvasDramaAssetEdits?.[assetId] ?? {}),
+        description: String(target.value ?? "").slice(0, 2_000),
+      },
+    };
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-project-asset-detail]")) {
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const field = String(target.dataset.field ?? "").trim();
+    if (!assetId || !["name", "description"].includes(field)) return false;
+    workbench.ui.canvasProjectAssetEdits = {
+      ...(workbench.ui.canvasProjectAssetEdits ?? {}),
+      [assetId]: {
+        ...(workbench.ui.canvasProjectAssetEdits?.[assetId] ?? {}),
+        [field]: String(target.value ?? "").slice(0, field === "name" ? 120 : 2_000),
+      },
+    };
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-project-asset-replace-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    const projectId = String(workbench.ui.canvasAssetProjectId ?? "").trim();
+    if (!file || !assetId || !projectId || typeof workbench.api?.updateProjectAsset !== "function") return false;
+    const mimeType = String(file.type ?? "").toLowerCase();
+    if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/") && !mimeType.startsWith("audio/")) {
+      workbench.ui.toast = "项目资产仅支持图片、视频或音频。";
+      render(workbench);
+      return false;
+    }
+    void runAction(workbench, "正在替换项目资产...", async () => {
+      const upload = await uploadLocalFile(workbench, file, "asset-replace", { projectId });
+      await workbench.api.updateProjectAsset(assetId, {
+        storageObjectId: upload.storageObjectId ?? null,
+        storageObjectKey: upload.storageObjectKey ?? null,
+        previewUrl: upload.previewUrl ?? upload.publicUrl ?? null,
+        sourceUrl: upload.publicUrl ?? upload.previewUrl ?? null,
+        mimeType: upload.mimeType ?? file.type,
+      });
+      await loadCanvasProjectAssets(workbench, projectId);
+    }, { successToast: "项目资产已替换。" });
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-node-filter]")) {
+    const filter = String(target.value ?? "all");
+    workbench.ui.canvasNodeFilter = ["all", "source", "text", "image", "video", "audio"].includes(filter)
+      ? filter
+      : "all";
+    render(workbench);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-node-search]")) {
+    workbench.ui.canvasNodeSearch = target.value ?? "";
+    const query = String(workbench.ui.canvasNodeSearch).trim().toLocaleLowerCase();
+    const sidebar = target.closest?.(".canvas-sidebar");
+    const nodeItems = Array.from(sidebar?.querySelectorAll?.('.canvas-element-item[data-node-kind]') ?? []);
+    let visibleCount = 0;
+    nodeItems.forEach((item) => {
+      const visible = !query || String(item.textContent ?? "").toLocaleLowerCase().includes(query);
+      item.hidden = !visible;
+      if (visible) visibleCount += 1;
+    });
+    const count = sidebar?.querySelector?.("[data-canvas-node-count]");
+    if (count) {
+      const totalCount = Array.isArray(workbench.ui.canvasDocument?.nodes)
+        ? workbench.ui.canvasDocument.nodes.filter((node) => !node?.data?.hiddenByCharacterId).length
+        : nodeItems.length;
+      count.textContent = `显示 ${visibleCount} / ${totalCount} 节点`;
+    }
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-project-status-filter]")) {
+    workbench.ui.canvasProjectStatusFilter = ["active", "archived", "all"].includes(target.value)
+      ? target.value
+      : "active";
+    workbench.ui.canvasProjectPage = 1;
+    render(workbench);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-asset-search]")) {
+    workbench.ui.canvasAssetSearch = target.value ?? "";
+    if (workbench.ui.canvasSidebarMode === "assets") {
+      resetCanvasAssetVisibleCount(workbench);
+      render(workbench);
+      return true;
+    }
+    workbench.ui.canvasHistoryNextCursor = null;
+    workbench.ui.canvasAssetsLoading = true;
+    render(workbench);
+    return loadCanvasGenerationAssets(workbench, {
+      reset: true,
+      search: workbench.ui.canvasAssetSearch,
+      ...(workbench.ui.canvasSidebarMode === "history" && normalizeCanvasHistoryFilterValue(workbench.ui.canvasHistoryFilter) !== "all"
+        ? { mediaKind: normalizeCanvasHistoryFilterValue(workbench.ui.canvasHistoryFilter) }
+        : {}),
+    }).finally(() => render(workbench));
+  }
+  if (target?.matches?.("[data-canvas-history-filter]")) {
+    workbench.ui.canvasHistoryFilter = normalizeCanvasHistoryFilterValue(target.value);
+    workbench.ui.canvasHistoryNextCursor = null;
+    workbench.ui.canvasAssetsLoading = true;
+    render(workbench);
+    return loadCanvasGenerationAssets(workbench, {
+      reset: true,
+      search: workbench.ui.canvasAssetSearch,
+      ...(workbench.ui.canvasHistoryFilter !== "all" ? { mediaKind: workbench.ui.canvasHistoryFilter } : {}),
+    }).finally(() => render(workbench));
+  }
+  if (target?.matches?.("[data-canvas-project-search]")) {
+    workbench.ui.canvasProjectSearchQuery = target.value ?? "";
+    workbench.ui.canvasProjectPage = 1;
+    render(workbench);
+    return true;
+  }
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const nodeId = target?.dataset?.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "";
+  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
+  if (!nodeId || !node) return false;
+  if (target.matches?.("[data-canvas-group-title-input]") && node.type === "group") {
+    const nextDocument = updateCanvasGroupData(canvasDocument, nodeId, { title: target.value });
+    if (nextDocument !== canvasDocument) {
+      updateActiveCanvasDocument(workbench, nextDocument, { scheduleSave: false });
+      workbench.ui.selectedCanvasNodeId = nodeId;
+      scheduleProjectCanvasSave(workbench, { delayMs: 500 });
+    }
+    return true;
+  }
+  if (target.matches?.("[data-canvas-markdown-fullscreen-input]") && ["markdown", "ai-markdown"].includes(node.type)) {
+    const patch = buildCanvasMarkdownTextPatch(target.value);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, patch), { scheduleSave: false });
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    scheduleProjectCanvasSave(workbench, { delayMs: 500 });
+    const stats = target.closest?.("[data-canvas-markdown-fullscreen]")?.querySelectorAll?.("[data-canvas-markdown-text-stats]") ?? [];
+    for (const output of stats) output.textContent = formatCanvasMarkdownTextStats(target.value);
+    return true;
+  }
+  if (target.matches?.("[data-canvas-animation-frames]") && node.type === "ai-animation") {
+    const animation = normalizeCanvasAnimationState({
+      ...node.data,
+      animationFrames: target.value,
+    });
+    const aspectRatio = resolveCanvasAnimationSheetAspectRatio(animation.frames);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
+      animationFrames: animation.frames,
+      imageAspectRatio: aspectRatio,
+      aspectRatio,
+      parameterValues: {
+        ...(node.data?.parameterValues && typeof node.data.parameterValues === "object" ? node.data.parameterValues : {}),
+        aspectRatio,
+        imageAspectRatio: aspectRatio,
+        count: 1,
+      },
+    }), { scheduleSave: false });
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    workbench.ui.canvasRunPreview = null;
+    scheduleProjectCanvasSave(workbench, { delayMs: 500 });
+    render(workbench);
+    return true;
+  }
+  if (target.matches?.("[data-canvas-audio-field]")) {
+    const field = String(target.dataset.canvasAudioField ?? "");
+    if (!field) return false;
+    const value = target.type === "checkbox"
+      ? target.checked === true
+      : target.type === "number" ? Number(target.value) : String(target.value ?? "");
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
+      [field]: value,
+      parameterValues: {
+        ...(node.data?.parameterValues && typeof node.data.parameterValues === "object" ? node.data.parameterValues : {}),
+        [field]: value,
+      },
+    }), { scheduleSave: false });
+    scheduleProjectCanvasSave(workbench, { delayMs: 2_000 });
+    render(workbench);
+    return true;
+  }
+  let patch = null;
+  if (target.matches?.("[data-canvas-prompt-input]")) {
+    patch = { prompt: target.value };
+  } else if (target.matches?.("[data-canvas-title-input]")) {
+    patch = { title: target.value };
+  } else if (target.matches?.("[data-canvas-text-input]")) {
+    const isRichTextInput = target.matches?.("[contenteditable='true']");
+    const textValue = isRichTextInput ? readCanvasRichTextPlainText(target) : target.value;
+    patch = {
+      [node.type === "send" ? "prompt" : "text"]: textValue,
+      ...(isRichTextInput && node.type !== "send" ? { textHtml: target.innerHTML } : {}),
+    };
+  }
+  if (!patch) return false;
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, patch), { scheduleSave: false });
+  workbench.ui.selectedCanvasNodeId = nodeId;
+  workbench.ui.canvasRunPreview = null;
+  scheduleProjectCanvasSave(workbench, { delayMs: 2_000 });
+  return true;
+}
+
+async function handleNewCanvasHostChange(workbench, target) {
+  if (target?.matches?.("[data-canvas-zoom-value-input]")) {
+    await handleAction(workbench, {
+      dataset: { action: "set-canvas-viewport", viewportPatch: "zoom-value" },
+      value: target.value,
+    });
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-storyboard-position-input]")) {
+    return updateCanvasStoryboardPositionFromInput(workbench, target, { renderAfter: true });
+  }
+  if (target?.matches?.("[data-canvas-drama-asset-type]")) {
+    const assetType = String(target.value ?? "role").trim();
+    workbench.ui.canvasDramaAssetCreate = {
+      ...(workbench.ui.canvasDramaAssetCreate ?? {}),
+      assetType: ["role", "scene", "prop"].includes(assetType) ? assetType : "role",
+    };
+    render(workbench);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-drama-asset-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const projectId = String(workbench.ui.canvasDramaProjectId ?? "").trim();
+    const assetType = String(workbench.ui.canvasDramaAssetCreate?.assetType ?? "role").trim();
+    if (!file || !episodeId || !projectId || !["role", "scene", "prop"].includes(assetType)) return false;
+    if (!String(file.type ?? "").toLocaleLowerCase().startsWith("image/")) {
+      workbench.ui.toast = "短剧资产仅支持导入图片。";
+      render(workbench);
+      return false;
+    }
+    if (typeof workbench.api?.importEpisodeAsset !== "function") {
+      workbench.ui.toast = "短剧资产导入接口暂不可用。";
+      render(workbench);
+      return false;
+    }
+    await runAction(workbench, "正在导入短剧图片...", async () => {
+      const upload = await uploadLocalFile(workbench, file, `episode-assets/${assetType}`, { projectId });
+      await workbench.api.importEpisodeAsset(episodeId, {
+        assetType,
+        name: normalizeAssetImportName(file.name),
+        uploadSessionId: upload.uploadSessionId ?? null,
+        storageObjectId: upload.storageObjectId ?? null,
+        storageObjectKey: upload.storageObjectKey ?? null,
+        sourceUrl: upload.publicUrl ?? upload.previewUrl ?? null,
+        mimeType: upload.mimeType ?? file.type,
+        width: 0,
+        height: 0,
+        source: "canvas_drama_drawer",
+      });
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: "短剧图片已导入。" });
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-drama-asset-fixed-image-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    const episodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    const projectId = String(workbench.ui.canvasDramaProjectId ?? "").trim();
+    const assetId = String(target.dataset.assetId ?? "").trim();
+    if (!file || !episodeId || !projectId || !assetId) return false;
+    if (!String(file.type ?? "").toLocaleLowerCase().startsWith("image/")) {
+      workbench.ui.toast = "固定图仅支持图片。";
+      render(workbench);
+      return false;
+    }
+    if (typeof workbench.api?.setFixedImage !== "function") {
+      workbench.ui.toast = "固定图接口暂不可用。";
+      render(workbench);
+      return false;
+    }
+    await runAction(workbench, "正在替换固定图...", async () => {
+      const upload = await uploadLocalFile(workbench, file, "episode-assets/fixed-image", { projectId });
+      await workbench.api.setFixedImage(episodeId, assetId, {
+        uploadSessionId: upload.uploadSessionId ?? null,
+        storageObjectId: upload.storageObjectId ?? null,
+      });
+      await loadCanvasDramaAssets(workbench, episodeId);
+    }, { successToast: "固定图已替换。" });
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-history-filter]")) {
+    workbench.ui.canvasHistoryFilter = normalizeCanvasHistoryFilterValue(target.value);
+    workbench.ui.canvasHistoryNextCursor = null;
+    workbench.ui.canvasAssetsLoading = true;
+    render(workbench);
+    return loadCanvasGenerationAssets(workbench, {
+      reset: true,
+      search: workbench.ui.canvasAssetSearch,
+      ...(workbench.ui.canvasHistoryFilter !== "all" ? { mediaKind: workbench.ui.canvasHistoryFilter } : {}),
+    }).finally(() => render(workbench));
+  }
+  if (target?.matches?.("[data-canvas-asset-project]")) {
+    workbench.ui.canvasAssetProjectId = String(target.value ?? "").trim() || null;
+    workbench.ui.canvasAssetProjectAssetsError = "";
+    workbench.ui.canvasAssetProjectAssetsLoading = true;
+    resetCanvasAssetVisibleCount(workbench);
+    render(workbench);
+    return loadCanvasProjectAssets(workbench, workbench.ui.canvasAssetProjectId).finally(() => render(workbench));
+  }
+  if (target?.matches?.("[data-canvas-drama-project]")) {
+    workbench.ui.canvasDramaEpisodeId = null;
+    workbench.ui.canvasDramaAssets = [];
+    render(workbench);
+    return loadCanvasDramaEpisodes(workbench, target.value).finally(() => render(workbench));
+  }
+  if (target?.matches?.("[data-canvas-drama-episode]")) {
+    render(workbench);
+    return loadCanvasDramaAssets(workbench, target.value).finally(() => render(workbench));
+  }
+  if (target?.matches?.("[data-canvas-global-asset-category]")) {
+    const category = String(target.value ?? "").trim();
+    workbench.ui.canvasGlobalAssetCategory = ["character", "scene", "prop", "voice"].includes(category)
+      ? category
+      : "character";
+    render(workbench);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-global-asset-folder-filter]")) {
+    workbench.ui.canvasGlobalAssetFolderFilter = String(target.value ?? "all").trim() || "all";
+    resetCanvasAssetVisibleCount(workbench);
+    render(workbench);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-global-asset-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    if (!file) return false;
+    const category = ["character", "scene", "prop", "voice"].includes(workbench.ui.canvasGlobalAssetCategory)
+      ? workbench.ui.canvasGlobalAssetCategory
+      : "character";
+    await runAction(workbench, "正在上传全局资产...", async () => {
+      await uploadTeamAssetLocalFile(workbench, category, file);
+      workbench.ui.canvasLibraryAssetsLoaded = false;
+      workbench.ui.canvasLibraryAssetsLoading = true;
+      await loadCanvasLibraryAssets(workbench);
+    }, { successToast: "全局资产已上传。" });
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-project-asset-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    const projectId = String(workbench.ui.canvasAssetProjectId ?? "").trim();
+    if (!file || !projectId) return false;
+    await runAction(workbench, "正在导入项目文件...", async () => {
+      await importCanvasProjectAssetFile(workbench, projectId, file);
+      resetCanvasAssetVisibleCount(workbench);
+    }, { successToast: "项目文件已导入。" });
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-node-filter]")) {
+    return handleNewCanvasHostInput(workbench, target);
+  }
+  if (target?.matches?.("[data-canvas-model-select]")) {
+    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+    const nodeId = target.dataset.nodeId ?? "";
+    const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
+    if (!nodeId || !node) return false;
+    const model = findConfiguredGenerationModel(workbench, target.value);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
+      modelCode: target.value,
+      ...(model ? { modelLabel: model.modelLabel ?? model.name ?? model.label ?? target.value } : {}),
+      ...(model ? buildGenerationModelDefaultsPatch(
+        model,
+        node.type === "ai-animation" ? "image" : node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image",
+      ) : {}),
+    }));
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    workbench.ui.canvasRunPreview = null;
+    workbench.ui.toast = "";
+    render(workbench);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-upload-input]")) {
+    const [file] = [...(target.files ?? [])];
+    const nodeId = target.dataset.nodeId ?? "";
+    target.value = "";
+    if (!file || !nodeId) return false;
+    await handleCanvasUploadNodeFile(workbench, nodeId, file);
+    return true;
+  }
+  return false;
+}
+
+function updateCanvasStoryboardPositionFromInput(workbench, target, options = {}) {
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const nodeId = String(target?.dataset?.nodeId ?? "");
+  const node = document.nodes?.find?.((item) => item.id === nodeId && item.type === "ai-storyboard");
+  if (!node) return false;
+  const grid = normalizeCanvasStoryboardGrid(node);
+  const axis = target.dataset.storyboardAxis === "columns" ? "columns" : "rows";
+  const positionIndex = Math.max(0, Number(target.dataset.storyboardPositionIndex ?? 0) || 0);
+  const patch = axis === "columns"
+    ? {
+        storyboardGridMode: "custom",
+        storyboardColPositions: updateCanvasStoryboardGridPosition(grid.columnPositions, positionIndex, target.value),
+      }
+    : {
+        storyboardGridMode: "custom",
+        storyboardRowPositions: updateCanvasStoryboardGridPosition(grid.rowPositions, positionIndex, target.value),
+      };
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(document, nodeId, patch), { scheduleSave: false });
+  workbench.ui.selectedCanvasNodeId = nodeId;
+  scheduleProjectCanvasSave(workbench, { delayMs: 500 });
+  if (options.renderAfter === true) render(workbench);
+  return true;
+}
+
+function buildCanvasStoryboardAxisPatch(node, axisValue, deltaValue) {
+  const grid = normalizeCanvasStoryboardGrid(node);
+  const axis = axisValue === "columns" ? "columns" : "rows";
+  const delta = Number(deltaValue) < 0 ? -1 : 1;
+  const nextRows = axis === "rows" ? Math.max(1, Math.min(12, grid.rows + delta)) : grid.rows;
+  const nextColumns = axis === "columns" ? Math.max(1, Math.min(12, grid.columns + delta)) : grid.columns;
+  if (nextRows === grid.rows && nextColumns === grid.columns) return {};
+  const patch = {
+    storyboardRows: nextRows,
+    storyboardCols: nextColumns,
+    ...remapCanvasStoryboardCellState(node.data, grid, nextRows, nextColumns),
+  };
+  if (grid.mode === "custom") {
+    patch.storyboardRowPositions = resizeCanvasStoryboardGridPositions(grid.rowPositions, nextRows);
+    patch.storyboardColPositions = resizeCanvasStoryboardGridPositions(grid.columnPositions, nextColumns);
+  }
+  return patch;
+}
+
+function remapCanvasStoryboardCellState(data = {}, grid, nextRows, nextColumns) {
+  const next = {};
+  const remap = (values, fallback) => {
+    if (!Array.isArray(values)) return null;
+    const result = Array.from({ length: nextRows * nextColumns }, () => fallback);
+    for (let row = 0; row < Math.min(grid.rows, nextRows); row += 1) {
+      for (let column = 0; column < Math.min(grid.columns, nextColumns); column += 1) {
+        result[row * nextColumns + column] = values[row * grid.columns + column] ?? fallback;
+      }
+    }
+    return result;
+  };
+  const extracted = remap(data.storyboardExtracted, false);
+  const overrides = remap(data.storyboardOverrides, null);
+  if (extracted) next.storyboardExtracted = extracted;
+  if (overrides) next.storyboardOverrides = overrides;
+  const selected = Number(data.storyboardSelectedCell);
+  if (Number.isInteger(selected) && selected >= 0) {
+    const selectedRow = Math.floor(selected / grid.columns);
+    const selectedColumn = selected % grid.columns;
+    next.storyboardSelectedCell = selectedRow < nextRows && selectedColumn < nextColumns
+      ? selectedRow * nextColumns + selectedColumn
+      : Math.max(0, nextRows * nextColumns - 1);
+  }
+  return next;
+}
+
+function normalizeCanvasHistoryFilterValue(value) {
+  const normalized = String(value ?? "all").trim().toLowerCase();
+  return ["all", "text", "image", "video", "audio"].includes(normalized) ? normalized : "all";
+}
+
+function resolveCanvasHistoryOutputText(snapshot) {
+  const visit = (value, depth = 0) => {
+    if (depth > 4 || value == null) return "";
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map((item) => visit(item, depth + 1)).filter(Boolean).join("\n");
+    if (typeof value !== "object") return "";
+    const record = value;
+    for (const key of ["text", "output", "content", "transcript", "result"]) {
+      const result = visit(record[key], depth + 1);
+      if (result) return result;
+    }
+    return Object.values(record).map((item) => visit(item, depth + 1)).filter(Boolean).join("\n");
+  };
+  return visit(snapshot).slice(0, 100_000);
+}
+
+async function loadCanvasGenerationAssets(workbench, options = {}) {
+  const canvasProjectId = String(workbench?.ui?.selectedCanvasProjectId ?? "").trim();
+  const isCurrentHistoryRequest = (loadToken) => (
+    workbench?.ui?.canvasHistoryLoadToken === loadToken
+    && String(workbench?.ui?.selectedCanvasProjectId ?? "").trim() === canvasProjectId
+  );
+  if (!canvasProjectId || typeof workbench?.api?.listCanvasGenerationHistory !== "function") {
+    if (!canvasProjectId) {
+      workbench.ui.canvasAssets = [];
+      workbench.ui.canvasGenerationHistoryItems = [];
+      workbench.ui.canvasAssetsLoading = false;
+    }
+    return [];
+  }
+  const search = String(
+    options.search ?? (options.append
+      ? workbench.ui.canvasHistoryLoadedSearch ?? workbench.ui.canvasAssetSearch
+      : workbench.ui.canvasAssetSearch) ?? "",
+  ).trim();
+  const loadToken = Symbol("canvas-generation-history-load");
+  workbench.ui.canvasHistoryLoadToken = loadToken;
+  try {
+    const payload = await workbench.api.listCanvasGenerationHistory(canvasProjectId, {
+      limit: 50,
+      ...(search ? { search } : {}),
+      ...(options.mediaKind ? { mediaKind: options.mediaKind } : {}),
+      ...(options.cursor ? { cursor: options.cursor } : {}),
+    });
+    if (!isCurrentHistoryRequest(loadToken)) {
+      return workbench.ui.canvasAssets ?? [];
+    }
+    const previous = options.append && Array.isArray(workbench.ui.canvasGenerationHistoryItems)
+      ? workbench.ui.canvasGenerationHistoryItems
+      : [];
+    const incoming = Array.isArray(payload?.items) ? payload.items : [];
+    const byId = new Map([...previous, ...incoming].map((item) => [String(item?.id ?? ""), item]));
+    workbench.ui.canvasGenerationHistoryItems = [...byId.values()].filter((item) => item?.id);
+    workbench.ui.canvasHistoryNextCursor = payload?.nextCursor ?? null;
+    workbench.ui.canvasHistoryLoadedSearch = search;
+    workbench.ui.canvasAssets = canvasAssetsFromGenerationHistory({ items: workbench.ui.canvasGenerationHistoryItems });
+    const reconciledMedia = reconcileCanvasMediaDocumentSources(workbench.ui.canvasDocument, workbench.ui.canvasAssets);
+    if (reconciledMedia.changed) {
+      updateActiveCanvasDocument(workbench, reconciledMedia.document, { scheduleSave: false });
+    }
+    workbench.ui.canvasAssetsError = "";
+  } catch (error) {
+    if (isCurrentHistoryRequest(loadToken)) {
+      workbench.ui.canvasAssetsError = friendlyError(error);
+    }
+  } finally {
+    if (isCurrentHistoryRequest(loadToken)) {
+      workbench.ui.canvasAssetsLoading = false;
+    }
+  }
+  return workbench.ui.canvasAssets ?? [];
+}
+
+async function loadCanvasLibraryAssets(workbench) {
+  if (typeof workbench?.api?.getLibraryAssets !== "function") {
+    workbench.ui.canvasLibraryAssets = [];
+    workbench.ui.canvasLibraryAssetsLoading = false;
+    return [];
+  }
+  const loadToken = Symbol("canvas-library-assets-load");
+  workbench.ui.canvasLibraryAssetsLoadToken = loadToken;
+  try {
+    const categories = ["character", "scene", "prop", "voice"];
+    const payloads = await Promise.all(categories.map((category) => workbench.api.getLibraryAssets({ scope: "team", category })));
+    if (workbench.ui.canvasLibraryAssetsLoadToken !== loadToken) return workbench.ui.canvasLibraryAssets ?? [];
+    const seenAssetIds = new Set();
+    workbench.ui.canvasLibraryAssets = payloads.flatMap((payload, index) => {
+      const category = categories[index];
+      return (Array.isArray(payload?.assets) ? payload.assets : [])
+        .map((asset) => normalizeCanvasLibraryAsset(asset, { source: "global", category }))
+        .filter((asset) => {
+          const assetId = String(asset?.assetId ?? "");
+          if (!assetId || seenAssetIds.has(assetId)) return false;
+          seenAssetIds.add(assetId);
+          return true;
+        });
+    });
+    workbench.ui.canvasLibraryAssetsLoaded = true;
+    workbench.ui.canvasLibraryAssetsError = "";
+  } catch (error) {
+    if (workbench.ui.canvasLibraryAssetsLoadToken === loadToken) {
+      workbench.ui.canvasLibraryAssets = [];
+      workbench.ui.canvasLibraryAssetsError = friendlyError(error);
+    }
+  } finally {
+    if (workbench.ui.canvasLibraryAssetsLoadToken === loadToken) {
+      workbench.ui.canvasLibraryAssetsLoading = false;
+    }
+  }
+  return workbench.ui.canvasLibraryAssets ?? [];
+}
+
+async function loadCanvasProjectAssets(workbench, projectId = workbench?.ui?.canvasAssetProjectId) {
+  if (typeof workbench?.api?.getAssetLibrary !== "function") {
+    workbench.ui.canvasAssetProjectAssets = [];
+    workbench.ui.canvasAssetProjectAssetsLoading = false;
+    return [];
+  }
+  await loadCanvasAssetProjects(workbench);
+  const normalizedProjectId = String(projectId ?? workbench.ui.canvasAssetProjectId ?? resolveActiveProjectId(workbench) ?? "").trim();
+  if (!normalizedProjectId) {
+    workbench.ui.canvasAssetProjectAssets = [];
+    workbench.ui.canvasAssetProjectAssetsLoading = false;
+    return [];
+  }
+  workbench.ui.canvasAssetProjectId = normalizedProjectId;
+  const loadToken = Symbol("canvas-project-assets-load");
+  workbench.ui.canvasAssetProjectAssetsLoadToken = loadToken;
+  try {
+    const payload = await workbench.api.getAssetLibrary(normalizedProjectId);
+    if (workbench.ui.canvasAssetProjectAssetsLoadToken !== loadToken) return workbench.ui.canvasAssetProjectAssets ?? [];
+    workbench.ui.canvasAssetProjectAssets = normalizeCanvasProjectAssets(payload?.assets);
+    workbench.ui.canvasAssetProjectAssetsError = "";
+  } catch (error) {
+    if (workbench.ui.canvasAssetProjectAssetsLoadToken === loadToken) {
+      workbench.ui.canvasAssetProjectAssets = [];
+      workbench.ui.canvasAssetProjectAssetsError = friendlyError(error);
+    }
+  } finally {
+    if (workbench.ui.canvasAssetProjectAssetsLoadToken === loadToken) {
+      workbench.ui.canvasAssetProjectAssetsLoading = false;
+    }
+  }
+  return workbench.ui.canvasAssetProjectAssets ?? [];
+}
+
+async function importCanvasProjectAssetFile(workbench, projectId, file) {
+  const contentType = String(file?.type ?? "").toLowerCase();
+  const kind = contentType.startsWith("video/") ? "video" : contentType.startsWith("image/") ? "image" : "";
+  if (!kind) throw new Error("项目文件仅支持图片或视频");
+  if (typeof workbench.api?.importAsset !== "function") throw new Error("项目文件导入接口暂不可用");
+  const upload = await uploadLocalFile(workbench, file, `asset-import/${kind}`, { projectId });
+  await workbench.api.importAsset({
+    projectId,
+    kind,
+    name: normalizeAssetImportName(file.name),
+    uploadSessionId: upload.uploadSessionId,
+    storageObjectId: upload.storageObjectId,
+    mimeType: contentType,
+    width: 0,
+    height: 0,
+  });
+  workbench.ui.canvasAssetProjectAssetsLoading = true;
+  await loadCanvasProjectAssets(workbench, projectId);
+}
+
+async function loadCanvasDramaEpisodes(workbench, projectId = workbench?.ui?.canvasDramaProjectId) {
+  await loadCanvasAssetProjects(workbench);
+  const normalizedProjectId = String(projectId ?? workbench.ui.canvasAssetProjectId ?? resolveActiveProjectId(workbench) ?? "").trim();
+  if (!normalizedProjectId || typeof workbench.api?.getProjectEpisodes !== "function") {
+    workbench.ui.canvasDramaEpisodes = [];
+    workbench.ui.canvasDramaEpisodeId = null;
+    return [];
+  }
+  const loadToken = Symbol("canvas-drama-episodes-load");
+  workbench.ui.canvasDramaEpisodesLoadToken = loadToken;
+  workbench.ui.canvasDramaProjectId = normalizedProjectId;
+  workbench.ui.canvasDramaEpisodesLoading = true;
+  workbench.ui.canvasDramaEpisodesError = "";
+  try {
+    const payload = await workbench.api.getProjectEpisodes(normalizedProjectId);
+    if (workbench.ui.canvasDramaEpisodesLoadToken !== loadToken) return workbench.ui.canvasDramaEpisodes ?? [];
+    const episodes = (Array.isArray(payload?.episodes) ? payload.episodes : [])
+      .map((episode) => ({
+        id: String(episode?.id ?? "").trim(),
+        title: String(episode?.title ?? "未命名剧集").trim() || "未命名剧集",
+        sequence: Number(episode?.sequence ?? 0),
+      }))
+      .filter((episode) => episode.id);
+    workbench.ui.canvasDramaEpisodes = episodes;
+    const selectedEpisodeId = String(workbench.ui.canvasDramaEpisodeId ?? "").trim();
+    workbench.ui.canvasDramaEpisodeId = episodes.some((episode) => episode.id === selectedEpisodeId)
+      ? selectedEpisodeId
+      : episodes[0]?.id ?? null;
+    if (workbench.ui.canvasDramaEpisodeId) {
+      await loadCanvasDramaAssets(workbench, workbench.ui.canvasDramaEpisodeId);
+    } else {
+      workbench.ui.canvasDramaAssets = [];
+    }
+    return episodes;
+  } catch (error) {
+    if (workbench.ui.canvasDramaEpisodesLoadToken === loadToken) {
+      workbench.ui.canvasDramaEpisodes = [];
+      workbench.ui.canvasDramaEpisodeId = null;
+      workbench.ui.canvasDramaAssets = [];
+      workbench.ui.canvasDramaEpisodesError = friendlyError(error);
+    }
+    return [];
+  } finally {
+    if (workbench.ui.canvasDramaEpisodesLoadToken === loadToken) {
+      workbench.ui.canvasDramaEpisodesLoading = false;
+    }
+  }
+}
+
+async function loadCanvasDramaAssets(workbench, episodeId = workbench?.ui?.canvasDramaEpisodeId) {
+  const normalizedEpisodeId = String(episodeId ?? "").trim();
+  if (!normalizedEpisodeId || typeof workbench.api?.listEpisodeAssets !== "function") {
+    workbench.ui.canvasDramaAssets = [];
+    return [];
+  }
+  const loadToken = Symbol("canvas-drama-assets-load");
+  workbench.ui.canvasDramaAssetsLoadToken = loadToken;
+  workbench.ui.canvasDramaEpisodeId = normalizedEpisodeId;
+  workbench.ui.canvasDramaAssetsLoading = true;
+  workbench.ui.canvasDramaAssetsError = "";
+  try {
+    const assetTypes = ["role", "scene", "prop"];
+    const payloads = await Promise.all(assetTypes.map((assetType) => workbench.api.listEpisodeAssets(normalizedEpisodeId, { assetType })));
+    if (workbench.ui.canvasDramaAssetsLoadToken !== loadToken) return workbench.ui.canvasDramaAssets ?? [];
+    workbench.ui.canvasDramaAssets = payloads.flatMap((payload, index) => {
+      const assetType = assetTypes[index];
+      return (Array.isArray(payload?.items) ? payload.items : []).map((asset) => ({
+        id: String(asset?.assetId ?? "").trim(),
+        episodeId: normalizedEpisodeId,
+        assetType,
+        name: String(asset?.name ?? "未命名素材").trim() || "未命名素材",
+        description: String(asset?.description ?? "").trim(),
+        assetVersionId: String(asset?.fixedImageFileId ?? "").trim() || null,
+        storageObjectId: String(asset?.fixedImageStorageObjectId ?? asset?.storageObjectId ?? "").trim() || null,
+        previewUrl: String(asset?.fixedImageUrl ?? "").trim(),
+      })).filter((asset) => asset.id);
+    });
+    return workbench.ui.canvasDramaAssets;
+  } catch (error) {
+    if (workbench.ui.canvasDramaAssetsLoadToken === loadToken) {
+      workbench.ui.canvasDramaAssets = [];
+      workbench.ui.canvasDramaAssetsError = friendlyError(error);
+    }
+    return [];
+  } finally {
+    if (workbench.ui.canvasDramaAssetsLoadToken === loadToken) {
+      workbench.ui.canvasDramaAssetsLoading = false;
+    }
+  }
+}
+
+async function loadCanvasAssetProjects(workbench) {
+  if (workbench.ui.canvasAssetProjectsLoaded === true || typeof workbench?.api?.getProjects !== "function") {
+    return workbench.ui.canvasAssetProjects ?? [];
+  }
+  const loadToken = Symbol("canvas-asset-projects-load");
+  workbench.ui.canvasAssetProjectsLoadToken = loadToken;
+  try {
+    const payload = await workbench.api.getProjects({ page: 1, pageSize: 100 });
+    if (workbench.ui.canvasAssetProjectsLoadToken !== loadToken) return workbench.ui.canvasAssetProjects ?? [];
+    const projects = Array.isArray(payload?.projects) ? payload.projects : [];
+    workbench.ui.canvasAssetProjects = projects
+      .map((project) => ({
+        id: String(project?.id ?? "").trim(),
+        name: String(project?.name ?? "未命名项目").trim() || "未命名项目",
+      }))
+      .filter((project) => project.id);
+    const activeProjectId = String(resolveActiveProjectId(workbench) ?? "").trim();
+    const selectedProjectId = String(workbench.ui.canvasAssetProjectId ?? "").trim();
+    workbench.ui.canvasAssetProjectId = workbench.ui.canvasAssetProjects.some((project) => project.id === selectedProjectId)
+      ? selectedProjectId
+      : workbench.ui.canvasAssetProjects.some((project) => project.id === activeProjectId)
+        ? activeProjectId
+        : workbench.ui.canvasAssetProjects[0]?.id ?? null;
+    workbench.ui.canvasAssetProjectsLoaded = true;
+  } catch (error) {
+    if (workbench.ui.canvasAssetProjectsLoadToken === loadToken) {
+      workbench.ui.canvasAssetProjects = [];
+      workbench.ui.canvasAssetProjectAssetsError = friendlyError(error);
+    }
+  } finally {
+    if (workbench.ui.canvasAssetProjectsLoadToken === loadToken) {
+      workbench.ui.canvasAssetProjectsLoading = false;
+    }
+  }
+  return workbench.ui.canvasAssetProjects ?? [];
+}
+
+function normalizeCanvasProjectAssets(assets) {
+  return normalizeCanvasAssetsByType(groupLibraryAssetsByType(Array.isArray(assets) ? assets : []), "project");
+}
+
+function normalizeCanvasAssetsByType(assetsByType, source) {
+  const entries = [];
+  const seenAssetIds = new Set();
+  for (const [category, value] of Object.entries(assetsByType)) {
+    const list = Array.isArray(value)
+      ? value
+      : value && typeof value === "object"
+        ? Object.values(value).flatMap((item) => Array.isArray(item) ? item : [])
+        : [];
+    for (const asset of list) {
+      const normalized = normalizeCanvasLibraryAsset(asset, { source, category });
+      if (!normalized || seenAssetIds.has(normalized.assetId)) continue;
+      seenAssetIds.add(normalized.assetId);
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
+
+function resolveCanvasSidebarLibraryAssets(workbench) {
+  const source = String(workbench?.ui?.canvasAssetSource ?? "").trim();
+  const current = source === "project"
+    ? workbench?.ui?.canvasAssetProjectAssets
+    : source === "drama"
+      ? normalizeCanvasAssetsByType(workbench?.ui?.importedAssets ?? {}, "drama")
+      : workbench?.ui?.canvasLibraryAssets;
+  return Array.isArray(current) ? current : [];
+}
+
+function findCanvasLibraryAsset(workbench, assetId) {
+  const normalizedId = String(assetId ?? "");
+  return resolveCanvasSidebarLibraryAssets(workbench)
+    .find((asset) => String(asset?.id ?? "") === normalizedId) ?? null;
+}
+
+function updateCanvasImportedAssetTags(collection, assetId, tags) {
+  if (!collection || typeof collection !== "object") return;
+  if (Array.isArray(collection)) {
+    for (const item of collection) updateCanvasImportedAssetTags(item, assetId, tags);
+    return;
+  }
+  if (String(collection.id ?? collection.assetId ?? "") === String(assetId)) {
+    collection.tags = tags;
+    if (collection.latestVersion && typeof collection.latestVersion === "object") {
+      collection.latestVersion.metadata = {
+        ...(collection.latestVersion.metadata ?? {}),
+        tags,
+      };
+    }
+  }
+  for (const value of Object.values(collection)) updateCanvasImportedAssetTags(value, assetId, tags);
+}
+
+function canvasAssetTagEditorKey(source, assetId) {
+  return `${String(source ?? "").trim()}:${String(assetId ?? "").trim()}`;
+}
+
+function findCanvasTagAsset(workbench, source, libraryAssetId) {
+  const normalizedSource = String(source ?? workbench.ui.canvasAssetSource ?? "").trim();
+  const normalizedId = String(libraryAssetId ?? "").trim();
+  if (normalizedSource === "outputs") {
+    return (workbench.ui.canvasAssets ?? []).find((item) => String(item?.id ?? "") === normalizedId) ?? null;
+  }
+  const assets = normalizedSource === "project"
+    ? workbench.ui.canvasAssetProjectAssets
+    : normalizedSource === "drama"
+      ? normalizeCanvasAssetsByType(workbench.ui.importedAssets ?? {}, "drama")
+      : workbench.ui.canvasLibraryAssets;
+  return (Array.isArray(assets) ? assets : []).find((item) => String(item?.id ?? "") === normalizedId) ?? null;
+}
+
+function focusCanvasAssetTagInput(workbench, editorKey) {
+  queueMicrotask(() => {
+    const input = [...(workbench.root?.querySelectorAll?.("[data-canvas-asset-tag-input]") ?? [])]
+      .find((element) => String(element.dataset.canvasAssetEditorKey ?? "") === editorKey);
+    input?.focus?.();
+  });
+}
+
+async function saveCanvasAssetTags(workbench, { source, libraryAssetId, tags }) {
+  const normalizedSource = String(source ?? workbench.ui.canvasAssetSource ?? "").trim();
+  const asset = findCanvasTagAsset(workbench, normalizedSource, libraryAssetId);
+  const normalizedTags = [...new Set((Array.isArray(tags) ? tags : [])
+    .map((tag) => String(tag ?? "").trim())
+    .filter(Boolean))];
+  const assetId = String(asset?.assetId ?? "").trim();
+  const artifactId = String(asset?.artifactId ?? "").trim();
+  const isTeamMember = String(workbench.session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+  if (!asset || (normalizedSource === "global" && isTeamMember)) {
+    throw new Error(isTeamMember ? "团队子账户不能编辑全局资产标签" : "资产标签接口暂不可用");
+  }
+  if (normalizedTags.length > 12 || normalizedTags.some((tag) => tag.length > 32)) {
+    throw new Error("最多 12 个标签，每个不超过 32 个字符");
+  }
+  const saveKey = canvasAssetTagEditorKey(normalizedSource, libraryAssetId);
+  workbench.canvasAssetTagSavePromises ??= new Map();
+  if (workbench.canvasAssetTagSavePromises.has(saveKey)) return false;
+  const next = runAction(workbench, "正在更新资产标签...", async () => {
+    if (normalizedSource === "global") {
+      if (typeof workbench.api?.updateTeamAsset !== "function") throw new Error("全局资产标签接口暂不可用");
+      await workbench.api.updateTeamAsset(assetId, { tags: normalizedTags });
+      workbench.ui.canvasLibraryAssetsLoaded = false;
+      workbench.ui.canvasLibraryAssetsLoading = true;
+      await loadCanvasLibraryAssets(workbench);
+    } else if (normalizedSource === "outputs") {
+      const canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "").trim();
+      if (!canvasProjectId || !artifactId || typeof workbench.api?.updateCanvasArtifactTags !== "function") {
+        throw new Error("画布产物标签接口暂不可用");
+      }
+      await workbench.api.updateCanvasArtifactTags(canvasProjectId, artifactId, { tags: normalizedTags });
+      await loadCanvasGenerationAssets(workbench, { reset: true });
+    } else {
+      if (!assetId || typeof workbench.api?.updateProjectAsset !== "function") {
+        throw new Error("项目资产标签接口暂不可用");
+      }
+      await workbench.api.updateProjectAsset(assetId, { tags: normalizedTags });
+      if (normalizedSource === "project") {
+        await loadCanvasProjectAssets(workbench);
+      } else {
+        updateCanvasImportedAssetTags(workbench.ui.importedAssets, assetId, normalizedTags);
+      }
+    }
+  }, { successToast: "资产标签已更新。" });
+  workbench.canvasAssetTagSavePromises.set(saveKey, next);
+  try {
+    return await next;
+  } finally {
+    if (workbench.canvasAssetTagSavePromises.get(saveKey) === next) {
+      workbench.canvasAssetTagSavePromises.delete(saveKey);
+    }
+    if (workbench.ui.canvasAssetTagEditorKey === saveKey) focusCanvasAssetTagInput(workbench, saveKey);
+  }
+}
+
+async function commitCanvasAssetTagInput(workbench, target) {
+  if (target?.dataset?.canvasAssetTagSubmitting === "true") return false;
+  const value = String(target?.value ?? "").trim();
+  if (!value) return false;
+  const source = String(target.dataset.assetSource ?? workbench.ui.canvasAssetSource ?? "").trim();
+  const libraryAssetId = String(target.dataset.libraryAssetId ?? "").trim();
+  const asset = findCanvasTagAsset(workbench, source, libraryAssetId);
+  if (!asset || (asset.tags ?? []).includes(value)) {
+    target.value = "";
+    return false;
+  }
+  target.dataset.canvasAssetTagSubmitting = "true";
+  try {
+    await saveCanvasAssetTags(workbench, { source, libraryAssetId, tags: [...(asset.tags ?? []), value] });
+    return true;
+  } finally {
+    delete target.dataset.canvasAssetTagSubmitting;
+  }
+}
+
+async function loadCanvasSettingsRecord(workbench) {
+  const canvasProjectId = String(workbench?.ui?.selectedCanvasProjectId ?? "").trim();
+  if (!canvasProjectId || typeof workbench?.api?.getCanvasSettings !== "function") return null;
+  try {
+    const payload = await workbench.api.getCanvasSettings(canvasProjectId);
+    const record = payload?.settings ? payload : payload?.data?.settings ? payload.data : payload;
+    workbench.ui.canvasSettingsRecord = record;
+    workbench.ui.canvasSettingsError = "";
+    return record;
+  } catch (error) {
+    workbench.ui.canvasSettingsError = friendlyError(error);
+    return null;
+  }
+}
+
+async function loadAppliedCanvasToolbar(workbench) {
+  const reference = workbench?.ui?.canvasDocument?.configReferences?.toolbar;
+  const snapshots = {
+    ...(workbench?.ui?.canvasConfigSnapshots && typeof workbench.ui.canvasConfigSnapshots === "object"
+      ? workbench.ui.canvasConfigSnapshots
+      : {}),
+  };
+  if (!reference?.configId || typeof workbench?.api?.listCanvasUserConfigVersions !== "function") {
+    delete snapshots.toolbar;
+    workbench.ui.canvasConfigSnapshots = snapshots;
+    return null;
+  }
+  delete snapshots.toolbar;
+  workbench.ui.canvasConfigSnapshots = snapshots;
+  try {
+    const payload = await workbench.api.listCanvasUserConfigVersions(reference.configId, { limit: 100 });
+    const versions = Array.isArray(payload?.versions) ? payload.versions : [];
+    const version = versions.find((item) => String(item?.id ?? "") === String(reference.versionId ?? ""))
+      ?? versions.find((item) => Number(item?.version) === Number(reference.version));
+    if (!version?.manifest || typeof version.manifest !== "object") return null;
+    snapshots.toolbar = {
+      configId: reference.configId,
+      versionId: version.id,
+      version: Number(version.version ?? reference.version ?? 1),
+      manifest: version.manifest,
+    };
+    workbench.ui.canvasConfigSnapshots = snapshots;
+    return snapshots.toolbar;
+  } catch {
+    return null;
+  }
+}
+
+export function handleNewCanvasAssetDrop(workbench, input = {}) {
+  const assetId = String(input.assetId ?? "").trim();
+  const asset = [...(Array.isArray(workbench?.ui?.canvasAssets) ? workbench.ui.canvasAssets : []), ...resolveCanvasSidebarLibraryAssets(workbench)]
+    .find((item) => String(item?.id ?? "") === assetId);
+  if (!asset || (!asset.assetVersionId && !asset.storageObjectId)) {
+    workbench.ui.toast = "该产物尚未形成稳定资产版本，暂不能拖入画布。";
+    render(workbench);
+    return false;
+  }
+  const mediaKind = String(asset.kind ?? "image").toLowerCase();
+  const nodeType = mediaKind === "video"
+    ? "source-video"
+    : mediaKind === "audio" ? "source-audio" : "source-image";
+  const template = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig)
+    .find((item) => item.type === nodeType);
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  updateActiveCanvasDocument(workbench, addCanvasNode(document, {
+    type: nodeType,
+    position: {
+      x: Number(input.position?.x ?? 220),
+      y: Number(input.position?.y ?? 180),
+    },
+    template: {
+      ...template,
+      defaultData: {
+        ...(template?.defaultData ?? {}),
+        ...canvasAssetNodeData(asset),
+      },
+    },
+  }));
+  workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
+  workbench.ui.canvasSidebarMode = "nodes";
+  workbench.ui.canvasEditorOpen = false;
+  workbench.ui.canvasContextMenu = null;
+  workbench.ui.toast = "已将稳定资产引用添加到画布。";
+  render(workbench);
+  return true;
+}
+
+export async function handleNewCanvasStoryboardCellDrop(workbench, input = {}) {
+  const nodeId = String(input.nodeId ?? "").trim();
+  const cellIndex = Number(input.cellIndex);
+  if (!nodeId || !Number.isInteger(cellIndex) || cellIndex < 0) return false;
+  await extractCanvasStoryboardCell(workbench, nodeId, cellIndex, {
+    position: {
+      x: Number(input.position?.x ?? 0),
+      y: Number(input.position?.y ?? 0),
+    },
+  });
+  return true;
+}
+
+export async function handleNewCanvasExternalDrop(workbench, input = {}) {
+  const files = Array.isArray(input.files) ? input.files : [];
+  const text = String(input.text ?? "").trim().slice(0, 100_000);
+  const basePosition = {
+    x: Number(input.position?.x ?? 220),
+    y: Number(input.position?.y ?? 180),
+  };
+  let imported = 0;
+  for (const file of files) {
+    const mimeType = String(file?.type ?? "").toLowerCase();
+    const mediaKind = mimeType.startsWith("video/") ? "video" : mimeType.startsWith("audio/") ? "audio" : mimeType.startsWith("image/") ? "image" : "";
+    if (!mediaKind) continue;
+    const nodeType = mediaKind === "video" ? "source-video" : mediaKind === "audio" ? "source-audio" : "source-image";
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const position = resolveCanvasNodePlacement(document, { type: nodeType, position: basePosition });
+    const template = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig).find((item) => item.type === nodeType);
+    const nextDocument = addCanvasNode(document, {
+      type: nodeType,
+      position,
+      template: {
+        ...template,
+        defaultData: {
+          ...(template?.defaultData ?? {}),
+          title: String(file.name ?? (mediaKind === "image" ? "图片" : mediaKind === "video" ? "视频" : "音频")).slice(0, 160),
+          mediaKind,
+          status: "empty",
+        },
+      },
+    });
+    const nodeId = String(nextDocument.nodes.at(-1)?.id ?? "");
+    updateActiveCanvasDocument(workbench, nextDocument, { scheduleSave: false });
+    if (nodeId) {
+      await handleCanvasUploadNodeFile(workbench, nodeId, file);
+      imported += 1;
+    }
+  }
+  if (text) {
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const nodeType = "source-text";
+    const position = resolveCanvasNodePlacement(document, { type: nodeType, position: basePosition });
+    const template = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig).find((item) => item.type === nodeType);
+    updateActiveCanvasDocument(workbench, addCanvasNode(document, {
+      type: nodeType,
+      position,
+      template: {
+        ...template,
+        defaultData: {
+          ...(template?.defaultData ?? {}),
+          title: "粘贴文本",
+          text,
+          textHtml: canvasPlainTextToParagraphHtml(text),
+          source: "clipboard",
+        },
+      },
+    }));
+    imported += 1;
+  }
+  if (!imported) return false;
+  workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
+  workbench.ui.canvasSidebarMode = "nodes";
+  workbench.ui.canvasEditorOpen = false;
+  workbench.ui.canvasContextMenu = null;
+  workbench.ui.toast = `已导入 ${imported} 项素材。`;
+  refreshCanvasGraphFromDocument(workbench);
+  render(workbench);
+  return true;
+}
+
+function addCanvasNodeFromShortcut(workbench, nodeType, requestedPosition = null) {
+  const template = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig)
+    .find((item) => item.type === nodeType);
+  if (!template) return false;
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const position = resolveCanvasNodePlacement(document, {
+    type: nodeType,
+    position: requestedPosition ?? { x: 220, y: 180 },
+  });
+  updateActiveCanvasDocument(workbench, addCanvasNode(document, { type: nodeType, position, template }));
+  workbench.ui.selectedCanvasNodeId = workbench.ui.canvasDocument.nodes.at(-1)?.id ?? null;
+  workbench.ui.canvasSidebarMode = "nodes";
+  workbench.ui.canvasEditorOpen = nodeType !== "group";
+  workbench.ui.canvasContextMenu = null;
+  workbench.ui.toast = "";
+  refreshCanvasGraphFromDocument(workbench);
+  render(workbench);
+  return true;
+}
+
 function syncActiveCanvasDocument(workbench) {
   if (!workbench?.ui) {
     return null;
   }
   const projects = normalizeCanvasProjects(workbench.ui);
   workbench.ui.canvasProjects = projects;
+  const availableIds = new Set(projects.map((project) => project.id));
+  workbench.ui.canvasRecentProjectIds = (Array.isArray(workbench.ui.canvasRecentProjectIds) ? workbench.ui.canvasRecentProjectIds : [])
+    .filter((id) => availableIds.has(String(id)))
+    .slice(0, 5);
   if (!projects.length) {
     workbench.ui.selectedCanvasProjectId = null;
     workbench.ui.canvasDocument = null;
@@ -17329,6 +21729,9 @@ function normalizeStandaloneCanvasDocument(document, canvasProjectId = null) {
   return {
     ...standaloneDocument,
     ...(canvasProjectId ? { canvasProjectId } : {}),
+    ...(Array.isArray(standaloneDocument.nodes)
+      ? { nodes: standaloneDocument.nodes.map(normalizeCanvasAnimationNode) }
+      : {}),
   };
 }
 
@@ -17347,6 +21750,97 @@ function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
   return canvasDocument;
 }
 
+function isCanvasCharacterReferenceNode(node) {
+  if (!node || node?.data?.hiddenByCharacterId) return false;
+  const mediaKind = String(node?.data?.mediaKind ?? "").trim().toLowerCase();
+  return ["image", "source-image", "ai-image"].includes(String(node.type ?? ""))
+    || (node.type === "upload" && (!mediaKind || mediaKind === "image"));
+}
+
+function canvasNodeStorageObjectId(node, assets = []) {
+  if (!node) return "";
+  const data = node.data && typeof node.data === "object" ? node.data : {};
+  const direct = String(
+    data.storageObjectId
+      ?? data.sourceStorageObjectId
+      ?? data.resultStorageObjectId
+      ?? data.mediaStorageObjectId
+      ?? "",
+  ).trim();
+  if (direct) return direct;
+  const stableAssetId = String(data.assetId ?? data.sourceAssetId ?? "").trim();
+  const stableVersionId = String(data.assetVersionId ?? data.sourceAssetVersionId ?? "").trim();
+  const asset = (Array.isArray(assets) ? assets : []).find((item) =>
+    (stableAssetId && String(item?.assetId ?? item?.id ?? "") === stableAssetId)
+      || (stableVersionId && String(item?.assetVersionId ?? "") === stableVersionId));
+  return String(asset?.storageObjectId ?? "").trim();
+}
+
+function canvasEditableContextHasSelection(target) {
+  const editable = target?.closest?.("input, textarea, [contenteditable='true']");
+  if (!editable) return false;
+  if (typeof editable.selectionStart === "number" && typeof editable.selectionEnd === "number") {
+    return editable.selectionEnd > editable.selectionStart;
+  }
+  const root = editable.getRootNode?.();
+  const selection = root?.getSelection?.() ?? editable.ownerDocument?.defaultView?.getSelection?.();
+  const selectedText = String(selection?.toString?.() ?? "");
+  const anchor = selection?.anchorNode;
+  return Boolean(selectedText && (!anchor || editable.contains?.(anchor)));
+}
+
+function applyCanvasCharacterNodeCapture(workbench, input = {}) {
+  const nodeId = String(input.nodeId ?? "").trim();
+  const characterId = String(input.characterId ?? "").trim();
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const node = document.nodes?.find?.((item) => item.id === nodeId);
+  if (!node || !characterId || !isCanvasCharacterReferenceNode(node)) return false;
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(document, nodeId, {
+    hiddenByCharacterId: characterId,
+  }));
+  workbench.ui.selectedCanvasNodeId = null;
+  const graphNode = workbench.canvasGraph?.getCellById?.(nodeId);
+  if (graphNode) {
+    workbench.canvasGraph.removeCell?.(graphNode);
+  } else {
+    refreshCanvasWorkflowGraph(workbench);
+  }
+  render(workbench);
+  return true;
+}
+
+function restoreCanvasCharacterNodes(workbench, nodeIds = []) {
+  const restoreIds = new Set((Array.isArray(nodeIds) ? nodeIds : [nodeIds]).map(String).filter(Boolean));
+  if (!restoreIds.size) return false;
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  let changed = false;
+  let nextDocument = document;
+  for (const node of document.nodes ?? []) {
+    if (!restoreIds.has(String(node.id)) || !node?.data?.hiddenByCharacterId) continue;
+    nextDocument = updateCanvasNodeData(nextDocument, node.id, { hiddenByCharacterId: null });
+    changed = true;
+  }
+  if (!changed) return false;
+  updateActiveCanvasDocument(workbench, nextDocument);
+  refreshCanvasWorkflowGraph(workbench);
+  render(workbench);
+  return true;
+}
+
+function focusCanvasCharacterNode(workbench, nodeId) {
+  const normalizedNodeId = String(nodeId ?? "").trim();
+  if (!normalizedNodeId) return false;
+  restoreCanvasCharacterNodes(workbench, [normalizedNodeId]);
+  workbench.ui.selectedCanvasNodeId = normalizedNodeId;
+  const cell = workbench.canvasGraph?.getCellById?.(normalizedNodeId);
+  if (cell) {
+    workbench.canvasGraph.select?.(cell);
+    workbench.canvasGraph.centerCell?.(cell);
+  }
+  render(workbench);
+  return Boolean(cell || ensureWorkbenchCanvasDocument(workbench).nodes?.some?.((node) => node.id === normalizedNodeId));
+}
+
 async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   const projectId = String(canvasProjectId ?? "").trim();
   if (!projectId || typeof workbench.api?.getStandaloneCanvas !== "function") {
@@ -17354,17 +21848,34 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   }
   const payload = await workbench.api.getStandaloneCanvas(projectId);
   const canvas = payload?.canvas ?? payload;
-  const document = canvas?.document && typeof canvas.document === "object"
+  let document = canvas?.document && typeof canvas.document === "object"
     ? normalizeStandaloneCanvasDocument(canvas.document, canvasProjectId)
     : null;
   if (!document) {
     return false;
+  }
+  if (typeof workbench.api?.getCanvasSession === "function") {
+    const sessionPayload = await workbench.api.getCanvasSession(projectId).catch(() => null);
+    const session = sessionPayload?.session ?? sessionPayload;
+    if (session?.viewport && typeof session.viewport === "object") {
+      document = {
+        ...document,
+        viewport: { ...(document.viewport ?? {}), ...session.viewport },
+      };
+    }
+    workbench.ui.selectedCanvasNodeId = Array.isArray(session?.selectedNodeKeys)
+      ? String(session.selectedNodeKeys[0] ?? "") || null
+      : null;
+    workbench.ui.canvasSessionUiState = session?.uiState && typeof session.uiState === "object"
+      ? session.uiState
+      : {};
   }
   workbench.ui.activeCanvasProjectId = projectId;
   workbench.ui.selectedCanvasProjectId = projectId;
   workbench.ui.canvasServerRevision = Number(canvas.serverRevision ?? 1) || 1;
   workbench.ui.canvasSaveStatus = "idle";
   workbench.ui.canvasSaveError = "";
+  workbench.ui.canvasRevisionConflict = null;
   workbench.ui.canvasDocumentsByProject = {
     ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
       ? workbench.ui.canvasDocumentsByProject
@@ -17372,6 +21883,301 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
     [projectId]: document,
   };
   workbench.ui.canvasDocument = document;
+  return true;
+}
+
+function shouldSubscribeCanvasLive(workbench, canvasProjectId = resolveCanvasSaveProjectId(workbench)) {
+  return Boolean(
+    canvasProjectId &&
+    canvasProjectId !== DEFAULT_CANVAS_PROJECT_ID &&
+    isCanvasNavTab(workbench?.ui?.activeNavTab) &&
+    workbench.ui.canvasProjectView === "detail" &&
+    typeof workbench.api?.streamCanvasLive === "function" &&
+    typeof workbench.api?.getCanvasHead === "function"
+  );
+}
+
+function stopCanvasLiveSubscription(workbench) {
+  workbench.canvasLiveAbortController?.abort?.();
+  workbench.canvasLiveAbortController = null;
+  workbench.canvasLiveProjectId = null;
+  workbench.canvasLivePromise = null;
+  if (workbench.ui) {
+    workbench.ui.canvasLiveStatus = "idle";
+    workbench.ui.canvasLiveMembers = [];
+  }
+}
+
+function isCanvasLiveAccessRevokedError(error) {
+  const status = Number(error?.status ?? 0);
+  const errorCode = String(error?.errorCode ?? error?.message ?? "").toLowerCase();
+  return [401, 403, 404].includes(status)
+    || errorCode.includes("access_revoked")
+    || errorCode.includes("access_denied")
+    || errorCode.includes("canvas_project_not_found");
+}
+
+function canvasHasUnsavedDraft(workbench) {
+  return Boolean(
+    workbench.canvasSaveTimer ||
+    workbench.canvasSaveInFlight ||
+    workbench.canvasSaveQueuedDocument ||
+    ["pending", "saving", "error", "conflict"].includes(String(workbench.ui?.canvasSaveStatus ?? "idle"))
+  );
+}
+
+function rememberCanvasLiveEventId(workbench, canvasProjectId, event) {
+  const eventId = String(event?.id ?? event?.data?.eventId ?? event?.eventId ?? "").trim();
+  if (!eventId) return;
+  workbench.canvasLiveLastEventIds = {
+    ...(workbench.canvasLiveLastEventIds && typeof workbench.canvasLiveLastEventIds === "object"
+      ? workbench.canvasLiveLastEventIds
+      : {}),
+    [canvasProjectId]: eventId,
+  };
+}
+
+function applyCanvasLiveAccessRevoked(workbench, canvasProjectId, options = {}) {
+  if (String(resolveCanvasSaveProjectId(workbench) ?? "") !== String(canvasProjectId ?? "")) return false;
+  stopCanvasLiveSubscription(workbench);
+  if (workbench.canvasSaveTimer) {
+    clearTimeout(workbench.canvasSaveTimer);
+    workbench.canvasSaveTimer = null;
+  }
+  workbench.canvasSaveRequestId = Number(workbench.canvasSaveRequestId ?? 0) + 1;
+  workbench.canvasSaveQueuedDocument = null;
+  const documentsByProject = {
+    ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+      ? workbench.ui.canvasDocumentsByProject
+      : {}),
+  };
+  delete documentsByProject[canvasProjectId];
+  workbench.ui.canvasDocumentsByProject = documentsByProject;
+  workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui)
+    .filter((project) => String(project.id) !== String(canvasProjectId));
+  workbench.ui.canvasDocument = null;
+  workbench.ui.activeCanvasProjectId = null;
+  workbench.ui.selectedCanvasProjectId = DEFAULT_CANVAS_PROJECT_ID;
+  workbench.ui.canvasServerRevision = null;
+  workbench.ui.canvasRevisionConflict = null;
+  workbench.ui.canvasSaveStatus = "idle";
+  workbench.ui.canvasSaveError = "";
+  workbench.ui.canvasProjectView = "list";
+  workbench.ui.selectedCanvasNodeId = null;
+  workbench.ui.canvasEditorOpen = false;
+  workbench.ui.toast = "画布访问权限已撤销，已返回画布项目列表。";
+  if (globalThis.window?.location) globalThis.window.location.hash = canvasListRouteToken(workbench);
+  if (options.render !== false) render(workbench);
+  return true;
+}
+
+async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision = 0, options = {}) {
+  if (!shouldSubscribeCanvasLive(workbench, canvasProjectId)) return null;
+  const activeSave = workbench.canvasSaveInFlight;
+  if (activeSave) await Promise.resolve(activeSave).catch(() => null);
+  if (!shouldSubscribeCanvasLive(workbench, canvasProjectId)) return null;
+  const currentRevision = Number(workbench.ui.canvasServerRevision ?? 0);
+  if (Number(hintedRevision) > 0 && Number(hintedRevision) <= currentRevision) return null;
+
+  const requestId = Number(workbench.canvasLiveHeadRequestId ?? 0) + 1;
+  workbench.canvasLiveHeadRequestId = requestId;
+  let payload;
+  try {
+    payload = await workbench.api.getCanvasHead(canvasProjectId);
+  } catch (error) {
+    if (isCanvasLiveAccessRevokedError(error)) {
+      applyCanvasLiveAccessRevoked(workbench, canvasProjectId, options);
+      return null;
+    }
+    throw error;
+  }
+  if (
+    requestId !== workbench.canvasLiveHeadRequestId ||
+    !shouldSubscribeCanvasLive(workbench, canvasProjectId)
+  ) {
+    return null;
+  }
+  const head = payload?.head ?? payload;
+  const serverRevision = Number(head?.serverRevision ?? 0);
+  if (!Number.isFinite(serverRevision) || serverRevision <= Number(workbench.ui.canvasServerRevision ?? 0)) {
+    return head ?? null;
+  }
+  const serverDocument = head?.document && typeof head.document === "object"
+    ? normalizeStandaloneCanvasDocument(head.document, canvasProjectId)
+    : null;
+  if (!serverDocument) return null;
+
+  if (canvasHasUnsavedDraft(workbench)) {
+    if (workbench.canvasSaveTimer) {
+      clearTimeout(workbench.canvasSaveTimer);
+      workbench.canvasSaveTimer = null;
+    }
+    const localDocument = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, canvasProjectId);
+    workbench.canvasSaveQueuedDocument = null;
+    workbench.ui.canvasRevisionConflict = {
+      canvasProjectId,
+      clientRevision: Number(workbench.ui.canvasServerRevision ?? 1) || 1,
+      serverRevision,
+      localDocument,
+      serverDocument,
+    };
+    workbench.ui.canvasSaveStatus = "conflict";
+    workbench.ui.canvasSaveError = "检测到其他位置的新版本，本地草稿已保留。请选择要继续使用的版本。";
+    if (options.render !== false) render(workbench);
+    return head;
+  }
+
+  workbench.ui.canvasDocument = serverDocument;
+  workbench.ui.canvasDocumentsByProject = {
+    ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+      ? workbench.ui.canvasDocumentsByProject
+      : {}),
+    [canvasProjectId]: serverDocument,
+  };
+  workbench.ui.canvasServerRevision = serverRevision;
+  workbench.ui.canvasRevisionConflict = null;
+  workbench.ui.canvasSaveStatus = "saved";
+  workbench.ui.canvasSaveError = "";
+  void persistCanvasSession(workbench, canvasProjectId, serverRevision);
+  if (options.render !== false) render(workbench);
+  return head;
+}
+
+async function handleCanvasLiveEvent(workbench, canvasProjectId, event, options = {}) {
+  rememberCanvasLiveEventId(workbench, canvasProjectId, event);
+  const payload = event?.data && typeof event.data === "object" ? event.data : event;
+  const eventType = String(payload?.type ?? event?.event ?? "").trim();
+  if (eventType === "access.revoked") {
+    applyCanvasLiveAccessRevoked(workbench, canvasProjectId, options);
+    return;
+  }
+  if (eventType === "presence") {
+    workbench.ui.canvasLiveMembers = Array.isArray(payload.members) ? payload.members : [];
+    workbench.ui.canvasLiveStatus = "connected";
+    return;
+  }
+  if (eventType !== "revision") return;
+  await syncCanvasHeadFromLive(workbench, canvasProjectId, Number(payload.serverRevision ?? 0), options);
+}
+
+function waitForCanvasLiveRetry(workbench, attempt, signal) {
+  const configuredDelay = Number(workbench.canvasLiveRetryDelayMs);
+  const delayMs = Number.isFinite(configuredDelay)
+    ? Math.max(0, configuredDelay)
+    : Math.min(CANVAS_LIVE_RECONNECT_MAX_MS, CANVAS_LIVE_RECONNECT_BASE_MS * (2 ** Math.min(attempt, 4)));
+  return new Promise((resolve) => {
+    if (signal.aborted || delayMs === 0) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, delayMs);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
+async function runCanvasLiveSubscription(workbench, canvasProjectId, controller) {
+  let attempt = 0;
+  const updateOptions = { render: workbench.canvasLiveRender !== false };
+  while (!controller.signal.aborted && shouldSubscribeCanvasLive(workbench, canvasProjectId)) {
+    try {
+      workbench.ui.canvasLiveStatus = attempt === 0 ? "connecting" : "reconnecting";
+      const lastEventId = String(workbench.canvasLiveLastEventIds?.[canvasProjectId] ?? "");
+      for await (const event of workbench.api.streamCanvasLive(canvasProjectId, {
+        signal: controller.signal,
+        lastEventId,
+      })) {
+        if (controller.signal.aborted || !shouldSubscribeCanvasLive(workbench, canvasProjectId)) return;
+        attempt = 0;
+        workbench.ui.canvasLiveStatus = "connected";
+        await handleCanvasLiveEvent(workbench, canvasProjectId, event, updateOptions);
+      }
+      if (controller.signal.aborted) return;
+      await syncCanvasHeadFromLive(workbench, canvasProjectId, 0, updateOptions);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (isCanvasLiveAccessRevokedError(error)) {
+        applyCanvasLiveAccessRevoked(workbench, canvasProjectId, updateOptions);
+        return;
+      }
+      try {
+        await syncCanvasHeadFromLive(workbench, canvasProjectId, 0, updateOptions);
+      } catch {
+        // A transient head failure follows the same bounded reconnect backoff.
+      }
+    }
+    if (controller.signal.aborted || !shouldSubscribeCanvasLive(workbench, canvasProjectId)) return;
+    attempt += 1;
+    workbench.ui.canvasLiveStatus = "reconnecting";
+    await waitForCanvasLiveRetry(workbench, attempt, controller.signal);
+  }
+}
+
+function syncCanvasLiveSubscription(workbench) {
+  const canvasProjectId = resolveCanvasSaveProjectId(workbench);
+  if (!shouldSubscribeCanvasLive(workbench, canvasProjectId)) {
+    if (workbench.canvasLiveAbortController) stopCanvasLiveSubscription(workbench);
+    return null;
+  }
+  if (
+    workbench.canvasLiveProjectId === canvasProjectId &&
+    workbench.canvasLiveAbortController &&
+    !workbench.canvasLiveAbortController.signal.aborted
+  ) {
+    return workbench.canvasLivePromise ?? null;
+  }
+  stopCanvasLiveSubscription(workbench);
+  const controller = new AbortController();
+  workbench.canvasLiveAbortController = controller;
+  workbench.canvasLiveProjectId = canvasProjectId;
+  const promise = runCanvasLiveSubscription(workbench, canvasProjectId, controller)
+    .catch((error) => console.warn("[canvas] live subscription failed", error));
+  workbench.canvasLivePromise = promise;
+  return promise;
+}
+
+async function resolveCanvasRevisionConflict(workbench, version, options = {}) {
+  const conflict = workbench.ui?.canvasRevisionConflict;
+  if (!conflict || !["local", "server"].includes(version)) return false;
+  const canvasProjectId = String(conflict.canvasProjectId ?? resolveCanvasSaveProjectId(workbench) ?? "");
+  if (!canvasProjectId || canvasProjectId !== String(resolveCanvasSaveProjectId(workbench) ?? "")) return false;
+  if (workbench.canvasSaveTimer) {
+    clearTimeout(workbench.canvasSaveTimer);
+    workbench.canvasSaveTimer = null;
+  }
+  workbench.canvasSaveQueuedDocument = null;
+  const selectedDocument = normalizeStandaloneCanvasDocument(
+    version === "local" ? conflict.localDocument : conflict.serverDocument,
+    canvasProjectId,
+  );
+  workbench.ui.canvasDocument = selectedDocument;
+  workbench.ui.canvasDocumentsByProject = {
+    ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+      ? workbench.ui.canvasDocumentsByProject
+      : {}),
+    [canvasProjectId]: selectedDocument,
+  };
+  workbench.ui.canvasServerRevision = Number(conflict.serverRevision ?? workbench.ui.canvasServerRevision ?? 1) || 1;
+  workbench.ui.canvasRevisionConflict = null;
+  workbench.ui.canvasSaveError = "";
+  if (version === "server") {
+    workbench.ui.canvasSaveStatus = "saved";
+    void persistCanvasSession(workbench, canvasProjectId, workbench.ui.canvasServerRevision);
+    if (options.render !== false) render(workbench);
+    return true;
+  }
+  workbench.ui.canvasSaveStatus = "pending";
+  try {
+    await saveProjectCanvasNow(workbench);
+    workbench.ui.toast = "已保留本地版本并保存为最新修订。";
+  } catch (error) {
+    workbench.ui.toast = workbench.ui.canvasSaveError || `本地版本保存失败：${friendlyError(error)}`;
+    if (options.render !== false) render(workbench);
+    throw error;
+  }
+  if (options.render !== false) render(workbench);
   return true;
 }
 
@@ -17397,8 +22203,11 @@ function scheduleProjectCanvasSave(workbench, options = {}) {
   workbench.canvasSaveTimer = setTimeout(() => {
     workbench.canvasSaveTimer = null;
     void saveProjectCanvasNow(workbench).catch((error) => {
-      workbench.ui.canvasSaveStatus = "error";
-      workbench.ui.canvasSaveError = friendlyError(error);
+      if (workbench.ui.canvasSaveStatus !== "conflict") {
+        workbench.ui.canvasSaveStatus = "error";
+        workbench.ui.canvasSaveError = friendlyError(error);
+      }
+      if (workbench.root?.isConnected === true) render(workbench);
       console.warn("[canvas] save failed", error);
     });
   }, delayMs);
@@ -17470,6 +22279,8 @@ async function saveProjectCanvasNow(workbench) {
     workbench.ui.canvasServerRevision = Number(canvas?.serverRevision ?? revision) || revision;
     workbench.ui.canvasSaveStatus = "saved";
     workbench.ui.canvasSaveError = "";
+    workbench.ui.canvasRevisionConflict = null;
+    void persistCanvasSession(workbench, projectId, workbench.ui.canvasServerRevision);
     return canvas;
   } catch (error) {
     if (
@@ -17477,21 +22288,25 @@ async function saveProjectCanvasNow(workbench) {
       error?.errorCode === "canvas_revision_conflict" &&
       error?.details?.serverDocument
     ) {
-      workbench.ui.canvasDocument = normalizeStandaloneCanvasDocument(error.details.serverDocument, projectId);
+      const localDocument = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument ?? documentToSave, projectId);
+      const serverDocument = normalizeStandaloneCanvasDocument(error.details.serverDocument, projectId);
+      workbench.ui.canvasDocument = localDocument;
       workbench.ui.canvasDocumentsByProject = {
         ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
           ? workbench.ui.canvasDocumentsByProject
           : {}),
-        [projectId]: workbench.ui.canvasDocument,
+        [projectId]: localDocument,
       };
-      workbench.ui.canvasServerRevision = Number(error.details.serverRevision ?? revision) || revision;
-      workbench.ui.canvasSaveStatus = "saved";
-      workbench.ui.canvasSaveError = "";
-      return {
-        canvasProjectId: workbench.ui.activeCanvasProjectId ?? null,
-        serverRevision: workbench.ui.canvasServerRevision,
-        document: workbench.ui.canvasDocument,
+      workbench.ui.canvasRevisionConflict = {
+        canvasProjectId: projectId,
+        clientRevision: revision,
+        serverRevision: Number(error.details.serverRevision ?? revision) || revision,
+        localDocument,
+        serverDocument,
       };
+      workbench.ui.canvasSaveStatus = "conflict";
+      workbench.ui.canvasSaveError = "画布已在其他位置更新，本地草稿已保留。请选择要继续使用的版本。";
+      workbench.canvasSaveQueuedDocument = null;
     }
     throw error;
   } finally {
@@ -17502,13 +22317,71 @@ async function saveProjectCanvasNow(workbench) {
       if (queuedDocument && typeof queuedDocument === "object") {
         workbench.ui.canvasDocument = queuedDocument;
         void saveProjectCanvasNow(workbench).catch((error) => {
-          workbench.ui.canvasSaveStatus = "error";
-          workbench.ui.canvasSaveError = friendlyError(error);
+          if (workbench.ui.canvasSaveStatus !== "conflict") {
+            workbench.ui.canvasSaveStatus = "error";
+            workbench.ui.canvasSaveError = friendlyError(error);
+          }
+          if (workbench.root?.isConnected === true) render(workbench);
           console.warn("[canvas] save failed", error);
         });
       }
     }
   }
+}
+
+async function flushProjectCanvasSave(workbench) {
+  const hadTimer = Boolean(workbench.canvasSaveTimer);
+  if (workbench.canvasSaveTimer) {
+    clearTimeout(workbench.canvasSaveTimer);
+    workbench.canvasSaveTimer = null;
+  }
+  if (workbench.ui?.canvasSaveStatus === "conflict") {
+    throw new Error("canvas_revision_conflict");
+  }
+  if (workbench.canvasSaveInFlight) {
+    workbench.canvasSaveQueuedDocument = workbench.ui?.canvasDocument ?? workbench.canvasSaveQueuedDocument;
+    workbench.ui.canvasSaveStatus = "pending";
+  } else if (hadTimer || workbench.ui?.canvasSaveStatus === "pending") {
+    try {
+      await saveProjectCanvasNow(workbench);
+    } catch (error) {
+      if (workbench.ui.canvasSaveStatus !== "conflict") {
+        workbench.ui.canvasSaveStatus = "error";
+        workbench.ui.canvasSaveError = friendlyError(error);
+      }
+      throw error;
+    }
+  }
+  while (workbench.canvasSaveInFlight) {
+    try {
+      await workbench.canvasSaveInFlight;
+    } catch {
+      // saveProjectCanvasNow owns the stable error/conflict state.
+    }
+    await Promise.resolve();
+    if (workbench.ui?.canvasSaveStatus === "conflict") {
+      throw new Error("canvas_revision_conflict");
+    }
+    if (workbench.ui?.canvasSaveStatus === "error") {
+      throw new Error(workbench.ui.canvasSaveError || "canvas_save_failed");
+    }
+  }
+  if (workbench.ui?.canvasSaveStatus === "error") {
+    throw new Error(workbench.ui.canvasSaveError || "canvas_save_failed");
+  }
+  return true;
+}
+
+async function persistCanvasSession(workbench, canvasProjectId, serverRevision) {
+  if (!canvasProjectId || typeof workbench.api?.saveCanvasSession !== "function") return null;
+  const document = workbench.ui?.canvasDocument;
+  return workbench.api.saveCanvasSession(canvasProjectId, {
+    viewport: document?.viewport ?? { x: 0, y: 0, zoom: 1 },
+    selectedNodeKeys: workbench.ui?.selectedCanvasNodeId ? [workbench.ui.selectedCanvasNodeId] : [],
+    selectedEdgeKeys: [],
+    uiState: workbench.ui?.canvasSessionUiState ?? {},
+    lastSeenRevision: Number(serverRevision ?? workbench.ui?.canvasServerRevision ?? 1) || 1,
+  }).catch(() => null);
 }
 
 async function createStandaloneCanvasForSave(workbench, staleProjectId) {
@@ -17605,6 +22478,7 @@ function deleteCanvasProject(workbench, projectId) {
   const removedIndex = projects.findIndex((project) => project.id === targetId);
   const nextProjects = projects.filter((project) => project.id !== targetId);
   workbench.ui.canvasProjects = nextProjects;
+  workbench.ui.canvasRecentProjectIds = (workbench.ui.canvasRecentProjectIds ?? []).filter((id) => id !== targetId);
   const documentsByProject = {
     ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
       ? workbench.ui.canvasDocumentsByProject
@@ -17912,12 +22786,16 @@ function escapeHtmlForCanvas(value) {
 }
 
 function normalizeCanvasViewport(viewport = {}) {
+  const interactionMode = ["hand", "classic"].includes(viewport.interactionMode)
+    ? viewport.interactionMode
+    : "default";
   return {
     x: Number(viewport.x ?? 0),
     y: Number(viewport.y ?? 0),
     zoom: clampCanvasZoom(viewport.zoom ?? 1),
     gridVisible: viewport.gridVisible ?? true,
     snapEnabled: viewport.snapEnabled ?? true,
+    interactionMode,
   };
 }
 
@@ -17926,11 +22804,110 @@ function clampCanvasZoom(value) {
   if (!Number.isFinite(number)) {
     return 1;
   }
-  return Math.min(2.2, Math.max(0.35, Math.round(number * 100) / 100));
+  return Math.min(8, Math.max(0.1, Math.round(number * 100) / 100));
 }
 
-function shouldStartCanvasPan(eventTarget, event) {
-  if (!eventTarget || event.button !== 0) {
+export function resolveCanvasFitViewport(document = {}, viewportSize = {}, options = {}) {
+  const nodes = (Array.isArray(document?.nodes) ? document.nodes : [])
+    .filter((node) => !node?.data?.hiddenByCharacterId);
+  if (!nodes.length) {
+    return { x: 0, y: 0, zoom: 0.5 };
+  }
+
+  const padding = Math.max(0, Number(options.padding ?? 48) || 0);
+  const minZoom = Math.max(0.1, Number(options.minZoom ?? 0.1) || 0.1);
+  const maxZoom = Math.max(minZoom, Number(options.maxZoom ?? 1) || 1);
+  const width = Math.max(1, Number(viewportSize.width ?? 0) || 1);
+  const height = Math.max(1, Number(viewportSize.height ?? 0) || 1);
+  const boxes = nodes.map((node) => {
+    const defaultSize = CANVAS_NODE_SIZES[node?.type] ?? { width: 300, height: 180 };
+    const requestedWidth = Number(node?.size?.width);
+    const requestedHeight = Number(node?.size?.height);
+    return {
+      x: Number(node?.position?.x ?? 0) || 0,
+      y: Number(node?.position?.y ?? 0) || 0,
+      width: Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : Number(defaultSize.width),
+      height: Number.isFinite(requestedHeight) && requestedHeight > 0 ? requestedHeight : Number(defaultSize.height),
+    };
+  });
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+  const contentWidth = Math.max(1, right - left);
+  const contentHeight = Math.max(1, bottom - top);
+  const availableWidth = Math.max(1, width - (padding * 2));
+  const availableHeight = Math.max(1, height - (padding * 2));
+  const fittedZoom = Math.min(maxZoom, Math.max(minZoom, Math.min(
+    availableWidth / contentWidth,
+    availableHeight / contentHeight,
+  )));
+  const zoom = Math.max(minZoom, Math.floor(fittedZoom * 100) / 100);
+  return {
+    x: Math.round(((width - (contentWidth * zoom)) / 2) - (left * zoom)),
+    y: Math.round(((height - (contentHeight * zoom)) / 2) - (top * zoom)),
+    zoom,
+  };
+}
+
+export function resolveCanvasGraphFitNodes(graph) {
+  return (graph?.getNodes?.() ?? []).flatMap((cell) => {
+    const data = cell?.getData?.() ?? {};
+    if (data.canvasTransientEditor === true || data.canvasNode?.data?.hiddenByCharacterId) return [];
+    const box = cell?.getBBox?.();
+    const x = Number(box?.x);
+    const y = Number(box?.y);
+    const width = Number(box?.width);
+    const height = Number(box?.height);
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return [];
+    return [{
+      id: String(cell?.id ?? data.canvasNode?.id ?? ""),
+      type: data.canvasNode?.type,
+      position: { x, y },
+      size: { width, height },
+    }];
+  });
+}
+
+function centerCanvasGraphNodesInMount(graph, graphMount) {
+  if (!graphMount?.querySelectorAll || typeof graph?.translate !== "function") return null;
+  const transientNodeIds = new Set((graph?.getNodes?.() ?? [])
+    .filter((cell) => cell?.getData?.()?.canvasTransientEditor === true)
+    .map((cell) => String(cell?.id ?? "")));
+  const nodeRects = [...graphMount.querySelectorAll(".x6-node")]
+    .filter((element) => !transientNodeIds.has(String(element.getAttribute?.("data-cell-id") ?? "")))
+    .map((element) => element.getBoundingClientRect?.())
+    .filter((rect) => Number(rect?.width) > 0 && Number(rect?.height) > 0);
+  const delta = resolveCanvasCenteringDelta(graphMount.getBoundingClientRect?.(), nodeRects);
+  if (!delta) return null;
+  const translation = graph.translate() ?? {};
+  graph.translate(
+    Number(translation.tx ?? 0) + delta.x,
+    Number(translation.ty ?? 0) + delta.y,
+  );
+  return delta;
+}
+
+export function resolveCanvasCenteringDelta(containerRect, nodeRects = []) {
+  if (!containerRect || !nodeRects.length) return null;
+  const left = Math.min(...nodeRects.map((rect) => Number(rect.left)));
+  const top = Math.min(...nodeRects.map((rect) => Number(rect.top)));
+  const right = Math.max(...nodeRects.map((rect) => Number(rect.right)));
+  const bottom = Math.max(...nodeRects.map((rect) => Number(rect.bottom)));
+  if (![left, top, right, bottom].every(Number.isFinite)) return null;
+  return {
+    x: ((Number(containerRect.left) + Number(containerRect.right)) - (left + right)) / 2,
+    y: ((Number(containerRect.top) + Number(containerRect.bottom)) - (top + bottom)) / 2,
+  };
+}
+
+function shouldStartCanvasPan(eventTarget, event, workbench) {
+  const interactionMode = ["hand", "classic"].includes(workbench?.ui?.canvasDocument?.viewport?.interactionMode)
+    ? workbench.ui.canvasDocument.viewport.interactionMode
+    : "default";
+  const allowedButtons = interactionMode === "classic" ? [0] : [1, 2];
+  const panButtons = interactionMode === "hand" ? [0] : allowedButtons;
+  if (!eventTarget || !panButtons.includes(event.button) || isCanvasX6InteractionTarget(eventTarget)) {
     return false;
   }
   const stage = eventTarget.closest?.(".canvas-stage");
@@ -17941,6 +22918,46 @@ function shouldStartCanvasPan(eventTarget, event) {
     ".canvas-node-connect, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-script-picker, .canvas-add-menu, .canvas-zoom-tools, button, input, textarea, [contenteditable='true'], select, option, a",
   );
   return !blockedTarget;
+}
+
+function isCanvasX6InteractionTarget(eventTarget, event = null) {
+  if (eventTarget?.closest?.(".canvas-x6-mount")) return true;
+  return (event?.composedPath?.() ?? []).some((candidate) =>
+    candidate?.classList?.contains?.("canvas-x6-mount")
+    || candidate?.hasAttribute?.("data-canvas-x6-mount"));
+}
+
+function trackCanvasRightPanGesture(workbench, eventTarget, event) {
+  const interactionMode = workbench?.ui?.canvasDocument?.viewport?.interactionMode === "classic" ? "classic" : "default";
+  if (interactionMode !== "default" || event?.button !== 2 || !eventTarget?.closest?.(".canvas-stage")) {
+    return;
+  }
+  workbench.canvasRightPanGesture = {
+    startX: Number(event.clientX ?? 0),
+    startY: Number(event.clientY ?? 0),
+    moved: false,
+    active: true,
+  };
+}
+
+function updateCanvasRightPanGesture(workbench, event) {
+  const gesture = workbench?.canvasRightPanGesture;
+  if (!gesture?.active || gesture.moved) return;
+  const deltaX = Number(event?.clientX ?? 0) - gesture.startX;
+  const deltaY = Number(event?.clientY ?? 0) - gesture.startY;
+  if ((deltaX * deltaX) + (deltaY * deltaY) > 25) gesture.moved = true;
+}
+
+function finishCanvasRightPanGesture(workbench, event) {
+  if (event?.button === 2 && workbench?.canvasRightPanGesture) {
+    workbench.canvasRightPanGesture.active = false;
+  }
+}
+
+function consumeCanvasRightPanContextMenuSuppression(workbench) {
+  const gesture = workbench?.canvasRightPanGesture;
+  workbench.canvasRightPanGesture = null;
+  return gesture?.moved === true;
 }
 
 function isCanvasInteractionOverlayTarget(eventTarget) {
@@ -18006,8 +23023,13 @@ function updateCanvasViewportAndRender(workbench, patch = {}, options = {}) {
 }
 
 function startCanvasPan(workbench, event) {
-  const stage = resolveEventElement(event.target)?.closest?.(".canvas-stage");
-  if (!stage || event.button !== 0) {
+  const stage = resolveEventElement(event.composedPath?.()[0] ?? event.target)?.closest?.(".canvas-stage");
+  const interactionMode = ["hand", "classic"].includes(workbench?.ui?.canvasDocument?.viewport?.interactionMode)
+    ? workbench.ui.canvasDocument.viewport.interactionMode
+    : "default";
+  const allowedButtons = interactionMode === "classic" ? [0] : [1, 2];
+  const panButtons = interactionMode === "hand" ? [0] : allowedButtons;
+  if (!stage || !panButtons.includes(event.button)) {
     return;
   }
   event.preventDefault();
@@ -18031,6 +23053,7 @@ function startCanvasPan(workbench, event) {
       zoom: startViewport.zoom,
       gridVisible: startViewport.gridVisible,
       snapEnabled: startViewport.snapEnabled,
+      interactionMode: startViewport.interactionMode,
     };
     flow?.style?.setProperty?.("--canvas-pan-x", `${latestViewport.x}px`);
     flow?.style?.setProperty?.("--canvas-pan-y", `${latestViewport.y}px`);
@@ -18176,11 +23199,14 @@ function startCanvasNodeDrag(workbench, event, nodeElement) {
     const nodeWidth = Number.parseFloat(nodeStyle.width) || nodeRect.width / visualScale;
     const nodeHeight = Number.parseFloat(nodeStyle.height) || nodeRect.height / visualScale;
     const editorWidth = Number.parseFloat(editorStyle.width) || editorRectWidth / visualScale || 600;
+    const editorHeight = Number.parseFloat(editorStyle.height) || editor.getBoundingClientRect().height / visualScale || 220;
     if (!stageRect) {
       return;
     }
-    const nextLeft = latestPosition.x + (nodeWidth / 2) - (editorWidth / 2);
-    const nextTop = latestPosition.y + nodeHeight + 2;
+    const nextLeft = Math.max(12, latestPosition.x + (nodeWidth / 2) - (editorWidth / 2));
+    const nextTop = latestPosition.y >= 260
+      ? Math.max(12, latestPosition.y - editorHeight - 12)
+      : latestPosition.y + nodeHeight + 2;
     editor.style.left = `${Math.round(nextLeft)}px`;
     editor.style.top = `${Math.round(nextTop)}px`;
   };
@@ -18586,6 +23612,12 @@ function startCanvasConnectionDrag(workbench, event, portElement) {
     previewPath.remove();
     const targetPort = findCanvasPortFromPoint(stage, ownerDocument, upEvent.clientX, upEvent.clientY);
     if (!targetPort || targetPort === portElement) {
+      if (!targetPort && sourceDirection === "out") {
+        openCanvasConnectionDropMenu(workbench, stage, upEvent, {
+          sourceNodeId,
+          sourcePortId,
+        });
+      }
       return;
     }
     const targetDirection = targetPort.dataset.portDirection ?? "";
@@ -18640,6 +23672,39 @@ function startCanvasConnectionDrag(workbench, event, portElement) {
   updatePreview(event.clientX, event.clientY);
   ownerDocument.addEventListener(moveEventName, onPointerMove);
   ownerDocument.addEventListener(upEventName, onPointerUp);
+}
+
+function openCanvasConnectionDropMenu(workbench, stage, event, connection) {
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const compatibleTemplates = resolveCompatibleCanvasNodeTemplates(
+    canvasDocument,
+    connection,
+    workbench.ui.episodeGenerationConfig,
+  );
+  if (!compatibleTemplates.length) return false;
+  const rect = stage.getBoundingClientRect?.();
+  const point = canvasPointFromClient(
+    stage,
+    event.clientX,
+    event.clientY,
+    readCanvasViewportFromFlow(stage.querySelector?.(".canvas-flow")),
+  );
+  workbench.ui.canvasAddMenuOpen = false;
+  workbench.ui.canvasScriptPicker = null;
+  workbench.ui.canvasContextMenu = {
+    mode: "connection",
+    sourceNodeId: connection.sourceNodeId,
+    sourcePortId: connection.sourcePortId,
+    compatibleTemplateIds: compatibleTemplates.map((template) => template.id),
+    x: Math.round(event.clientX - (rect?.left ?? 0)),
+    y: Math.round(event.clientY - (rect?.top ?? 0)),
+    canvasX: Math.round(point.x),
+    canvasY: Math.round(point.y),
+    stageWidth: Math.round(rect?.width ?? 0),
+    stageHeight: Math.round(rect?.height ?? 0),
+  };
+  render(workbench);
+  return true;
 }
 
 function findCanvasPortFromPoint(stage, ownerDocument, clientX, clientY) {
@@ -19113,9 +24178,6 @@ function resolveCanvasViewportPatch(viewport = {}, patchName = "") {
   if (patchName === "zoom-out") {
     return { zoom: Math.round((zoom - 0.1) * 100) / 100 };
   }
-  if (patchName === "toggle-grid") {
-    return { gridVisible: !(viewport.gridVisible ?? true) };
-  }
   if (patchName === "toggle-snap") {
     return { snapEnabled: !(viewport.snapEnabled ?? true) };
   }
@@ -19138,9 +24200,7 @@ function applyCanvasGraphViewport(workbench) {
   if (typeof graph.translate === "function") {
     graph.translate(normalized.x, normalized.y);
   }
-  if (graph.options?.grid) {
-    graph.options.grid.visible = viewport.gridVisible !== false;
-  }
+  applyCanvasGraphViewportPreferences(graph, viewport);
   return true;
 }
 
@@ -19155,6 +24215,14 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
       upstreamNodeIds: preview.upstreamNodeIds,
       upstreamTextFragments: preview.upstreamTextFragments ?? [],
       documentVersion: workbench.ui.canvasDocument?.version ?? 1,
+      ...(preview.promptReferences
+        ? {
+            sourcePrompt: preview.sourcePrompt,
+            expandedPrompt: preview.prompt,
+            promptReferences: preview.promptReferences.references,
+            promptReferenceDiagnostics: preview.promptReferences.diagnostics,
+          }
+        : {}),
     },
     parameters: buildCanvasGenerationParameters(workbench, canvasNode, preview),
   };
@@ -19171,6 +24239,14 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
   }
   const savedCanvas = await saveProjectCanvasNow(workbench);
   const canvasProjectId = resolveCanvasRunProjectId(workbench, savedCanvas);
+  if (preview.mediaKind === "text" && canvasProjectId && typeof workbench.api?.runCanvasNode === "function") {
+    return workbench.api.runCanvasNode(canvasProjectId, preview.nodeId, {
+      ...payload,
+      kind: "text",
+      mediaKind: "text",
+      text: preview.prompt,
+    });
+  }
   if (preview.mediaKind === "video" && canvasProjectId && typeof workbench.api?.runCanvasNode === "function") {
     return workbench.api.runCanvasNode(canvasProjectId, preview.nodeId, {
       ...payload,
@@ -19179,7 +24255,28 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
       motionPrompt: preview.prompt,
     });
   }
-  if (preview.mediaKind !== "video" && canvasProjectId && typeof workbench.api?.createImageGenerationTask === "function") {
+  if (preview.mediaKind === "audio" && canvasProjectId && typeof workbench.api?.runCanvasNode === "function") {
+    const audioReferences = collectCanvasMediaReferences(workbench.ui.canvasDocument, preview.nodeId)
+      .filter((item) => item.kind === "audio");
+    const audioPayload = {
+      ...payload,
+      kind: "audio",
+      mediaKind: "audio",
+      mode: preview.audioGenerationMode || canvasNode?.data?.audioGenerationMode || "text-to-speech",
+      text: preview.prompt,
+    };
+    applyCanvasAudioReferencesToPayload(audioPayload, audioReferences);
+    if (preview.audioGenerationMode === "transcription" && !audioReferences.length) {
+      audioPayload.transcriptionInputKind = "text";
+      audioPayload.textInput = preview.nodePrompt ?? "";
+      audioPayload.parameters = {
+        ...(audioPayload.parameters ?? {}),
+        transcriptionInputKind: "text",
+      };
+    }
+    return workbench.api.runCanvasNode(canvasProjectId, preview.nodeId, audioPayload);
+  }
+  if (preview.mediaKind !== "video" && preview.mediaKind !== "audio" && canvasProjectId && typeof workbench.api?.createImageGenerationTask === "function") {
     return workbench.api.createImageGenerationTask({
       ...payload,
       target: {
@@ -19190,6 +24287,71 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
     });
   }
   throw new Error("canvas_project_context_missing");
+}
+
+export function buildCanvasGenerationBatchNodes(workbench, nodeIds = []) {
+  const document = workbench?.ui?.canvasDocument;
+  if (!document) return [];
+  const selectedIds = [...new Set((Array.isArray(nodeIds) ? nodeIds : []).map(String).filter(Boolean))];
+  const selectedSet = new Set(selectedIds);
+  const previews = new Map(selectedIds.map((nodeId) => [nodeId, buildCanvasRunPreview(document, nodeId)]));
+  return selectedIds.flatMap((nodeId) => {
+    const preview = previews.get(nodeId);
+    if (!preview?.ok || !["text", "image", "video", "audio"].includes(preview.mediaKind)) return [];
+    const canvasNode = document.nodes?.find?.((node) => node.id === nodeId);
+    if (!canvasNode) return [];
+    const payload = {
+      targetType: "canvas",
+      targetId: nodeId,
+      prompt: preview.prompt,
+      model: preview.modelCode,
+      canvasContext: {
+        upstreamNodeIds: preview.upstreamNodeIds,
+        upstreamTextFragments: preview.upstreamTextFragments ?? [],
+        documentVersion: document.version ?? 1,
+        ...(preview.promptReferences
+          ? {
+              sourcePrompt: preview.sourcePrompt,
+              expandedPrompt: preview.prompt,
+              promptReferences: preview.promptReferences.references,
+              promptReferenceDiagnostics: preview.promptReferences.diagnostics,
+            }
+          : {}),
+      },
+      parameters: buildCanvasGenerationParameters(workbench, canvasNode, preview),
+      kind: preview.mediaKind,
+      mediaKind: preview.mediaKind,
+    };
+    const imageReferences = collectCanvasImageReferences(document, nodeId);
+    if (preview.mediaKind === "text") {
+      payload.text = preview.prompt;
+    } else if (preview.mediaKind === "video") {
+      payload.motionPrompt = preview.prompt;
+      applyCanvasVideoReferencesToPayload(payload, imageReferences, preview);
+      applyCanvasVideoMediaReferencesToPayload(payload, collectCanvasMediaReferences(document, nodeId));
+    } else if (preview.mediaKind === "audio") {
+      payload.mode = preview.audioGenerationMode || canvasNode.data?.audioGenerationMode || "text-to-speech";
+      payload.text = preview.prompt;
+      const audioReferences = collectCanvasMediaReferences(document, nodeId).filter((item) => item.kind === "audio");
+      applyCanvasAudioReferencesToPayload(payload, audioReferences);
+      if (preview.audioGenerationMode === "transcription" && !audioReferences.length) {
+        payload.transcriptionInputKind = "text";
+        payload.textInput = preview.nodePrompt ?? "";
+        payload.parameters = { ...(payload.parameters ?? {}), transcriptionInputKind: "text" };
+      }
+    } else if (imageReferences.length) {
+      payload.canvasContext.referenceImages = imageReferences;
+      applyCanvasReferenceImagesToPayload(payload, imageReferences);
+    }
+    const dependsOn = (document.edges ?? [])
+      .filter((edge) => edge.targetNodeId === nodeId && selectedSet.has(String(edge.sourceNodeId)))
+      .map((edge) => String(edge.sourceNodeId))
+      .filter((sourceNodeId) => {
+        const sourcePreview = previews.get(sourceNodeId);
+        return sourcePreview?.ok && ["text", "image", "video", "audio"].includes(sourcePreview.mediaKind);
+      });
+    return [{ nodeKey: nodeId, mediaKind: preview.mediaKind, dependsOn: [...new Set(dependsOn)], payload }];
+  });
 }
 
 function buildCanvasGenerationParameters(workbench, node, preview) {
@@ -19218,9 +24380,40 @@ function buildCanvasGenerationParameters(workbench, node, preview) {
     parameters.resolution ??= String(node?.data?.videoResolution ?? nodeValues.videoResolution ?? "1080p");
     parameters.durationSec ??= Number(node?.data?.videoDurationSec ?? nodeValues.videoDurationSec ?? 5);
     parameters.aspectRatio ??= String(node?.data?.imageAspectRatio ?? nodeValues.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16");
+  } else if (preview.mediaKind === "audio") {
+    parameters.mode = preview.audioGenerationMode || node?.data?.audioGenerationMode || "text-to-speech";
+    if (node?.data?.voiceId) parameters.voiceId = String(node.data.voiceId);
+    if (Number.isFinite(Number(node?.data?.speed))) parameters.speed = Number(node.data.speed);
+    if (node?.data?.language) parameters.language = String(node.data.language);
+    if (Number.isFinite(Number(node?.data?.durationSec))) parameters.durationSec = Number(node.data.durationSec);
+    if (node?.data?.instrumental === true) parameters.instrumental = true;
+    if (parameters.mode === "music") {
+      parameters.lyricsMode = preview.lyricsMode || node?.data?.lyricsMode || (node?.data?.lyrics ? "custom" : "generate");
+      parameters.generateLyrics = parameters.lyricsMode === "generate" && parameters.instrumental !== true;
+      parameters.autoGenerateLyrics = parameters.generateLyrics;
+      if (String(node?.data?.musicTitle ?? "").trim()) parameters.musicTitle = String(node.data.musicTitle).slice(0, 200);
+      if (Number.isFinite(Number(node?.data?.musicBpm))) parameters.musicBpm = Number(node.data.musicBpm);
+      if (parameters.instrumental !== true && String(preview.lyrics ?? node?.data?.lyrics ?? "").trim()) {
+        parameters.lyrics = String(preview.lyrics ?? node?.data?.lyrics).slice(0, 100_000);
+      } else if (parameters.instrumental === true) {
+        delete parameters.lyrics;
+      }
+    }
   } else {
-    parameters.count ??= clampCount(node?.data?.imageCount ?? nodeValues.count ?? 1, 1, 4);
-    parameters.aspectRatio ??= String(node?.data?.imageAspectRatio ?? nodeValues.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16");
+    if (node?.type === "ai-animation") {
+      const animation = normalizeCanvasAnimationState(node.data);
+      const aspectRatio = preview.animationSheetAspectRatio ?? resolveCanvasAnimationSheetAspectRatio(animation.frames);
+      parameters.count = 1;
+      parameters.aspectRatio = aspectRatio;
+      parameters.imageAspectRatio = aspectRatio;
+      parameters.animationAction = animation.action;
+      parameters.animationFrames = animation.frames;
+      parameters.animationGrid = { ...animation.grid };
+      parameters.outputKind = "sprite-sheet";
+    } else {
+      parameters.count ??= clampCount(node?.data?.imageCount ?? nodeValues.count ?? 1, 1, 4);
+      parameters.aspectRatio ??= String(node?.data?.imageAspectRatio ?? nodeValues.imageAspectRatio ?? workbench.state?.project?.aspectRatio ?? "9:16");
+    }
   }
   return parameters;
 }
@@ -19370,6 +24563,17 @@ function applyCanvasVideoMediaReferencesToPayload(payload, references) {
   };
 }
 
+function applyCanvasAudioReferencesToPayload(payload, references) {
+  if (!references.length) return;
+  payload.parameters = {
+    ...(payload.parameters ?? {}),
+    referenceAudio: references[0],
+    referenceAudios: references,
+    audios: references,
+    audioFilePaths: references.map((item) => item.url).filter(Boolean),
+  };
+}
+
 function canvasFrameReferenceFromImageReference(reference) {
   const url = String(reference?.url ?? "").trim();
   const assetVersionId = String(reference?.assetVersionId ?? "").trim();
@@ -19406,13 +24610,24 @@ function collectCanvasMediaReferences(document, targetNodeId) {
   return (Array.isArray(document?.edges) ? document.edges : [])
     .filter((edge) => edge.targetNodeId === targetNodeId)
     .map((edge) => canvasMediaReferenceFromNode(nodeMap.get(edge.sourceNodeId), edge.data?.kind))
-    .filter((item) => item.url && (item.kind === "video" || item.kind === "audio"));
+    .filter((item) => (item.url || item.storageObjectId || item.assetVersionId) && (item.kind === "video" || item.kind === "audio"));
 }
 
 function canvasMediaReferenceFromNode(node, edgeKind = "") {
   const data = node?.data ?? {};
   const kind = String(edgeKind || data.mediaKind || (node?.type === "audio" ? "audio" : node?.type === "video" ? "video" : ""));
-  const url = String(data.previewUrl ?? data.url ?? data.src ?? data.videoUrl ?? data.audioUrl ?? data.resultUrl ?? data.assetUrl ?? "");
+  const storageObjectId = String(data.storageObjectId ?? data.storage_object_id ?? "");
+  const assetVersionId = String(data.assetVersionId ?? data.asset_version_id ?? data.versionId ?? "");
+  const url = String(
+    data.previewUrl
+      ?? data.url
+      ?? data.src
+      ?? data.videoUrl
+      ?? data.audioUrl
+      ?? data.resultUrl
+      ?? data.assetUrl
+      ?? (storageObjectId ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content` : ""),
+  );
   return {
     kind,
     type: kind,
@@ -19421,6 +24636,8 @@ function canvasMediaReferenceFromNode(node, edgeKind = "") {
     preview: url,
     src: url,
     nodeId: String(node?.id ?? ""),
+    ...(storageObjectId ? { storageObjectId } : {}),
+    ...(assetVersionId ? { assetVersionId } : {}),
   };
 }
 
@@ -19828,11 +25045,17 @@ function applyDraggedEpisodeAssetToGenerationImage(workbench, dataTransfer, { fr
 }
 
 function applyDraggedEpisodeAssetToAssetPromptDraft(workbench, asset, payload, preview) {
+  const sourceAssetKind = String(payload?.assetKind ?? "").trim();
+  if (sourceAssetKind && !["image", "other"].includes(sourceAssetKind)) {
+    workbench.ui.toast = "生图仅支持已上传的图片素材。";
+    return true;
+  }
   const reference = {
     id: `drag-ref:asset-reference:${asset.id ?? payload.assetId}`,
     assetId: asset.id ?? payload.assetId,
     kind: "image",
     type: "image",
+    sourceAssetKind: sourceAssetKind || "image",
     name: asset.name ?? "参考图",
     description: asset.description ?? "",
     summary: asset.description ?? "已拖入参考图",
@@ -19964,6 +25187,14 @@ export async function handleWorkbenchActionForTest(workbench, target) {
   return handleAction(workbench, target);
 }
 
+export function handleNewCanvasHostInputForTest(workbench, target) {
+  return handleNewCanvasHostInput(workbench, target);
+}
+
+export function loadCanvasGenerationAssetsForTest(workbench, options = {}) {
+  return loadCanvasGenerationAssets(workbench, options);
+}
+
 export async function createEpisodeExportPreviewWithKindForTest(workbench, exportKind = "mp4") {
   return createEpisodeExportPreviewWithKind(workbench, exportKind);
 }
@@ -20020,6 +25251,10 @@ export async function uploadStoryboardGeneratorReferenceImagesForTest(workbench,
   return uploadStoryboardGeneratorReferenceImages(workbench, files);
 }
 
+export function buildStoryboardGeneratorPromptEditorReferencesForTest(workbench) {
+  return buildStoryboardGeneratorPromptEditorReferences(workbench);
+}
+
 export async function uploadAssetGeneratorRetryImageForTest(workbench, file) {
   return uploadAssetGeneratorRetryImage(workbench, file);
 }
@@ -20038,6 +25273,22 @@ export function saveProjectCanvasNowForTest(workbench) {
 
 export function scheduleProjectCanvasSaveForTest(workbench, options = {}) {
   return scheduleProjectCanvasSave(workbench, options);
+}
+
+export function syncCanvasLiveSubscriptionForTest(workbench) {
+  return syncCanvasLiveSubscription(workbench);
+}
+
+export function stopCanvasLiveSubscriptionForTest(workbench) {
+  return stopCanvasLiveSubscription(workbench);
+}
+
+export function handleCanvasLiveEventForTest(workbench, canvasProjectId, event, options = {}) {
+  return handleCanvasLiveEvent(workbench, canvasProjectId, event, options);
+}
+
+export function resolveCanvasRevisionConflictForTest(workbench, version, options = {}) {
+  return resolveCanvasRevisionConflict(workbench, version, options);
 }
 
 export function resolveCanvasGenerationPollDelayForTest(startedAt, immediate = false, now = Date.now()) {
@@ -20064,12 +25315,34 @@ export function deriveInitialNavTabForTest(hash, session = {}) {
   return deriveInitialNavTab(hash, session);
 }
 
+export function readWorkbenchRouteTokenForTest(locationLike) {
+  return readWorkbenchRouteToken(locationLike);
+}
+
+export async function syncPromptMarketplaceForTest(workbench) {
+  return syncPromptMarketplace(workbench);
+}
+
+export async function scheduleLazySurfaceLoadForTest(workbench) {
+  if (workbench?.ui?.activeNavTab === "prompts") {
+    await syncPromptMarketplace(workbench);
+  }
+}
+
+export function buildPromptMarketplacePublishInputForTest(data) {
+  return buildPromptMarketplacePublishInput(data);
+}
+
 export function syncTeamMemberCreateDraftFromDomForTest(workbench) {
   return syncTeamMemberCreateDraftFromDom(workbench);
 }
 
 export function mapEpisodeStoryboardContractForTest(storyboard) {
   return mapEpisodeStoryboardContract(storyboard);
+}
+
+export function persistStoryboardCardDescriptionForTest(workbench, storyboard, description) {
+  return persistStoryboardCardDescription(workbench, storyboard, description);
 }
 
 export function syncEpisodeStoryboardMapForTest(currentMap, primaryStoryboards, customEpisodes = []) {
@@ -20091,11 +25364,14 @@ async function openSingleEpisodeFlow(workbench) {
   workbench.ui.singleEpisodeScriptImportMenu = "";
   workbench.ui.singleEpisodeAiChecking = false;
   workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+  workbench.ui.episodePromptSkillModalOpen = false;
+  workbench.ui.episodePromptSkillDraftIds = {};
+  workbench.ui.selectedEpisodePromptSkillIds = {};
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
   workbench.ui.uploadNotice = "";
   await Promise.all([
     ensureProjectEpisodesLoaded(workbench),
-    syncStoryboardPromptPackages(workbench),
+    syncEpisodePromptSkills(workbench),
     syncSingleEpisodeGenerationConfig(workbench),
     refreshScriptLibraryIfAvailable(workbench),
   ]);
@@ -20982,6 +26258,8 @@ function resetSingleEpisodeModalState(workbench) {
   workbench.ui.singleEpisodeScriptImportMenu = "";
   workbench.ui.singleEpisodeAiChecking = false;
   workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+  workbench.ui.episodePromptSkillModalOpen = false;
+  workbench.ui.episodePromptSkillDraftIds = {};
   workbench.ui.selectedSingleEpisodeLookPackageIds = createEmptySingleEpisodeLookSelection();
 }
 
@@ -23809,6 +29087,9 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     candidateEpisodeId && candidateEpisodeId !== "episode-primary"
       ? resolvePersistedEpisodeWorkbenchId(workbench, candidateEpisodeId)
       : candidateEpisodeId;
+  if (String(workbench.ui.selectedEpisodeId ?? "") !== String(resolvedEpisodeId ?? "")) {
+    workbench.ui.storyboardMediaComposerDrafts = {};
+  }
   const requestedScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
   const shouldLoadRemoteEpisode =
@@ -23849,6 +29130,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   if (workbench.ui.museScopeMode === "storyboard") {
     workbench.ui.selectedStoryboardId = previousStoryboardId;
     if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
+      switchStoryboardComposerMediaMode(workbench, "image", "video");
       workbench.ui.episodeMediaMode = "video";
     }
   } else {
@@ -23923,6 +29205,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   }
   if (workbench.ui.museScopeMode === "storyboard") {
     if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
+      switchStoryboardComposerMediaMode(workbench, "image", "video");
       workbench.ui.episodeMediaMode = "video";
     }
     const activeStoryboards = getEpisodeStoryboards(workbench, resolvedEpisodeId, storyboards);
@@ -24700,7 +29983,8 @@ async function restorePendingAssetBatchGenerationTasksForWorkbench(workbench, ep
       mediaKind,
       assetId,
       promptPreview: task?.prompt ?? existing?.promptPreview ?? "",
-      selectedModelId: task?.model ?? existing?.selectedModelId ?? null,
+      selectedModelId: existing?.selectedModelId ?? null,
+      modelLabel: task?.modelLabel ?? task?.modelName ?? task?.model ?? existing?.modelLabel ?? null,
       selectionContext: {
         ...(existing?.selectionContext ?? {}),
         ...(task?.selectionContext ?? {}),
@@ -24846,10 +30130,24 @@ function findConfiguredGenerationModel(workbench, modelCode) {
 
 function ensureCanvasNodeConfiguredModel(workbench, canvasDocument, nodeId) {
   const node = canvasDocument?.nodes?.find?.((item) => item.id === nodeId);
-  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+  const generativeTextNode = ["ai-text", "ai-markdown"].includes(String(node?.type ?? ""));
+  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !generativeTextNode)) {
     return canvasDocument;
   }
-  const mediaKind = node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image";
+  const mediaKind = generativeTextNode
+    ? "text"
+    : node.type === "ai-storyboard" || node.type === "ai-animation"
+      ? "image"
+      : node.data?.mediaKind === "audio" || node.type === "audio" || node.type === "ai-audio"
+    ? "audio"
+    : node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image";
+  if (
+    mediaKind === "audio"
+    && String(node.data?.audioGenerationMode ?? node.data?.audioMode ?? "") === "transcription"
+    && !collectCanvasMediaReferences(canvasDocument, nodeId).some((item) => item.kind === "audio")
+  ) {
+    return canvasDocument;
+  }
   const currentModelCode = String(node.data?.modelCode ?? "").trim();
   const configuredModels = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
     ? workbench.ui.episodeGenerationConfig.models
@@ -24859,15 +30157,28 @@ function ensureCanvasNodeConfiguredModel(workbench, canvasDocument, nodeId) {
   }
   const currentModel = findConfiguredGenerationModel(workbench, currentModelCode);
   const videoMode = mediaKind === "video" ? normalizeCanvasVideoMode(node.data?.videoGenerationMode ?? node.data?.videoMode ?? "first-frame") : "";
-  const currentModelAllowed = currentModel
-    ? modelSupportsGenerationMode(currentModel, mediaKind === "video" ? videoMode : "single-image")
-    : false;
+  const audioMode = mediaKind === "audio" ? String(node.data?.audioGenerationMode ?? node.data?.audioMode ?? "text-to-speech") : "";
+  const audioModelOptions = mediaKind === "audio"
+    ? resolveCanvasModelOptions({ models: configuredModels }, "audio")
+        .filter((item) => canvasAudioModelSupportsMode(item.raw, audioMode))
+    : [];
+  const currentModelAllowed = mediaKind === "audio"
+    ? audioModelOptions.some((item) => item.modelCode === currentModelCode)
+    : mediaKind === "text"
+      ? resolveCanvasModelOptions({ models: configuredModels }, "text").some((item) => item.modelCode === currentModelCode)
+    : currentModel
+      ? modelSupportsGenerationMode(currentModel, mediaKind === "video" ? videoMode : "single-image")
+      : false;
   if (currentModelCode && currentModelAllowed) {
     return canvasDocument;
   }
   const modelCode = mediaKind === "video"
     ? resolveConfiguredVideoModelCode(workbench, videoMode, currentModelCode || "")
-    : resolveConfiguredImageModelCode(workbench, "single-image", currentModelCode || "");
+    : mediaKind === "audio"
+      ? audioModelOptions[0]?.modelCode ?? ""
+      : mediaKind === "text"
+        ? resolveCanvasModelOptions({ models: configuredModels }, "text")[0]?.modelCode ?? ""
+      : resolveConfiguredImageModelCode(workbench, "single-image", currentModelCode || "");
   if (!modelCode || modelCode === currentModelCode) {
     return canvasDocument;
   }
@@ -24882,6 +30193,21 @@ function ensureCanvasNodeConfiguredModel(workbench, canvasDocument, nodeId) {
   return updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
     modelCode,
   }));
+}
+
+function canvasAudioModelSupportsMode(model, mode) {
+  const modes = [model?.taskModes, model?.supportedModes, model?.modes, model?.capabilities]
+    .filter(Array.isArray)
+    .flat()
+    .map((value) => String(value ?? "").trim().toLowerCase().replace(/[.\-]/g, "_"))
+    .filter(Boolean);
+  if (!modes.length) return true;
+  const aliases = mode === "music"
+    ? ["music", "music_generation", "audio_music_generation"]
+    : mode === "transcription"
+      ? ["transcription", "speech_to_text", "audio_transcription"]
+      : ["text_to_speech", "tts", "audio_text_to_speech"];
+  return aliases.some((alias) => modes.includes(alias));
 }
 
 function normalizeGenerationOptionValues(values) {
@@ -25502,12 +30828,15 @@ function closeAssetGeneratorModal(workbench) {
   workbench.ui.assetGeneratorEditingAsset = null;
   workbench.ui.assetGeneratorName = "";
   workbench.ui.assetGeneratorPrompt = "";
+  workbench.ui.assetGeneratorStoryboardPrompt = "";
   workbench.ui.assetGeneratorPreviewUrl = "";
   workbench.ui.assetGeneratorPreviewFile = null;
   workbench.ui.assetGeneratorStoryboardId = null;
   workbench.ui.assetGeneratorStoryboardReferences = [];
   workbench.ui.assetGeneratorStoryboardUploadReferences = [];
   workbench.ui.assetGeneratorStyleCode = "";
+  workbench.ui.episodePromptSkillModalOpen = false;
+  workbench.ui.episodePromptSkillDraftIds = {};
   workbench.ui.assetGeneratorRetryPreviewUrl = "";
   workbench.ui.assetGeneratorRetryPreviewFile = null;
   workbench.ui.assetGeneratorUploading = false;
@@ -25515,7 +30844,7 @@ function closeAssetGeneratorModal(workbench) {
   stopProjectAssetGenerationPolling(workbench);
 }
 
-const STORYBOARD_IMAGE_GENERATION_PROMPT_PREFIX = [
+const LEGACY_STORYBOARD_IMAGE_GENERATION_PROMPT_PREFIX = [
   "避免场景过于相似创建一个电影制作板/视觉规划表，展示短片或商业广告的完整概念。布局应简洁、基于网格，并分为清晰标记的部分。包含:",
   "共享创意指导(顶部栏):整体限制，如镜头数量、统一的调色板和一般的环境背景。",
   "角色与风格参考部分:一个从多个角度展示的模型(正面、背面、侧面、特写、放松姿态)，配有服装和配饰参考。强调身份的一致性，同时允许在特定场景中进行细微变化。",
@@ -25577,9 +30906,11 @@ async function submitStoryboardImageGenerator(workbench, prompt) {
     ...(uploadedReference ? [uploadedReference] : []),
   ]);
   const promptContent = normalizeStoryboardGeneratorPrompt(prompt, references);
-  const normalizedPrompt = promptContent.startsWith(STORYBOARD_IMAGE_GENERATION_PROMPT_PREFIX)
-    ? promptContent
-    : [STORYBOARD_IMAGE_GENERATION_PROMPT_PREFIX, promptContent].filter(Boolean).join("\n");
+  const storyboardPromptSource = String(workbench.ui.assetGeneratorStoryboardPrompt ?? "").trim()
+    || resolveStoryboardQuickReferencePrompt(storyboard);
+  const storyboardPrompt = normalizeStoryboardGeneratorPrompt(storyboardPromptSource, references);
+  const normalizedPrompt = promptContent;
+  workbench.ui.assetGeneratorStoryboardPrompt = storyboardPrompt;
   const model = String(workbench.ui.assetGeneratorModelCode ?? "").trim()
     || resolveConfiguredImageModelCode(workbench, "image", "gpt-image-2-cn");
   const resolution = String(workbench.ui.assetGeneratorResolution ?? "2K").trim();
@@ -25936,6 +31267,7 @@ async function submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextNam
   const model = String(replayPayload?.model ?? workbench.ui.assetGeneratorModelCode ?? "").trim()
     || resolveConfiguredImageModelCode(workbench, "image", "gpt-image-2-cn");
   const selectedModel = findConfiguredGenerationModel(workbench, model);
+  const selectedStyle = resolveSelectedImageStyle(workbench);
   const submission = {
     mediaKind: "image",
     assetId,
@@ -25944,6 +31276,8 @@ async function submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextNam
     attachmentItems: [],
     selectionContext,
     selectedModelId: model,
+    modelLabel: selectedModel?.modelLabel ?? selectedModel?.name ?? selectedModel?.label ?? model,
+    styleLabel: selectedStyle?.label ?? selectedStyle?.name ?? selectedStyle?.title ?? null,
     resolution: workbench.ui.assetGeneratorResolution ?? "2K",
     aspectRatio: workbench.ui.assetGeneratorAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
     creditCost: selectedModel ? resolveCanvasRunCreditCost(selectedModel, "image") : workbench.ui.assetGeneratorCreditCost,
@@ -26960,6 +32294,278 @@ function createObjectUrlPreview(file) {
   return "";
 }
 
+export async function importCanvasMarkdownFile(workbench, nodeId, file) {
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
+  if (!node || !["markdown", "ai-markdown"].includes(String(node.type ?? ""))) {
+    workbench.ui.toast = "请选择 Markdown 节点后再导入。";
+    render(workbench);
+    return false;
+  }
+  if (Number(file?.size ?? 0) > 1024 * 1024) {
+    workbench.ui.toast = "Markdown 文件不能超过 1 MB。";
+    render(workbench);
+    return false;
+  }
+  const text = typeof file?.text === "function" ? await file.text() : "";
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
+    text,
+    textHtml: canvasPlainTextToParagraphHtml(text),
+    source: "markdown_import",
+    markdownViewMode: "edit",
+    importedFileName: String(file?.name ?? "document.md"),
+  }));
+  workbench.ui.selectedCanvasNodeId = nodeId;
+  workbench.ui.editingCanvasTextNodeId = nodeId;
+  workbench.ui.toast = "Markdown 已导入。";
+  render(workbench);
+  return true;
+}
+
+export function exportCanvasMarkdownFile(workbench, nodeId) {
+  const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId);
+  if (!node || !["markdown", "ai-markdown"].includes(String(node.type ?? ""))) return false;
+  const ownerDocument = workbench.root?.ownerDocument ?? globalThis.document;
+  if (!ownerDocument?.createElement || typeof globalThis.URL?.createObjectURL !== "function") return false;
+  const text = String(node.data?.text ?? canvasMarkdownPlainText(node.data?.textHtml ?? ""));
+  const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = globalThis.URL.createObjectURL(blob);
+  const anchor = ownerDocument.createElement("a");
+  const baseName = String(node.data?.title ?? node.data?.importedFileName ?? "canvas-markdown")
+    .replace(/\.md$/i, "")
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .trim()
+    .slice(0, 80) || "canvas-markdown";
+  try {
+    anchor.href = url;
+    anchor.download = `${baseName}.md`;
+    anchor.hidden = true;
+    ownerDocument.body?.append?.(anchor);
+    anchor.click?.();
+  } finally {
+    anchor.remove?.();
+    globalThis.URL.revokeObjectURL(url);
+  }
+  workbench.ui.toast = "Markdown 已导出。";
+  return true;
+}
+
+function canvasMarkdownPlainText(html) {
+  return String(html ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|h[1-6]|li|blockquote)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export async function loadCanvasPromptReferenceItems(workbench) {
+  const categories = ["character", "scene", "prop"];
+  const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "").trim();
+  const [libraryPayloads, characterPayload] = await Promise.all([
+    typeof workbench.api?.getLibraryAssets === "function"
+      ? Promise.all(categories.map((category) => workbench.api.getLibraryAssets({ scope: "team", category })))
+      : categories.map(() => ({ assets: [] })),
+    canvasId && typeof workbench.api?.listCanvasCharacters === "function"
+      ? workbench.api.listCanvasCharacters(canvasId, { limit: 200 })
+      : { characters: [] },
+  ]);
+  const canvasCharacterItems = canvasCharacterPromptReferenceItems(characterPayload);
+  const dramaItems = libraryPayloads.flatMap((payload, index) => {
+    const group = categories[index];
+    return (Array.isArray(payload?.assets) ? payload.assets : []).map((asset) => ({
+      id: `${group}:${asset.id}`,
+      group,
+      referenceType: "drama",
+      referenceId: String(asset.id ?? ""),
+      label: String(asset.name ?? asset.label ?? "未命名资产"),
+      description: String(asset.prompt ?? asset.description ?? ""),
+      prompt: String(asset.prompt ?? asset.description ?? ""),
+      previewUrl: String(asset.previewUrl ?? asset.preview ?? asset.sourceUrl ?? ""),
+      meta: group === "character" ? "人物" : group === "scene" ? "场景" : "道具",
+    })).filter((item) => item.referenceId);
+  });
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const nodeItems = (Array.isArray(document.nodes) ? document.nodes : []).map((node) => ({
+    id: `node:${node.id}`,
+    group: "node",
+    referenceType: "node",
+    referenceId: String(node.id ?? ""),
+    label: String(node.data?.title ?? node.data?.name ?? node.id ?? "画布节点"),
+    description: String(node.data?.prompt ?? node.data?.text ?? ""),
+    prompt: String(node.data?.prompt ?? node.data?.text ?? ""),
+    meta: "节点",
+  })).filter((item) => item.referenceId);
+  const assetItems = (Array.isArray(workbench.ui?.canvasAssets) ? workbench.ui.canvasAssets : []).map((asset) => {
+    const referenceId = String(asset.assetId ?? asset.assetVersionId ?? "");
+    return {
+      id: `asset:${referenceId}`,
+      group: "asset",
+      referenceType: "asset",
+      referenceId,
+      referenceVersion: asset.assetVersionId && asset.assetVersionId !== referenceId ? String(asset.assetVersionId) : "",
+      label: String(asset.title ?? asset.name ?? "画布产物"),
+      description: String(asset.prompt ?? asset.meta ?? ""),
+      prompt: String(asset.prompt ?? asset.meta ?? ""),
+      previewUrl: String(asset.thumbnailUrl ?? asset.url ?? ""),
+      meta: "产物",
+    };
+  }).filter((item) => item.referenceId);
+  const models = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
+    ? workbench.ui.episodeGenerationConfig.models
+    : [];
+  const modelItems = models.map((model) => {
+    const referenceId = String(model.id ?? model.modelConfigId ?? "");
+    return {
+      id: `model:${referenceId}`,
+      group: "model",
+      referenceType: "model",
+      referenceId,
+      referenceVersion: String(model.revisionId ?? model.modelConfigRevisionId ?? ""),
+      label: String(model.displayName ?? model.name ?? model.modelCode ?? "模型"),
+      description: String(model.description ?? model.mediaType ?? ""),
+      prompt: String(model.modelCode ?? model.displayName ?? ""),
+      meta: String(model.mediaType ?? "模型"),
+    };
+  }).filter((item) => item.referenceId);
+  return [...canvasCharacterItems, ...dramaItems, ...nodeItems, ...assetItems, ...modelItems];
+}
+
+function canvasCharacterPromptReferenceItems(payload) {
+  const characters = Array.isArray(payload?.characters) ? payload.characters : [];
+  return characters.flatMap((character) => {
+    const characterId = String(character?.id ?? "").trim();
+    if (!characterId) return [];
+    const characterName = String(character.name ?? "未命名角色");
+    const characterPrompt = String(character.prompt ?? character.promptText ?? "").trim();
+    const references = (Array.isArray(character.references) ? character.references : [])
+      .map((reference) => ({
+        id: String(reference?.id ?? "").trim(),
+        label: String(reference?.label ?? reference?.usage ?? "参考图"),
+        prompt: String(reference?.prompt ?? reference?.promptText ?? "").trim(),
+        previewUrl: String(reference?.previewUrl ?? "").trim(),
+        primary: reference?.primary === true,
+      }))
+      .filter((reference) => reference.id);
+    const scopeLabel = character.scope === "global" ? "全局角色" : "本画布角色";
+    const singleItems = references.map((reference) => ({
+      id: `canvas-character:${characterId}@${reference.id}`,
+      group: "character",
+      referenceType: "drama",
+      referenceId: characterId,
+      referenceVersion: reference.id,
+      referenceSource: "canvas_character",
+      referenceMode: "single",
+      referenceIds: [reference.id],
+      label: `${characterName} · ${reference.label}`,
+      description: mergeCanvasCharacterPrompts(characterPrompt, reference.prompt),
+      prompt: mergeCanvasCharacterPrompts(characterPrompt, reference.prompt),
+      previewUrl: reference.previewUrl,
+      meta: `${scopeLabel} · 单图`,
+    }));
+    if (references.length < 2) return singleItems;
+    const orderedReferences = [...references].sort((left, right) => Number(right.primary) - Number(left.primary));
+    return [{
+      id: `canvas-character:${characterId}@all`,
+      group: "character",
+      referenceType: "drama",
+      referenceId: characterId,
+      referenceVersion: "all",
+      referenceSource: "canvas_character",
+      referenceMode: "merge_all",
+      referenceIds: orderedReferences.map((reference) => reference.id),
+      label: `${characterName} · 合并全部参考图`,
+      description: mergeCanvasCharacterPrompts(characterPrompt, ...orderedReferences.map((reference) => reference.prompt)),
+      prompt: mergeCanvasCharacterPrompts(characterPrompt, ...orderedReferences.map((reference) => reference.prompt)),
+      previewUrl: orderedReferences[0]?.previewUrl ?? "",
+      previewUrls: orderedReferences.map((reference) => reference.previewUrl).filter(Boolean),
+      meta: `${scopeLabel} · ${references.length} 张`,
+    }, ...singleItems];
+  });
+}
+
+function mergeCanvasCharacterPrompts(...parts) {
+  return [...new Set(parts.map((part) => String(part ?? "").trim()).filter(Boolean))].join(", ");
+}
+
+export function applyCanvasPromptReferenceSelection(workbench, { createNode = false } = {}) {
+  const picker = workbench.ui?.canvasPromptReferencePicker;
+  const item = picker?.items?.find?.((candidate) => String(candidate.id) === String(picker.selectedId));
+  const nodeId = String(picker?.nodeId ?? workbench.ui?.selectedCanvasNodeId ?? "");
+  if (!item || !nodeId) return false;
+  const type = String(item.referenceType ?? "");
+  const referenceId = String(item.referenceId ?? "");
+  const version = String(item.referenceVersion ?? "");
+  if (!type || !referenceId) return false;
+  const token = `@${type}:${referenceId}${version ? `@${version}` : ""}`;
+  let document = ensureWorkbenchCanvasDocument(workbench);
+  const sourceNode = document.nodes?.find?.((node) => node.id === nodeId);
+  const prompt = String(sourceNode?.data?.prompt ?? "").trim();
+  const referenceRecord = {
+    id: referenceId,
+    ...(version ? { version } : {}),
+    value: String(item.prompt ?? item.description ?? item.label ?? token),
+    label: String(item.label ?? referenceId),
+    status: "active",
+    ...(item.referenceSource ? { source: String(item.referenceSource) } : {}),
+    ...(item.referenceMode ? { mode: String(item.referenceMode) } : {}),
+    ...(Array.isArray(item.referenceIds) ? { referenceIds: item.referenceIds.map(String).filter(Boolean) } : {}),
+  };
+  if (type === "drama" && item.referenceSource === "canvas_character" && version) {
+    const existing = document.promptReferenceCatalog?.drama?.[referenceId];
+    document = upsertCanvasPromptReference(document, type, {
+      id: referenceId,
+      label: String(item.label ?? referenceId),
+      status: "active",
+      source: "canvas_character",
+      versions: {
+        ...(existing?.versions && typeof existing.versions === "object" ? existing.versions : {}),
+        [version]: referenceRecord,
+      },
+    });
+  } else {
+    document = upsertCanvasPromptReference(document, type, referenceRecord);
+  }
+  document = updateCanvasNodeData(document, nodeId, {
+    prompt: prompt ? `${prompt} ${token}` : token,
+  });
+  let createdNodeId = "";
+  if (createNode && ["character", "scene", "prop"].includes(item.group)) {
+    const x = Number(sourceNode?.position?.x ?? 0) + 500;
+    const y = Number(sourceNode?.position?.y ?? 0);
+    document = addCanvasNode(document, {
+      type: "ai-image",
+      position: { x, y },
+    });
+    createdNodeId = String(document.nodes.at(-1)?.id ?? "");
+    document = updateCanvasNodeData(document, createdNodeId, {
+      title: String(item.label ?? "短剧资产"),
+      prompt: token,
+      dramaAssetId: referenceId,
+      dramaAssetKind: item.group,
+      source: "drama_reference",
+      ...(item.referenceSource === "canvas_character" ? {
+        dramaCharacterId: referenceId,
+        dramaReferenceSelector: version,
+        dramaReferenceMode: String(item.referenceMode ?? "single"),
+        dramaReferenceIds: Array.isArray(item.referenceIds) ? item.referenceIds.map(String).filter(Boolean) : [],
+      } : {}),
+    });
+  }
+  updateActiveCanvasDocument(workbench, document);
+  workbench.ui.selectedCanvasNodeId = createdNodeId || nodeId;
+  workbench.ui.canvasEditorOpen = true;
+  workbench.ui.canvasPromptReferencePicker = null;
+  workbench.ui.toast = createNode ? "已插入短剧资产引用并创建图片节点。" : "已插入提示词引用。";
+  return true;
+}
+
 async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
   const mimeType = String(file?.type || "");
   const mediaKind = mimeType.startsWith("video/") ? "video" : mimeType.startsWith("audio/") ? "audio" : "image";
@@ -26971,18 +32577,42 @@ async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
   const mediaDimensions = await readLocalMediaDimensions(file, mediaKind);
   const localPreviewUrl = createObjectUrlPreview(file);
   const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-  if (!canvasDocument.nodes?.some?.((node) => node.id === nodeId && node.type === "upload")) {
+  const targetNode = canvasDocument.nodes?.find?.((node) => node.id === nodeId);
+  const specialImageNode = targetNode?.type === "ai-panorama" || targetNode?.type === "ai-storyboard";
+  if (!targetNode || !canvasUploadNodeAcceptsMedia(targetNode.type, mediaKind)) {
+    if (targetNode && ["source-image", "source-video", "source-audio", "ai-panorama", "ai-storyboard"].includes(targetNode.type)) {
+      workbench.ui.toast = targetNode.type === "source-video"
+        ? "视频源节点只支持视频素材。"
+        : targetNode.type === "source-audio"
+          ? "音频源节点只支持音频素材。"
+          : specialImageNode
+            ? "全景和分镜节点只支持图片素材。"
+            : "图片源节点只支持图片素材。";
+      render(workbench);
+    }
     return;
   }
+  const genericUploadNode = targetNode.type === "upload";
+  const previousStableData = {
+    status: targetNode.data?.status ?? "empty",
+    previewUrl: targetNode.data?.previewUrl ?? "",
+    url: targetNode.data?.url ?? "",
+    imageUrl: targetNode.data?.imageUrl ?? "",
+    fileName: targetNode.data?.fileName ?? "",
+    mimeType: targetNode.data?.mimeType ?? "",
+    size: targetNode.data?.size ?? null,
+  };
   updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
-    title: "上传",
+    ...(genericUploadNode ? { title: "上传" } : {}),
     status: "uploading",
     source: "upload",
     mediaKind,
-    ports: {
-      inputs: [],
-      outputs: [{ id: `out_${mediaKind}`, kind: mediaKind, label: mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片" }],
-    },
+    ...(genericUploadNode ? {
+      ports: {
+        inputs: [],
+        outputs: [{ id: `out_${mediaKind}`, kind: mediaKind, label: mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片" }],
+      },
+    } : {}),
     fileName: file.name ?? "upload",
     mimeType: file.type ?? "",
     size: file.size ?? null,
@@ -26990,7 +32620,8 @@ async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
     ...(mediaDimensions.height ? { height: mediaDimensions.height, imageHeight: mediaDimensions.height } : {}),
     previewUrl: localPreviewUrl,
     url: localPreviewUrl,
-  }));
+    ...(specialImageNode ? { imageUrl: localPreviewUrl } : {}),
+  }), { scheduleSave: false });
   workbench.ui.selectedCanvasNodeId = nodeId;
   workbench.ui.canvasEditorOpen = false;
   workbench.ui.canvasRunPreview = null;
@@ -27000,18 +32631,25 @@ async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
   if (typeof workbench.api?.uploadFile !== "function") {
     updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
       status: "ready",
-    }));
+    }), { scheduleSave: false });
     render(workbench);
     return;
   }
 
   try {
     const upload = await uploadLocalFile(workbench, file, "canvas-uploads");
-    const uploadedUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? localPreviewUrl);
+    const stableUploadUrl = upload.previewUrl ?? upload.publicUrl ?? (upload.storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(upload.storageObjectId)}/content`
+      : "");
+    if (!stableUploadUrl) {
+      throw new Error("上传完成后未返回稳定素材地址。");
+    }
+    const uploadedUrl = resolveApiUrl(stableUploadUrl);
     updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
       status: "ready",
       previewUrl: uploadedUrl,
       url: uploadedUrl,
+      ...(specialImageNode ? { imageUrl: uploadedUrl } : {}),
       uploadSessionId: upload.uploadSessionId ?? null,
       storageObjectId: upload.storageObjectId ?? null,
       storageObjectKey: upload.storageObjectKey ?? "",
@@ -27019,14 +32657,161 @@ async function handleCanvasUploadNodeFile(workbench, nodeId, file) {
       ...(mediaDimensions.width ? { width: mediaDimensions.width, imageWidth: mediaDimensions.width } : {}),
       ...(mediaDimensions.height ? { height: mediaDimensions.height, imageHeight: mediaDimensions.height } : {}),
     }));
+    globalThis.URL?.revokeObjectURL?.(localPreviewUrl);
     workbench.ui.toast = `已上传 ${file.name ?? "素材"}。`;
   } catch (error) {
     updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
-      status: "ready",
+      ...previousStableData,
       uploadError: friendlyError(error),
-    }));
-    workbench.ui.toast = "素材已在节点中预览，云端上传失败。";
+    }), { scheduleSave: false });
+    globalThis.URL?.revokeObjectURL?.(localPreviewUrl);
+    workbench.ui.toast = "云端上传失败，已保留节点原素材。";
   }
+  refreshCanvasGraphFromDocument(workbench);
+  render(workbench);
+}
+
+async function captureCanvasPanoramaView(workbench, nodeId) {
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const node = document.nodes?.find?.((item) => item.id === nodeId && item.type === "ai-panorama");
+  const sourceUrl = resolveCanvasSpecialImageUrl(node);
+  if (!node || !sourceUrl) throw new Error("请先为全景节点生成或上传图片。");
+  const renderedView = typeof workbench.captureCanvasPanoramaRendererView === "function"
+    ? await workbench.captureCanvasPanoramaRendererView(nodeId).catch(() => null)
+    : null;
+  if (renderedView) {
+    await insertCanvasDerivedImageNode(workbench, node, renderedView, "全景视角截图");
+    return;
+  }
+  const image = await loadCanvasSpecialImage(sourceUrl);
+  const view = normalizeCanvasPanoramaView(node.data?.panoramaView);
+  const cropWidth = Math.max(1, Math.min(image.naturalWidth, Math.round(image.naturalWidth * view.fov / 360)));
+  const cropHeight = Math.max(1, Math.min(image.naturalHeight, Math.round(cropWidth * 9 / 16)));
+  const centerX = (180 - view.yaw) / 360 * image.naturalWidth;
+  const centerY = (90 - view.pitch) / 180 * image.naturalHeight;
+  const blob = await renderCanvasImageCropBlob(image, {
+    x: centerX - cropWidth / 2,
+    y: Math.max(0, Math.min(image.naturalHeight - cropHeight, centerY - cropHeight / 2)),
+    width: cropWidth,
+    height: cropHeight,
+    wrapX: true,
+  }, { maxWidth: 1280, maxHeight: 720 });
+  await insertCanvasDerivedImageNode(workbench, node, blob, "全景视角截图");
+}
+
+async function extractCanvasStoryboardCell(workbench, nodeId, cellIndex, options = {}) {
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const node = document.nodes?.find?.((item) => item.id === nodeId && item.type === "ai-storyboard");
+  const sourceUrl = resolveCanvasSpecialImageUrl(node);
+  if (!node || !sourceUrl) throw new Error("请先为分镜节点生成或上传图片。");
+  const cells = normalizeCanvasStoryboardCells(node);
+  const cell = cells[cellIndex];
+  if (!cell) throw new Error("未找到要提取的分镜格。");
+  const image = await loadCanvasSpecialImage(cell.override?.url || sourceUrl);
+  const rect = cell.override?.url
+    ? { x: 0, y: 0, width: image.naturalWidth, height: image.naturalHeight }
+    : calculateCanvasStoryboardSourceRect(cell, image);
+  if (!rect) throw new Error("无法读取分镜图片尺寸。");
+  const blob = await renderCanvasImageCropBlob(image, rect, { maxWidth: 1600, maxHeight: 1600 });
+  await insertCanvasDerivedImageNode(workbench, node, blob, `分镜 ${cell.row + 1}-${cell.column + 1}`, options);
+  const latestDocument = ensureWorkbenchCanvasDocument(workbench);
+  const latestNode = latestDocument.nodes?.find?.((item) => item.id === nodeId);
+  const extracted = Array.isArray(latestNode?.data?.storyboardExtracted)
+    ? [...latestNode.data.storyboardExtracted]
+    : [];
+  extracted[cellIndex] = true;
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(latestDocument, nodeId, { storyboardExtracted: extracted }));
+  render(workbench);
+}
+
+function resolveCanvasSpecialImageUrl(node) {
+  const data = node?.data ?? {};
+  const value = data.imageUrl ?? data.previewUrl ?? data.resultUrl ?? data.url ?? data.assetUrl ?? data.thumbnailUrl ?? "";
+  return value ? resolveApiUrl(String(value)) : "";
+}
+
+function loadCanvasSpecialImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    try {
+      const parsed = new URL(url, globalThis.window?.location?.href ?? "http://localhost");
+      if (parsed.origin !== globalThis.window?.location?.origin) image.crossOrigin = "anonymous";
+    } catch {
+      // The browser will validate the URL when assigning src.
+    }
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("无法读取图片，请确认文件仍可访问。"));
+    image.src = url;
+  });
+}
+
+function renderCanvasImageCropBlob(image, rect, limits = {}) {
+  const sourceWidth = Math.max(1, Math.round(Number(rect.width) || 1));
+  const sourceHeight = Math.max(1, Math.round(Number(rect.height) || 1));
+  const scale = Math.min(
+    1,
+    Math.max(1, Number(limits.maxWidth ?? sourceWidth)) / sourceWidth,
+    Math.max(1, Number(limits.maxHeight ?? sourceHeight)) / sourceHeight,
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return Promise.reject(new Error("浏览器无法创建图片画布。"));
+  const sourceY = Math.max(0, Math.min(image.naturalHeight - sourceHeight, Math.round(Number(rect.y) || 0)));
+  let sourceX = Math.round(Number(rect.x) || 0);
+  if (rect.wrapX === true) {
+    sourceX = ((sourceX % image.naturalWidth) + image.naturalWidth) % image.naturalWidth;
+    const firstWidth = Math.min(sourceWidth, image.naturalWidth - sourceX);
+    const firstOutputWidth = Math.round(canvas.width * firstWidth / sourceWidth);
+    context.drawImage(image, sourceX, sourceY, firstWidth, sourceHeight, 0, 0, firstOutputWidth, canvas.height);
+    if (firstWidth < sourceWidth) {
+      context.drawImage(image, 0, sourceY, sourceWidth - firstWidth, sourceHeight, firstOutputWidth, 0, canvas.width - firstOutputWidth, canvas.height);
+    }
+  } else {
+    sourceX = Math.max(0, Math.min(image.naturalWidth - sourceWidth, sourceX));
+    context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  }
+  return new Promise((resolve, reject) => canvas.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error("图片编码失败。")),
+    "image/png",
+  ));
+}
+
+async function insertCanvasDerivedImageNode(workbench, sourceNode, blob, title, options = {}) {
+  const fileName = `${String(title || "canvas-image").replace(/[\\/:*?"<>|\s]+/g, "-")}.png`;
+  const file = new File([blob], fileName, { type: "image/png", lastModified: Date.now() });
+  const previewUrl = createObjectUrlPreview(file);
+  let upload = null;
+  if (typeof workbench.api?.uploadFile === "function") {
+    upload = await uploadLocalFile(workbench, file, "canvas-derivations");
+  }
+  const document = ensureWorkbenchCanvasDocument(workbench);
+  const position = options?.position
+    ? { x: Number(options.position.x ?? 0), y: Number(options.position.y ?? 0) }
+    : {
+        x: Number(sourceNode?.position?.x ?? 0) + Number(sourceNode?.size?.width ?? 420) + 72,
+        y: Number(sourceNode?.position?.y ?? 0),
+      };
+  let nextDocument = addCanvasNode(document, { type: "source-image", position });
+  const createdNode = nextDocument.nodes.at(-1);
+  const uploadedUrl = upload ? resolveApiUrl(upload.previewUrl ?? upload.publicUrl ?? previewUrl) : previewUrl;
+  nextDocument = updateCanvasNodeData(nextDocument, createdNode.id, {
+    title,
+    status: "ready",
+    source: "canvas_derivation",
+    mediaKind: "image",
+    fileName,
+    mimeType: "image/png",
+    previewUrl: uploadedUrl,
+    url: uploadedUrl,
+    storageObjectId: upload?.storageObjectId ?? null,
+    storageObjectKey: upload?.storageObjectKey ?? "",
+    parentNodeId: sourceNode?.id ?? null,
+  });
+  updateActiveCanvasDocument(workbench, nextDocument);
+  workbench.ui.selectedCanvasNodeId = createdNode.id;
+  workbench.ui.toast = `${title}已创建为图片节点。`;
   refreshCanvasGraphFromDocument(workbench);
   render(workbench);
 }
@@ -27520,7 +33305,7 @@ function applyCanvasModelSelection(workbench, nodeId, modelCode) {
   updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
     modelCode: normalizedModelCode,
     ...(model ? { modelLabel: model.modelLabel ?? model.name ?? model.label ?? normalizedModelCode } : {}),
-    ...(model ? buildGenerationModelDefaultsPatch(model, node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image") : {}),
+    ...(model ? buildGenerationModelDefaultsPatch(model, node.type === "ai-animation" ? "image" : node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image") : {}),
   }));
   workbench.ui.selectedCanvasNodeId = nodeId;
   workbench.ui.canvasRunPreview = null;
@@ -27548,6 +33333,25 @@ function applyCanvasVideoGenerationMode(workbench, nodeId, mode) {
     ...(model ? buildGenerationModelDefaultsPatch(model, "video") : {}),
   };
   updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, patch));
+  workbench.ui.selectedCanvasNodeId = nodeId;
+  workbench.ui.canvasEditorOpen = true;
+  workbench.ui.canvasRunPreview = null;
+  workbench.ui.openGenerationSelectMenu = null;
+  refreshCanvasGraphFromDocument(workbench);
+}
+
+function applyCanvasAudioGenerationMode(workbench, nodeId, mode) {
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
+  if (!node || !(node.type === "audio" || node.type === "ai-audio" || node.data?.mediaKind === "audio")) return;
+  const normalizedMode = ["text-to-speech", "music", "transcription"].includes(mode) ? mode : "text-to-speech";
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
+    audioGenerationMode: normalizedMode,
+    parameterValues: {
+      ...(node.data?.parameterValues && typeof node.data.parameterValues === "object" ? node.data.parameterValues : {}),
+      mode: normalizedMode,
+    },
+  }));
   workbench.ui.selectedCanvasNodeId = nodeId;
   workbench.ui.canvasEditorOpen = true;
   workbench.ui.canvasRunPreview = null;
@@ -27654,6 +33458,31 @@ function syncPromptFromCurrentScope(workbench) {
   workbench.ui.prompt = getCurrentScopePrompt(workbench, { allowPromptFallback: false });
 }
 
+function clearEpisodeWorkbenchScopeComposer(workbench, scopeMode) {
+  disposeEpisodePromptEditor(workbench);
+  clearEpisodeWorkbenchAttachmentComposer(workbench);
+  workbench.ui.imageGenerationResult = null;
+  workbench.ui.videoGenerationResult = null;
+  workbench.ui.prompt = "";
+  workbench.ui.storyboardPromptClearedContext = null;
+  clearPromptMentionUi(workbench);
+
+  if (scopeMode === "assets") {
+    workbench.ui.assetPromptDraft = {
+      scopeMode: "assets",
+      prompt: "",
+      quickReferenceItems: [],
+      mentionReferences: [],
+      selectionContext: {
+        ...resolveEpisodeAssetSelectionContext(workbench),
+      },
+    };
+    return;
+  }
+
+  clearStoryboardComposerForSelection(workbench, workbench.ui.selectedStoryboardId);
+}
+
 async function hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, scopeMode) {
   if ((workbench.ui.museScopeMode ?? "storyboard") !== scopeMode) {
     return;
@@ -27669,6 +33498,7 @@ async function hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, scopeMode) {
     await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
   } else {
     if ((workbench.ui.episodeMediaMode ?? "image") === "image") {
+      switchStoryboardComposerMediaMode(workbench, "image", "video");
       workbench.ui.episodeMediaMode = "video";
     }
     const episodeId = workbench.ui.selectedEpisodeId;
@@ -27693,6 +33523,7 @@ async function hydrateEpisodeWorkbenchScopeAfterSwitch(workbench, scopeMode) {
     return;
   }
   syncPromptFromCurrentScope(workbench);
+  requestEpisodeWorkbenchConversationScroll(workbench);
   render(workbench);
 }
 
@@ -27708,7 +33539,17 @@ function clearAssetPromptDraftForCurrentSelection(workbench) {
     workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? "",
   ).trim();
   const draftAssetId = String(draft?.selectionContext?.selectedAssetId ?? "").trim();
-  if (!selectedAssetId || draftAssetId === selectedAssetId) {
+  const selectedAssetTab = String(
+    workbench.ui.projectAssetTab ?? resolveEpisodeAssetSelectionContext(workbench).assetTab ?? "",
+  ).trim();
+  const draftAssetTab = String(draft?.selectionContext?.assetTab ?? "").trim();
+  if (
+    !selectedAssetId ||
+    (
+      draftAssetId === selectedAssetId &&
+      (!draftAssetTab || !selectedAssetTab || draftAssetTab === selectedAssetTab)
+    )
+  ) {
     return;
   }
   workbench.ui.assetPromptDraft = {
@@ -27720,6 +33561,9 @@ function clearAssetPromptDraftForCurrentSelection(workbench) {
       ...resolveEpisodeAssetSelectionContext(workbench),
     },
   };
+  clearEpisodeWorkbenchAttachmentComposer(workbench);
+  workbench.ui.prompt = "";
+  clearPromptMentionUi(workbench);
 }
 
 function normalizeStoryboardComposerState(workbench, storyboardId) {
@@ -27766,6 +33610,85 @@ function clearStoryboardComposerForSelection(workbench, storyboardId) {
     audioFilePaths: [],
   }));
   clearEpisodeWorkbenchAttachmentComposer(workbench);
+}
+
+function normalizeStoryboardComposerMediaMode(mediaMode) {
+  return mediaMode === "video" || mediaMode === "lip-sync" ? "video" : "image";
+}
+
+function storyboardMediaComposerDraftKey(storyboardId, mediaMode) {
+  return `${String(storyboardId ?? "").trim()}:${normalizeStoryboardComposerMediaMode(mediaMode)}`;
+}
+
+function switchStoryboardComposerMediaMode(workbench, previousMediaMode, nextMediaMode) {
+  if (isAssetScope(workbench)) {
+    return;
+  }
+  const storyboardId = String(workbench.ui.selectedStoryboardId ?? "").trim();
+  const previousKind = normalizeStoryboardComposerMediaMode(previousMediaMode);
+  const nextKind = normalizeStoryboardComposerMediaMode(nextMediaMode);
+  if (!storyboardId || previousKind === nextKind) {
+    return;
+  }
+  const storyboard = getSelectedStoryboard(
+    getActiveStoryboards(workbench),
+    storyboardId,
+  );
+  const generationState = storyboard?.generationState ?? createEmptyGenerationState();
+  const currentDraft = {
+    prompt: String(getCurrentScopePrompt(workbench, { allowPromptFallback: false }) ?? ""),
+    generationState: {
+      ...generationState,
+      quickReferenceItems: [...(generationState.quickReferenceItems ?? [])],
+      referenceUploads: [...(generationState.referenceUploads ?? [])],
+      localReferenceRoles: [...(generationState.localReferenceRoles ?? [])],
+      referenceSelections: [...(generationState.referenceSelections ?? [])],
+      mentionReferences: [...(generationState.mentionReferences ?? [])],
+    },
+    attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
+    selectedAttachmentIds: [...(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [])],
+    lipSyncAudioItems: [...(workbench.ui.lipSyncAudioItems ?? [])],
+  };
+  const draftMap = {
+    ...(workbench.ui.storyboardMediaComposerDrafts ?? {}),
+    [storyboardMediaComposerDraftKey(storyboardId, previousKind)]: currentDraft,
+  };
+  const nextDraft = draftMap[storyboardMediaComposerDraftKey(storyboardId, nextKind)] ?? null;
+  const nextPrompt = String(
+    nextDraft?.prompt ??
+      (nextKind === "video"
+        ? generationState.videoPrompt ?? resolveEpisodeStoryboardVideoPrompt(storyboard)
+        : generationState.imagePrompt ?? resolveEpisodeStoryboardImagePrompt(storyboard) ?? ""),
+  );
+  const restoredState = nextDraft?.generationState
+    ? {
+        ...nextDraft.generationState,
+        prompt: nextPrompt,
+      }
+    : {
+        ...createEmptyGenerationState(),
+        prompt: nextPrompt,
+        ...(nextKind === "video"
+          ? { videoPrompt: nextPrompt }
+          : { imagePrompt: nextPrompt }),
+      };
+  updateStoryboardGenerationState(workbench, storyboardId, () => restoredState);
+  workbench.ui.storyboardMediaComposerDrafts = draftMap;
+  workbench.ui.prompt = nextPrompt;
+  workbench.ui.episodeWorkbenchAttachments = nextDraft?.attachmentItems ?? [];
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = nextDraft?.selectedAttachmentIds ?? [];
+  workbench.ui.lipSyncAudioItems = nextDraft?.lipSyncAudioItems ?? [];
+}
+
+function clearStoredStoryboardComposerDraft(workbench, storyboardId, mediaMode) {
+  const key = storyboardMediaComposerDraftKey(storyboardId, mediaMode);
+  const drafts = workbench.ui.storyboardMediaComposerDrafts ?? {};
+  if (!Object.prototype.hasOwnProperty.call(drafts, key)) {
+    return;
+  }
+  const nextDrafts = { ...drafts };
+  delete nextDrafts[key];
+  workbench.ui.storyboardMediaComposerDrafts = nextDrafts;
 }
 
 function clearStoryboardBoardModeComposer(workbench) {
@@ -28294,18 +34217,51 @@ export function buildImageGenerationPayload(workbench) {
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
   const explicitImageSize = hasExplicitImageSizeParameter(configuredParameters);
+  const isStoryboardGenerator = workbench.ui.assetGeneratorTarget === "storyboard";
+  const selectedImageStyle = isStoryboardGenerator
+    ? resolveAssetImageStyleSkillId(workbench) === "project-style"
+      ? resolveStoryboardGeneratorStyle(workbench)
+      : resolveSelectedImageStyle(workbench)
+    : resolveSelectedImageStyle(workbench);
+  const selectedImageStyleReference = buildImageStyleGenerationReference(selectedImageStyle);
+  const generationStateWithImageStyle = selectedImageStyleReference
+    ? {
+        ...generationState,
+        quickReferenceItems: [
+          ...(Array.isArray(generationState.quickReferenceItems) ? generationState.quickReferenceItems : []),
+          selectedImageStyleReference,
+        ],
+      }
+    : generationState;
+  const normalizedPrompt = normalizePromptByImageReferenceOrder(
+    workbench,
+    getCurrentScopePrompt(workbench) || selectedStoryboard?.description || "",
+    generationStateWithImageStyle,
+  );
   const orderedReferences = filterLegacyStoryboardTextQuickReferences(
     enrichGenerationReferenceNamesFromAssets(
       workbench,
-      collectOrderedGenerationReferenceItems(workbench, generationState),
+      collectOrderedGenerationReferenceItems(workbench, generationStateWithImageStyle),
     ),
   );
   const orderedImageReferences = filterOrderedGenerationReferences(orderedReferences, "image");
+  const styleReferenceIndex = orderedImageReferences.findIndex((item) => isAutomaticImageStyleReference(item));
+  const promptOverride = appendImageGenerationStylePrompt(
+    normalizedPrompt,
+    selectedImageStyle,
+    styleReferenceIndex >= 0 ? `图${styleReferenceIndex + 1}` : "",
+  ) ?? normalizedPrompt;
   const orderedImageFilePaths = orderedImageReferences.map(resolveGenerationReferenceUrl).filter(Boolean);
-  const quickReferenceItems = filterLegacyStoryboardTextQuickReferences(generationState.quickReferenceItems);
+  const quickReferenceItems = filterLegacyStoryboardTextQuickReferences(generationStateWithImageStyle.quickReferenceItems)
+    .filter((item) => resolveGenerationReferenceMediaKind(item) === "image");
+  const selectedImageStyleSkillId = resolveAssetImageStyleSkillId(workbench);
+  const selectedStoryboardPromptSkillId = String(workbench.ui.selectedStoryboardPromptSkillId ?? "").trim();
+  const selectedGenerationSkillId = workbench.ui.assetGeneratorTarget === "storyboard"
+    ? selectedStoryboardPromptSkillId
+    : selectedImageStyleSkillId;
   return {
     shotId: selectedStoryboard?.linkedShotId ?? null,
-    promptOverride: getCurrentScopePrompt(workbench) || selectedStoryboard?.description || null,
+    promptOverride: promptOverride || null,
     model,
     parameters: {
       ...configuredParameters,
@@ -28329,6 +34285,22 @@ export function buildImageGenerationPayload(workbench) {
       localReferenceRoles: generationState.localReferenceRoles ?? [],
       selectionContext,
     },
+    ...(selectedImageStyleSkillId === "project-style" &&
+      (selectedImageStyle?.code || selectedImageStyle?.id)
+      ? { imageStyleCode: String(selectedImageStyle.code ?? selectedImageStyle.id).trim() }
+      : {}),
+    ...(isStoryboardGenerator && selectedImageStyleSkillId !== "project-style"
+      ? { imageStyleSkillId: selectedImageStyleSkillId }
+      : {}),
+    ...(isStoryboardGenerator && String(workbench.ui.assetGeneratorStoryboardPrompt ?? "").trim()
+      ? { storyboardPrompt: String(workbench.ui.assetGeneratorStoryboardPrompt).trim() }
+      : {}),
+    ...(selectedGenerationSkillId && selectedGenerationSkillId !== "project-style"
+      ? {
+          skillId: selectedGenerationSkillId,
+          sourceSurface: isAssetScope ? "episode_asset_image" : "episode_storyboard_image",
+        }
+      : {}),
   };
 }
 
@@ -29250,15 +35222,21 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
     selectedAsset?.publicUrl ??
     selectedAsset?.src ??
     null;
-  const selectedAssetPrompt = String(selectedAssetDescription ?? "").trim();
+  const selectedAssetPrompt = stripAutomaticImageStylePromptForWorkbench(
+    workbench,
+    selectedAssetDescription,
+    collectAssetGeneratorPromptReferences(selectedAsset),
+  );
   if (!selectedAssetPrompt) {
     return { ok: false, reason: "missing-asset-prompt", toast: "当前没有可引用素材。" };
   }
-  const selectedGenerationStyle = resolveEpisodeGenerationStyle(workbench);
+  const selectedGenerationStyle = isAssetScope(workbench)
+    ? null
+    : resolveEpisodeGenerationStyle(workbench);
   const selectedStylePreview = String(selectedGenerationStyle?.coverImageUrl ?? "").trim();
   const styleReferenceName = selectedStylePreview ? "图片风格参考图" : "";
   const nextPrompt = isAssetScope(workbench)
-    ? appendImageGenerationStylePrompt(selectedAssetPrompt, selectedGenerationStyle, styleReferenceName)
+    ? selectedAssetPrompt
     : appendGenerationStylePrompt(selectedAssetPrompt, selectedGenerationStyle);
   const selectedStoryboard = isAssetScope(workbench)
     ? null
@@ -29441,12 +35419,13 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
       ? activeStoryboardContext?.description || resolveStoryboardQuickReferencePrompt(selectedStoryboard)
       : resolveStoryboardQuickReferencePrompt(selectedStoryboard);
   const storyboardOnly = workbench.ui.museBoardMode === "storyboard";
-  const isVideoPrompt = workbench.ui.episodeMediaMode === "video" || workbench.ui.episodeMediaMode === "lip-sync";
   const composerPrompt = storyboardOnly
     ? buildStoryboardImportPrompt(workbench, promptText)
-    : isVideoPrompt
-      ? appendStoryboardVideoStylePrompt(workbench, promptText)
-      : promptText;
+    : promptText
+        .split(/\r?\n/u)
+        .filter((line) => !/^\s*视频风格：/u.test(line))
+        .join("\n")
+        .trim();
   if (!promptText) {
     return { ok: false, reason: "missing-storyboard-prompt" };
   }
@@ -29558,7 +35537,11 @@ function buildStoryboardImportPrompt(workbench, prompt) {
     "请完美还原图一中故事板(分镜剧情)的剧情并确保人物/场景/道具的一致性，下方脚本是这个故事板的补充!视频中不得出现任何字幕与文字!(文字透明度调整为百分之0)",
     String(prompt ?? "").trim(),
   ].filter(Boolean).join("\n");
-  return appendStoryboardVideoStylePrompt(workbench, content);
+  return content
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*视频风格：/u.test(line))
+    .join("\n")
+    .trim();
 }
 
 function appendStoryboardVideoStylePrompt(workbench, prompt, fallbackStylePrompt = "") {
@@ -29654,7 +35637,7 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
   const additionalReferences = Array.isArray(options.additionalReferences)
     ? options.additionalReferences.filter(Boolean)
     : [];
-  const mergedStoryboardReferences = dedupeQuickReferenceItems(
+  const mergedStoryboardReferences = dedupeStoryboardGeneratorReferenceItems(
     [...storyboardReferences, ...domStoryboardReferences, ...additionalReferences].map((item, index) => ({
       id: item?.id ?? item?.assetId ?? `storyboard-ref-${index + 1}`,
       assetId: item?.assetId ?? item?.id ?? null,
@@ -29686,8 +35669,12 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
   if (mergedStoryboardReferences.length) {
     return mergedStoryboardReferences.map((item, index) => {
       const matchingAudio = mentionAudioMap.get(String(item?.name ?? item?.assetName ?? "").trim()) ?? null;
+      const itemIdentity = String(item?.id ?? "").trim();
+      const duplicateIdentity = itemIdentity && mergedStoryboardReferences.some((reference, referenceIndex) => (
+        referenceIndex !== index && String(reference?.id ?? "").trim() === itemIdentity
+      ));
       return {
-        id: `quick-ref:storyboard-image:${storyboard.id}:${item?.id ?? index + 1}`,
+        id: `quick-ref:storyboard-image:${storyboard.id}:${itemIdentity || index + 1}${duplicateIdentity ? `:${index + 1}` : ""}`,
         assetId: item?.assetId ?? item?.id ?? `${storyboard.id}:ref:${index + 1}`,
         sourceStoryboardId: storyboard.id,
         kind: "image",
@@ -29717,20 +35704,42 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
 }
 
 function normalizeStoryboardGeneratorImageReferences(items = []) {
-  return dedupeQuickReferenceItems(items)
-    .filter((item) => resolveGenerationReferenceUrl(item) && resolveGenerationReferenceMediaKind(item) === "image")
-    .map((item, index) => {
-      const name = `图${index + 1}`;
-      return {
-        ...item,
-        kind: "image",
-        type: "image",
-        originalName: item?.originalName ?? item?.assetName ?? item?.name ?? "",
-        name,
-        token: `【@${name}】`,
-        composerOrder: index + 1,
-      };
-    });
+  const references = dedupeStoryboardGeneratorReferenceItems(items)
+    .filter((item) => resolveGenerationReferenceUrl(item) && resolveGenerationReferenceMediaKind(item) === "image");
+  const idCounts = new Map();
+  references.forEach((item) => {
+    const id = String(item?.id ?? item?.assetId ?? "storyboard-generator-reference").trim();
+    idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
+  });
+  return references.map((item, index) => {
+    const name = `图${index + 1}`;
+    const sourceId = String(item?.id ?? item?.assetId ?? "storyboard-generator-reference").trim();
+    const id = (idCounts.get(sourceId) ?? 0) > 1 ? `${sourceId}:${index + 1}` : sourceId;
+    return {
+      ...item,
+      id,
+      kind: "image",
+      type: "image",
+      originalName: item?.originalName ?? item?.assetName ?? item?.name ?? "",
+      name,
+      token: `【@${name}】`,
+      composerOrder: index + 1,
+    };
+  });
+}
+
+function dedupeStoryboardGeneratorReferenceItems(items = []) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const url = normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl(item));
+    const id = String(item?.id ?? item?.assetId ?? item?.assetVersionId ?? item?.storageObjectId ?? "").trim();
+    const key = url ? `url:${url}` : id ? `id:${id}` : "";
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function normalizeStoryboardGeneratorPrompt(prompt, references = []) {
@@ -29743,6 +35752,18 @@ function normalizeStoryboardGeneratorPrompt(prompt, references = []) {
       return imageMatch && imageIndex >= 1 && imageIndex <= references.length ? matched : "";
     },
   );
+}
+
+function prependStoryboardGeneratorPrompt(storyboardPrompt, content) {
+  const prefix = String(storyboardPrompt ?? "").trim();
+  const body = String(content ?? "").trim();
+  if (!prefix) {
+    return body;
+  }
+  if (!body || body === prefix || body.startsWith(`${prefix}\n`)) {
+    return body || prefix;
+  }
+  return `${prefix}\n${body}`;
 }
 
 function reindexStoryboardGeneratorPromptReferences(prompt, previousReferences = [], nextReferences = []) {
@@ -29770,6 +35791,9 @@ function reindexStoryboardGeneratorPromptReferences(prompt, previousReferences =
 }
 
 function appendStoryboardMentionAudioAttachments(workbench, description) {
+  if (!isEpisodeAudioComposerMode(workbench)) {
+    return;
+  }
   const nextAudioItems = buildStoryboardMentionAudioAttachments(workbench, description);
   if (!nextAudioItems.length) {
     return;
@@ -29846,6 +35870,7 @@ function clearStoryboardGenerationComposerAfterSubmit(workbench, storyboardId, l
   if (!storyboardId) {
     return;
   }
+  clearStoredStoryboardComposerDraft(workbench, storyboardId, workbench.ui.episodeMediaMode ?? "image");
   updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
     ...createEmptyGenerationState(),
     lastSubmission: lastSubmission ?? generationState?.lastSubmission ?? null,
@@ -30146,6 +36171,7 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
     : [];
   const videoPayload = isVideo ? buildVideoGenerationPayload(workbench) : null;
   const imagePayload = !isVideo ? buildImageGenerationPayload(workbench) : null;
+  const submissionPrompt = imagePayload?.promptOverride || scopePrompt || storyboard?.description || "";
   const selectedModelId = isVideo
     ? videoPayload?.model ?? workbench.ui.selectedModelId ?? null
     : imagePayload?.model ?? workbench.ui.selectedModelId ?? null;
@@ -30159,14 +36185,22 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
       : {};
   const selectedVideoModel = isVideo ? findConfiguredGenerationModel(workbench, selectedModelId) : null;
   const selectedImageModel = !isVideo ? findConfiguredGenerationModel(workbench, selectedModelId) : null;
+  const selectedModel = selectedVideoModel ?? selectedImageModel;
+  const selectedImageStyle = workbench.ui.assetGeneratorTarget === "storyboard"
+    ? resolveStoryboardGeneratorStyle(workbench)
+    : resolveSelectedImageStyle(workbench);
+  const submissionQuickReferenceItems = dedupeConversationMediaItems(
+    Array.isArray(generationState.quickReferenceItems) ? generationState.quickReferenceItems : [],
+  );
   const imageResolutionFallback = workbench.ui.imageResolution ?? selectedImageModel?.defaultParams?.quality ?? selectedImageModel?.defaultParams?.resolution;
   const imageAspectRatioFallback = selectedImageModel?.defaultParams?.aspectRatio;
   return {
     mediaKind,
     storyboardId: storyboard?.id ?? null,
     shotId: storyboard?.linkedShotId ?? null,
-    promptPreview: scopePrompt || storyboard?.description || "",
-    quickReferenceItems: [...(generationState.quickReferenceItems ?? [])],
+    promptPreview: submissionPrompt,
+    skillId: imagePayload?.skillId ?? null,
+    quickReferenceItems: submissionQuickReferenceItems,
     attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
     firstFrame: generationState.firstFrame ?? null,
     lastFrame: generationState.lastFrame ?? null,
@@ -30176,6 +36210,8 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
     editSourceVideo: generationState.editSourceVideo ?? null,
     selectionContext: resolveEpisodeAssetSelectionContext(workbench),
     selectedModelId,
+    modelLabel: selectedModel?.modelLabel ?? selectedModel?.name ?? selectedModel?.label ?? null,
+    styleLabel: selectedImageStyle?.label ?? selectedImageStyle?.name ?? selectedImageStyle?.title ?? null,
     resolution: isVideo
       ? resolveGenerationDisplayResolution(videoParameters, null) || null
       : resolveGenerationDisplayResolution(
@@ -30228,20 +36264,34 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
       : (workbench.ui.selectedModelId ?? null);
   const scopePrompt = String(getCurrentScopePrompt(workbench) ?? "");
   const imagePayload = mediaKind === "image" ? buildImageGenerationPayload(workbench) : null;
+  const submissionPrompt = imagePayload?.promptOverride || scopePrompt || asset?.description || "";
   const imageParameters =
     imagePayload?.parameters && typeof imagePayload.parameters === "object"
       ? imagePayload.parameters
       : {};
   const selectedImageModel =
     mediaKind === "image" ? findConfiguredGenerationModel(workbench, selectedModelId) : null;
+  const selectedImageStyle = mediaKind === "image" ? resolveSelectedImageStyle(workbench) : null;
+  const selectedImageStyleReference = buildImageStyleGenerationReference(selectedImageStyle);
+  const quickReferenceItems = [...(workbench.ui.assetPromptDraft?.quickReferenceItems ?? [])];
+  if (
+    selectedImageStyleReference &&
+    !quickReferenceItems.some((item) => (
+      item?.isGenerationStyleReference === true ||
+      String(item?.id ?? "") === selectedImageStyleReference.id
+    ))
+  ) {
+    quickReferenceItems.push(selectedImageStyleReference);
+  }
   const imageResolutionFallback = workbench.ui.imageResolution ?? selectedImageModel?.defaultParams?.quality ?? selectedImageModel?.defaultParams?.resolution;
   const imageAspectRatioFallback = selectedImageModel?.defaultParams?.aspectRatio;
   return {
     turnId: createAssetConversationTurnId(),
     mediaKind,
     assetId: asset?.id ?? null,
-    promptPreview: scopePrompt || asset?.description || "",
-    quickReferenceItems: [...(workbench.ui.assetPromptDraft?.quickReferenceItems ?? [])],
+    promptPreview: submissionPrompt,
+    skillId: imagePayload?.skillId ?? null,
+    quickReferenceItems,
     attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
     selectionContext: {
       ...selectionContext,
@@ -30253,6 +36303,7 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
         asset?.previewUrl ?? asset?.preview ?? asset?.sourceUrl ?? selectionContext.selectedAssetPreview,
     },
     selectedModelId,
+    styleLabel: selectedImageStyle?.label ?? selectedImageStyle?.name ?? selectedImageStyle?.title ?? null,
     resolution: resolveGenerationDisplayResolution(
       imageParameters,
       imageResolutionFallback,
@@ -30274,6 +36325,36 @@ function buildAssetConversationHistoryKey(assetId, mediaKind = "image") {
   return `${mediaKind}:${assetId ?? ""}`;
 }
 
+function enrichGenerationConversationStyleMetadata(workbench, entry, mediaKind = "image") {
+  if (!entry || mediaKind !== "image") {
+    return entry;
+  }
+  const skillId = String(entry?.skillId ?? "").trim();
+  const style = [
+    ...(Array.isArray(workbench.ui.episodeBatchOfficialImageStyleSkills) ? workbench.ui.episodeBatchOfficialImageStyleSkills : []),
+    ...(Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills) ? workbench.ui.episodeBatchPrivateImageStyleSkills : []),
+  ].find((item) => String(item?.id ?? "").trim() === skillId);
+  if (!style) {
+    return entry;
+  }
+  const styleReference = buildImageStyleGenerationReference(style);
+  const quickReferenceItems = [...(Array.isArray(entry?.quickReferenceItems) ? entry.quickReferenceItems : [])];
+  if (
+    styleReference &&
+    !quickReferenceItems.some((item) => (
+      item?.isGenerationStyleReference === true ||
+      String(item?.id ?? "") === styleReference.id
+    ))
+  ) {
+    quickReferenceItems.push(styleReference);
+  }
+  return {
+    ...entry,
+    styleLabel: entry?.styleLabel ?? style?.label ?? style?.name ?? style?.title ?? null,
+    quickReferenceItems,
+  };
+}
+
 function listAssetConversationHistoryEntries(workbench, assetId, mediaKind = "image") {
   const key = buildAssetConversationHistoryKey(assetId, mediaKind);
   const history = workbench.ui.assetConversationHistory ?? {};
@@ -30285,12 +36366,42 @@ function replaceAssetConversationHistoryEntries(workbench, assetId, entries, med
     return [];
   }
   const key = buildAssetConversationHistoryKey(assetId, mediaKind);
-  const nextEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  const nextEntries = Array.isArray(entries)
+    ? entries.filter(Boolean).map((entry) => enrichGenerationConversationStyleMetadata(workbench, entry, mediaKind))
+    : [];
   workbench.ui.assetConversationHistory = {
     ...(workbench.ui.assetConversationHistory ?? {}),
     [key]: nextEntries,
   };
   return nextEntries;
+}
+
+function mergeAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind = "image") {
+  const mergedEntries = [];
+  const appendOrMerge = (entry) => {
+    if (!entry) {
+      return;
+    }
+    const taskId = String(entry?.taskId ?? "").trim();
+    const turnId = String(entry?.turnId ?? "").trim();
+    const matchIndex = mergedEntries.findIndex((item) => {
+      const itemTaskId = String(item?.taskId ?? "").trim();
+      const itemTurnId = String(item?.turnId ?? "").trim();
+      return (taskId && itemTaskId === taskId) || (turnId && itemTurnId === turnId);
+    });
+    if (matchIndex >= 0) {
+      mergedEntries[matchIndex] = { ...mergedEntries[matchIndex], ...entry };
+      return;
+    }
+    mergedEntries.push(entry);
+  };
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    appendOrMerge(entry);
+  }
+  for (const entry of listAssetConversationHistoryEntries(workbench, assetId, mediaKind)) {
+    appendOrMerge(entry);
+  }
+  return mergedEntries;
 }
 
 function appendAssetConversationHistoryEntry(workbench, entry) {
@@ -30513,6 +36624,7 @@ function replaceStoryboardConversationHistoryEntries(workbench, storyboardId, en
   const key = buildStoryboardConversationHistoryKey(storyboardId, mediaKind);
   const nextEntries = (Array.isArray(entries) ? entries : [])
     .map((entry) => normalizeStoryboardConversationEntryForTarget(workbench, entry, storyboardId, mediaKind))
+    .map((entry) => enrichGenerationConversationStyleMetadata(workbench, entry, mediaKind))
     .filter((entry) => entry && (mediaKind !== "image" || !isStoryboardGeneratorTaskResult(entry)));
   workbench.ui.storyboardConversationHistory = {
     ...(workbench.ui.storyboardConversationHistory ?? {}),
@@ -30972,6 +37084,62 @@ function applyStoryboardConversationEditDraft(workbench, result, selectedStorybo
   }
 }
 
+function applyAssetConversationEditDraft(workbench, result) {
+  if (!result) {
+    return;
+  }
+  const conversationReferences = [
+    ...collectConversationEditItems(result, "quickReferenceItems"),
+    ...collectConversationEditItems(result, "attachmentItems"),
+    ...collectConversationEditItems(result, "referenceUploads"),
+  ];
+  const annotatedConversationReferences = annotateAutomaticImageStyleReferences(
+    workbench,
+    result?.promptPreview ?? "",
+    conversationReferences,
+  );
+  const automaticStyleReferences = annotatedConversationReferences.filter(isAutomaticImageStyleReference);
+  const isRestoredAutomaticStyleReference = (item) => (
+    isAutomaticImageStyleReference(item) ||
+    automaticStyleReferences.some((reference) => areConversationItemsSameMedia(reference, item))
+  );
+  const promptPreview = stripAutomaticImageStylePrompt(
+    result?.promptPreview ?? "",
+    annotatedConversationReferences,
+  );
+  const quickReferenceItems = hydrateQuickReferencePreviews(
+    workbench,
+    dedupeConversationMediaItems(collectConversationEditItems(result, "quickReferenceItems")),
+  );
+  const restoredMedia = mergeConversationMediaCollections(
+    quickReferenceItems,
+    dedupeConversationMediaItems(extractConversationEditAttachmentItems(result)),
+  );
+  const selectionContext =
+    result?.selectionContext && typeof result.selectionContext === "object"
+      ? result.selectionContext
+      : (workbench.ui.assetPromptDraft?.selectionContext ?? {});
+  const attachmentItems = restoredMedia.secondaryItems.filter(
+    (item) => !isRestoredAutomaticStyleReference(item),
+  );
+  workbench.ui.episodeWorkbenchAttachments = attachmentItems;
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = attachmentItems
+    .map((item) => item?.id)
+    .filter(Boolean);
+  workbench.ui.assetPromptDraft = {
+    ...(workbench.ui.assetPromptDraft ?? {}),
+    scopeMode: "assets",
+    prompt: promptPreview,
+    quickReferenceItems: restoredMedia.primaryItems.filter((item) => !isRestoredAutomaticStyleReference(item)),
+    mentionReferences: [],
+    selectionContext,
+  };
+  setCurrentScopePrompt(
+    workbench,
+    normalizePromptByImageReferenceOrder(workbench, promptPreview, workbench.ui.assetPromptDraft),
+  );
+}
+
 function buildStoryboardConversationPayload(entry, messageType) {
   const payload = buildAssetConversationPayload(entry, messageType);
   const payloadAttachmentItems = payload.attachmentItems ?? [];
@@ -31146,13 +37314,16 @@ function buildAssetConversationPayload(entry, messageType) {
         ? entry.selectionContext
         : {},
     turnId: String(entry?.turnId ?? "").trim() || null,
-    selectedModelId: entry?.selectedModelId ?? null,
     aspectRatio: entry?.aspectRatio ?? null,
     resolution: entry?.resolution ?? null,
     creditCost: entry?.creditCost ?? null,
     createdAt: entry?.createdAt ?? null,
+    returnedAt: entry?.returnedAt ?? entry?.completedAt ?? null,
     taskId: entry?.taskId ?? null,
     status: entry?.status ?? null,
+    modelLabel: entry?.modelLabel ?? entry?.modelName ?? null,
+    styleLabel: entry?.styleLabel ?? entry?.styleName ?? null,
+    skillId: entry?.skillId ?? null,
     failureCode: entry?.failureCode ?? entry?.failure?.failureCode ?? null,
     failure:
       entry?.failure && typeof entry.failure === "object"
@@ -31367,7 +37538,12 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     );
     const entries = Array.isArray(response?.entries) ? response.entries : [];
     const localEntry = resolvePreferredAssetConversationLocalEntry(workbench, assetId, mediaKind);
-    replaceAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind);
+    replaceAssetConversationHistoryEntries(
+      workbench,
+      assetId,
+      mergeAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind),
+      mediaKind,
+    );
     if (localEntry) {
       appendAssetConversationHistoryEntry(workbench, localEntry);
     }
@@ -31483,8 +37659,35 @@ function buildEpisodeBatchModal(workbench, {
   items = [],
   storyboardBoardMode = false,
 } = {}) {
-  const publicStyles = resolveEpisodeBatchPublicStyles(workbench);
-  const activeStyle = resolveEpisodeGenerationStyle(workbench);
+  const projectStyles = resolveEpisodeBatchPublicStyles(workbench);
+  const projectStyle = resolveEpisodeGenerationStyle(workbench);
+  const projectStyleOption = projectStyle
+    ? {
+        id: String(projectStyle.code ?? projectStyle.id ?? "").trim(),
+        label: String(projectStyle.name ?? projectStyle.label ?? "").trim(),
+        preview: String(projectStyle.coverImageUrl ?? projectStyle.cover_image_url ?? "").trim(),
+        prompt_content: String(projectStyle.prompt_content ?? projectStyle.promptContent ?? "").trim(),
+        promptContent: String(projectStyle.promptContent ?? projectStyle.prompt_content ?? "").trim(),
+        isProjectStyle: true,
+        priceCredits: 0,
+      }
+    : null;
+  const officialImageStyleSkills = Array.isArray(workbench.ui.episodeBatchOfficialImageStyleSkills)
+    ? workbench.ui.episodeBatchOfficialImageStyleSkills
+    : [];
+  const privateImageStyleSkills = Array.isArray(workbench.ui.episodeBatchPrivateImageStyleSkills)
+    ? workbench.ui.episodeBatchPrivateImageStyleSkills
+    : [];
+  const selectedImageStyleSkillId = resolveAssetImageStyleSkillId(workbench);
+  const selectedImageStyleSkill = [...officialImageStyleSkills, ...privateImageStyleSkills]
+    .find((item) => item.id === selectedImageStyleSkillId) ?? null;
+  const publicStyles = mode === "image"
+    ? [
+        ...(projectStyleOption ? [projectStyleOption] : []),
+        ...officialImageStyleSkills.filter((style) => style.id !== projectStyleOption?.id),
+      ]
+    : projectStyles;
+  const customStyles = mode === "image" ? privateImageStyleSkills : [];
   const imageModelOptions = resolveEpisodeBatchImageModelOptions(workbench);
   const batchPromptPresetCategories = resolveBatchPromptPresetCategories(workbench);
   const defaultImageModelId = resolveEpisodeBatchImageModelId(workbench, imageModelOptions);
@@ -31506,10 +37709,13 @@ function buildEpisodeBatchModal(workbench, {
       ? String(workbench.ui.imageAspectRatio ?? resolveEpisodeBatchVideoModelRatio(defaultVideoModel) ?? "")
       : resolveEpisodeBatchModelRatio(defaultImageModel) ?? "",
     imageClarity: resolveEpisodeBatchModelClarity(defaultImageModel) ?? "2K",
-    styleTab: "public",
+    styleTab: selectedImageStyleSkill?.source === "private" ? "custom" : "public",
+    projectStyle: projectStyleOption,
     publicStyles,
-    customStyles: [],
-    selectedStyleId: String(activeStyle?.id ?? activeStyle?.code ?? publicStyles[0]?.id ?? ""),
+    customStyles,
+    selectedStyleId: mode === "image"
+      ? String(selectedImageStyleSkill?.id ?? projectStyleOption?.id ?? publicStyles[0]?.id ?? customStyles[0]?.id ?? "")
+      : String(resolveEpisodeGenerationStyle(workbench)?.id ?? resolveEpisodeGenerationStyle(workbench)?.code ?? publicStyles[0]?.id ?? ""),
     batchPromptPresetCategories,
     videoModelId: defaultVideoModelId,
     videoModelOptions,
@@ -31664,10 +37870,16 @@ function resolveEpisodeBatchUnitCredit(modal) {
       return String(option?.value ?? option?.id ?? "").trim() === selectedModelId;
     }),
   );
+  const selectedSkillId = String(modal?.selectedStyleId ?? "").trim();
+  const selectedSkill = [
+    ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
+    ...(Array.isArray(modal?.customStyles) ? modal.customStyles : []),
+  ].find((item) => String(item?.id ?? "").trim() === selectedSkillId);
+  const skillCredit = Math.max(0, Math.round(Number(selectedSkill?.priceCredits) || 0));
   if (Number.isFinite(configuredCredit) && configuredCredit > 0) {
-    return configuredCredit;
+    return configuredCredit + skillCredit;
   }
-  return resolveEpisodeBatchFallbackUnitCredit(modal);
+  return resolveEpisodeBatchFallbackUnitCredit(modal) + skillCredit;
 }
 
 function resolveEpisodeBatchModelRatio(model) {
@@ -32049,29 +38261,29 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
   const selectedModelConfig = findConfiguredGenerationModel(workbench, selectedModelCode);
   const imageResolutionFallback = modal?.imageClarity ?? selectedModelConfig?.defaultParams?.quality ?? selectedModelConfig?.defaultParams?.resolution;
   const imageAspectRatioFallback = selectedModelConfig?.defaultParams?.aspectRatio;
-  const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, modal?.selectedStyleId, modal);
-  const selectedStylePreview = String(selectedStyle?.coverImageUrl ?? selectedStyle?.preview ?? "").trim();
-  const styleReference = selectedStylePreview
-    ? {
-        id: `batch-style-reference:${selectedStyle?.code ?? selectedStyle?.id ?? modal?.selectedStyleId ?? "selected"}`,
-        kind: "image",
-        type: "image",
-        name: String(selectedStyle?.name ?? selectedStyle?.label ?? "官方样式").trim() || "官方样式",
-        isGenerationStyleReference: true,
-        preview: resolveApiUrl(selectedStylePreview),
-        url: resolveApiUrl(selectedStylePreview),
-        src: resolveApiUrl(selectedStylePreview),
-      }
-    : null;
+  const selectedSkillId = String(modal?.selectedStyleId ?? "").trim();
+  const selectedSkill = [
+    ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
+    ...(Array.isArray(modal?.customStyles) ? modal.customStyles : []),
+  ].find((item) => (
+    !item?.isProjectStyle &&
+    String(item?.id ?? "").trim() === selectedSkillId &&
+    Object.prototype.hasOwnProperty.call(item, "priceCredits")
+  ));
+  const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, selectedSkillId, modal);
+  const batchPromptPreview = normalizeEpisodeBatchImagePrompt(promptPreview, []);
   return {
     turnId: createAssetConversationTurnId(),
     mediaKind: "image",
     assetId: item?.id ?? null,
-    promptPreview,
-    quickReferenceItems: styleReference ? [styleReference] : [],
+    promptPreview: batchPromptPreview,
+    quickReferenceItems: [],
     attachmentItems: [],
     selectionContext,
     selectedModelId: modal?.imageModelId ?? "gpt-image-2-cn",
+    modelLabel: selectedModel?.label ?? selectedModel?.modelLabel ?? selectedModelCode,
+    skillId: selectedSkill ? selectedSkillId : null,
+    styleLabel: selectedStyle?.label ?? selectedStyle?.name ?? selectedStyle?.title ?? null,
     resolution: resolveGenerationDisplayResolution(configuredParameters, imageResolutionFallback) || null,
     aspectRatio: resolveGenerationDisplayAspectRatio(
       configuredParameters,
@@ -32083,6 +38295,21 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
   };
 }
 
+function normalizeEpisodeBatchImagePrompt(prompt, imageReferences = []) {
+  const text = String(prompt ?? "");
+  if (!text || !Array.isArray(imageReferences) || !imageReferences.length) {
+    return text;
+  }
+  const referenceIndexByName = buildImageReferenceIndexByAssetName(imageReferences);
+  if (!referenceIndexByName.size) {
+    return text;
+  }
+  return text.replace(/【@([^】]+)】/gu, (matched, rawName) => {
+    const referenceIndex = referenceIndexByName.get(normalizeAssetReferenceLookupName(rawName));
+    return referenceIndex ? `【@图${referenceIndex}】` : matched;
+  });
+}
+
 function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission) {
   const model = String(modal?.imageModelId ?? "gpt-image-2-cn").trim() || "gpt-image-2-cn";
   const configuredParameters = filterExplicitImageSizeParameters(configuredGenerationParametersForModel(workbench, model));
@@ -32090,11 +38317,22 @@ function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, su
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");
   const explicitImageSize = hasExplicitImageSizeParameter(configuredParameters);
-  const quickReferences = Array.isArray(submission?.quickReferenceItems) ? submission.quickReferenceItems : [];
+  const selectedStyle = resolveEpisodeBatchSelectedStyle(workbench, modal?.selectedStyleId, modal);
+  const selectedStyleReference = buildImageStyleGenerationReference(selectedStyle);
+  const quickReferences = [
+    ...(Array.isArray(submission?.quickReferenceItems) ? submission.quickReferenceItems : []),
+    ...(selectedStyleReference ? [selectedStyleReference] : []),
+  ].sort(compareComposerReferenceOrder);
+  const styleReferenceIndex = quickReferences.findIndex((reference) => isAutomaticImageStyleReference(reference));
+  const promptOverride = appendImageGenerationStylePrompt(
+    submission?.promptPreview ?? "",
+    selectedStyle,
+    styleReferenceIndex >= 0 ? `图${styleReferenceIndex + 1}` : "",
+  ) ?? submission?.promptPreview ?? "";
   const filePaths = quickReferences.map(resolveGenerationReferenceUrl).filter(Boolean);
   return {
     shotId: null,
-    promptOverride: submission?.promptPreview ?? "",
+    promptOverride,
     model,
     parameters: {
       ...configuredParameters,
@@ -32122,7 +38360,12 @@ function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, su
     targetId: item?.id ?? null,
     assetId: item?.id ?? null,
     assetType: assetKind,
-    prompt: submission?.promptPreview ?? "",
+    prompt: promptOverride,
+    skillId: submission?.skillId ?? null,
+    ...(!submission?.skillId && (selectedStyle?.code || selectedStyle?.id)
+      ? { imageStyleCode: String(selectedStyle.code ?? selectedStyle.id).trim() }
+      : {}),
+    sourceSurface: "episode_batch_image",
   };
 }
 
@@ -32944,7 +39187,9 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   if (options.force !== true && workbench.taskCenterAppliedVersions?.get(taskId) === version) {
     return false;
   }
-  const mediaKind = task?.kind === "video" || task?.mediaKind === "video" ? "video" : "image";
+  const mediaKind = task?.kind === "audio" || task?.mediaKind === "audio"
+    ? "audio"
+    : task?.kind === "video" || task?.mediaKind === "video" ? "video" : "image";
   let applied = false;
 
   const canvasTargets = resolveCanvasGenerationPollTargets(workbench).filter((target) => target.taskId === taskId);
@@ -33383,7 +39628,7 @@ function resumeCanvasGenerationPollingIfNeeded(workbench) {
 }
 
 function isCanvasGenerationPollingVisible(workbench) {
-  return workbench?.ui?.activeNavTab === "tools" && workbench?.ui?.canvasProjectView === "detail";
+  return isCanvasNavTab(workbench?.ui?.activeNavTab) && workbench?.ui?.canvasProjectView === "detail";
 }
 
 function resolveCanvasGenerationPollTargets(workbench) {
@@ -33398,7 +39643,11 @@ function resolveCanvasGenerationPollTargets(workbench) {
         preview: {
           ok: true,
           nodeId: node.id,
-          mediaKind: node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image",
+          mediaKind: node.data?.mediaKind === "audio" || node.type === "audio" || node.type === "ai-audio"
+            ? "audio"
+            : node.type === "ai-animation"
+              ? "image"
+              : node.data?.mediaKind === "video" || node.type === "video" ? "video" : "image",
           modelCode: String(node.data?.modelCode ?? ""),
           prompt: String(node.data?.prompt ?? ""),
           taskId,
@@ -34068,12 +40317,23 @@ function normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind) {
     ? readPublicGenerationMediaUrl(result.videoUrl, result.sourceUrl, result.downloadUrl, result.previewUrl)
     : result.imageUrl;
   const isLipSync = mediaKind === "video" && isLipSyncTaskLike(taskPayload);
-  const selectionContext =
+  const submittedSelectionContext =
+    submission?.selectionContext && typeof submission.selectionContext === "object"
+      ? submission.selectionContext
+      : {};
+  const taskSelectionContext =
     taskPayload?.selectionContext && typeof taskPayload.selectionContext === "object"
       ? taskPayload.selectionContext
-      : submission?.selectionContext && typeof submission.selectionContext === "object"
-        ? submission.selectionContext
-        : {};
+      : {};
+  const submittedAssetName = String(submittedSelectionContext.selectedAssetName ?? "").trim();
+  const taskAssetName = String(taskSelectionContext.selectedAssetName ?? "").trim();
+  const selectionContext = {
+    ...submittedSelectionContext,
+    ...taskSelectionContext,
+    ...((submittedAssetName || taskAssetName)
+      ? { selectedAssetName: submittedAssetName || taskAssetName }
+      : {}),
+  };
   const targetType = taskPayload?.targetType ?? submission?.targetType ?? null;
   const targetId = taskPayload?.targetId ?? submission?.targetId ?? null;
   const taskParameters =
@@ -34209,7 +40469,7 @@ function isStoryboardGeneratorTaskResult(task, submission = null) {
   const prompt = String(
     task?.promptPreview ?? task?.prompt ?? submission?.promptPreview ?? submission?.prompt ?? "",
   ).trim();
-  return prompt.startsWith(STORYBOARD_IMAGE_GENERATION_PROMPT_PREFIX);
+  return prompt.startsWith(LEGACY_STORYBOARD_IMAGE_GENERATION_PROMPT_PREFIX);
 }
 
 function readPublicGenerationMediaUrl(...values) {
@@ -34235,6 +40495,10 @@ function isProviderDirectContentUrl(value) {
 }
 
 function resolveGenerationTaskProgressPercent(taskPayload, submission) {
+  const taskStatus = resolveWorkflowStatus(taskPayload?.status ?? taskPayload?.workflowStatus);
+  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(taskStatus)) {
+    return null;
+  }
   const rawValue =
     taskPayload?.progressPercent ??
     taskPayload?.progress_percent ??
@@ -34577,6 +40841,22 @@ function dedupeMentionReferenceItems(items = []) {
 function resolvePromptMentionAssetBuckets(workbench) {
   const importedAssets = workbench.ui.importedAssets ?? {};
   const mediaBuckets = resolvePromptMentionMediaBuckets(workbench);
+  const uploadedImageAssets = isAssetScope(workbench)
+    ? (importedAssets.other?.image ?? []).map((item, index) => {
+        const id = item?.id ?? item?.assetId ?? `uploaded-image-${index + 1}`;
+        const name = item?.name ?? item?.label ?? `图片${index + 1}`;
+        return {
+          ...item,
+          id,
+          assetId: item?.assetId ?? id,
+          assetKind: "image",
+          kind: "image",
+          type: "image",
+          name,
+          label: name,
+        };
+      })
+    : [];
   const detailAssets =
     workbench.ui.projectDetail?.assetsByType ??
     workbench.state?.projectDetail?.assetsByType ??
@@ -34600,7 +40880,10 @@ function resolvePromptMentionAssetBuckets(workbench) {
       ...(contextAssets.prop ?? []),
       ...(detailBuckets?.prop ?? []),
     ]),
-    image: mediaBuckets.image,
+    image: dedupePromptMentionAssetItems([
+      ...uploadedImageAssets,
+      ...mediaBuckets.image,
+    ]),
     audio: mediaBuckets.audio,
     video: mediaBuckets.video,
   };
@@ -34696,10 +40979,13 @@ function resolvePromptMentionMediaBuckets(workbench) {
           "",
       ).trim();
     const name = resolvePromptMentionMediaName(mediaKind, number);
+    const referenceId = item?.id ?? item?.assetId ?? `mention-${mediaKind}-${index + 1}`;
+    const useUniqueComposerReferenceId = isAssetScope(workbench) && mediaKind === "image";
     buckets[mediaKind].push({
       ...item,
-      id: item?.id ?? item?.assetId ?? `mention-${mediaKind}-${index + 1}`,
-      assetId: item?.assetId ?? item?.id ?? null,
+      id: referenceId,
+      assetId: useUniqueComposerReferenceId ? referenceId : item?.assetId ?? item?.id ?? null,
+      sourceAssetId: item?.sourceAssetId ?? item?.assetId ?? null,
       assetKind: mediaKind,
       kind: mediaKind,
       type: mediaKind,
@@ -35267,7 +41553,10 @@ function resolveCompletePromptMentionAsset(workbench, textOrBeforeCursor, cursor
   if (!mentionName) {
     return null;
   }
-  const matched = collectPromptMentionAssets(workbench).find((item) => doesPromptMentionMatchAssetName(item, mentionName));
+  const assets = isAssetScope(workbench)
+    ? collectPromptMentionSuggestionAssets(workbench)
+    : collectPromptMentionAssets(workbench);
+  const matched = assets.find((item) => doesPromptMentionMatchAssetName(item, mentionName));
   if (!matched) {
     return null;
   }
@@ -35301,6 +41590,12 @@ function resolvePromptMentionTokenAtCursor(text, cursor) {
 }
 
 function insertEpisodeAssetMention(workbench, asset, assetKind, options = {}) {
+  if (isAssetScope(workbench) && !isAssetScopeUploadedImageReference(workbench, {
+    ...asset,
+    assetKind,
+  })) {
+    return { promptInputState: null, mentionReference: null };
+  }
   const textarea = workbench.root?.querySelector?.("#video-prompt-input");
   const currentPrompt = String(options.currentPrompt ?? workbench.ui.prompt ?? "");
   const cursor = Number(options.cursor ?? textarea?.selectionStart ?? currentPrompt.length);
@@ -35485,7 +41780,15 @@ function buildEpisodeAssetMentionImageReference(asset, assetKind) {
   };
 }
 
+function isEpisodeAudioComposerMode(workbench) {
+  const mediaMode = String(workbench?.ui?.episodeMediaMode ?? "image").trim();
+  return mediaMode === "video" || mediaMode === "lip-sync";
+}
+
 function appendEpisodeAssetMentionAudioAttachment(workbench, asset, assetKind) {
+  if (!isEpisodeAudioComposerMode(workbench)) {
+    return;
+  }
   const audioUrl = resolveImportedProjectAudioUrl(asset);
   if (!audioUrl) {
     return;
@@ -36200,6 +42503,12 @@ function hydratePersistedWorkbenchState(workbench) {
   if (Array.isArray(persisted.canvasProjects)) {
     workbench.ui.canvasProjects = persisted.canvasProjects;
   }
+  if (Array.isArray(persisted.canvasRecentProjectIds)) {
+    workbench.ui.canvasRecentProjectIds = persisted.canvasRecentProjectIds.map(String).slice(0, 5);
+  }
+  if (["active", "archived", "all"].includes(persisted.canvasProjectStatusFilter)) {
+    workbench.ui.canvasProjectStatusFilter = persisted.canvasProjectStatusFilter;
+  }
   if (typeof persisted.selectedCanvasProjectId === "string") {
     workbench.ui.selectedCanvasProjectId = persisted.selectedCanvasProjectId;
   }
@@ -36213,7 +42522,7 @@ function hydratePersistedWorkbenchState(workbench) {
     workbench.ui.selectedCanvasNodeId = persisted.selectedCanvasNodeId;
   }
   const routeToken = typeof window !== "undefined" ? String(window.location?.hash ?? "").replace(/^#/, "") : "";
-  if (routeToken === "tools" || routeToken === "tools-canvas") {
+  if (["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(routeToken)) {
     workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(routeToken);
   }
   sanitizeEpisodeWorkbenchSelection(workbench, { persist: true });
@@ -36221,6 +42530,13 @@ function hydratePersistedWorkbenchState(workbench) {
 
 function syncWorkbenchRouteState(workbench, hash) {
   const token = String(hash || "").replace(/^#/, "");
+  if (["new-canvas", "new-canvas-canvas"].includes(token) && !isNewCanvasEnabled(workbench.session)) {
+    workbench.ui.activeNavTab = "home";
+    workbench.ui.canvasProjectView = "list";
+    workbench.ui.toast = "新画布当前未启用。";
+    globalThis.window?.history?.replaceState?.(null, "", "/");
+    return;
+  }
   if (parseEpisodeRouteToken(token)) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "episode-workbench";
@@ -36257,12 +42573,12 @@ function syncWorkbenchRouteState(workbench, hash) {
     workbench.ui.projectInteriorSection = "episodes";
     return;
   }
-  if (token === "home" || token === "director" || token === "script" || token === "library" || token === "tools" || token === "tools-canvas") {
+  if (token === "home" || token === "director" || token === "script" || token === "prompts" || token === "library" || token === "tools" || token === "tools-canvas" || token === "new-canvas" || token === "new-canvas-canvas") {
     workbench.ui.activeNavTab = token;
-    if (token === "tools-canvas") {
-      workbench.ui.activeNavTab = "tools";
+    if (token === "tools-canvas" || token === "new-canvas-canvas") {
+      workbench.ui.activeNavTab = token === "new-canvas-canvas" ? "new-canvas" : "tools";
       workbench.ui.canvasProjectView = "detail";
-    } else if (token === "tools") {
+    } else if (token === "tools" || token === "new-canvas") {
       workbench.ui.canvasProjectView = "list";
     }
     workbench.ui.projectPanelMode = "library";
@@ -36302,13 +42618,16 @@ function syncWorkbenchRouteState(workbench, hash) {
 
 function syncCanvasRouteState(workbench, hash) {
   const token = String(hash || "").replace(/^#/, "");
-  if (token !== "tools" && token !== "tools-canvas") {
+  if (!["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
     return;
   }
-  workbench.ui.activeNavTab = "tools";
+  if (["new-canvas", "new-canvas-canvas"].includes(token) && !isNewCanvasEnabled(workbench.session)) {
+    return;
+  }
+  workbench.ui.activeNavTab = token.startsWith("new-canvas") ? "new-canvas" : "tools";
   workbench.ui.projectPanelMode = "library";
   workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(token);
-  if (token === "tools") {
+  if (token === "tools" || token === "new-canvas") {
     workbench.ui.selectedCanvasNodeId = null;
     workbench.ui.canvasEditorOpen = false;
     workbench.ui.canvasAddMenuOpen = false;
@@ -36556,6 +42875,10 @@ function buildPersistedWorkbenchStatePayload(workbench) {
     episodeStoryboardPaginationMap: workbench.ui.episodeStoryboardPaginationMap ?? {},
     canvasDocument: workbench.ui.canvasDocument ?? null,
     canvasProjects: normalizeCanvasProjects(workbench.ui),
+    canvasRecentProjectIds: Array.isArray(workbench.ui.canvasRecentProjectIds)
+      ? workbench.ui.canvasRecentProjectIds.slice(0, 5)
+      : [],
+    canvasProjectStatusFilter: workbench.ui.canvasProjectStatusFilter ?? "active",
     selectedCanvasProjectId: workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID,
     canvasDocumentsByProject: workbench.ui.canvasDocumentsByProject ?? null,
     canvasProjectView: workbench.ui.canvasProjectView === "detail" ? "detail" : "list",
@@ -37471,7 +43794,7 @@ async function ensureStoryboardShot(workbench, storyboardId) {
 
 function applyPostRenderEffects(workbench) {
   syncEpisodeWorkbenchLayoutVars(workbench);
-  positionPromptMentionPreview(workbench);
+  positionPromptMentionSurface(workbench);
   scheduleSelectedAssetGenerationPolling(workbench, "image");
   syncProjectAssetGenerationPollingForCurrentView(workbench);
   const episodeWorkbenchScrollTarget = workbench.ui.episodeWorkbenchScrollTarget ?? null;
@@ -37506,6 +43829,7 @@ function applyPostRenderEffects(workbench) {
     (
       episodeWorkbenchConversationScrollMode === "latest" ||
       episodeWorkbenchConversationScrollMode === "bottom" ||
+      episodeWorkbenchConversationScrollMode === "top" ||
       shouldPinEpisodeWorkbenchConversation
     ) &&
     workbench.ui.projectPanelMode === "episode-workbench"
@@ -37518,13 +43842,22 @@ function applyPostRenderEffects(workbench) {
         ".episode-replica-generated-stage.visible:last-of-type",
       ].join(", "),
     );
-    if (episodeWorkbenchConversationScrollMode === "latest" && latestConversationEntry) {
+    const shouldScrollConversationToTop = episodeWorkbenchConversationScrollMode === "top";
+    if (shouldScrollConversationToTop && conversationContainer) {
+      conversationContainer.scrollTop = 0;
+      workbench.ui.episodeWorkbenchConversationScrollStickyUntil = 0;
+    } else if (episodeWorkbenchConversationScrollMode === "latest" && latestConversationEntry) {
       latestConversationEntry.scrollIntoView({ block: "end", inline: "nearest", behavior: "auto" });
+      if (conversationContainer) {
+        conversationContainer.scrollTop = conversationContainer.scrollHeight;
+      }
     } else if (conversationContainer) {
       conversationContainer.scrollTop = conversationContainer.scrollHeight;
     }
-    workbench.ui.episodeWorkbenchConversationScrollStickyUntil = Date.now() + 1800;
-    keepEpisodeWorkbenchConversationPinnedToBottom(workbench);
+    if (!shouldScrollConversationToTop) {
+      workbench.ui.episodeWorkbenchConversationScrollStickyUntil = Date.now() + 1800;
+      keepEpisodeWorkbenchConversationPinnedToBottom(workbench);
+    }
     workbench.ui.episodeWorkbenchConversationScrollMode = null;
   }
 
@@ -37570,7 +43903,7 @@ function disposeHomeLightfall(workbench) {
 }
 
 function updateHomeHeroPointerAura(workbench, event) {
-  const eventTarget = resolveEventElement(event.target);
+  const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
   const hero = eventTarget?.closest?.(".home-hero") ?? workbench.root.querySelector(".home-hero");
   if (!hero || typeof hero.getBoundingClientRect !== "function") {
     return;
@@ -37998,6 +44331,30 @@ async function saveStoryboardDescriptionInline(workbench, storyboardId, value) {
   render(workbench);
 }
 
+async function persistStoryboardCardDescription(workbench, storyboard, description) {
+  await workbench.api.updateShot({
+    shotId: storyboard.linkedShotId,
+    description,
+  });
+  if (typeof workbench.api.saveDraft !== "function" || !workbench.ui.selectedEpisodeId) {
+    return { savedVideoDraft: null };
+  }
+  const payload = {
+    prompt: description,
+    mode: "video",
+    payload: storyboard.videoPromptDraft?.payload ?? {},
+  };
+  const result = await workbench.api.saveDraft(
+    workbench.ui.selectedEpisodeId,
+    "storyboard",
+    storyboard.linkedShotId,
+    payload,
+  );
+  return {
+    savedVideoDraft: result?.draft ?? payload,
+  };
+}
+
 function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files, options = {}) {
   const attachmentLabel = attachmentType === "audio" ? "音频" : attachmentType === "video" ? "视频" : attachmentType === "mixed" ? "素材" : "图片";
   void runAction(
@@ -38418,16 +44775,20 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
     };
     return;
   }
+  const replayTask = resolveAssetGeneratorReplayTask(asset);
   workbench.ui.assetGeneratorModal = assetKind;
   workbench.ui.assetGeneratorMode = "edit";
   workbench.ui.assetGeneratorEditingAsset = asset
     ? { ...asset, assetKind, mediaType }
     : null;
   workbench.ui.assetGeneratorName = asset?.name ?? "";
-  workbench.ui.assetGeneratorPrompt = asset?.description ?? "";
+  workbench.ui.assetGeneratorPrompt = stripAutomaticImageStylePromptForWorkbench(
+    workbench,
+    asset?.description ?? replayTask?.prompt ?? "",
+    collectAssetGeneratorPromptReferences(asset),
+  );
   workbench.ui.assetGeneratorRetryPreviewUrl = "";
   workbench.ui.assetGeneratorRetryPreviewFile = null;
-  const replayTask = resolveAssetGeneratorReplayTask(asset);
   const generatedAsset = Boolean(
     replayTask ||
       asset?.generationTaskId ||
@@ -39835,6 +46196,7 @@ function modelGenerationErrorMessage(value) {
     {
       generation_membership_required: "有效会员已过期或未开通，请先开通会员。",
       membership_required: "请先开通会员。",
+      membership_expired: "会员已过期，请先续费会员。",
       model_reference_limit_exceeded: "参考素材数量超出模型限制",
       model_reference_not_found: "参考素材不存在或无权访问",
       model_reference_unavailable: "参考素材尚未准备好，请重新选择",
@@ -39961,6 +46323,47 @@ function resolveEventElement(target) {
   return null;
 }
 
+function resolveCanvasKeyboardAction(workbench, event, target) {
+  if (
+    !isCanvasNavTab(workbench?.ui?.activeNavTab)
+    || workbench.ui.canvasProjectView !== "detail"
+    || target?.matches?.("input, textarea, select, [contenteditable='true']")
+  ) {
+    return "";
+  }
+  const key = String(event.key ?? "").toLowerCase();
+  if (event.altKey && event.shiftKey && key === "f") return "arrange-canvas-nodes";
+  if (event.ctrlKey || event.metaKey) {
+    if (key === "+" || key === "=") return "zoom-canvas-in";
+    if (key === "-" || key === "_") return "zoom-canvas-out";
+    if (key === "0") return "fit-canvas-view";
+    if (key === "z") return event.shiftKey ? "redo-canvas-change" : "undo-canvas-change";
+    if (key === "y") return "redo-canvas-change";
+    if (key === "c") return "copy-canvas-selection";
+    if (key === "v") {
+      return workbench.canvasClipboardSnapshot?.nodes?.length || workbench.canvasClipboardNodeIds?.length
+        ? "paste-canvas-selection"
+        : "";
+    }
+    if (key === "g") return event.shiftKey ? "ungroup-canvas-selection" : "group-canvas-selection";
+    return "";
+  }
+  if (event.repeat || event.shiftKey) return "";
+  const digit = /^(?:digit|numpad)?([1-7])$/.exec(String(event.code || key).toLowerCase())?.[1];
+  if (digit) return `add-canvas-shortcut-${event.altKey ? "source" : "generator"}-${digit}`;
+  if (event.altKey) return "";
+  if (key === "f") return "fit-canvas-view";
+  if (key === "m") return "toggle-canvas-minimap";
+  if ((key === " " || String(event.code ?? "") === "Space") && selectedCanvasWorkflowNodeIds(workbench).length === 1) {
+    return "open-canvas-node-editor";
+  }
+  return "";
+}
+
+export function resolveCanvasKeyboardActionForTest(workbench, event, target = null) {
+  return resolveCanvasKeyboardAction(workbench, event, target);
+}
+
 export function hasActiveWorkbenchTextSelection(target, selection = globalThis.window?.getSelection?.()) {
   const doc = target?.ownerDocument ?? globalThis.document ?? null;
   const activeElement = doc?.activeElement ?? null;
@@ -40062,6 +46465,18 @@ function normalizeRoutePath(pathname) {
   return normalized;
 }
 
+function isCanvasNavTab(tab) {
+  return tab === "tools" || tab === "new-canvas";
+}
+
+function canvasListRouteToken(workbench) {
+  return workbench?.ui?.activeNavTab === "new-canvas" ? "new-canvas" : "tools";
+}
+
+function canvasDetailRouteToken(workbench) {
+  return workbench?.ui?.activeNavTab === "new-canvas" ? "new-canvas-canvas" : "tools-canvas";
+}
+
 function readWorkbenchRouteToken(locationLike = globalThis.window?.location) {
   const hashToken = String(locationLike?.hash ?? "").replace(/^#/, "").trim();
   if (hashToken) {
@@ -40091,9 +46506,6 @@ function deriveInitialNavTab(hash, session = {}) {
   if (token === "director") {
     return "director";
   }
-  if (token === "new-canvas") {
-    return "new-canvas";
-  }
   if (
     token === "asset-prep-section" ||
     token === "project-detail" ||
@@ -40106,11 +46518,17 @@ function deriveInitialNavTab(hash, session = {}) {
   if (token === "script") {
     return "script";
   }
+  if (token === "prompts") {
+    return "prompts";
+  }
   if (token === "library") {
     return "library";
   }
   if (token === "tools" || token === "tools-canvas") {
     return "tools";
+  }
+  if (token === "new-canvas" || token === "new-canvas-canvas") {
+    return isNewCanvasEnabled(session) ? "new-canvas" : "home";
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
     if (isTeamMemberSession(session)) {
@@ -40478,7 +46896,7 @@ function inferCommunityUserIdFromAuthor(author) {
 
 function deriveInitialCanvasProjectView(hash) {
   const token = String(hash || "").replace(/^#/, "");
-  return token === "tools-canvas" ? "detail" : "list";
+  return token === "tools-canvas" || token === "new-canvas-canvas" ? "detail" : "list";
 }
 
 function deriveInitialLibraryTeamRoute(hash) {

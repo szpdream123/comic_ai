@@ -110,6 +110,7 @@ export function renderGenerationSettingsControl({
 export function renderGenerationSubmitButton({
   action,
   cost,
+  costLabel = null,
   label = "生成",
   busy = false,
   className = "",
@@ -118,7 +119,7 @@ export function renderGenerationSubmitButton({
   const extraClass = className ? ` ${escapeAttr(className)}` : "";
   return `
     <button class="episode-replica-generate${extraClass}" type="button" data-action="${escapeAttr(action)}"${attrs ? ` ${attrs}` : ""} ${busy ? "disabled" : ""}>
-      <span>${escapeHtml(String(cost))}</span>
+      <span>${escapeHtml(String(costLabel ?? cost))}</span>
       <strong class="episode-replica-generate-label">${escapeHtml(busy ? "生成中" : label)}</strong>
     </button>
   `;

@@ -16,6 +16,8 @@ export interface ProviderRequestRecord {
   workflowId: string | null;
   taskId: string | null;
   attemptId: string | null;
+  agentTaskId?: string | null;
+  agentStepId?: string | null;
   providerName: string;
   providerOperation: string;
   requestKey: string;
@@ -40,6 +42,8 @@ export interface ProviderRequestInput {
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;
+  agentTaskId?: string | null;
+  agentStepId?: string | null;
   providerName: string;
   providerOperation: string;
   requestKey: string;
@@ -59,6 +63,8 @@ interface ProviderRequestRow {
   workflow_id: string | null;
   task_id: string | null;
   attempt_id: string | null;
+  agent_task_id: string | null;
+  agent_step_id: string | null;
   provider_name: string;
   provider_operation: string;
   request_key: string;
@@ -99,6 +105,8 @@ export async function createOrReuseProviderRequest(
         workflow_id,
         task_id,
         attempt_id,
+        agent_task_id,
+        agent_step_id,
         provider_name,
         provider_operation,
         request_key,
@@ -115,7 +123,7 @@ export async function createOrReuseProviderRequest(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13::jsonb, $14, $15, 'created', $16, $17, $17
+        $10, $11, $12, $13, $14, $15::jsonb, $16, $17, 'created', $18, $19, $19
       )
       ON CONFLICT (provider_name, provider_operation, request_key)
       DO NOTHING
@@ -128,6 +136,8 @@ export async function createOrReuseProviderRequest(
       input.workflowId ?? null,
       input.taskId ?? null,
       input.attemptId ?? null,
+      input.agentTaskId ?? null,
+      input.agentStepId ?? null,
       input.providerName,
       input.providerOperation,
       input.requestKey,
@@ -180,6 +190,33 @@ export async function submitProviderRequest(
   const prepared = await createOrReuseProviderRequest(db, input);
 
   if (prepared.request.externalSubmissionStartedAt) {
+    const recovered = !prepared.request.externalRequestId
+      && !["failed", "canceled", "succeeded"].includes(prepared.request.status)
+      ? await input.adapter.recoverSubmission?.({
+          providerRequestId: prepared.request.id,
+          providerName: prepared.request.providerName,
+          providerOperation: prepared.request.providerOperation,
+          requestKey: prepared.request.requestKey,
+          payloadRef: prepared.request.payloadRef,
+          payloadHash: prepared.request.payloadHash,
+          redactedPayload: prepared.request.redactedPayload,
+        })
+      : null;
+    if (recovered) {
+      const accepted = await recordProviderSubmissionAccepted(db, {
+        providerRequestId: prepared.request.id,
+        externalRequestId: recovered.externalRequestId,
+        status: recovered.status,
+        redactedResponse: sanitizeProviderIdentityFields(withStoredProviderRawResponse(recovered.redactedResponse ?? {})),
+        now: input.now,
+      });
+      return {
+        kind: "submitted",
+        request: accepted,
+        artifacts: recovered.artifacts,
+        redactedRequest: recovered.redactedRequest,
+      };
+    }
     return {
       kind: "already_started",
       request: prepared.request,
@@ -512,6 +549,35 @@ async function recordProviderSubmissionAccepted(
   return providerRequestFromRow(row!);
 }
 
+export async function advanceProviderRequestStage(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    externalRequestId: string;
+    redactedResponse: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  const row = await queryOne<ProviderRequestRow>(db, `
+    UPDATE provider_requests
+    SET status='running',
+        external_request_id=$2,
+        response_redacted_json=COALESCE(response_redacted_json, '{}'::jsonb) || $3::jsonb,
+        next_poll_at=$4,
+        updated_at=$4
+    WHERE id=$1
+      AND status IN ('accepted','running')
+    RETURNING *
+  `, [
+    input.providerRequestId,
+    input.externalRequestId,
+    JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
+    input.now,
+  ]);
+  if (!row) throw new Error("provider_request_stage_transition_conflict");
+  return providerRequestFromRow(row);
+}
+
 async function updateProviderRequestTerminalStatus(
   db: SqlDatabase,
   input: {
@@ -652,6 +718,8 @@ function providerRequestFromRow(row: ProviderRequestRow): ProviderRequestRecord 
     workflowId: row.workflow_id,
     taskId: row.task_id,
     attemptId: row.attempt_id,
+    ...(row.agent_task_id ? { agentTaskId: row.agent_task_id } : {}),
+    ...(row.agent_step_id ? { agentStepId: row.agent_step_id } : {}),
     providerName: row.provider_name,
     providerOperation: row.provider_operation,
     requestKey: row.request_key,

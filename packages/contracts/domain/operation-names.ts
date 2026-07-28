@@ -7,7 +7,6 @@ export const operationNames = {
   episodeImageGenerate: "episode.image.generate",
   episodeVideoGenerate: "episode.video.generate",
   canvasAudioGenerate: "canvas.audio.generate",
-  canvasVideoCompose: "canvas.video.compose",
   toolPresetCreate: "canvas.tool_preset.create",
   toolPresetDuplicate: "canvas.tool_preset.duplicate",
   calibrationGenerate: "calibration.generate",

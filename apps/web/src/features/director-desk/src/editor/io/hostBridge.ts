@@ -21,7 +21,14 @@ export interface HostCaptureBatchPayload {
   captures?: HostCaptureItemPayload[];
 }
 
+export type DirectorDeskCaptureHandler = (
+  captures: Array<{ dataUrl: string; fileName: string }>,
+) => void | Promise<void>;
+export type DirectorDeskVideoHandler = (file: File) => void | Promise<void>;
+
 let initialized = false;
+let captureHandler: DirectorDeskCaptureHandler | null = null;
+let videoHandler: DirectorDeskVideoHandler | null = null;
 export const DIRECTOR_DESK_SESSION_OPENED_EVENT = "storyai:director-desk-session-opened";
 
 function normalizeString(value: unknown) {
@@ -105,6 +112,17 @@ export function postDirectorDeskCapturesToHost(
     return;
   }
 
+  if (captureHandler) {
+    try {
+      void Promise.resolve(captureHandler(normalizedCaptures)).catch((error) => {
+        console.error("[director-desk] host capture handler failed", error);
+      });
+    } catch (error) {
+      console.error("[director-desk] host capture handler failed", error);
+    }
+    return;
+  }
+
   window.parent?.postMessage(
     {
       type: "storyai:director-desk-captures-sent",
@@ -114,6 +132,39 @@ export function postDirectorDeskCapturesToHost(
     },
     getDirectorDeskHostOrigin()
   );
+}
+
+export function setDirectorDeskCaptureHandler(handler?: DirectorDeskCaptureHandler | null) {
+  captureHandler = handler ?? null;
+}
+
+export function clearDirectorDeskCaptureHandler(handler?: DirectorDeskCaptureHandler | null) {
+  if (!handler || captureHandler === handler) {
+    captureHandler = null;
+  }
+}
+
+export function postDirectorDeskVideoToHost(blob: Blob, fileName: string) {
+  if (!videoHandler || !blob || blob.size <= 0) return false;
+  const file = new File([blob], fileName || "director-desk-reference-video.webm", {
+    type: blob.type || "video/webm",
+  });
+  try {
+    void Promise.resolve(videoHandler(file)).catch((error) => {
+      console.error("[director-desk] host video handler failed", error);
+    });
+  } catch (error) {
+    console.error("[director-desk] host video handler failed", error);
+  }
+  return true;
+}
+
+export function setDirectorDeskVideoHandler(handler?: DirectorDeskVideoHandler | null) {
+  videoHandler = handler ?? null;
+}
+
+export function clearDirectorDeskVideoHandler(handler?: DirectorDeskVideoHandler | null) {
+  if (!handler || videoHandler === handler) videoHandler = null;
 }
 
 function handleHostMessage(event: MessageEvent) {

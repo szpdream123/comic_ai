@@ -1,6 +1,7 @@
 import {
   generationPollIntervalMs,
   generationPollMaxAttempts,
+  generationPollMaxAttemptsForEnv,
 } from "./generation-timeout.policy.ts";
 
 export interface GenerationQueueConfig {
@@ -308,13 +309,20 @@ export function loadGenerationQueueConfig(
     },
     retry: {
       submit: { attempts: 3, backoffMs: 5_000 },
-      poll: { attempts: 3, backoffMs: 5_000 },
+      poll: {
+        attempts: parsePositiveInteger(env.GENERATION_POLL_RETRY_ATTEMPTS, 20, 100),
+        backoffMs: parsePositiveInteger(
+          env.GENERATION_POLL_RETRY_BACKOFF_MS,
+          30_000,
+          3_600_000,
+        ),
+      },
       finalize: { attempts: 3, backoffMs: 5_000 },
     },
     poll: {
       image: {
         intervalMs: generationPollIntervalMs,
-        maxAttempts: generationPollMaxAttempts("image"),
+        maxAttempts: generationPollMaxAttemptsForEnv("image", env),
         concurrency: pollImageConcurrency,
         limiter: {
           max: parsePositiveInteger(

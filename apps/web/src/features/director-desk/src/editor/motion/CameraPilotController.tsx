@@ -28,6 +28,8 @@ const PILOT_MIN_FOV = 10;
 const PILOT_MAX_FOV = 120;
 const PILOT_WHEEL_FOV_SENSITIVITY = 0.006;
 const PILOT_WHEEL_MAX_FOV_STEP = 0.6;
+const PILOT_PINCH_FOV_SENSITIVITY = 0.08;
+const PILOT_PINCH_MAX_FOV_STEP = 2.4;
 const PILOT_SNAPSHOT_INTERVAL_MS = 80;
 
 export function getPilotMouseSensitivity(rotateSensitivity = DEFAULT_VIEWPORT_ROTATE_SENSITIVITY) {
@@ -52,6 +54,28 @@ export function getPilotFovAfterWheel(
     (Number.isFinite(deltaY) ? deltaY : 0) * PILOT_WHEEL_FOV_SENSITIVITY * sensitivityScale,
     -PILOT_WHEEL_MAX_FOV_STEP * sensitivityScale,
     PILOT_WHEEL_MAX_FOV_STEP * sensitivityScale
+  );
+  return MathUtils.clamp(currentFov + step, PILOT_MIN_FOV, PILOT_MAX_FOV);
+}
+
+export function getPilotFovAfterPinch(
+  currentFov: number,
+  previousDistance: number,
+  currentDistance: number,
+  zoomSensitivity = DEFAULT_VIEWPORT_ZOOM_SENSITIVITY
+) {
+  const normalizedSensitivity = normalizeViewportSensitivity(
+    zoomSensitivity,
+    DEFAULT_VIEWPORT_ZOOM_SENSITIVITY
+  );
+  const sensitivityScale = normalizedSensitivity / DEFAULT_VIEWPORT_ZOOM_SENSITIVITY;
+  const distanceDelta = Number.isFinite(previousDistance) && Number.isFinite(currentDistance)
+    ? previousDistance - currentDistance
+    : 0;
+  const step = MathUtils.clamp(
+    distanceDelta * PILOT_PINCH_FOV_SENSITIVITY * sensitivityScale,
+    -PILOT_PINCH_MAX_FOV_STEP * sensitivityScale,
+    PILOT_PINCH_MAX_FOV_STEP * sensitivityScale
   );
   return MathUtils.clamp(currentFov + step, PILOT_MIN_FOV, PILOT_MAX_FOV);
 }
@@ -109,6 +133,8 @@ export function CameraPilotController({
   const pendingLockedMouseRef = useRef({ x: 0, y: 0 });
   const draggingRef = useRef(false);
   const lastDragPositionRef = useRef({ x: 0, y: 0 });
+  const touchPointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const touchPinchDistanceRef = useRef<number | null>(null);
   const focusDistanceRef = useRef(6);
   const lastSnapshotAtRef = useRef(0);
   const raycasterRef = useRef(new Raycaster());
@@ -166,6 +192,8 @@ export function CameraPilotController({
 
     const canvas = gl.domElement;
     const canUseCanvasEvents = typeof HTMLElement !== "undefined" && canvas instanceof HTMLElement;
+    const previousTouchAction = canUseCanvasEvents ? canvas.style.touchAction : "";
+    if (canUseCanvasEvents) canvas.style.touchAction = "none";
     hadPointerLockRef.current = canUseCanvasEvents && isPointerLockedTo(canvas);
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -233,19 +261,72 @@ export function CameraPilotController({
 
     function handlePointerDown(event: PointerEvent) {
       if (event.button !== 0) return;
+      if (event.pointerType === "touch") {
+        touchPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        const touches = [...touchPointersRef.current.values()];
+        if (touches.length >= 2) {
+          draggingRef.current = false;
+          touchPinchDistanceRef.current = Math.hypot(
+            touches[1].x - touches[0].x,
+            touches[1].y - touches[0].y
+          );
+        } else {
+          draggingRef.current = true;
+          lastDragPositionRef.current = { x: event.clientX, y: event.clientY };
+        }
+        canvas.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+        return;
+      }
       draggingRef.current = true;
       lastDragPositionRef.current = { x: event.clientX, y: event.clientY };
       event.preventDefault();
     }
 
     function handlePointerMove(event: PointerEvent) {
+      if (event.pointerType === "touch" && touchPointersRef.current.has(event.pointerId)) {
+        touchPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        const touches = [...touchPointersRef.current.values()];
+        if (touches.length >= 2) {
+          const currentDistance = Math.hypot(
+            touches[1].x - touches[0].x,
+            touches[1].y - touches[0].y
+          );
+          const previousDistance = touchPinchDistanceRef.current;
+          if (previousDistance !== null) {
+            pilotCamera.fov = getPilotFovAfterPinch(
+              pilotCamera.fov,
+              previousDistance,
+              currentDistance,
+              viewportZoomSensitivity
+            );
+            pilotCamera.updateProjectionMatrix();
+          }
+          touchPinchDistanceRef.current = currentDistance;
+          return;
+        }
+
+        const lastPosition = lastDragPositionRef.current;
+        applyMouseLook(event.clientX - lastPosition.x, event.clientY - lastPosition.y);
+        lastDragPositionRef.current = { x: event.clientX, y: event.clientY };
+        return;
+      }
       if (!draggingRef.current || isPointerLockedTo(canvas)) return;
       const lastPosition = lastDragPositionRef.current;
       applyMouseLook(event.clientX - lastPosition.x, event.clientY - lastPosition.y);
       lastDragPositionRef.current = { x: event.clientX, y: event.clientY };
     }
 
-    function stopDragging() {
+    function stopDragging(event?: PointerEvent) {
+      if (event?.pointerType === "touch") {
+        touchPointersRef.current.delete(event.pointerId);
+        if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        const remainingTouch = touchPointersRef.current.values().next().value as { x: number; y: number } | undefined;
+        touchPinchDistanceRef.current = null;
+        draggingRef.current = Boolean(remainingTouch);
+        if (remainingTouch) lastDragPositionRef.current = remainingTouch;
+        return;
+      }
       draggingRef.current = false;
     }
 
@@ -270,6 +351,8 @@ export function CameraPilotController({
 
     function clearPressedCodes() {
       pressedCodesRef.current.clear();
+      touchPointersRef.current.clear();
+      touchPinchDistanceRef.current = null;
       stopDragging();
     }
 
@@ -290,6 +373,9 @@ export function CameraPilotController({
 
     return () => {
       pressedCodesRef.current.clear();
+      touchPointersRef.current.clear();
+      touchPinchDistanceRef.current = null;
+      if (canUseCanvasEvents) canvas.style.touchAction = previousTouchAction;
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
       window.removeEventListener("keyup", handleKeyUp, { capture: true });
       window.removeEventListener("blur", clearPressedCodes);

@@ -248,6 +248,31 @@ describe("GlobalAiOpc image provider adapter", () => {
     ]);
   });
 
+  it("returns provider error codes from failed poll responses", async () => {
+    const cases = [
+      { payload: { code: "root_code" }, expected: "root_code" },
+      { payload: { error: { code: "nested_error_code" } }, expected: "nested_error_code" },
+      { payload: { data: { error_code: "data_error_code" } }, expected: "data_error_code" },
+      { payload: { result: { errorCode: "result_error_code" } }, expected: "result_error_code" },
+    ];
+
+    for (const testCase of cases) {
+      const adapter = new GlobalAiOpcImageProviderAdapter({
+        apiKey: "global-ai-opc-key",
+        queryTaskEndpoint: "https://provider.example.test/v1/result/{taskId}",
+        fetchImpl: (async () => new Response(JSON.stringify({
+          status: "failed",
+          ...testCase.payload,
+        }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+      });
+
+      const result = await adapter.poll!({ externalRequestId: "failed-image-task" });
+
+      assert.equal(result.status, "failed");
+      assert.equal(result.redactedResponse?.providerErrorCode, testCase.expected);
+    }
+  });
+
   it("fails create responses without a provider task id instead of polling the internal request id", async () => {
     const capturedUrls: string[] = [];
     const adapter = new GlobalAiOpcImageProviderAdapter({

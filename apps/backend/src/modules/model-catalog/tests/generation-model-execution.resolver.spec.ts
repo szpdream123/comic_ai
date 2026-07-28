@@ -612,6 +612,53 @@ describe("generation model execution resolver", () => {
       mode: "single-image",
     });
   });
+
+  it("routes APIMart Flow Music through the durable audio executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "audio",
+      modelCode: "flowmusic",
+      modelConfig: imageModelConfig({
+        modelCode: "flowmusic",
+        displayName: "Flow Music",
+        providerName: "apimart",
+        providerModel: "flowmusic",
+        providerProtocol: "apimart_audio",
+        mediaType: "audio",
+        taskModes: ["audio.music_generation"],
+        parameterSchema: {
+          mode: { enum: ["music"] },
+          autoGenerateLyrics: { type: "boolean" },
+          generateLyrics: { type: "boolean" },
+          lyricsMode: { enum: ["generate", "custom"] },
+          lyrics: { type: "string" },
+          musicTitle: { type: "string" },
+          musicBpm: { type: "number" },
+          durationSec: { type: "number" },
+          instrumental: { type: "boolean" },
+        },
+        providerConfig: { baseURL: "https://api.example.test", apiKeyEnv: "APIMART_API_KEY" },
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-audio" }),
+      parameters: {
+        mode: "music",
+        autoGenerateLyrics: true,
+        generateLyrics: true,
+        lyricsMode: "generate",
+        musicTitle: "微光",
+        musicBpm: 88,
+        durationSec: 60,
+      },
+      fallbackQueueName: "generation-submit-audio",
+    });
+
+    assert.equal(execution.providerExecutor, "apimart-audio");
+    assert.equal(execution.queueName, "generation-submit-audio");
+    assert.equal(execution.taskMode, "audio.music_generation");
+    assert.equal(execution.parameters.autoGenerateLyrics, true);
+    assert.equal(execution.parameters.musicTitle, "微光");
+    assert.equal(execution.parameters.musicBpm, 88);
+    assert.equal(execution.parameters.durationSec, 60);
+  });
 });
 
 function assertExecutionError(callback: () => void, code: string) {

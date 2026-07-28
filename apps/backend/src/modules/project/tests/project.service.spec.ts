@@ -24,6 +24,7 @@ describe("project service", () => {
       scriptInput: fixture.scriptInput,
       aspectRatio: fixture.aspectRatio,
       resolution: fixture.resolution,
+      projectType: fixture.projectType,
       idempotencyKey: fixture.idempotencyKey,
     });
 
@@ -45,6 +46,7 @@ describe("project service", () => {
       scriptInput: fixture.scriptInput,
       aspectRatio: fixture.aspectRatio,
       resolution: fixture.resolution,
+      projectType: fixture.projectType,
       idempotencyKey: fixture.idempotencyKey,
     });
 
@@ -55,6 +57,7 @@ describe("project service", () => {
       scriptInput: fixture.scriptInput,
       aspectRatio: fixture.aspectRatio,
       resolution: fixture.resolution,
+      projectType: fixture.projectType,
       idempotencyKey: fixture.idempotencyKey,
     });
 
@@ -71,6 +74,7 @@ describe("project service", () => {
       scriptInput: fixture.scriptInput,
       aspectRatio: fixture.aspectRatio,
       resolution: fixture.resolution,
+      projectType: fixture.projectType,
     });
 
     await beginOrReplayCommand(store.idempotency, {
@@ -89,6 +93,7 @@ describe("project service", () => {
         scriptInput: fixture.scriptInput,
         aspectRatio: fixture.aspectRatio,
         resolution: fixture.resolution,
+        projectType: fixture.projectType,
         idempotencyKey: fixture.idempotencyKey,
       }),
       (error: unknown) => {
@@ -110,6 +115,7 @@ describe("project service", () => {
         scriptInput: "",
         aspectRatio: "1:1",
         resolution: "4k",
+        projectType: "animation",
         idempotencyKey: "invalid-project",
       }),
       (error: unknown) => {
@@ -131,6 +137,7 @@ function hashCreateProjectRequest(input: {
   scriptInput: string;
   aspectRatio: string;
   resolution: string;
+  projectType: string;
 }) {
   return createHash("sha256")
     .update(
@@ -139,6 +146,7 @@ function hashCreateProjectRequest(input: {
         scriptInput: input.scriptInput.trim(),
         aspectRatio: input.aspectRatio,
         resolution: input.resolution,
+        projectType: input.projectType,
       }),
     )
     .digest("hex");

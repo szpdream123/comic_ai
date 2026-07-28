@@ -238,6 +238,32 @@ function createMentionMenuRenderer(onSelect) {
     menu.hidden = items.length === 0;
   };
 
+  const positionMenuFromClientRect = (clientRect) => {
+    if (!menu || !clientRect) {
+      return;
+    }
+    const view = menu.ownerDocument?.defaultView ?? globalThis.window;
+    const viewportWidth = Number(view?.innerWidth ?? 0);
+    const viewportHeight = Number(view?.innerHeight ?? 0);
+    const menuWidth = Number(menu.offsetWidth ?? 0);
+    const menuHeight = Number(menu.offsetHeight ?? 0);
+    const padding = 12;
+    const gap = 4;
+    const left = viewportWidth > 0
+      ? Math.max(padding, Math.min(Number(clientRect.left ?? 0), viewportWidth - menuWidth - padding))
+      : Number(clientRect.left ?? 0);
+    const below = Number(clientRect.bottom ?? 0) + gap;
+    const top = viewportHeight > 0 && below + menuHeight > viewportHeight - padding
+      ? Math.max(padding, Number(clientRect.top ?? 0) - menuHeight - gap)
+      : below;
+    Object.assign(menu.style, {
+      position: "fixed",
+      left: `${left}px`,
+      top: `${top}px`,
+      visibility: "",
+    });
+  };
+
   return {
     onStart(nextProps) {
       props = nextProps;
@@ -248,6 +274,7 @@ function createMentionMenuRenderer(onSelect) {
       menu.setAttribute("aria-label", "\u9009\u62e9\u5f15\u7528\u7d20\u6750");
       renderItems();
       menu.style.visibility = "hidden";
+      positionMenuFromClientRect(nextProps.clientRect);
       unmount = nextProps.mount(menu, {
         onPosition({ x, y, strategy }) {
           Object.assign(menu.style, {
@@ -263,6 +290,7 @@ function createMentionMenuRenderer(onSelect) {
       props = nextProps;
       selectedIndex = 0;
       renderItems();
+      positionMenuFromClientRect(nextProps.clientRect);
     },
     onKeyDown({ event }) {
       const itemCount = props?.items?.length ?? 0;

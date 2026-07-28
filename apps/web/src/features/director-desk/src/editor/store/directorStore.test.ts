@@ -901,6 +901,15 @@ it("preserves a valid panorama when replacing a loaded project", () => {
   );
 });
 
+it("adds an empty animation asset collection when replacing a legacy project", () => {
+  const legacyProject = createDefaultDirectorProject();
+  delete legacyProject.animationAssets;
+
+  useDirectorStore.getState().replaceProject(legacyProject);
+
+  expect(useDirectorStore.getState().project.animationAssets).toEqual([]);
+});
+
 it("keeps imported model object ids unique after deleting an earlier model", () => {
   useDirectorStore.setState(createInitialDirectorState());
 
@@ -1251,6 +1260,38 @@ it("migrates backend procedural characters to the built-in UE4 mannequin rig", a
       "head.yaw": 12,
     },
   });
+});
+
+it("preserves an imported character rig and its animation assets during project migration", () => {
+  const project = createDefaultDirectorProject();
+  project.objects[0] = {
+    ...project.objects[0],
+    assetRefId: "asset_character_1",
+    characterRig: { rigType: "mixamo", posePresetId: "stand", controls: {} },
+  };
+  project.assets = [{
+    id: "asset_character_1",
+    kind: "character",
+    sourceType: "model",
+    fileName: "actor.glb",
+    url: "data:model/gltf-binary;base64,AA==",
+    modelFormat: "glb",
+    characterRigProfile: "mixamo",
+  }];
+  project.animationAssets = [{
+    id: "animation_1",
+    name: "walk",
+    fileName: "walk.glb",
+    url: "data:model/gltf-binary;base64,AA==",
+    modelFormat: "glb",
+    rigProfile: "mixamo",
+    clips: [{ name: "Walk", duration: 1, trackCount: 1 }],
+  }];
+
+  useDirectorStore.getState().replaceProject(project);
+
+  expect(useDirectorStore.getState().project.objects[0]?.characterRig?.rigType).toBe("mixamo");
+  expect(useDirectorStore.getState().project.animationAssets).toEqual(project.animationAssets);
 });
 
 it("returns backend characters from impossible elevated positions to the scene ground", async () => {

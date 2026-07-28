@@ -40,6 +40,7 @@ describe("create project contract", () => {
         "Episode 1: The creator opens with a mechanical city skyline and a tense monologue.",
       aspectRatio: "9:16",
       resolution: "1080p",
+      projectType: "animation",
       idempotencyKey: "create-project-launch-teaser-v1",
     });
     assert.equal(projectPhases.includes("script_input"), true);

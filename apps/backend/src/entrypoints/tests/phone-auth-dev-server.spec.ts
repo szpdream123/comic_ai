@@ -24,6 +24,12 @@ import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
+const directUploadPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const directUploadMp4Bytes = Buffer.from([0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+
+function directUploadPngBytes(seed: number) {
+  return Buffer.concat([directUploadPngSignature, Buffer.from([seed, 0, 0, 0])]);
+}
 
 function createPhoneAuthDevServer(
   options?: Parameters<typeof createPhoneAuthDevServerBase>[0],
@@ -223,8 +229,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(envelope.data.items[0].taskId, taskId);
       assert.equal(envelope.data.items[0].status, "completed");
       assert.equal(envelope.data.items[0].kind, "image");
-      assert.equal(envelope.data.items[0].model, "global-ai-opc-gpt-image-2");
+      assert.equal(envelope.data.items[0].model, "GPT Image 2（GlobalAiOpc）");
       assert.equal(envelope.data.items[0].modelName, "GPT Image 2（GlobalAiOpc）");
+      assert.equal(JSON.stringify(envelope.data.items[0]).includes("global-ai-opc-gpt-image-2"), false);
       assert.equal(Object.hasOwn(envelope.data.items[0], "prompt"), false);
       assert.equal(Object.hasOwn(envelope.data.items[0].requestSummary, "prompt"), false);
       assert.equal(Object.hasOwn(envelope.data.items[0].requestSummary, "promptPreview"), false);
@@ -238,6 +245,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(envelope.data.totalPages, 1);
       assert.equal(batchResponse.status, 200);
       assert.deepEqual(batchEnvelope.data.items.map((item: { taskId: string }) => item.taskId), [taskId]);
+      assert.equal(JSON.stringify(batchEnvelope.data).includes("global-ai-opc-gpt-image-2"), false);
 
       const promptSearchResponse = await fetch(
         `${server.origin}/api/task-center/tasks?search=${encodeURIComponent("雨夜街道")}`,
@@ -625,7 +633,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("serves the local Three module files used by the LiquidEther homepage background", async () => {
+  it("serves the local Three and X6 browser runtimes", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 
     try {
@@ -635,6 +643,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const moduleText = await moduleResponse.text();
       const coreResponse = await fetch(`${server.origin}/vendor/three.core.js`);
       const coreText = await coreResponse.text();
+      const x6Response = await fetch(`${server.origin}/vendor/@antv/x6/dist/x6.min.js`);
+      const x6Text = await x6Response.text();
 
       assert.equal(moduleResponse.status, 200);
       assert.match(moduleResponse.headers.get("content-type") ?? "", /text\/javascript/);
@@ -642,6 +652,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(coreResponse.status, 200);
       assert.match(coreResponse.headers.get("content-type") ?? "", /text\/javascript/);
       assert.match(coreText, /class Vector2/);
+      assert.equal(x6Response.status, 200);
+      assert.match(x6Response.headers.get("content-type") ?? "", /text\/javascript/);
+      assert.match(x6Text, /Graph/);
     } finally {
       await server.close();
     }
@@ -737,10 +750,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { connection: "close" },
       });
       const deepLinkHtml = await deepLinkResponse.text();
+      const newCanvasResponse = await fetch(`${server.origin}/new-canvas`, {
+        headers: { connection: "close" },
+      });
+      const newCanvasHtml = await newCanvasResponse.text();
 
       assert.equal(missingResponse.status, 404);
       assert.equal(deepLinkResponse.status, 200);
       assert.match(deepLinkHtml, /id="creator-app"/);
+      assert.equal(newCanvasResponse.status, 200);
+      assert.match(newCanvasHtml, /id="creator-app"/);
     } finally {
       await server.close();
     }
@@ -1983,6 +2002,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           scriptInput: "Episode 1: Project ownership stays personal.",
           aspectRatio: "9:16",
           resolution: "1080p",
+          projectType: "oil_painting",
         }),
       });
       const created = await createResponse.json();
@@ -1990,11 +2010,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const counts = await db.query<{
         owner_project_count: number;
         project_owner_user_id: string;
+        project_style_code: string;
       }>(
         `
           SELECT
             (SELECT count(*)::int FROM projects WHERE owner_user_id = (SELECT id FROM users WHERE phone_e164 = '13800138000')) AS owner_project_count,
-            (SELECT owner_user_id FROM projects WHERE id = $1) AS project_owner_user_id
+            (SELECT owner_user_id FROM projects WHERE id = $1) AS project_owner_user_id,
+            (SELECT project_style_code FROM projects WHERE id = $1) AS project_style_code
         `,
         [created.project.id],
       );
@@ -2007,8 +2029,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(createResponse.status, 200);
       assert.equal(counts.rows[0]?.owner_project_count, 1);
       assert.equal(counts.rows[0]?.project_owner_user_id, await readUserIdForPhone(db, normalizeCnPhone("13800138000")));
+      assert.equal(counts.rows[0]?.project_style_code, "oil_painting");
+      assert.equal(created.project.projectType, "oil_painting");
       assert.equal(projects.projects.length, 1);
       assert.equal(projects.projects[0].id, created.project.id);
+      assert.equal(projects.projects[0].projectType, "oil_painting");
     } finally {
       await server.close();
     }
@@ -2495,12 +2520,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
       });
       const createdMember = await createMemberResponse.json();
 
-      const memberLoginResponse = await fetch(`${server.origin}/api/auth/team-member/password/login`, {
+      const memberLoginResponse = await fetch(`${server.origin}/api/auth/password/login`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           account: createdMember.member.memberLoginAccount,
           password: createdMember.temporaryPassword,
+          actorType: "team_member",
         }),
       });
       const memberCookie = memberLoginResponse.headers.get("set-cookie") ?? "";
@@ -2637,23 +2663,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const legacyEpisodeCanvas = await legacyEpisodeCanvasResponse.json();
       assert.equal(legacyEpisodeCanvasResponse.status, 400, JSON.stringify(legacyEpisodeCanvas));
       assert.equal(legacyEpisodeCanvas.errorCode, "canvas_project_id_required");
-      const legacyNewCanvasResponse = await fetch(`${server.origin}/api/new-canvas/generate`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": "http-new-canvas-episode-fallback-forbidden",
-          cookie,
-        },
-        body: JSON.stringify({
-          episodeId: randomUUID(),
-          canvasNodeId: "image-node",
-          prompt: "不得通过剧集运行独立画布任务",
-          model: "global-ai-opc-gpt-image-2",
-        }),
-      });
-      const legacyNewCanvas = await legacyNewCanvasResponse.json();
-      assert.equal(legacyNewCanvasResponse.status, 400, JSON.stringify(legacyNewCanvas));
-      assert.equal(legacyNewCanvas.errorCode, "canvas_project_id_required");
       const otherCookie = await login(server.origin, "13800138281");
       const forbiddenRunsResponse = await fetch(
         `${server.origin}/api/canvas/${canvasProjectId}/nodes/image-node/runs`,
@@ -3329,7 +3338,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "asset-import/scene",
         fileName: "imported-alley.png",
         contentType: "image/png",
-        body: Buffer.from([1, 2, 3, 4]),
+        body: directUploadPngBytes(1),
       });
       const importedAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
         method: "POST",
@@ -3373,7 +3382,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "asset-import/prop",
         fileName: "disposable-prop.png",
         contentType: "image/png",
-        body: Buffer.from([5, 6, 7, 8]),
+        body: directUploadPngBytes(2),
       });
       const deletableAssetResponse = await fetch(`${server.origin}/api/creator/assets/import`, {
         method: "POST",
@@ -3602,7 +3611,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "storyboard-image",
         fileName: "manual-storyboard-image.png",
         contentType: "image/png",
-        body: Buffer.from([9, 10, 11, 12]),
+        body: directUploadPngBytes(3),
       });
       const importedShotImageResponse = await fetch(
         `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
@@ -3629,7 +3638,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "storyboard-image",
         fileName: "manual-storyboard-image-dup.png",
         contentType: "image/png",
-        body: Buffer.from([13, 14, 15, 16]),
+        body: directUploadPngBytes(4),
       });
       const importedSecondShotImageResponse = await fetch(
         `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
@@ -3656,7 +3665,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "storyboard-video",
         fileName: "manual-storyboard-video.mp4",
         contentType: "video/mp4",
-        body: Buffer.from([17, 18, 19, 20]),
+        body: directUploadMp4Bytes,
       });
       const importedShotVideoResponse = await fetch(
         `${server.origin}/api/creator/shots/${createdShot.shot.id}/media/import`,
@@ -4121,6 +4130,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           scriptInput: "Episode 1: The project opens an episode workbench.",
           aspectRatio: "9:16",
           resolution: "1080p",
+          projectType: "oil_painting",
         }),
       });
       const created = await createResponse.json();
@@ -4217,6 +4227,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.match(createdEpisodeEnvelope.requestId, /.+/);
       assert.equal(detailResponse.status, 200);
       assert.equal(detailEnvelope.data.project.projectId, created.project.id);
+      assert.equal(detailEnvelope.data.project.projectType, "oil_painting");
       assert.ok(
         detailEnvelope.data.episodes.some(
           (episode: { episodeId: string; title: string }) =>
@@ -4227,6 +4238,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(workbenchEnvelope.data.episode.episodeId, episodeId);
       assert.equal(workbenchEnvelope.data.episode.projectId, created.project.id);
       assert.equal(workbenchEnvelope.data.project.projectId, created.project.id);
+      assert.equal(workbenchEnvelope.data.project.projectType, "oil_painting");
       assert.equal(workbenchEnvelope.data.navigation.backTarget, "project_episodes");
       assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "storyboards"), false);
       assert.equal(Object.prototype.hasOwnProperty.call(workbenchEnvelope.data, "permissions"), false);
@@ -4540,8 +4552,388 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("generates an AI storyboard preview from creator-selected prompt packages", async () => {
+  it("rejects legacy storyboard package selection for user script analysis", async () => {
     const db = await createMigratedTestDb();
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({ scriptText: "任小野把小草托付给闵婶子。" }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138210");
+      const response = await fetch(`${server.origin}/api/creator/scripts/ai-script-analysis`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          scriptText: "任小野把小草托付给闵婶子。",
+          packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+        }),
+      });
+
+      const responseBody = await response.json();
+      assert.equal(response.status, 400);
+      assert.equal(responseBody.errorCode, "script_conversion_skill_required");
+      assert.equal(textChatGateway.calls.length, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("uses the selected official novel-to-script skill for user script analysis", async () => {
+    const db = await createMigratedTestDb();
+    await seedScriptAnalysisModelConfig(db);
+    const skillId = "67676767-6767-4767-8767-676767676767";
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES ($1, 'script', '官方小说转剧本技能', '', $2, 'enabled', true, true, 18, NOW())`,
+      [skillId, "把小说改编为节奏紧凑、可拍摄的分场剧本。"],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway(["改编后的剧本"]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138210");
+      await seedGenerationAccessForPhone(db, "13800138210", 5000);
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE phone_e164 = $1",
+        [normalizeCnPhone("13800138210")],
+      );
+      const modelPrice = await db.query<{ price: number | string }>(
+        "SELECT pricing_json->>'baseCredits' AS price FROM ai_model_configs WHERE model_code = 'deepseek-noval'",
+      );
+      const response = await fetch(`${server.origin}/api/creator/scripts/ai-script-analysis`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          scriptText: "任小野把小草托付给闵婶子。",
+          skillId,
+          modelCode: "deepseek-noval",
+          creditCost: 1,
+          modelCreditCost: 1,
+          skillCreditCost: 0,
+        }),
+      });
+
+      const responseText = await response.clone().text();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE phone_e164 = $1",
+        [normalizeCnPhone("13800138210")],
+      );
+      const expectedCost = Number(modelPrice.rows[0]?.price ?? 0) + 18;
+      assert.equal(response.status, 200, responseText);
+      assert.equal(
+        Number(balanceBefore.rows[0]?.balance ?? 0) - Number(balanceAfter.rows[0]?.balance ?? 0),
+        expectedCost,
+      );
+      assert.match(responseText, new RegExp(`"creditCost":${expectedCost}`));
+      assert.equal(
+        textChatGateway.calls[0]?.prompt,
+        "把小说改编为节奏紧凑、可拍摄的分场剧本。\n\n任小野把小草托付给闵婶子。",
+      );
+      const authorEarnings = await db.query(
+        "SELECT id FROM credit_ledger_entries WHERE source_type = 'prompt_skill_usage_earning'",
+      );
+      assert.equal(authorEarnings.rows.length, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("credits private script skill fees to the author once and skips free skill payouts", async () => {
+    const db = await createMigratedTestDb();
+    await seedScriptAnalysisModelConfig(db);
+    const paidSkillId = "77777777-7777-4777-8777-777777777771";
+    const freeSkillId = "77777777-7777-4777-8777-777777777772";
+    const otherPaidSkillId = "77777777-7777-4777-8777-777777777773";
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      "付费技能改编结果",
+      "付费技能重复请求结果",
+      "免费技能改编结果",
+      "子账户使用付费技能改编结果",
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      await login(server.origin, "13800138231");
+      const buyerCookie = await login(server.origin, "13800138232");
+      const authorId = await readUserIdForPhone(db, normalizeCnPhone("13800138231"));
+      const buyerId = await readUserIdForPhone(db, normalizeCnPhone("13800138232"));
+      await seedGenerationAccessForPhone(db, "13800138232", 5000);
+      await db.query(
+        `INSERT INTO prompts (
+           id, prompt_category, name, summary, prompt_content, status,
+           is_official, is_published, price_credits, published_at
+         ) VALUES
+           ($1, 'script', '私人付费小说转剧本', '', '私人付费技能正文', 'enabled', false, true, 21, NOW()),
+           ($2, 'script', '私人免费小说转剧本', '', '私人免费技能正文', 'enabled', false, true, 0, NOW()),
+           ($3, 'script', '其他私人付费小说转剧本', '', '其他私人付费技能正文', 'enabled', false, true, 21, NOW())`,
+        [paidSkillId, freeSkillId, otherPaidSkillId],
+      );
+      await db.query(
+        `INSERT INTO prompt_user_links (
+           id, prompt_id, user_id, relation_type, status, price_credits_paid, added_at, created_at, updated_at
+         ) VALUES
+           ($1, $2, $3, 'owner', 'active', 0, NOW(), NOW(), NOW()),
+           ($4, $5, $3, 'owner', 'active', 0, NOW(), NOW(), NOW()),
+           ($6, $2, $7, 'added', 'active', 0, NOW(), NOW(), NOW()),
+           ($8, $5, $7, 'added', 'active', 0, NOW(), NOW(), NOW()),
+           ($9, $10, $3, 'owner', 'active', 0, NOW(), NOW(), NOW()),
+           ($11, $10, $7, 'added', 'active', 0, NOW(), NOW(), NOW())`,
+        [
+          randomUUID(), paidSkillId, authorId, randomUUID(), freeSkillId, randomUUID(), buyerId, randomUUID(),
+          randomUUID(), otherPaidSkillId, randomUUID(),
+        ],
+      );
+      const readBalance = async (userId: string) => Number((await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      )).rows[0]?.balance ?? 0);
+      const authorBefore = await readBalance(authorId);
+      const buyerBefore = await readBalance(buyerId);
+      const postAnalysis = (skillId: string, idempotencyKey: string, cookie = buyerCookie) => fetch(
+        `${server.origin}/api/creator/scripts/ai-script-analysis`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": idempotencyKey,
+            cookie,
+          },
+          body: JSON.stringify({ scriptText: "待改编小说正文。", skillId, modelCode: "deepseek-noval" }),
+        },
+      );
+
+      const firstPaidResponse = await postAnalysis(paidSkillId, "private-paid-script-skill-usage");
+      assert.equal(firstPaidResponse.status, 200, await firstPaidResponse.clone().text());
+      await firstPaidResponse.text();
+      assert.equal(await readBalance(authorId), authorBefore + 21);
+      assert.equal(await readBalance(buyerId), buyerBefore - 181);
+
+      const replayResponse = await postAnalysis(paidSkillId, "private-paid-script-skill-usage");
+      assert.equal(replayResponse.status, 200, await replayResponse.clone().text());
+      await replayResponse.text();
+      assert.equal(await readBalance(authorId), authorBefore + 21);
+      assert.equal(await readBalance(buyerId), buyerBefore - 181);
+
+      const conflictResponse = await postAnalysis(otherPaidSkillId, "private-paid-script-skill-usage");
+      assert.equal(conflictResponse.status, 409);
+      assert.equal((await conflictResponse.json()).errorCode, "idempotency_conflict");
+      assert.equal(await readBalance(authorId), authorBefore + 21);
+      assert.equal(await readBalance(buyerId), buyerBefore - 181);
+
+      const freeResponse = await postAnalysis(freeSkillId, "private-free-script-skill-usage");
+      assert.equal(freeResponse.status, 200, await freeResponse.clone().text());
+      await freeResponse.text();
+      assert.equal(await readBalance(authorId), authorBefore + 21);
+      assert.equal(await readBalance(buyerId), buyerBefore - 341);
+      const earnings = await db.query<{ user_id: string; amount: number | string }>(
+        `SELECT user_id, amount
+         FROM credit_ledger_entries
+         WHERE source_type = 'prompt_skill_usage_earning'`,
+      );
+      assert.equal(earnings.rows.length, 1);
+      assert.equal(earnings.rows[0]?.user_id, authorId);
+      assert.equal(Number(earnings.rows[0]?.amount ?? 0), 21);
+
+      await db.query("UPDATE users SET team_seat_limit = 50 WHERE id = $1", [buyerId]);
+      await db.query(
+        `INSERT INTO user_entitlements (
+           id, user_id, entitlement_key, status, source, expires_at, created_at, updated_at
+         ) VALUES ($1, $2, 'team_member_management', 'active', 'dev_seed', $3, NOW(), NOW())
+         ON CONFLICT (user_id, entitlement_key) DO UPDATE
+         SET status = 'active', expires_at = EXCLUDED.expires_at, updated_at = NOW()`,
+        [randomUUID(), buyerId, new Date("2099-01-01T00:00:00.000Z")],
+      );
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: buyerCookie },
+        body: JSON.stringify({
+          teamAccount: "script_skill_member",
+          displayName: "剧本技能子账户",
+          projectIds: [],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      await db.query("UPDATE team_members SET member_credits = 500 WHERE id = $1", [
+        createdMember.member.membershipId,
+      ]);
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const memberResponse = await postAnalysis(
+        paidSkillId,
+        "team-member-private-paid-script-skill-usage",
+        memberCookie,
+      );
+      assert.equal(memberResponse.status, 200, await memberResponse.clone().text());
+      await memberResponse.text();
+      const memberBalance = await db.query<{ member_credits: number | string }>(
+        "SELECT member_credits FROM team_members WHERE id = $1",
+        [createdMember.member.membershipId],
+      );
+      assert.equal(Number(memberBalance.rows[0]?.member_credits ?? 0), 319);
+      assert.equal(await readBalance(authorId), authorBefore + 42);
+      assert.equal(await readBalance(buyerId), buyerBefore - 341);
+      const earningsAfterMemberUsage = await db.query<{ user_id: string; amount: number | string }>(
+        `SELECT user_id, amount
+         FROM credit_ledger_entries
+         WHERE source_type = 'prompt_skill_usage_earning'`,
+      );
+      assert.equal(earningsAfterMemberUsage.rows.length, 2);
+      assert.equal(earningsAfterMemberUsage.rows.every((row) => row.user_id === authorId), true);
+      assert.equal(earningsAfterMemberUsage.rows.reduce((sum, row) => sum + Number(row.amount), 0), 42);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects user script analysis when membership is not active", async () => {
+    const db = await createMigratedTestDb();
+    const skillId = "68686868-6868-4868-8868-686868686868";
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES ($1, 'script', '会员校验技能', '', $2, 'enabled', true, true, 18, NOW())`,
+      [skillId, "把小说改编为可以拍摄的分场剧本，保留原文核心情节。"],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway(["不应调用模型"]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138212");
+      const response = await fetch(`${server.origin}/api/creator/scripts/ai-script-analysis`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          scriptText: "待改编小说正文。",
+          skillId,
+          modelCode: "deepseek-noval",
+        }),
+      });
+      const responseBody = await response.json();
+
+      assert.equal(response.status, 403);
+      assert.equal(responseBody.errorCode, "generation_membership_required");
+      assert.equal(textChatGateway.calls.length, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects user script analysis without deducting when credits are insufficient", async () => {
+    const db = await createMigratedTestDb();
+    await seedScriptAnalysisModelConfig(db);
+    const skillId = "69696969-6969-4969-8969-696969696969";
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES ($1, 'script', '高价小说转剧本技能', '', $2, 'enabled', true, true, 999, NOW())`,
+      [skillId, "把小说改编为可以拍摄的分场剧本，保留原文核心情节。"],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway(["不应调用模型"]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138213");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138213"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 100,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      const response = await fetch(`${server.origin}/api/creator/scripts/ai-script-analysis`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          scriptText: "待改编小说正文。",
+          skillId,
+          modelCode: "deepseek-noval",
+        }),
+      });
+      const responseBody = await response.json();
+      const balance = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      assert.equal(response.status, 402);
+      assert.equal(responseBody.errorCode, "insufficient_credits");
+      assert.equal(Number(balance.rows[0]?.balance ?? 0), 100);
+      assert.equal(textChatGateway.calls.length, 0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("routes script document imports past the script card matcher", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138211");
+      const response = await fetch(`${server.origin}/api/creator/scripts/import-document`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-script-import-document-route",
+          cookie,
+        },
+        body: JSON.stringify({
+          title: "AI 分析剧本",
+          scriptInput: "第一场\n任小野走进城门。",
+        }),
+      });
+
+      const responseText = await response.clone().text();
+      assert.equal(response.status, 200, responseText);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("generates an AI storyboard preview from selected workflow skills", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    const skillId = "78787878-7878-4787-8787-787878787878";
+    const sceneSkillId = "79797979-7979-4797-8797-797979797979";
+    const sceneSkillAuthorId = "79797979-7979-4797-8797-797979797970";
+    await db.query(
+      `INSERT INTO users (id, phone_e164, display_name, password_hash, status, credit_balance_cached)
+       VALUES ($1, '13800138239', '场景技能作者', 'plain:test-password', 'active', 0)`,
+      [sceneSkillAuthorId],
+    );
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES
+         ($1, 'script', '官方新建剧集改编技能', '', $2, 'enabled', true, true, 7, NOW()),
+         ($3, 'scene_extract', '私人场景抽取技能', '', $4, 'enabled', false, true, 3, NOW())`,
+      [skillId, "请把小说改编为节奏紧凑、可以直接拍摄的分场剧本。", sceneSkillId, "场景抽取专用\n{{script}}"],
+    );
+    await db.query(
+      `INSERT INTO prompt_user_links (id, prompt_id, user_id, relation_type, status, price_credits_paid, added_at, created_at, updated_at)
+       VALUES ($1, $2, $3, 'owner', 'active', 0, NOW(), NOW(), NOW())`,
+      [randomUUID(), sceneSkillId, sceneSkillAuthorId],
+    );
     const textChatGateway = new FakeAiStoryboardTextGateway([
       JSON.stringify({
         title: "第一章",
@@ -4575,6 +4967,17 @@ describe("phone auth dev server", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138210");
+      await seedGenerationAccessForPhone(db, "13800138210", 5000);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138210"));
+      await db.query(
+        `INSERT INTO prompt_user_links (id, prompt_id, user_id, relation_type, status, price_credits_paid, added_at, created_at, updated_at)
+         VALUES ($1, $2, $3, 'added', 'active', 0, NOW(), NOW(), NOW())`,
+        [randomUUID(), sceneSkillId, userId],
+      );
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
         method: "POST",
@@ -4591,18 +4994,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
-      const packagesResponse = await fetch(
-        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
-        { headers: { cookie } },
-      );
-      const packagesEnvelope = await packagesResponse.json();
-      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
-      const packageId = (code: string) => {
-        const found = packages.find((item) => item.code === code);
-        assert.ok(found, `missing package ${code}`);
-        return found.id;
-      };
-
       const previewResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
@@ -4614,10 +5005,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
           },
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
-            packages: {
-              genrePackageId: packageId("xuanhuan_xiuxian"),
-              emotionPackageId: packageId("male_hotblood"),
-            },
+            skills: { script: skillId, scene_extract: sceneSkillId },
+            modelCode: "preview-script-model",
           }),
         },
       );
@@ -4627,28 +5016,39 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(previewResponse.status, 200);
       assert.equal(textChatGateway.calls.length, 5);
       assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /任小野把小草托付给闵婶子/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[基础改编任务\]/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[题材包：玄幻修仙\]/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[情绪包：男频热血\]/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用质量禁忌\]/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：角色一致性禁忌\]/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /按玄幻修仙风格改编/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /节奏强、冲突硬/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免魔改原著核心设定/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免角色姓名、身份、年龄、外貌、服装、性格前后不一致/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /请把小说原文改写/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /纯文本剧本/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /JSON 对象/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /scriptText/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /改写要求/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /题材看点：/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /情绪看点：/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /通用禁忌：/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[小说原文\]/);
-      assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("按玄幻修仙风格改编") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("节奏强、冲突硬"));
-      assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("节奏强、冲突硬") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("避免魔改原著核心设定"));
-      assert.ok((textChatGateway.calls[0]?.prompt ?? "").indexOf("避免魔改原著核心设定") < (textChatGateway.calls[0]?.prompt ?? "").indexOf("任小野把小草托付给闵婶子"));
+      assert.equal(
+        textChatGateway.calls[0]?.prompt,
+        "请把小说改编为节奏紧凑、可以直接拍摄的分场剧本。\n\n任小野把小草托付给闵婶子。",
+      );
+      assert.deepEqual(
+        previewEnvelope.data.selectedSkills.map((item: { id: string; category: string }) => [item.category, item.id]),
+        [["script", skillId], ["scene_extract", sceneSkillId]],
+      );
+      assert.equal(previewEnvelope.data.selectedPackages, null);
+      assert.equal(previewEnvelope.data.modelCreditCost, 0);
+      assert.equal(previewEnvelope.data.skillCreditCost, 10);
+      assert.equal(previewEnvelope.data.creditCost, 10);
+      assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景抽取专用/);
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+      assert.equal(
+        Number(balanceBefore.rows[0]?.balance ?? 0) - Number(balanceAfter.rows[0]?.balance ?? 0),
+        10,
+      );
+      const authorBalance = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [sceneSkillAuthorId],
+      );
+      assert.equal(Number(authorBalance.rows[0]?.balance ?? 0), 3);
+      const authorEarnings = await db.query<{ amount: number | string }>(
+        `SELECT amount FROM credit_ledger_entries
+         WHERE user_id = $1 AND source_type = 'prompt_skill_usage_earning'`,
+        [sceneSkillAuthorId],
+      );
+      assert.equal(authorEarnings.rows.length, 1);
+      assert.equal(Number(authorEarnings.rows[0]?.amount ?? 0), 3);
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /任小野把小草托付给闵婶子/);
       assert.match(textChatGateway.calls[2]?.prompt ?? "", /任小野把小草托付给闵婶子/);
       assert.match(textChatGateway.calls[3]?.prompt ?? "", /任小野把小草托付给闵婶子/);
@@ -4788,36 +5188,21 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("appends the admin default taboo package to creator preview prompts", async () => {
+  it("uses the selected script prompt for creator preview generation", async () => {
     const db = await createMigratedTestDb();
+    const selectedScriptPromptId = "55555555-5555-4555-8555-555555555555";
     await db.query(
       `
-        UPDATE storyboard_prompt_packages
-        SET is_default = false,
-            is_global_default = false
-        WHERE package_type = 'taboo'
-          AND deleted_at IS NULL
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO storyboard_prompt_packages (
-          id, name, code, package_type, audience, tags, prompt_content, key_points,
-          negative_prompt, applicable_scene, output_type, can_stack, max_select_count,
-          is_default, is_global_default, is_recommended, sort_order, status, remark,
-          created_at, updated_at
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
         )
-        VALUES (
-          $1, $2, $3, 'taboo', NULL, '[]'::jsonb, $4, '[]'::jsonb,
-          NULL, '[]'::jsonb, NULL, true, NULL,
-          true, false, false, 9999, 'enabled', '', NOW(), NOW()
-        )
-        ON CONFLICT (code) DO NOTHING
+        VALUES ($1, 'script', $2, '', $3, 'enabled', true, true, NOW(), NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
       `,
       [
-        "55555555-5555-4555-8555-555555555555",
+        selectedScriptPromptId,
         "通用小说转剧本",
-        "universal_script",
         "请把小说原文改写为可继续生成分镜的纯文本剧本。请只返回一个 JSON 对象。",
       ],
     );
@@ -4859,18 +5244,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
-      const packagesResponse = await fetch(
-        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
-        { headers: { cookie } },
-      );
-      const packagesEnvelope = await packagesResponse.json();
-      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
-      const packageId = (code: string) => {
-        const found = packages.find((item) => item.code === code);
-        assert.ok(found, `missing package ${code}`);
-        return found.id;
-      };
-
       const previewResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
@@ -4883,8 +5256,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
             packages: {
-              genrePackageId: packageId("xuanhuan_xiuxian"),
-              emotionPackageId: packageId("male_hotblood"),
+              genrePackageId: selectedScriptPromptId,
+              emotionPackageId: selectedScriptPromptId,
             },
           }),
         },
@@ -4895,7 +5268,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[基础改编任务\]/);
       assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[题材包：玄幻修仙\]/);
       assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[情绪包：男频热血\]/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用小说转剧本\]/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /请把小说原文改写为可继续生成分镜的纯文本剧本/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /请只返回一个 JSON 对象/);
       assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用质量禁忌\]/);
@@ -4905,8 +5277,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("appends global default taboo packages to creator script analysis prompts", async () => {
+  it("uses the current automatic script prompt for creator script analysis", async () => {
     const db = await createMigratedTestDb();
+    await db.query(
+      `
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
+        )
+        VALUES (
+          '66666666-6666-4666-8666-666666666666', 'script', '剧本分析默认提示词', '',
+          '避免魔改原著核心设定；避免角色姓名、身份、年龄、外貌、服装、性格前后不一致。',
+          'enabled', true, true, NOW(), NOW(), NOW()
+        )
+        ON CONFLICT (id) DO NOTHING
+      `,
+    );
     const textChatGateway = new FakeAiStoryboardTextGateway([
       JSON.stringify({
         scriptText: "任小野把小草托付给闵婶子。",
@@ -4933,18 +5319,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
-      const packagesResponse = await fetch(
-        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
-        { headers: { cookie } },
-      );
-      const packagesEnvelope = await packagesResponse.json();
-      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
-      const packageId = (code: string) => {
-        const found = packages.find((item) => item.code === code);
-        assert.ok(found, `missing package ${code}`);
-        return found.id;
-      };
-
       const analysisResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-script-analysis`,
         {
@@ -4953,8 +5327,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
             packages: {
-              genrePackageId: packageId("xuanhuan_xiuxian"),
-              emotionPackageId: packageId("male_hotblood"),
+              genrePackageId: "auto",
+              emotionPackageId: "auto",
             },
           }),
         },
@@ -4962,117 +5336,28 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(createResponse.status, 200);
       assert.equal(analysisResponse.status, 200);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：通用质量禁忌\]/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免魔改原著核心设定/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /\[通用禁忌包：角色一致性禁忌\]/);
       assert.match(textChatGateway.calls[0]?.prompt ?? "", /避免角色姓名、身份、年龄、外貌、服装、性格前后不一致/);
     } finally {
       await server.close();
     }
   });
 
-  it("uses the current default templates from each prompt list for preview generation", async () => {
+  it("uses the current prompt from each extraction category for preview generation", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
-        UPDATE scene_prompt_templates
-        SET is_default = false
-        WHERE deleted_at IS NULL
-          AND stage = 'split'
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO scene_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, json_schema,
-          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
         )
         VALUES
-          ($1, $2, $3, 'split', 'general', '[]'::jsonb, '[]'::jsonb, '', $4, '', 9999, 'enabled', true, '', NOW(), NOW())
-        ON CONFLICT (code) DO NOTHING
+          ('11111111-1111-4111-8111-111111111111', 'scene_extract', '自定义场景提示词', '', '后台列表默认场景模板', 'enabled', true, true, NOW(), NOW(), NOW()),
+          ('33333333-3333-4333-8333-333333333333', 'character_extract', '自定义角色提示词', '', '后台列表默认角色模板', 'enabled', true, true, NOW(), NOW(), NOW()),
+          ('22222222-2222-4222-8222-222222222222', 'prop_extract', '自定义道具提示词', '', '后台列表默认道具模板', 'enabled', true, true, NOW(), NOW(), NOW()),
+          ('44444444-4444-4444-8444-444444444444', 'shot', '自定义分镜提示词', '', '后台列表默认分镜模板', 'enabled', true, true, NOW(), NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
       `,
-      [
-        "11111111-1111-4111-8111-111111111111",
-        "自定义默认场景模板",
-        "custom_scene_default",
-        "后台列表默认场景模板",
-      ],
-    );
-    await db.query(
-      `
-        UPDATE character_prompt_templates
-        SET is_default = false
-        WHERE deleted_at IS NULL
-          AND stage = 'extract'
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO character_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, chunk_min_chars,
-          chunk_max_chars, overlap_chars, json_schema, prompt_content, is_default,
-          sort_order, status, remark, created_at, updated_at
-        )
-        VALUES
-          ($1, $2, $3, 'extract', 'general', '[]'::jsonb, '[]'::jsonb, 3000, 8000, 500, '', $4, true, 9999, 'enabled', '', NOW(), NOW())
-        ON CONFLICT (code) DO NOTHING
-      `,
-      [
-        "33333333-3333-4333-8333-333333333333",
-        "自定义默认角色模板",
-        "custom_character_default",
-        "后台列表默认角色模板",
-      ],
-    );
-    await db.query(
-      `
-        UPDATE prop_prompt_templates
-        SET is_default = false
-        WHERE deleted_at IS NULL
-          AND stage = 'extract'
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO prop_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, json_schema,
-          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
-        )
-        VALUES
-          ($1, $2, $3, 'extract', 'general', '[]'::jsonb, '[]'::jsonb, '', $4, '', 9999, 'enabled', true, '', NOW(), NOW())
-        ON CONFLICT (code) DO NOTHING
-      `,
-      [
-        "22222222-2222-4222-8222-222222222222",
-        "自定义默认道具模板",
-        "custom_prop_default",
-        "后台列表默认道具模板",
-      ],
-    );
-    await db.query(
-      `
-        UPDATE shot_prompt_templates
-        SET is_default = false
-        WHERE deleted_at IS NULL
-          AND stage = 'outline'
-      `,
-    );
-    await db.query(
-      `
-        INSERT INTO shot_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, json_schema,
-          prompt_content, negative_prompt, sort_order, status, is_default, remark, created_at, updated_at
-        )
-        VALUES
-          ($1, $2, $3, 'outline', 'general', '[]'::jsonb, '[]'::jsonb, '', $4, '', 9999, 'enabled', true, '', NOW(), NOW())
-        ON CONFLICT (code) DO NOTHING
-      `,
-      [
-        "44444444-4444-4444-8444-444444444444",
-        "自定义默认分镜模板",
-        "custom_shot_default",
-        "后台列表默认分镜模板",
-      ],
     );
     const textChatGateway = new FakeAiStoryboardTextGateway([
       JSON.stringify({
@@ -5112,18 +5397,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
-      const packagesResponse = await fetch(
-        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500`,
-        { headers: { cookie } },
-      );
-      const packagesEnvelope = await packagesResponse.json();
-      const packages = packagesEnvelope.packages as Array<{ id: string; code: string }>;
-      const packageId = (code: string) => {
-        const found = packages.find((item) => item.code === code);
-        assert.ok(found, `missing package ${code}`);
-        return found.id;
-      };
-
       const previewResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
         {
@@ -5136,8 +5409,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
             packages: {
-              genrePackageId: packageId("xuanhuan_xiuxian"),
-              emotionPackageId: packageId("male_hotblood"),
+              genrePackageId: "auto",
+              emotionPackageId: "auto",
             },
           }),
         },
@@ -5607,6 +5880,109 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("lets creators publish and freely add protected prompt marketplace items", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const sellerCookie = await login(server.origin, "13800138201");
+      const buyerCookie = await login(server.origin, "13800138202");
+      const createResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/items`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: sellerCookie },
+        body: JSON.stringify({
+          title: "创作者场景抽取提示词",
+          category: "scene_extract",
+          summary: "用于长篇小说的场景抽取。",
+          content: "请根据小说章节抽取全部场景，并保持地点、时间、人物关系和视觉线索一致。",
+          tags: ["场景", "长篇"],
+          priceCredits: 25,
+        }),
+      });
+      assert.equal(createResponse.status, 201);
+      const created = await createResponse.json();
+
+      const updateResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/items/${created.item.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie: sellerCookie },
+        body: JSON.stringify({
+          title: "创作者场景抽取提示词（已编辑）",
+          category: "scene_extract",
+          summary: "编辑后的场景抽取简介。",
+          content: "请根据小说章节抽取全部场景，并保持地点、时间、人物关系、视觉线索和上下文连续性一致。",
+          coverImageUrl: "https://example.com/scene-prompt-cover.png",
+          priceCredits: 25,
+          publish: true,
+        }),
+      });
+      assert.equal(updateResponse.status, 200);
+      const updated = await updateResponse.json();
+      assert.equal(updated.item.title, "创作者场景抽取提示词（已编辑）");
+      assert.equal(updated.item.coverImageUrl, "https://example.com/scene-prompt-cover.png");
+
+      const unauthorizedUpdateResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/items/${created.item.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", cookie: buyerCookie },
+        body: JSON.stringify({
+          title: "无权编辑",
+          category: "scene_extract",
+          content: "购买者不能修改其他作者发布的提示词，这段正文用于验证接口的所有者权限限制。",
+          priceCredits: 0,
+          publish: false,
+        }),
+      });
+      assert.equal(unauthorizedUpdateResponse.status, 404);
+
+      const catalogResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace`, {
+        headers: { cookie: buyerCookie },
+      });
+      assert.equal(catalogResponse.status, 200);
+      const catalog = await catalogResponse.json();
+      assert.equal(catalog.pagination.pageSize, 12);
+      const listed = catalog.items.find((item: { id: string }) => item.id === created.item.id);
+      assert.equal(listed.official, false);
+      assert.equal(listed.title, "创作者场景抽取提示词（已编辑）");
+      assert.equal(listed.priceCredits, 25);
+      assert.equal(listed.contentVisible, false);
+      assert.equal(Object.prototype.hasOwnProperty.call(listed, "content"), false);
+
+      const pagedCatalogResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace?page=999&page_size=1`, {
+        headers: { cookie: buyerCookie },
+      });
+      const pagedCatalog = await pagedCatalogResponse.json();
+      assert.equal(pagedCatalogResponse.status, 200);
+      assert.equal(pagedCatalog.pagination.page, pagedCatalog.pagination.totalPages || 1);
+      assert.equal(pagedCatalog.pagination.pageSize, 1);
+      assert.equal(pagedCatalog.items.length <= 1, true);
+      assert.ok(Array.isArray(pagedCatalog.ranking));
+      assert.equal(pagedCatalog.ranking.length <= 20, true);
+
+      const purchaseResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/items/${created.item.id}/purchase`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: buyerCookie },
+        body: "{}",
+      });
+      assert.equal(purchaseResponse.status, 200);
+      const added = await purchaseResponse.json();
+      const buyerBalance = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE phone_e164 = $1",
+        [normalizeCnPhone("13800138202")],
+      );
+      assert.equal(added.priceCredits, 0);
+      assert.equal(Number(buyerBalance.rows[0]?.balance ?? 0), 0);
+      const libraryResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/library`, {
+        headers: { cookie: buyerCookie },
+      });
+      const library = await libraryResponse.json();
+      const purchased = library.items.find((item: { id: string }) => item.id === created.item.id);
+      assert.equal(purchased.purchased, true);
+      assert.equal(Object.prototype.hasOwnProperty.call(purchased, "content"), false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exposes enabled image prompt styles as project styles to authenticated creators", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -5892,10 +6268,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
                 turnId: "asset-image-turn-1",
                 messageKey: "asset-image-turn-1:user_request",
                 messageType: "user_request",
-                payload: {
-                  assetId,
-                  mediaKind: "image",
-                  promptPreview: "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
+                 payload: {
+                   assetId,
+                   mediaKind: "image",
+                   selectedModelId: "global-ai-opc-gpt-image-2",
+                   modelLabel: "global-ai-opc-gpt-image-2",
+                   promptPreview: "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
                   quickReferenceItems: [],
                   selectionContext: {
                     assetTab: "character",
@@ -5910,10 +6288,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
                 messageType: "result",
                 taskId: "asset-image-task-1",
                 status: "completed",
-                payload: {
-                  assetId,
-                  mediaKind: "image",
-                  promptPreview: "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
+                 payload: {
+                   assetId,
+                   mediaKind: "image",
+                   model: "global-ai-opc-gpt-image-2",
+                   promptPreview: "瘦削，警惕，穿破旧夹克，肩背磨损背包。",
                   status: "completed",
                   taskId: "asset-image-task-1",
                   fixedImages: [
@@ -6112,10 +6491,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(getLightImageConversationResponse.status, 200);
       assert.equal(getLightVideoConversationResponse.status, 200);
       assert.equal(appendConversationEnvelope.data.entries.length, 1);
+      assert.equal(appendConversationEnvelope.data.entries[0].modelLabel, "GPT Image 2（GlobalAiOpc）");
+      assert.equal(JSON.stringify(appendConversationEnvelope.data).includes("global-ai-opc-gpt-image-2"), false);
       assert.equal(appendVideoConversationEnvelope.data.entries.length, 1);
       assert.equal(appendSecondImageConversationEnvelope.data.entries.length, 1);
       assert.equal(appendSecondImageConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
       assert.equal(getConversationEnvelope.data.entries.length, 2);
+      assert.equal(JSON.stringify(getConversationEnvelope.data).includes("global-ai-opc-gpt-image-2"), false);
+      assert.equal(JSON.stringify(getLightImageConversationEnvelope.data).includes("global-ai-opc-gpt-image-2"), false);
       const firstImageEntry = getConversationEnvelope.data.entries.find(
         (entry: { taskId: string }) => entry.taskId === "asset-image-task-1",
       );
@@ -6984,7 +7367,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "asset-import/scene",
         fileName: "project-delete-upload.png",
         contentType: "image/png",
-        body: Buffer.from([1, 2, 3, 4]),
+        body: directUploadPngBytes(5),
       });
 
       const uploadRowsBeforeDelete = await db.query<{ count: number | string }>(
@@ -7387,7 +7770,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           },
           body: JSON.stringify({
             assetType: "scene",
-            name: "搴熷湡琛楄",
+            name: "No-preview scene fixture",
             description: "闆ㄥ闇撹櫣搴熷琛楄",
           }),
         },
@@ -7412,7 +7795,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         purpose: "episode-asset-library/scene",
         fileName: "episode-library-scene.png",
         contentType: "image/png",
-        body: Buffer.from([137, 80, 78, 71]),
+        body: directUploadPngBytes(6),
       });
 
       const importResponse = await fetch(`${server.origin}/api/episodes/${episodeId}/assets/import`, {
@@ -8479,6 +8862,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
               progress_percent = 100,
               result_assets_json = $2::jsonb,
               credit_status = 'consumed',
+              completed_at = '2026-06-03T07:00:00.000Z'::timestamptz,
               updated_at = now()
           WHERE task_id = $1
         `,
@@ -8520,6 +8904,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(taskEnvelope.data.status, "succeeded");
       assert.equal(taskEnvelope.data.progressStage, "completed");
       assert.equal(taskEnvelope.data.progressPercent, 100);
+      assert.equal(taskEnvelope.data.returnedAt, "2026-06-03T07:00:00.000Z");
       assert.equal(taskEnvelope.data.snapshot.progressStage, "completed");
       assert.equal(taskEnvelope.data.snapshot.progressPercent, 100);
       assert.equal(taskEnvelope.data.result.imageUrl, snapshotUrl);
@@ -12270,6 +12655,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(productionLauncherScript, /allowLocalDatabaseUrl:\s*true/);
     assert.match(productionLauncherScript, /listenHost:/);
     assert.match(productionLauncherScript, /NODE_ENV\s*=\s*"production"/);
+    assert.match(productionLauncherScript, /createCreatorDevServiceSupervisor/);
+    assert.match(productionLauncherScript, /generation-outbox/);
+    assert.match(productionLauncherScript, /run-generation-outbox-dispatcher\.mjs/);
+    assert.match(productionLauncherScript, /generation-repair/);
+    assert.match(productionLauncherScript, /run-generation-queue-maintenance\.mjs/);
+    assert.match(productionLauncherScript, /generation-worker/);
+    assert.match(productionLauncherScript, /run-generation-video-worker\.mjs/);
+    assert.match(productionLauncherScript, /restartOnFailure:\s*true/);
+    assert.match(productionLauncherScript, /server\.close\(\)/);
+    assert.doesNotMatch(productionLauncherScript, /npm\s+(start|run)/);
     assert.match(packageJson, /"start"\s*:\s*"node scripts\/run-phone-auth-production\.mjs"/);
   });
 
@@ -12966,12 +13361,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
         updated_by_name: string;
         is_admin_created: boolean;
         created_user_id: string;
+        tags_json: string[] | string;
       }>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id]);
       const renameResponse = await fetch(`${server.origin}/api/creator/team-assets/${body.asset?.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ name: "重命名团队主角", prompt: "更新后的团队角色描述" }),
+        body: JSON.stringify({ name: "重命名团队主角", prompt: "更新后的团队角色描述", tags: ["主角", "红披风"] }),
       });
+      const renamed = await renameResponse.json();
       const replacementFormData = new FormData();
       replacementFormData.set("assetName", "编辑后的团队主角");
       replacementFormData.set("assetPrompt", "编辑后的团队角色描述");
@@ -12986,7 +13383,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
         asset_prompt: string | null;
         asset_url: string;
         resource_size: number | string;
-      }>("SELECT asset_name, asset_prompt, asset_url, resource_size FROM team_assets WHERE id = $1", [body.asset?.id]);
+        tags_json: string[] | string;
+      }>("SELECT asset_name, asset_prompt, asset_url, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
       const afterEdits = await db.query<{
         upload_sessions: number;
         upload_records: number;
@@ -13029,6 +13427,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(stored.rows[0]?.asset_name, "团队主角");
       assert.equal(stored.rows[0]?.asset_prompt, "红色披风的青年英雄");
       assert.equal(stored.rows[0]?.asset_category, "character");
+      assert.deepEqual(stored.rows[0]?.tags_json, []);
       assert.match(stored.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
       assert.equal(stored.rows[0]?.resource_type, "image");
       assert.equal(Number(stored.rows[0]?.resource_size), 4);
@@ -13037,6 +13436,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(stored.rows[0]?.is_admin_created, true);
       assert.equal(stored.rows[0]?.created_user_id, stored.rows[0]?.admin_user_id);
       assert.equal(renameResponse.status, 200);
+      assert.deepEqual(renamed.asset?.tags, ["主角", "红披风"]);
       assert.equal(replacementResponse.status, 200);
       assert.equal(uploadedObjects.length, 2);
       assert.equal(afterEdits.rows[0]?.upload_sessions, before.rows[0]?.upload_sessions);
@@ -13051,6 +13451,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(edited.rows[0]?.asset_prompt, "编辑后的团队角色描述");
       assert.match(edited.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
       assert.equal(Number(edited.rows[0]?.resource_size), 5);
+      assert.deepEqual(edited.rows[0]?.tags_json, ["主角", "红披风"]);
     } finally {
       if (uploadedAssetId) {
         await db.query("DELETE FROM team_assets WHERE id = $1", [uploadedAssetId]);
@@ -13773,59 +14174,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("protects the new canvas assistant route and uses the configured text gateway", async () => {
-    const db = await createMigratedTestDb();
-    const textChatGateway = new FakeAiStoryboardTextGateway(["建议先固定角色参考图，再补充镜头景别。"]);
-    const server = createPhoneAuthDevServer({ db, textChatGateway });
-
-    try {
-      await server.listen(0);
-      const requestBody = {
-        messages: [{ role: "user", text: "如何让角色保持一致？" }],
-        selectedElements: [{ id: "node-1", type: "image-generator", title: "主角", dataURL: "data:image/png;base64,SECRET" }],
-        attachments: [{ name: "hero.png", mimeType: "image/png", blob: "blob:http://localhost/SECRET" }],
-      };
-      const anonymousResponse = await fetch(`${server.origin}/api/creator/new-canvas/assistant`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(requestBody),
-      });
-      assert.equal(anonymousResponse.status, 401);
-      assert.equal(textChatGateway.calls.length, 0);
-
-      const cookie = await login(server.origin, "13800138666");
-      const unsupportedResponse = await fetch(`${server.origin}/api/creator/new-canvas/assistant`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify(requestBody),
-      });
-      const unsupported = await unsupportedResponse.json();
-      assert.equal(unsupportedResponse.status, 400, JSON.stringify(unsupported));
-      assert.equal(unsupported.errorCode, "new_canvas_assistant_vision_unsupported");
-      assert.equal(textChatGateway.calls.length, 0);
-
-      const response = await fetch(`${server.origin}/api/creator/new-canvas/assistant`, {
-        method: "POST",
-        headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({
-          messages: requestBody.messages,
-          selectedElements: requestBody.selectedElements,
-          attachments: [],
-        }),
-      });
-      const body = await response.json();
-
-      assert.equal(response.status, 200, JSON.stringify(body));
-      assert.deepEqual(body.data?.message, { role: "assistant", text: "建议先固定角色参考图，再补充镜头景别。" });
-      assert.equal(textChatGateway.calls.length, 1);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /如何让角色保持一致/);
-      assert.match(textChatGateway.calls[0]?.prompt ?? "", /不能看到图片内容/);
-      assert.doesNotMatch(textChatGateway.calls[0]?.prompt ?? "", /data:image|blob:http|SECRET/);
-    } finally {
-      await server.close();
-    }
-  });
-
 });
 
 async function login(origin: string, phone: string) {
@@ -14267,6 +14615,37 @@ async function seedGenerationAccessForPhone(
     createdByUserId: userId,
     now: new Date(),
   });
+}
+
+async function seedScriptAnalysisModelConfig(db: PhoneAuthTestDb) {
+  await db.query(
+    `
+      INSERT INTO ai_model_configs (
+        id, model_code, display_name, provider_name, provider_model,
+        provider_protocol, invocation_mode, media_type, task_modes_json,
+        capabilities_json, pricing_json, ui_config_json, status
+      ) VALUES (
+        $1, 'deepseek-noval', 'DeepSeek 剧本模型', 'deepseek', 'deepseek-v4-pro',
+        'openai_compatible_chat', 'stream', 'text', '["text.script"]'::jsonb,
+        '{"stream":true}'::jsonb, '{"unit":"text","baseCredits":160}'::jsonb,
+        '{"modelKind":"text.script","supportedModes":["script"]}'::jsonb, 'active'
+      )
+      ON CONFLICT (model_code) DO UPDATE
+      SET display_name = EXCLUDED.display_name,
+          provider_name = EXCLUDED.provider_name,
+          provider_model = EXCLUDED.provider_model,
+          provider_protocol = EXCLUDED.provider_protocol,
+          invocation_mode = EXCLUDED.invocation_mode,
+          media_type = EXCLUDED.media_type,
+          task_modes_json = EXCLUDED.task_modes_json,
+          capabilities_json = EXCLUDED.capabilities_json,
+          pricing_json = EXCLUDED.pricing_json,
+          ui_config_json = EXCLUDED.ui_config_json,
+          status = EXCLUDED.status,
+          updated_at = NOW()
+    `,
+    [randomUUID()],
+  );
 }
 
 class FakeAiStoryboardTextGateway {

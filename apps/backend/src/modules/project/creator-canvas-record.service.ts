@@ -1,8 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import {
+  assertCanvasActorAction,
+  type CanvasAction,
+  type CanvasActorScope,
+} from "../identity/canvas-actor-scope.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
-import { CanvasValidationError, validateCanvasDocumentGraph } from "./creator-canvas-validation.ts";
+import {
+  CanvasValidationError,
+  validateCanvasDocumentEnvelope,
+  validateCanvasDocumentGraph,
+  validateCanvasDocumentProtocol,
+} from "./creator-canvas-validation.ts";
 
 export class CanvasConflictError extends Error {
   constructor(
@@ -80,6 +90,7 @@ export interface CanvasNode {
 
 export interface CanvasEdge {
   id: string;
+  kind?: "execution" | "reference" | "layout" | "control";
   sourceNodeId: string;
   sourcePortId: string;
   targetNodeId: string;
@@ -115,6 +126,35 @@ interface CanvasRevisionRow {
   created_at: Date | string;
 }
 
+export type CanvasRecordAccess =
+  | { actorScope: CanvasActorScope; userId?: string }
+  | { actorScope?: undefined; userId: string };
+
+function resolveCanvasRecordAccess(
+  input: CanvasRecordAccess & { canvasProjectId: string },
+  action: CanvasAction,
+) {
+  if (input.actorScope) {
+    if (input.actorScope.canvasId !== input.canvasProjectId) {
+      throw new CanvasDocumentError("canvas_scope_mismatch", "canvas actor scope does not match canvas project");
+    }
+    if (input.userId && input.userId !== input.actorScope.ownerUserId) {
+      throw new CanvasDocumentError("canvas_scope_owner_mismatch", "canvas actor scope owner does not match user");
+    }
+    assertCanvasActorAction(input.actorScope, action);
+    return {
+      ownerUserId: input.actorScope.ownerUserId,
+      actorTeamMemberId: input.actorScope.actorTeamMemberId,
+      principalKey: input.actorScope.principalKey,
+    };
+  }
+  return {
+    ownerUserId: input.userId,
+    actorTeamMemberId: null,
+    principalKey: `owner:${input.userId}`,
+  };
+}
+
 export interface CanvasRevisionMetadataRecord {
   id: string;
   canvasProjectId: string;
@@ -130,11 +170,11 @@ export interface CanvasRevisionRecord extends CanvasRevisionMetadataRecord {
 
 export async function findCanvasByCanvasProjectId(
   db: SqlDatabase,
-  input: {
+  input: CanvasRecordAccess & {
     canvasProjectId: string;
-    userId: string;
   },
 ): Promise<CanvasRecord | null> {
+  const access = resolveCanvasRecordAccess(input, "view");
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
@@ -145,7 +185,7 @@ export async function findCanvasByCanvasProjectId(
         AND deleted_at IS NULL
       LIMIT 1
     `,
-    [input.canvasProjectId, input.userId],
+    [input.canvasProjectId, access.ownerUserId],
   );
   if (!canvas) {
     return null;
@@ -181,9 +221,8 @@ export async function findCanvasByCanvasProjectId(
 
 export async function listCanvasRevisions(
   db: SqlDatabase,
-  input: {
+  input: CanvasRecordAccess & {
     canvasProjectId: string;
-    userId: string;
     limit?: number;
     beforeRevision?: number;
   },
@@ -225,10 +264,9 @@ export async function listCanvasRevisions(
 
 export async function getCanvasRevision(
   db: SqlDatabase,
-  input: {
+  input: CanvasRecordAccess & {
     canvasProjectId: string;
     revisionId: string;
-    userId: string;
   },
 ): Promise<CanvasRevisionRecord | null> {
   const canvas = await findCanvasByCanvasProjectId(db, input);
@@ -265,15 +303,15 @@ export async function getCanvasRevision(
 
 export async function saveCanvasByCanvasProjectId(
   db: SqlDatabase,
-  input: {
+  input: CanvasRecordAccess & {
     canvasProjectId: string;
-    userId: string;
     clientRevision: number;
     document: unknown;
     events?: Array<Record<string, unknown>>;
     now: Date;
   },
 ): Promise<CanvasRecord> {
+  const access = resolveCanvasRecordAccess(input, "edit");
   await db.query("BEGIN");
   try {
   const canvas = await queryOne<CanvasProjectRow>(
@@ -287,7 +325,7 @@ export async function saveCanvasByCanvasProjectId(
       LIMIT 1
       FOR UPDATE
     `,
-    [input.canvasProjectId, input.userId],
+    [input.canvasProjectId, access.ownerUserId],
   );
   if (!canvas) {
     throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
@@ -297,12 +335,14 @@ export async function saveCanvasByCanvasProjectId(
     throw new CanvasConflictError(canvas.server_revision, server?.document ?? null);
   }
 
+  validateCanvasDocumentEnvelope(input.document);
   const document = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(input.document, {
     canvasProjectId: canvas.id,
     now: input.now.toISOString(),
   }), {
     canvasProjectId: canvas.id,
   });
+  validateCanvasDocumentProtocol(document);
   validateCanvasDocumentGraph(document);
 
   const currentDocument = await findCurrentCanvasDocument(db, canvas.id, canvas.server_revision);
@@ -323,14 +363,14 @@ export async function saveCanvasByCanvasProjectId(
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     document,
-    userId: input.userId,
+    userId: access.ownerUserId,
     now: input.now,
   });
 
   await syncCanvasNodesAndEdges(db, {
     canvasProjectId: canvas.id,
     document,
-    userId: input.userId,
+    userId: access.ownerUserId,
     now: input.now,
   });
 
@@ -339,7 +379,8 @@ export async function saveCanvasByCanvasProjectId(
     serverRevision: nextRevision,
     operation: "autosave",
     document,
-    userId: input.userId,
+    userId: access.ownerUserId,
+    actorTeamMemberId: access.actorTeamMemberId,
     now: input.now,
   });
 
@@ -347,7 +388,8 @@ export async function saveCanvasByCanvasProjectId(
     canvasProjectId: canvas.id,
     serverRevision: nextRevision,
     events: input.events ?? [],
-    actorUserId: input.userId,
+    actorUserId: access.ownerUserId,
+    actorTeamMemberId: access.actorTeamMemberId,
   });
 
   await db.query(
@@ -359,7 +401,7 @@ export async function saveCanvasByCanvasProjectId(
           updated_at = $5
       WHERE id = $1
     `,
-    [canvas.id, nextRevision, documentId, input.userId, input.now],
+    [canvas.id, nextRevision, documentId, access.ownerUserId, input.now],
   );
 
   await db.query("COMMIT");
@@ -394,9 +436,20 @@ export async function createCanvasNodeRun(
     inputSnapshot?: Record<string, unknown>;
     taskId?: string | null;
     userId?: string | null;
+    actorScope?: CanvasActorScope;
     now: Date;
   },
 ): Promise<CanvasNodeRunRecord> {
+  const access = input.actorScope
+    ? resolveCanvasRecordAccess({ canvasProjectId: input.canvasProjectId, actorScope: input.actorScope }, "run")
+    : {
+        ownerUserId: input.userId ?? null,
+        actorTeamMemberId: null,
+        principalKey: null,
+      };
+  const idempotencyKey = access.principalKey
+    ? `${access.principalKey}:${input.idempotencyKey}`
+    : input.idempotencyKey;
   const existing = await queryOne<{
     id: string;
     run_no: number;
@@ -411,7 +464,7 @@ export async function createCanvasNodeRun(
         AND idempotency_key = $2
       LIMIT 1
     `,
-    [input.canvasProjectId, input.idempotencyKey],
+    [input.canvasProjectId, idempotencyKey],
   );
   if (existing) {
     return {
@@ -460,10 +513,11 @@ export async function createCanvasNodeRun(
           input_snapshot_json,
           task_id,
           created_by_user_id,
+          actor_team_member_id,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $15)
         ON CONFLICT DO NOTHING
         RETURNING id, run_no, status, task_id
       `,
@@ -472,7 +526,7 @@ export async function createCanvasNodeRun(
         input.canvasProjectId,
         input.nodeKey,
         runNo,
-        input.idempotencyKey,
+        idempotencyKey,
         input.status ?? "created",
         normalizeMediaKind(input.mediaKind),
         input.modelCode ?? null,
@@ -480,7 +534,8 @@ export async function createCanvasNodeRun(
         input.targetId ?? null,
         JSON.stringify(input.inputSnapshot ?? {}),
         input.taskId ?? null,
-        input.userId ?? null,
+        access.ownerUserId,
+        access.actorTeamMemberId,
         input.now,
       ],
     );
@@ -507,7 +562,7 @@ export async function createCanvasNodeRun(
           AND idempotency_key = $2
         LIMIT 1
       `,
-      [input.canvasProjectId, input.idempotencyKey],
+      [input.canvasProjectId, idempotencyKey],
     );
     if (raced) {
       return {
@@ -843,9 +898,13 @@ export async function selectCanvasNodeArtifact(
     artifactId: string;
     selectionRole?: string;
     userId?: string | null;
+    actorScope?: CanvasActorScope;
     now: Date;
   },
 ) {
+  if (input.actorScope) {
+    resolveCanvasRecordAccess({ canvasProjectId: input.canvasProjectId, actorScope: input.actorScope }, "edit");
+  }
   const artifact = await queryOne<{ node_key: string; selection_role: string }>(
     db,
     `
@@ -898,8 +957,12 @@ export async function listCanvasNodeRuns(
     canvasProjectId: string;
     nodeKey: string;
     limit?: number;
+    actorScope?: CanvasActorScope;
   },
 ) {
+  if (input.actorScope) {
+    resolveCanvasRecordAccess({ canvasProjectId: input.canvasProjectId, actorScope: input.actorScope }, "view");
+  }
   const result = await db.query<{
     id: string;
     run_no: number;
@@ -996,9 +1059,13 @@ export async function attachCanvasTaskResultToHistory(
     result?: Record<string, unknown> | null;
     failure?: Record<string, unknown> | null;
     userId?: string | null;
+    actorScope?: CanvasActorScope;
     now: Date;
   },
 ) {
+  const access = input.actorScope && input.canvasProjectId
+    ? resolveCanvasRecordAccess({ canvasProjectId: input.canvasProjectId, actorScope: input.actorScope }, "run")
+    : null;
   const canvas = await queryOne<{ id: string }>(
     db,
     `
@@ -1009,7 +1076,7 @@ export async function attachCanvasTaskResultToHistory(
         AND ($2::uuid IS NULL OR created_by_user_id = $2)
       LIMIT 1
     `,
-    [input.canvasProjectId ?? null, input.userId ?? null],
+    [input.canvasProjectId ?? null, access?.ownerUserId ?? input.userId ?? null],
   );
   if (!canvas) {
     return null;
@@ -1037,7 +1104,8 @@ export async function attachCanvasTaskResultToHistory(
     targetType: "canvas",
     targetId: input.nodeKey,
     inputSnapshot: { taskId: input.taskId, recoveredFromGenerationTask: true },
-    userId: input.userId ?? null,
+    userId: access?.ownerUserId ?? input.userId ?? null,
+    actorScope: input.actorScope,
     now: input.now,
   });
   if (input.failure) {
@@ -1089,6 +1157,26 @@ export async function attachCanvasTaskResultToHistory(
     now: input.now,
   });
   if (existingArtifact) {
+    await maybeCreateCanvasTranscriptionSourceText(db, {
+      canvasProjectId: canvas.id,
+      nodeKey: input.nodeKey,
+      taskId: input.taskId,
+      artifactId: existingArtifact.id,
+      result: input.result,
+      actorScope: input.actorScope,
+      userId: input.userId ?? null,
+      now: input.now,
+    }).catch(() => undefined);
+    await maybeSyncCanvasMusicLyrics(db, {
+      canvasProjectId: canvas.id,
+      nodeKey: input.nodeKey,
+      taskId: input.taskId,
+      artifactId: existingArtifact.id,
+      result: input.result,
+      actorScope: input.actorScope,
+      userId: input.userId ?? null,
+      now: input.now,
+    }).catch(() => undefined);
     return { runId: resolvedRun.id, artifactId: existingArtifact.id };
   }
   const artifact = await appendCanvasNodeArtifact(db, {
@@ -1110,7 +1198,177 @@ export async function attachCanvasTaskResultToHistory(
     userId: input.userId ?? null,
     now: input.now,
   });
+  await maybeCreateCanvasTranscriptionSourceText(db, {
+    canvasProjectId: canvas.id,
+    nodeKey: input.nodeKey,
+    taskId: input.taskId,
+    artifactId: artifact.id,
+    result: input.result,
+    actorScope: input.actorScope,
+    userId: input.userId ?? null,
+    now: input.now,
+  }).catch(() => undefined);
+  await maybeSyncCanvasMusicLyrics(db, {
+    canvasProjectId: canvas.id,
+    nodeKey: input.nodeKey,
+    taskId: input.taskId,
+    artifactId: artifact.id,
+    result: input.result,
+    actorScope: input.actorScope,
+    userId: input.userId ?? null,
+    now: input.now,
+  }).catch(() => undefined);
   return { runId: resolvedRun.id, artifactId: artifact.id };
+}
+
+async function maybeSyncCanvasMusicLyrics(
+  db: SqlDatabase,
+  input: {
+    canvasProjectId: string;
+    nodeKey: string;
+    taskId: string;
+    artifactId: string;
+    result: Record<string, unknown>;
+    actorScope?: CanvasActorScope;
+    userId: string | null;
+    now: Date;
+  },
+) {
+  const parameters = readJsonRecord(input.result.parameters);
+  const mode = nullableString(input.result.audioGenerationMode)
+    ?? nullableString(parameters.mode)
+    ?? nullableString(input.result.mode);
+  const lyrics = nullableString(input.result.lyrics) ?? nullableString(parameters.lyrics);
+  if (mode !== "music" || !lyrics) return null;
+  const ownerUserId = input.actorScope?.ownerUserId ?? input.userId;
+  if (!ownerUserId) return null;
+  const actorScope = input.actorScope ?? {
+    canvasId: input.canvasProjectId,
+    ownerUserId,
+    principal: "owner" as const,
+    actorTeamMemberId: null,
+    principalKey: `owner:${ownerUserId}`,
+    capabilities: ["canvas:view", "canvas:edit", "canvas:run", "canvas:manage"] as const,
+  };
+  const normalizedLyrics = lyrics.slice(0, 100_000);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await findCanvasByCanvasProjectId(db, {
+      canvasProjectId: input.canvasProjectId,
+      actorScope,
+    });
+    if (!current) return null;
+    const nodeIndex = current.document.nodes.findIndex((node) => node.id === input.nodeKey);
+    if (nodeIndex < 0) return null;
+    const node = current.document.nodes[nodeIndex]!;
+    const nodeData = readJsonRecord(node.data);
+    if (
+      nullableString(nodeData.lyricsTaskId) === input.taskId
+      && nullableString(nodeData.lyricsArtifactId) === input.artifactId
+      && nullableString(nodeData.lyrics) === normalizedLyrics
+    ) return current;
+    const nextNodes = current.document.nodes.slice();
+    nextNodes[nodeIndex] = {
+      ...node,
+      data: {
+        ...nodeData,
+        lyrics: normalizedLyrics,
+        ...(nullableString(input.result.musicTitle) ? { musicTitle: nullableString(input.result.musicTitle) } : {}),
+        lyricsMode: nullableString(input.result.lyricsMode)
+          ?? nullableString(parameters.lyricsMode)
+          ?? nullableString(nodeData.lyricsMode)
+          ?? "generate",
+        lyricsTaskId: input.taskId,
+        lyricsArtifactId: input.artifactId,
+        lyricsUpdatedAt: input.now.toISOString(),
+      },
+    };
+    try {
+      return await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: input.canvasProjectId,
+        actorScope,
+        clientRevision: current.serverRevision,
+        document: { ...current.document, nodes: nextNodes, updatedAt: input.now.toISOString() },
+        events: [{
+          type: "canvas.music_lyrics.synced",
+          taskId: input.taskId,
+          nodeKey: input.nodeKey,
+          artifactId: input.artifactId,
+        }],
+        now: input.now,
+      });
+    } catch (error) {
+      if (!(error instanceof CanvasConflictError) || attempt === 2) throw error;
+    }
+  }
+  return null;
+}
+
+async function maybeCreateCanvasTranscriptionSourceText(
+  db: SqlDatabase,
+  input: {
+    canvasProjectId: string;
+    nodeKey: string;
+    taskId: string;
+    artifactId: string;
+    result: Record<string, unknown>;
+    actorScope?: CanvasActorScope;
+    userId: string | null;
+    now: Date;
+  },
+) {
+  const mode = nullableString(input.result.audioGenerationMode)
+    ?? nullableString(readJsonRecord(input.result.parameters).mode)
+    ?? nullableString(input.result.mode);
+  const transcript = nullableString(input.result.transcript) ?? nullableString(input.result.text);
+  if (mode !== "transcription" || !transcript) return null;
+  const normalizedTranscript = transcript.slice(0, 100_000);
+  const ownerUserId = input.actorScope?.ownerUserId ?? input.userId;
+  if (!ownerUserId) return null;
+  const actorScope = input.actorScope ?? {
+    canvasId: input.canvasProjectId,
+    ownerUserId,
+    principal: "owner" as const,
+    actorTeamMemberId: null,
+    principalKey: `owner:${ownerUserId}`,
+    capabilities: ["canvas:view", "canvas:edit", "canvas:run", "canvas:manage"] as const,
+  };
+  const current = await findCanvasByCanvasProjectId(db, {
+    canvasProjectId: input.canvasProjectId,
+    actorScope,
+  });
+  if (!current) return null;
+  const nodes = Array.isArray(current.document.nodes) ? current.document.nodes : [];
+  const existingIndex = nodes.findIndex((node) => {
+    const data = readJsonRecord(node.data);
+    return node.type === "source-text" && data.transcriptionTaskId === input.taskId;
+  });
+  const sourceNode = {
+    id: existingIndex >= 0 ? nodes[existingIndex]!.id : `transcript-${input.taskId}`,
+    type: "source-text",
+    position: existingIndex >= 0 ? nodes[existingIndex]!.position : { x: 40, y: 40 },
+    size: existingIndex >= 0 ? nodes[existingIndex]!.size : { width: 340, height: 220 },
+    data: {
+      ...(existingIndex >= 0 ? readJsonRecord(nodes[existingIndex]!.data) : {}),
+      text: normalizedTranscript,
+      label: "音频转录",
+      transcriptionTaskId: input.taskId,
+      sourceAudioNodeId: input.nodeKey,
+      sourceArtifactId: input.artifactId,
+      transcriptUpdatedAt: input.now.toISOString(),
+    },
+  };
+  const nextNodes = nodes.slice();
+  if (existingIndex >= 0) nextNodes[existingIndex] = sourceNode;
+  else nextNodes.push(sourceNode);
+  const document = { ...current.document, nodes: nextNodes, updatedAt: input.now.toISOString() };
+  return saveCanvasByCanvasProjectId(db, {
+    canvasProjectId: input.canvasProjectId,
+    actorScope,
+    clientRevision: current.serverRevision,
+    document,
+    events: [{ type: "canvas.transcription_source_text.created", taskId: input.taskId, sourceNodeId: sourceNode.id }],
+    now: input.now,
+  });
 }
 
 async function persistCanvasNodeTaskFailure(
@@ -1289,12 +1547,26 @@ function normalizeCanvasEdge(value: unknown): CanvasEdge | null {
   }
   return {
     id,
+    kind: normalizeCanvasEdgeKind(raw),
     sourceNodeId,
     sourcePortId,
     targetNodeId,
     targetPortId,
     data: raw.data && typeof raw.data === "object" ? raw.data as Record<string, unknown> : {},
   };
+}
+
+function normalizeCanvasEdgeKind(raw: Record<string, unknown>) {
+  const direct = String(raw.kind ?? "").trim();
+  if (["execution", "reference", "layout", "control"].includes(direct)) {
+    return direct as CanvasEdge["kind"];
+  }
+  const nested = raw.data && typeof raw.data === "object"
+    ? String((raw.data as Record<string, unknown>).edgeKind ?? "").trim()
+    : "";
+  return (["execution", "reference", "layout", "control"].includes(nested)
+    ? nested
+    : "execution") as CanvasEdge["kind"];
 }
 
 function normalizePoint(value: unknown) {
@@ -1407,6 +1679,7 @@ async function syncCanvasNodesAndEdges(
             updated_at = $3
         WHERE canvas_project_id = $1
           AND deleted_at IS NULL
+          AND COALESCE(source_kind, '') <> 'style-reference'
           AND NOT (node_key = ANY($2::text[]))
       `,
       [input.canvasProjectId, activeNodeIds, input.now, input.userId],
@@ -1420,6 +1693,7 @@ async function syncCanvasNodesAndEdges(
             updated_at = $2
         WHERE canvas_project_id = $1
           AND deleted_at IS NULL
+          AND COALESCE(source_kind, '') <> 'style-reference'
       `,
       [input.canvasProjectId, input.now, input.userId],
     );
@@ -1586,6 +1860,7 @@ async function appendCanvasRevision(
     operation: string;
     document: CanvasDocument;
     userId: string;
+    actorTeamMemberId?: string | null;
     now: Date;
   },
 ) {
@@ -1599,9 +1874,9 @@ async function appendCanvasRevision(
       INSERT INTO creator_canvas_revisions (
         id, canvas_project_id,
         server_revision, operation, document_json, summary_json,
-        created_by_user_id, created_at
+        created_by_user_id, actor_team_member_id, created_at
       )
-      SELECT $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8::timestamptz
+      SELECT $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9::timestamptz
       WHERE $4 <> 'autosave'
          OR $3 % 10 = 0
          OR NOT EXISTS (
@@ -1609,7 +1884,7 @@ async function appendCanvasRevision(
            FROM creator_canvas_revisions
            WHERE canvas_project_id = $2
              AND operation = 'autosave'
-             AND created_at >= $8::timestamptz - interval '30 seconds'
+             AND created_at >= $9::timestamptz - interval '30 seconds'
          )
     `,
     [
@@ -1620,6 +1895,7 @@ async function appendCanvasRevision(
       JSON.stringify(input.document),
       JSON.stringify({ nodeCount: liveNodes.length, edgeCount: input.document.edges.length, mediaCount }),
       input.userId,
+      input.actorTeamMemberId ?? null,
       input.now,
     ],
   );
@@ -1650,6 +1926,7 @@ async function appendCanvasEvents(
     serverRevision: number;
     events: Array<Record<string, unknown>>;
     actorUserId: string;
+    actorTeamMemberId?: string | null;
   },
 ) {
   for (const event of input.events) {
@@ -1658,9 +1935,9 @@ async function appendCanvasEvents(
         INSERT INTO creator_canvas_events (
           id, canvas_project_id,
           server_revision, event_type, target_type, target_key, patch_json,
-          actor_user_id, created_at
+          actor_user_id, actor_team_member_id, created_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, now())
       `,
       [
         randomUUID(),
@@ -1671,6 +1948,7 @@ async function appendCanvasEvents(
         nullableString(event.targetKey),
         JSON.stringify(event.patch ?? event),
         input.actorUserId,
+        input.actorTeamMemberId ?? null,
       ],
     );
   }

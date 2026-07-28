@@ -1,9 +1,16 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1";
+import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
 import { renderExportPanel } from "./export-panel.js";
 import { renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
+import { renderSelectionPickerModal } from "./selection-picker-modal.js";
+import {
+  normalizeEpisodePromptSkills,
+  renderEpisodePromptSkillControl,
+  renderEpisodePromptSkillModal,
+  sumEpisodePromptSkillCredits,
+} from "./episode-prompt-skill-modal.js";
 import {
   renderOriginalScriptModal,
   renderScriptManagementPage,
@@ -13,6 +20,26 @@ import { normalizeNovelStyleScriptText, truncateScriptTextByCharacters } from ".
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam, renderPricingModal } from "../library-team/index.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
+import {
+  renderCanvasPanoramaNodeBody,
+  renderCanvasStoryboardNodeBody,
+} from "../new-canvas/special-media-nodes.js";
+import {
+  renderCanvasAnimationControls,
+  renderCanvasAnimationNodeBody,
+} from "./canvas/canvas-animation-node.js";
+import { renderCanvasDirectorNodeBody } from "./canvas/canvas-director-node.js";
+import { renderCanvasGroupNodeBody } from "./canvas/canvas-group-node.js";
+import {
+  renderCanvasMediaNodeBody,
+  renderCanvasVideoFullscreen,
+  resolveCanvasMediaNodeSource,
+} from "./canvas/canvas-media-node.js";
+import {
+  renderCanvasMarkdownFullscreen,
+  renderCanvasMarkdownNodeTools,
+} from "./canvas/canvas-markdown-node.js";
+import { resolveCanvasNodeToolbarTools } from "./canvas/canvas-node-toolbar.js";
 import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
 import {
   buildCanvasSidebarItems,
@@ -29,9 +56,29 @@ const CANVAS_VIDEO_GENERATION_MODES = [
   { id: "first-last-frame", label: "首尾帧生视频" },
   { id: "reference-video", label: "全能参考" },
 ];
+const CANVAS_AUDIO_GENERATION_MODES = [
+  { id: "text-to-speech", label: "语音合成" },
+  { id: "music", label: "音乐生成" },
+  { id: "transcription", label: "音频转录" },
+];
+const CANVAS_HISTORY_FILTER_OPTIONS = [
+  { id: "all", label: "全部" },
+  { id: "text", label: "文本" },
+  { id: "image", label: "图像" },
+  { id: "video", label: "视频" },
+  { id: "audio", label: "音频" },
+];
+const CANVAS_ASSET_SOURCE_OPTIONS = [
+  { id: "outputs", label: "画布产物" },
+  { id: "project", label: "项目文件" },
+  { id: "global", label: "全局资产" },
+  { id: "drama", label: "短剧资产" },
+];
+const CANVAS_ASSET_RENDER_PAGE_SIZE = 48;
 
 export function resolveEpisodeProjectStyleCode(state = {}, ui = {}) {
   const projects = [
+    ui.episodeWorkbenchContext?.data?.project,
     ui.episodeWorkbenchContext?.project,
     ui.projectDetail?.project,
     state.projectDetail?.project,
@@ -68,6 +115,20 @@ function resolveSelectedEpisodeProjectStyleCode(state = {}, ui = {}) {
   return selectedProjectId && activeProjectId && selectedProjectId !== activeProjectId ? "" : selectedCode;
 }
 
+function resolveSelectedAssetImageStyleSkillId(state = {}, ui = {}) {
+  const activeProjectId = String(
+    state.project?.id ??
+    state.projectDetail?.project?.id ??
+    ui.projectDetail?.project?.id ??
+    ui.selectedProjectCardId ??
+    "",
+  ).trim();
+  const selectedProjectId = String(ui.assetImageStyleSkillProjectId ?? "").trim();
+  return selectedProjectId && activeProjectId && selectedProjectId !== activeProjectId
+    ? "project-style"
+    : String(ui.assetImageStyleSkillId ?? "project-style");
+}
+
 export const WORKBENCH_THEME_OPTIONS = [
   { id: "starlit", label: "星河紫", description: "当前配色", swatches: ["#a75cff", "#38c8ff", "#0b0a25"] },
   { id: "aurora", label: "极光蓝", description: "冷感高亮", swatches: ["#3ce8ff", "#5b7dff", "#061827"] },
@@ -76,14 +137,14 @@ export const WORKBENCH_THEME_OPTIONS = [
   { id: "daylight", label: "月光白", description: "清透月白", swatches: ["#ffffff", "#86d7ff", "#1b2a41"] },
 ];
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
-const SHOW_NEW_CANVAS_RAIL_ENTRY = false;
 
 const NAV_TABS = [
   { id: "home", label: "首页", icon: "home" },
+  { id: "project", label: "项目", icon: "clapperboard" },
+  { id: "prompts", label: "提示词", icon: "sparkles" },
   { id: "tools", label: "画布", icon: "wand" },
   { id: "director", label: "导演台", icon: "camera" },
   { id: "script", label: "剧本", icon: "book" },
-  { id: "project", label: "项目", icon: "clapperboard" },
   { id: "library", label: "资产库", icon: "archive" },
   { id: "team", label: "团队", icon: "users" },
 ];
@@ -498,14 +559,24 @@ function resolveAssetGeneratorTaskSummary(asset) {
   ).trim();
   const previewUrl = resolvePreferredPreviewUrl(
     result?.fixedImages?.[0]?.previewUrl,
+    result?.fixedImages?.[0]?.thumbnailUrl,
+    result?.fixedImages?.[0]?.thumbnail_url,
     result?.fixedImages?.[0]?.url,
     result?.fixedImages?.[0]?.src,
+    result?.fixedImages?.[0]?.sourceUrl,
+    result?.fixedImages?.[0]?.source_url,
     result?.version?.previewUrl,
     result?.version?.metadata?.previewUrl,
     result?.result?.imageUrl,
+    result?.result?.image_url,
     result?.result?.previewUrl,
+    result?.result?.thumbnailUrl,
+    result?.result?.fixedImageUrl,
     result?.imageUrl,
+    result?.image_url,
     result?.previewUrl,
+    result?.thumbnailUrl,
+    result?.fixedImageUrl,
     resultAsset?.previewUrl,
     resultAsset?.sourceUrl,
     resultAsset?.downloadUrl,
@@ -707,6 +778,7 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
           <span>任务 ${escapeHtml(summary.taskId || "未记录")}</span>
           <strong>${reviewRequired ? "复核说明" : "失败原因"}：${escapeHtml(failureMessage || helperText)}</strong>
         </div>
+        ${previewUrl ? `<div class="asset-generator-task-preview has-image"><img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" /></div>` : ""}
       ` : `
         <div class="asset-generator-task-preview ${previewStateClass}">
           ${previewUrl
@@ -938,7 +1010,8 @@ export function renderProjectDetail(context = {}) {
   const state = rawState && typeof rawState === "object" ? rawState : {};
   const detailState = getProjectDetailState(state);
   const progress = getProgress(state);
-  const activeNavTab = ui.activeNavTab ?? "home";
+  const requestedNavTab = ui.activeNavTab ?? "home";
+  const activeNavTab = requestedNavTab === "new-canvas" && !isNewCanvasEnabled(session) ? "home" : requestedNavTab;
   const creditBalance = resolveDisplayedCreditBalance(ui, session);
   const taskCenterActiveCount = countActiveTaskCenterTasks(ui);
 
@@ -991,9 +1064,9 @@ export function renderProjectDetail(context = {}) {
         defaultScript: ui.scriptModalMode === "manual" ? (ui.scriptManualDraft ?? "") : (ui.defaultScript ?? ""),
         busy: ui.busy,
         submitAction: ui.scriptSubmitAction ?? "import-script-document",
-        submitLabel: ui.scriptSubmitLabel ?? "开始分析",
+        submitLabel: resolveScriptModalSubmitLabel(ui),
         mode: ui.scriptModalMode ?? "full",
-        lookControlsHtml: renderScriptManualLookControls(ui),
+        lookControlsHtml: renderScriptConversionSkillControl(ui),
         scriptUploadFileName: ui.scriptUploadFileName ?? "",
       })}
       ${renderProjectCreateModal({
@@ -1034,6 +1107,7 @@ export function renderProjectDetail(context = {}) {
           ${episodeWorkbenchContent}
         </section>
       </section>
+      ${renderAssetImageStyleSkillModal(ui, state)}
       ${renderAssetExtractModal({
         activeTab: ui.scriptTab,
         show: ui.isScriptModalOpen,
@@ -1042,9 +1116,9 @@ export function renderProjectDetail(context = {}) {
         defaultScript: ui.scriptModalMode === "manual" ? (ui.scriptManualDraft ?? "") : (ui.defaultScript ?? ""),
         busy: ui.busy,
         submitAction: ui.scriptSubmitAction ?? "import-script-document",
-        submitLabel: ui.scriptSubmitLabel ?? "开始分析",
+        submitLabel: resolveScriptModalSubmitLabel(ui),
         mode: ui.scriptModalMode ?? "full",
-        lookControlsHtml: renderScriptManualLookControls(ui),
+        lookControlsHtml: renderScriptConversionSkillControl(ui),
         scriptUploadFileName: ui.scriptUploadFileName ?? "",
       })}
       ${renderProjectCreateModal({
@@ -1064,7 +1138,7 @@ export function renderProjectDetail(context = {}) {
     `;
   }
 
-  const toolsModeClass = activeNavTab === "tools"
+  const toolsModeClass = isCanvasNavTab(activeNavTab)
     ? ` tools-mode ${ui.canvasProjectView === "detail" ? "tools-canvas-detail-mode" : "tools-canvas-list-mode"}`
     : "";
   const directorModeClass = activeNavTab === "director" ? " director-mode" : "";
@@ -1096,9 +1170,9 @@ export function renderProjectDetail(context = {}) {
       defaultScript: ui.scriptModalMode === "manual" ? (ui.scriptManualDraft ?? "") : (ui.defaultScript ?? ""),
       busy: ui.busy,
       submitAction: ui.scriptSubmitAction ?? "import-script-document",
-      submitLabel: ui.scriptSubmitLabel ?? "开始分析",
+      submitLabel: resolveScriptModalSubmitLabel(ui),
       mode: ui.scriptModalMode ?? "full",
-      lookControlsHtml: renderScriptManualLookControls(ui),
+      lookControlsHtml: renderScriptConversionSkillControl(ui),
       scriptUploadFileName: ui.scriptUploadFileName ?? "",
     })}
     ${renderProjectCreateModal({
@@ -1150,6 +1224,17 @@ export function renderProjectDetail(context = {}) {
 
 function renderGlobalOverlays(ui = {}, session = {}) {
   return `
+    ${renderScriptConversionSkillModal(ui)}
+    ${renderEpisodePromptSkillModal({
+      show: ui.episodePromptSkillModalOpen === true && ui.isSingleEpisodeModalOpen === true,
+      sourceTab: ui.episodePromptSkillSourceTab,
+      activeCategory: ui.episodePromptSkillCategory,
+      officialSkills: ui.episodePromptOfficialSkills,
+      privateSkills: ui.episodePromptPrivateSkills,
+      draftSelections: ui.episodePromptSkillDraftIds,
+      loading: ui.episodePromptSkillLoading,
+    })}
+    ${renderStoryboardPromptSkillModal(ui)}
     ${renderTaskCenterDrawer(ui)}
     ${renderCreditLedgerDrawer(ui)}
     ${renderGlobalPricingModal(ui)}
@@ -1599,10 +1684,11 @@ function renderPageBoundary(label, activeNavTab, renderContent) {
 }
 
 function navTabLabel(activeNavTab) {
-  if (activeNavTab === "new-canvas") {
-    return "新画布";
-  }
   return NAV_TABS.find((tab) => tab.id === activeNavTab)?.label ?? "当前页面";
+}
+
+function isCanvasNavTab(tab) {
+  return tab === "tools" || tab === "new-canvas";
 }
 
 function renderPageErrorPanel(label, error) {
@@ -2553,7 +2639,7 @@ function isPaymentResultToast(message) {
 
 function shouldRenderPaymentResultOverlayToast(ui = {}, message) {
   return (
-    ui.activeNavTab === "tools" &&
+    isCanvasNavTab(ui.activeNavTab) &&
     isPaymentResultToast(message)
   );
 }
@@ -2623,11 +2709,14 @@ function resolveMembershipPaymentState(ui) {
 export function renderWorkbenchRail(activeNavTab, session = {}, ui = {}) {
   const isTeamMember = isTeamMemberSession(session);
   const isAnonymous = !hasActiveSessionUser(session);
-  const railTabs = isTeamMember ? NAV_TABS.filter((tab) => tab.id !== "team") : NAV_TABS;
+  const railTabs = NAV_TABS.filter((tab) =>
+    (!isTeamMember || tab.id !== "team") &&
+      (isNewCanvasEnabled(session) || tab.id !== "new-canvas"),
+  );
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
-        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab, ui)).join("")}
+        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
       </nav>
       <button class="rail-item rail-bottom" type="button" data-action="logout">${isAnonymous ? "登录" : "退出"}</button>
     </aside>
@@ -2718,8 +2807,9 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           parameterValues: ui.generationParameterValues ?? null,
           uploadLimits: ui.episodeGenerationConfig?.uploadLimits ?? null,
         },
-        episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
-        generationUiState: {
+         episodeGenerationConfig: ui.episodeGenerationConfig ?? null,
+         assetImageStyleSkillModal: "",
+         generationUiState: {
           isVideoModelMenuOpen: Boolean(ui.isVideoModelMenuOpen),
           openGenerationSelectMenu: ui.openGenerationSelectMenu ?? null,
           isFirstFrameMenuOpen: Boolean(ui.isFirstFrameMenuOpen),
@@ -2746,6 +2836,10 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
           projectStyles: ui.projectStyles ?? [],
           projectStyleCode: resolveEpisodeProjectStyleCode(state, ui),
           selectedProjectStyleCode: resolveSelectedEpisodeProjectStyleCode(state, ui),
+          assetImageStyleSkillId: resolveSelectedAssetImageStyleSkillId(state, ui),
+          assetImageStyleSkillModalOpen: Boolean(ui.assetImageStyleSkillModalOpen),
+          assetImageStyleOfficialSkills: ui.episodeBatchOfficialImageStyleSkills ?? [],
+          assetImageStylePrivateSkills: ui.episodeBatchPrivateImageStyleSkills ?? [],
         },
         storyboardDeleteTarget: ui.storyboardDeleteId ?? null,
         storyboardImageDeleteTarget: ui.storyboardImageDeleteTarget ?? null,
@@ -2781,7 +2875,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         assetImportPage: ui.assetImportPage ?? 1,
         assetImportPageSize: ui.assetImportPageSize ?? 10,
         assetImportPageSizeMenuOpen: Boolean(ui.assetImportPageSizeMenuOpen),
-        assetImportOfficialAssets: ui.assetImportOfficialAssets ?? null,
+       assetImportOfficialAssets: ui.assetImportOfficialAssets ?? null,
         projectLibraryAssetsByType: ui.projectLibraryAssetsByType ?? null,
         projectOtherAssetMediaType: normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
         projectDetail: ui.projectDetail ?? null,
@@ -3042,6 +3136,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
       ${renderEpisodeDeleteModal(ui)}
       ${renderImportedAssetRenameModal(ui)}
       ${renderImportedAssetDeleteModal(ui)}
+      ${renderAssetImageStyleSkillModal(ui, state)}
     </section>
   `;
 }
@@ -3426,9 +3521,6 @@ function renderEpisodeHubMenu(episode) {
 }
 
 function renderSingleEpisodeModal(ui, state = {}) {
-  const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
-  const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
-  const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
   const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
   const aiScriptStoryboardActionLabel = resolveSingleEpisodeStoryboardActionLabel(ui);
   const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
@@ -3460,15 +3552,12 @@ function renderSingleEpisodeModal(ui, state = {}) {
         ` : ""}
         <div class="single-episode-toolbar single-episode-toolbar-replica">
           <div class="single-episode-toolbar-left">
-            <div class="single-episode-look-controls">
-              ${SINGLE_EPISODE_LOOK_TYPES
-                .map((option) => renderSingleEpisodeLookSelect({
-                  option,
-                  activeType: activeLookPanel,
-                  packages,
-                  selectedPackageIds,
-                }))
-                .join("")}
+            <div class="single-episode-look-controls single-episode-skill-controls">
+              ${renderEpisodePromptSkillControl({
+                skills: resolveEpisodePromptSkillItems(ui),
+                selectedByCategory: ui.selectedEpisodePromptSkillIds,
+                loading: ui.episodePromptSkillLoading,
+              })}
             </div>
           </div>
           <div class="single-episode-actions">
@@ -3837,13 +3926,35 @@ function renderSingleEpisodeScriptEpisodeItem(episode = {}, picker = {}) {
 }
 
 function resolveSingleEpisodeAiActionLabel(ui = {}) {
-  const credits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-script");
-  return credits ? `AI 小说分镜 ${credits}积分` : "AI 小说分镜";
+  const modelCredits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-script");
+  if (!modelCredits) {
+    return "AI 小说分镜";
+  }
+  const skillCredits = sumEpisodePromptSkillCredits(
+    resolveEpisodePromptSkillItems(ui),
+    ui.selectedEpisodePromptSkillIds,
+  );
+  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits, skillCredits)}`;
 }
 
 function resolveSingleEpisodeStoryboardActionLabel(ui = {}) {
-  const credits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-noval");
-  return credits ? `AI剧本分镜 ${credits}积分` : "AI剧本分镜";
+  const modelCredits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-noval");
+  if (!modelCredits) {
+    return "AI剧本分镜";
+  }
+  const skillCredits = sumEpisodePromptSkillCredits(
+    resolveEpisodePromptSkillItems(ui),
+    ui.selectedEpisodePromptSkillIds,
+    ["script"],
+  );
+  return `AI剧本分镜 ${formatModelAndSkillCredits(modelCredits, skillCredits)}`;
+}
+
+function formatModelAndSkillCredits(modelCredits, skillCredits) {
+  const normalizedSkillCredits = Math.max(0, Number(skillCredits) || 0);
+  return normalizedSkillCredits > 0
+    ? `${modelCredits} + ${normalizedSkillCredits}积分`
+    : `${modelCredits}积分`;
 }
 
 function resolveSingleEpisodeModelCreditsByCode(ui = {}, modelCode = "") {
@@ -4693,26 +4804,241 @@ const SINGLE_EPISODE_LOOK_TYPES = [
   { type: "emotion", label: "情绪看点", title: "情绪", empty: "暂无启用的情绪包", limit: 3 },
 ];
 
-function renderScriptManualLookControls(ui = {}) {
-  const activeLookPanel = normalizeOpenSingleEpisodeLookType(ui.singleEpisodeLookPanel);
-  const selectedPackageIds = normalizeSingleEpisodeLookSelections(ui.selectedSingleEpisodeLookPackageIds);
-  const packages = normalizeStoryboardPromptPackages(ui.storyboardPromptPackages);
-  const manualOptions = SINGLE_EPISODE_LOOK_TYPES.map((option) => ({
-    ...option,
-    label: option.type === "genre" ? "题材包" : "情绪包",
-  }));
+function renderScriptConversionSkillControl(ui = {}) {
+  const officialSkills = normalizeScriptConversionSkills(ui.scriptConversionOfficialSkills)
+    .filter((item) => item.official);
+  const officialIds = new Set(officialSkills.map((item) => item.id));
+  const personalSkills = normalizeScriptConversionSkills(ui.scriptConversionPersonalSkills)
+    .filter((item) => !officialIds.has(item.id));
+  const selectedSkillId = String(ui.selectedScriptConversionSkillId ?? "");
+  const selectedSkill = [...officialSkills, ...personalSkills]
+    .find((item) => item.id === selectedSkillId);
+  const summary = selectedSkill?.title
+    || (ui.scriptConversionSkillLoading ? "正在加载技能" : "请选择技能");
   return `
-    <div class="single-episode-look-controls script-manual-look-control-row">
-      ${manualOptions
-        .map((option) => renderSingleEpisodeLookSelect({
-          option,
-          activeType: activeLookPanel,
-          packages,
-          selectedPackageIds,
-        }))
-        .join("")}
+    <div class="script-conversion-skill-control">
+      <section class="single-episode-look-select" aria-label="小说转剧本技能">
+        <div class="single-episode-look-label">
+          <span>小说转剧本技能</span>
+          <i aria-hidden="true">?</i>
+        </div>
+        <button
+          class="single-episode-look-trigger"
+          type="button"
+          data-action="open-script-conversion-skill-modal"
+          aria-haspopup="dialog"
+          aria-expanded="${ui.scriptConversionSkillModalOpen ? "true" : "false"}"
+        >
+          <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
+          ${selectedSkill ? `<small>${formatScriptConversionSkillPrice(selectedSkill.priceCredits)}</small>` : ""}
+          <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span>
+        </button>
+      </section>
     </div>
   `;
+}
+
+function renderScriptConversionSkillModal(ui = {}) {
+  const officialSkills = normalizeScriptConversionSkills(ui.scriptConversionOfficialSkills)
+    .filter((item) => item.official);
+  const officialIds = new Set(officialSkills.map((item) => item.id));
+  const personalSkills = normalizeScriptConversionSkills(ui.scriptConversionPersonalSkills)
+    .filter((item) => !officialIds.has(item.id));
+  const activeTab = ui.scriptConversionSkillTab === "personal" ? "personal" : "official";
+  return renderSelectionPickerModal({
+    show: ui.isScriptModalOpen === true && ui.scriptModalMode === "manual" && ui.scriptConversionSkillModalOpen === true,
+    id: "script-conversion-skill-picker",
+    title: "选择小说转剧本技能",
+    tabs: [
+      { id: "official", label: "官方技能", count: officialSkills.length },
+      { id: "personal", label: "个人添加技能", count: personalSkills.length },
+    ],
+    activeTab,
+    items: [
+      ...officialSkills.map((item) => ({
+        id: item.id,
+        group: "official",
+        label: item.title,
+        description: item.summary,
+        meta: formatScriptConversionSkillPrice(item.priceCredits),
+      })),
+      ...personalSkills.map((item) => ({
+        id: item.id,
+        group: "personal",
+        label: item.title,
+        description: item.summary,
+        meta: formatScriptConversionSkillPrice(item.priceCredits),
+      })),
+    ],
+    selectedId: String(ui.scriptConversionSkillDraftId ?? ""),
+    emptyLabel: activeTab === "personal" ? "暂无个人添加技能" : "暂无官方技能",
+    closeAction: "close-script-conversion-skill-modal",
+    tabAction: "set-script-conversion-skill-tab",
+    selectAction: "select-script-conversion-skill-draft",
+    confirmAction: "confirm-script-conversion-skill",
+  });
+}
+
+function renderAssetImageStyleSkillModal(ui = {}, state = {}) {
+  const officialSkills = Array.isArray(ui.episodeBatchOfficialImageStyleSkills)
+    ? ui.episodeBatchOfficialImageStyleSkills
+    : [];
+  const privateSkills = Array.isArray(ui.episodeBatchPrivateImageStyleSkills)
+    ? ui.episodeBatchPrivateImageStyleSkills
+    : [];
+  const activeTab = ui.assetImageStyleSkillTab === "private" ? "private" : "official";
+  const projectStyleCode = resolveSelectedEpisodeProjectStyleCode(state, ui)
+    || resolveEpisodeProjectStyleCode(state, ui);
+  const projectStyle = (Array.isArray(ui.projectStyles) ? ui.projectStyles : [])
+    .find((item) => String(item?.code ?? item?.id ?? "") === projectStyleCode)
+    ?? ui.projectStyles?.[0]
+    ?? null;
+  const toPickerItem = (item, group) => ({
+    id: String(item?.id ?? ""),
+    group,
+    label: String(item?.label ?? item?.title ?? "未命名技能"),
+    description: "生图风格提示词",
+    previewUrl: String(item?.preview ?? item?.coverImageUrl ?? ""),
+    meta: Number(item?.priceCredits ?? 0) > 0 ? `${Math.round(Number(item.priceCredits))}积分` : "免费",
+  });
+  return renderSelectionPickerModal({
+    show: ui.assetImageStyleSkillModalOpen === true,
+    id: "asset-image-style-skill-picker",
+    title: "选择生图风格",
+    tabs: [
+      { id: "official", label: "官方技能", count: officialSkills.length + 1 },
+      { id: "private", label: "私人技能库", count: privateSkills.length },
+    ],
+    activeTab,
+    items: [
+      {
+        id: "project-style",
+        group: "official",
+        label: projectStyle?.name ?? "",
+        description: "项目默认风格",
+        previewUrl: String(projectStyle?.coverImageUrl ?? projectStyle?.cover_image_url ?? ""),
+        meta: "免费",
+      },
+      ...officialSkills.map((item) => toPickerItem(item, "official")),
+      ...privateSkills.map((item) => toPickerItem(item, "private")),
+    ],
+    selectedId: String(ui.assetImageStyleSkillDraftId ?? "project-style"),
+    emptyLabel: activeTab === "private" ? "暂无私人生图风格技能" : "暂无官方生图风格技能",
+    closeAction: "close-asset-image-style-skill-modal",
+    tabAction: "set-asset-image-style-skill-tab",
+    selectAction: "select-asset-image-style-skill-draft",
+    confirmAction: "confirm-asset-image-style-skill",
+  });
+}
+
+function renderStoryboardPromptSkillModal(ui = {}) {
+  const officialSkills = normalizeStoryboardPromptSkills(ui.storyboardPromptOfficialSkills, "official")
+    .filter((item) => item.official);
+  const privateSkills = normalizeStoryboardPromptSkills(ui.storyboardPromptPrivateSkills, "private");
+  const activeTab = ui.storyboardPromptSkillSourceTab === "private" ? "private" : "official";
+  const toPickerItem = (item, group) => ({
+    id: item.id,
+    group,
+    label: item.title,
+    description: item.summary || "故事板生成提示词",
+    previewUrl: item.preview ? resolveApiUrl(String(item.preview)) : "",
+    meta: item.priceCredits > 0 ? `${item.priceCredits}积分` : "免费",
+  });
+  return renderSelectionPickerModal({
+    show: ui.assetGeneratorTarget === "storyboard" &&
+      ui.assetGeneratorModal === "storyboard" &&
+      ui.storyboardPromptSkillModalOpen === true,
+    id: "storyboard-prompt-skill-picker",
+    title: "选择故事板提示词",
+    tabs: [
+      { id: "official", label: "官方技能", count: officialSkills.length },
+      { id: "private", label: "私人技能库", count: privateSkills.length },
+    ],
+    activeTab,
+    items: [
+      ...officialSkills.map((item) => toPickerItem(item, "official")),
+      ...privateSkills.map((item) => toPickerItem(item, "private")),
+    ],
+    selectedId: String(ui.storyboardPromptSkillDraftId ?? ""),
+    emptyLabel: activeTab === "private" ? "暂无私人故事板提示词" : "暂无官方故事板提示词",
+    closeAction: "close-storyboard-prompt-skill-modal",
+    tabAction: "set-storyboard-prompt-skill-source",
+    selectAction: "select-storyboard-prompt-skill-draft",
+    confirmAction: "confirm-storyboard-prompt-skill",
+  });
+}
+
+function normalizeStoryboardPromptSkills(items = [], source = "") {
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => String(item?.category ?? item?.promptCategory ?? "") === "storyboard")
+    .map((item) => ({
+      id: String(item?.id ?? ""),
+      title: String(item?.title ?? item?.name ?? "未命名提示词"),
+      summary: String(item?.summary ?? ""),
+      preview:
+        String(item?.coverImageUrl ?? "").trim() ||
+        String(item?.cover_image_url ?? "").trim() ||
+        String(item?.thumbnailUrl ?? "").trim() ||
+        String(item?.thumbnail_url ?? "").trim() ||
+        String(item?.previewUrl ?? "").trim() ||
+        String(item?.preview ?? "").trim() ||
+        (item?.coverStorageObjectId ?? item?.cover_storage_object_id
+          ? `/api/storage/objects/${encodeURIComponent(String(item.coverStorageObjectId ?? item.cover_storage_object_id))}/content?proxy=1`
+          : ""),
+      priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
+      source,
+      official: item?.official === true,
+    }))
+    .filter((item) => item.id);
+}
+
+function resolveEpisodePromptSkillItems(ui = {}) {
+  return [
+    ...normalizeEpisodePromptSkills(ui.episodePromptOfficialSkills, "official"),
+    ...normalizeEpisodePromptSkills(ui.episodePromptPrivateSkills, "private"),
+  ];
+}
+
+function normalizeScriptConversionSkills(items = []) {
+  return Array.isArray(items)
+    ? items
+        .filter((item) => item && typeof item === "object" && String(item.category ?? "script") === "script")
+        .map((item) => ({
+          id: String(item.id ?? ""),
+          title: String(item.title ?? item.name ?? "未命名技能"),
+          summary: String(item.summary ?? ""),
+          priceCredits: Math.max(0, Number(item.priceCredits ?? item.price_credits ?? 0) || 0),
+          official: item.official === true || item.isOfficial === true || item.is_official === true,
+        }))
+        .filter((item) => item.id)
+    : [];
+}
+
+function formatScriptConversionSkillPrice(value) {
+  const price = Math.max(0, Number(value) || 0);
+  return price === 0 ? "免费" : `${price}积分`;
+}
+
+function resolveSelectedScriptConversionSkillCredits(ui = {}) {
+  const selectedSkillId = String(ui.selectedScriptConversionSkillId ?? "");
+  const selectedSkill = [
+    ...normalizeScriptConversionSkills(ui.scriptConversionOfficialSkills),
+    ...normalizeScriptConversionSkills(ui.scriptConversionPersonalSkills),
+  ].find((item) => item.id === selectedSkillId);
+  return Math.max(0, Number(selectedSkill?.priceCredits) || 0);
+}
+
+function resolveScriptModalSubmitLabel(ui = {}) {
+  const fallback = ui.scriptSubmitLabel ?? "开始分析";
+  if (ui.scriptModalMode !== "manual") {
+    return fallback;
+  }
+  const modelCredits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-noval");
+  if (!modelCredits) {
+    return fallback;
+  }
+  const skillCredits = resolveSelectedScriptConversionSkillCredits(ui);
+  return `${fallback} ${formatModelAndSkillCredits(modelCredits, skillCredits)}`;
 }
 
 function renderSingleEpisodeLookSelect({ option, activeType, packages = [], selectedPackageIds = {} }) {
@@ -6594,6 +6920,44 @@ function renderAssetGeneratorModal(ui) {
   const selectedGeneratorStyle = generatorStyleOptions.find(
     (style) => style.code === String(ui.assetGeneratorStyleCode ?? "").trim(),
   ) ?? generatorStyleOptions[0] ?? null;
+  const imageStyleSkills = [
+    ...(Array.isArray(ui.episodeBatchOfficialImageStyleSkills) ? ui.episodeBatchOfficialImageStyleSkills : []),
+    ...(Array.isArray(ui.episodeBatchPrivateImageStyleSkills) ? ui.episodeBatchPrivateImageStyleSkills : []),
+  ];
+  const selectedImageStyleSkillId = String(ui.assetImageStyleSkillId ?? "project-style");
+  const selectedImageStyleSkill = imageStyleSkills.find(
+    (skill) => String(skill?.id ?? "") === selectedImageStyleSkillId,
+  ) ?? null;
+  const selectedImageStyleLabel = selectedImageStyleSkill?.label
+    ?? selectedImageStyleSkill?.title
+    ?? selectedGeneratorStyle?.name
+    ?? "动画";
+  const selectedImageStylePreview = String(
+    selectedImageStyleSkill?.preview
+      ?? selectedImageStyleSkill?.coverImageUrl
+      ?? selectedImageStyleSkill?.cover_image_url
+      ?? selectedGeneratorStyle?.coverImageUrl
+      ?? "",
+  ).trim();
+  const selectedImageStyleCredits = Math.max(0, Math.round(Number(selectedImageStyleSkill?.priceCredits) || 0));
+  const storyboardPromptSkills = [
+    ...normalizeStoryboardPromptSkills(ui.storyboardPromptOfficialSkills, "official"),
+    ...normalizeStoryboardPromptSkills(ui.storyboardPromptPrivateSkills, "private"),
+  ];
+  const selectedStoryboardPromptSkillId = String(ui.selectedStoryboardPromptSkillId ?? "").trim();
+  const selectedStoryboardPromptSkill = storyboardPromptSkills.find(
+    (skill) => skill.id === selectedStoryboardPromptSkillId,
+  ) ?? null;
+  const storyboardPromptSkillLabel = selectedStoryboardPromptSkill?.title ?? "故事板提示词";
+  const storyboardPromptSkillPreview = String(selectedStoryboardPromptSkill?.preview ?? "").trim();
+  const storyboardPromptSkillCredits = Math.max(0, Math.round(Number(selectedStoryboardPromptSkill?.priceCredits) || 0));
+  const generatorSkillCredits = isStoryboardGenerator
+    ? selectedImageStyleCredits + storyboardPromptSkillCredits
+    : selectedImageStyleCredits;
+  const generatorCredits = (generatorConfig.credits ?? 90) + generatorSkillCredits;
+  const generatorCostLabel = isStoryboardGenerator && generatorSkillCredits > 0
+    ? `${generatorConfig.credits ?? 90} + ${generatorSkillCredits}积分`
+    : String(generatorCredits);
   if (!isEditing) {
     const storyboardTaskOverview = isStoryboardGenerator
       ? renderStoryboardGeneratorTaskOverview(ui)
@@ -6638,8 +7002,16 @@ function renderAssetGeneratorModal(ui) {
               styleCode: isStoryboardGenerator ? selectedGeneratorStyle?.code ?? "" : "",
               styleLabel: isStoryboardGenerator ? selectedGeneratorStyle?.name ?? "" : "",
               styleOptions: isStoryboardGenerator ? generatorStyleOptions : [],
+              imageStyleSkillId: isStoryboardGenerator ? selectedImageStyleSkillId : "",
+              imageStyleSkillLabel: isStoryboardGenerator ? selectedImageStyleLabel : "",
+              imageStyleSkillPreview: isStoryboardGenerator ? selectedImageStylePreview : "",
+               imageStyleSkillModalOpen: isStoryboardGenerator && ui.assetImageStyleSkillModalOpen === true,
+               promptSkillLabel: isStoryboardGenerator ? storyboardPromptSkillLabel : "",
+               promptSkillPreview: isStoryboardGenerator ? storyboardPromptSkillPreview : "",
+               promptSkillModalOpen: isStoryboardGenerator && ui.storyboardPromptSkillModalOpen === true,
               action: "submit-asset-generator",
-              credits: generatorConfig.credits ?? 90,
+              credits: generatorCredits,
+              costLabel: generatorCostLabel,
               isSubmitting: ui.assetGeneratorSubmitting === true,
               referenceInputId: isStoryboardGenerator
                 ? "asset-generator-storyboard-reference-input"
@@ -6823,8 +7195,16 @@ function renderAssetGeneratorComposer({
   styleCode = "",
   styleLabel = "",
   styleOptions = [],
+  imageStyleSkillId = "project-style",
+  imageStyleSkillLabel = "",
+  imageStyleSkillPreview = "",
+  imageStyleSkillModalOpen = false,
+  promptSkillLabel = "",
+  promptSkillPreview = "",
+  promptSkillModalOpen = false,
   action = "submit-asset-generator",
   credits = 90,
+  costLabel = null,
   isSubmitting = false,
   promptInputId = "asset-generator-prompt-input",
   referenceInputId = "asset-generator-reference-input",
@@ -6864,20 +7244,41 @@ function renderAssetGeneratorComposer({
               settings: generatorSettings,
               scope: "asset-generator",
             })}
-            ${isStoryboardGenerator && styleOptions.length
-              ? renderGenerationControlMenu({
-                  field: "storyboardStyle",
-                  label: `风格：${styleLabel || "请选择"}`,
-                  openMenu: openGenerationSelectMenu,
-                  options: styleOptions.map((style) => [style.code, style.name, "", style.coverImageUrl]),
-                  action: "select-storyboard-generator-style",
-                  title: `风格：${styleLabel || "请选择"}`,
-                  selectedValue: styleCode,
-                  scope: "asset-generator",
-                })
+            ${isStoryboardGenerator
+              ? `
+                <span class="episode-replica-control-wrap episode-image-style-skill-wrap">
+                  <button
+                    class="episode-replica-control episode-image-style-skill-trigger"
+                    type="button"
+                    data-action="open-asset-image-style-skill-modal"
+                    aria-haspopup="dialog"
+                    aria-expanded="${imageStyleSkillModalOpen ? "true" : "false"}"
+                    aria-label="生图风格：${escapeAttr(imageStyleSkillLabel || "生图风格")}"
+                  >
+                    ${imageStyleSkillPreview
+                      ? `<img class="episode-image-style-skill-thumb" src="${escapeAttr(resolveApiUrl(imageStyleSkillPreview))}" alt="" />`
+                      : `<span class="episode-image-style-skill-thumb fallback" aria-hidden="true">${escapeHtml([...(imageStyleSkillLabel || "生图风格")][0] ?? "风")}</span>`}
+                    <span class="episode-image-style-skill-name">${escapeHtml(imageStyleSkillLabel || "生图风格")}</span>
+                  </button>
+                </span>
+                <span class="episode-replica-control-wrap episode-image-style-skill-wrap">
+                  <button
+                    class="episode-replica-control episode-image-style-skill-trigger"
+                    type="button"
+                    data-action="open-storyboard-prompt-skill-modal"
+                    aria-haspopup="dialog"
+                    aria-expanded="${promptSkillModalOpen ? "true" : "false"}"
+                    aria-label="故事板提示词：${escapeAttr(promptSkillLabel || "故事板提示词")}"
+                  >
+                    ${promptSkillPreview
+                      ? `<img class="episode-image-style-skill-thumb" src="${escapeAttr(resolveApiUrl(promptSkillPreview))}" alt="" />`
+                      : `<span class="episode-image-style-skill-thumb fallback" aria-hidden="true">${escapeHtml([...(promptSkillLabel || "故事板提示词")][0] ?? "故")}</span>`}
+                    <span class="episode-image-style-skill-name">${escapeHtml(promptSkillLabel || "故事板提示词")}</span>
+                  </button>
+                </span>`
               : ""}
           </div>
-          ${renderGenerationSubmitButton({ action, cost: credits, busy: isSubmitting })}
+          ${renderGenerationSubmitButton({ action, cost: credits, costLabel, busy: isSubmitting })}
         </footer>
       </div>
     </div>
@@ -7639,24 +8040,16 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     return renderDirectorDeskSurface(ui);
   }
 
-  if (activeNavTab === "new-canvas") {
-    const canvasProjectId = String(ui.selectedCanvasProjectId ?? "").trim();
-    return `
-      <section class="new-canvas-embedded-surface" aria-label="新画布">
-        <div
-          class="new-canvas-embedded-mount"
-          data-new-canvas-mount
-          data-canvas-project-id="${escapeAttr(canvasProjectId)}"
-        >
-          <div class="new-canvas-native-loading" role="status">正在加载画布…</div>
-        </div>
-      </section>
-    `;
-  }
-
   if (activeNavTab === "script") {
     return renderScrollableWorkbenchSurface("script", `
       ${renderScriptManagementPage({ state, ui: { ...ui, toast: "", session }, session })}
+      ${renderInlineStatusToast(ui)}
+    `);
+  }
+
+  if (activeNavTab === "prompts") {
+    return renderScrollableWorkbenchSurface("prompts", `
+      ${renderPromptPlazaPage(ui)}
       ${renderInlineStatusToast(ui)}
     `);
   }
@@ -7716,6 +8109,289 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     `);
   }
 
+function renderPromptPlazaPage(ui = {}) {
+  const typeLabels = {
+    all: "全部",
+    script: "剧本提示词",
+    shot: "分镜提示词",
+    scene_extract: "场景抽取提示词",
+    character_extract: "人物抽取提示词",
+    prop_extract: "道具抽取提示词",
+    image_style: "生图风格提示词",
+    storyboard: "故事板提示词",
+    other: "其它",
+  };
+  const sectionLabels = {
+    marketplace: "提示词广场",
+    library: "我的提示词库",
+  };
+  const activeSection = Object.prototype.hasOwnProperty.call(sectionLabels, ui.promptPlazaSection)
+    ? ui.promptPlazaSection
+    : "marketplace";
+  const activeType = Object.prototype.hasOwnProperty.call(typeLabels, ui.promptPlazaType) ? ui.promptPlazaType : "all";
+  const query = String(ui.promptPlazaQuery ?? "").trim().toLowerCase();
+  const fallbackItems = (Array.isArray(ui.storyboardPromptPackages) ? ui.storyboardPromptPackages : []).map((item) => ({
+    id: String(item.id ?? item.code ?? ""),
+    title: String(item.name ?? item.code ?? "官方提示词"),
+    category: "script",
+    summary: "官方发布的剧本提示词，可免费添加到私人提示词库使用。",
+    coverImageUrl: String(item.coverImageUrl ?? item.cover_image_url ?? "").trim(),
+    priceCredits: 0,
+    official: true,
+    publisherName: "官方",
+    usageCount: 0,
+    ratingAverage: 5,
+    ratingCount: 0,
+    owned: false,
+    purchased: false,
+    canUse: false,
+    contentVisible: false,
+  }));
+  const catalog = Array.isArray(ui.promptMarketplaceItems)
+    ? ui.promptMarketplaceItems
+    : fallbackItems;
+  const items = catalog;
+  const rankedItems = (Array.isArray(ui.promptMarketplaceRankings) ? ui.promptMarketplaceRankings : []).slice(0, 20);
+  const marketplaceMeta = ui.promptMarketplaceMeta || {};
+  const marketplacePage = Math.max(1, Number(marketplaceMeta.page || ui.promptMarketplacePage || 1));
+  const marketplacePageSize = Math.max(1, Number(marketplaceMeta.pageSize || 12));
+  const marketplaceTotal = Math.max(0, Number(marketplaceMeta.total ?? items.length));
+  const marketplaceTotalPages = Math.max(1, Number(marketplaceMeta.totalPages || Math.ceil(marketplaceTotal / marketplacePageSize) || 1));
+  const marketplacePages = buildProjectPageItems(marketplacePage, marketplaceTotalPages);
+  const library = (Array.isArray(ui.promptMarketplaceLibrary) ? ui.promptMarketplaceLibrary : [])
+    .filter((item) => activeType === "all" || item.category === activeType)
+    .filter((item) => !query || [item.title, item.summary].join(" ").toLowerCase().includes(query));
+  const libraryPageSize = 10;
+  const libraryPageCount = Math.max(1, Math.ceil(library.length / libraryPageSize));
+  const libraryPage = Math.min(Math.max(Number(ui.promptLibraryPage || 1), 1), libraryPageCount);
+  const visibleLibraryItems = library.slice((libraryPage - 1) * libraryPageSize, libraryPage * libraryPageSize);
+  const deleteDraft = ui.promptMarketplaceDeleteConfirm;
+  const editItem = ui.promptMarketplaceEditItem?.owned === true ? ui.promptMarketplaceEditItem : null;
+  const rankingDetailItem = [...rankedItems, ...catalog].find((item) => String(item.id) === String(ui.promptMarketplaceRankingItemId || "")) || null;
+
+  const renderRating = (item, interactive = false) => {
+    const average = Number(item.ratingAverage || 5);
+    const rounded = Math.round(average);
+    const userRating = Number(item.userRating || 0);
+    return `<span class="prompt-marketplace-rating" aria-label="推荐星级 ${average.toFixed(1)}">
+      ${[1, 2, 3, 4, 5].map((rating) => interactive
+        ? `<button type="button" class="${rating <= (userRating || (Number(item.ratingCount || 0) === 0 ? 5 : 0)) ? "active" : ""}" data-action="rate-prompt-marketplace-item" data-prompt-id="${escapeAttr(item.id)}" data-rating="${rating}" title="推荐 ${rating} 星" ${userRating ? "disabled" : ""}>★</button>`
+        : `<span class="${rating <= rounded ? "active" : ""}">★</span>`).join("")}
+      <small>${average.toFixed(1)}</small>
+    </span>`;
+  };
+
+  const renderDefaultCover = (item, extraClass = "") => {
+    const coverKinds = {
+      script: "script",
+      storyboard: "storyboard",
+      shot: "shot",
+      scene_extract: "scene",
+      character_extract: "character",
+      prop_extract: "prop",
+      image_style: "style",
+    };
+    const coverImages = {
+      character_extract: "/assets/library/official/characters/3d-city-heroine.png",
+      scene_extract: "/assets/library/official/scenes/scene-3d-neon-street.png",
+      prop_extract: "/assets/library/official/props/prop-ancient-sword.png",
+    };
+    const coverMontages = {
+      shot: [
+        "/assets/library/official/scenes/scene-3d-neon-street.png",
+        "/assets/library/official/characters/3d-city-heroine.png",
+        "/assets/library/official/props/prop-ancient-sword.png",
+      ],
+      image_style: [
+        "/assets/library/official/scenes/scene-2d-starry.png",
+        "/assets/library/official/scenes/scene-3d-neon-street.png",
+        "/assets/library/official/scenes/scene-ancient-garden.png",
+      ],
+    };
+    const kind = coverKinds[item.category] ?? "other";
+    const label = typeLabels[item.category] ?? "提示词";
+    const imageUrl = coverImages[item.category];
+    const montageImages = coverMontages[item.category];
+    if (montageImages) {
+      return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind} has-montage ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${montageImages.map((url) => `<img src="${escapeAttr(url)}" alt="" loading="lazy" />`).join("")}</div>`;
+    }
+    return `<div class="prompt-marketplace-cover prompt-marketplace-default-cover is-${kind}${imageUrl ? " has-image" : ""} ${escapeAttr(extraClass)}" role="img" aria-label="${escapeAttr(label)}通用封面">${imageUrl ? `<img src="${escapeAttr(imageUrl)}" alt="" loading="lazy" />` : "<span></span><span></span><span></span>"}</div>`;
+  };
+
+  const renderMarketplaceCard = (item) => {
+    const inLibrary = item.owned || item.purchased;
+    const price = Number(item.priceCredits || 0);
+    const coverImageUrl = String(item.coverImageUrl ?? item.cover_image_url ?? "").trim();
+    const cover = coverImageUrl
+      ? `<div class="prompt-marketplace-cover"><img src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="${escapeAttr(item.title || "提示词")}封面" loading="lazy" /></div>`
+      : renderDefaultCover(item);
+    return `<article class="prompt-marketplace-card ${item.official ? "is-official" : "is-private"} has-cover">
+      <header class="prompt-marketplace-card-head">
+        <h2>${escapeHtml(item.title || "未命名提示词")}</h2>
+        <span class="prompt-marketplace-source ${item.official ? "official" : "private"}">${item.official ? "官方" : "私人发布"}</span>
+        <div class="prompt-marketplace-card-labels">
+          <div class="prompt-marketplace-badges">
+            <span class="prompt-plaza-type">${escapeHtml(typeLabels[item.category] ?? "提示词")}</span>
+          </div>
+          <span class="prompt-marketplace-price ${price === 0 ? "free" : ""}">${price === 0 ? "免费使用" : `使用 ${price} 积分`}</span>
+        </div>
+      </header>
+      ${cover}
+      <p>${escapeHtml(item.summary || "暂无公开简介")}</p>
+      <div class="prompt-marketplace-meta">
+        <span>${Number(item.usageCount || 0).toLocaleString("zh-CN")} 次使用</span>
+        ${renderRating(item)}
+      </div>
+      ${inLibrary ? "" : `<footer><button type="button" class="prompt-marketplace-buy" data-action="purchase-prompt-marketplace-item" data-prompt-id="${escapeAttr(item.id)}">免费添加</button></footer>`}
+    </article>`;
+  };
+
+  const renderRankingAction = (item) => {
+    const inLibrary = item.owned || item.purchased;
+    return inLibrary
+      ? `<button type="button" class="prompt-marketplace-ranking-action is-added" disabled>已添加</button>`
+      : `<button type="button" class="prompt-marketplace-ranking-action" data-action="purchase-prompt-marketplace-item" data-prompt-id="${escapeAttr(item.id)}">免费添加</button>`;
+  };
+
+  const rankingContent = `<aside class="prompt-marketplace-ranking" aria-label="提示词排行榜">
+    <header><div><span>TOP PROMPTS</span><h3>提示词排行榜 · 全部分类</h3></div></header>
+    <ol>${rankedItems.length ? rankedItems.map((item, index) => `<li><button type="button" class="prompt-marketplace-ranking-main" data-action="open-prompt-marketplace-ranking-item" data-prompt-id="${escapeAttr(item.id)}" aria-label="查看排行榜第 ${index + 1} 名 ${escapeAttr(item.title || "未命名提示词")}"><span class="prompt-marketplace-ranking-rank">${index + 1}</span><div><strong>${escapeHtml(item.title || "未命名提示词")}</strong><span class="prompt-marketplace-ranking-metrics"><span>${Number(item.usageCount || 0).toLocaleString("zh-CN")} 次使用</span>${renderRating(item)}</span></div></button>${renderRankingAction(item)}</li>`).join("") : `<li class="prompt-marketplace-ranking-empty">暂无可排行提示词</li>`}</ol>
+  </aside>`;
+  const marketplacePagination = `<footer class="prompt-marketplace-pagination project-gallery-pagination" aria-label="提示词广场分页">
+    <div class="project-gallery-pagination-summary"><span>共 ${marketplaceTotal.toLocaleString("zh-CN")} 条</span><span>${marketplacePageSize} 条/页</span></div>
+    <div class="project-gallery-pagination-controls">
+      <button class="project-gallery-page-button" type="button" data-action="set-prompt-marketplace-page" data-page="${marketplacePage - 1}" ${marketplacePage <= 1 ? "disabled" : ""} aria-label="上一页">‹</button>
+      ${marketplacePages.map((page) => page === "ellipsis"
+        ? '<span class="project-gallery-page-ellipsis" aria-hidden="true">…</span>'
+        : `<button class="project-gallery-page-button ${page === marketplacePage ? "active" : ""}" type="button" data-action="set-prompt-marketplace-page" data-page="${page}" aria-current="${page === marketplacePage ? "page" : "false"}">${page}</button>`).join("")}
+      <button class="project-gallery-page-button" type="button" data-action="set-prompt-marketplace-page" data-page="${marketplacePage + 1}" ${marketplacePage >= marketplaceTotalPages || marketplaceMeta.hasNext === false ? "disabled" : ""} aria-label="下一页">›</button>
+    </div>
+  </footer>`;
+  const marketplaceContent = ui.promptMarketplaceLoading
+    ? `<section class="prompt-marketplace-workspace"><div class="prompt-plaza-empty prompt-plaza-loading" aria-live="polite"><strong>正在加载提示词广场</strong><span>官方提示词即将显示。</span></div></section>`
+    : `<section class="prompt-marketplace-workspace"><div class="prompt-marketplace-layout"><div class="prompt-plaza-grid" aria-live="polite">
+        ${items.length ? items.map(renderMarketplaceCard).join("") : `<div class="prompt-plaza-empty"><strong>${ui.promptMarketplaceError ? "官方提示词暂未同步" : "未找到匹配的提示词"}</strong><span>${ui.promptMarketplaceError ? "请点击左侧提示词广场或刷新页面重试。" : "换个关键词或分类试试。"}</span></div>`}
+      </div>${rankingContent}</div>${marketplacePagination}</section>`;
+
+  const renderLibraryItem = (item) => {
+    const coverImageUrl = String(item.coverImageUrl ?? item.cover_image_url ?? "").trim();
+    const price = Number(item.priceCredits || 0);
+    const cover = coverImageUrl
+      ? `<div class="prompt-marketplace-cover"><img src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="${escapeAttr(item.title || "提示词")}封面" loading="lazy" /></div>`
+      : renderDefaultCover(item);
+    const defaultAction = `<button type="button" class="prompt-marketplace-default ${item.isDefault ? "active" : ""}" data-action="${item.isDefault ? "clear" : "set"}-prompt-marketplace-default" data-prompt-id="${escapeAttr(item.id)}" data-prompt-category="${escapeAttr(item.category)}">${item.isDefault ? "取消默认" : "设为默认"}</button>`;
+    return `<article class="prompt-marketplace-card ${item.owned ? "is-private" : "is-purchased"} has-cover">
+      <header class="prompt-marketplace-card-head">
+        <h2>${escapeHtml(item.title || "未命名提示词")}</h2>
+        <span class="prompt-marketplace-source ${item.owned ? "private" : ""}">${item.owned ? "我发布的" : "已添加"}</span>
+        <div class="prompt-marketplace-card-labels">
+          <div class="prompt-marketplace-badges">
+            <span class="prompt-plaza-type">${escapeHtml(typeLabels[item.category] ?? "提示词")}</span>
+            ${item.isDefault ? `<span class="prompt-marketplace-default-badge">默认</span>` : ""}
+          </div>
+          <span class="prompt-marketplace-price ${price === 0 ? "free" : ""}">${price === 0 ? "免费使用" : `使用 ${price} 积分`}</span>
+        </div>
+      </header>
+      ${cover}
+      <p>${escapeHtml(item.summary || "暂无公开简介")}</p>
+      <div class="prompt-marketplace-meta">
+        <span>${Number(item.usageCount || 0).toLocaleString("zh-CN")} 次使用</span>
+        ${renderRating(item, item.purchased === true)}
+      </div>
+      <footer>
+        ${defaultAction}
+        ${item.owned
+          ? `<button type="button" class="prompt-marketplace-edit" data-action="open-edit-prompt-marketplace-item" data-prompt-id="${escapeAttr(item.id)}">编辑</button><button type="button" class="prompt-marketplace-remove" data-action="request-delete-prompt-marketplace-item" data-prompt-id="${escapeAttr(item.id)}" data-owned="true">删除</button>`
+          : `<button type="button" class="prompt-marketplace-remove" data-action="request-delete-prompt-marketplace-item" data-prompt-id="${escapeAttr(item.id)}" data-owned="false">移除私人库</button>`}
+      </footer>
+    </article>`;
+  };
+
+  const libraryContent = `<section class="prompt-library-workspace">
+    <div class="prompt-library-list">
+      ${library.length ? visibleLibraryItems.map(renderLibraryItem).join("") : `<div class="prompt-plaza-empty"><strong>私人提示词库为空</strong><span>从广场添加，或创建自己的提示词。</span></div>`}
+    </div>
+    <footer class="prompt-library-footer">
+      <div class="prompt-library-pagination" aria-label="私人提示词库分页">
+        <span>共 ${library.length} 条</span>
+        <span>${libraryPage} / ${libraryPageCount} 页</span>
+        <button type="button" data-action="set-prompt-library-page" data-page="${libraryPage - 1}" ${libraryPage <= 1 ? "disabled" : ""} aria-label="上一页">‹</button>
+        <button type="button" data-action="set-prompt-library-page" data-page="${libraryPage + 1}" ${libraryPage >= libraryPageCount ? "disabled" : ""} aria-label="下一页">›</button>
+      </div>
+      <button type="button" class="prompt-library-create" data-action="open-prompt-marketplace-create"><span aria-hidden="true">${renderRailIcon("plus")}</span>创建提示词</button>
+    </footer>
+  </section>`;
+
+  const renderPromptMarketplaceCoverField = (item = {}) => {
+    const coverImageUrl = String(item.coverImageUrl ?? item.cover_image_url ?? "").trim();
+    const coverPreview = coverImageUrl
+      ? `<img class="prompt-marketplace-cover-upload-preview" src="${escapeAttr(resolveApiUrl(coverImageUrl))}" alt="封面预览" loading="lazy" />`
+      : `<span class="prompt-marketplace-cover-upload-empty">未上传封面</span>`;
+    return `<div class="prompt-marketplace-cover-field"><span>封面</span><div class="prompt-marketplace-cover-upload">${coverPreview}<label class="prompt-marketplace-cover-upload-button">上传封面<input type="file" accept="image/*" hidden data-action="upload-prompt-marketplace-cover" /></label><input type="hidden" name="coverImageUrl" value="${escapeAttr(coverImageUrl)}" /><input type="hidden" name="coverStorageObjectId" value="${escapeAttr(item.coverStorageObjectId ?? item.cover_storage_object_id ?? "")}" /></div></div>`;
+  };
+
+  const createDialog = ui.promptMarketplaceCreateOpen ? `<div class="prompt-marketplace-create" role="dialog" aria-modal="true" aria-labelledby="prompt-create-title">
+    <section>
+      <header><div><span>CREATE PROMPT</span><h2 id="prompt-create-title">创建提示词</h2><p>正文仅自己可见，可仅保存到私人库，或同时发布到提示词广场。</p></div><button type="button" data-action="close-prompt-marketplace-create" aria-label="关闭创建提示词">×</button></header>
+      <form id="prompt-marketplace-create-form" class="prompt-publish-form">
+      <div class="prompt-publish-fields">
+        <label><span>提示词名称</span><input name="title" maxlength="80" placeholder="例如：高密度短剧分镜提示词" required /></label>
+        <label><span>分类</span><select name="category">${Object.entries(typeLabels).filter(([key]) => key !== "all").map(([key, label]) => `<option value="${key}">${label}</option>`).join("")}</select></label>
+        <label class="is-wide"><span>公开简介</span><textarea name="summary" rows="3" maxlength="240" placeholder="描述用途、适用题材和输出特点，不要粘贴正文。" required></textarea></label>
+        <label class="is-wide"><span>提示词正文</span><textarea name="content" rows="12" maxlength="50000" placeholder="只有你自己可以查看这段内容。" required></textarea></label>
+        ${renderPromptMarketplaceCoverField()}
+        <label><span>积分价格</span><input name="priceCredits" type="number" min="0" max="99999" step="1" value="0" /></label>
+      </div>
+        <div class="prompt-publish-submit"><label class="prompt-publish-choice"><input name="publish" type="checkbox" checked /><span><strong>发布到提示词广场</strong><small>取消勾选则仅保存到私人提示词库</small></span></label><button type="button" data-action="create-prompt-marketplace-item"><span aria-hidden="true">${renderRailIcon("plus")}</span>保存提示词</button></div>
+      </form>
+    </section>
+  </div>` : "";
+
+  const rankingDetailDialog = rankingDetailItem ? `<div class="prompt-marketplace-create prompt-marketplace-ranking-detail" role="dialog" aria-modal="true" aria-labelledby="prompt-ranking-detail-title"><section><header><div><span>RANKED PROMPT</span><h2 id="prompt-ranking-detail-title">排行榜提示词详情</h2></div><button type="button" data-action="close-prompt-marketplace-ranking-item" aria-label="关闭排行榜提示词详情">×</button></header>${renderMarketplaceCard(rankingDetailItem)}</section></div>` : "";
+
+  const editDialog = editItem ? `<div class="prompt-marketplace-create" role="dialog" aria-modal="true" aria-labelledby="prompt-edit-title">
+    <section>
+      <header><div><span>EDIT PROMPT</span><h2 id="prompt-edit-title">编辑提示词</h2><p>修改自己的提示词内容、封面、积分价格和发布状态。</p></div><button type="button" data-action="close-edit-prompt-marketplace-item" aria-label="关闭编辑提示词">×</button></header>
+      <form id="prompt-marketplace-edit-form" class="prompt-publish-form">
+        <div class="prompt-publish-fields">
+          <label><span>提示词名称</span><input name="title" maxlength="80" value="${escapeAttr(editItem.title || "")}" required /></label>
+          <label><span>分类</span><select name="category">${Object.entries(typeLabels).filter(([key]) => key !== "all").map(([key, label]) => `<option value="${key}" ${key === editItem.category ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+          <label class="is-wide"><span>公开简介</span><textarea name="summary" rows="3" maxlength="240" required>${escapeHtml(editItem.summary || "")}</textarea></label>
+          <label class="is-wide"><span>提示词正文</span><textarea name="content" rows="12" maxlength="50000" required>${escapeHtml(editItem.content || "")}</textarea></label>
+          ${renderPromptMarketplaceCoverField(editItem)}
+          <label><span>积分价格</span><input name="priceCredits" type="number" min="0" max="99999" step="1" value="${Number(editItem.priceCredits || 0)}" /></label>
+        </div>
+        <div class="prompt-publish-submit"><label class="prompt-publish-choice"><input name="publish" type="checkbox" ${editItem.status === "published" ? "checked" : ""} /><span><strong>发布到提示词广场</strong><small>取消勾选后将从广场下架，但仍保留在私人库</small></span></label><button type="button" data-action="update-prompt-marketplace-item">保存修改</button></div>
+      </form>
+    </section>
+  </div>` : "";
+
+  return `
+    <section class="prompt-plaza-page" aria-label="提示词管理与广场">
+      <nav class="prompt-workspace-tabs" aria-label="提示词工作区">
+        ${Object.entries(sectionLabels).map(([section, label]) => `<button class="${section === activeSection ? "active" : ""}" type="button" data-action="set-prompt-plaza-section" data-section="${section}">${label}</button>`).join("")}
+      </nav>
+      <div class="prompt-plaza-tools">
+        <nav class="prompt-plaza-tabs" aria-label="提示词分类">
+          ${Object.entries(typeLabels).map(([type, label]) => `
+            <button class="${type === activeType ? "active" : ""}" type="button" data-action="set-prompt-plaza-type" data-type="${type}" aria-pressed="${type === activeType}">${label}</button>
+          `).join("")}
+        </nav>
+        <label class="prompt-plaza-search">
+          <span aria-hidden="true">⌕</span>
+          <input type="search" data-prompt-plaza-search-input value="${escapeAttr(ui.promptPlazaQuery ?? "")}" placeholder="搜索提示词名称或简介" aria-label="搜索提示词广场" />
+        </label>
+      </div>
+      ${ui.promptMarketplaceError ? `<div class="prompt-marketplace-error">${escapeHtml(ui.promptMarketplaceError)}</div>` : ""}
+      ${activeSection === "library" ? libraryContent : marketplaceContent}
+      ${deleteDraft ? `<div class="prompt-marketplace-confirm" role="dialog" aria-modal="true" aria-labelledby="prompt-delete-title"><div><span>删除提示词</span><h2 id="prompt-delete-title">${deleteDraft.owned ? "停止发布并删除自己的提示词？" : "从私人提示词库移除？"}</h2><p>${deleteDraft.owned ? "删除后其他用户将无法继续添加该提示词。" : "移除后仍可随时从广场免费添加。"}</p><footer><button type="button" data-action="cancel-delete-prompt-marketplace-item">取消</button><button type="button" class="danger" data-action="confirm-delete-prompt-marketplace-item">确认删除</button></footer></div></div>` : ""}
+      ${rankingDetailDialog}
+      ${createDialog}
+      ${editDialog}
+    </section>
+  `;
+}
+
   if (activeNavTab === "community") {
     return renderScrollableWorkbenchSurface("community", `
       ${renderCommunityPage({ ui, session })}
@@ -7723,7 +8399,7 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     `);
   }
 
-  if (activeNavTab === "tools") {
+  if (isCanvasNavTab(activeNavTab)) {
     if (ui.canvasProjectView !== "detail") {
       return renderScrollableWorkbenchSurface("tools", `
         ${renderToolsPanel(ui, state, session)}
@@ -7956,20 +8632,114 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   if (ui.canvasProjectView !== "detail") {
     return renderCanvasProjectGallery({ ...ui, session });
   }
+  if (ui.canvasHostMount === true) {
+    return `
+      <section class="new-canvas-workbench-host" data-new-canvas-mount aria-label="画布编辑器">
+        <div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布">
+          <span class="new-canvas-loading-skeleton__rail"></span>
+          <span class="new-canvas-loading-skeleton__stage"></span>
+          <span class="new-canvas-loading-skeleton__panel"></span>
+        </div>
+      </section>
+    `;
+  }
   const canvasDocument = ui.canvasDocument ?? createDefaultCanvasDocument({
     canvasProjectId: ui.selectedCanvasProjectId ?? "",
   });
-  const nodes = Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes : [];
+  const nodes = (Array.isArray(canvasDocument.nodes) ? canvasDocument.nodes : [])
+    .filter((node) => !node?.data?.hiddenByCharacterId);
+  const visibleCanvasDocument = {
+    ...canvasDocument,
+    nodes,
+  };
   const viewport = canvasDocument.viewport ?? {};
   const zoomPercent = Math.round(Number(viewport.zoom ?? 1) * 100);
+  const zoomMenuOpen = ui.canvasZoomMenuOpen === true;
+  const canvasEdgeStyle = ui.canvasEdgeStyle === "orthogonal" ? "orthogonal" : "curve";
+  const canvasEdgesHidden = ui.canvasEdgesHidden === true;
+  const canvasGridVisible = viewport.gridVisible !== false;
+  const canvasSnapEnabled = viewport.snapEnabled !== false;
   const viewportStyle = canvasViewportStyle(viewport);
-  const gridStyle = canvasGridStyle(viewport);
-  const sidebarMode = ui.canvasSidebarMode === "assets" ? "assets" : "nodes";
+  const sidebarMode = ["assets", "history"].includes(ui.canvasSidebarMode)
+    ? ui.canvasSidebarMode
+    : "nodes";
+  const assetSidebarMode = sidebarMode === "assets" || sidebarMode === "history";
   const canvasAssets = Array.isArray(ui.canvasAssets) ? ui.canvasAssets : [];
-  const sidebarItems = buildCanvasSidebarItems(canvasDocument, {
-    mode: sidebarMode,
-    assets: canvasAssets,
+  const canvasAssetSource = normalizeCanvasAssetSource(ui.canvasAssetSource);
+  const canvasAssetMediaFilter = ["all", "image", "video", "audio"].includes(ui.canvasAssetMediaFilter)
+    ? ui.canvasAssetMediaFilter
+    : "all";
+  const canvasAssetLayoutColumns = Math.min(6, Math.max(2, Number(ui.canvasAssetLayoutColumns ?? 3) || 3));
+  const canvasPanelStyle = ui.canvasSidebarCollapsed === true
+    ? "grid-template-columns:minmax(0, 1fr)"
+    : assetSidebarMode
+      ? `--canvas-asset-columns:${canvasAssetLayoutColumns};--canvas-sidebar-width:${Math.max(264, canvasAssetLayoutColumns * 118)}px`
+      : "";
+  const canManageGlobalCanvasAssets = !isTeamMemberSession(ui.session);
+  const canDeleteCanvasDramaAssets = !isTeamMemberSession(ui.session);
+  const canvasAssetProjects = Array.isArray(ui.canvasAssetProjects) ? ui.canvasAssetProjects : [];
+  const canvasAssetProjectId = String(ui.canvasAssetProjectId ?? "").trim();
+  const canvasDramaDrawerOpen = ui.canvasDramaDrawerOpen === true;
+  const canvasDramaProjectId = String(ui.canvasDramaProjectId ?? canvasAssetProjectId).trim();
+  const canvasDramaEpisodes = Array.isArray(ui.canvasDramaEpisodes) ? ui.canvasDramaEpisodes : [];
+  const canvasDramaEpisodeId = String(ui.canvasDramaEpisodeId ?? "").trim();
+  const canvasDramaAssets = Array.isArray(ui.canvasDramaAssets) ? ui.canvasDramaAssets : [];
+  const canvasAssetSearch = String(ui.canvasAssetSearch ?? "").trim().toLocaleLowerCase();
+  const visibleCanvasAssets = canvasAssetSearch
+    ? canvasAssets.filter((asset) => `${asset?.title ?? ""} ${asset?.meta ?? ""} ${asset?.kind ?? ""}`.toLocaleLowerCase().includes(canvasAssetSearch))
+    : canvasAssets;
+  const canvasLibraryAssets = resolveCanvasLibraryAssets(ui, state, canvasAssetSource);
+  const canvasAssetTags = [...new Set(canvasLibraryAssets.flatMap((asset) => Array.isArray(asset?.tags) ? asset.tags : []))]
+    .map((tag) => String(tag ?? "").trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const canvasAssetTagFilter = String(ui.canvasAssetTagFilter ?? "").trim();
+  const canvasGlobalAssetFolderFilter = String(ui.canvasGlobalAssetFolderFilter ?? "all").trim() || "all";
+  const canvasGlobalAssetFolders = [...new Set(canvasLibraryAssets
+    .map((asset) => String(asset?.folderName ?? "").trim())
+    .filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const filteredCanvasLibraryAssets = canvasAssetMediaFilter === "all"
+    ? canvasLibraryAssets
+    : canvasLibraryAssets.filter((asset) => asset?.kind === canvasAssetMediaFilter);
+  const tagFilteredCanvasLibraryAssets = canvasAssetTagFilter
+    ? filteredCanvasLibraryAssets.filter((asset) => Array.isArray(asset?.tags) && asset.tags.includes(canvasAssetTagFilter))
+    : filteredCanvasLibraryAssets;
+  const folderFilteredCanvasLibraryAssets = canvasAssetSource === "global" && canvasGlobalAssetFolderFilter !== "all"
+    ? tagFilteredCanvasLibraryAssets.filter((asset) => canvasGlobalAssetFolderFilter === "unfiled"
+      ? !String(asset?.folderName ?? "").trim()
+      : String(asset?.folderName ?? "").trim() === canvasGlobalAssetFolderFilter)
+    : tagFilteredCanvasLibraryAssets;
+  const visibleCanvasLibraryAssets = canvasAssetSearch
+    ? folderFilteredCanvasLibraryAssets.filter((asset) => `${asset?.title ?? ""} ${asset?.meta ?? ""} ${asset?.kind ?? ""} ${(asset?.tags ?? []).join(" ")}`.toLocaleLowerCase().includes(canvasAssetSearch))
+    : folderFilteredCanvasLibraryAssets;
+  const allSidebarAssets = canvasAssetSource === "outputs" ? visibleCanvasAssets : visibleCanvasLibraryAssets;
+  const canvasAssetVisibleCount = Math.max(
+    CANVAS_ASSET_RENDER_PAGE_SIZE,
+    Number(ui.canvasAssetVisibleCount ?? CANVAS_ASSET_RENDER_PAGE_SIZE) || CANVAS_ASSET_RENDER_PAGE_SIZE,
+  );
+  const sidebarAssets = assetSidebarMode && sidebarMode === "assets"
+    ? allSidebarAssets.slice(0, canvasAssetVisibleCount)
+    : allSidebarAssets;
+  const hasMoreCanvasAssets = sidebarMode === "assets" && sidebarAssets.length < allSidebarAssets.length;
+  const canvasNodeFilter = normalizeCanvasNodeFilter(ui.canvasNodeFilter);
+  const canvasNodeSearch = String(ui.canvasNodeSearch ?? "").trim().toLocaleLowerCase();
+  const rawSidebarItems = buildCanvasSidebarItems(visibleCanvasDocument, {
+    mode: assetSidebarMode ? "assets" : "nodes",
+    assets: sidebarAssets,
+    assetTransfers: ui.canvasAssetTransfers,
   });
+  const historyItems = sidebarMode === "history"
+    ? filterCanvasHistoryItems(ui.canvasGenerationHistoryItems, {
+        filter: ui.canvasHistoryFilter,
+        search: ui.canvasAssetSearch,
+      })
+    : [];
+  const sidebarItems = sidebarMode === "history"
+    ? historyItems
+    : !assetSidebarMode
+    ? filterCanvasSidebarNodeItems(rawSidebarItems, canvasNodeFilter, canvasNodeSearch)
+    : rawSidebarItems;
+  const sidebarCollapsed = ui.canvasSidebarCollapsed === true;
   const nodeTemplates = resolveCanvasNodeTemplates(ui.episodeGenerationConfig);
   const selectedNode =
     nodes.find((node) => node.id === ui.selectedCanvasNodeId) ??
@@ -7990,27 +8760,141 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     ? ui.canvasContextMenu
     : null;
   const scriptPicker = resolveCanvasScriptPicker(ui, state);
+  const revisionConflict = renderCanvasRevisionConflict(ui.canvasRevisionConflict);
+  const markdownFullscreenState = ui.canvasMarkdownFullscreen && typeof ui.canvasMarkdownFullscreen === "object"
+    ? ui.canvasMarkdownFullscreen
+    : null;
+  const markdownFullscreenNode = markdownFullscreenState?.open === true
+    ? nodes.find((node) => node.id === markdownFullscreenState.nodeId && ["markdown", "ai-markdown"].includes(node.type))
+    : null;
+  const videoFullscreenState = ui.canvasVideoFullscreen && typeof ui.canvasVideoFullscreen === "object"
+    ? ui.canvasVideoFullscreen
+    : null;
+  const videoFullscreenNode = videoFullscreenState?.open === true
+    ? nodes.find((node) => node.id === videoFullscreenState.nodeId && resolveCanvasNodeMediaKind(node) === "video")
+    : null;
   return `
-    <section class="canvas-panel" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}">
-      <aside class="canvas-sidebar" aria-label="画布侧栏">
+    <section class="canvas-panel" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}"${canvasPanelStyle ? ` style="${escapeAttr(canvasPanelStyle)}"` : ""}>
+      <aside id="canvas-sidebar-panel" class="canvas-sidebar" aria-label="画布侧栏"${sidebarCollapsed ? ' style="display:none"' : ""}>
         <header class="canvas-sidebar-tabs" role="tablist" aria-label="画布资源切换">
           <button class="canvas-sidebar-tab ${sidebarMode === "nodes" ? "active" : ""}" type="button" role="tab" aria-selected="${sidebarMode === "nodes" ? "true" : "false"}" data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="nodes">画布</button>
           <button class="canvas-sidebar-tab ${sidebarMode === "assets" ? "active" : ""}" type="button" role="tab" aria-selected="${sidebarMode === "assets" ? "true" : "false"}" data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="assets">资产</button>
-          <button class="canvas-sidebar-book" type="button" aria-label="打开画布说明">${renderCanvasIcon("book")}</button>
+          <button class="canvas-sidebar-tab ${sidebarMode === "history" ? "active" : ""}" type="button" role="tab" aria-selected="${sidebarMode === "history" ? "true" : "false"}" data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="history">历史</button>
         </header>
         <div class="canvas-sidebar-filter">
-          <button class="canvas-filter-label" type="button">
-            <span>${sidebarMode === "assets" ? "项目素材" : "画布元素"}</span>
+          <span class="canvas-filter-label">
+            <span>${assetSidebarMode ? (sidebarMode === "history" ? "输出历史" : CANVAS_ASSET_SOURCE_OPTIONS.find((option) => option.id === canvasAssetSource)?.label ?? "资产") : "画布元素"}</span>
             <i aria-hidden="true">${renderCanvasIcon("sort")}</i>
-          </button>
-          <button class="canvas-filter-select" type="button"><span>${sidebarMode === "assets" ? "可拖入" : "全部"}</span><span class="canvas-filter-select__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span></button>
-          <button class="canvas-search" type="button" aria-label="搜索">${renderCanvasIcon("search")}</button>
+          </span>
+          ${sidebarMode === "assets" ? `<div class="canvas-asset-source-tabs" role="tablist" aria-label="资产来源">
+            ${CANVAS_ASSET_SOURCE_OPTIONS.map((option) => `<button type="button" role="tab" class="${option.id === canvasAssetSource ? "active" : ""}" aria-selected="${option.id === canvasAssetSource}" data-action="set-canvas-asset-source" data-canvas-asset-source="${option.id}">${option.label}</button>`).join("")}
+          </div>` : ""}
+          ${sidebarMode === "assets" && canvasAssetSource === "global" ? `<div class="canvas-global-asset-tools" aria-label="全局资产上传">
+            <select data-canvas-global-asset-category aria-label="全局资产分类">
+              <option value="character" ${ui.canvasGlobalAssetCategory === "character" ? "selected" : ""}>角色图片</option>
+              <option value="scene" ${ui.canvasGlobalAssetCategory === "scene" ? "selected" : ""}>场景图片</option>
+              <option value="prop" ${ui.canvasGlobalAssetCategory === "prop" ? "selected" : ""}>道具图片</option>
+              <option value="voice" ${ui.canvasGlobalAssetCategory === "voice" ? "selected" : ""}>音色音频</option>
+            </select>
+            <input type="file" data-canvas-global-asset-file accept="image/*,audio/*" hidden />
+            <button type="button" data-action="trigger-canvas-global-asset-upload" aria-label="上传全局资产" title="上传全局资产">${renderCanvasIcon("plus")}</button>
+          </div><label class="canvas-global-asset-folder-filter"><span>文件夹</span><select data-canvas-global-asset-folder-filter aria-label="筛选全局资产文件夹"><option value="all" ${canvasGlobalAssetFolderFilter === "all" ? "selected" : ""}>全部</option><option value="unfiled" ${canvasGlobalAssetFolderFilter === "unfiled" ? "selected" : ""}>未分类</option>${canvasGlobalAssetFolders.map((folder) => `<option value="${escapeAttr(folder)}" ${canvasGlobalAssetFolderFilter === folder ? "selected" : ""}>${escapeHtml(folder)}</option>`).join("")}</select></label>` : ""}
+          ${sidebarMode === "assets" && canvasAssetSource === "drama" ? `<div class="canvas-drama-asset-tools" aria-label="短剧资产管理">
+            <button type="button" data-action="toggle-canvas-drama-drawer" aria-expanded="${canvasDramaDrawerOpen}" aria-controls="canvas-drama-asset-drawer">${canvasDramaDrawerOpen ? "收起短剧资产" : "管理短剧资产"}</button>
+          </div>
+          ${canvasDramaDrawerOpen ? `<section id="canvas-drama-asset-drawer" class="canvas-drama-asset-drawer" aria-label="短剧资产管理面板">
+            <label><span>项目</span><select data-canvas-drama-project ${canvasAssetProjects.length ? "" : "disabled"}>
+              ${canvasAssetProjects.length ? canvasAssetProjects.map((project) => `<option value="${escapeAttr(project.id)}" ${project.id === canvasDramaProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`).join("") : `<option value="">${ui.canvasAssetProjectsLoading ? "正在读取项目..." : "暂无可用项目"}</option>`}
+            </select></label>
+            <label><span>剧集</span><select data-canvas-drama-episode ${canvasDramaEpisodes.length ? "" : "disabled"}>
+              ${canvasDramaEpisodes.length ? canvasDramaEpisodes.map((episode) => `<option value="${escapeAttr(episode.id)}" ${episode.id === canvasDramaEpisodeId ? "selected" : ""}>${escapeHtml(episode.title)}</option>`).join("") : `<option value="">${ui.canvasDramaEpisodesLoading ? "正在读取剧集..." : "暂无剧集"}</option>`}
+            </select></label>
+            <div class="canvas-drama-asset-create" aria-label="新建短剧资产">
+              <select data-canvas-drama-asset-type aria-label="资产类型" ${canvasDramaEpisodeId ? "" : "disabled"}>
+                <option value="role" ${ui.canvasDramaAssetCreate?.assetType === "role" ? "selected" : ""}>角色</option>
+                <option value="scene" ${ui.canvasDramaAssetCreate?.assetType === "scene" ? "selected" : ""}>场景</option>
+                <option value="prop" ${ui.canvasDramaAssetCreate?.assetType === "prop" ? "selected" : ""}>道具</option>
+              </select>
+              <input type="text" data-canvas-drama-asset-name value="${escapeAttr(ui.canvasDramaAssetCreate?.name ?? "")}" maxlength="120" placeholder="资产名称" aria-label="资产名称" ${canvasDramaEpisodeId ? "" : "disabled"} />
+              <button type="button" data-action="create-canvas-drama-asset" ${canvasDramaEpisodeId ? "" : "disabled"}>新建</button>
+              <input type="file" data-canvas-drama-asset-file accept="image/*" hidden />
+              <button type="button" data-action="trigger-canvas-drama-asset-import" aria-label="导入短剧图片" title="导入短剧图片" ${canvasDramaEpisodeId ? "" : "disabled"}>${renderCanvasIcon("upload")}</button>
+            </div>
+            ${canDeleteCanvasDramaAssets ? `<button class="canvas-drama-asset-category-clear" type="button" data-action="clear-canvas-drama-asset-category" ${canvasDramaEpisodeId ? "" : "disabled"}>清空当前分类</button>` : ""}
+            ${ui.canvasDramaEpisodesError ? `<p class="canvas-drama-asset-error">${escapeHtml(ui.canvasDramaEpisodesError)}</p>` : ""}
+            ${ui.canvasDramaAssetsLoading ? `<p class="canvas-drama-asset-empty">正在读取短剧资产...</p>` : ui.canvasDramaAssetsError ? `<p class="canvas-drama-asset-error">${escapeHtml(ui.canvasDramaAssetsError)}</p>` : canvasDramaAssets.length ? `<div class="canvas-drama-asset-list">${canvasDramaAssets.map((asset) => `<article>
+              ${asset.previewUrl ? `<img src="${escapeAttr(asset.previewUrl)}" alt="" loading="lazy" />` : `<span aria-hidden="true">${renderCanvasIcon("image")}</span>`}
+              <div><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.assetType === "role" ? "角色" : asset.assetType === "scene" ? "场景" : "道具")}</small><div class="canvas-drama-asset-description"><input type="text" data-canvas-drama-asset-description data-asset-id="${escapeAttr(asset.id)}" value="${escapeAttr(ui.canvasDramaAssetEdits?.[asset.id]?.description ?? asset.description ?? "")}" maxlength="2000" placeholder="资产简介" aria-label="${escapeAttr(`${asset.name} 的简介`)}" /><button type="button" data-action="save-canvas-drama-asset-description" data-asset-id="${escapeAttr(asset.id)}">保存</button><input type="file" data-canvas-drama-asset-fixed-image-file data-asset-id="${escapeAttr(asset.id)}" accept="image/*" hidden /><button type="button" data-action="trigger-canvas-drama-asset-fixed-image-upload" aria-label="替换 ${escapeAttr(asset.name)} 的固定图" title="替换固定图">${renderCanvasIcon("upload")}</button>${canDeleteCanvasDramaAssets ? `<button type="button" data-action="clear-canvas-drama-asset-fixed-image" data-asset-id="${escapeAttr(asset.id)}">解绑</button><button type="button" class="danger" data-action="delete-canvas-drama-asset" data-asset-id="${escapeAttr(asset.id)}" aria-label="删除 ${escapeAttr(asset.name)}" title="删除 ${escapeAttr(asset.name)}">${renderCanvasIcon("trash")}</button>` : ""}</div></div>
+            </article>`).join("")}</div>` : `<p class="canvas-drama-asset-empty">选择剧集后在此查看角色、场景和道具。</p>`}
+          </section>` : ""}` : ""}
+          ${sidebarMode === "assets" && canvasAssetSource !== "outputs" ? `<div class="canvas-asset-media-filters" role="tablist" aria-label="资产媒体类型">
+            ${[["all", "全部"], ["image", "图片"], ["video", "视频"], ["audio", "音频"]].map(([id, label]) => `<button type="button" role="tab" class="${canvasAssetMediaFilter === id ? "active" : ""}" aria-selected="${canvasAssetMediaFilter === id}" data-action="set-canvas-asset-media-filter" data-canvas-asset-media-filter="${id}">${label}</button>`).join("")}
+          </div>` : ""}
+          ${sidebarMode === "assets" && canvasAssetSource !== "outputs" && canvasAssetTags.length ? `<div class="canvas-asset-tag-filters" role="list" aria-label="资产标签">
+            <button type="button" class="${canvasAssetTagFilter ? "" : "active"}" data-action="set-canvas-asset-tag-filter" data-canvas-asset-tag="">全部</button>
+            ${canvasAssetTags.map((tag) => `<button type="button" class="${canvasAssetTagFilter === tag ? "active" : ""}" data-action="set-canvas-asset-tag-filter" data-canvas-asset-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</button>`).join("")}
+          </div>` : ""}
+          ${sidebarMode === "assets" ? `<div class="canvas-asset-layout-controls" aria-label="资产瀑布流列数">
+            <span>列数</span>
+            <button type="button" data-action="set-canvas-asset-layout-columns" data-canvas-asset-layout-columns="-1" aria-label="减少资产列数" title="减少列数" ${canvasAssetLayoutColumns <= 2 ? "disabled" : ""}>-</button>
+            <output aria-live="polite">${canvasAssetLayoutColumns}</output>
+            <button type="button" data-action="set-canvas-asset-layout-columns" data-canvas-asset-layout-columns="1" aria-label="增加资产列数" title="增加列数" ${canvasAssetLayoutColumns >= 6 ? "disabled" : ""}>+</button>
+          </div>` : ""}
+          ${sidebarMode === "assets" && canvasAssetSource === "project" ? `<label class="canvas-asset-project-select"><span>项目</span><select data-canvas-asset-project aria-label="选择项目文件来源" ${canvasAssetProjects.length ? "" : "disabled"}>
+            ${canvasAssetProjects.length ? canvasAssetProjects.map((project) => `<option value="${escapeAttr(project.id)}" ${project.id === canvasAssetProjectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`).join("") : `<option value="">${ui.canvasAssetProjectsLoading ? "正在读取项目..." : "暂无可用项目"}</option>`}
+          </select></label><div class="canvas-project-asset-tools" aria-label="导入项目文件">
+            <input type="file" data-canvas-project-asset-file accept="image/*,video/*" hidden />
+            <button type="button" data-action="trigger-canvas-project-asset-upload" aria-label="导入项目文件" title="导入项目文件" ${canvasAssetProjectId ? "" : "disabled"}>${renderCanvasIcon("plus")}</button>
+          </div>` : ""}
+          ${sidebarMode === "history" ? `<div class="canvas-history-filter-row">
+            <select data-canvas-history-filter aria-label="筛选输出历史">
+              ${CANVAS_HISTORY_FILTER_OPTIONS.map((option) => `<option value="${option.id}" ${normalizeCanvasHistoryFilter(ui.canvasHistoryFilter) === option.id ? "selected" : ""}>${option.label}</option>`).join("")}
+            </select>
+            <span class="canvas-history-actions">
+              <button class="canvas-history-export" type="button" data-action="export-canvas-generation-history" aria-label="导出生成历史" title="导出生成历史">${renderCanvasIcon("download")}</button>
+              <button class="canvas-history-export danger" type="button" data-action="delete-all-canvas-generation-history" aria-label="清空生成历史" title="清空生成历史">${renderCanvasIcon("trash")}</button>
+            </span>
+          </div>` : assetSidebarMode ? `<span class="canvas-history-actions">
+            <button class="canvas-history-export" type="button" data-action="export-canvas-generation-history" aria-label="导出生成历史" title="导出生成历史">${renderCanvasIcon("download")}</button>
+            <button class="canvas-history-export" type="button" data-action="delete-canvas-node-generation-history" data-node-key="${escapeAttr(selectedNode?.id ?? "")}" aria-label="删除当前节点生成历史" title="删除当前节点生成历史" ${selectedNode?.id ? "" : "disabled"}>${renderCanvasIcon("trash")}</button>
+            <button class="canvas-history-export danger" type="button" data-action="delete-all-canvas-generation-history" aria-label="清空生成历史" title="清空生成历史">${renderCanvasIcon("trash")}</button>
+          </span>` : `<select class="canvas-filter-select" data-canvas-node-filter aria-label="筛选画布节点">${renderCanvasNodeFilterOptions(canvasNodeFilter)}</select>`}
+          ${assetSidebarMode
+            ? `<label class="canvas-asset-search"><span aria-hidden="true">${renderCanvasIcon("search")}</span><input type="search" value="${escapeAttr(ui.canvasAssetSearch ?? "")}" data-canvas-asset-search aria-label="${sidebarMode === "history" ? "搜索输出历史" : `搜索${CANVAS_ASSET_SOURCE_OPTIONS.find((option) => option.id === canvasAssetSource)?.label ?? "资产"}`}" placeholder="搜索" /></label>`
+            : `<label id="canvas-node-search-region" class="canvas-asset-search"${ui.canvasNodeSearchOpen === true ? "" : ' style="display:none"'}><span aria-hidden="true">${renderCanvasIcon("search")}</span><input id="canvas-node-search-input" type="search" value="${escapeAttr(ui.canvasNodeSearch ?? "")}" data-canvas-node-search aria-label="搜索画布节点" placeholder="搜索节点" /></label><button class="canvas-search" style="display:grid" type="button" data-action="toggle-canvas-node-search" aria-label="${ui.canvasNodeSearchOpen === true ? "关闭节点搜索" : "搜索画布节点"}" aria-expanded="${ui.canvasNodeSearchOpen === true}" aria-controls="canvas-node-search-region">${renderCanvasIcon(ui.canvasNodeSearchOpen === true ? "minus" : "search")}</button>`}
         </div>
-        <div class="canvas-element-list" aria-label="画布节点列表">
+        <div class="canvas-element-list${sidebarMode === "assets" ? " is-asset-waterfall" : ""}" aria-label="${assetSidebarMode ? (sidebarMode === "history" ? "输出历史列表" : "画布产物列表") : "画布节点列表"}">
           ${sidebarItems.length
-            ? sidebarItems.map((item) => renderCanvasSidebarItem(item, item.id === selectedNode?.id)).join("")
-            : `<p class="canvas-empty-copy">${sidebarMode === "assets" ? "暂无可用素材，先在资产库导入角色、场景或参考图。" : "暂无画布节点。"}</p>`}
-          <section class="canvas-template-section" aria-label="节点模板">
+            ? sidebarMode === "history"
+            ? sidebarItems.map((item) => renderCanvasHistoryRecord(item, {
+                  expanded: new Set(Array.isArray(ui.canvasHistoryExpandedIds) ? ui.canvasHistoryExpandedIds : []).has(String(item?.id ?? "")),
+                  node: nodes.find((node) => String(node?.id ?? "") === String(item?.nodeKey ?? "")),
+                })).join("")
+              : canvasAssetSource === "outputs"
+                ? sidebarItems.map((item) => renderCanvasSidebarItem(item, item.id === selectedNode?.id, {
+                    tagEditorKey: `outputs:${item.id}`,
+                    activeTagEditorKey: String(ui.canvasAssetTagEditorKey ?? ""),
+                  })).join("")
+                : sidebarAssets.map((item) => renderCanvasLibraryAssetItem(item, {
+                    canDelete: canvasAssetSource === "global" ? canManageGlobalCanvasAssets : canvasAssetSource === "project",
+                    deleteAction: canvasAssetSource === "project" ? "delete-canvas-project-asset" : "delete-canvas-global-asset",
+                    canEditDetails: canvasAssetSource === "project",
+                    canReplaceMedia: canvasAssetSource === "project",
+                    detailDraft: ui.canvasProjectAssetEdits?.[item.assetId] ?? null,
+                    canEditTags: canvasAssetSource === "global" ? canManageGlobalCanvasAssets : true,
+                    canMoveToFolder: canvasAssetSource === "global" && canManageGlobalCanvasAssets,
+                    tagEditAction: canvasAssetSource === "global" ? "edit-canvas-global-asset-tags" : undefined,
+                    tagSource: canvasAssetSource,
+                    tagEditorKey: `${canvasAssetSource}:${item.id}`,
+                    activeTagEditorKey: String(ui.canvasAssetTagEditorKey ?? ""),
+                    canSaveToGlobal: canvasAssetSource === "project" && item?.kind === "image" && Boolean(item?.assetVersionId),
+                    canUseAsStyleReference: ((canvasAssetSource === "project" || canvasAssetSource === "drama") && item?.kind === "image" && Boolean(item?.assetVersionId)) || (canvasAssetSource === "global" && item?.kind === "image" && Boolean(item?.storageObjectId)),
+                    styleReferenceBusy: String(ui.canvasStyleReferenceMaterializingAssetId ?? "") === String(item?.id ?? ""),
+                  })).join("")
+            : `<p class="canvas-empty-copy">${sidebarMode === "history" ? (ui.canvasAssetsLoading ? "正在加载输出历史..." : ui.canvasAssetsError ? `加载失败：${escapeHtml(ui.canvasAssetsError)}` : "暂无输出历史。运行节点后会在这里显示。") : assetSidebarMode ? (canvasAssetSource === "project" && ui.canvasAssetProjectAssetsLoading ? "正在加载资产..." : ui.canvasLibraryAssetsLoading && canvasAssetSource === "global" ? "正在加载资产..." : ui.canvasAssetProjectAssetsError && canvasAssetSource === "project" ? `加载失败：${escapeHtml(ui.canvasAssetProjectAssetsError)}` : ui.canvasLibraryAssetsError && canvasAssetSource === "global" ? `加载失败：${escapeHtml(ui.canvasLibraryAssetsError)}` : canvasAssetSource === "outputs" ? "暂无生成产物。运行节点后可从这里拖入或复用。" : "暂无可用资产。") : nodes.length ? "没有匹配的画布节点。" : "暂无画布节点。"}</p>`}
+          ${assetSidebarMode && ui.canvasHistoryNextCursor ? `<button class="canvas-history-load-more" type="button" data-action="load-more-canvas-generation-history" ${ui.canvasAssetsLoading ? "disabled" : ""}>${ui.canvasAssetsLoading ? "正在加载" : "加载更多"}</button>` : ""}
+          ${hasMoreCanvasAssets ? `<div class="canvas-asset-load-sentinel" data-canvas-asset-load-more-sentinel data-canvas-asset-total="${allSidebarAssets.length}" aria-live="polite">加载更多…</div>` : ""}
+          ${sidebarMode !== "history" ? `<section class="canvas-template-section" aria-label="节点模板">
             <header>
               <span>节点模板</span>
               <small>${nodeTemplates.length} 个</small>
@@ -8018,26 +8902,30 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
             <div class="canvas-template-grid">
               ${nodeTemplates.map((template) => renderCanvasTemplateButton(template)).join("")}
             </div>
-          </section>
+          </section>` : ""}
         </div>
         <footer class="canvas-sidebar-footer">
-          <button class="canvas-collapse" type="button" aria-label="收起侧栏">${renderCanvasIcon("collapse")}</button>
-          <span>${sidebarMode === "assets" ? `共 ${sidebarItems.length} 素材` : `共 ${nodes.length} 节点`}</span>
+          <button class="canvas-collapse" type="button" data-action="toggle-canvas-sidebar" aria-label="收起侧栏" aria-expanded="true" aria-controls="canvas-sidebar-panel">${renderCanvasIcon("collapse")}</button>
+          <span${!assetSidebarMode ? ' data-canvas-node-count' : ""}>${assetSidebarMode ? `共 ${sidebarMode === "history" ? sidebarItems.length : (sidebarMode === "assets" ? `${sidebarAssets.length} / ${allSidebarAssets.length}` : sidebarItems.length)} ${sidebarMode === "history" ? "条记录" : "项"}` : `显示 ${sidebarItems.length} / ${nodes.length} 节点`}</span>
         </footer>
       </aside>
-      <main class="canvas-stage ${viewport.gridVisible === false ? "is-grid-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
+      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} ${canvasGridVisible ? "is-canvas-grid-visible" : ""} ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布">
         <button class="canvas-detail-back" type="button" data-action="back-to-canvas-projects" aria-label="返回画布项目列表">
           ${renderCanvasIcon("collapse")}<span>项目</span>
         </button>
+        ${sidebarCollapsed ? `<button class="canvas-detail-back" style="left:6.25rem" type="button" data-action="toggle-canvas-sidebar" aria-label="展开侧栏" aria-expanded="false" aria-controls="canvas-sidebar-panel">${renderCanvasIcon("collapse")}<span>侧栏</span></button>` : ""}
         <div class="canvas-x6-mount" data-canvas-x6-mount aria-label="可拖拽连线画布"></div>
         <div class="canvas-flow" aria-label="AI 节点工作流" style="${escapeAttr(viewportStyle)}">
-          ${renderLiblibCanvasEdges(canvasDocument)}
+          ${renderLiblibCanvasEdges(visibleCanvasDocument, { edgeStyle: canvasEdgeStyle })}
           ${nodes.map((node) => renderLiblibCanvasNode(node, {
             selected: node.id === selectedNode?.id,
             activeTextToolbar: ui.editingCanvasTextNodeId === node.id,
             canvasDocument,
+            canvasAssets,
             generatingNodeId: generatingCanvasNodeId,
           })).join("")}
+          ${nodes.length === 0 ? renderCanvasEmptyQuickStart(nodeTemplates) : ""}
+          ${selectedNode && !selectedNodeGenerating ? renderCanvasNodeToolbar(selectedNode) : ""}
           ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, modelMenuHtml: selectedCanvasModelMenu, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
         </div>
 
@@ -8052,25 +8940,138 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
             `).join("")}
           </aside>
         ` : ""}
+        ${markdownFullscreenNode ? renderCanvasMarkdownFullscreen(markdownFullscreenNode, {
+          open: true,
+          fullscreenViewMode: markdownFullscreenState.viewMode,
+          copied: markdownFullscreenState.copied === true,
+          renderPreview: renderCanvasMarkdownPreview,
+        }) : ""}
+        ${videoFullscreenNode ? renderCanvasVideoFullscreen(videoFullscreenNode, {
+          open: true,
+          assets: canvasAssets,
+        }) : ""}
 
         ${contextMenu ? renderCanvasContextMenu(contextMenu, { episodeGenerationConfig: ui.episodeGenerationConfig }) : ""}
 
         ${scriptPicker ? renderCanvasScriptPicker(scriptPicker) : ""}
 
         <div class="canvas-zoom-tools" aria-label="画布视图工具">
-          <button class="${viewport.gridVisible === false ? "" : "active"}" type="button" data-action="set-canvas-viewport" data-viewport-patch="toggle-grid" aria-label="网格视图">${renderCanvasIcon("grid")}</button>
-          <button type="button" data-action="set-canvas-viewport" data-viewport-patch="zoom-out" aria-label="缩小">${renderCanvasIcon("minus")}</button>
-          <button type="button" data-action="set-canvas-viewport" data-viewport-patch="zoom-in" aria-label="放大">${renderCanvasIcon("plus")}</button>
-          <button class="${viewport.snapEnabled === false ? "" : "active"}" type="button" data-action="set-canvas-viewport" data-viewport-patch="toggle-snap" aria-label="吸附">${renderCanvasIcon("link")}</button>
-          <strong>${escapeHtml(String(zoomPercent))}%</strong>
+          <button type="button" class="canvas-view-tool is-wide ${sidebarCollapsed ? "" : "active"}" data-action="toggle-canvas-sidebar" aria-label="${sidebarCollapsed ? "展开资产管理" : "收起资产管理"}" title="资产管理" aria-expanded="${!sidebarCollapsed}" aria-controls="canvas-sidebar-panel">${renderCanvasIcon("panel")}<span>资产管理</span></button>
+          <button type="button" class="canvas-view-tool" data-action="arrange-canvas-nodes" aria-label="整理画布" title="整理画布（Alt+Shift+F）">${renderCanvasIcon("grid")}</button>
+          <button type="button" class="canvas-view-tool ${ui.canvasMinimapHidden === true ? "" : "active"}" data-action="toggle-canvas-minimap" aria-label="${ui.canvasMinimapHidden === true ? "显示画布小地图" : "隐藏画布小地图"}" title="画布小地图">${renderCanvasIcon("map")}</button>
+          <button type="button" class="canvas-view-tool ${canvasEdgesHidden ? "" : "active"}" data-action="toggle-canvas-edges" aria-label="${canvasEdgesHidden ? "显示节点连线" : "隐藏节点连线"}" title="${canvasEdgesHidden ? "显示节点连线" : "隐藏节点连线"}">${renderCanvasIcon("connections")}</button>
+          <button type="button" class="canvas-view-tool ${canvasSnapEnabled ? "active" : ""}" data-action="toggle-canvas-snap" data-viewport-patch="toggle-snap" aria-label="${canvasSnapEnabled ? "关闭网格吸附" : "开启网格吸附"}" title="网格吸附">${renderCanvasIcon("magnet")}</button>
+          <button type="button" class="${canvasEdgeStyle === "orthogonal" ? "active" : ""}" data-action="set-canvas-edge-style" data-edge-style="${canvasEdgeStyle === "orthogonal" ? "curve" : "orthogonal"}" aria-label="${canvasEdgeStyle === "orthogonal" ? "切换为曲线连线" : "切换为直角连线"}" title="${canvasEdgeStyle === "orthogonal" ? "连线类型：直角 → 曲线" : "连线类型：曲线 → 直角"}">${renderCanvasIcon("edge")}</button>
+          <div class="canvas-zoom-menu-shell">
+            <button type="button" class="canvas-zoom-trigger ${zoomMenuOpen ? "active" : ""}" data-action="toggle-canvas-zoom-menu" data-canvas-zoom-trigger aria-label="画布缩放比例 ${zoomPercent}%" aria-haspopup="menu" aria-expanded="${zoomMenuOpen}" aria-controls="canvas-zoom-menu">${zoomPercent}%</button>
+            ${zoomMenuOpen ? `
+              <div class="canvas-zoom-menu" id="canvas-zoom-menu" role="menu" aria-label="画布缩放">
+                <label class="canvas-zoom-menu-value" aria-label="当前缩放比例">
+                  <input type="number" min="10" max="800" step="1" value="${zoomPercent}" data-canvas-zoom-value-input />
+                  <span>%</span>
+                </label>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-in"><span>放大</span><kbd>Ctrl +</kbd></button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-out"><span>缩小</span><kbd>Ctrl -</kbd></button>
+                <button type="button" role="menuitem" data-action="fit-canvas-view"><span>适合屏幕</span><kbd>Ctrl 0</kbd></button>
+                <div class="canvas-zoom-menu-separator" role="separator"></div>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="50">缩放至50%</button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="100">缩放至100%</button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="800">缩放至800%</button>
+              </div>
+            ` : ""}
+          </div>
         </div>
+        ${renderCanvasPromptReferencePicker(ui)}
+        ${revisionConflict}
       </main>
     </section>
   `;
 }
 
+function renderCanvasRevisionConflict(conflict) {
+  if (!conflict || typeof conflict !== "object") return "";
+  const localSummary = summarizeCanvasRevisionDocument(conflict.localDocument);
+  const serverSummary = summarizeCanvasRevisionDocument(conflict.serverDocument);
+  return `
+    <div class="canvas-revision-conflict-backdrop" role="presentation">
+      <section class="canvas-revision-conflict" role="alertdialog" aria-modal="true" aria-labelledby="canvas-revision-conflict-title" aria-describedby="canvas-revision-conflict-description">
+        <header>
+          <span class="canvas-revision-conflict-mark" aria-hidden="true">!</span>
+          <div>
+            <h2 id="canvas-revision-conflict-title">画布版本发生冲突</h2>
+            <p id="canvas-revision-conflict-description">其他位置已保存新版本。请比较摘要，并明确选择继续使用的版本。</p>
+          </div>
+        </header>
+        <div class="canvas-revision-conflict-compare" aria-label="版本摘要">
+          ${renderCanvasRevisionSummary("本地草稿", conflict.clientRevision, localSummary, "尚未保存的编辑")}
+          ${renderCanvasRevisionSummary("服务端版本", conflict.serverRevision, serverSummary, "其他位置已保存")}
+        </div>
+        <footer>
+          <button type="button" class="canvas-revision-choice secondary" data-action="resolve-canvas-revision-conflict" data-canvas-conflict-version="server">使用服务端版本</button>
+          <button type="button" class="canvas-revision-choice primary" data-action="resolve-canvas-revision-conflict" data-canvas-conflict-version="local">保留本地版本并保存</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function renderCanvasRevisionSummary(label, revision, summary, note) {
+  return `
+    <article class="canvas-revision-summary">
+      <div class="canvas-revision-summary-title">
+        <strong>${escapeHtml(label)}</strong>
+        <span>Revision ${escapeHtml(String(Number(revision ?? 0) || 0))}</span>
+      </div>
+      <dl>
+        <div><dt>节点</dt><dd>${summary.nodeCount}</dd></div>
+        <div><dt>连接</dt><dd>${summary.edgeCount}</dd></div>
+      </dl>
+      <p>${escapeHtml(summary.nodeLabels || "空白画布")}</p>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function summarizeCanvasRevisionDocument(document) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const edges = Array.isArray(document?.edges) ? document.edges : [];
+  const nodeLabels = nodes
+    .map((node) => String(node?.data?.title ?? node?.data?.name ?? node?.data?.text ?? node?.type ?? "节点").trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((label) => label.length > 28 ? `${label.slice(0, 28)}...` : label)
+    .join("、");
+  return { nodeCount: nodes.length, edgeCount: edges.length, nodeLabels };
+}
+
+/**
+ * Render only the standalone Canvas surface for the in-app host.
+ * The production workbench remains the source of truth for Canvas markup;
+ * the host owns lifecycle, styling scope, and dependency injection.
+ */
+export function renderCanvasSurfaceForHost(context = {}) {
+  const state = context?.state && typeof context.state === "object" ? context.state : {};
+  const ui = context?.ui && typeof context.ui === "object" ? context.ui : {};
+  const session = context?.session && typeof context.session === "object"
+    ? context.session
+    : { user: { phone: "" } };
+  return renderToolsPanel({ ...ui, session, canvasProjectView: "detail" }, state, session);
+}
+
 export function renderCanvasProjectGallery(ui = {}) {
-  const projects = normalizeCanvasProjectCards(ui);
+  const allProjects = normalizeCanvasProjectCards(ui);
+  const statusFilter = ["active", "archived", "all"].includes(ui.canvasProjectStatusFilter)
+    ? ui.canvasProjectStatusFilter
+    : "active";
+  const statusProjects = statusFilter === "all"
+    ? allProjects
+    : allProjects.filter((project) => statusFilter === "archived"
+      ? normalizeCanvasProjectCardStatus(project.status) === "archived"
+      : normalizeCanvasProjectCardStatus(project.status) !== "archived");
+  const searchQuery = String(ui.canvasProjectSearchQuery ?? "").trim().toLocaleLowerCase();
+  const projects = searchQuery
+    ? statusProjects.filter((project) => `${project.title ?? ""} ${project.id ?? ""}`.toLocaleLowerCase().includes(searchQuery))
+    : statusProjects;
   const pageSize = CANVAS_PROJECT_GALLERY_PAGE_SIZE;
   const totalProjects = projects.length;
   const totalPages = Math.max(1, Math.ceil(totalProjects / pageSize));
@@ -8084,7 +9085,7 @@ export function renderCanvasProjectGallery(ui = {}) {
     <section class="canvas-project-gallery" aria-label="画布项目列表">
       <header class="canvas-project-gallery-head">
         <div class="page-seo-heading">
-          <h1>全部画布(${escapeHtml(String(totalProjects))})</h1>
+          <h1>全部画布(${escapeHtml(String(allProjects.length))})</h1>
           <div class="page-seo-tags" aria-label="画布能力">
             <b>AI视频生成工具</b>
             <b>文生视频</b>
@@ -8094,22 +9095,21 @@ export function renderCanvasProjectGallery(ui = {}) {
           </div>
         </div>
         <div class="canvas-project-gallery-controls">
-          <button class="canvas-project-filter" type="button">
-            <span>项目状态</span>
-            <span class="canvas-project-filter__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span>
-          </button>
+          <label class="canvas-project-filter"><span>项目状态</span><select data-canvas-project-status-filter aria-label="筛选画布状态"><option value="active" ${statusFilter === "active" ? "selected" : ""}>使用中</option><option value="archived" ${statusFilter === "archived" ? "selected" : ""}>已归档</option><option value="all" ${statusFilter === "all" ? "selected" : ""}>全部</option></select></label>
           <label class="canvas-project-search">
             ${renderCanvasIcon("search")}
-            <input type="search" value="${escapeAttr(ui.canvasProjectSearchQuery ?? "")}" placeholder="请输入项目名称" aria-label="请输入项目名称" />
+            <input type="search" value="${escapeAttr(ui.canvasProjectSearchQuery ?? "")}" data-canvas-project-search placeholder="请输入项目名称" aria-label="请输入项目名称" />
           </label>
         </div>
       </header>
       <div class="canvas-project-card-grid">
         ${visibleProjects.length
           ? visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id, !isTeamMember)).join("")
-          : isTeamMember
-            ? renderTeamMemberAssignmentEmptyState("画布")
-            : ""}
+          : searchQuery
+            ? `<p class="canvas-project-empty">没有匹配“${escapeHtml(String(ui.canvasProjectSearchQuery ?? "").trim())}”的画布</p>`
+            : isTeamMember
+              ? renderTeamMemberAssignmentEmptyState("画布")
+              : ""}
       </div>
       ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize, "画布分页", "change-canvas-project-page") : ""}
       <div class="canvas-project-aurora" aria-hidden="true"></div>
@@ -8125,6 +9125,10 @@ export function renderCanvasProjectGallery(ui = {}) {
 
 function isTeamMemberSession(session) {
   return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
+}
+
+function isNewCanvasEnabled(session = {}) {
+  return (session?.features?.newCanvas ?? session?.user?.features?.newCanvas) !== false;
 }
 
 function hasActiveSessionUser(session = {}) {
@@ -8182,6 +9186,20 @@ function normalizeCanvasProjectCards(ui = {}) {
   }));
 }
 
+function normalizeCanvasProjectCardStatus(value) {
+  const status = String(value ?? "draft").trim().toLocaleLowerCase();
+  return status === "归档" || status === "archived" ? "archived" : status;
+}
+
+function resolveRecentCanvasProjects(ui = {}) {
+  const projects = normalizeCanvasProjectCards(ui);
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  return (Array.isArray(ui.canvasRecentProjectIds) ? ui.canvasRecentProjectIds : [])
+    .map((id) => projectById.get(String(id)))
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
 function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = true) {
   return `
     <article class="canvas-project-card">
@@ -8195,7 +9213,7 @@ function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = tru
           <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
         </button>
         <div class="canvas-project-card-row">
-          <small>创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")}</small>
+          <small>创建时间：${escapeHtml(project.createdAt ?? "2026/06/10")} · ${normalizeCanvasProjectCardStatus(project.status) === "archived" ? "已归档" : "使用中"}</small>
           <span class="canvas-project-card-actions">
             <button class="canvas-project-menu" type="button" data-action="toggle-canvas-project-menu" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="${escapeAttr(project.title ?? "画布项目")}编辑">编辑</button>
             ${menuOpen ? renderCanvasProjectMenu(project, canDelete) : ""}
@@ -8207,29 +9225,360 @@ function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = tru
 }
 
 function renderCanvasProjectMenu(project = {}, canDelete = true) {
+  const archived = normalizeCanvasProjectCardStatus(project.status) === "archived";
   return `
     <div class="canvas-project-card-menu" role="menu" aria-label="画布操作">
       <button class="canvas-project-card-menu-item" type="button" data-action="rename-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">重命名</button>
+      ${canDelete ? `<button class="canvas-project-card-menu-item" type="button" data-action="toggle-canvas-project-archive" data-canvas-project-id="${escapeAttr(project.id ?? "")}" data-canvas-project-status="${archived ? "active" : "archived"}">${archived ? "恢复" : "归档"}</button>` : ""}
       ${canDelete ? `<button class="canvas-project-card-menu-item danger" type="button" data-action="delete-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}">删除</button>` : ""}
     </div>
   `;
 }
 
-function renderCanvasSidebarItem(item, active = false) {
+const CANVAS_TOOLBAR_TOOLS = Object.freeze({
+  select: { label: "选择", icon: "cursor", action: "set-canvas-tool", attrs: 'data-canvas-tool="select"' },
+  connect: { label: "连接", icon: "link", action: "set-canvas-tool", attrs: 'data-canvas-tool="connect"' },
+  comment: { label: "评论", icon: "comment", action: "add-canvas-node", attrs: 'data-node-kind="comment"' },
+  undo: { label: "撤销", icon: "undo", action: "undo-canvas-change" },
+  redo: { label: "重做", icon: "redo", action: "redo-canvas-change" },
+  copy: { label: "复制节点", icon: "copy", action: "copy-canvas-selection" },
+  paste: { label: "粘贴节点", icon: "clipboard", action: "paste-canvas-selection" },
+  group: { label: "节点分组", icon: "group", action: "group-canvas-selection" },
+  ungroup: { label: "取消分组", icon: "group", action: "ungroup-canvas-selection" },
+});
+
+const DEFAULT_CANVAS_TOOLBAR_ZONES = Object.freeze([
+  Object.freeze(["undo", "redo"]),
+  Object.freeze(["copy", "paste", "group"]),
+]);
+
+export function resolveCanvasToolbarLayout(ui = {}) {
+  const manifest = ui.canvasConfigSnapshots?.toolbar?.manifest;
+  const configuredIds = Array.isArray(manifest?.toolIds)
+    ? manifest.toolIds.map(String).filter((id) => CANVAS_TOOLBAR_TOOLS[id])
+    : [];
+  const layout = manifest?.layout;
+  const configuredZones = Array.isArray(layout?.zones)
+    ? layout.zones.map((zone) => {
+        const ids = Array.isArray(zone)
+          ? zone
+          : Array.isArray(zone?.toolIds) ? zone.toolIds : Array.isArray(zone?.buttonKeys) ? zone.buttonKeys : [];
+        return ids.map(String).filter((id) => CANVAS_TOOLBAR_TOOLS[id] && (!configuredIds.length || configuredIds.includes(id)));
+      }).filter((zone) => zone.length)
+    : [];
+  const zones = configuredZones.length
+    ? configuredZones
+    : configuredIds.length ? [configuredIds] : DEFAULT_CANVAS_TOOLBAR_ZONES.map((zone) => [...zone]);
+  const directionValue = typeof layout === "string" ? layout : layout?.direction ?? layout?.orientation;
+  const direction = directionValue === "vertical" ? "vertical" : "horizontal";
+  const position = ["top-left", "top-center", "top-right", "left", "right"].includes(layout?.position)
+    ? layout.position
+    : "top-left";
+  return { zones, direction, position, configured: Boolean(configuredIds.length) };
+}
+
+function renderCanvasCommandToolbar(ui = {}) {
+  const layout = resolveCanvasToolbarLayout(ui);
+  const activeTool = String(ui.canvasActiveTool ?? "select");
+  return `<div class="canvas-command-tools" role="toolbar" aria-label="画布编辑工具" data-toolbar-layout="${layout.direction}" data-toolbar-position="${layout.position}" data-toolbar-configured="${layout.configured}">
+    ${layout.zones.map((zone, zoneIndex) => `${zoneIndex ? '<span aria-hidden="true"></span>' : ""}${zone.map((id) => {
+      const tool = CANVAS_TOOLBAR_TOOLS[id];
+      const active = tool.action === "set-canvas-tool" && activeTool === id;
+      return `<button class="${active ? "active" : ""}" type="button" data-action="${tool.action}" ${tool.attrs ?? ""} aria-label="${escapeAttr(tool.label)}" title="${escapeAttr(tool.label)}"${tool.action === "set-canvas-tool" ? ` aria-pressed="${active}"` : ""}>${renderCanvasIcon(tool.icon)}</button>`;
+    }).join("")}`).join("")}
+  </div>`;
+}
+
+const CANVAS_NODE_FILTER_LABELS = {
+  all: "全部",
+  source: "输入",
+  text: "文本",
+  image: "图片",
+  video: "视频",
+  audio: "音频",
+};
+
+function normalizeCanvasNodeFilter(value) {
+  const normalized = String(value ?? "all");
+  return Object.hasOwn(CANVAS_NODE_FILTER_LABELS, normalized) ? normalized : "all";
+}
+
+function renderCanvasNodeFilterOptions(activeFilter) {
+  return Object.entries(CANVAS_NODE_FILTER_LABELS)
+    .map(([value, label]) => `<option value="${value}" ${value === activeFilter ? "selected" : ""}>${label}</option>`)
+    .join("");
+}
+
+function filterCanvasSidebarNodeItems(items, filter, query) {
+  const sourceKinds = new Set(["upload", "source-file", "source-image", "source-video", "source-audio"]);
+  const textKinds = new Set(["script", "source-text", "text", "ai-text", "ai-markdown", "ai-storyboard", "ai-director", "markdown", "comment", "group"]);
+  const imageKinds = new Set(["image", "send", "ai-image", "ai-animation", "ai-panorama"]);
+  const videoKinds = new Set(["video", "ai-video"]);
+  const audioKinds = new Set(["audio", "ai-audio"]);
+  const kindsByFilter = { source: sourceKinds, text: textKinds, image: imageKinds, video: videoKinds, audio: audioKinds };
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const kind = String(item?.kind ?? "").toLowerCase();
+    if (filter !== "all" && !kindsByFilter[filter]?.has(kind)) {
+      return false;
+    }
+    return !query || [item?.title, item?.meta, item?.kind, item?.status]
+      .some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+  });
+}
+
+function renderCanvasEmptyQuickStart(templates = []) {
+  const preferredTypes = ["ai-text", "ai-image", "ai-video", "ai-audio"];
+  const quickStarts = preferredTypes
+    .map((type) => templates.find((template) => template.type === type))
+    .filter(Boolean);
+  if (!quickStarts.length) return "";
+  return `<section class="canvas-empty-quick-start" aria-label="快速开始">
+    <strong>从一个创作节点开始</strong>
+    <div>${quickStarts.map((template) => `<button type="button" data-action="add-canvas-template" data-template-id="${escapeAttr(template.id)}" data-node-kind="${escapeAttr(template.type)}"><span aria-hidden="true">${renderCanvasIcon(template.type)}</span><span>${escapeHtml(template.title)}</span></button>`).join("")}</div>
+  </section>`;
+}
+
+function normalizeCanvasAssetSource(value) {
+  const normalized = String(value ?? "outputs").trim().toLowerCase();
+  return CANVAS_ASSET_SOURCE_OPTIONS.some((option) => option.id === normalized) ? normalized : "outputs";
+}
+
+function resolveCanvasLibraryAssets(ui = {}, state = {}, source = "outputs") {
+  if (source === "outputs") return [];
+  if (source === "global") return Array.isArray(ui.canvasLibraryAssets) ? ui.canvasLibraryAssets : [];
+  if (source === "project" && Array.isArray(ui.canvasAssetProjectAssets)) {
+    return ui.canvasAssetProjectAssets;
+  }
+  const assetsByType = source === "drama"
+    ? ui.importedAssets ?? ui.projectDetail?.assetsByType ?? state.projectDetail?.assetsByType ?? {}
+    : ui.projectLibraryAssetsByType ?? ui.projectDetail?.assetsByType ?? state.projectDetail?.assetsByType ?? {};
+  if (!assetsByType || typeof assetsByType !== "object") {
+    return source === "global" && Array.isArray(ui.canvasLibraryAssets) ? ui.canvasLibraryAssets : [];
+  }
+  const entries = [];
+  for (const [category, value] of Object.entries(assetsByType)) {
+    const list = Array.isArray(value)
+      ? value
+      : value && typeof value === "object"
+        ? Object.values(value).flatMap((item) => Array.isArray(item) ? item : [])
+        : [];
+    for (const asset of list) {
+      const normalized = normalizeCanvasLibraryAsset(asset, { source, category });
+      if (normalized) entries.push(normalized);
+    }
+  }
+  return entries;
+}
+
+  export function normalizeCanvasLibraryAsset(asset, { source = "project", category = "image" } = {}) {
+  if (!asset || typeof asset !== "object") return null;
+  const id = String(asset.id ?? asset.assetId ?? asset.assetKey ?? "").trim();
+  if (!id) return null;
+  const latestVersion = asset.latestVersion && typeof asset.latestVersion === "object" ? asset.latestVersion : {};
+  const metadata = latestVersion.metadata && typeof latestVersion.metadata === "object" ? latestVersion.metadata : {};
+  const mediaType = String(asset.mediaType ?? asset.mimeType ?? metadata.mimeType ?? category).toLowerCase();
+  const kind = mediaType.includes("video") || category === "video" ? "video" : mediaType.includes("audio") || category === "audio" || category === "voice" ? "audio" : "image";
+  const previewUrl = String(
+    asset.previewUrl ?? asset.preview ?? asset.sourceUrl ?? latestVersion.previewUrl ?? metadata.previewUrl ?? metadata.fixedImageUrl ?? "",
+  ).trim();
+  return {
+    id: `library:${source}:${id}`,
+    sourceAssetId: id,
+    source,
+    kind,
+    title: String(asset.name ?? asset.label ?? asset.assetKey ?? "未命名资产"),
+    meta: `${source === "global" ? "全局" : source === "drama" ? "短剧" : "项目"} · ${category}`,
+      tags: Array.isArray(asset.tags)
+      ? [...new Set(asset.tags.map((tag) => String(tag ?? "").trim()).filter(Boolean))]
+      : Array.isArray(metadata.tags)
+        ? [...new Set(metadata.tags.map((tag) => String(tag ?? "").trim()).filter(Boolean))]
+          : [],
+      folderName: String(asset.folderName ?? asset.folder_name ?? "").trim(),
+    status: "可用",
+    url: previewUrl,
+    previewUrl,
+    storageObjectId: String(asset.storageObjectId ?? latestVersion.storageObjectId ?? metadata.storageObjectId ?? "").trim() || null,
+    assetId: id,
+    assetVersionId: String(asset.assetVersionId ?? latestVersion.id ?? "").trim() || null,
+  };
+}
+
+function renderCanvasAssetTagEditor(asset, { source, editorKey, activeEditorKey } = {}) {
+  if (!editorKey || editorKey !== activeEditorKey) return "";
+  const tags = Array.isArray(asset?.tags) ? asset.tags : [];
+  return `<div class="canvas-asset-tag-editor" role="group" aria-label="编辑 ${escapeAttr(asset?.title ?? "资产")} 的标签">
+    ${tags.map((tag) => `<button type="button" data-action="remove-canvas-library-asset-tag" data-library-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-source="${escapeAttr(source ?? "")}" data-canvas-asset-tag="${escapeAttr(tag)}" aria-label="删除标签 ${escapeAttr(tag)}" title="删除标签 ${escapeAttr(tag)}">${escapeHtml(tag)} <b aria-hidden="true">×</b></button>`).join("")}
+    <input type="text" data-canvas-asset-tag-input data-canvas-asset-editor-key="${escapeAttr(editorKey)}" data-library-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-source="${escapeAttr(source ?? "")}" maxlength="32" aria-label="新增标签" placeholder="输入标签后按 Enter" />
+  </div>`;
+}
+
+  function renderCanvasLibraryAssetItem(asset, { canDelete = false, deleteAction = "delete-canvas-global-asset", canEditDetails = false, canReplaceMedia = false, detailDraft = null, canEditTags = false, canMoveToFolder = false, canSaveToGlobal = false, canUseAsStyleReference = false, styleReferenceBusy = false, tagEditAction = "edit-canvas-library-asset-tags", tagSource = "", tagEditorKey = "", activeTagEditorKey = "" } = {}) {
+  const title = String(asset?.title ?? "未命名资产");
+  const preview = String(asset?.url ?? asset?.previewUrl ?? "").trim();
+  return `<div class="canvas-library-asset-item" data-canvas-asset-drag="true" data-asset-id="${escapeAttr(asset?.id ?? "")}" draggable="true">
+    <button class="canvas-element-item asset" type="button" data-action="add-canvas-library-asset" data-library-asset-id="${escapeAttr(asset?.id ?? "")}">
+      <span class="canvas-element-icon" aria-hidden="true">${preview ? `<img src="${escapeAttr(preview)}" alt="" loading="lazy" />` : renderCanvasIcon(asset?.kind ?? "image")}</span>
+      <span class="canvas-element-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(asset?.meta ?? "资产")}</small></span>
+      ${Array.isArray(asset?.tags) && asset.tags.length ? `<span class="canvas-library-asset-tags">${asset.tags.map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}</span>` : ""}
+      <i>${escapeHtml(asset?.status ?? "可用")}</i>
+    </button>
+      ${canEditDetails ? `<div class="canvas-library-asset-details"><input type="text" data-canvas-project-asset-detail data-asset-id="${escapeAttr(asset?.assetId ?? "")}" data-field="name" value="${escapeAttr(detailDraft?.name ?? title)}" maxlength="120" aria-label="${escapeAttr(title)} 名称" /><input type="text" data-canvas-project-asset-detail data-asset-id="${escapeAttr(asset?.assetId ?? "")}" data-field="description" value="${escapeAttr(detailDraft?.description ?? asset?.description ?? "")}" maxlength="2000" placeholder="资产简介" aria-label="${escapeAttr(title)} 简介" /><button type="button" data-action="save-canvas-project-asset-details" data-asset-id="${escapeAttr(asset?.assetId ?? "")}">保存</button></div>` : ""}
+      ${canReplaceMedia ? `<input type="file" data-canvas-project-asset-replace-file data-asset-id="${escapeAttr(asset?.assetId ?? "")}" accept="image/*,video/*,audio/*" hidden /><button type="button" data-action="trigger-canvas-project-asset-replace" aria-label="替换 ${escapeAttr(title)}" title="替换资产">${renderCanvasIcon("upload")}</button>` : ""}
+      ${canEditTags ? `<button class="canvas-library-asset-edit-tags" type="button" data-action="${escapeAttr(tagEditAction)}" data-library-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-id="${escapeAttr(asset?.assetId ?? "")}" data-asset-source="${escapeAttr(tagSource)}" aria-label="编辑 ${escapeAttr(title)} 的标签" title="编辑标签">标签</button>` : ""}
+      ${canMoveToFolder ? `<div class="canvas-library-asset-folder"><input type="text" data-canvas-global-asset-folder-input value="${escapeAttr(asset?.folderName ?? "")}" maxlength="64" placeholder="文件夹" aria-label="${escapeAttr(title)} 的文件夹" /><button type="button" data-action="move-canvas-global-asset-folder" data-asset-id="${escapeAttr(asset?.assetId ?? "")}">移动</button></div>` : ""}
+    ${canSaveToGlobal ? `<button class="canvas-library-asset-save-global" type="button" data-action="save-canvas-project-asset-to-global" data-library-asset-id="${escapeAttr(asset?.id ?? "")}" aria-label="将 ${escapeAttr(title)} 保存到全局资产" title="保存到全局资产">保存全局</button>` : ""}
+    ${canUseAsStyleReference ? `<button class="canvas-library-asset-style-reference" type="button" data-action="use-canvas-library-asset-as-style-reference" data-library-asset-id="${escapeAttr(asset?.id ?? "")}" aria-label="将 ${escapeAttr(title)} 设为风格母图" title="设为风格母图" ${styleReferenceBusy ? "disabled" : ""}>${styleReferenceBusy ? "处理中" : "风格母图"}</button>` : ""}
+    ${canDelete ? `<button class="canvas-library-asset-delete" type="button" data-action="${escapeAttr(deleteAction)}" data-asset-id="${escapeAttr(asset?.assetId ?? "")}" aria-label="删除资产 ${escapeAttr(title)}" title="删除资产">${renderCanvasIcon("trash")}</button>` : ""}
+    ${canEditTags ? renderCanvasAssetTagEditor(asset, { source: tagSource, editorKey: tagEditorKey, activeEditorKey: activeTagEditorKey }) : ""}
+  </div>`;
+}
+
+function renderCanvasSidebarItem(item, active = false, { tagEditorKey = "", activeTagEditorKey = "" } = {}) {
   const action = item.type === "asset" ? "add-canvas-template" : "select-canvas-node";
   const dataAttrs = item.type === "asset"
     ? `data-template-id="template-upload" data-node-kind="upload" data-asset-id="${escapeAttr(item.id)}"`
     : `data-node-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.kind)}"`;
-  return `
-    <button class="canvas-element-item ${escapeAttr(item.kind)} ${item.type === "asset" ? "asset" : ""} ${active ? "active" : ""}" type="button" data-action="${action}" ${dataAttrs}>
+  const itemButton = `
+    <button class="canvas-element-item ${escapeAttr(item.kind)} ${item.type === "asset" ? "asset" : ""} ${active ? "active" : ""}" type="button" data-action="${action}" ${dataAttrs}${item.type === "asset" ? ' draggable="true" data-canvas-asset-drag="true"' : ""}>
       <span class="canvas-element-icon" aria-hidden="true">${item.url ? `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />` : renderCanvasIcon(item.kind)}</span>
       <span class="canvas-element-copy">
         <strong>${escapeHtml(item.title)}</strong>
         <small>${escapeHtml(item.meta)}</small>
       </span>
+      ${Array.isArray(item.tags) && item.tags.length ? `<span class="canvas-library-asset-tags">${item.tags.map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}</span>` : ""}
       <i>${escapeHtml(item.status)}</i>
     </button>
   `;
+  if (item.type !== "asset") return itemButton;
+  const transfer = item.transfer && typeof item.transfer === "object" ? item.transfer : null;
+  const running = transfer?.status === "running";
+  const failed = transfer?.status === "failed";
+  const progress = Number.isFinite(Number(transfer?.progress))
+    ? Math.max(0, Math.min(100, Math.round(Number(transfer.progress) * 100)))
+    : null;
+  const transferLabel = running
+    ? `${transfer.mode === "copy" ? "复制" : "下载"} ${progress === null ? formatCanvasTransferBytes(transfer.loaded) : `${progress}%`}`
+    : failed ? "传输失败，可重试" : transfer?.status === "canceled" ? "传输已取消，可重试" : transfer?.status === "succeeded" ? "传输完成" : "";
+  const unavailable = item.storageObjectId ? "" : "disabled";
+  return `<div class="canvas-history-item">${itemButton}<div class="canvas-asset-actions" role="group" aria-label="${escapeAttr(item.title)}资产操作">
+    ${running
+      ? `<button type="button" data-action="cancel-canvas-asset-transfer" data-asset-id="${escapeAttr(item.id)}" aria-label="取消${escapeAttr(transfer.mode === "copy" ? "复制" : "下载")}" title="取消传输">${renderCanvasIcon("minus")}</button>`
+      : `<button type="button" data-action="copy-canvas-asset" data-asset-id="${escapeAttr(item.id)}" aria-label="复制${escapeAttr(item.title)}" title="复制到剪贴板" ${unavailable}>${renderCanvasIcon("copy")}</button>
+         <button type="button" data-action="download-canvas-asset" data-asset-id="${escapeAttr(item.id)}" aria-label="下载${escapeAttr(item.title)}" title="下载资产" ${unavailable}>${renderCanvasIcon("download")}</button>`}
+    ${item.artifactId ? `<button class="canvas-library-asset-edit-tags" type="button" data-action="edit-canvas-library-asset-tags" data-library-asset-id="${escapeAttr(item.id)}" data-asset-source="outputs" aria-label="编辑 ${escapeAttr(item.title)} 的标签" title="编辑标签">标签</button>` : ""}
+    ${item.runId ? `<button class="canvas-history-delete" type="button" data-action="delete-canvas-generation-run" data-run-id="${escapeAttr(item.runId)}" aria-label="删除${escapeAttr(item.title)}" title="删除生成记录">${renderCanvasIcon("trash")}</button>` : ""}
+  </div>${item.artifactId ? renderCanvasAssetTagEditor(item, { source: "outputs", editorKey: tagEditorKey, activeEditorKey: activeTagEditorKey }) : ""}${transferLabel ? `<div class="canvas-asset-transfer-status ${escapeAttr(transfer?.status ?? "")}" role="status"><span>${escapeHtml(transferLabel)}</span>${running ? `<progress max="1" ${progress === null ? "" : `value="${escapeAttr(Number(transfer.progress))}"`}></progress>` : ""}</div>` : ""}</div>`;
+}
+
+function normalizeCanvasHistoryFilter(value) {
+  const normalized = String(value ?? "all").trim().toLowerCase();
+  return CANVAS_HISTORY_FILTER_OPTIONS.some((option) => option.id === normalized) ? normalized : "all";
+}
+
+function filterCanvasHistoryItems(items, options = {}) {
+  const filter = normalizeCanvasHistoryFilter(options.filter);
+  const query = String(options.search ?? "").trim().toLocaleLowerCase();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const mediaKind = String(item?.mediaKind ?? "").trim().toLowerCase();
+    if (filter !== "all" && mediaKind !== filter) return false;
+    if (!query) return true;
+    const prompt = resolveCanvasHistorySnapshotText(item?.inputSnapshot, ["prompt", "text", "content"]);
+    const output = resolveCanvasHistorySnapshotText(item?.outputSnapshot, ["text", "output", "content", "transcript", "result"]);
+    return [item?.nodeKey, item?.modelCode, item?.status, prompt, output]
+      .some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+  });
+}
+
+function resolveCanvasHistorySnapshotText(snapshot, preferredKeys = []) {
+  const visit = (value, depth = 0) => {
+    if (depth > 4 || value == null) return "";
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map((item) => visit(item, depth + 1)).filter(Boolean).join("\n");
+    if (typeof value !== "object") return "";
+    const record = value;
+    for (const key of preferredKeys) {
+      const result = visit(record[key], depth + 1);
+      if (result) return result;
+    }
+    return Object.values(record).map((item) => visit(item, depth + 1)).filter(Boolean).join("\n");
+  };
+  return visit(snapshot).slice(0, 12_000);
+}
+
+function formatCanvasHistoryTime(value) {
+  const date = new Date(String(value ?? ""));
+  if (!Number.isFinite(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function canvasHistoryMediaLabel(kind) {
+  return CANVAS_HISTORY_FILTER_OPTIONS.find((option) => option.id === String(kind ?? "").toLowerCase())?.label ?? "输出";
+}
+
+function canvasHistoryStatusLabel(status) {
+  return {
+    succeeded: "成功",
+    completed: "成功",
+    failed: "失败",
+    canceled: "已取消",
+    queued: "排队中",
+    running: "生成中",
+  }[String(status ?? "").toLowerCase()] ?? String(status ?? "未知");
+}
+
+function renderCanvasHistoryRecord(run, options = {}) {
+  const runId = String(run?.id ?? "");
+  const nodeId = String(options.node?.id ?? run?.nodeKey ?? "");
+  const prompt = resolveCanvasHistorySnapshotText(run?.inputSnapshot, ["prompt", "text", "content"]);
+  const output = resolveCanvasHistorySnapshotText(run?.outputSnapshot, ["text", "output", "content", "transcript", "result"]);
+  const failure = resolveCanvasHistorySnapshotText(run?.failure, ["message", "error", "failureCode", "reason"]);
+  const artifacts = Array.isArray(run?.artifacts) ? run.artifacts : [];
+  const expanded = options.expanded === true;
+  const title = String(options.node?.data?.title ?? run?.nodeKey ?? "生成记录");
+  const mediaLabel = canvasHistoryMediaLabel(run?.mediaKind);
+  const status = canvasHistoryStatusLabel(run?.status);
+  const preview = artifacts.slice(0, 4).map((rawArtifact) => {
+    const artifact = rawArtifact && typeof rawArtifact === "object" ? rawArtifact : {};
+    const url = String(artifact.thumbnailUrl ?? artifact.thumbnail_url ?? artifact.url ?? "").trim();
+    return url
+      ? `<img src="${escapeAttr(url)}" alt="" loading="lazy" />`
+      : `<span aria-hidden="true">${renderCanvasIcon(run?.mediaKind ?? "image")}</span>`;
+  }).join("");
+  return `<article class="canvas-history-record ${expanded ? "expanded" : ""}" data-canvas-history-record data-run-id="${escapeAttr(runId)}">
+    <header class="canvas-history-record-header">
+      <span class="canvas-history-record-icon" aria-hidden="true">${renderCanvasIcon(run?.mediaKind ?? "image")}</span>
+      <span class="canvas-history-record-title"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(mediaLabel)} · ${escapeHtml(formatCanvasHistoryTime(run?.createdAt))}</small></span>
+      <b class="canvas-history-record-status ${escapeAttr(String(run?.status ?? ""))}">${escapeHtml(status)}</b>
+    </header>
+    ${preview ? `<div class="canvas-history-record-previews" aria-label="输出预览">${preview}</div>` : ""}
+    ${prompt ? `<p class="canvas-history-record-prompt">${escapeHtml(prompt.slice(0, expanded ? 1200 : 180))}${!expanded && prompt.length > 180 ? "..." : ""}</p>` : ""}
+    ${failure ? `<p class="canvas-history-record-failure">${escapeHtml(failure.slice(0, expanded ? 1200 : 240))}</p>` : ""}
+    ${expanded ? `<div class="canvas-history-record-details">
+      ${prompt ? `<div><small>提示词</small><pre>${escapeHtml(prompt)}</pre></div>` : ""}
+      ${output ? `<div><small>输出</small><pre>${escapeHtml(output)}</pre></div>` : ""}
+      <small>模型：${escapeHtml(run?.modelCode ?? "未记录")} · Run ${escapeHtml(run?.runNo ?? "-")}</small>
+    </div>` : ""}
+    <footer class="canvas-history-record-actions">
+      <button type="button" data-action="toggle-canvas-history-record" data-run-id="${escapeAttr(runId)}" aria-label="${expanded ? "收起详情" : "展开详情"}">${expanded ? "收起" : "详情"}</button>
+      ${output ? `<button type="button" data-action="copy-canvas-history-text" data-run-id="${escapeAttr(runId)}">复制输出</button>` : ""}
+      ${nodeId ? `<button type="button" data-action="select-canvas-node" data-node-id="${escapeAttr(nodeId)}">查看节点</button>` : ""}
+      <button type="button" class="danger" data-action="delete-canvas-generation-run" data-run-id="${escapeAttr(runId)}" aria-label="删除生成记录">删除</button>
+    </footer>
+  </article>`;
+}
+
+function formatCanvasTransferBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "准备中";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function renderCanvasTemplateButton(template) {
@@ -8242,7 +9591,8 @@ function renderCanvasTemplateButton(template) {
   `;
 }
 
-function renderLiblibCanvasEdges(document = {}) {
+function renderLiblibCanvasEdges(document = {}, options = {}) {
+  const edgeStyle = options.edgeStyle === "orthogonal" ? "orthogonal" : "curve";
   const nodes = Array.isArray(document.nodes) ? document.nodes : [];
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const edges = Array.isArray(document.edges) ? document.edges : [];
@@ -8256,7 +9606,10 @@ function renderLiblibCanvasEdges(document = {}) {
       const source = canvasPortAnchor(sourceNode, "out");
       const target = canvasPortAnchor(targetNode, "in");
       const delta = Math.max(110, Math.abs(target.x - source.x) * 0.48);
-      const d = `M ${source.x} ${source.y} C ${source.x + delta} ${source.y}, ${target.x - delta} ${target.y}, ${target.x} ${target.y}`;
+      const middleX = Math.round((source.x + target.x) / 2);
+      const d = edgeStyle === "orthogonal"
+        ? `M ${source.x} ${source.y} H ${middleX} V ${target.y} H ${target.x}`
+        : `M ${source.x} ${source.y} C ${source.x + delta} ${source.y}, ${target.x - delta} ${target.y}, ${target.x} ${target.y}`;
       const active = edge?.data?.status === "running" || edge?.data?.status === "preview" || edge?.data?.status === "queued";
       return `
         <g
@@ -8282,21 +9635,45 @@ function renderLiblibCanvasEdges(document = {}) {
 }
 
 function renderLiblibCanvasNode(node, options = {}) {
-  if (node?.type === "script") {
+  if (node?.type === "ai-animation") {
+    return renderLiblibAnimationNode(node, options);
+  }
+  if (node?.type === "ai-director") {
+    return renderLiblibDirectorNode(node, options);
+  }
+  if (node?.type === "group") {
+    return renderLiblibGroupNode(node, options);
+  }
+  if (node?.type === "ai-panorama") {
+    return renderLiblibPanoramaNode(node, options);
+  }
+  if (node?.type === "ai-storyboard") {
+    return renderLiblibStoryboardNode(node, options);
+  }
+  if (["script", "source-text", "ai-text", "ai-markdown", "markdown", "comment"].includes(node?.type)) {
     return renderLiblibTextNode(node, options);
   }
-  if (node?.type === "upload") {
+  if (["upload", "source-image", "source-video", "source-audio"].includes(node?.type)) {
     return renderLiblibUploadNode(node, options);
   }
-  if (node?.type === "send") {
+  if (["send", "ai-image"].includes(node?.type)) {
     return renderLiblibGenerationNode(node, options);
   }
-  if (node?.type === "video") {
+  if (["video", "ai-video"].includes(node?.type)) {
     return renderLiblibGenerationNode({
       ...node,
       data: {
         ...(node.data ?? {}),
         mediaKind: "video",
+      },
+    }, options);
+  }
+  if (node?.type === "ai-audio" || node?.type === "audio") {
+    return renderLiblibGenerationNode({
+      ...node,
+      data: {
+        ...(node.data ?? {}),
+        mediaKind: "audio",
       },
     }, options);
   }
@@ -8312,18 +9689,113 @@ function renderLiblibCanvasNode(node, options = {}) {
   return renderLiblibTextNode(node, options);
 }
 
-function renderLiblibUploadNode(node, { selected = false } = {}) {
+function renderLiblibDirectorNode(node, { selected = false } = {}) {
+  const style = canvasNodePositionStyle(node, { width: 500, height: 340 });
+  return `<article class="canvas-lib-node canvas-special-media-node canvas-director-node ${selected ? "selected" : ""}"
+    data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-director" style="${escapeAttr(style)}">
+    <header class="canvas-lib-node-title">${renderCanvasIcon("ai-director")}<strong>${escapeHtml(node?.data?.title ?? "AI 导演")}</strong></header>
+    <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
+    <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+    ${renderCanvasDirectorNodeBody(node)}
+  </article>`;
+}
+
+function renderLiblibGroupNode(node, { selected = false } = {}) {
+  const style = canvasNodePositionStyle(node, { width: 500, height: 340 });
+  return `<article class="canvas-lib-node canvas-group-node ${selected ? "selected" : ""}"
+    data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="group" style="${escapeAttr(style)}">
+    ${renderCanvasGroupNodeBody(node)}
+  </article>`;
+}
+
+function renderLiblibAnimationNode(node, { selected = false } = {}) {
+  const style = canvasNodePositionStyle(node, { width: 420, height: 378 });
+  return `<article class="canvas-lib-node canvas-special-media-node canvas-animation-node ${selected ? "selected" : ""}"
+    data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-animation" style="${escapeAttr(style)}">
+    <header class="canvas-lib-node-title">${renderCanvasIcon("ai-animation")}<strong>${escapeHtml(node?.data?.title ?? "AI 动画")}</strong></header>
+    <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
+    <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+    ${renderCanvasAnimationNodeBody(node)}
+  </article>`;
+}
+
+function renderLiblibPanoramaNode(node, { selected = false } = {}) {
+  const style = canvasNodePositionStyle(node, { width: 420, height: 438 });
+  return `<article class="canvas-lib-node canvas-special-media-node canvas-panorama-node ${selected ? "selected" : ""}"
+    data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-panorama" style="${escapeAttr(style)}">
+    <header class="canvas-lib-node-title">${renderCanvasIcon("image")}<strong>${escapeHtml(node?.data?.title ?? "AI 全景")}</strong></header>
+    <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
+    <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+    ${renderCanvasPanoramaNodeBody(node)}
+  </article>`;
+}
+
+function renderLiblibStoryboardNode(node, { selected = false } = {}) {
+  const style = canvasNodePositionStyle(node, { width: 420, height: 356 });
+  return `<article class="canvas-lib-node canvas-special-media-node canvas-storyboard-node ${selected ? "selected" : ""}"
+    data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-storyboard" style="${escapeAttr(style)}">
+    <header class="canvas-lib-node-title">${renderCanvasIcon("story")}<strong>${escapeHtml(node?.data?.title ?? "AI 分镜")}</strong></header>
+    <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
+    <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
+    ${renderCanvasStoryboardNodeBody(node)}
+  </article>`;
+}
+
+function renderCanvasNodeToolbar(node) {
+  const nodeId = escapeAttr(node?.id ?? "");
+  const iconByTool = {
+    crop: "image",
+    outpaint: "fullscreen",
+    "remove-background": "image",
+    "camera-studio": "role",
+    annotation: "text",
+    "batch-grid": "grid",
+    composite: "group",
+    history: "clock",
+    "capture-frame": "image",
+    fullscreen: "fullscreen",
+    transcription: "text",
+    "toggle-play": "audio",
+  };
+  const tools = resolveCanvasNodeToolbarTools(node);
+  if (!tools.length) return "";
+  const primary = tools.map((tool) => {
+    const attributes = tool.action === "open"
+      ? `data-media-action="open" data-media-tool="${escapeAttr(tool.mediaTool)}"`
+      : tool.action === "set-canvas-sidebar-mode"
+        ? `data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="${escapeAttr(tool.mediaTool ?? "assets")}"`
+        : tool.action === "set-canvas-audio-generation-mode"
+          ? `data-action="set-canvas-audio-generation-mode" data-mode="transcription" data-node-id="${nodeId}"`
+          : `data-action="${escapeAttr(tool.action)}" data-node-id="${nodeId}"`;
+    return `<button type="button" ${attributes} aria-label="${escapeAttr(tool.label)}" title="${escapeAttr(tool.label)}">${renderCanvasIcon(iconByTool[tool.id] ?? "image")}</button>`;
+  }).join("");
+  return `<div class="canvas-node-action-toolbar" role="toolbar" aria-label="节点工具栏" style="${escapeAttr(canvasNodeToolbarPositionStyle(node))}">
+    ${primary ? `<span class="canvas-node-action-zone" data-toolbar-zone="primary">${primary}</span>` : ""}
+    <span class="canvas-node-action-zone" data-toolbar-zone="secondary">
+      <button type="button" data-action="duplicate-canvas-node" data-node-id="${nodeId}" aria-label="复制节点" title="复制节点">${renderCanvasIcon("copy")}</button>
+      <button type="button" class="danger" data-action="delete-canvas-node" data-node-id="${nodeId}" aria-label="删除节点" title="删除节点">${renderCanvasIcon("trash")}</button>
+    </span>
+  </div>`;
+}
+
+function canvasNodeToolbarPositionStyle(node) {
+  const x = Number(node?.position?.x ?? 0);
+  const y = Number(node?.position?.y ?? 0);
+  return `left:clamp(8px,${x}px,calc(100% - 12rem));top:${Math.max(8, y - 42)}px`;
+}
+
+function renderLiblibUploadNode(node, { selected = false, canvasAssets = [] } = {}) {
   const title = node?.data?.title && !String(node.data.title).includes("�")
     ? node.data.title
-    : "上传";
+    : node?.type === "source-video" ? "视频源" : node?.type === "source-audio" ? "音频源" : node?.type === "source-image" ? "图片源" : "上传";
   const mediaKind = node?.data?.mediaKind === "video" ? "video" : node?.data?.mediaKind === "audio" ? "audio" : "image";
-  const mediaUrl = node?.data?.url ?? node?.data?.previewUrl ?? node?.data?.src ?? "";
+  const mediaUrl = resolveCanvasMediaNodeSource(node, mediaKind, { assets: canvasAssets });
   const fileName = node?.data?.fileName ?? node?.data?.name ?? "";
   const status = node?.data?.status ?? "empty";
   const style = canvasNodePositionStyle(node, { width: 360, height: 220 });
   return `
     <article
-      class="canvas-lib-node canvas-upload-node ${selected ? "selected" : ""}"
+      class="canvas-lib-node canvas-upload-node ${["source-audio", "source-video"].includes(node?.type) ? "canvas-special-media-node" : ""} ${selected ? "selected" : ""}"
       data-action="select-canvas-node"
       data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-id="${escapeAttr(node?.id ?? "")}"
@@ -8337,11 +9809,11 @@ function renderLiblibUploadNode(node, { selected = false } = {}) {
       <button class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}">
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
         ${mediaUrl ? `
-          <span class="canvas-upload-preview">
+          <span class="canvas-upload-preview" ${mediaKind === "video" ? `data-canvas-video-body data-node-id="${escapeAttr(node?.id ?? "")}"` : mediaKind === "audio" ? `data-canvas-audio-body data-node-id="${escapeAttr(node?.id ?? "")}"` : ""}>
             ${mediaKind === "video"
-              ? `<video src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
+              ? `<video data-canvas-video-player src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
               : mediaKind === "audio"
-                ? `<audio src="${escapeAttr(mediaUrl)}" controls preload="metadata"></audio>`
+                ? `<audio data-canvas-audio-player src="${escapeAttr(mediaUrl)}" controls preload="metadata"></audio>`
                 : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
           </span>
           <span class="canvas-upload-meta">
@@ -8358,12 +9830,14 @@ function renderLiblibUploadNode(node, { selected = false } = {}) {
   `;
 }
 
-function renderLiblibGenerationNode(node, { selected = false, canvasDocument = null, generatingNodeId = "" } = {}) {
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const title = mediaKind === "video" ? "视频生成" : "图片生成";
-  const promptLabel = mediaKind === "video" ? "输入提示词生成视频" : "输入提示词生成图片";
-  const style = canvasNodePositionStyle(node, mediaKind === "video" ? { width: 420, height: 378 } : { width: 420, height: 378 });
-  const mediaUrl = resolveCanvasGenerationNodeMediaUrl(node, mediaKind);
+function renderLiblibGenerationNode(node, { selected = false, canvasDocument = null, canvasAssets = [], generatingNodeId = "" } = {}) {
+  const mediaKind = node?.data?.mediaKind === "audio" || node?.type === "audio" || node?.type === "ai-audio"
+    ? "audio"
+    : node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const title = mediaKind === "video" ? "视频生成" : mediaKind === "audio" ? "音频生成" : "图片生成";
+  const promptLabel = mediaKind === "video" ? "输入提示词生成视频" : mediaKind === "audio" ? "输入文本生成语音、音乐或转录" : "输入提示词生成图片";
+  const style = canvasNodePositionStyle(node, { width: 420, height: 378 });
+  const mediaUrl = resolveCanvasGenerationNodeMediaUrl(node, mediaKind, { assets: canvasAssets });
   const progress = resolveCanvasGenerationNodeProgress(node);
   const progressStage = resolveCanvasGenerationNodeStage(node);
   const progressTaskId = resolveCanvasGenerationNodeTaskId(node);
@@ -8431,9 +9905,24 @@ function renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating = 
     const fileName = resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl);
     return `
       <div class="${resultClass}">
-        <video class="canvas-generation-video" src="${escapeAttr(mediaUrl)}" controls playsinline preload="metadata"></video>
+        ${renderCanvasMediaNodeBody({ ...node, data: { ...(node.data ?? {}), mediaKind: "video", videoUrl: mediaUrl } })}
         <div class="canvas-generation-result-actions">
           <a class="canvas-generation-result-action" href="${escapeAttr(mediaUrl)}" download="${escapeAttr(fileName)}" target="_blank" rel="noopener" aria-label="下载生成视频" title="下载生成视频">
+            ${renderCanvasIcon("download")}
+            <span>下载</span>
+          </a>
+        </div>
+      </div>
+    `;
+  }
+
+  if (mediaKind === "audio") {
+    const fileName = resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl);
+    return `
+      <div class="${resultClass}">
+        ${renderCanvasMediaNodeBody({ ...node, data: { ...(node.data ?? {}), mediaKind: "audio", audioUrl: mediaUrl } })}
+        <div class="canvas-generation-result-actions">
+          <a class="canvas-generation-result-action" href="${escapeAttr(mediaUrl)}" download="${escapeAttr(fileName)}" target="_blank" rel="noopener" aria-label="下载生成音频" title="下载生成音频">
             ${renderCanvasIcon("download")}
             <span>下载</span>
           </a>
@@ -8457,15 +9946,15 @@ function resolveCanvasGeneratedMediaFileName(node, mediaKind, mediaUrl = "") {
     data.title ??
     data.lastTaskId ??
     node?.id ??
-    (mediaKind === "video" ? "canvas-video" : "canvas-image"),
+    (mediaKind === "video" ? "canvas-video" : mediaKind === "audio" ? "canvas-audio" : "canvas-image"),
   ).trim();
-  const safeBaseName = (baseName || (mediaKind === "video" ? "canvas-video" : "canvas-image"))
+  const safeBaseName = (baseName || (mediaKind === "video" ? "canvas-video" : mediaKind === "audio" ? "canvas-audio" : "canvas-image"))
     .replace(/[\\/:*?"<>|]+/g, "-")
     .replace(/\s+/g, "-")
     .replace(/\.[a-z0-9]{2,5}$/i, "")
     .slice(0, 80);
   const extensionMatch = String(mediaUrl ?? "").split(/[?#]/)[0].match(/\.([a-z0-9]{2,5})$/i);
-  const extension = extensionMatch?.[1] ?? (mediaKind === "video" ? "mp4" : "png");
+  const extension = extensionMatch?.[1] ?? (mediaKind === "video" ? "mp4" : mediaKind === "audio" ? "mp3" : "png");
   return `${safeBaseName}.${extension}`;
 }
 
@@ -8544,11 +10033,12 @@ function canvasGenerationStageLabel(stage, percent) {
   return percent <= 25 ? "任务排队中，等待发送到模型" : "正在同步生成状态";
 }
 
-function resolveCanvasGenerationNodeMediaUrl(node, mediaKind) {
+function resolveCanvasGenerationNodeMediaUrl(node, mediaKind, options = {}) {
+  if (mediaKind === "audio" || mediaKind === "video") {
+    return resolveCanvasMediaNodeSource(node, mediaKind, options);
+  }
   const data = node?.data ?? {};
-  const candidates = mediaKind === "video"
-    ? [data.videoUrl, data.resultVideoUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl, data.thumbnailUrl]
-    : [data.previewUrl, data.resultUrl, data.url, data.imageUrl, data.assetUrl, data.thumbnailUrl];
+  const candidates = [data.previewUrl, data.resultUrl, data.url, data.imageUrl, data.assetUrl, data.thumbnailUrl];
   for (const candidate of candidates) {
     const value = String(candidate ?? "").trim();
     if (value) {
@@ -8674,6 +10164,8 @@ function renderInlineCanvasTextEditor(node, { toolbar: showToolbar = true } = {}
   const nodeId = node?.id ?? "";
   const html = node?.data?.textHtml ? String(node.data.textHtml) : canvasTextToHtml(node?.data?.text ?? "");
   const title = resolveCanvasTextNodeTitle(node);
+  const isMarkdown = ["markdown", "ai-markdown"].includes(String(node?.type ?? ""));
+  const markdownMode = node?.data?.markdownViewMode === "preview" ? "preview" : "edit";
   const toolbarItems = [
     ["clear-format", "clear-format"],
     ["heading-1", "H1"],
@@ -8687,13 +10179,21 @@ function renderInlineCanvasTextEditor(node, { toolbar: showToolbar = true } = {}
     ["divider", "divider"],
   ];
   return `
-    ${showToolbar ? `<div class="canvas-text-format-toolbar" aria-label="文本格式工具条">
+    ${isMarkdown ? `<div class="canvas-markdown-toolbar" role="toolbar" aria-label="Markdown 工具栏">
+      ${renderCanvasMarkdownNodeTools(node)}
+      <span class="canvas-markdown-file-actions">
+        <button type="button" data-action="pick-canvas-markdown-file" data-node-id="${escapeAttr(nodeId)}">导入</button>
+        <button type="button" data-action="export-canvas-markdown" data-node-id="${escapeAttr(nodeId)}">导出</button>
+      </span>
+      <input type="file" accept=".md,.markdown,text/markdown,text/plain" data-canvas-markdown-input data-node-id="${escapeAttr(nodeId)}" tabindex="-1" aria-hidden="true" />
+    </div>` : ""}
+    ${showToolbar && (!isMarkdown || markdownMode === "edit") ? `<div class="canvas-text-format-toolbar" aria-label="文本格式工具条">
       ${toolbarItems.map(([command, label]) => `
         <button type="button" data-action="format-canvas-text-node" data-node-id="${escapeAttr(nodeId)}" data-format-command="${escapeAttr(command)}" aria-label="${escapeAttr(label)}" onmousedown="event.preventDefault()">${renderCanvasToolbarLabel(label)}</button>
       `).join("")}
     </div>` : ""}
     <div class="canvas-inline-editor-title" data-canvas-node-drag-handle data-node-id="${escapeAttr(nodeId)}" aria-hidden="true">${renderCanvasIcon("text")}<span>${escapeHtml(title)}</span></div>
-    <div
+    ${isMarkdown && markdownMode === "preview" ? `<div class="canvas-markdown-preview" aria-label="Markdown 预览">${renderCanvasMarkdownPreview(node?.data?.text ?? stripCanvasHtml(html))}</div>` : `<div
       class="canvas-inline-richtext"
       role="textbox"
       contenteditable="true"
@@ -8701,19 +10201,140 @@ function renderInlineCanvasTextEditor(node, { toolbar: showToolbar = true } = {}
       data-canvas-text-input
       data-node-id="${escapeAttr(nodeId)}"
       data-placeholder="输入内容..."
-    >${sanitizeCanvasTextHtml(html)}</div>
+    >${sanitizeCanvasTextHtml(html)}</div>`}
   `;
+}
+
+export function renderCanvasMarkdownPreview(rawText) {
+  const lines = String(rawText ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const output = [];
+  let paragraph = [];
+  let listType = "";
+  let codeLines = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    output.push(`<p>${renderCanvasMarkdownInline(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+  const closeList = () => {
+    if (!listType) return;
+    output.push(`</${listType}>`);
+    listType = "";
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (codeLines !== null) {
+      if (/^```/.test(line.trim())) {
+        output.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = null;
+      } else codeLines.push(line);
+      continue;
+    }
+    if (/^```/.test(line.trim())) {
+      flushParagraph();
+      closeList();
+      codeLines = [];
+      continue;
+    }
+    let table = null;
+    let tableEndIndex = index;
+    if (line.includes("|") && lines[index + 1]?.match(/^\s*\|?\s*:?-{3,}/)) {
+      const tableLines = [line, lines[index + 1]];
+      let cursor = index + 2;
+      while (cursor < lines.length && lines[cursor].includes("|")) {
+        tableLines.push(lines[cursor]);
+        cursor += 1;
+      }
+      table = parseSingleEpisodeAiResponseMarkdownTable(tableLines.join("\n"));
+      tableEndIndex = cursor - 1;
+    }
+    if (table) {
+      flushParagraph();
+      closeList();
+      output.push(`<div class="canvas-markdown-table-wrap"><table><thead><tr>${table.header.map((cell) => `<th>${renderCanvasMarkdownInline(cell)}</th>`).join("")}</tr></thead><tbody>${table.rows.map((row) => `<tr>${row.map((cell) => `<td>${renderCanvasMarkdownInline(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      index = tableEndIndex;
+      continue;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    const heading = line.match(/^\s*(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      closeList();
+      const level = heading[1].length;
+      output.push(`<h${level}>${renderCanvasMarkdownInline(heading[2])}</h${level}>`);
+      continue;
+    }
+    if (/^\s*(?:---+|___+|\*\*\*+)\s*$/.test(line)) {
+      flushParagraph();
+      closeList();
+      output.push("<hr />");
+      continue;
+    }
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    if (quote) {
+      flushParagraph();
+      closeList();
+      output.push(`<blockquote>${renderCanvasMarkdownInline(quote[1])}</blockquote>`);
+      continue;
+    }
+    const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const nextType = ordered ? "ol" : "ul";
+      if (listType !== nextType) {
+        closeList();
+        listType = nextType;
+        output.push(`<${listType}>`);
+      }
+      output.push(`<li>${renderCanvasMarkdownInline((unordered ?? ordered)[1])}</li>`);
+      continue;
+    }
+    closeList();
+    paragraph.push(line.trim());
+  }
+  if (codeLines !== null) output.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  flushParagraph();
+  closeList();
+  return output.join("") || '<p class="canvas-markdown-empty">暂无内容</p>';
+}
+
+function renderCanvasMarkdownInline(value) {
+  const tokens = [];
+  const tokenized = String(value ?? "")
+    .replace(/`([^`]+)`/g, (_match, code) => canvasMarkdownToken(tokens, `<code>${escapeHtml(code)}</code>`))
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (_match, label, url) => canvasMarkdownToken(tokens, `<a href="${escapeAttr(url)}" rel="noopener noreferrer">${escapeHtml(label)}</a>`));
+  let rendered = escapeHtml(tokenized)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>")
+    .replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
+  tokens.forEach((token, index) => { rendered = rendered.replace(`CANVASMDTOKEN${index}END`, token); });
+  return rendered;
+}
+
+function canvasMarkdownToken(tokens, html) {
+  const marker = `CANVASMDTOKEN${tokens.length}END`;
+  tokens.push(html);
+  return marker;
 }
 
 function resolveCanvasTextNodeTitle(node) {
   const source = String(node?.data?.source ?? "");
-  return node?.type === "script" || source === "project_script" || source === "project_script_episode"
+  return ["markdown", "ai-markdown"].includes(String(node?.type ?? ""))
+    ? "Markdown"
+    : node?.type === "script" || source === "project_script" || source === "project_script_episode"
     ? "剧本源"
     : "文本源";
 }
 
 function renderCanvasToolbarLabel(label) {
   const icons = {
+    align: '<path d="M5 6h14M5 12h10M5 18h14" /><path d="M5 4v16" />',
     "clear-format": '<span class="canvas-toolbar-clear-mark"></span>',
     italic: '<span class="canvas-toolbar-italic" aria-hidden="true">I</span>',
     paragraph: '<span class="canvas-toolbar-paragraph">¶</span>',
@@ -8776,20 +10397,18 @@ function canvasPortAnchor(node, direction) {
 }
 
 function renderLiblibCanvasEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
-  if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
+  if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || (node?.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node?.type !== "ai-storyboard")) {
     return "";
   }
   return renderLiblibGenerationEditor(node, { modelOptionHtml, modelMenuHtml, parameterControlHtml, canvasDocument, selectedModel });
 }
 
 function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
-  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return null;
   }
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const mediaKind = resolveCanvasNodeMediaKind(node);
+  const modelOptions = resolveCanvasNodeModelOptions(generationConfig, node, mediaKind);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -8798,13 +10417,11 @@ function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
 }
 
 function renderCanvasModelOptions(generationConfig = {}, node = null) {
-  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return "";
   }
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const mediaKind = resolveCanvasNodeMediaKind(node);
+  const modelOptions = resolveCanvasNodeModelOptions(generationConfig, node, mediaKind);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -8820,13 +10437,11 @@ function renderCanvasModelOptions(generationConfig = {}, node = null) {
 }
 
 function renderCanvasModelMenu(generationConfig = {}, node = null, openMenu = "") {
-  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return "";
   }
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const mediaKind = resolveCanvasNodeMediaKind(node);
+  const modelOptions = resolveCanvasNodeModelOptions(generationConfig, node, mediaKind);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -8850,13 +10465,11 @@ function renderCanvasModelMenu(generationConfig = {}, node = null, openMenu = ""
 }
 
 function renderCanvasModelParameterControls({ generationConfig = {}, node = null, parameterValues = {}, openMenu = "" } = {}) {
-  if (!node || node.type === "script" || node.type === "director" || node.data?.mediaKind === "text") {
+  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return "";
   }
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
-  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const modelOptions = resolveCanvasModelOptions(generationConfig, mediaKind)
-    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode));
+  const mediaKind = resolveCanvasNodeMediaKind(node);
+  const modelOptions = resolveCanvasNodeModelOptions(generationConfig, node, mediaKind);
   const nodeModelCode = String(node?.data?.modelCode ?? "").trim();
   const selectedModelCode = modelOptions.some((model) => model.modelCode === nodeModelCode)
     ? nodeModelCode
@@ -8871,10 +10484,48 @@ function renderCanvasModelParameterControls({ generationConfig = {}, node = null
   });
 }
 
+function resolveCanvasNodeMediaKind(node) {
+  if (isCanvasGenerativeTextNode(node)) return "text";
+  if (node?.type === "ai-animation") return "image";
+  if (node?.data?.mediaKind === "audio" || node?.type === "audio" || node?.type === "ai-audio") return "audio";
+  if (node?.data?.mediaKind === "video" || node?.type === "video") return "video";
+  return "image";
+}
+
+function isCanvasGenerativeTextNode(node) {
+  return ["ai-text", "ai-markdown"].includes(String(node?.type ?? ""));
+}
+
+function resolveCanvasNodeModelOptions(generationConfig, node, mediaKind = resolveCanvasNodeMediaKind(node)) {
+  const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
+  const audioMode = mediaKind === "audio" ? resolveCanvasAudioGenerationMode(node) : "";
+  return resolveCanvasModelOptions(generationConfig, mediaKind)
+    .filter((model) => mediaKind !== "video" || canvasModelMatchesVideoMode(model.raw, videoMode))
+    .filter((model) => mediaKind !== "audio" || canvasModelMatchesAudioMode(model.raw, audioMode));
+}
+
+function canvasModelMatchesAudioMode(model, mode) {
+  const modes = [model?.taskModes, model?.supportedModes, model?.modes, model?.capabilities]
+    .filter(Array.isArray)
+    .flat()
+    .map(normalizeCanvasModeToken)
+    .filter(Boolean);
+  if (!modes.length) return true;
+  const aliases = mode === "music"
+    ? ["music", "music_generation", "audio_music_generation"]
+    : mode === "transcription"
+      ? ["transcription", "speech_to_text", "audio_transcription"]
+      : ["text_to_speech", "tts", "audio_text_to_speech"];
+  return aliases.some((alias) => modes.includes(alias));
+}
+
 function buildCanvasParameterControls({ selectedModel = null, mediaKind = "image", parameterValues = {}, openMenu = "", nodeId = "" } = {}) {
   const schema = selectedModel?.parameterSchema && typeof selectedModel.parameterSchema === "object" && !Array.isArray(selectedModel.parameterSchema)
     ? selectedModel.parameterSchema
     : {};
+  if (mediaKind === "audio" || mediaKind === "text") {
+    return "";
+  }
   if (mediaKind === "video") {
     return renderGenerationSettingsControl({
       kind: "video",
@@ -9107,19 +10758,34 @@ function renderCanvasParameterMenu(field, label, openMenu, options, title = "", 
 }
 
 function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
-  const mediaKind = node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
+  const mediaKind = isCanvasGenerativeTextNode(node)
+    ? "text"
+    : node?.type === "ai-animation"
+      ? "image"
+    : node?.data?.mediaKind === "audio" || node?.type === "audio" || node?.type === "ai-audio"
+    ? "audio"
+    : node?.data?.mediaKind === "video" || node?.type === "video" ? "video" : "image";
   const videoMode = mediaKind === "video" ? resolveCanvasVideoGenerationMode(node) : "";
-  const placeholder = mediaKind === "video" ? "请输入您的生视频要求" : "请输入您的生图要求";
+  const audioMode = mediaKind === "audio" ? resolveCanvasAudioGenerationMode(node) : "";
+  const placeholder = mediaKind === "video"
+    ? "请输入您的生视频要求"
+    : mediaKind === "audio"
+      ? audioMode === "transcription" ? "可选：填写转录提示或术语" : audioMode === "music" ? "输入音乐风格、情绪和歌词" : "输入需要合成的语音文本"
+      : mediaKind === "text"
+        ? node?.type === "ai-markdown" ? "描述需要生成的 Markdown 文档结构和内容" : "描述需要生成或改写的文本"
+      : "请输入您的生图要求";
   const cost = resolveCanvasGenerationCost(selectedModel, mediaKind, resolveCanvasNodeParameterValues(node));
   const connectedTextFragments = resolveConnectedCanvasTextFragments(canvasDocument, node?.id);
   const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
     ? resolveCanvasUploadReferences(canvasDocument, node?.id)
     : [];
   return `
-    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "video" ? "视频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
+    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "text" ? "文本生成设置" : mediaKind === "video" ? "视频生成设置" : mediaKind === "audio" ? "音频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
       ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
+      ${mediaKind === "audio" ? renderCanvasAudioModeTabs(audioMode, node?.id ?? "") : ""}
       <div class="canvas-editor-reference-row">
-        <button class="canvas-editor-upload" type="button" aria-label="添加参考素材">+</button>
+        <button class="canvas-editor-upload" type="button" data-action="open-canvas-prompt-reference-picker" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="添加参考素材">+</button>
+        <button class="canvas-editor-upload" type="button" data-action="open-canvas-prompt-reference-picker" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="选择提示词引用" title="选择提示词引用">@</button>
         ${renderCanvasConnectedTextReference(connectedTextFragments)}
         ${renderCanvasGenerationReferences(connectedUploadReferences)}
       </div>
@@ -9129,6 +10795,8 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
         data-node-id="${escapeAttr(node?.id ?? "")}"
         placeholder="${escapeAttr(placeholder)}"
       >${escapeHtml(node?.data?.prompt ?? "")}</textarea>
+      ${node?.type === "ai-animation" ? renderCanvasAnimationControls(node) : ""}
+      ${mediaKind === "audio" ? renderCanvasAudioOptions(node, audioMode) : ""}
       <footer class="canvas-editor-controls">
         ${modelMenuHtml || `<select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">${modelOptionHtml}</select>`}
         ${parameterControlHtml}
@@ -9141,6 +10809,57 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
       </footer>
     </aside>
   `;
+}
+
+function renderCanvasPromptReferencePicker(ui) {
+  const picker = ui.canvasPromptReferencePicker;
+  if (!picker?.open) return "";
+  const items = Array.isArray(picker.items) ? picker.items : [];
+  const groups = [
+    ["character", "人物"], ["scene", "场景"], ["prop", "道具"],
+    ["node", "节点"], ["asset", "产物"], ["model", "模型"],
+  ];
+  const selected = items.find((item) => String(item.id) === String(picker.selectedId));
+  return renderSelectionPickerModal({
+    show: true,
+    id: "canvas-prompt-reference-picker",
+    title: "选择提示词引用",
+    tabs: groups.map(([id, label]) => ({ id, label, count: items.filter((item) => item.group === id).length })),
+    activeTab: picker.activeTab ?? "character",
+    items,
+    selectedId: picker.selectedId ?? "",
+    emptyLabel: picker.loading ? "正在加载引用..." : picker.error || "当前分类暂无可用引用",
+    closeAction: "close-canvas-prompt-reference-picker",
+    tabAction: "set-canvas-prompt-reference-tab",
+    selectAction: "select-canvas-prompt-reference",
+    confirmAction: "confirm-canvas-prompt-reference",
+    confirmLabel: "插入引用",
+    secondaryConfirmAction: "create-canvas-node-from-prompt-reference",
+    secondaryConfirmLabel: "引用并建节点",
+    secondaryConfirmDisabled: !["character", "scene", "prop"].includes(selected?.group),
+  });
+}
+
+function renderCanvasAudioModeTabs(activeMode, nodeId) {
+  return `<div class="canvas-editor-tabs audio-mode-tabs" role="tablist" aria-label="音频处理模式">${CANVAS_AUDIO_GENERATION_MODES.map((mode) => `<button class="${mode.id === activeMode ? "active" : ""}" type="button" role="tab" aria-selected="${mode.id === activeMode}" data-action="set-canvas-audio-generation-mode" data-node-id="${escapeAttr(nodeId)}" data-mode="${escapeAttr(mode.id)}">${escapeHtml(mode.label)}</button>`).join("")}</div>`;
+}
+
+function resolveCanvasAudioGenerationMode(node) {
+  const mode = String(node?.data?.audioGenerationMode ?? node?.data?.audioMode ?? "text-to-speech").trim();
+  return CANVAS_AUDIO_GENERATION_MODES.some((item) => item.id === mode) ? mode : "text-to-speech";
+}
+
+function renderCanvasAudioOptions(node, mode) {
+  const data = node?.data ?? {};
+  const nodeId = escapeAttr(node?.id ?? "");
+  if (mode === "transcription") {
+    return `<div class="canvas-audio-options"><label><span>语言</span><select data-canvas-audio-field="language" data-node-id="${nodeId}"><option value="auto" ${data.language === "auto" || !data.language ? "selected" : ""}>自动识别</option><option value="zh" ${data.language === "zh" ? "selected" : ""}>中文</option><option value="en" ${data.language === "en" ? "selected" : ""}>English</option></select></label><small>连接音频时走转录模型；仅连接文本或直接输入文本时会转换为文本源，不调用音频模型。</small></div>`;
+  }
+  if (mode === "music") {
+    const lyricsMode = String(data.lyricsMode ?? (data.lyrics ? "custom" : "generate"));
+    return `<div class="canvas-audio-options canvas-music-options"><label><span>标题</span><input value="${escapeAttr(data.musicTitle ?? "")}" data-canvas-audio-field="musicTitle" data-node-id="${nodeId}" placeholder="可选" /></label><label><span>BPM</span><input type="number" min="1" max="400" value="${escapeAttr(data.musicBpm ?? "")}" data-canvas-audio-field="musicBpm" data-node-id="${nodeId}" /></label><label><span>时长</span><input type="number" min="1" max="240" value="${escapeAttr(data.durationSec ?? 60)}" data-canvas-audio-field="durationSec" data-node-id="${nodeId}" /></label><label class="canvas-audio-toggle"><input type="checkbox" ${data.instrumental === true ? "checked" : ""} data-canvas-audio-field="instrumental" data-node-id="${nodeId}" /><span>纯音乐</span></label><label><span>歌词来源</span><select data-canvas-audio-field="lyricsMode" data-node-id="${nodeId}"><option value="generate" ${lyricsMode === "generate" ? "selected" : ""}>模型生成</option><option value="custom" ${lyricsMode === "custom" ? "selected" : ""}>自定义歌词</option></select></label><label class="canvas-music-lyrics-field"><span>歌词${data.lyricsArtifactId ? " · 已与音乐结果同步" : ""}</span><textarea data-canvas-audio-field="lyrics" data-node-id="${nodeId}" placeholder="可留空由模型生成，也可直接编辑歌词">${escapeHtml(data.lyrics ?? "")}</textarea></label></div>`;
+  }
+  return `<div class="canvas-audio-options"><label><span>音色 ID</span><input value="${escapeAttr(data.voiceId ?? "")}" placeholder="使用模型默认音色" data-canvas-audio-field="voiceId" data-node-id="${nodeId}" /></label><label><span>语速</span><input type="number" min="0.5" max="2" step="0.1" value="${escapeAttr(data.speed ?? 1)}" data-canvas-audio-field="speed" data-node-id="${nodeId}" /></label></div>`;
 }
 
 function resolveCanvasGenerationCost(model, mediaKind = "image", parameterValues = {}) {
@@ -9228,7 +10947,10 @@ function resolveConnectedCanvasTextFragments(document = {}, nodeId = "") {
   return edges
     .filter((edge) => edge.targetNodeId === normalizedNodeId)
     .map((edge) => nodeMap.get(edge.sourceNodeId))
-    .filter((node) => node && (node.type === "script" || node.type === "director" || node.data?.mediaKind === "text"))
+    .filter((node) => node && (
+      ["script", "director", "markdown", "source-text", "ai-text", "ai-markdown", "ai-storyboard", "ai-director"].includes(node.type)
+      || node.data?.mediaKind === "text"
+    ))
     .map((node) => {
       const text = normalizeCanvasFragmentText(node.data?.text || stripCanvasHtml(node.data?.textHtml));
       return {
@@ -9302,31 +11024,118 @@ function renderLiblibTextEditor(node) {
   `;
 }
 
+const CANVAS_CONTEXT_GENERATOR_TYPES = new Set([
+  "ai-text",
+  "ai-image",
+  "ai-video",
+  "ai-audio",
+  "ai-panorama",
+  "ai-animation",
+  "ai-storyboard",
+  "ai-director",
+  "send",
+  "video",
+  "audio",
+]);
+
+const CANVAS_CONTEXT_SHORTCUTS = new Map([
+  ["ai-text", "1"],
+  ["ai-image", "2"],
+  ["ai-video", "3"],
+  ["ai-audio", "4"],
+  ["ai-panorama", "5"],
+  ["ai-animation", "6"],
+  ["ai-director", "7"],
+  ["source-text", "Alt+1"],
+  ["source-image", "Alt+2"],
+  ["source-video", "Alt+3"],
+  ["source-audio", "Alt+4"],
+  ["ai-markdown", "Alt+5"],
+]);
+
+function renderCanvasContextMenuTemplateItems(items = [], { showShortcuts = false } = {}) {
+  return items.map((item) => {
+    const shortcut = showShortcuts ? CANVAS_CONTEXT_SHORTCUTS.get(item.type) : "";
+    return `
+      <button type="button" role="menuitem" data-action="add-canvas-template" data-template-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.type)}">
+        <span aria-hidden="true">${renderCanvasIcon(item.type)}</span>
+        ${escapeHtml(item.title)}
+        ${shortcut ? `<kbd aria-label="快捷键 ${escapeAttr(shortcut)}">${escapeHtml(shortcut)}</kbd>` : ""}
+      </button>
+    `;
+  }).join("");
+}
+
 function renderCanvasContextMenu(menu = {}, options = {}) {
   const isNodeMenu = menu.mode === "node" && menu.nodeId;
+  const isConnectionMenu = menu.mode === "connection" && menu.sourceNodeId;
   const menuWidth = 244;
-  const menuHeight = isNodeMenu ? 296 : 236;
+  const compatibleTemplateIds = new Set(Array.isArray(menu.compatibleTemplateIds) ? menu.compatibleTemplateIds : []);
+  const items = resolveCanvasNodeTemplates(options.episodeGenerationConfig)
+    .filter((item) => !isNodeMenu && (!isConnectionMenu || compatibleTemplateIds.has(item.id)));
+  const blankMenuContentHeight = 32 + (3 * 50) + (2 * 30) + (items.length * 50) + (7 * 10);
+  const menuHeight = isNodeMenu
+    ? 300 + (menu.characterCaptureEligible ? 44 : 0) + (menu.mediaCopyEligible ? 44 : 0) + (menu.grouped ? 44 : 0)
+    : isConnectionMenu ? 360 : Math.min(680, blankMenuContentHeight);
   const stageWidth = Number(menu.stageWidth ?? 0);
   const stageHeight = Number(menu.stageHeight ?? 0);
   const maxLeft = stageWidth > menuWidth ? stageWidth - menuWidth - 8 : Number.POSITIVE_INFINITY;
   const maxTop = stageHeight > menuHeight ? stageHeight - menuHeight - 8 : Number.POSITIVE_INFINITY;
   const left = Math.max(8, Math.min(maxLeft, Number(menu.x ?? 120)));
   const top = Math.max(8, Math.min(maxTop, Number(menu.y ?? 120)));
-  const items = resolveCanvasNodeTemplates(options.episodeGenerationConfig);
   return `
-    <aside class="canvas-context-menu${isNodeMenu ? " canvas-node-context-menu" : ""}" data-canvas-context-menu role="menu" aria-label="${isNodeMenu ? "节点操作菜单" : "添加节点菜单"}" style="left:${left}px;top:${top}px">
+    <aside class="canvas-context-menu${isNodeMenu ? " canvas-node-context-menu" : ""}${isConnectionMenu ? " canvas-connection-drop-menu" : ""}" data-canvas-context-menu role="menu" aria-label="${isNodeMenu ? "节点操作菜单" : isConnectionMenu ? "连接并创建节点" : "添加节点菜单"}" style="left:${left}px;top:${top}px">
+      ${isConnectionMenu ? `<header><small>引用该节点生成</small><strong>选择兼容节点</strong></header>` : ""}
       ${isNodeMenu ? `
+        <button type="button" role="menuitem" data-action="cut-canvas-selection" data-node-id="${escapeAttr(menu.nodeId)}">
+          <span aria-hidden="true">${renderCanvasIcon("copy")}</span>
+          剪切
+        </button>
+        <button type="button" role="menuitem" data-action="copy-canvas-selection" data-node-id="${escapeAttr(menu.nodeId)}">
+          <span aria-hidden="true">${renderCanvasIcon("copy")}</span>
+          复制
+        </button>
+        <button type="button" role="menuitem" data-action="duplicate-canvas-node" data-node-id="${escapeAttr(menu.nodeId)}">
+          <span aria-hidden="true">${renderCanvasIcon("copy")}</span>
+          创建副本
+        </button>
+        ${menu.mediaCopyEligible ? `
+          <button type="button" role="menuitem" data-action="copy-canvas-node-media" data-node-id="${escapeAttr(menu.nodeId)}">
+            <span aria-hidden="true">${renderCanvasIcon("copy")}</span>
+            复制媒体
+          </button>
+        ` : ""}
+        ${menu.characterCaptureEligible ? `
+          <button type="button" role="menuitem" data-action="add-canvas-node-to-character-library" data-node-id="${escapeAttr(menu.nodeId)}">
+            <span aria-hidden="true">${renderCanvasIcon("image")}</span>
+            添加到角色库
+          </button>
+        ` : ""}
+        ${menu.grouped ? `
+          <button type="button" role="menuitem" data-action="ungroup-canvas-selection" data-node-id="${escapeAttr(menu.nodeId)}">
+            <span aria-hidden="true">${renderCanvasIcon("group")}</span>
+            取消分组
+          </button>
+        ` : ""}
         <button type="button" role="menuitem" class="danger" data-action="delete-canvas-node" data-node-id="${escapeAttr(menu.nodeId)}">
           <span aria-hidden="true">${renderCanvasIcon("trash")}</span>
           删除
         </button>
       ` : ""}
-      ${items.map((item) => `
-        <button type="button" role="menuitem" data-action="add-canvas-template" data-template-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.type)}">
-          <span aria-hidden="true">${renderCanvasIcon(item.type)}</span>
-          ${escapeHtml(item.title)}
-        </button>
-      `).join("")}
+      ${!isNodeMenu && !isConnectionMenu ? `
+        <button type="button" role="menuitem" data-action="paste-canvas-selection"><span aria-hidden="true">${renderCanvasIcon("clipboard")}</span>粘贴</button>
+        <button type="button" role="menuitem" data-action="undo-canvas-change"><span aria-hidden="true">${renderCanvasIcon("undo")}</span>撤销</button>
+        <button type="button" role="menuitem" data-action="redo-canvas-change"><span aria-hidden="true">${renderCanvasIcon("redo")}</span>重做</button>
+        <section class="canvas-context-menu-group" data-canvas-node-group="generator" role="group" aria-label="生成节点">
+          <strong>生成节点</strong>
+          ${renderCanvasContextMenuTemplateItems(items.filter((item) => CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type)), { showShortcuts: true })}
+        </section>
+        <section class="canvas-context-menu-group" data-canvas-node-group="source" role="group" aria-label="来源节点">
+          <strong>来源节点</strong>
+          ${renderCanvasContextMenuTemplateItems(items.filter((item) => !CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type)), { showShortcuts: true })}
+        </section>
+      ` : ""}
+      ${isNodeMenu || isConnectionMenu ? renderCanvasContextMenuTemplateItems(items) : ""}
     </aside>
   `;
 }
@@ -9481,8 +11290,11 @@ function canvasEditorPositionStyle(node, options = {}) {
   const nodeWidth = Number(node?.size?.width ?? options.nodeWidth ?? 360);
   const nodeHeight = Number(options.nodeHeight ?? node?.size?.height ?? 260);
   const editorWidth = Number(options.editorWidth ?? 600);
-  const left = Math.round(nodeX + (nodeWidth / 2) - (editorWidth / 2));
-  const top = Math.round(nodeY + nodeHeight + 2);
+  const editorHeight = Number(options.editorHeight ?? 220);
+  const left = Math.max(12, Math.round(nodeX + (nodeWidth / 2) - (editorWidth / 2)));
+  const top = Math.round(nodeY >= 260
+    ? Math.max(12, nodeY - editorHeight - 12)
+    : nodeY + nodeHeight + 2);
   return `left:${left}px;top:${top}px;--editor-width:${editorWidth}px`;
 }
 
@@ -9490,15 +11302,8 @@ function canvasViewportStyle(viewport = {}) {
   const x = Number(viewport.x ?? 0);
   const y = Number(viewport.y ?? 0);
   const zoom = Number(viewport.zoom ?? 1);
-  return `--canvas-pan-x:${x}px;--canvas-pan-y:${y}px;--canvas-zoom:${zoom}`;
-}
-
-function canvasGridStyle(viewport = {}) {
-  const x = Number(viewport.x ?? 0);
-  const y = Number(viewport.y ?? 0);
-  const zoom = Number(viewport.zoom ?? 1);
-  const gridSize = Math.max(6, Math.round(18 * zoom * 100) / 100);
-  return `--canvas-grid-size:${gridSize}px;--canvas-grid-x:${x}px;--canvas-grid-y:${y}px`;
+  const toolbarScale = 1 / Math.max(0.1, Number.isFinite(zoom) ? zoom : 1);
+  return `--canvas-pan-x:${x}px;--canvas-pan-y:${y}px;--canvas-zoom:${zoom};--canvas-toolbar-scale:${toolbarScale}`;
 }
 
 function renderCanvasInspectorMetrics({ inputCount = 0, outputCount = 0, selectedNode = null } = {}) {
@@ -9561,23 +11366,50 @@ function renderCanvasQuickAction(kind, label) {
 }
 
 function renderCanvasIcon(icon) {
+  const aliases = {
+    "ai-text": "text",
+    "ai-image": "image",
+    "ai-video": "video",
+    "ai-audio": "audio",
+    "ai-animation": "video",
+    "ai-panorama": "image",
+    "ai-markdown": "markdown",
+    "ai-storyboard": "story",
+    "ai-director": "role",
+    "source-text": "text",
+    "source-image": "image",
+    "source-video": "video",
+    "source-audio": "audio",
+  };
   const icons = {
     audio: '<path d="M9 18V6l10-2v12" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="16" r="2" />',
+    align: '<path d="M5 5v14" /><path d="M9 8h10M9 12h7M9 16h10" />',
     book: '<path d="M5 5.5h6.2a2.8 2.8 0 0 1 2.8 2.8v10.2H7.8A2.8 2.8 0 0 1 5 15.7V5.5Z" /><path d="M14 8.3h5v10.2h-5" />',
     clock: '<circle cx="12" cy="12" r="8" /><path d="M12 7.8v4.6l3 1.8" />',
     collapse: '<path d="M14 6 8 12l6 6" /><path d="M20 6 14 12l6 6" />',
+    clipboard: '<path d="M9 5.5h6" /><rect x="6" y="5" width="12" height="15" rx="2" /><path d="M9 4h6v3H9z" />',
+    comment: '<path d="M5 5h14v11H9l-4 3V5Z" /><path d="M8 9h8M8 12h5" />',
+    connections: '<circle cx="6" cy="7" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="12" cy="17" r="2" /><path d="m7.8 8 3 7M16.2 8l-3 7M8 7h8" />',
     copy: '<rect x="8" y="8" width="10" height="10" rx="1.6" /><path d="M6 15.5H5.8A1.8 1.8 0 0 1 4 13.7V5.8A1.8 1.8 0 0 1 5.8 4h7.9A1.8 1.8 0 0 1 15.5 5.8V6" />',
     cursor: '<path d="M7 4.5 18.5 12 13 13.2l-2.4 5.1L7 4.5Z" />',
     download: '<path d="M12 4.5v10" /><path d="m7.5 10 4.5 4.5 4.5-4.5" /><path d="M5 19.5h14" />',
+    distribute: '<path d="M5 5v14M12 8v8M19 5v14" /><path d="M3 12h4M10 12h4M17 12h4" />',
+    edge: '<path d="M4 18h5V6h6v12h5" /><path d="m17 15 3 3-3 3" />',
     fullscreen: '<path d="M8.5 4H4v4.5" /><path d="M4 4l5.2 5.2" /><path d="M15.5 4H20v4.5" /><path d="m20 4-5.2 5.2" /><path d="M8.5 20H4v-4.5" /><path d="m4 20 5.2-5.2" /><path d="M15.5 20H20v-4.5" /><path d="m20 20-5.2-5.2" />',
     grid: '<path d="M5 5h5v5H5zM14 5h5v5h-5zM5 14h5v5H5zM14 14h5v5h-5z" />',
+    group: '<rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /><path d="M14 7h4v4M10 17H6v-4" />',
     help: '<circle cx="12" cy="12" r="8" /><path d="M9.8 9.4a2.4 2.4 0 1 1 3.8 2c-.9.6-1.5 1.1-1.5 2.1" /><path d="M12 16.7h.01" />',
     image: '<rect x="4.5" y="5" width="15" height="14" rx="2" /><path d="m7.5 16 3.4-4 2.5 2.8 1.7-2 2.9 3.2" /><circle cx="15.5" cy="9" r="1.2" />',
     keyboard: '<rect x="4" y="7" width="16" height="10" rx="1.8" /><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M8 14h8" />',
     link: '<path d="M9.5 14.5 14.5 9.5" /><path d="M10.3 8.2 11.8 6.7a3 3 0 0 1 4.2 4.2l-1.5 1.5" /><path d="M13.7 15.8 12.2 17.3A3 3 0 0 1 8 13.1l1.5-1.5" />',
+    magnet: '<path d="M6 5v7a6 6 0 0 0 12 0V5" /><path d="M6 9h4M14 9h4M6 5h4v4H6zM14 5h4v4h-4z" />',
+    map: '<path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2V6Z" /><path d="M9 4v14M15 6v14" />',
+    markdown: '<path d="M4 6h16v12H4z" /><path d="M7 15V9l3 3 3-3v6M16 9v6m-2-2 2 2 2-2" />',
     minus: '<path d="M5 12h14" />',
+    panel: '<rect x="4" y="5" width="16" height="14" rx="2" /><path d="M9 5v14" />',
     plus: '<path d="M12 5v14M5 12h14" />',
     role: '<rect x="5" y="5" width="14" height="14" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" />',
+    redo: '<path d="M17 7h3v-3" /><path d="M20 7a8 8 0 1 0 1 7" />',
     search: '<circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4 4" />',
     share: '<circle cx="6.5" cy="12" r="2" /><circle cx="17.5" cy="7" r="2" /><circle cx="17.5" cy="17" r="2" /><path d="m8.3 11.2 7.4-3.4M8.3 12.8l7.4 3.4" />',
     sort: '<path d="M8 7h9M8 12h6M8 17h3" /><path d="m5 8-2 2 2 2" />',
@@ -9585,6 +11417,7 @@ function renderCanvasIcon(icon) {
     story: '<path d="M6 5h12v14H6z" /><path d="M9 8h6M9 11h6M9 14h3" /><path d="M18 8l2-1v10l-2-1" />',
     text: '<rect x="5" y="4.5" width="14" height="15" rx="2" /><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4.5" />',
     trash: '<path d="M5.5 7h13" /><path d="M9 7V5.5h6V7" /><path d="m8 10 .5 8.2h7l.5-8.2" /><path d="M11 11.5v4.8M14 11.5v4.8" />',
+    undo: '<path d="M7 7H4v-3" /><path d="M4 7a8 8 0 1 1-1 7" />',
     translate: '<path d="M5 5h8" /><path d="M9 5v14" /><path d="M4 19h10" /><path d="M7 9c.7 2.1 2.2 3.9 5 5" /><path d="M12 9c-.7 2.1-2.2 3.9-5 5" /><path d="M17 10l3.5 9" /><path d="M14.5 19l3.5-9" /><path d="M15.5 16h4" />',
     upload: '<path d="M12 16V5" /><path d="m7 10 5-5 5 5" /><path d="M5 19h14" />',
     video: '<rect x="4" y="6" width="13" height="12" rx="2" /><path d="m17 10 4-2v8l-4-2" /><path d="M8 10.5 11.5 12 8 13.5z" />',
@@ -9594,7 +11427,7 @@ function renderCanvasIcon(icon) {
 
   return `
     <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      ${icons[icon] ?? icons.plus}
+      ${icons[aliases[icon] ?? icon] ?? icons.plus}
     </svg>
   `;
 }
@@ -9799,7 +11632,6 @@ export function renderGlobalStatusbar(session, options = {}) {
               <circle cx="12" cy="8" r="5"></circle>
               <path d="M20 21a8 8 0 0 0-16 0"></path>
             </svg>
-            <span class="statusbar-avatar-status" aria-hidden="true"></span>
           </button>
           <div class="statusbar-popover account-popover" role="menu">
             <div class="account-popover-card">
@@ -10471,7 +12303,7 @@ function getProjectCreatedAtValue(project) {
   return 0;
 }
 
-function renderRailTab(tab, activeNavTab, ui = {}) {
+function renderRailTab(tab, activeNavTab) {
   const tabButton = `
     <button
       class="rail-item ${tab.id === activeNavTab ? "active" : ""}"
@@ -10485,21 +12317,7 @@ function renderRailTab(tab, activeNavTab, ui = {}) {
       <span class="rail-label">${tab.label}</span>
     </button>
   `;
-  if (tab.id !== "tools" || !SHOW_NEW_CANVAS_RAIL_ENTRY) {
-    return tabButton;
-  }
-  const canvasProjectId = String(ui.selectedCanvasProjectId ?? "").trim();
-  const query = new URLSearchParams();
-  if (canvasProjectId) query.set("canvasProjectId", canvasProjectId);
-  const href = query.toString() ? `/new-canvas/?${query.toString()}` : "/new-canvas/";
-  const newCanvasLabel = String(ui.newCanvasLabel ?? "新画布").trim() || "新画布";
-  return `
-    ${tabButton}
-    <button class="rail-item ${activeNavTab === "new-canvas" ? "active" : ""}" type="button" data-action="set-nav-tab" data-tab="new-canvas" aria-label="${escapeAttr(newCanvasLabel)}" aria-selected="${activeNavTab === "new-canvas" ? "true" : "false"}" title="${escapeAttr(newCanvasLabel)}" data-new-canvas-href="${escapeAttr(href)}">
-      <span class="rail-glyph" aria-hidden="true">${renderRailIcon("sparkles")}</span>
-      <span class="rail-label">${escapeHtml(newCanvasLabel)}</span>
-    </button>
-  `;
+  return tabButton;
 }
 
 function renderRailIcon(icon) {

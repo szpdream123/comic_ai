@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "./provider-adapter.contract.ts";
 import { AliyunBailianAudioProviderAdapter } from "./aliyun-bailian-audio.provider-adapter.ts";
+import { ApiMartAudioProviderAdapter } from "./apimart-audio.provider-adapter.ts";
 import { AliyunBailianVideoProviderAdapter } from "./aliyun-bailian-video.provider-adapter.ts";
 import { createCreatorDevProviderAdapter } from "./creator-dev.provider-adapter.ts";
 import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
@@ -20,6 +21,7 @@ import {
 export interface ModelProviderAdapterConfig {
   providerProtocol: string;
   providerModel?: string | null;
+  mediaType?: string | null;
   providerConfig?: Record<string, unknown> | null;
 }
 
@@ -322,6 +324,19 @@ export function createProviderAdapterFromModelConfig(
       model: modelConfig.providerModel?.trim() || undefined,
       createTaskEndpoint,
       queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "apimart_audio") {
+    const baseURL = readNonEmptyString(providerConfig.baseURL);
+    if (!baseURL) throw new Error("provider_endpoint_required");
+    return new ApiMartAudioProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      model: modelConfig.providerModel?.trim() || undefined,
+      lyricsEndpoint: joinUrl(baseURL, readNonEmptyString(providerConfig.lyricsPath) || "/music/generations/lyricsFlowMusic"),
+      musicEndpoint: joinUrl(baseURL, readNonEmptyString(providerConfig.musicPath) || "/music/generations"),
+      queryTaskEndpoint: joinUrl(baseURL, readNonEmptyString(providerConfig.queryTaskPath) || "/music/tasks/{taskId}?language=zh"),
       fetchImpl,
     });
   }

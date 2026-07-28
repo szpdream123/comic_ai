@@ -20,6 +20,7 @@ import {
 import { createAdminHttpAuth } from "../modules/admin-auth/admin-http-auth.ts";
 import { createAdminDashboardService } from "../modules/admin-dashboard/admin-dashboard.service.ts";
 import { createAdminModelConfigService } from "../modules/admin-models/admin-model-config.service.ts";
+import type { CanvasAgentModelCompatibilityProbeResult } from "../modules/canvas-agent/canvas-agent-model-compatibility-probe.service.ts";
 import {
   createAdminOpsService,
   listAdminOpsItems,
@@ -36,6 +37,15 @@ import { createAdminShotPromptService, ensureDefaultShotPromptTemplates } from "
 import { createAdminScenePromptService, ensureDefaultScenePromptTemplates } from "../modules/admin-scene-prompts/admin-scene-prompt.service.ts";
 import { createAdminPropPromptService, ensureDefaultPropPromptTemplates } from "../modules/admin-scene-prompts/admin-prop-prompt.service.ts";
 import {
+  createPromptMarketplaceService,
+  PromptMarketplaceError,
+} from "../modules/prompt-marketplace/prompt-marketplace.service.ts";
+import {
+  clearUserPromptDefault,
+  setOfficialPromptDefault,
+  setUserPromptDefault,
+} from "../modules/prompt-marketplace/prompt-skill-default.service.ts";
+import {
   createAiStoryboardPreviewService,
   createTextModelChatGateway,
   type TextChatGatewayLike,
@@ -43,6 +53,37 @@ import {
 import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
 import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { readBatchImagePromptPresetCategoriesFromDb } from "../modules/admin-system-settings/admin-system-settings.service.ts";
+import {
+  AdminBackedTextModelResolver,
+  CanvasAgentStateConflictError,
+  CanvasAgentStepSkipError,
+  CanvasAgentKnowledgeService,
+  CanvasAgentCheckpointService,
+  createCanvasAgentFileGrantHttpService,
+  createCanvasAgentConversation,
+  createCanvasAgentTask,
+  decideCanvasAgentApproval,
+  deleteCanvasAgentConversation,
+  findCanvasAgentTaskForActor,
+  interjectCanvasAgentTask,
+  inspectCanvasAgentMetrics,
+  listCanvasAgentConversations,
+  listCanvasAgentEventsForActor,
+  listCanvasAgentMessages,
+  listAvailableCanvasAgentModels,
+  loadCanvasAgentRuntimeConfiguration,
+  matchCanvasAgentFileGrantRoute,
+  pauseCanvasAgentTask,
+  replanCanvasAgentTask,
+  resumeCanvasAgentTask,
+  selectCanvasAgentModelCode,
+  skipCanvasAgentStep,
+  stopCanvasAgentTask,
+  updateCanvasAgentConversation,
+  type CanvasAgentActor,
+  type CanvasAgentMode,
+} from "../modules/canvas-agent/index.ts";
+import { TextModelGatewayError } from "../modules/model-gateway/text-model-gateway.errors.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
@@ -106,7 +147,6 @@ import {
   canvasErrorToStatus,
   CanvasConflictError,
   CanvasDocumentError,
-  completeCanvasNodeRun,
   createCanvasNodeRun,
   failCanvasNodeRun,
   findCanvasByCanvasProjectId,
@@ -118,14 +158,104 @@ import {
   selectCanvasNodeArtifact,
 } from "../modules/project/creator-canvas-record.service.ts";
 import {
+  CanvasAudioTextInputError,
+  isCanvasPlainTextTranscriptionRequest,
+  runCanvasPlainTextTranscription,
+} from "../modules/project/canvas-audio-text-input.service.ts";
+import {
+  cancelCanvasGenerationBatch,
+  CanvasGenerationBatchError,
+  createCanvasGenerationBatch,
+  getCanvasGenerationBatch,
+  reconcileCanvasGenerationBatch,
+  type CanvasGenerationDispatch,
+  type CanvasGenerationBatchBilling,
+} from "../modules/project/canvas-generation-batch.service.ts";
+import {
+  exportCanvasGenerationHistoryJson,
+  CanvasGenerationHistoryError,
+  hydrateCanvasGenerationHistoryArtifactUrls,
+  listCanvasGenerationHistory,
+  softDeleteCanvasGenerationRun,
+  softDeleteCanvasGenerationRuns,
+} from "../modules/project/canvas-generation-history.service.ts";
+import { inspectCanvasAssetReferenceUsage } from "../modules/project/canvas-asset-reference.service.ts";
+import {
+  applyCanvasPromptDramaBindings,
+  CanvasPromptReferenceError,
+  loadCanvasPromptDirectiveCatalog,
+  resolveCanvasPromptWithDirectives,
+} from "../modules/project/canvas-prompt-reference.service.ts";
+import {
+  CanvasSettingsError,
+  createCanvasPromptSuffixDirective,
+  getCanvasSettings,
+  updateCanvasSettings,
+} from "../modules/project/canvas-settings.service.ts";
+import {
+  addCanvasCharacterReference,
+  CanvasCharacterLibraryError,
+  copyCanvasCharacter,
+  createCanvasCharacter,
+  deleteCanvasCharacter,
+  deleteCanvasCharacterReference,
+  getCanvasCharacter,
+  listCanvasCharacters,
+  updateCanvasCharacter,
+  updateCanvasCharacterReference,
+  type CanvasCharacterReferenceInput,
+  type CanvasCharacterScope,
+} from "../modules/project/canvas-character-library.service.ts";
+import {
+  applyCanvasAnnotationSourceReplacement,
+  attachCanvasMediaDerivationTask,
+  CanvasMediaDerivationError,
+  completeCanvasCardSnapshot,
+  completeCanvasMediaDerivation,
+  createCanvasAnnotationLayer,
+  createCanvasImageBatchGroup,
+  failCanvasCardSnapshot,
+  failCanvasMediaDerivation,
+  getCanvasImageBatchGroup,
+  getLatestCanvasCardSnapshot,
+  listCanvasAnnotationLayers,
+  selectCanvasImageBatchArtifact,
+  startCanvasCardSnapshot,
+  startCanvasMediaDerivation,
+} from "../modules/project/canvas-media-derivation.service.ts";
+import {
+  CanvasUploadFingerprintError,
+  registerOrReuseCanvasUploadFingerprint,
+} from "../modules/storage/canvas-upload-fingerprint.service.ts";
+import { getCanvasStorageHealth } from "../modules/storage/canvas-storage-health.service.ts";
+import {
+  createCanvasUserConfigHttpService,
+  matchCanvasUserConfigRoute,
+} from "../modules/project/canvas-user-config-http.routes.ts";
+import { CanvasUserConfigError } from "../modules/project/canvas-user-config.service.ts";
+import {
+  CanvasSessionError,
+  getCanvasSession,
+  saveCanvasSession,
+} from "../modules/project/canvas-session.service.ts";
+import {
   createCanvasLiveCollaborationHub,
   createCanvasLiveRevisionTransportFromEnv,
+  type CanvasLiveEvent,
 } from "../modules/project/canvas-live-collaboration.service.ts";
 import { CanvasValidationError } from "../modules/project/creator-canvas-validation.ts";
+import {
+  inspectCanvasCanaryMetrics,
+  recordCanvasCanaryRuntimeMetric,
+} from "../modules/project/canvas-canary-metrics.service.ts";
 import {
   DirectorCanvasNodeRunError,
   runDirectorCanvasNode,
 } from "../modules/project/director-canvas-node-run.service.ts";
+import {
+  CanvasTextNodeRunError,
+  runCanvasTextNode,
+} from "../modules/project/canvas-text-node-run.service.ts";
 import {
   completeProjectUploadRecord,
   createProjectUploadRecord,
@@ -137,12 +267,18 @@ import {
   type UserActorContext as ActorContext,
   resolveUserActorContext as resolveActorContext,
 } from "../modules/identity/user-actor-context.service.ts";
+import {
+  authorizeCanvasActor,
+  CanvasAuthorizationError,
+  type CanvasActorScope,
+} from "../modules/identity/canvas-actor-scope.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
 import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
 import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError, type IdempotencyRecord } from "../modules/shared/idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
 import { createStorageAdapterFromEnv } from "../modules/storage/storage-adapter.factory.ts";
+import { validateUploadContentBoundary } from "../modules/storage/upload-content-validation.ts";
 import {
   buildSignedObjectUrls,
   createSignedReadUrl,
@@ -151,6 +287,7 @@ import {
   findStorageObject,
   markStorageObjectAvailable,
   markStorageObjectFailed,
+  StorageAccessError,
   type StorageObjectRecord,
 } from "../modules/storage/storage.service.ts";
 import {
@@ -224,7 +361,7 @@ import {
   type JianyingDraftPackageClip,
 } from "../modules/project/jianying-draft.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
-import { InsufficientCreditsError, grantCreditsInTransaction, reserveCreditsInTransaction, settleReservationAllocation, settleReservationAllocationInTransaction } from "../modules/credit-billing/credit-ledger.service.ts";
+import { assertExternalCreditReservationInTransaction, InsufficientCreditsError, grantCredits, grantCreditsInTransaction, grantPromptSkillsUsageCredits, reserveCreditsInTransaction, settleReservationAllocation, settleReservationAllocationInTransaction } from "../modules/credit-billing/credit-ledger.service.ts";
 import {
   refundTeamMemberGenerationCreditsInTransaction,
   refundTeamMemberGenerationCredits as refundTeamMemberGenerationCreditsIdempotently,
@@ -259,20 +396,6 @@ import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-
 import { cancelGenerationTask } from "../modules/model-gateway/seedance-video.worker.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
-import {
-  createNewCanvasAssistantService,
-  NewCanvasAssistantValidationError,
-} from "../modules/new-canvas/new-canvas-assistant.service.ts";
-import {
-  canvasVideoCompositionObjectKey,
-  CanvasVideoCompositionValidationError,
-  resolveCanvasVideoCompositionRequest,
-  type CanvasVideoCompositionRequest,
-} from "../modules/new-canvas/canvas-video-composition.service.ts";
-import {
-  composeVideoToMp4,
-  VideoCompositionError,
-} from "../modules/media/video-composition.service.ts";
 import {
   createOrReuseProviderRequest,
   markProviderRequestFailed,
@@ -351,11 +474,14 @@ import { PUBLIC_SEO_PAGES } from "../../../web/src/shared/public-seo-content.js"
 
 const webRoot = join(process.cwd(), "apps", "web");
 const webRootPrefix = `${resolve(webRoot)}${sep}`;
+const webVendorRoot = resolve(webRoot, "vendor");
+const webVendorRootPrefix = `${webVendorRoot}${sep}`;
 const adminRoot = join(process.cwd(), "apps", "admin");
 const nodeModulesRoot = join(process.cwd(), "node_modules");
 const uploadRoot = resolve(process.cwd(), ".local", "creator-uploads");
 const episodeEventLogPath = resolve(process.cwd(), ".local", "episode-workbench-events.jsonl");
-const vendorRoot = join(process.cwd(), "node_modules");
+const vendorRoot = resolve(process.cwd(), "node_modules");
+const vendorRootPrefix = `${vendorRoot}${sep}`;
 const staticAssetTransformCache = new Map<string, {
   mtimeMs: number;
   size: number;
@@ -597,6 +723,9 @@ export interface PhoneAuthDevServerOptions {
   };
   generationQueueJobOpsService?: GenerationQueueJobOpsService;
   textChatGateway?: TextChatGatewayLike;
+  canvasAgentModelProbe?: {
+    probe(modelCode: string): Promise<CanvasAgentModelCompatibilityProbeResult>;
+  };
   allowProduction?: boolean;
   allowLocalDatabaseUrl?: boolean;
   listenHost?: string;
@@ -779,125 +908,191 @@ function hasOwn(body: Record<string, unknown>, key: string) {
   return Object.prototype.hasOwnProperty.call(body, key);
 }
 
-function storyboardPromptPackageBody(body: Record<string, unknown>) {
-  const result: Record<string, unknown> = {
-    name: String(body.name ?? ""),
-    code: String(body.code ?? ""),
-    package_type: String(body.package_type ?? ""),
-    prompt_content: String(body.prompt_content ?? ""),
+function withCanvasCharacterReferencePreviewUrl<T extends { storageObjectId: string | null }>(reference: T) {
+  return {
+    ...reference,
+    previewUrl: reference.storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(reference.storageObjectId)}/content`
+      : null,
   };
-  if (hasOwn(body, "audience")) result.audience = body.audience === null ? null : String(body.audience ?? "");
-  if (hasOwn(body, "tags")) result.tags = stringArray(body.tags);
-  if (hasOwn(body, "cover_image_url")) result.cover_image_url = body.cover_image_url === null ? null : String(body.cover_image_url ?? "");
-  if (hasOwn(body, "key_points")) result.key_points = stringArray(body.key_points);
-  if (hasOwn(body, "negative_prompt")) result.negative_prompt = body.negative_prompt === null ? null : String(body.negative_prompt ?? "");
-  if (hasOwn(body, "applicable_genres")) result.applicable_genres = stringArray(body.applicable_genres);
-  if (hasOwn(body, "applicable_scene")) result.applicable_scene = stringArray(body.applicable_scene);
-  if (hasOwn(body, "output_type")) result.output_type = body.output_type === null ? null : String(body.output_type ?? "");
-  if (hasOwn(body, "scope")) result.scope = body.scope && typeof body.scope === "object" && !Array.isArray(body.scope) ? body.scope as Record<string, unknown> : {};
-  if (hasOwn(body, "can_stack")) result.can_stack = Boolean(body.can_stack);
-  if (hasOwn(body, "max_select_count")) result.max_select_count = body.max_select_count === null ? null : Number(body.max_select_count);
-  if (hasOwn(body, "is_default") || hasOwn(body, "isDefault")) result.is_default = Boolean(body.is_default ?? body.isDefault);
-  if (hasOwn(body, "is_global_default") || hasOwn(body, "isGlobalDefault")) result.is_global_default = Boolean(body.is_global_default ?? body.isGlobalDefault);
-  if (hasOwn(body, "is_recommended") || hasOwn(body, "isRecommended")) result.is_recommended = Boolean(body.is_recommended ?? body.isRecommended);
-  if (hasOwn(body, "sort_order") || hasOwn(body, "sortOrder")) result.sort_order = Number(body.sort_order ?? body.sortOrder ?? 0);
-  if (hasOwn(body, "status")) result.status = String(body.status ?? "enabled");
-  if (hasOwn(body, "remark")) result.remark = body.remark === null ? null : String(body.remark ?? "");
-  return result;
+}
+
+function withCanvasCharacterPreviewUrls<T extends { references: Array<{ storageObjectId: string | null }> }>(character: T) {
+  return {
+    ...character,
+    references: character.references.map(withCanvasCharacterReferencePreviewUrl),
+  };
+}
+
+function promptMarketplaceFields(body: Record<string, unknown>) {
+  const rawPrice = hasOwn(body, "price_credits") ? body.price_credits : body.priceCredits;
+  const rawPublished = hasOwn(body, "is_published") ? body.is_published : body.isPublished;
+  const rawUsageCount = hasOwn(body, "usage_count") ? body.usage_count : body.usageCount;
+  return {
+    price_credits: rawPrice === undefined ? undefined : Number(rawPrice),
+    usage_count: rawUsageCount === undefined ? undefined : Number(rawUsageCount),
+    is_published: rawPublished === undefined ? undefined : rawPublished === true || rawPublished === "true",
+  };
+}
+
+function storyboardPromptPackageBody(body: Record<string, unknown>) {
+  return {
+    name: String(body.name ?? ""),
+    prompt_content: String(body.prompt_content ?? ""),
+    cover_image_url: body.cover_image_url === null ? null : String(body.cover_image_url ?? ""),
+    status: String(body.status ?? "enabled"),
+    remark: body.summary === null || body.remark === null ? null : String(body.summary ?? body.remark ?? ""),
+    ...promptMarketplaceFields(body),
+  };
 }
 
 function imagePromptStyleBody(body: Record<string, unknown>) {
   return {
     name: String(body.name ?? ""),
-    code: String(body.code ?? ""),
-    category: String(body.category ?? "official"),
-    model_family: String(body.model_family ?? body.modelFamily ?? "doubao"),
-    tags: stringArray(body.tags),
     cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
     prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
-    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
-    is_default: Boolean(body.is_default ?? body.isDefault),
-    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
     status: String(body.status ?? "enabled"),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
-    batch_preset_target: body.batch_preset_target === undefined && body.batchPresetTarget === undefined
-      ? null
-      : String(body.batch_preset_target ?? body.batchPresetTarget ?? ""),
+    remark: body.summary === undefined && body.remark === undefined ? null : String(body.summary ?? body.remark ?? ""),
+    ...promptMarketplaceFields(body),
   };
 }
 
 function scenePromptTemplateBody(body: Record<string, unknown>) {
   return {
     name: String(body.name ?? ""),
-    code: String(body.code ?? ""),
-    stage: String(body.stage ?? "detail"),
-    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
-    tags: stringArray(body.tags),
-    variables: stringArray(body.variables),
-    json_schema: String(body.json_schema ?? body.jsonSchema ?? ""),
+    cover_image_url: body.cover_image_url === undefined || body.cover_image_url === null ? null : String(body.cover_image_url),
     prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
-    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
-    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
     status: String(body.status ?? "enabled"),
-    is_default: Boolean(body.is_default ?? body.isDefault),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+    remark: body.summary === undefined && body.remark === undefined ? null : String(body.summary ?? body.remark ?? ""),
+    ...promptMarketplaceFields(body),
   };
 }
 
 function propPromptTemplateBody(body: Record<string, unknown>) {
-  return {
-    name: String(body.name ?? ""),
-    code: String(body.code ?? ""),
-    stage: String(body.stage ?? "extract"),
-    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
-    tags: stringArray(body.tags),
-    variables: stringArray(body.variables),
-    json_schema: String(body.json_schema ?? body.jsonSchema ?? ""),
-    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
-    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
-    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
-    status: String(body.status ?? "enabled"),
-    is_default: Boolean(body.is_default ?? body.isDefault),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
-  };
+  return scenePromptTemplateBody(body);
 }
 
 function shotPromptTemplateBody(body: Record<string, unknown>) {
-  return {
-    name: String(body.name ?? ""),
-    code: String(body.code ?? ""),
-    stage: String(body.stage ?? "outline"),
-    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
-    tags: stringArray(body.tags),
-    variables: stringArray(body.variables),
-    json_schema: String(body.json_schema ?? body.jsonSchema ?? ""),
-    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
-    negative_prompt: body.negative_prompt === undefined || body.negative_prompt === null ? null : String(body.negative_prompt),
-    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
-    status: String(body.status ?? "enabled"),
-    is_default: Boolean(body.is_default ?? body.isDefault),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
-  };
+  return scenePromptTemplateBody(body);
 }
 
 function characterPromptTemplateBody(body: Record<string, unknown>) {
-  return {
-    name: String(body.name ?? ""),
-    code: String(body.code ?? ""),
-    stage: String(body.stage ?? "extract"),
-    model_family: String(body.model_family ?? body.modelFamily ?? "general"),
-    tags: stringArray(body.tags),
-    variables: stringArray(body.variables),
-    chunk_min_chars: Number(body.chunk_min_chars ?? body.chunkMinChars ?? 0),
-    chunk_max_chars: Number(body.chunk_max_chars ?? body.chunkMaxChars ?? 0),
-    overlap_chars: Number(body.overlap_chars ?? body.overlapChars ?? 0),
-    json_schema: body.json_schema === undefined || body.json_schema === null ? null : String(body.json_schema),
-    prompt_content: String(body.prompt_content ?? body.promptContent ?? ""),
-    is_default: Boolean(body.is_default ?? body.isDefault),
-    sort_order: Number(body.sort_order ?? body.sortOrder ?? 0),
-    status: String(body.status ?? "enabled"),
-    remark: body.remark === undefined || body.remark === null ? null : String(body.remark),
+  return scenePromptTemplateBody(body);
+}
+
+function promptCoverStorageObjectId(body: Record<string, unknown>) {
+  if (!hasOwn(body, "cover_storage_object_id") && !hasOwn(body, "coverStorageObjectId")) return undefined;
+  const value = String(body.cover_storage_object_id ?? body.coverStorageObjectId ?? "").trim();
+  return value || null;
+}
+
+async function saveAdminPromptWithCover(input: {
+  db: SqlDatabase;
+  runtime: UploadSessionRuntime;
+  promptId?: string;
+  coverStorageObjectId?: string | null;
+  save: () => Promise<unknown>;
+}) {
+  const result = await input.save() as {
+    status?: number;
+    body?: { data?: Record<string, unknown> };
   };
+  if ((result.status ?? 200) >= 400 || input.coverStorageObjectId === undefined) return result;
+
+  const promptId = input.promptId || String(result.body?.data?.id ?? "").trim();
+  if (!isUuid(promptId)) return result;
+  const nextStorageObjectId = input.coverStorageObjectId;
+  if (nextStorageObjectId !== null && !isUuid(nextStorageObjectId)) {
+    throw new Error("invalid_prompt_cover_storage_object_id");
+  }
+  const existing = await queryOne<{ cover_storage_object_id: string | null }>(
+    input.db,
+    "SELECT cover_storage_object_id FROM prompts WHERE id = $1",
+    [promptId],
+  );
+  if (!existing || existing.cover_storage_object_id === nextStorageObjectId) return result;
+
+  await input.db.query(
+    "UPDATE prompts SET cover_storage_object_id = $2 WHERE id = $1",
+    [promptId, nextStorageObjectId],
+  );
+  if (result.body?.data) {
+    result.body.data.cover_storage_object_id = nextStorageObjectId;
+    result.body.data.coverStorageObjectId = nextStorageObjectId;
+  }
+  if (existing.cover_storage_object_id) {
+    const deleted = await deleteStorageObjectRecord(input.db, {
+      storageObjectId: existing.cover_storage_object_id,
+      adapter: input.runtime.adapter,
+      localObjectStore: input.runtime.localObjectStore,
+      now: new Date(),
+    });
+    if (!deleted || deleted.status !== "deleted") {
+      throw new Error("prompt_cover_storage_delete_failed");
+    }
+  }
+  return result;
+}
+
+async function saveCreatorPromptWithCover(input: {
+  db: SqlDatabase;
+  runtime: UploadSessionRuntime;
+  userId: string;
+  promptId?: string;
+  coverStorageObjectId?: string | null;
+  save: () => Promise<unknown>;
+}) {
+  const previous = input.promptId
+    ? await queryOne<{ cover_storage_object_id: string | null }>(
+        input.db,
+        `
+          SELECT prompt.cover_storage_object_id
+          FROM prompts prompt
+          WHERE prompt.id = $1
+            AND prompt.deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1
+              FROM prompt_user_links link
+              WHERE link.prompt_id = prompt.id
+                AND link.user_id = $2
+                AND link.relation_type = 'owner'
+                AND link.status = 'active'
+            )
+        `,
+        [input.promptId, input.userId],
+      )
+    : undefined;
+  if (input.coverStorageObjectId && !isUuid(input.coverStorageObjectId)) {
+    throw new Error("invalid_prompt_cover_storage_object_id");
+  }
+  if (input.coverStorageObjectId) {
+    const ownedObject = await queryOne<{ id: string }>(
+      input.db,
+      `
+        SELECT id
+        FROM storage_objects
+        WHERE id = $1
+          AND created_by_user_id = $2
+          AND status = 'available'
+      `,
+      [input.coverStorageObjectId, input.userId],
+    );
+    if (!ownedObject) throw new Error("prompt_cover_storage_object_not_owned");
+  }
+  const result = await input.save();
+  if (!previous?.cover_storage_object_id || previous.cover_storage_object_id === input.coverStorageObjectId) {
+    return result;
+  }
+  const deleted = await deleteStorageObjectRecord(input.db, {
+    storageObjectId: previous.cover_storage_object_id,
+    adapter: input.runtime.adapter,
+    localObjectStore: input.runtime.localObjectStore,
+    now: new Date(),
+  });
+  if (!deleted || deleted.status !== "deleted") {
+    throw new Error("prompt_cover_storage_delete_failed");
+  }
+  return result;
 }
 
 function storyboardPromptComposeBody(body: Record<string, unknown>) {
@@ -1004,6 +1199,14 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
     return true;
   }
 
+  if (error instanceof PromptMarketplaceError) {
+    writeJson(response, {
+      status: error.status,
+      body: { error: { code: error.code, message: error.message } },
+    });
+    return true;
+  }
+
   if (error instanceof AuthorizationError) {
     const status =
       error.code === "unauthenticated"
@@ -1024,6 +1227,89 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
           ? "resource not found"
           : "permission denied";
     writeJson(response, envelopedError(status, errorCode, message, { reason: error.code }));
+    return true;
+  }
+
+  if (error instanceof CanvasAuthorizationError) {
+    const status = error.code === "canvas_not_found" ? 404 : 403;
+    writeJson(response, envelopedError(
+      status,
+      error.code,
+      status === 404 ? "canvas project not found" : "permission denied",
+    ));
+    return true;
+  }
+
+  if (error instanceof CanvasGenerationBatchError || error instanceof CanvasGenerationHistoryError) {
+    const status = error.code.endsWith("_not_found") ? 404
+      : error.code.endsWith("_forbidden") ? 403
+        : error.code.includes("cycle") || error.code.includes("invalid") ? 400 : 409;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CanvasPromptReferenceError) {
+    const status = error.code.endsWith("_forbidden") ? 403
+      : error.code.endsWith("_unavailable") ? 409
+        : 400;
+    writeJson(response, envelopedError(status, error.code, error.message, {
+      ...(error.reference ? { reference: error.reference } : {}),
+    }));
+    return true;
+  }
+
+  if (error instanceof CanvasSettingsError) {
+    const status = error.code.endsWith("_not_found") ? 404
+      : error.code.endsWith("_forbidden") ? 403
+        : error.code.endsWith("_conflict") ? 409
+          : 400;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CanvasCharacterLibraryError) {
+    const status = error.code.endsWith("_not_found") ? 404
+      : error.code.endsWith("_forbidden") ? 403
+        : error.code.endsWith("_conflict") || error.code.endsWith("_mismatch") ? 409
+          : 400;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CanvasUploadFingerprintError) {
+    const status = error.code.endsWith("_unavailable") ? 409 : 400;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CanvasMediaDerivationError) {
+    const status = error.code.endsWith("_not_found") ? 404
+      : error.code.endsWith("_forbidden") ? 403
+        : error.code.includes("stale") || error.code.includes("mismatch") ? 409 : 400;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CanvasSessionError) {
+    const status = error.code.endsWith("forbidden") ? 403 : 400;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof CanvasAgentStateConflictError) {
+    writeJson(response, envelopedError(409, error.code, "Canvas Agent 状态已变化，请刷新后重试。"));
+    return true;
+  }
+
+  if (error instanceof CanvasAgentStepSkipError) {
+    const status = error.code === "canvas_agent_step_not_found" ? 404 : 409;
+    writeJson(response, envelopedError(status, error.code, error.message));
+    return true;
+  }
+
+  if (error instanceof TextModelGatewayError) {
+    const status = error.code === "provider_auth_missing" || error.code === "model_not_configured" ? 503 : 400;
+    writeJson(response, envelopedError(status, error.code, "Canvas Agent 模型当前不可用。"));
     return true;
   }
 
@@ -1114,6 +1400,64 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
   }
 
   return false;
+}
+
+function canvasAgentActorFromCanvasScope(scope: CanvasActorScope): CanvasAgentActor {
+  return {
+    ownerUserId: scope.ownerUserId,
+    actorTeamMemberId: scope.actorTeamMemberId,
+    capabilities: new Set(scope.capabilities),
+  };
+}
+
+function normalizeCanvasAgentMode(value: unknown): CanvasAgentMode {
+  const mode = String(value ?? "b").trim().toLowerCase();
+  return mode === "c" || mode === "plan" || mode === "expert" ? mode : "b";
+}
+
+function normalizeCanvasAgentMessage(value: unknown, fallback: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return { text: String(value ?? fallback ?? "") };
+}
+
+function canvasActorScopeFromAgentActor(canvasId: string, actor: CanvasAgentActor): CanvasActorScope {
+  return {
+    canvasId,
+    ownerUserId: actor.ownerUserId,
+    principal: actor.actorTeamMemberId ? "team_member" : "owner",
+    actorTeamMemberId: actor.actorTeamMemberId ?? null,
+    principalKey: actor.actorTeamMemberId ? `member:${actor.actorTeamMemberId}` : `owner:${actor.ownerUserId}`,
+    capabilities: actor.actorTeamMemberId
+      ? [capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun]
+      : [capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun, capabilities.canvasManage],
+  };
+}
+
+async function resolveCanvasAgentTaskActor(
+  db: SqlDatabase,
+  sessionToken: string,
+  canvasProjectId: string,
+  taskId: string,
+  action: "view" | "run",
+) {
+  const scope = await authorizeCanvasActor(db, {
+    sessionToken,
+    canvasId: canvasProjectId,
+    action,
+    now: new Date(),
+  });
+  const actor = canvasAgentActorFromCanvasScope(scope);
+  const task = await findCanvasAgentTaskForActor(db, {
+    taskId,
+    canvasId: canvasProjectId,
+    actor,
+  });
+  if (!task) {
+    throw new CanvasAuthorizationError("canvas_not_found");
+  }
+  return { scope, actor, task };
 }
 
 function writeJson(response: ServerResponse, payload: AuthHttpResponse<unknown>) {
@@ -1280,6 +1624,7 @@ interface CanvasProjectRow {
   status: string;
   created_by_user_id: string | null;
   created_at: Date | string;
+  deleted_at?: Date | string | null;
   server_revision?: number;
   latest_document_id?: string | null;
 }
@@ -1313,14 +1658,14 @@ function canvasProjectFromRow(row: CanvasProjectRow): CanvasProjectRecord {
     projectId: null,
     title: row.title,
     createdAt: formatCanvasProjectDate(new Date(row.created_at)),
-    status: row.status,
+    status: row.deleted_at ? "deleted" : row.status,
     ownerUserId: row.created_by_user_id ?? "",
   };
 }
 
 async function listCanvasProjects(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { userId: string; teamMemberId?: string },
+  input: { userId: string; teamMemberId?: string; includeDeleted?: boolean },
 ): Promise<CanvasProjectRecord[]> {
   const params: unknown[] = [input.userId];
   const ownerScopeSql = input.teamMemberId
@@ -1358,11 +1703,12 @@ async function listCanvasProjects(
         title,
         status,
         created_by_user_id,
-        created_at
+        created_at,
+        deleted_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? "TRUE" : "created_by_user_id = $1"}
         ${ownerScopeSql}
-        AND deleted_at IS NULL
+        ${input.includeDeleted && !input.teamMemberId ? "" : "AND deleted_at IS NULL"}
         ${teamMemberVisibilitySql}
       ORDER BY created_at DESC, id DESC
     `,
@@ -1511,6 +1857,27 @@ async function deleteCanvasProjectRecord(
   return result.rowCount > 0;
 }
 
+async function restoreCanvasProjectRecord(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { userId: string; projectId: string; now: Date },
+): Promise<CanvasProjectRecord | null> {
+  const row = await queryOne<CanvasProjectRow>(
+    db,
+    `
+      UPDATE creator_canvas_projects
+      SET deleted_at = NULL,
+          updated_by_user_id = $1,
+          updated_at = $3
+      WHERE created_by_user_id = $1
+        AND id = $2
+        AND deleted_at IS NOT NULL
+      RETURNING id, title, status, created_by_user_id, created_at, deleted_at
+    `,
+    [input.userId, input.projectId, input.now],
+  );
+  return row ? canvasProjectFromRow(row) : null;
+}
+
 export function formatNamedSseChunk(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
@@ -1519,12 +1886,49 @@ export function formatSseDataChunk(data: unknown) {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
+export function formatCanvasAgentSseChunk(event: {
+  id: string;
+  taskId: string;
+  sequence: number;
+  eventType: string;
+  event: Record<string, unknown>;
+  createdAt: Date;
+}) {
+  return `id: ${event.sequence}\nevent: ${event.eventType}\ndata: ${JSON.stringify({
+    id: event.id,
+    taskId: event.taskId,
+    sequence: event.sequence,
+    eventType: event.eventType,
+    event: event.event,
+    createdAt: event.createdAt.toISOString(),
+  })}\n\n`;
+}
+
+function isTerminalCanvasAgentEvent(eventType: string) {
+  return [
+    "task.succeeded",
+    "task.failed",
+    "task.canceled",
+    "task.result_unknown",
+    "task.manual_review_required",
+  ].includes(eventType);
+}
+
 function writeSseEvent(response: ServerResponse, event: string, data: unknown) {
   response.write(formatNamedSseChunk(event, data));
 }
 
 function writeSseData(response: ServerResponse, data: unknown) {
   response.write(formatSseDataChunk(data));
+}
+
+function writeCanvasLiveSseData(response: ServerResponse, event: CanvasLiveEvent) {
+  response.write(formatCanvasLiveSseChunk(event));
+}
+
+export function formatCanvasLiveSseChunk(event: CanvasLiveEvent) {
+  const eventId = event.type === "revision" && "eventId" in event ? String(event.eventId ?? "").trim() : "";
+  return `${eventId ? `id: ${eventId}\n` : ""}data: ${JSON.stringify(event)}\n\n`;
 }
 
 function startSseHeartbeat(response: ServerResponse, intervalMs = 15_000, options?: { dataOnly?: boolean }) {
@@ -2370,18 +2774,58 @@ async function findEnabledStoryboardPromptPackageForPreview(
   id: string,
   packageType: "genre" | "emotion" | "taboo",
 ) {
+  void packageType;
   return queryOne<StoryboardPromptPackageForPreview>(
     db,
     `
-      SELECT id, name, package_type, prompt_content
-      FROM storyboard_prompt_packages
+      SELECT id, name, 'generic' AS package_type, prompt_content
+      FROM prompts
       WHERE id = $1
-        AND package_type = $2
+        AND prompt_category = 'script'
         AND status = 'enabled'
         AND deleted_at IS NULL
     `,
-    [id, packageType],
+    [id],
   );
+}
+
+async function findDefaultStoryboardPromptPackageForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  packageType: "genre" | "emotion",
+) {
+  void packageType;
+  return queryOne<StoryboardPromptPackageForPreview>(
+    db,
+    `
+      SELECT id, name, 'generic' AS package_type, prompt_content
+      FROM prompts
+      WHERE prompt_category = 'script'
+        AND status = 'enabled'
+        AND deleted_at IS NULL
+      ORDER BY updated_at DESC, id ASC
+      LIMIT 1
+    `,
+    [],
+  );
+}
+
+async function resolveStoryboardPromptPackageForPreview(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  rawId: unknown,
+  packageType: "genre" | "emotion",
+) {
+  const id = String(rawId ?? "").trim();
+  if (!id || /^(?:auto|adaptive)$/i.test(id)) {
+    return findDefaultStoryboardPromptPackageForPreview(db, packageType);
+  }
+  return isUuid(id)
+    ? findEnabledStoryboardPromptPackageForPreview(db, id, packageType)
+    : undefined;
+}
+
+function isAutomaticStoryboardPromptPackageSelection(rawId: unknown) {
+  const id = String(rawId ?? "").trim();
+  return !id || /^(?:auto|adaptive)$/i.test(id);
 }
 
 async function findDefaultTabooStoryboardPromptPackagesForPreview(
@@ -2389,26 +2833,13 @@ async function findDefaultTabooStoryboardPromptPackagesForPreview(
 ) {
   const rows = await db.query<StoryboardPromptPackageForPreview>(
     `
-      SELECT id, name, package_type, prompt_content
-      FROM storyboard_prompt_packages
-      WHERE package_type = 'taboo'
+      SELECT id, name, 'generic' AS package_type, prompt_content
+      FROM prompts
+      WHERE prompt_category = 'script'
         AND status = 'enabled'
         AND deleted_at IS NULL
-        AND (
-          is_default = true
-          OR (
-            is_global_default = true
-            AND NOT EXISTS (
-              SELECT 1
-              FROM storyboard_prompt_packages default_taboo
-              WHERE default_taboo.package_type = 'taboo'
-                AND default_taboo.status = 'enabled'
-                AND default_taboo.is_default = true
-                AND default_taboo.deleted_at IS NULL
-            )
-          )
-        )
-      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      ORDER BY updated_at DESC, id ASC
+      LIMIT 1
     `,
   );
   return rows.rows;
@@ -2457,12 +2888,11 @@ async function findDefaultScenePromptTemplateForPreview(
     db,
     `
       SELECT id, name, prompt_content
-      FROM scene_prompt_templates
+      FROM prompts
       WHERE status = 'enabled'
-        AND stage = 'split'
-        AND is_default = true
+        AND prompt_category = 'scene_extract'
         AND deleted_at IS NULL
-      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      ORDER BY updated_at DESC, id ASC
       LIMIT 1
     `,
   );
@@ -2475,12 +2905,11 @@ async function findDefaultCharacterPromptTemplateForPreview(
     db,
     `
       SELECT id, name, prompt_content
-      FROM character_prompt_templates
+      FROM prompts
       WHERE status = 'enabled'
-        AND stage = 'extract'
-        AND is_default = true
+        AND prompt_category = 'character_extract'
         AND deleted_at IS NULL
-      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      ORDER BY updated_at DESC, id ASC
       LIMIT 1
     `,
   );
@@ -2493,12 +2922,11 @@ async function findDefaultShotPromptTemplateForPreview(
     db,
     `
       SELECT id, name, prompt_content
-      FROM shot_prompt_templates
+      FROM prompts
       WHERE status = 'enabled'
-        AND stage = 'outline'
-        AND is_default = true
+        AND prompt_category = 'shot'
         AND deleted_at IS NULL
-      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      ORDER BY updated_at DESC, id ASC
       LIMIT 1
     `,
   );
@@ -2511,12 +2939,11 @@ async function findDefaultPropPromptTemplateForPreview(
     db,
     `
       SELECT id, name, prompt_content
-      FROM prop_prompt_templates
+      FROM prompts
       WHERE status = 'enabled'
-        AND stage = 'extract'
-        AND is_default = true
+        AND prompt_category = 'prop_extract'
         AND deleted_at IS NULL
-      ORDER BY sort_order DESC, updated_at DESC, id ASC
+      ORDER BY updated_at DESC, id ASC
       LIMIT 1
     `,
   );
@@ -2669,6 +3096,21 @@ function adminManagedUploadConfig(pathname: string, env: NodeJS.ProcessEnv) {
   return null;
 }
 
+export function isNewCanvasEnabledForActor(
+  env: NodeJS.ProcessEnv,
+  actor: { ownerUserId: string; actorTeamMemberId?: string | null },
+) {
+  if (String(env.NEW_CANVAS_ENABLED ?? "true").trim().toLowerCase() !== "false") return true;
+  const ownerIds = commaSeparatedIdSet(env.NEW_CANVAS_ROLLOUT_OWNER_USER_IDS ?? env.NEW_CANVAS_ROLLOUT_USER_IDS);
+  const memberIds = commaSeparatedIdSet(env.NEW_CANVAS_ROLLOUT_TEAM_MEMBER_IDS);
+  return ownerIds.has(String(actor.ownerUserId ?? "").trim())
+    || Boolean(actor.actorTeamMemberId && memberIds.has(String(actor.actorTeamMemberId).trim()));
+}
+
+function commaSeparatedIdSet(value: unknown) {
+  return new Set(String(value ?? "").split(/[\s,]+/).map((item) => item.trim()).filter(Boolean));
+}
+
 async function uploadTrackedCloudObject(
   db: SqlDatabase,
   input: {
@@ -2799,362 +3241,6 @@ async function uploadTrackedCloudObject(
     );
     throw error;
   }
-}
-
-async function createCanvasVideoComposition(
-  db: SqlDatabase,
-  input: {
-    body: CanvasVideoCompositionRequest & { canvasProjectId?: string };
-    idempotencyKey: string;
-    authenticated: { sessionToken: string; user: AuthenticatedUser };
-    runtime: UploadSessionRuntime;
-    env: NodeJS.ProcessEnv;
-    fetchImpl?: typeof fetch;
-    signedUrlExpiresInSeconds: number;
-    now: Date;
-  },
-) {
-  const canvasProjectId = readString(input.body.canvasProjectId);
-  if (!canvasProjectId) {
-    return { status: 400 as const, body: { errorCode: "canvas_project_id_required", message: "请选择要合成的画布。" } };
-  }
-  const canvas = await findCanvasByCanvasProjectId(db, {
-    canvasProjectId,
-    userId: input.authenticated.user.id,
-  });
-  if (!canvas) {
-    return { status: 404 as const, body: { errorCode: "canvas_project_not_found", message: "画布不存在。" } };
-  }
-  await resolveActorContext(db, {
-    sessionToken: input.authenticated.sessionToken,
-    capability: capabilities.generationStart,
-    now: input.now,
-  });
-
-  let resolvedRequest;
-  try {
-    resolvedRequest = resolveCanvasVideoCompositionRequest(canvas.document as Record<string, unknown>, input.body);
-  } catch (error) {
-    if (error instanceof CanvasVideoCompositionValidationError) {
-      return { status: 400 as const, body: canvasVideoCompositionErrorBody(error) };
-    }
-    throw error;
-  }
-
-  const store = new SqlIdempotencyRecordStore(db);
-  const started = await beginOrReplayCommand(store, {
-    scopeKey: `user:${input.authenticated.user.id}`,
-    userId: input.authenticated.user.id,
-    operationName: operationNames.canvasVideoCompose,
-    idempotencyKey: input.idempotencyKey,
-    requestHash: hashJson({ canvasProjectId, ...resolvedRequest }),
-  });
-  if (started.kind === "replayed") {
-    const replay = started.record.responseSnapshot;
-    if (!replay) throw new IdempotencyProcessingError(started.record);
-    return {
-      status: Number(replay.httpStatus) >= 400 ? Number(replay.httpStatus) : 200,
-      body: replay,
-    };
-  }
-  if (started.kind === "processing") throw new IdempotencyProcessingError(started.record);
-
-  let run: Awaited<ReturnType<typeof createCanvasNodeRun>> | null = null;
-  let taskRoot: string | null = null;
-  let uploadedStorageObjectId: string | null = null;
-  try {
-    run = await createCanvasNodeRun(db, {
-      canvasProjectId,
-      nodeKey: resolvedRequest.nodeId,
-      idempotencyKey: input.idempotencyKey,
-      status: "running",
-      mediaKind: "video",
-      modelCode: "ffmpeg-h264",
-      targetType: "canvas",
-      targetId: resolvedRequest.nodeId,
-      inputSnapshot: {
-        width: resolvedRequest.width,
-        height: resolvedRequest.height,
-        fps: resolvedRequest.fps,
-        clips: resolvedRequest.clips.map(({ nodeId, kind, storageObjectId, durationSeconds }) => ({
-          nodeId,
-          kind,
-          storageObjectId,
-          durationSeconds,
-        })),
-      },
-      userId: input.authenticated.user.id,
-      now: input.now,
-    });
-    taskRoot = await mkdtemp(join(tmpdir(), "comic-ai-canvas-composition-"));
-    const clips = [];
-    const maxInputBytes = 1024 * 1024 * 1024;
-    let downloadedInputBytes = 0;
-    for (const [index, clip] of resolvedRequest.clips.entries()) {
-      const object = await findStorageObject(db, clip.storageObjectId);
-      if (
-        !object ||
-        object.status !== "available" ||
-        (object.createdByUserId !== input.authenticated.user.id && object.canvasProjectId !== canvasProjectId)
-      ) {
-        throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_not_found");
-      }
-      const extension = canvasCompositionSourceExtension(clip.kind, object.contentType);
-      const sourcePath = join(taskRoot, `${String(index + 1).padStart(3, "0")}-${clip.nodeId}${extension}`);
-      const recordedSizeBytes = Number(object.sizeBytes ?? 0);
-      if (recordedSizeBytes > 0 && downloadedInputBytes + recordedSizeBytes > maxInputBytes) {
-        throw new VideoCompositionError("video_composition_input_limit_exceeded");
-      }
-      downloadedInputBytes += await downloadCanvasCompositionObject({
-        object,
-        destinationPath: sourcePath,
-        runtime: input.runtime,
-        fetchImpl: input.fetchImpl ?? fetch,
-        now: input.now,
-        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-      });
-      if (downloadedInputBytes > maxInputBytes) {
-        throw new VideoCompositionError("video_composition_input_limit_exceeded");
-      }
-      clips.push({ kind: clip.kind, sourcePath, durationSeconds: clip.durationSeconds });
-    }
-
-    const outputPath = join(taskRoot, "composition.mp4");
-    const composed = await composeVideoToMp4({
-      clips,
-      outputPath,
-      width: resolvedRequest.width,
-      height: resolvedRequest.height,
-      fps: resolvedRequest.fps,
-    }, {
-      allowedInputRoots: [taskRoot],
-      allowedOutputRoot: taskRoot,
-      tempRoot: taskRoot,
-      limits: {
-        maxClips: 50,
-        maxDurationSeconds: 600,
-        maxInputFileBytes: 512 * 1024 * 1024,
-        maxInputBytes,
-        maxOutputBytes: 128 * 1024 * 1024,
-        timeoutMs: 5 * 60_000,
-      },
-    });
-    const outputBytes = await readFile(composed.outputPath);
-    const uploaded = await uploadTrackedCloudObject(db, {
-      runtime: input.runtime,
-      objectKey: canvasVideoCompositionObjectKey({
-        rootPrefix: input.env.STORAGE_OBJECT_ROOT_PREFIX,
-        userId: input.authenticated.user.id,
-        now: input.now,
-      }),
-      bytes: outputBytes,
-      contentType: "video/mp4",
-      fileName: `canvas-composition-${input.now.toISOString().replace(/[:.]/g, "-")}.mp4`,
-      projectId: null,
-      canvasProjectId,
-      actorUserId: input.authenticated.user.id,
-      pageKey: "new-canvas",
-      pageUrl: `/new-canvas/?projectId=${encodeURIComponent(canvasProjectId)}`,
-      sourceAction: "new-canvas/video-composition",
-      metadata: {
-        canvasProjectId,
-        nodeId: resolvedRequest.nodeId,
-        runId: run.id,
-        clipCount: composed.clipCount,
-        durationSeconds: composed.durationSeconds,
-        width: composed.width,
-        height: composed.height,
-        fps: composed.fps,
-        videoCodec: composed.videoCodec,
-      },
-      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-      now: input.now,
-    });
-    uploadedStorageObjectId = uploaded.storageObjectId;
-    const artifact = {
-      id: uploaded.storageObjectId,
-      url: uploaded.sourceUrl,
-      storageUrl: uploaded.sourceUrl,
-      storageObjectId: uploaded.storageObjectId,
-      mimeType: "video/mp4",
-      mediaKind: "video",
-      title: "视频合成",
-      width: composed.width,
-      height: composed.height,
-      fps: composed.fps,
-      durationSeconds: composed.durationSeconds,
-      sizeBytes: composed.sizeBytes,
-      clipCount: composed.clipCount,
-      videoCodec: composed.videoCodec,
-    };
-    const responseBody = { artifact, run: { id: run.id, runNo: run.runNo, status: "succeeded" } };
-    await db.query("BEGIN");
-    try {
-      const finalizedAt = new Date();
-      await appendCanvasNodeArtifact(db, {
-        canvasProjectId,
-        nodeKey: resolvedRequest.nodeId,
-        runId: run.id,
-        artifactKind: "video",
-        storageObjectId: uploaded.storageObjectId,
-        url: uploaded.sourceUrl,
-        selected: true,
-        selectionRole: "current",
-        metadata: artifact,
-        userId: input.authenticated.user.id,
-        now: finalizedAt,
-      });
-      await completeCanvasNodeRun(db, {
-        runId: run.id,
-        outputSnapshot: artifact,
-        now: finalizedAt,
-      });
-      await store.update({
-        ...started.record,
-        responseResourceType: "canvas_video_composition",
-        responseResourceId: uploaded.storageObjectId,
-        responseSnapshot: responseBody,
-        status: "succeeded",
-        updatedAt: finalizedAt,
-      });
-      await db.query("COMMIT");
-    } catch (error) {
-      await db.query("ROLLBACK").catch(() => undefined);
-      throw error;
-    }
-    uploadedStorageObjectId = null;
-    return { status: 200 as const, body: responseBody };
-  } catch (error) {
-    const errorBody = canvasVideoCompositionErrorBody(error);
-    if (uploadedStorageObjectId) {
-      await deleteStorageObjectRecord(db, {
-        storageObjectId: uploadedStorageObjectId,
-        adapter: input.runtime.adapter,
-        localObjectStore: input.runtime.localObjectStore,
-        now: new Date(),
-      }).catch(() => undefined);
-    }
-    if (run) {
-      await failCanvasNodeRun(db, {
-        runId: run.id,
-        failure: errorBody,
-        now: new Date(),
-      }).catch(() => undefined);
-    }
-    await store.update({
-      ...started.record,
-      responseSnapshot: errorBody,
-      status: "failed_terminal",
-      updatedAt: new Date(),
-    }).catch(() => undefined);
-    return { status: Number(errorBody.httpStatus), body: errorBody };
-  } finally {
-    if (taskRoot) {
-      await rm(taskRoot, { recursive: true, force: true });
-    }
-  }
-}
-
-async function downloadCanvasCompositionObject(input: {
-  object: StorageObjectRecord;
-  destinationPath: string;
-  runtime: UploadSessionRuntime;
-  fetchImpl: typeof fetch;
-  now: Date;
-  signedUrlExpiresInSeconds: number;
-}) {
-  const maxBytes = 512 * 1024 * 1024;
-  const timeoutMs = 60_000;
-  if (Number(input.object.sizeBytes ?? 0) > maxBytes) {
-    throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_too_large");
-  }
-  const signed = await input.runtime.adapter.createSignedReadUrl({
-    bucket: input.object.bucket,
-    objectKey: input.object.objectKey,
-    expiresAt: new Date(input.now.getTime() + input.signedUrlExpiresInSeconds * 1000),
-  });
-  const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), timeoutMs);
-  try {
-    const response = await input.fetchImpl(signed.url, {
-      method: "GET",
-      signal: abortController.signal,
-    });
-    if (!response.ok || !response.body) {
-      throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_download_failed");
-    }
-    const declaredLength = Number(response.headers.get("content-length") ?? 0);
-    if (declaredLength > maxBytes) {
-      throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_too_large");
-    }
-    let receivedBytes = 0;
-    const limiter = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        receivedBytes += chunk.byteLength;
-        if (receivedBytes > maxBytes) {
-          callback(new CanvasVideoCompositionValidationError("canvas_video_composition_source_too_large"));
-          return;
-        }
-        callback(null, chunk);
-      },
-    });
-    await pipeline(
-      Readable.fromWeb(response.body as never),
-      limiter,
-      createWriteStream(input.destinationPath, { flags: "wx" }),
-    );
-    if (!receivedBytes) {
-      throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_empty");
-    }
-    return receivedBytes;
-  } catch (error) {
-    if (abortController.signal.aborted) {
-      throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_download_failed");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function canvasCompositionSourceExtension(kind: "image" | "video", contentType: string) {
-  const type = String(contentType ?? "").toLowerCase().split(";", 1)[0]?.trim();
-  const imageExtensions: Record<string, string> = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-  };
-  const videoExtensions: Record<string, string> = {
-    "video/mp4": ".mp4",
-    "video/webm": ".webm",
-    "video/quicktime": ".mov",
-    "video/x-m4v": ".m4v",
-  };
-  const extension = kind === "image" ? imageExtensions[type] : videoExtensions[type];
-  if (!extension) {
-    throw new CanvasVideoCompositionValidationError("canvas_video_composition_source_type_invalid");
-  }
-  return extension;
-}
-
-function canvasVideoCompositionErrorBody(error: unknown) {
-  const code = error instanceof CanvasVideoCompositionValidationError || error instanceof VideoCompositionError
-    ? error.code
-    : "canvas_video_composition_failed";
-  const messages: Record<string, string> = {
-    canvas_video_composition_clips_required: "请先连接至少一个已归档的图片或视频素材。",
-    canvas_video_composition_clip_not_archived: "连接的素材尚未完成云端归档，请稍后重试。",
-    canvas_video_composition_source_not_found: "连接的素材不存在或无权访问。",
-    canvas_video_composition_source_download_failed: "读取云端素材失败，请稍后重试。",
-    canvas_video_composition_source_too_large: "连接的单个素材超过 512 MB。",
-    video_composition_timeout: "视频合成超时，请减少片段数量或总时长。",
-    video_composition_output_limit_exceeded: "合成结果超过 128 MB 限制。",
-  };
-  return {
-    httpStatus: code === "canvas_video_composition_source_not_found" ? 404 : code.includes("failed") || code.startsWith("video_composition_") ? 422 : 400,
-    errorCode: code,
-    message: messages[code] ?? "视频合成失败，请检查片段格式和参数。",
-  };
 }
 
 function buildTeamAssetUploadObjectKey(input: {
@@ -3300,12 +3386,15 @@ function teamAssetRow(row: Record<string, unknown>) {
     adminUserId: readString(row.admin_user_id),
     name: readString(row.asset_name),
     prompt: readString(row.asset_prompt) || null,
+    tags: normalizeTeamAssetTags(row.tags_json),
+    folderName: readString(row.folder_name),
     category: readString(row.asset_category),
     status: assetStatus,
     previewUrl: assetUrl,
     sourceUrl: assetUrl,
     resourceType: readString(row.resource_type),
     resourceSize: Number(row.resource_size ?? 0),
+    storageObjectId: readString(row.storage_object_id) || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdByName: readString(row.created_by_name),
@@ -3338,6 +3427,19 @@ function teamAssetRow(row: Record<string, unknown>) {
         }
       : null,
   };
+}
+
+function normalizeTeamAssetTags(value: unknown): string[] {
+  let values = value;
+  if (typeof values === "string") {
+    try {
+      values = JSON.parse(values);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.map((item) => String(item ?? "").trim()).filter(Boolean))];
 }
 
 function sanitizeOfficialAssetUploadFileName(fileName: string) {
@@ -3444,6 +3546,38 @@ function generationCostFromModelConfig(
     : fallbackCost;
 }
 
+async function estimateCanvasGenerationBatchItemCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  nodes: Array<{ nodeKey: string; mediaKind: "image" | "video" | "audio"; payload?: Record<string, unknown> }>,
+  env: NodeJS.ProcessEnv,
+) {
+  const queueConfig = loadGenerationQueueConfig(env);
+  const itemCredits: Record<string, number> = {};
+  for (const node of nodes) {
+    const config = normalizeGenerationKind(node.mediaKind);
+    const payload = readJsonRecord(node.payload);
+    const modelCode = requestModelCode(payload.model ?? payload.modelCode);
+    const modelConfig = modelCode ? await findActiveAiModelConfigByCode(db, modelCode) : undefined;
+    const dispatchPolicy = modelCode ? await findActiveAiModelDispatchPolicyByModelCode(db, modelCode) : undefined;
+    const rawParameters = readJsonRecord(payload.parameters);
+    const execution = resolveGenerationModelExecution({
+      kind: node.mediaKind,
+      modelCode,
+      modelConfig,
+      dispatchPolicy,
+      parameters: rawParameters,
+      fallbackQueueName: node.mediaKind === "video"
+        ? queueConfig.queues.submitVideo
+        : queueConfig.queues.submitImage,
+    });
+    itemCredits[node.nodeKey] = generationCostFromModelConfig(config.cost, modelConfig, {
+      ...execution.parameters,
+      ...rawParameters,
+    });
+  }
+  return itemCredits;
+}
+
 function resolutionCreditsFromModelConfig(
   modelConfig: AiModelConfigRecord | undefined,
   parameters: Record<string, unknown>,
@@ -3509,14 +3643,28 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
     idempotencyKey: string;
     promptPreview: string;
     modelConfig?: AiModelConfigRecord;
+    billingMetadata?: Record<string, unknown>;
+    skillCreditCost?: number;
+    skillAuthorGrant?: {
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    } | null;
+    skillAuthorGrants?: Array<{
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    }>;
     now: Date;
   },
 ) {
-  const amount = generationCostFromModelConfig(0, input.modelConfig);
+  const amount = generationCostFromModelConfig(0, input.modelConfig)
+    + Math.max(0, Math.round(Number(input.skillCreditCost) || 0));
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
   }
-  const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
   const modelCode = String(input.modelConfig?.modelCode ?? "text.script").trim() || "text.script";
   const modelLabel = String(input.modelConfig?.displayName ?? "剧本模型").trim() || "剧本模型";
   const metadata = {
@@ -3532,17 +3680,22 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
     billingEvent: "consumed",
     outcome: "consumed",
     promptPreview: input.promptPreview,
+    ...(input.billingMetadata ?? {}),
   };
-  return verifyMembershipAndConsumeCredits(db, {
+  if (!await hasActiveGenerationMembership(db, { userId: input.createdByUserId, now: input.now })) {
+    throw new GenerationMembershipRequiredError();
+  }
+  return reserveConsumeAndGrantUserScriptAnalysisCredits(db, {
     userId: input.createdByUserId,
-    requiredCredits: amount,
+    amount,
     projectId: input.projectId,
     idempotencyKey: input.idempotencyKey,
     sourceType: "episode_generation_task",
-    sourceId,
     reason: "script generation",
     allocationKey: "ai_storyboard_preview",
     metadata,
+    skillAuthorGrant: input.skillAuthorGrant,
+    skillAuthorGrants: input.skillAuthorGrants,
     now: input.now,
   });
 }
@@ -3555,28 +3708,25 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
     idempotencyKey: string;
     promptPreview: string;
     modelConfig?: AiModelConfigRecord;
+    billingMetadata?: Record<string, unknown>;
+    skillAuthorGrant?: {
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    } | null;
+    skillAuthorGrants?: Array<{
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    }>;
     now: Date;
   },
 ) {
   const amount = generationCostFromModelConfig(0, input.modelConfig);
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
-  }
-  const member = await queryOne<{ user_id: string; member_credits: number | string }>(
-    db,
-    `
-      SELECT user_id, member_credits
-      FROM team_members
-      WHERE id = $1
-        AND status = 'active'
-        AND deleted_at IS NULL
-      LIMIT 1
-    `,
-    [input.teamMemberId],
-  );
-  const availableCredits = Number(member?.member_credits ?? 0);
-  if (availableCredits < amount) {
-    throw new InsufficientCreditsError();
   }
   const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
   const modelCode = String(input.modelConfig?.modelCode ?? "text.script").trim() || "text.script";
@@ -3594,83 +3744,96 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
     billingEvent: "consumed",
     outcome: "consumed",
     promptPreview: input.promptPreview,
+    ...(input.billingMetadata ?? {}),
   };
   await db.query("BEGIN");
   try {
-    await db.query(
-      `
-        UPDATE team_members
-        SET member_credits = member_credits - $2,
-            updated_at = $3
-        WHERE id = $1
-          AND status = 'active'
-          AND deleted_at IS NULL
-          AND member_credits >= $2
-      `,
-      [input.teamMemberId, amount, input.now],
-    );
-    const updated = await queryOne<{ member_credits: number | string }>(
+    const member = await queryOne<{ user_id: string; member_credits: number | string }>(
       db,
-      `
-        SELECT member_credits
-        FROM team_members
-        WHERE id = $1
-          AND status = 'active'
-          AND deleted_at IS NULL
-        LIMIT 1
-      `,
+      `SELECT user_id, member_credits
+       FROM team_members
+       WHERE id = $1
+         AND status = 'active'
+         AND deleted_at IS NULL
+       LIMIT 1
+       FOR UPDATE`,
       [input.teamMemberId],
     );
-    if (!updated || Number(updated.member_credits ?? 0) < 0) {
+    if (!member) {
       throw new InsufficientCreditsError();
     }
-
-    const reservationId = uuidFromIdempotencyKey(input.idempotencyKey);
-    await queryOne<{ id: string }>(
+    const existingCharge = await queryOne<{
+      id: string;
+      amount: number | string;
+      metadata_json: Record<string, unknown>;
+    }>(
       db,
-      `
-        INSERT INTO credit_ledger_entries (
-          id,
-          user_id,
-          team_member_id,
-          reservation_id,
-          allocation_id,
-          entry_type,
-          amount,
-          available_delta,
-          reserved_delta,
-          consumed_delta,
-          balance_after,
-          source_type,
-          source_id,
-          reason,
-          metadata_json,
-          created_by_user_id,
-          created_at
-        )
-        VALUES (
-          $1, $2, $3, NULL, NULL, 'transfer_out', $4, -($4::int), 0, 0, $9,
-          'team_member_generation_task', $5, $6, $7::jsonb, $2, $8
-        )
-        RETURNING id
-      `,
-      [
-        randomUUID(),
-        member.user_id,
-        input.teamMemberId,
-        amount,
-        reservationId,
-        "成员生成消耗积分",
-        JSON.stringify(metadata),
-        input.now,
-        Number(updated.member_credits),
-      ],
+      `SELECT id, amount, metadata_json
+       FROM credit_ledger_entries
+       WHERE user_id = $1
+         AND team_member_id = $2
+         AND entry_type = 'transfer_out'
+         AND source_type = 'team_member_generation_task'
+         AND source_id = $3
+       LIMIT 1`,
+      [member.user_id, input.teamMemberId, sourceId],
     );
+    if (existingCharge && (
+      Number(existingCharge.amount) !== amount
+      || existingCharge.metadata_json.skillId !== metadata.skillId
+      || existingCharge.metadata_json.modelCode !== metadata.modelCode
+    )) {
+      throw new IdempotencyConflictError();
+    }
+    if (!existingCharge) {
+      if (Number(member.member_credits ?? 0) < amount) {
+        throw new InsufficientCreditsError();
+      }
+      const updated = await queryOne<{ member_credits: number | string }>(
+        db,
+        `UPDATE team_members
+         SET member_credits = member_credits - $2,
+             updated_at = $3
+         WHERE id = $1
+           AND status = 'active'
+           AND deleted_at IS NULL
+           AND member_credits >= $2
+         RETURNING member_credits`,
+        [input.teamMemberId, amount, input.now],
+      );
+      if (!updated) {
+        throw new InsufficientCreditsError();
+      }
+
+      await queryOne<{ id: string }>(
+        db,
+        `INSERT INTO credit_ledger_entries (
+           id, user_id, team_member_id, reservation_id, allocation_id, entry_type,
+           amount, available_delta, reserved_delta, consumed_delta, balance_after,
+           source_type, source_id, reason, metadata_json, created_by_user_id, created_at
+         ) VALUES (
+           $1, $2, $3, NULL, NULL, 'transfer_out', $4, -($4::int), 0, 0, $9,
+           'team_member_generation_task', $5, $6, $7::jsonb, $2, $8
+         )
+         RETURNING id`,
+        [
+          randomUUID(),
+          member.user_id,
+          input.teamMemberId,
+          amount,
+          sourceId,
+          "成员生成消耗积分",
+          JSON.stringify(metadata),
+          input.now,
+          Number(updated.member_credits),
+        ],
+      );
+    }
 
     await db.query("COMMIT");
     return {
       reservation: {
-        id: reservationId,
+        id: sourceId,
         userId: member.user_id,
         teamMemberId: input.teamMemberId,
         projectId: input.projectId,
@@ -3682,7 +3845,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
         amountReleased: 0,
         status: "settled" as const,
         sourceType: "team_member_generation_task",
-        sourceId: reservationId,
+        sourceId,
         reason: "成员生成消耗积分",
         metadata,
         createdByUserId: member.user_id,
@@ -3693,6 +3856,112 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
+  }
+}
+
+async function reserveConsumeAndGrantUserScriptAnalysisCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    amount: number;
+    projectId?: string | null;
+    idempotencyKey: string;
+    sourceType?: string;
+    allocationKey?: string;
+    reason?: string;
+    metadata: Record<string, unknown>;
+    skillAuthorGrant?: {
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    } | null;
+    skillAuthorGrants?: Array<{
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    }>;
+    now: Date;
+  },
+) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return null;
+  }
+  await db.query("BEGIN");
+  try {
+    const walletUserIds = [input.userId]
+      .filter((userId): userId is string => Boolean(userId))
+      .sort();
+    await db.query(
+      "SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE",
+      [walletUserIds],
+    );
+    const reservation = await reserveCreditsInTransaction(db, {
+      userId: input.userId,
+      projectId: input.projectId ?? null,
+      amount: Math.round(input.amount),
+      sourceType: input.sourceType ?? "user_script_analysis",
+      sourceId: uuidFromIdempotencyKey(input.idempotencyKey),
+      reason: input.reason ?? "小说转剧本分析",
+      metadata: input.metadata,
+      createdByUserId: input.userId,
+      now: input.now,
+    });
+    if (
+      reservation.reservation.metadata.skillId !== input.metadata.skillId
+      || reservation.reservation.metadata.modelCode !== input.metadata.modelCode
+    ) {
+      throw new IdempotencyConflictError();
+    }
+    await settleReservationAllocationInTransaction(db, {
+      reservationId: reservation.reservation.id,
+      allocationKey: input.allocationKey ?? "user-script-analysis",
+      amount: Math.round(input.amount),
+      outcome: "consumed",
+      metadata: input.metadata,
+      now: input.now,
+    });
+    await db.query("COMMIT");
+    return reservation;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+async function grantPromptSkillAuthorCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    payerUserId: string;
+    skillAuthorGrant?: {
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    } | null;
+    skillAuthorGrants?: Array<{
+      userId: string;
+      amount: number;
+      sourceId: string;
+      metadata: Record<string, unknown>;
+    }>;
+    now: Date;
+  },
+) {
+  const grants = [input.skillAuthorGrant, ...(input.skillAuthorGrants ?? [])]
+    .filter((grant): grant is NonNullable<typeof grant> => Boolean(grant && grant.amount > 0));
+  for (const grant of grants) {
+    await grantCredits(db, {
+      userId: grant.userId,
+      amount: grant.amount,
+      sourceType: "prompt_skill_usage_earning",
+      sourceId: grant.sourceId,
+      reason: "私人提示词技能使用分成",
+      metadata: grant.metadata,
+      createdByUserId: input.payerUserId,
+      now: input.now,
+    });
   }
 }
 
@@ -4036,7 +4305,10 @@ async function validateGenerationQueueReplay(
   if (!task) {
     return false;
   }
-  if (input.sourceJobName.includes(".submit")) {
+  if (
+    input.sourceJobName === "generation.task.created"
+    || input.sourceJobName.includes(".submit")
+  ) {
     return task.status === "queued" && !task.external_submission_started;
   }
   if (input.sourceJobName.includes(".poll")) {
@@ -4209,7 +4481,7 @@ function createSeedancePollAdapterFromModelConfig(
 }
 
 function isVideoPollProviderAdapter(adapter: unknown): adapter is {
-  poll(input: { externalRequestId: string }): Promise<{
+  poll(input: { externalRequestId: string; redactedPayload?: Record<string, unknown> }): Promise<{
     status: "accepted" | "running" | "succeeded" | "failed";
     videoUrl?: string;
     redactedResponse: Record<string, unknown>;
@@ -4485,9 +4757,10 @@ async function getEpisodeContext(
     phase: string;
     aspect_ratio: string;
     resolution: string;
+    project_style_code: string;
   }>(
     db,
-    "SELECT id, name, phase, aspect_ratio, resolution FROM projects WHERE id = $1",
+    "SELECT id, name, phase, aspect_ratio, resolution, project_style_code FROM projects WHERE id = $1",
     [episode.project_id],
   );
   if (!project) {
@@ -4615,6 +4888,8 @@ async function ensureMockGenerationStorageObject(
   input: {
     kind: "image" | "video";
     projectId: string | null;
+    canvasProjectId?: string | null;
+    canvasActorScope?: CanvasActorScope;
     episodeId: string | null;
     taskId: string;
     userId: string;
@@ -4644,7 +4919,9 @@ async function ensureMockGenerationStorageObject(
   const objectName = `${objectScope}/mock/${config.objectNamePrefix}-${input.taskId}.${media.fileExtension}`;
   const storageObject = await createScopedStorageObject(db, {
     userId: input.userId,
+    actorScope: input.canvasActorScope,
     projectId: input.projectId,
+    canvasProjectId: input.canvasProjectId,
     bucket: input.runtime.bucket,
     objectName,
     contentType: media.contentType,
@@ -4691,6 +4968,7 @@ async function signedUrlsForStorageObject(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     sessionToken: string;
+    canvasScope?: CanvasActorScope;
     storageObjectId: string;
     runtime: UploadSessionRuntime;
     signedUrlExpiresInSeconds: number;
@@ -4699,6 +4977,7 @@ async function signedUrlsForStorageObject(
 ) {
   return buildSignedObjectUrls(db, {
     sessionToken: input.sessionToken,
+    actorScope: input.canvasScope,
     storageObjectId: input.storageObjectId,
     adapter: input.runtime.adapter,
     now: input.now,
@@ -4713,6 +4992,7 @@ async function mapGenerationTaskResponse(
   input: {
     taskId: string;
     sessionToken: string;
+    canvasScope?: CanvasActorScope;
     runtime: UploadSessionRuntime;
     signedUrlExpiresInSeconds: number;
     now: Date;
@@ -4730,6 +5010,7 @@ async function mapGenerationTaskResponse(
     project_id: string | null;
     created_at: Date | string;
     updated_at: Date | string;
+    returned_at: Date | string | null;
     workflow_status: string;
     reservation_id: string | null;
     amount_total: number | string | null;
@@ -4766,6 +5047,7 @@ async function mapGenerationTaskResponse(
         t.project_id,
         t.created_at,
         t.updated_at,
+        COALESCE(s.completed_at, s.failed_at) AS returned_at,
         w.status AS workflow_status,
         r.id AS reservation_id,
         r.amount_total,
@@ -4792,7 +5074,7 @@ async function mapGenerationTaskResponse(
         ON w.id = t.workflow_id
       JOIN users u
         ON u.id = w.created_by_user_id
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       LEFT JOIN asset_versions v
         ON v.source_task_id = t.id
@@ -4827,6 +5109,8 @@ async function mapGenerationTaskResponse(
     typeof row.input_snapshot_json === "string"
       ? JSON.parse(row.input_snapshot_json) as Record<string, unknown>
       : row.input_snapshot_json;
+  const modelDisplayName = readString(row.model_display_name)
+    || (readString(snapshot.model) ? "默认模型" : null);
   const failureMessageSnapshot = {
     ...snapshot,
     modelDisplayName: row.model_display_name,
@@ -4870,6 +5154,7 @@ async function mapGenerationTaskResponse(
   if (row.storage_object_id) {
     urls = await signedUrlsForStorageObject(db, {
       sessionToken: input.sessionToken,
+      canvasScope: input.canvasScope,
       storageObjectId: row.storage_object_id,
       runtime: input.runtime,
       signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
@@ -5000,7 +5285,8 @@ async function mapGenerationTaskResponse(
       (readString(snapshot.targetType) === "asset" ? readString(snapshot.targetId) : null) ||
       (row.target_entity_type === "asset" ? row.target_entity_id : null),
     selectionContext,
-    model: snapshot.model ?? null,
+    model: modelDisplayName,
+    modelLabel: modelDisplayName,
     prompt: snapshot.prompt ?? null,
     parameters: snapshot.parameters ?? {},
     timeoutAt: snapshot.timeoutAt ?? null,
@@ -5023,6 +5309,7 @@ async function mapGenerationTaskResponse(
     generatedAudioItems,
     result,
     createdAt: new Date(row.created_at).toISOString(),
+    returnedAt: row.returned_at ? new Date(row.returned_at).toISOString() : null,
     updatedAt: new Date(row.updated_at).toISOString(),
   };
 }
@@ -5254,6 +5541,12 @@ async function listTaskCenterTasks(
 
   const items = rows.rows.map((row) => {
     const requestSummary = readJsonRecord(row.request_summary_json);
+    const modelDisplayName = readString(row.model_name)
+      || (readString(row.model_code) ? "默认模型" : null);
+    const publicRequestSummary = sanitizeModelFieldsForClient(
+      requestSummary,
+      modelDisplayName ?? "",
+    ) as Record<string, unknown>;
     const resultAssets = readRecordArray(row.result_assets_json);
     const failure = readJsonRecord(row.failure_json);
     const providerResponse = readJsonRecord(row.provider_response_json);
@@ -5306,11 +5599,12 @@ async function listTaskCenterTasks(
       targetType: row.target_type,
       targetId: row.target_id,
       assetId: row.target_type === "asset" || row.target_type === "team_asset" ? row.target_id : null,
-      model: row.model_code,
-      modelName: row.model_name,
-      parameters: readJsonRecord(requestSummary.parameters),
-      selectionContext: readJsonRecord(requestSummary.selectionContext),
-      requestSummary,
+      model: modelDisplayName,
+      modelName: modelDisplayName,
+      modelLabel: modelDisplayName,
+      parameters: readJsonRecord(publicRequestSummary.parameters),
+      selectionContext: readJsonRecord(publicRequestSummary.selectionContext),
+      requestSummary: publicRequestSummary,
       resultAssets,
       result,
       fixedImages: mediaKind === "image" && mediaUrl ? [{ id: row.task_id, url: mediaUrl, src: mediaUrl }] : [],
@@ -5934,12 +6228,13 @@ async function syncTeamAssetGenerationTaskMetadata(
       UPDATE team_assets
       SET asset_status = $3,
           asset_url = CASE WHEN $3 = 'active' THEN $4 ELSE asset_url END,
+          storage_object_id = CASE WHEN $3 = 'active' THEN $7 ELSE storage_object_id END,
           resource_size = CASE WHEN $3 = 'active' THEN $5 ELSE resource_size END,
           updated_at = $6
       WHERE id = $1
         AND admin_user_id = $2
     `,
-    [assetId, input.adminUserId, terminalStatus, previewUrl || null, Number(storageObject?.size_bytes ?? 0), input.now],
+    [assetId, input.adminUserId, terminalStatus, previewUrl || null, Number(storageObject?.size_bytes ?? 0), input.now, storageObjectId],
   );
 }
 
@@ -6022,6 +6317,8 @@ function generationResultFromSnapshotAsset(
     coverImageUrl: readString(asset.coverImageUrl) || previewUrl,
     sourceUrl: url || null,
     downloadUrl,
+    ...(readString(asset.transcript) ? { transcript: readString(asset.transcript) } : {}),
+    ...(readString(asset.audioGenerationMode) ? { audioGenerationMode: readString(asset.audioGenerationMode) } : {}),
     generatedAudioItems,
   };
 }
@@ -6726,7 +7023,7 @@ async function settleTimedOutEpisodeGenerationTask(
           r.id AS reservation_id,
           r.amount_reserved
         FROM tasks t
-        LEFT JOIN credit_reservations r
+        LEFT JOIN generation_task_credit_reservations r
           ON r.task_id = t.id
          AND r.status IN ('active', 'partially_settled')
         WHERE t.id = $1
@@ -7049,7 +7346,7 @@ async function syncSeedanceVideoTaskOnRead(
          (task_model_config.provider_protocol = 'lingdong_api' AND pr.provider_name = task_model_config.provider_name)
          OR (task_model_config.provider_protocol IS DISTINCT FROM 'lingdong_api' AND pr.provider_name = 'volcengine')
        )
-      LEFT JOIN credit_reservations r
+      LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
@@ -7070,7 +7367,7 @@ async function syncSeedanceVideoTaskOnRead(
   const snapshotModelCode = readString(snapshot.modelCode) || readString(snapshot.model);
   const modelConfig = await findActiveAiModelConfigByCode(db, snapshotModelCode || "seedance-i2v-pro");
   const adapter = createSeedancePollAdapterFromModelConfig(modelConfig, input.env, input.fetchImpl);
-  const poll = await adapter.poll({ externalRequestId: row.external_request_id });
+  const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
 
   if (poll.status === "running" || poll.status === "accepted") {
     return false;
@@ -7337,7 +7634,293 @@ interface GenerationTaskContext {
   actor: ActorContext;
   project: { id: string } | null;
   canvasProjectId?: string | null;
+  canvasActorScope?: CanvasActorScope;
+  canvasBatchBilling?: Extract<CanvasGenerationBatchBilling, { mode: "batch_reservation" }>;
+  promptSkill?: {
+    id: string;
+    category: string;
+    title: string;
+    priceCredits: number;
+    official: boolean;
+    ownerUserId: string | null;
+  } | null;
+  promptSkills?: Array<NonNullable<GenerationTaskContext["promptSkill"]>>;
   userId: string;
+}
+
+async function resolveCanvasGenerationPromptBody(
+  db: SqlDatabase,
+  actorScope: CanvasActorScope,
+  body: Record<string, unknown>,
+  mediaKindHint?: string,
+) {
+  const canvasContext = readJsonRecord(body.canvasContext);
+  const sourcePrompt = readString(canvasContext.sourcePrompt)
+    || readString(body.sourcePrompt)
+    || readString(body.text)
+    || readString(body.prompt)
+    || readString(body.promptOverride)
+    || readString(body.motionPrompt)
+    || "";
+  const settings = await getCanvasSettings(db, { actorScope });
+  const mediaKind = ["text", "image", "video", "audio"].includes(String(mediaKindHint ?? body.kind ?? body.mediaKind))
+    ? String(mediaKindHint ?? body.kind ?? body.mediaKind)
+    : "image";
+  const suffix = createCanvasPromptSuffixDirective(settings, mediaKind as "text" | "image" | "video" | "audio");
+  const canvasContextDirectives = canvasContext.promptDirectives ?? body.promptDirectives;
+  const directives = canvasContextDirectives === undefined
+    ? {
+        schemaVersion: 1,
+        slashCommands: [],
+        presets: [],
+        suffixes: suffix ? [{ id: suffix.id, version: suffix.version }] : [],
+      }
+    : normalizeCanvasGenerationDirectiveContract(canvasContextDirectives);
+  const directiveCatalog = await loadCanvasPromptDirectiveCatalog(db, { actorScope });
+  if (suffix) directiveCatalog.suffixes = [suffix];
+  const resolved = await resolveCanvasPromptWithDirectives(db, {
+    actorScope,
+    sourcePrompt,
+    directives,
+    directiveCatalog,
+  });
+  const resolvedBody = { ...body } as Record<string, unknown>;
+  const defaultModel = settings.settings.defaultModels[mediaKind as "text" | "image" | "video" | "audio"];
+  if (!readString(resolvedBody.model) && !readString(resolvedBody.modelCode) && defaultModel) {
+    resolvedBody.model = defaultModel;
+    resolvedBody.modelCode = defaultModel;
+  }
+  const currentParameters = resolvedBody.parameters && typeof resolvedBody.parameters === "object" && !Array.isArray(resolvedBody.parameters)
+    ? resolvedBody.parameters as Record<string, unknown>
+    : {};
+  const styleReferenceAssetId = settings.settings.visualStyle.styleReferenceEnabled === true
+    && (mediaKind === "image" || mediaKind === "video")
+    ? settings.settings.visualStyle.styleReferenceAssetId
+    : null;
+  const styleReferenceAssetVersionId = styleReferenceAssetId
+    ? await resolveCanvasStyleReferenceAssetVersion(db, actorScope, styleReferenceAssetId)
+    : null;
+  const referenceAssetVersionIds = styleReferenceAssetVersionId
+    ? Array.from(new Set([
+      ...readStringArray(resolvedBody.referenceAssetVersionIds),
+      ...readStringArray(currentParameters.referenceAssetVersionIds),
+      styleReferenceAssetVersionId,
+    ]))
+    : [];
+  resolvedBody.parameters = {
+    imageAspectRatio: settings.settings.generation.imageAspectRatio,
+    imageSize: settings.settings.generation.imageSize,
+    videoResolution: settings.settings.generation.videoResolution,
+    videoDuration: settings.settings.generation.videoDuration,
+    ...currentParameters,
+    ...(referenceAssetVersionIds.length ? { referenceAssetVersionIds } : {}),
+  };
+  if (referenceAssetVersionIds.length) {
+    resolvedBody.referenceAssetVersionIds = referenceAssetVersionIds;
+  }
+  const modelBinding = resolved.executionBindings.model;
+  if (modelBinding) {
+    const requestedModel = readString(body.model) ?? readString(body.modelCode);
+    if (requestedModel && requestedModel !== modelBinding.modelCode) {
+      throw new CanvasPromptReferenceError("canvas_prompt_model_binding_conflict");
+    }
+    resolvedBody.model = modelBinding.modelCode;
+    resolvedBody.modelCode = modelBinding.modelCode;
+  }
+  const voiceBinding = resolved.executionBindings.voice;
+  if (voiceBinding) {
+    const requestedVoice = readString(body.voiceId);
+    if (requestedVoice && requestedVoice !== voiceBinding.voiceAssetId) {
+      throw new CanvasPromptReferenceError("canvas_prompt_voice_binding_conflict");
+    }
+    resolvedBody.voiceId = voiceBinding.voiceAssetId;
+  }
+  Object.assign(resolvedBody, applyCanvasPromptDramaBindings(
+    resolvedBody,
+    resolved.executionBindings.drama,
+  ));
+  resolvedBody.parameters = applyCanvasPromptDramaBindings(
+    resolvedBody.parameters as Record<string, unknown>,
+    resolved.executionBindings.drama,
+  );
+  return {
+    ...resolvedBody,
+    prompt: resolved.expandedPrompt,
+    ...(body.promptOverride === undefined ? {} : { promptOverride: resolved.expandedPrompt }),
+    ...(body.motionPrompt === undefined ? {} : { motionPrompt: resolved.expandedPrompt }),
+    ...(body.text === undefined ? {} : { text: resolved.expandedPrompt }),
+    canvasContext: {
+      ...canvasContext,
+      sourcePrompt: resolved.sourcePrompt,
+      expandedPrompt: resolved.expandedPrompt,
+      promptReferences: resolved.references,
+      promptExpansionOrder: resolved.expansionOrder,
+      promptDirectives: resolved.directives,
+      promptExecutionBindings: resolved.executionBindings,
+      promptReadDependencies: resolved.readDependencies,
+      promptReferenceDiagnostics: [],
+      promptReferenceValidation: "server",
+      ...(styleReferenceAssetVersionId ? {
+        styleReferenceAssetId,
+        styleReferenceAssetVersionId,
+      } : {}),
+    },
+  };
+}
+
+async function resolveCanvasStyleReferenceAssetVersion(
+  db: SqlDatabase,
+  actorScope: CanvasActorScope,
+  assetId: string,
+) {
+  if (!isUuid(assetId)) {
+    throw new GenerationRequestValidationError(
+      "model_reference_not_found",
+      "Canvas style reference was not found or is inaccessible",
+    );
+  }
+  const row = await queryOne<{ asset_version_id: string }>(db, `
+    SELECT artifact.asset_version_id
+    FROM assets asset
+    JOIN creator_canvas_node_artifacts artifact
+      ON artifact.asset_id=asset.id
+     AND artifact.canvas_project_id=$2
+     AND artifact.asset_version_id IS NOT NULL
+     AND artifact.deleted_at IS NULL
+    JOIN asset_versions version
+      ON version.id=artifact.asset_version_id
+     AND version.asset_id=asset.id
+    JOIN storage_objects storage
+      ON storage.id=COALESCE(artifact.storage_object_id,version.storage_object_id)
+     AND storage.canvas_project_id=$2
+     AND storage.status='available'
+     AND storage.deleted_at IS NULL
+    WHERE asset.id=$1
+      AND asset.canvas_project_id=$2
+      AND asset.project_id IS NULL
+    ORDER BY artifact.selected DESC,artifact.updated_at DESC,artifact.id DESC
+    LIMIT 1
+  `, [assetId, actorScope.canvasId]);
+  if (!row?.asset_version_id) {
+    throw new GenerationRequestValidationError(
+      "model_reference_not_found",
+      "Canvas style reference was not found or is inaccessible",
+    );
+  }
+  return row.asset_version_id;
+}
+
+function normalizeCanvasGenerationDirectiveContract(value: unknown) {
+  const record = readJsonRecord(value);
+  return {
+    schemaVersion: 1 as const,
+    slashCommands: normalizeCanvasGenerationDirectiveList(record.slashCommands),
+    presets: normalizeCanvasGenerationDirectiveList(record.presets),
+    suffixes: normalizeCanvasGenerationDirectiveList(record.suffixes),
+  };
+}
+
+function normalizeCanvasGenerationDirectiveList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => {
+        const record = readJsonRecord(item);
+        return { id: readString(record.id), version: readString(record.version) };
+      })
+    : [];
+}
+
+/**
+ * Resolve prompt references before a batch is planned so an @node read can
+ * participate in the same execution DAG. Dependencies that are not selected
+ * in this batch remain immutable document snapshots rather than becoming
+ * synthetic generation items.
+ */
+async function resolveCanvasBatchPromptDependencies(
+  db: SqlDatabase,
+  actorScope: CanvasActorScope,
+  nodes: Array<{ nodeKey: string; mediaKind: "text" | "image" | "video" | "audio"; dependsOn?: string[]; payload?: Record<string, unknown> }>,
+) {
+  const selectedNodeKeys = new Set(nodes.map((node) => String(node.nodeKey ?? "").trim()).filter(Boolean));
+  const resolvedNodes = await Promise.all(nodes.map(async (node) => {
+    const payload = readJsonRecord(node.payload);
+    const resolvedPayload = await resolveCanvasGenerationPromptBody(db, actorScope, payload, node.mediaKind);
+    const resolvedContext = readJsonRecord(resolvedPayload.canvasContext);
+    const readDependencies = Array.isArray(resolvedContext.promptReadDependencies)
+      ? resolvedContext.promptReadDependencies
+        .map((dependency) => readJsonRecord(dependency))
+        .filter((dependency) => readString(dependency.nodeKey))
+      : [];
+    const executionDependencies = readDependencies
+      .map((dependency) => readString(dependency.nodeKey))
+      .filter((nodeKey) => nodeKey && selectedNodeKeys.has(nodeKey));
+    return {
+      ...node,
+      dependsOn: [...new Set([
+        ...(Array.isArray(node.dependsOn) ? node.dependsOn.map((value) => String(value).trim()).filter(Boolean) : []),
+        ...executionDependencies,
+      ])],
+      payload: resolvedPayload,
+      promptReadDependencies: readDependencies,
+    };
+  }));
+  const unselectedNodeKeys = [...new Set(resolvedNodes.flatMap((node) =>
+    node.promptReadDependencies
+      .map((dependency) => readString(dependency.nodeKey))
+      .filter((nodeKey) => nodeKey && !selectedNodeKeys.has(nodeKey)),
+  ))];
+  const artifactVersions = await findStableCanvasNodeArtifactVersions(db, actorScope.canvasId, unselectedNodeKeys);
+  return resolvedNodes.map(({ promptReadDependencies, ...node }) => {
+    if (node.mediaKind !== "image" && node.mediaKind !== "video") return node;
+    const referencedVersions = promptReadDependencies
+      .map((dependency) => readString(dependency.nodeKey))
+      .filter((nodeKey) => nodeKey && !selectedNodeKeys.has(nodeKey))
+      .map((nodeKey) => artifactVersions.get(nodeKey))
+      .filter((versionId): versionId is string => Boolean(versionId));
+    if (!referencedVersions.length) return node;
+    const payload = readJsonRecord(node.payload);
+    return {
+      ...node,
+      payload: {
+        ...payload,
+        referenceAssetVersionIds: [...new Set([
+          ...readStringArray(payload.referenceAssetVersionIds),
+          ...referencedVersions,
+        ])],
+      },
+    };
+  });
+}
+
+async function findStableCanvasNodeArtifactVersions(
+  db: SqlDatabase,
+  canvasProjectId: string,
+  nodeKeys: string[],
+) {
+  if (!nodeKeys.length) return new Map<string, string>();
+  const result = await db.query<{ node_key: string; asset_version_id: string }>(`
+    SELECT DISTINCT ON (artifact.node_key)
+      artifact.node_key,
+      artifact.asset_version_id
+    FROM creator_canvas_node_artifacts artifact
+    JOIN asset_versions version ON version.id=artifact.asset_version_id
+    JOIN assets asset
+      ON asset.id=version.asset_id
+     AND asset.canvas_project_id=$1
+    JOIN storage_objects storage
+      ON storage.id=COALESCE(artifact.storage_object_id,version.storage_object_id)
+     AND storage.canvas_project_id=$1
+     AND storage.status='available'
+     AND storage.deleted_at IS NULL
+    WHERE artifact.canvas_project_id=$1
+      AND artifact.node_key=ANY($2::text[])
+      AND artifact.deleted_at IS NULL
+      AND artifact.asset_version_id IS NOT NULL
+      AND artifact.artifact_kind='image'
+      AND (artifact.asset_id IS NULL OR artifact.asset_id=asset.id)
+      AND (artifact.storage_object_id IS NULL OR version.storage_object_id IS NULL OR artifact.storage_object_id=version.storage_object_id)
+    ORDER BY artifact.node_key, artifact.selected DESC, artifact.updated_at DESC, artifact.id DESC
+  `, [canvasProjectId, nodeKeys]);
+  return new Map(result.rows.map((row) => [row.node_key, row.asset_version_id]));
 }
 
 async function createGenerationTask(
@@ -7395,6 +7978,7 @@ async function createGenerationTask(
     parameters: rawParameters,
     fallbackQueueName: fallbackSubmitQueueName,
   });
+  let executionParameters = modelExecution.parameters;
   const shouldUseBullMQDispatch =
     generationQueueConfig.outboxDispatcherEnabled && modelExecution.providerExecutor !== "mock";
   if (input.kind === "audio" && !shouldUseBullMQDispatch) {
@@ -7403,10 +7987,18 @@ async function createGenerationTask(
       "音频生成队列未启动。",
     );
   }
-  const estimatedCost = generationCostFromModelConfig(config.cost, modelConfig, {
-    ...modelExecution.parameters,
+  const modelEstimatedCost = generationCostFromModelConfig(config.cost, modelConfig, {
+    ...executionParameters,
     ...rawParameters,
   });
+  const promptSkills = Array.isArray(context.promptSkills) && context.promptSkills.length
+    ? context.promptSkills
+    : context.promptSkill ? [context.promptSkill] : [];
+  const skillCreditCost = promptSkills.reduce(
+    (total, skill) => total + Math.max(0, Math.round(Number(skill?.priceCredits) || 0)),
+    0,
+  );
+  const estimatedCost = modelEstimatedCost + skillCreditCost;
   const hasMembership = await hasActiveGenerationMembership(db, {
     userId: context.actor.userId,
     now: input.now,
@@ -7419,24 +8011,25 @@ async function createGenerationTask(
       kind: input.kind,
       modelCode: requestedModelCode,
       modelConfig,
-      parameters: modelExecution.parameters,
+      parameters: executionParameters,
       prompt: String(input.body.text ?? input.body.prompt ?? input.body.promptOverride ?? input.body.motionPrompt ?? ""),
     });
   }
-  const referenceAssetVersionIds = input.kind === "image"
-    ? readGenerationReferenceAssetVersionIds(input.body, modelExecution.parameters)
+  const referenceAssetVersionIds = input.kind === "image" || input.kind === "video"
+    ? readGenerationReferenceAssetVersionIds(input.body, executionParameters)
     : [];
   validateGenerationReferenceLimit(referenceAssetVersionIds, modelConfig);
-  if (referenceAssetVersionIds.length && !projectId) {
+  if (referenceAssetVersionIds.length && !projectId && !canvasProjectId) {
     throw new GenerationRequestValidationError(
       "model_reference_not_found",
       "Reference asset versions require a project-scoped target",
     );
   }
-  const resolvedReferenceImages = input.kind === "image" && projectId
+  const resolvedReferenceImages = (input.kind === "image" || input.kind === "video") && (projectId || canvasProjectId)
     ? await resolveGenerationReferenceImages(db, {
-        projectId,
-        assetVersionIds: referenceAssetVersionIds,
+      projectId,
+      canvasProjectId,
+      assetVersionIds: referenceAssetVersionIds,
         modelConfig,
         runtime: input.runtime,
       })
@@ -7450,6 +8043,15 @@ async function createGenerationTask(
       throw new GenerationRequestValidationError("model_reference_not_found", "Canvas storage reference was not found");
     }
     try {
+      if (context.canvasActorScope) {
+        return (await createSignedReadUrl(db, {
+          actorScope: context.canvasActorScope,
+          storageObjectId,
+          adapter: input.runtime.adapter,
+          now: input.now,
+          expiresInSeconds: input.signedUrlExpiresInSeconds,
+        })).url;
+      }
       return (await createSignedReadUrl(db, {
         sessionToken: input.authenticated.sessionToken,
         storageObjectId,
@@ -7466,7 +8068,7 @@ async function createGenerationTask(
   };
   const resolvedBody = await resolveGenerationStorageObjectReferences(input.body, resolveStorageObjectUrl) as Record<string, unknown>;
   const resolvedModelParameters = await resolveGenerationStorageObjectReferences(
-    modelExecution.parameters,
+    executionParameters,
     resolveStorageObjectUrl,
   ) as Record<string, unknown>;
   const parameters = resolvedReferenceImages.length
@@ -7506,10 +8108,19 @@ async function createGenerationTask(
     referenceAssetVersionIds,
     firstFrameUrl: resolveFirstFrameUrl(resolvedBody),
     parameters,
+    ...(canvasProjectId ? { canvasContext: readJsonRecord(resolvedBody.canvasContext) } : {}),
     audioEnabled: Boolean(resolvedBody.audioEnabled),
     musicEnabled: Boolean(resolvedBody.musicEnabled),
     lipSyncEnabled: Boolean(resolvedBody.lipSyncEnabled),
     teamMemberId: context.actor.teamMember?.id ?? null,
+    ...(context.promptSkill ? { promptSkill: context.promptSkill } : {}),
+    ...(promptSkills.length ? { promptSkills } : {}),
+    ...(context.canvasBatchBilling ? { billing: {
+      mode: "batch_reservation",
+      reservationId: context.canvasBatchBilling.reservationId,
+      allocationKey: context.canvasBatchBilling.allocationKey,
+      estimatedCredits: context.canvasBatchBilling.estimatedCredits,
+    } } : {}),
     ...generationPrioritySnapshot,
   };
   const modelConfigSnapshot = modelConfig
@@ -7518,7 +8129,7 @@ async function createGenerationTask(
   const idempotencySnapshot = {
     ...requestSnapshot,
     firstFrameUrl: resolveFirstFrameUrl(input.body),
-    parameters: modelExecution.parameters,
+    parameters: executionParameters,
   };
   const store = new SqlIdempotencyRecordStore(db);
   let intakeTransactionOpen = true;
@@ -7539,6 +8150,7 @@ async function createGenerationTask(
     const replayed = await mapGenerationTaskResponse(db, {
       taskId: started.record.responseResourceId,
       sessionToken: input.authenticated.sessionToken,
+      canvasScope: context.canvasActorScope,
       runtime: input.runtime,
       signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
       now: input.now,
@@ -7617,6 +8229,13 @@ async function createGenerationTask(
     targetId: resolvedSnapshotTargetId,
     canvasNodeId: requestSnapshot.targetType === "canvas" ? requestSnapshot.targetId : undefined,
     amount: estimatedCost,
+    modelCreditCost: modelEstimatedCost,
+    skillCreditCost,
+    skillId: context.promptSkill?.id ?? undefined,
+    skillCategory: context.promptSkill?.category ?? undefined,
+    skillTitle: context.promptSkill?.title ?? undefined,
+    promptSkill: context.promptSkill ?? undefined,
+    promptSkills: promptSkills.length ? promptSkills : undefined,
     requestedAt: input.now,
     prompt: requestSnapshot.prompt,
     parameters: requestSnapshot.parameters,
@@ -7643,6 +8262,13 @@ async function createGenerationTask(
   );
 
   const teamMemberId = context.actor.teamMember?.id ?? null;
+  const canvasBatchBilling = context.canvasBatchBilling;
+  if (canvasBatchBilling && (teamMemberId || canvasBatchBilling.estimatedCredits !== estimatedCost)) {
+    throw new GenerationRequestValidationError(
+      "canvas_batch_billing_binding_invalid",
+      "Canvas batch billing reservation does not match this task",
+    );
+  }
   let creditReservationId: string | null = null;
   let creditSummary: Record<string, unknown> = {};
   let queuedSnapshotPersisted = false;
@@ -7669,6 +8295,7 @@ async function createGenerationTask(
       requestSummary: {
         prompt: requestSnapshot.prompt,
         parameters: requestSnapshot.parameters,
+        ...(requestSnapshot.canvasContext ? { canvasContext: requestSnapshot.canvasContext } : {}),
         targetType: requestSnapshot.targetType,
         targetId: resolvedSnapshotTargetId,
         ...(requestSnapshot.targetType === "canvas" ? { canvasNodeId: requestSnapshot.targetId } : {}),
@@ -7805,6 +8432,20 @@ async function createGenerationTask(
       }
       throw error;
     }
+  } else if (canvasBatchBilling) {
+    await assertExternalCreditReservationInTransaction(db, {
+      reservationId: canvasBatchBilling.reservationId,
+      userId: context.userId,
+      canvasProjectId: canvasProjectId!,
+      amount: estimatedCost,
+    });
+    creditReservationId = canvasBatchBilling.reservationId;
+    creditSummary = {
+      reservationId: canvasBatchBilling.reservationId,
+      allocationKey: canvasBatchBilling.allocationKey,
+      reserved: estimatedCost,
+      batchReservation: true,
+    };
   } else {
     const reservation = await reserveCreditsInTransaction(db, {
       userId: context.userId,
@@ -7855,6 +8496,20 @@ async function createGenerationTask(
   }
 
   await ensureQueuedSnapshot();
+
+  if (canvasBatchBilling) {
+    await db.query(`
+      UPDATE creator_canvas_generation_batch_items
+      SET task_id=$3, updated_at=$4
+      WHERE id=$1 AND batch_id=$2 AND credit_reservation_id=$5
+    `, [
+      readString(resolvedBody.batchItemId),
+      readString(resolvedBody.batchId),
+      task.id,
+      input.now,
+      canvasBatchBilling.reservationId,
+    ]);
+  }
 
   const reservation = creditReservationId
     ? { reservation: { id: creditReservationId } }
@@ -7974,6 +8629,7 @@ async function createGenerationTask(
     const responseBody = await mapGenerationTaskResponse(db, {
       taskId: task.id,
       sessionToken: input.authenticated.sessionToken,
+      canvasScope: context.canvasActorScope,
       runtime: input.runtime,
       signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
       now: input.now,
@@ -7995,6 +8651,7 @@ async function createGenerationTask(
   const intakeResponseBody = await mapGenerationTaskResponse(db, {
     taskId: task.id,
     sessionToken: input.authenticated.sessionToken,
+    canvasScope: context.canvasActorScope,
     runtime: input.runtime,
     signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
     now: input.now,
@@ -8191,6 +8848,7 @@ async function createGenerationTask(
         resolveUrls: async (storageObject) =>
           signedUrlsForStorageObject(db, {
             sessionToken: input.authenticated.sessionToken,
+            canvasScope: context.canvasActorScope,
             storageObjectId: storageObject.id,
             runtime: input.runtime,
             signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
@@ -8246,6 +8904,7 @@ async function createGenerationTask(
       const responseBody = await mapGenerationTaskResponse(db, {
         taskId: task.id,
         sessionToken: input.authenticated.sessionToken,
+        canvasScope: context.canvasActorScope,
         runtime: input.runtime,
         signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
         now: input.now,
@@ -8266,6 +8925,15 @@ async function createGenerationTask(
         responseSnapshot: responseBody as Record<string, unknown>,
         status: "succeeded",
         updatedAt: input.now,
+      });
+      await grantPromptSkillsUsageCredits(db, {
+        skills: promptSkills,
+        sourceId: task.id,
+        payerUserId: context.userId,
+        teamMemberId,
+        projectId,
+        modelCode: requestedModelCode,
+        now: input.now,
       });
 
       return { status: 200 as const, body: responseBody };
@@ -8343,6 +9011,7 @@ async function createGenerationTask(
       const responseBody = await mapGenerationTaskResponse(db, {
         taskId: task.id,
         sessionToken: input.authenticated.sessionToken,
+        canvasScope: context.canvasActorScope,
         runtime: input.runtime,
         signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
         now: input.now,
@@ -8478,6 +9147,7 @@ async function createGenerationTask(
     const responseBody = await mapGenerationTaskResponse(db, {
       taskId: task.id,
       sessionToken: input.authenticated.sessionToken,
+      canvasScope: context.canvasActorScope,
       runtime: input.runtime,
       signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
       now: input.now,
@@ -8514,6 +9184,8 @@ async function createGenerationTask(
   const storageObject = await ensureMockGenerationStorageObject(db, {
     kind: input.kind,
     projectId,
+    canvasProjectId,
+    canvasActorScope: context.canvasActorScope,
     episodeId,
     taskId: task.id,
     userId: context.userId,
@@ -8522,6 +9194,7 @@ async function createGenerationTask(
   });
   const urls = await signedUrlsForStorageObject(db, {
     sessionToken: input.authenticated.sessionToken,
+    canvasScope: context.canvasActorScope,
     storageObjectId: storageObject.id,
     runtime: input.runtime,
     signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
@@ -8580,6 +9253,7 @@ async function createGenerationTask(
         UPDATE team_assets
         SET asset_status = 'active',
             asset_url = $2,
+            storage_object_id = $3,
             resource_size = COALESCE((SELECT size_bytes FROM storage_objects WHERE id = $3), resource_size),
             updated_at = $4
         WHERE id = $1
@@ -8645,6 +9319,7 @@ async function createGenerationTask(
   const responseBody = await mapGenerationTaskResponse(db, {
     taskId: task.id,
     sessionToken: input.authenticated.sessionToken,
+    canvasScope: context.canvasActorScope,
     runtime: input.runtime,
     signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
     now: input.now,
@@ -8665,6 +9340,15 @@ async function createGenerationTask(
     responseSnapshot: responseBody as Record<string, unknown>,
     status: "succeeded",
     updatedAt: input.now,
+  });
+  await grantPromptSkillsUsageCredits(db, {
+    skills: promptSkills,
+    sourceId: task.id,
+    payerUserId: context.userId,
+    teamMemberId,
+    projectId,
+    modelCode: requestedModelCode,
+    now: input.now,
   });
 
   return { status: 200 as const, body: responseBody };
@@ -8800,9 +9484,15 @@ function createImageGenerationTargetRegistry() {
             "Canvas generation requires a canvas project id",
           );
         }
-        let canvas = await findCanvasByCanvasProjectId(context.db, {
+        const canvasScope = await authorizeCanvasActor(context.db, {
+          sessionToken: context.authenticated.sessionToken,
+          canvasId: canvasProjectId,
+          action: "run",
+          now: context.now,
+        });
+        const canvas = await findCanvasByCanvasProjectId(context.db, {
           canvasProjectId,
-          userId: context.authenticated.user.id,
+          actorScope: canvasScope,
         });
         if (!canvas) {
           throw new ImageGenerationTargetRouteError(
@@ -8835,32 +9525,35 @@ function createImageGenerationTargetRegistry() {
           actor,
           project: null,
           canvasProjectId,
+          canvasActorScope: canvasScope,
           userId: context.authenticated.user.id,
         };
+        const resolvedPromptBody = await resolveCanvasGenerationPromptBody(context.db, canvasScope, context.body, "image");
         const run = await createCanvasNodeRun(context.db, {
           canvasProjectId,
           nodeKey,
           idempotencyKey: context.idempotencyKey,
           status: "created",
           mediaKind: "image",
-          modelCode: readString(context.body.model) ?? readString(context.body.modelCode),
+          modelCode: readString(resolvedPromptBody.model) ?? readString(resolvedPromptBody.modelCode),
           episodeId: null,
           targetType: "canvas",
           targetId: nodeKey,
           inputSnapshot: {
-            ...context.body,
+            ...resolvedPromptBody,
             canvasProjectId,
             nodeKey,
             nodeData: node.data ?? {},
           },
           userId: context.authenticated.user.id,
+          actorScope: canvasScope,
           now: context.now,
         });
         return {
           context: generationContext,
           episodeId: null,
           body: {
-            ...context.body,
+            ...resolvedPromptBody,
             targetType: "canvas",
             targetId: nodeKey,
             canvasProjectId,
@@ -9067,7 +9760,7 @@ function createImageGenerationTargetRegistry() {
               UPDATE team_assets
               SET asset_name = $3, asset_prompt = $4, asset_category = $5,
                   asset_status = 'generating', asset_url = NULL, resource_type = 'image',
-                  resource_size = 0, updated_at = $6, updated_by_name = $7
+                  resource_size = 0, storage_object_id = NULL, updated_at = $6, updated_by_name = $7
               WHERE id = $1 AND admin_user_id = $2 AND asset_status IN ('active', 'failed')
               RETURNING *
             `, [assetId, actor.userId, name, prompt, category, context.now, operatorName])
@@ -9128,6 +9821,35 @@ function createImageGenerationTargetRegistry() {
   ]);
 }
 
+function appendImageStylePromptForGeneration(
+  prompt: string,
+  imageStyleContent: string,
+  body: Record<string, unknown>,
+) {
+  const content = imageStyleContent.trim();
+  if (!content) return prompt;
+  const quickReferences = readArray(readJsonRecord(body.parameters).quickReferences).map(readJsonRecord);
+  const styleReferenceIndex = quickReferences.findIndex((reference) => (
+    reference.isGenerationStyleReference === true
+    || readString(reference.originalName) === "图片风格参考图"
+    || readString(reference.id)?.startsWith("batch-style-reference:")
+    || readString(reference.id)?.startsWith("storyboard-generator-style:")
+  ));
+  const referenceToken = styleReferenceIndex >= 0 ? `【@图${styleReferenceIndex + 1}】` : "";
+  const referenceInstruction = referenceToken ? `参考${referenceToken}不要出现参考图内容，` : "";
+  const punctuation = /[。！？.!?]$/u.test(content) ? "" : "。";
+  const formattedStyle = `图片风格：${referenceInstruction}${content}${punctuation}`;
+  const promptLines = prompt.split(/\r?\n/u);
+  const existingStyleIndex = promptLines.findIndex((line) => (
+    /^\s*图片风格：/u.test(line) && line.includes(content)
+  ));
+  if (existingStyleIndex >= 0) {
+    promptLines[existingStyleIndex] = formattedStyle;
+    return promptLines.join("\n");
+  }
+  return [prompt, formattedStyle].filter(Boolean).join("\n");
+}
+
 async function createUnifiedImageGenerationTask(
   input: ImageGenerationTargetAdapterContext & {
     runtimeEnv: NodeJS.ProcessEnv;
@@ -9136,7 +9858,117 @@ async function createUnifiedImageGenerationTask(
   },
 ) {
   const prepared = await createImageGenerationTargetRegistry().prepare(input.body.target, input);
-  const { target: _target, ...generationBody } = input.body;
+  const requestedSkillId = String(input.body.skillId ?? "").trim();
+  const promptSkillCategory = input.body.target?.kind === "storyboard" ? "storyboard" : "image_style";
+  let promptSkill: GenerationTaskContext["promptSkill"] = null;
+  const promptSkills: Array<NonNullable<GenerationTaskContext["promptSkill"]>> = [];
+  let promptSkillContent = "";
+  let imageStyleContent = "";
+  if (requestedSkillId) {
+    if (!isUuid(requestedSkillId)) {
+      throw new ImageGenerationTargetRouteError(
+        envelopedError(
+          400,
+          promptSkillCategory === "storyboard" ? "storyboard_prompt_skill_invalid" : "image_style_skill_invalid",
+          promptSkillCategory === "storyboard" ? "故事板提示词技能无效" : "生图风格技能无效",
+        ),
+      );
+    }
+    try {
+      const skill = await createPromptMarketplaceService({ db: input.db }).resolveWorkflowPromptSkill({
+        userId: input.authenticated.user.id,
+        itemId: requestedSkillId,
+        category: promptSkillCategory,
+        now: input.now,
+      });
+      promptSkill = {
+        id: skill.id,
+        category: skill.category,
+        title: skill.title,
+        priceCredits: Math.max(0, Math.round(Number(skill.priceCredits) || 0)),
+        official: skill.official,
+        ownerUserId: skill.ownerUserId,
+      };
+      promptSkills.push(promptSkill);
+      if (promptSkillCategory === "storyboard") {
+        promptSkillContent = String(skill.content ?? "").trim();
+      } else {
+        imageStyleContent = String(skill.content ?? "").trim();
+      }
+    } catch (error) {
+      if (error instanceof PromptMarketplaceError) {
+        throw new ImageGenerationTargetRouteError(envelopedError(error.status, error.code, error.message));
+      }
+      throw error;
+    }
+  }
+  const requestedImageStyleSkillId = input.body.target?.kind === "storyboard"
+    ? String(input.body.imageStyleSkillId ?? "").trim()
+    : "";
+  if (requestedImageStyleSkillId) {
+    if (!isUuid(requestedImageStyleSkillId)) {
+      throw new ImageGenerationTargetRouteError(
+        envelopedError(400, "image_style_skill_invalid", "生图风格技能无效"),
+      );
+    }
+    try {
+      const styleSkill = await createPromptMarketplaceService({ db: input.db }).resolveWorkflowPromptSkill({
+        userId: input.authenticated.user.id,
+        itemId: requestedImageStyleSkillId,
+        category: "image_style",
+        now: input.now,
+      });
+      promptSkills.push({
+        id: styleSkill.id,
+        category: styleSkill.category,
+        title: styleSkill.title,
+        priceCredits: Math.max(0, Math.round(Number(styleSkill.priceCredits) || 0)),
+        official: styleSkill.official,
+        ownerUserId: styleSkill.ownerUserId,
+      });
+      imageStyleContent = String(styleSkill.content ?? "").trim();
+    } catch (error) {
+      if (error instanceof PromptMarketplaceError) {
+        throw new ImageGenerationTargetRouteError(envelopedError(error.status, error.code, error.message));
+      }
+      throw error;
+    }
+  }
+  const requestedImageStyleCode = String(input.body.imageStyleCode ?? "").trim();
+  if (requestedImageStyleCode && !imageStyleContent) {
+    const styles = await createAdminImagePromptService({ db: input.db }).listStyles({
+      status: "enabled",
+      pageSize: 500,
+    });
+    const selectedStyle = styles.data.find((style) => (
+      String(style.code ?? style.id ?? "").trim() === requestedImageStyleCode
+    ));
+    imageStyleContent = String(selectedStyle?.prompt_content ?? selectedStyle?.promptContent ?? "").trim();
+  }
+  const storyboardPromptContent = promptSkillCategory === "storyboard"
+    ? String(input.body.storyboardPrompt ?? "").trim()
+    : "";
+  const {
+    target: _target,
+    skillId: _skillId,
+    imageStyleSkillId: _imageStyleSkillId,
+    imageStyleCode: _imageStyleCode,
+    storyboardPrompt: _storyboardPrompt,
+    ...generationBody
+  } = input.body;
+  const originalPrompt = String(
+    generationBody.prompt ?? generationBody.promptOverride ?? generationBody.text ?? "",
+  ).trim();
+  const promptPrefix = [promptSkillContent, storyboardPromptContent]
+    .filter(Boolean)
+    .filter((part, index, parts) => parts.indexOf(part) === index)
+    .filter((part) => !originalPrompt.startsWith(part));
+  const resolvedPrompt = [...promptPrefix, originalPrompt].filter(Boolean).join("\n");
+  const finalPrompt = appendImageStylePromptForGeneration(resolvedPrompt, imageStyleContent, generationBody);
+  if (finalPrompt) {
+    generationBody.prompt = finalPrompt;
+    generationBody.promptOverride = finalPrompt;
+  }
   try {
     if (prepared.execute) {
       const result = await prepared.execute();
@@ -9145,10 +9977,10 @@ async function createUnifiedImageGenerationTask(
     const result = await createGenerationTask(input.db, {
       kind: "image",
       episodeId: prepared.episodeId,
-      body: { ...generationBody, ...prepared.body },
+      body: { ...prepared.body, ...generationBody },
       idempotencyKey: input.idempotencyKey,
       authenticated: input.authenticated,
-      context: prepared.context,
+      context: { ...prepared.context, promptSkill, promptSkills },
       runtime: input.storageRuntime,
       env: input.runtimeEnv,
       fetchImpl: input.fetchImpl,
@@ -9164,6 +9996,143 @@ async function createUnifiedImageGenerationTask(
   } catch (error) {
     await prepared.fail?.(error);
     throw error;
+  }
+}
+
+export function createCanvasGenerationBatchDispatch(input: {
+  db: Awaited<ReturnType<typeof createDevDb>>;
+  canvasProjectId: string;
+  canvasScope: CanvasActorScope;
+  actor: ActorContext;
+  authenticated: { sessionToken: string; user: AuthenticatedUser };
+  runtime: UploadSessionRuntime;
+  env: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  signedUrlExpiresInSeconds: number;
+  textGateway: TextChatGatewayLike;
+}): CanvasGenerationDispatch {
+  const dispatch: CanvasGenerationDispatch = async (item) => {
+    const now = new Date();
+    const resolvedPromptPayload = await resolveCanvasGenerationPromptBody(input.db, input.canvasScope, item.payload, item.mediaKind);
+    if (item.mediaKind === "text") {
+      const canvas = await findCanvasByCanvasProjectId(input.db, {
+        canvasProjectId: input.canvasProjectId,
+        actorScope: input.canvasScope,
+      });
+      if (!canvas) throw new CanvasGenerationBatchError("canvas_project_not_found");
+      const result = await runCanvasTextNode(input.db, {
+        canvas,
+        nodeKey: item.nodeKey,
+        idempotencyKey: item.idempotencyKey,
+        body: {
+          ...resolvedPromptPayload,
+          kind: "text",
+          mediaKind: "text",
+          batchId: item.batchId,
+          batchItemId: item.itemId,
+        },
+        userId: input.authenticated.user.id,
+        actorScope: input.canvasScope,
+        gateway: input.textGateway,
+        now,
+      });
+      if (result.status !== "succeeded" || !result.runId) {
+        throw new CanvasGenerationBatchError("canvas_batch_text_run_not_succeeded");
+      }
+      return { status: "succeeded", taskId: null, runId: result.runId };
+    }
+    const modelCode = readString(resolvedPromptPayload.model) ?? readString(resolvedPromptPayload.modelCode);
+    const run = await createCanvasNodeRun(input.db, {
+      canvasProjectId: input.canvasProjectId,
+      nodeKey: item.nodeKey,
+      idempotencyKey: item.idempotencyKey,
+      status: "created",
+      mediaKind: item.mediaKind,
+      modelCode,
+      targetType: "canvas",
+      targetId: item.nodeKey,
+      inputSnapshot: {
+        ...resolvedPromptPayload,
+        batchId: item.batchId,
+        batchItemId: item.itemId,
+      },
+      actorScope: input.canvasScope,
+      now,
+    });
+    try {
+      const created = await createGenerationTask(input.db, {
+        kind: item.mediaKind,
+        episodeId: null,
+        body: {
+          ...resolvedPromptPayload,
+          targetType: "canvas",
+          targetId: item.nodeKey,
+          canvasProjectId: input.canvasProjectId,
+          canvasNodeId: item.nodeKey,
+          batchId: item.batchId,
+          batchItemId: item.itemId,
+        },
+        idempotencyKey: item.idempotencyKey,
+        authenticated: input.authenticated,
+        context: {
+          actor: input.actor,
+          project: null,
+          canvasProjectId: input.canvasProjectId,
+          canvasActorScope: input.canvasScope,
+          ...(item.billing.mode === "batch_reservation" ? { canvasBatchBilling: item.billing } : {}),
+          userId: input.actor.userId,
+        },
+        runtime: input.runtime,
+        env: input.env,
+        fetchImpl: input.fetchImpl,
+        signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+        now,
+      });
+      const body = created.body as Record<string, unknown> | null;
+      const taskId = readString(body?.taskId);
+      if (!body || !taskId) throw new Error("canvas_batch_generation_task_missing");
+      await markCanvasNodeRunQueued(input.db, {
+        runId: run.id,
+        canvasProjectId: input.canvasProjectId,
+        taskId,
+        now,
+      });
+      const credit = readJsonRecord(body.credit);
+      return {
+        status: "queued",
+        taskId,
+        runId: run.id,
+        creditReservationId: readString(credit.reservationId) || null,
+        creditAllocationId: readString(credit.allocationId) || null,
+      };
+    } catch (error) {
+      await failCanvasNodeRun(input.db, {
+        runId: run.id,
+        status: "failed",
+        failure: { failureCode: readString((error as { code?: unknown }).code) || "canvas_batch_dispatch_failed" },
+        now,
+      });
+      throw error;
+    }
+  };
+  dispatch.supportedBillingModes = ["per_item", "batch_reservation"];
+  return dispatch;
+}
+
+function encodeCanvasGenerationHistoryCursor(cursor: { createdAt: string; id: string }) {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeCanvasGenerationHistoryCursor(value: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    const createdAt = readString(parsed.createdAt);
+    const id = readString(parsed.id);
+    if (!createdAt || Number.isNaN(new Date(createdAt).getTime()) || !id || !isUuid(id)) return null;
+    return { createdAt, id };
+  } catch {
+    return null;
   }
 }
 
@@ -9221,6 +10190,12 @@ function buildGenerationBillingMetadata(input: {
   targetId?: string | null;
   canvasNodeId?: string | null;
   amount?: number | string | null;
+  modelCreditCost?: number | string | null;
+  skillCreditCost?: number | string | null;
+  skillId?: string | null;
+  skillCategory?: string | null;
+  skillTitle?: string | null;
+  promptSkill?: Record<string, unknown> | null;
   requestedAt?: Date | string | null;
   settledAt?: Date | string | null;
   attemptId?: string | null;
@@ -9257,6 +10232,12 @@ function buildGenerationBillingMetadata(input: {
     targetId: input.targetId,
     canvasNodeId: input.canvasNodeId,
     amount: Number(input.amount ?? 0),
+    modelCreditCost: Number(input.modelCreditCost ?? 0),
+    skillCreditCost: Number(input.skillCreditCost ?? 0),
+    skillId: input.skillId,
+    skillCategory: input.skillCategory,
+    skillTitle: input.skillTitle,
+    promptSkill: input.promptSkill,
     requestedAt,
     settledAt,
     durationMs,
@@ -9333,7 +10314,8 @@ function validateGenerationReferenceLimit(
 async function resolveGenerationReferenceImages(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
-    projectId: string;
+    projectId: string | null;
+    canvasProjectId: string | null;
     assetVersionIds: string[];
     modelConfig: AiModelConfigRecord | undefined;
     runtime: UploadSessionRuntime;
@@ -9350,8 +10332,8 @@ async function resolveGenerationReferenceImages(
     storage_object_key_from_object: string | null;
     storage_content_type: string | null;
     storage_status: string | null;
-  }>(
-    `
+  }>(input.projectId
+    ? `
       SELECT
         av.id,
         av.storage_object_key,
@@ -9367,8 +10349,35 @@ async function resolveGenerationReferenceImages(
         ON so.id = av.storage_object_id
       WHERE a.project_id = $1
         AND av.id = ANY($2::uuid[])
+    `
+    : `
+      SELECT DISTINCT ON (av.id)
+        av.id,
+        av.storage_object_key,
+        av.metadata_json,
+        storage.bucket AS storage_bucket,
+        storage.object_key AS storage_object_key_from_object,
+        storage.content_type AS storage_content_type,
+        storage.status AS storage_status
+      FROM asset_versions av
+      JOIN assets asset
+        ON asset.id=av.asset_id
+       AND asset.canvas_project_id=$1
+      JOIN creator_canvas_node_artifacts artifact
+        ON artifact.canvas_project_id=$1
+       AND artifact.asset_version_id=av.id
+       AND artifact.deleted_at IS NULL
+      JOIN storage_objects storage
+        ON storage.id=COALESCE(artifact.storage_object_id,av.storage_object_id)
+       AND storage.canvas_project_id=$1
+       AND storage.status='available'
+       AND storage.deleted_at IS NULL
+      WHERE av.id=ANY($2::uuid[])
+        AND (artifact.asset_id IS NULL OR artifact.asset_id=asset.id)
+        AND (artifact.storage_object_id IS NULL OR av.storage_object_id IS NULL OR artifact.storage_object_id=av.storage_object_id)
+      ORDER BY av.id, artifact.selected DESC, artifact.updated_at DESC, artifact.id DESC
     `,
-    [input.projectId, input.assetVersionIds],
+    [input.projectId ?? input.canvasProjectId, input.assetVersionIds],
   );
   const rowsById = new Map(result.rows.map((row) => [row.id, row]));
   const allowedMimeTypes = new Set(
@@ -9859,6 +10868,7 @@ async function listEpisodeAssetTypesFromDb(
           typeof hydratedMetadata.fixedImageFileId === "string" ? hydratedMetadata.fixedImageFileId : null;
         const fixedImageStorageObjectId =
           typeof hydratedMetadata.fixedImageStorageObjectId === "string" ? hydratedMetadata.fixedImageStorageObjectId : null;
+        const hasFixedImage = hydratedMetadata.fixedImageDetached !== true;
         const fixedImageVersionMetadata = parseMetadataJson(row.fixed_metadata_json);
         const persistedFixedPreviewUrl =
           resolvePreferredEpisodeImageUrl(
@@ -9872,12 +10882,14 @@ async function listEpisodeAssetTypesFromDb(
           assetType: normalized.kind,
           name: String(hydratedMetadata.label ?? row.asset_key ?? "Untitled asset"),
           description: String(hydratedMetadata.description ?? ""),
-          fixedImageFileId: row.fixed_version_id ?? fixedImageFileId ?? row.version_id,
+          fixedImageFileId: hasFixedImage ? row.fixed_version_id ?? fixedImageFileId ?? row.version_id : null,
           storageObjectId:
-            row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id,
+            hasFixedImage ? row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id : null,
           fixedImageStorageObjectId:
-            row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id,
-          fixedImageUrl: persistedFixedPreviewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? ""),
+            hasFixedImage ? row.fixed_storage_object_id ?? fixedImageStorageObjectId ?? row.storage_object_id : null,
+          fixedImageUrl: hasFixedImage
+            ? persistedFixedPreviewUrl || String(hydratedMetadata.fixedImageUrl ?? hydratedMetadata.previewUrl ?? "")
+            : null,
           voiceId: typeof hydratedMetadata.voiceId === "string" ? hydratedMetadata.voiceId : null,
           voiceName: typeof hydratedMetadata.voiceName === "string" ? hydratedMetadata.voiceName : null,
           voiceSource: typeof hydratedMetadata.voiceSource === "string" ? hydratedMetadata.voiceSource : null,
@@ -10550,6 +11562,59 @@ async function deleteEpisodeAssetRecord(
   return { deleted: true };
 }
 
+async function deleteEpisodeAssetsByType(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetType: "role" | "scene" | "prop";
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const normalized = normalizeEpisodeAssetType(input.assetType);
+  const targets = await db.query<{ id: string }>(`
+    SELECT a.id
+    FROM assets a
+    JOIN LATERAL (
+      SELECT metadata_json
+      FROM asset_versions
+      WHERE asset_id = a.id
+      ORDER BY version_number DESC,created_at DESC,id DESC
+      LIMIT 1
+    ) v ON TRUE
+    WHERE a.project_id = $1
+      AND a.asset_type = $2
+      AND v.metadata_json->>'episodeId' = $3
+  `, [context.project.id, normalized.assetType, input.episodeId]);
+  const assetIds = targets.rows.map((row) => row.id);
+  if (!assetIds.length) {
+    return { deletedCount: 0, assetType: normalized.kind };
+  }
+  await db.query("BEGIN");
+  try {
+    await db.query("DELETE FROM asset_versions WHERE asset_id = ANY($1::uuid[])", [assetIds]);
+    await db.query(
+      "DELETE FROM assets WHERE id = ANY($1::uuid[]) AND project_id = $2",
+      [assetIds, context.project.id],
+    );
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  }
+  return { deletedCount: assetIds.length, assetType: normalized.kind };
+}
+
 async function saveEpisodeAssetToProjectLibrary(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
@@ -10911,7 +11976,17 @@ async function setEpisodeAssetFixedImage(
   if (!context) {
     return null;
   }
-  const resolved = await resolveEpisodeAssetVersion(db, {
+  const uploadedFixedImage = await createEpisodeAssetFixedImageVersionFromUpload(db, {
+    context,
+    episodeId: input.episodeId,
+    assetId: input.assetId,
+    body: input.body,
+    authenticated: input.authenticated,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+  });
+  const resolved = uploadedFixedImage ?? await resolveEpisodeAssetVersion(db, {
     episodeId: input.episodeId,
     assetVersionId: String(input.body.assetVersionId ?? input.body.fileId ?? ""),
     storageObjectId: String(input.body.storageObjectId ?? ""),
@@ -10998,6 +12073,7 @@ async function setEpisodeAssetFixedImage(
   if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
     return null;
   }
+  delete metadata.fixedImageDetached;
   metadata.fixedImageFileId = fixedResolved.assetVersion.versionId;
   metadata.fixedImageStorageObjectId = fixedResolved.assetVersion.storageObjectId;
   metadata.fixedImageUrl = persistedPreviewUrl;
@@ -11034,6 +12110,165 @@ async function setEpisodeAssetFixedImage(
     },
     file,
   };
+}
+
+async function createEpisodeAssetFixedImageVersionFromUpload(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    context: NonNullable<Awaited<ReturnType<typeof getEpisodeContext>>>;
+    episodeId: string;
+    assetId: string;
+    body: Record<string, unknown>;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const uploadSessionId = String(input.body.uploadSessionId ?? "").trim();
+  const storageObjectId = String(input.body.storageObjectId ?? "").trim();
+  if (!isUuid(uploadSessionId) || !isUuid(storageObjectId)) {
+    return null;
+  }
+  const uploaded = await queryOne<{
+    session_status: string;
+    content_type: string;
+    object_key: string;
+    object_status: string;
+    object_project_id: string | null;
+  }>(db, `
+    SELECT
+      session.status AS session_status,
+      session.content_type,
+      object.object_key,
+      object.status AS object_status,
+      object.project_id AS object_project_id
+    FROM storage_upload_sessions session
+    JOIN storage_objects object
+      ON object.id = session.storage_object_id
+    WHERE session.id = $1
+      AND session.storage_object_id = $2
+      AND (session.project_id IS NULL OR session.project_id = $3)
+      AND session.created_by_user_id = $4
+      AND object.created_by_user_id = $4
+    LIMIT 1
+  `, [uploadSessionId, storageObjectId, input.context.project.id, input.context.userId]);
+  if (
+    !uploaded ||
+    uploaded.session_status !== "uploaded" ||
+    uploaded.object_status !== "available" ||
+    (uploaded.object_project_id && uploaded.object_project_id !== input.context.project.id) ||
+    !uploaded.content_type.startsWith("image/")
+  ) {
+    return null;
+  }
+  const target = await queryOne<{
+    asset_type: AssetType;
+    asset_key: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(db, `
+    SELECT a.asset_type,a.asset_key,v.metadata_json
+    FROM assets a
+    JOIN LATERAL (
+      SELECT metadata_json
+      FROM asset_versions
+      WHERE asset_id = a.id
+      ORDER BY version_number DESC,created_at DESC,id DESC
+      LIMIT 1
+    ) v ON TRUE
+    WHERE a.id = $1
+      AND a.project_id = $2
+    LIMIT 1
+  `, [input.assetId, input.context.project.id]);
+  if (!target) {
+    return null;
+  }
+  const metadata = parseMetadataJson(target.metadata_json);
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  delete metadata.fixedImageDetached;
+  const snapshot = await createAssetVersionSnapshot(db, {
+    userId: input.context.userId,
+    projectId: input.context.project.id,
+    assetType: target.asset_type,
+    assetKey: target.asset_key,
+    createdByUserId: input.authenticated.user.id,
+    storageObjectId,
+    storageObjectKey: uploaded.object_key,
+    metadata: {
+      ...metadata,
+      mimeType: uploaded.content_type,
+      episodeId: input.episodeId,
+      uploadSessionId,
+      source: "fixed-image-upload",
+    },
+    sourceTaskId: null,
+    sourceAttemptId: null,
+    now: input.now,
+  });
+  return resolveEpisodeAssetVersion(db, {
+    episodeId: input.episodeId,
+    assetVersionId: snapshot.version.id,
+    storageObjectId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+}
+
+async function clearEpisodeAssetFixedImage(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    episodeId: string;
+    assetId: string;
+    authenticated: { sessionToken: string; user: AuthenticatedUser };
+    now: Date;
+  },
+) {
+  const context = await getEpisodeContext(db, {
+    episodeId: input.episodeId,
+    sessionToken: input.authenticated.sessionToken,
+    userId: input.authenticated.user.id,
+    capability: capabilities.generationStart,
+    now: input.now,
+  });
+  if (!context) {
+    return null;
+  }
+  const latestVersion = await queryOne<{
+    version_id: string;
+    metadata_json: Record<string, unknown> | string | null;
+  }>(db, `
+    SELECT v.id AS version_id,v.metadata_json
+    FROM assets a
+    JOIN asset_versions v ON v.asset_id = a.id
+    WHERE a.id = $1
+      AND a.project_id = $2
+    ORDER BY v.version_number DESC,v.created_at DESC,v.id DESC
+    LIMIT 1
+  `, [input.assetId, context.project.id]);
+  if (!latestVersion) {
+    return null;
+  }
+  const metadata = parseMetadataJson(latestVersion.metadata_json);
+  if (!matchesEpisodeScopedAsset(metadata, input.episodeId)) {
+    return null;
+  }
+  delete metadata.fixedImageFileId;
+  delete metadata.fixedImageStorageObjectId;
+  delete metadata.fixedImageUrl;
+  delete metadata.previewUrl;
+  delete metadata.sourceUrl;
+  delete metadata.downloadUrl;
+  metadata.fixedImageDetached = true;
+  await db.query(
+    "UPDATE asset_versions SET metadata_json = $2::jsonb WHERE id = $1",
+    [latestVersion.version_id, JSON.stringify(metadata)],
+  );
+  await db.query("UPDATE assets SET updated_at = $2 WHERE id = $1", [input.assetId, input.now]);
+  return { asset: { assetId: input.assetId, episodeId: input.episodeId, fixedImageFileId: null, fixedImageStorageObjectId: null, fixedImageUrl: null, status: "draft", isPinned: false, updatedAt: input.now.toISOString() } };
 }
 
 async function createEpisodeAssetFixedImageVersionFromUrl(
@@ -11413,6 +12648,7 @@ async function deleteEpisodeFileResource(
         currentVideoCount,
         shotReferenceCount,
         exportCount,
+        canvasReferenceCount,
       },
     };
   }
@@ -12376,7 +13612,7 @@ async function saveEpisodeAssetConversationMessagesRoute(
   const mediaModeRaw = String(input.body.mediaMode ?? "image").trim().toLowerCase();
   const mediaMode: AssetConversationMediaMode = mediaModeRaw === "video" ? "video" : "image";
   const inputMessages = Array.isArray(input.body.messages) ? input.body.messages : [];
-  const normalizedMessages = inputMessages
+  const normalizedMessageInputs = inputMessages
     .map((item, index) => normalizeAssetConversationMessageInput(item, index))
     .filter(Boolean) as Array<{
       turnId: string;
@@ -12386,6 +13622,7 @@ async function saveEpisodeAssetConversationMessagesRoute(
       taskId: string | null;
       payload: Record<string, unknown>;
     }>;
+  const normalizedMessages = await sanitizeConversationMessagesForClient(db, normalizedMessageInputs);
   if (!normalizedMessages.length) {
     return {
       thread: null,
@@ -12420,9 +13657,10 @@ async function saveEpisodeAssetConversationMessagesRoute(
       entries: buildAssetConversationEntries(thread, normalizedDeltaMessages),
     };
   }
-  const allMessages = await listAssetConversationMessages(db, {
+  const storedMessages = await listAssetConversationMessages(db, {
     threadId: thread.threadId,
   });
+  const allMessages = await sanitizeConversationMessagesForClient(db, storedMessages);
   const normalizedAllMessages = allMessages.map((message) => ({
     ...message,
     payload: replaceMockImageUrlsInValue(message.payload, message.taskId ?? message.turnId) as Record<string, unknown>,
@@ -12477,9 +13715,10 @@ async function getEpisodeAssetConversationRoute(
       entries,
     };
   }
-  const messages = await listAssetConversationMessages(db, {
+  const storedMessages = await listAssetConversationMessages(db, {
     threadId: thread.threadId,
   });
+  const messages = await sanitizeConversationMessagesForClient(db, storedMessages);
   const normalizedMessages = messages.map((message) => ({
     ...message,
     payload: replaceMockImageUrlsInValue(message.payload, message.taskId ?? message.turnId) as Record<string, unknown>,
@@ -12539,15 +13778,94 @@ async function deleteEpisodeAssetConversationTurnRoute(
         episodeId: input.episodeId,
         assetId: input.assetId,
         mediaMode: input.mediaMode,
-      })
+    })
     : null;
+  const remainingMessages = await sanitizeConversationMessagesForClient(db, deleted.remainingMessages);
   return {
     deleted: (deleted.deletedCount ?? 0) > 0,
     deletedCount: deleted.deletedCount ?? 0,
     thread: nextThread,
-    messages: deleted.remainingMessages,
-    entries: nextThread ? buildAssetConversationEntries(nextThread, deleted.remainingMessages) : [],
+    messages: remainingMessages,
+    entries: nextThread ? buildAssetConversationEntries(nextThread, remainingMessages) : [],
   };
+}
+
+async function sanitizeConversationMessagesForClient<
+  T extends { payload: Record<string, unknown> },
+>(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  messages: T[],
+): Promise<T[]> {
+  const modelIdentifiers = new Set<string>();
+  for (const message of messages) {
+    collectClientModelIdentifiers(message.payload, modelIdentifiers);
+  }
+  const displayNameByIdentifier = new Map<string, string>();
+  if (modelIdentifiers.size) {
+    const modelRows = await db.query<{ model_code: string; display_name: string }>(
+      `SELECT model_code, display_name FROM ai_model_configs WHERE model_code = ANY($1::text[])`,
+      [[...modelIdentifiers]],
+    );
+    for (const model of modelRows.rows) {
+      const modelCode = String(model.model_code ?? "").trim();
+      const displayName = String(model.display_name ?? "").trim();
+      if (modelCode && displayName) displayNameByIdentifier.set(modelCode, displayName);
+    }
+  }
+  return messages.map((message) => {
+    const directModelIdentifier = String(
+      message.payload.selectedModelId ?? message.payload.modelCode ?? message.payload.model ?? "",
+    ).trim();
+    const explicitModelLabel = String(
+      message.payload.modelLabel ?? message.payload.modelName ?? message.payload.displayModelName ?? "",
+    ).trim();
+    const modelDisplayName = (
+      displayNameByIdentifier.get(directModelIdentifier)
+      ?? displayNameByIdentifier.get(explicitModelLabel)
+      ?? (explicitModelLabel && explicitModelLabel !== directModelIdentifier ? explicitModelLabel : "")
+    ) || (modelIdentifiers.size ? "默认模型" : "");
+    return {
+      ...message,
+      payload: sanitizeModelFieldsForClient(message.payload, modelDisplayName) as Record<string, unknown>,
+    };
+  });
+}
+
+function collectClientModelIdentifiers(value: unknown, identifiers: Set<string>) {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectClientModelIdentifiers(item, identifiers));
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    if (["selectedModelId", "modelCode", "model", "modelLabel", "modelName", "displayModelName"].includes(key)) {
+      const identifier = String(nestedValue ?? "").trim();
+      if (identifier) identifiers.add(identifier);
+    }
+    collectClientModelIdentifiers(nestedValue, identifiers);
+  }
+}
+
+function sanitizeModelFieldsForClient(value: unknown, modelDisplayName: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeModelFieldsForClient(item, modelDisplayName));
+  }
+  if (!value || typeof value !== "object") return value;
+  const sanitized: Record<string, unknown> = {};
+  let hasModelField = false;
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    if (["selectedModelId", "modelCode", "providerModel", "providerModelCode"].includes(key)) {
+      hasModelField = true;
+      continue;
+    }
+    if (["model", "modelLabel", "modelName", "displayModelName"].includes(key)) {
+      hasModelField = true;
+      continue;
+    }
+    sanitized[key] = sanitizeModelFieldsForClient(nestedValue, modelDisplayName);
+  }
+  if (hasModelField && modelDisplayName) sanitized.modelLabel = modelDisplayName;
+  return sanitized;
 }
 
 function normalizeAssetConversationMessageInput(item: unknown, index: number) {
@@ -12676,7 +13994,7 @@ async function serveStatic(
     const origin = serverOriginFromRequest(request);
     response.statusCode = 200;
     response.setHeader("content-type", "text/plain; charset=utf-8");
-    response.setHeader("cache-control", "no-store");
+    response.setHeader("cache-control", "public, max-age=0, must-revalidate");
     response.end([
       "User-agent: *",
       "Allow: /",
@@ -12700,28 +14018,11 @@ async function serveStatic(
     return;
   }
 
-  if (pathname === "/vendor/three.module.js" || pathname === "/vendor/three.core.js") {
-    const vendorFile = pathname === "/vendor/three.module.js" ? "three.module.js" : "three.core.js";
-    const file = await readFile(join(nodeModulesRoot, "three", "build", vendorFile), "utf8");
-    const etag = staticAssetEtag(file);
-    response.setHeader("etag", etag);
-    response.setHeader("cache-control", "public, max-age=0, must-revalidate");
-    if (requestMatchesEtag(request, etag)) {
-      response.statusCode = 304;
-      response.end();
-      return;
-    }
-    response.statusCode = 200;
-    response.setHeader("content-type", "text/javascript; charset=utf-8");
-    response.end(file);
-    return;
+  if (pathname.startsWith("/vendor/")) {
+    return await serveVendorFile(pathname, response);
   }
 
-  const normalizedPath = pathname === "/"
-    ? "/app.html"
-    : pathname === "/new-canvas" || pathname === "/new-canvas/"
-      ? "/new-canvas/index.html"
-      : pathname;
+  const normalizedPath = pathname === "/" ? "/app.html" : pathname;
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
   let file: Buffer;
   try {
@@ -12872,10 +14173,22 @@ async function serveAdminStatic(pathname: string, response: ServerResponse) {
 
 async function serveVendorFile(pathname: string, response: ServerResponse) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
-  const filePath =
-    normalizedPath === "three.module.js" || normalizedPath === "three.core.js"
+  const servesWebVendorFile = normalizedPath === "prompt-editor.js";
+  const filePath = resolve(
+    servesWebVendorFile
+      ? join(webVendorRoot, normalizedPath)
+      : normalizedPath === "three.module.js" || normalizedPath === "three.core.js"
       ? join(vendorRoot, "three", "build", normalizedPath)
-      : join(vendorRoot, normalizedPath);
+      : join(vendorRoot, normalizedPath),
+  );
+  const filePathPrefix = servesWebVendorFile ? webVendorRootPrefix : vendorRootPrefix;
+  if (!filePath.startsWith(filePathPrefix)) {
+    response.statusCode = 403;
+    response.setHeader("content-type", "text/plain; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.end("Forbidden");
+    return;
+  }
   const file = await readFile(filePath);
 
   response.statusCode = 200;
@@ -13055,7 +14368,8 @@ function isSupportedAppShellPath(pathname: string) {
     return true;
   }
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
-  return /^\/projects?\/[^/]+(?:\/(?:overview|assets|episodes|stats))?$/.test(normalizedPath) ||
+  return normalizedPath === "/new-canvas" ||
+    /^\/projects?\/[^/]+(?:\/(?:overview|assets|episodes|stats))?$/.test(normalizedPath) ||
     /^\/projects?\/[^/]+\/episodes\/[^/]+$/.test(normalizedPath);
 }
 
@@ -14659,7 +15973,14 @@ export function createPhoneAuthDevServer(
           env: runtimeEnv,
         }),
       });
-      const newCanvasAssistantService = createNewCanvasAssistantService({ gateway: aiStoryboardTextChatGateway });
+      const aiScriptAnalysisTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+        gateway: new TextModelGatewayService({
+          db,
+          adapter: new OpenAICompatibleTextAdapter(),
+          resolver: new AdminBackedTextModelResolver(db),
+          env: runtimeEnv,
+        }),
+      });
       if (pathname.startsWith("/uploads/")) {
         return await serveUploadedFile(request, pathname, response);
       }
@@ -14900,6 +16221,44 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/dashboard/queue-health") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["dashboard.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
+        const queueHealth = options.generationQueueHealthService ??
+          createBullMQGenerationQueueHealthService(
+            generationQueueConfig,
+            async () => (await listGenerationQueueShards(db)).map((shard) => ({
+              role: `${shard.mediaType}_${shard.stage}`,
+              name: shard.queueName,
+            })),
+          );
+        try {
+          const healthSnapshot = await queueHealth.inspect();
+          const platformMetrics = await inspectGenerationPlatformMetrics(db, {
+            now: new Date(),
+            outboxStaleMs: generationQueueConfig.repair.staleDispatchMs,
+          });
+          const status = healthSnapshot.status === "unavailable"
+            ? "unavailable"
+            : healthSnapshot.status === "degraded" || platformMetrics.status === "degraded"
+              ? "degraded"
+              : "healthy";
+          return writeJson(response, {
+            status: 200,
+            body: { ...healthSnapshot, status, platformMetrics },
+          });
+        } finally {
+          await queueHealth.close().catch(() => undefined);
+        }
+      }
+
       if (
         request.method === "GET" &&
         (pathname === "/api/admin/dashboard/model-health" || pathname === "/api/admin/dashboard/recent-events")
@@ -15023,7 +16382,10 @@ export function createPhoneAuthDevServer(
         const body = (await readJsonBody(request)) as {
           reason?: string;
         };
-        const adminModels = createAdminModelConfigService({ db });
+        const adminModels = createAdminModelConfigService({
+          db,
+          canvasAgentProbe: options.canvasAgentModelProbe,
+        });
         return writeJson(
           response,
           await adminModels.probeModelConfig({
@@ -15311,8 +16673,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await service.listStyles({
-            category: url.searchParams.get("category"),
-            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
             keyword: url.searchParams.get("keyword"),
             status: url.searchParams.get("status"),
             pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
@@ -15333,12 +16693,119 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await service.listTemplates({
-            stage: url.searchParams.get("stage"),
-            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
             keyword: url.searchParams.get("keyword"),
             status: url.searchParams.get("status"),
             pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
           }),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/prompt-marketplace") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["storyboard_prompt:view"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createPromptMarketplaceService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: await service.listAdminItems({
+              category: url.searchParams.get("category"),
+              status: url.searchParams.get("status"),
+              source: url.searchParams.get("source"),
+              query: url.searchParams.get("query"),
+            }),
+          },
+        });
+      }
+
+      const adminPromptMarketplaceItemMatch = pathname.match(/^\/api\/admin\/prompt-marketplace\/items\/([^/]+)$/);
+      if (request.method === "PATCH" && adminPromptMarketplaceItemMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createPromptMarketplaceService({ db });
+        const rawPublished = hasOwn(body, "is_published") ? body.is_published : body.isPublished;
+        const itemId = decodeURIComponent(adminPromptMarketplaceItemMatch[1]);
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: await service.updateAdminItem({
+              itemId,
+              title: hasOwn(body, "title") || hasOwn(body, "name") ? String(body.title ?? body.name ?? "") : undefined,
+              summary: hasOwn(body, "summary") || hasOwn(body, "remark") ? String(body.summary ?? body.remark ?? "") : undefined,
+              content: hasOwn(body, "content") || hasOwn(body, "prompt_content") || hasOwn(body, "promptContent")
+                ? String(body.content ?? body.prompt_content ?? body.promptContent ?? "")
+                : undefined,
+              coverImageUrl: hasOwn(body, "coverImageUrl") || hasOwn(body, "cover_image_url")
+                ? String(body.coverImageUrl ?? body.cover_image_url ?? "")
+                : undefined,
+              priceCredits: body.priceCredits == null && body.price_credits == null
+                ? undefined
+                : Number(body.priceCredits ?? body.price_credits),
+              usageCount: body.usageCount == null && body.usage_count == null
+                ? undefined
+                : Number(body.usageCount ?? body.usage_count),
+              status: body.status == null
+                ? rawPublished === undefined ? undefined : (rawPublished === true || rawPublished === "true" ? "published" : "draft")
+                : String(body.status),
+              now: new Date(),
+            }),
+          },
+        });
+      }
+
+      if (request.method === "DELETE" && adminPromptMarketplaceItemMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const service = createPromptMarketplaceService({ db });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: await service.deleteAdminItem({
+              itemId: decodeURIComponent(adminPromptMarketplaceItemMatch[1]),
+              now: new Date(),
+            }),
+          },
+        });
+      }
+
+      const adminPromptDefaultMatch = pathname.match(/^\/api\/admin\/prompt-defaults\/([^/]+)$/);
+      if (request.method === "PUT" && adminPromptDefaultMatch) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        return writeJson(response, {
+          status: 200,
+          body: {
+            data: await setOfficialPromptDefault(db, {
+              category: decodeURIComponent(adminPromptDefaultMatch[1]),
+              promptId: String(body.itemId ?? body.promptId ?? ""),
+              now: new Date(),
+            }),
+          },
         });
       }
 
@@ -15353,11 +16820,16 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminScenePromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...scenePromptTemplateBody(body),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "create scene prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...scenePromptTemplateBody(body),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "create scene prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15414,12 +16886,18 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminScenePromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...scenePromptTemplateBody(body),
-          id: decodeURIComponent(scenePromptTemplateMatch[1]),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "update scene prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          promptId: decodeURIComponent(scenePromptTemplateMatch[1]),
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...scenePromptTemplateBody(body),
+            id: decodeURIComponent(scenePromptTemplateMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "update scene prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15436,8 +16914,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await service.listTemplates({
-            stage: url.searchParams.get("stage"),
-            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
             keyword: url.searchParams.get("keyword"),
             status: url.searchParams.get("status"),
             pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
@@ -15456,11 +16932,16 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminPropPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...propPromptTemplateBody(body),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "create prop prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...propPromptTemplateBody(body),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "create prop prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15517,12 +16998,18 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminPropPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...propPromptTemplateBody(body),
-          id: decodeURIComponent(propPromptTemplateMatch[1]),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "update prop prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          promptId: decodeURIComponent(propPromptTemplateMatch[1]),
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...propPromptTemplateBody(body),
+            id: decodeURIComponent(propPromptTemplateMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "update prop prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15539,8 +17026,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await service.listTemplates({
-            stage: url.searchParams.get("stage"),
-            modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
             keyword: url.searchParams.get("keyword"),
             status: url.searchParams.get("status"),
             pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
@@ -15559,11 +17044,16 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminShotPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...shotPromptTemplateBody(body),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "create shot prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...shotPromptTemplateBody(body),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "create shot prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15620,12 +17110,18 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminShotPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...shotPromptTemplateBody(body),
-          id: decodeURIComponent(shotPromptTemplateMatch[1]),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "update shot prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          promptId: decodeURIComponent(shotPromptTemplateMatch[1]),
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...shotPromptTemplateBody(body),
+            id: decodeURIComponent(shotPromptTemplateMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "update shot prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15640,11 +17136,16 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminImagePromptService({ db });
-        return writeJson(response, await service.saveStyle({
-          ...imagePromptStyleBody(body),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "create image prompt style"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveStyle({
+            ...imagePromptStyleBody(body),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "create image prompt style"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15701,12 +17202,18 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminImagePromptService({ db });
-        return writeJson(response, await service.saveStyle({
-          ...imagePromptStyleBody(body),
-          id: decodeURIComponent(imagePromptStyleMatch[1]),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "update image prompt style"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          promptId: decodeURIComponent(imagePromptStyleMatch[1]),
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveStyle({
+            ...imagePromptStyleBody(body),
+            id: decodeURIComponent(imagePromptStyleMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "update image prompt style"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15723,7 +17230,6 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await service.listTemplates({
-            stage: url.searchParams.get("stage"),
             keyword: url.searchParams.get("keyword"),
             status: url.searchParams.get("status"),
             pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 100),
@@ -15742,11 +17248,16 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminCharacterPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...characterPromptTemplateBody(body),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "create character prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...characterPromptTemplateBody(body),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "create character prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15803,12 +17314,18 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminCharacterPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          ...characterPromptTemplateBody(body),
-          id: decodeURIComponent(characterPromptTemplateMatch[1]),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "update character prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          promptId: decodeURIComponent(characterPromptTemplateMatch[1]),
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            ...characterPromptTemplateBody(body),
+            id: decodeURIComponent(characterPromptTemplateMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "update character prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15825,7 +17342,6 @@ export function createPhoneAuthDevServer(
         const service = createAdminCharacterPromptService({ db });
         return writeJson(response, await service.compose({
           template_id: body.template_id === undefined || body.template_id === null ? null : String(body.template_id),
-          template_code: body.template_code === undefined || body.template_code === null ? null : String(body.template_code),
           variables: body.variables && typeof body.variables === "object" && !Array.isArray(body.variables)
             ? body.variables as Record<string, unknown>
             : {},
@@ -15861,11 +17377,16 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminStoryboardPromptService({ db });
-        return writeJson(response, await service.savePackage({
-          ...storyboardPromptPackageBody(body),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "create storyboard prompt package"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.savePackage({
+            ...storyboardPromptPackageBody(body),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "create storyboard prompt package"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15922,12 +17443,18 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminStoryboardPromptService({ db });
-        return writeJson(response, await service.savePackage({
-          ...storyboardPromptPackageBody(body),
-          id: decodeURIComponent(storyboardPromptPackageMatch[1]),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "update storyboard prompt package"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          promptId: decodeURIComponent(storyboardPromptPackageMatch[1]),
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.savePackage({
+            ...storyboardPromptPackageBody(body),
+            id: decodeURIComponent(storyboardPromptPackageMatch[1]),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "update storyboard prompt package"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -15942,22 +17469,21 @@ export function createPhoneAuthDevServer(
         }
         const body = (await readJsonBody(request)) as Record<string, unknown>;
         const service = createAdminStoryboardPromptService({ db });
-        return writeJson(response, await service.saveTemplate({
-          name: String(body.name ?? ""),
-          code: String(body.code ?? ""),
-          base_prompt: String(body.base_prompt ?? ""),
-          genre_package_id: String(body.genre_package_id ?? ""),
-          emotion_package_ids: stringArray(body.emotion_package_ids),
-          camera_package_ids: stringArray(body.camera_package_ids),
-          output_package_id: String(body.output_package_id ?? ""),
-          taboo_package_ids: stringArray(body.taboo_package_ids),
-          is_default: Boolean(body.is_default),
-          sort_order: Number(body.sort_order ?? 0),
-          status: String(body.status ?? "enabled"),
-          remark: String(body.remark ?? ""),
-          actorAdminAccountId: adminRoute.session.admin_account_id,
-          reason: String(body.reason ?? "save storyboard prompt template"),
-          now: new Date(),
+        return writeJson(response, await saveAdminPromptWithCover({
+          db,
+          runtime: storageRuntime,
+          coverStorageObjectId: promptCoverStorageObjectId(body),
+          save: () => service.saveTemplate({
+            name: String(body.name ?? ""),
+            base_prompt: String(body.base_prompt ?? ""),
+            cover_image_url: body.cover_image_url == null ? null : String(body.cover_image_url),
+            status: String(body.status ?? "enabled"),
+            ...promptMarketplaceFields(body),
+            remark: String(body.summary ?? body.remark ?? ""),
+            actorAdminAccountId: adminRoute.session.admin_account_id,
+            reason: String(body.reason ?? "save storyboard prompt template"),
+            now: new Date(),
+          }),
         }));
       }
 
@@ -16941,6 +18467,44 @@ export function createPhoneAuthDevServer(
         );
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/settings/canvas-agent") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const settings = await createAdminSystemSettingsService({ db }).listSettings();
+        const config = settings.data.configs.find((item) => item.key === "canvas_agent.runtime");
+        return writeJson(response, {
+          status: 200,
+          body: { data: config?.value ?? { defaultModelCode: null, expertModelCode: null, webSearchModelCode: null, maxRounds: 12, maxToolCalls: 24, webSearchProvider: null, mcpAllowlist: [] } },
+        });
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/settings/canvas-agent") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: ["super_admin"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as { value?: unknown; reason?: string };
+        return writeJson(response, await createAdminSystemSettingsService({ db }).updateRuntimeConfig({
+          key: "canvas_agent.runtime",
+          value: body.value ?? {},
+          valueType: "json",
+          scope: "global",
+          description: "Canvas Agent runtime policy and model defaults",
+          reason: String(body.reason ?? ""),
+          idempotencyKey,
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/settings") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -17192,7 +18756,9 @@ export function createPhoneAuthDevServer(
           if (!adminRoute.ok) {
             return writeJson(response, adminRoute.response);
           }
-          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const body = request.method === "GET"
+            ? {}
+            : (await readJsonBody(request)) as Record<string, unknown>;
           return writeJson(response, {
             status: 200,
             body: await officialAssets.saveAsset({
@@ -18785,8 +20351,50 @@ export function createPhoneAuthDevServer(
           account: string;
           password: string;
           remember?: boolean;
+          actorType?: "owner" | "team_member";
         };
         const now = new Date();
+
+        if (body.actorType === "team_member") {
+          const memberVerified = await verifyPersistentTeamMemberPasswordLogin(db, {
+            account: String(body.account ?? ""),
+            password: String(body.password ?? ""),
+            now,
+            remember: body.remember !== false,
+          });
+          if (memberVerified.kind !== "verified") {
+            const status =
+              memberVerified.kind === "user_disabled" ||
+              memberVerified.kind === "team_member_disabled" ||
+              memberVerified.kind === "team_member_deleted"
+                ? 403
+                : 401;
+            return writeJson(response, { status, body: { error: memberVerified.kind } });
+          }
+          await ensureDevUserAccess(db, memberVerified.user.id, options);
+          return writeJson(response, {
+            status: 200,
+            body: {
+              actorType: "team_member",
+              userId: memberVerified.user.id,
+              memberId: memberVerified.member.id,
+              memberAccount: memberVerified.member.memberAccount,
+              memberLoginAccount: memberVerified.member.memberLoginAccount,
+              memberName: memberVerified.member.memberName,
+              user: {
+                id: memberVerified.user.id,
+                phone: memberVerified.user.phone,
+                displayName: memberVerified.user.displayName ?? null,
+              },
+              teamMember: memberVerified.member,
+              session: {
+                id: memberVerified.session.id,
+                expiresAt: memberVerified.session.expiresAt.toISOString(),
+              },
+            },
+            cookies: [sessionCookie(memberVerified.token, sessionCookieMaxAgeSecondsFromSession(memberVerified.session.expiresAt, now))],
+          });
+        }
 
         let verified: Awaited<ReturnType<typeof verifyPersistentPasswordLogin>>;
         try {
@@ -18849,6 +20457,12 @@ export function createPhoneAuthDevServer(
           status: 200,
           body: {
             authenticated: true,
+            features: {
+              newCanvas: isNewCanvasEnabledForActor(runtimeEnv, {
+                ownerUserId: authenticated.user.id,
+                actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+              }),
+            },
             user: authenticated.user,
             session: {
               id: authenticated.session.id,
@@ -19010,10 +20624,187 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (pathname === "/api/creator/prompt-marketplace" || pathname.startsWith("/api/creator/prompt-marketplace/")) {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+          authSessionCache,
+          { includeCredit: false },
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: { code: "unauthenticated", message: "请先登录" } },
+          });
+        }
+        const service = createPromptMarketplaceService({ db });
+        try {
+          if (request.method === "GET" && pathname === "/api/creator/prompt-marketplace") {
+            return writeJson(response, {
+              status: 200,
+              body: await service.listCatalog({
+                userId: authenticated.user.id,
+                category: url.searchParams.get("category"),
+                query: url.searchParams.get("query"),
+                page: Number(url.searchParams.get("page") ?? 1),
+                pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 12),
+              }),
+            });
+          }
+          if (request.method === "GET" && pathname === "/api/creator/prompt-marketplace/library") {
+            return writeJson(response, {
+              status: 200,
+              body: await service.listLibrary({ userId: authenticated.user.id }),
+            });
+          }
+          const privateDefaultMatch = pathname.match(/^\/api\/creator\/prompt-marketplace\/defaults\/([^/]+)$/);
+          if (request.method === "PUT" && privateDefaultMatch) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, {
+              status: 200,
+              body: await setUserPromptDefault(db, {
+                userId: authenticated.user.id,
+                category: decodeURIComponent(privateDefaultMatch[1]),
+                promptId: String(body.itemId ?? body.promptId ?? ""),
+                now: new Date(),
+              }),
+            });
+          }
+          if (request.method === "DELETE" && privateDefaultMatch) {
+            return writeJson(response, {
+              status: 200,
+              body: await clearUserPromptDefault(db, {
+                userId: authenticated.user.id,
+                category: decodeURIComponent(privateDefaultMatch[1]),
+              }),
+            });
+          }
+          if (request.method === "POST" && pathname === "/api/creator/prompt-marketplace/items") {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, {
+              status: 201,
+              body: await saveCreatorPromptWithCover({
+                db,
+                runtime: storageRuntime,
+                userId: authenticated.user.id,
+                coverStorageObjectId: promptCoverStorageObjectId(body),
+                save: () => service.createItem({
+                  userId: authenticated.user.id,
+                  title: String(body.title ?? ""),
+                  category: String(body.category ?? ""),
+                  summary: body.summary == null ? null : String(body.summary),
+                  content: String(body.content ?? ""),
+                  coverImageUrl: body.coverImageUrl == null && body.cover_image_url == null
+                    ? null
+                    : String(body.coverImageUrl ?? body.cover_image_url),
+                  coverStorageObjectId: promptCoverStorageObjectId(body),
+                  priceCredits: Number(body.priceCredits ?? body.price_credits ?? 0),
+                  publish: body.publish !== false,
+                  now: new Date(),
+                }),
+              }),
+            });
+          }
+          const purchaseMatch = pathname.match(/^\/api\/creator\/prompt-marketplace\/items\/([^/]+)\/purchase$/);
+          if (request.method === "POST" && purchaseMatch) {
+            return writeJson(response, {
+              status: 200,
+              body: await service.purchaseItem({
+                userId: authenticated.user.id,
+                itemId: decodeURIComponent(purchaseMatch[1]),
+                now: new Date(),
+              }),
+            });
+          }
+          const useMatch = pathname.match(/^\/api\/creator\/prompt-marketplace\/items\/([^/]+)\/use$/);
+          if (request.method === "POST" && useMatch) {
+            return writeJson(response, {
+              status: 200,
+              body: await service.useItem({
+                userId: authenticated.user.id,
+                itemId: decodeURIComponent(useMatch[1]),
+                now: new Date(),
+              }),
+            });
+          }
+          const ratingMatch = pathname.match(/^\/api\/creator\/prompt-marketplace\/items\/([^/]+)\/rating$/);
+          if (request.method === "POST" && ratingMatch) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, {
+              status: 200,
+              body: await service.rateItem({
+                userId: authenticated.user.id,
+                itemId: decodeURIComponent(ratingMatch[1]),
+                rating: Number(body.rating ?? 0),
+                now: new Date(),
+              }),
+            });
+          }
+          const libraryItemMatch = pathname.match(/^\/api\/creator\/prompt-marketplace\/library\/([^/]+)$/);
+          if (request.method === "DELETE" && libraryItemMatch) {
+            return writeJson(response, {
+              status: 200,
+              body: await service.removeFromLibrary({
+                userId: authenticated.user.id,
+                itemId: decodeURIComponent(libraryItemMatch[1]),
+                now: new Date(),
+              }),
+            });
+          }
+          const ownItemMatch = pathname.match(/^\/api\/creator\/prompt-marketplace\/items\/([^/]+)$/);
+          if (request.method === "PATCH" && ownItemMatch) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, {
+              status: 200,
+              body: await saveCreatorPromptWithCover({
+                db,
+                runtime: storageRuntime,
+                userId: authenticated.user.id,
+                promptId: decodeURIComponent(ownItemMatch[1]),
+                coverStorageObjectId: promptCoverStorageObjectId(body),
+                save: () => service.updateOwnItem({
+                  userId: authenticated.user.id,
+                  itemId: decodeURIComponent(ownItemMatch[1]),
+                  title: String(body.title ?? ""),
+                  category: String(body.category ?? ""),
+                  summary: body.summary == null ? null : String(body.summary),
+                  content: String(body.content ?? ""),
+                  coverImageUrl: body.coverImageUrl == null && body.cover_image_url == null
+                    ? null
+                    : String(body.coverImageUrl ?? body.cover_image_url),
+                  coverStorageObjectId: promptCoverStorageObjectId(body),
+                  priceCredits: Number(body.priceCredits ?? body.price_credits ?? 0),
+                  publish: body.publish === true,
+                  now: new Date(),
+                }),
+              }),
+            });
+          }
+          if (request.method === "DELETE" && ownItemMatch) {
+            return writeJson(response, {
+              status: 200,
+              body: await service.deleteOwnItem({
+                userId: authenticated.user.id,
+                itemId: decodeURIComponent(ownItemMatch[1]),
+                now: new Date(),
+              }),
+            });
+          }
+        } catch (error) {
+          if (error instanceof PromptMarketplaceError) {
+            return writeJson(response, {
+              status: error.status,
+              body: { error: { code: error.code, message: error.message } },
+            });
+          }
+          throw error;
+        }
+      }
+
       if (request.method === "GET" && pathname === "/api/creator/storyboard-prompt/packages") {
         const service = createAdminStoryboardPromptService({ db });
         const result = await service.listPackages({
-          packageType: url.searchParams.get("package_type"),
           keyword: url.searchParams.get("keyword"),
           status: url.searchParams.get("status") ?? "enabled",
           pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 500),
@@ -19042,8 +20833,6 @@ export function createPhoneAuthDevServer(
         }
         const service = createAdminImagePromptService({ db });
         const result = await service.listStyles({
-          category: url.searchParams.get("category"),
-          modelFamily: url.searchParams.get("model_family") ?? url.searchParams.get("modelFamily"),
           keyword: url.searchParams.get("keyword"),
           status: url.searchParams.get("status") ?? "enabled",
           pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 500),
@@ -19053,15 +20842,13 @@ export function createPhoneAuthDevServer(
           body: {
             styles: result.data.map((style) => ({
               id: style.id,
-              name: style.name,
               code: style.code,
+              name: style.name,
               coverImageUrl: style.coverImageUrl,
               cover_image_url: style.cover_image_url,
               prompt_content: style.prompt_content,
               promptContent: style.promptContent,
               status: style.status,
-              sortOrder: style.sort_order,
-              sort_order: style.sort_order,
             })),
           },
         });
@@ -19640,7 +21427,7 @@ export function createPhoneAuthDevServer(
             response.end();
             return;
           } catch (error) {
-            if (error instanceof AuthorizationError) {
+            if (error instanceof AuthorizationError || error instanceof StorageAccessError) {
               return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
             }
             throw error;
@@ -19778,6 +21565,11 @@ export function createPhoneAuthDevServer(
             response.end("upload_session_not_found");
             return;
           }
+          if (session.userId !== authenticated.user.id) {
+            response.statusCode = 404;
+            response.end("upload_session_not_found");
+            return;
+          }
           const object = await queryOne<{ bucket: string; object_key: string }>(
             db,
             "SELECT bucket, object_key FROM storage_objects WHERE id = $1",
@@ -19801,6 +21593,20 @@ export function createPhoneAuthDevServer(
               errorCode: uploadPolicy.errorCode,
               message: uploadPolicy.message,
               details: "details" in uploadPolicy ? uploadPolicy.details : {},
+            }));
+            return;
+          }
+          const contentBoundary = validateUploadContentBoundary({
+            fileName: session.originalFileName,
+            contentType: String(request.headers["content-type"] ?? session.contentType),
+            bytes,
+          });
+          if (!contentBoundary.ok) {
+            response.statusCode = 400;
+            response.setHeader("content-type", "application/json; charset=utf-8");
+            response.end(JSON.stringify({
+              errorCode: contentBoundary.errorCode,
+              message: contentBoundary.message,
             }));
             return;
           }
@@ -19921,13 +21727,12 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/canvas/") ||
         pathname === "/api/director-desks" ||
         pathname.startsWith("/api/director-desks/") ||
+        pathname === "/api/creator/canvases" ||
+        pathname.startsWith("/api/creator/canvases/") ||
         pathname === "/api/creator/canvas-projects" ||
         pathname.startsWith("/api/creator/canvas-projects/") ||
-        pathname === "/api/creator/new-canvas/assistant" ||
         pathname.startsWith("/api/task-center/") ||
         pathname === "/api/generation/image-tasks" ||
-        pathname === "/api/new-canvas/video-compositions" ||
-        pathname === "/api/new-canvas/generate" ||
         pathname === "/api/generation-config" ||
         pathname.startsWith("/api/generation-tasks/")
       ) {
@@ -19944,23 +21749,21 @@ export function createPhoneAuthDevServer(
             envelopedError(401, "unauthenticated", "session expired"),
           );
         }
-
-        if (pathname === "/api/creator/new-canvas/assistant") {
-          if (request.method !== "POST") {
-            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
-          }
-          try {
-            const message = await newCanvasAssistantService.reply(
-              await readJsonBody(request),
-              { createdByUserId: authenticated.user.id },
-            );
-            return writeJson(response, enveloped(200, { message }));
-          } catch (error) {
-            if (error instanceof NewCanvasAssistantValidationError) {
-              return writeJson(response, envelopedError(400, error.code, error.message));
-            }
-            throw error;
-          }
+        const canvasFeaturePath = pathname.startsWith("/api/canvas/")
+          || pathname === "/api/creator/canvases"
+          || pathname.startsWith("/api/creator/canvases/")
+          || pathname === "/api/creator/canvas-projects"
+          || pathname.startsWith("/api/creator/canvas-projects/");
+        if (
+          canvasFeaturePath
+          && request.method !== "GET"
+          && request.method !== "HEAD"
+          && !isNewCanvasEnabledForActor(runtimeEnv, {
+            ownerUserId: authenticated.user.id,
+            actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+          })
+        ) {
+          return writeJson(response, envelopedError(503, "new_canvas_disabled", "new canvas writes are temporarily disabled"));
         }
 
         if (request.method === "GET" && pathname === "/api/director-desks") {
@@ -20178,6 +21981,21 @@ export function createPhoneAuthDevServer(
             return writeIdempotencyKeyRequired(response);
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const target = readJsonRecord(body.target);
+          const targetsCanvas = readString(target.kind) === "canvas"
+            || readString(target.type) === "canvas"
+            || readString(body.targetType) === "canvas"
+            || Boolean(readString(body.canvasProjectId))
+            || Boolean(readString(target.canvasProjectId));
+          if (
+            targetsCanvas
+            && !isNewCanvasEnabledForActor(runtimeEnv, {
+              ownerUserId: authenticated.user.id,
+              actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+            })
+          ) {
+            return writeJson(response, envelopedError(503, "new_canvas_disabled", "new canvas writes are temporarily disabled"));
+          }
           return writeJson(response, await createUnifiedImageGenerationTask({
             db,
             authenticated,
@@ -20192,94 +22010,1688 @@ export function createPhoneAuthDevServer(
           }));
         }
 
-        if (request.method === "POST" && pathname === "/api/new-canvas/video-compositions") {
-          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
-          if (!idempotencyKey) {
-            return writeIdempotencyKeyRequired(response);
-          }
-          const body = (await readJsonBody(request)) as CanvasVideoCompositionRequest & { canvasProjectId?: string };
+        const canvasUserConfigRoute = matchCanvasUserConfigRoute(pathname);
+        if (canvasUserConfigRoute) {
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            now: new Date(),
+          });
+          const service = createCanvasUserConfigHttpService(db);
           try {
-            const result = await createCanvasVideoComposition(db, {
+            const body = request.method === "GET" || request.method === "DELETE"
+              ? undefined
+              : (await readJsonBody(request)) as Record<string, unknown>;
+            const result = await service.handle({
+              method: request.method,
+              route: canvasUserConfigRoute,
+              ownerUserId: actor.userId,
+              actorUserId: actor.userId,
+              canManage: !actor.teamMember,
+              query: url.searchParams,
               body,
-              idempotencyKey,
-              authenticated,
-              runtime: storageRuntime,
-              env: runtimeEnv,
-              fetchImpl: options.fetchImpl,
-              signedUrlExpiresInSeconds,
               now: new Date(),
             });
-            if (result.status >= 400) {
-              const errorBody = result.body as { errorCode?: string; message?: string; httpStatus?: number };
-              return writeJson(response, envelopedError(
-                result.status,
-                errorBody.errorCode ?? "canvas_video_composition_failed",
-                errorBody.message ?? "视频合成失败。",
-                errorBody,
-              ));
-            }
-            return writeJson(response, enveloped(result.status, result.body));
+            return writeJson(response, enveloped(result.status, result.data));
           } catch (error) {
-            if (error instanceof IdempotencyConflictError) {
-              return writeJson(response, envelopedError(409, error.code, "request conflict"));
+  if (error instanceof CanvasUserConfigError) {
+              const status = error.code.endsWith("forbidden") ? 403
+                : error.code.endsWith("not_found") || error.code.endsWith("version_not_found") ? 404
+                : error.code.endsWith("method_not_allowed") ? 405
+                : 400;
+              return writeJson(response, envelopedError(status, error.code, error.message));
             }
-            if (error instanceof IdempotencyProcessingError) {
-              return writeJson(response, envelopedError(202, error.code, "request is still processing"));
+            if (error instanceof Error && error.message === "canvas_user_config_manage_forbidden") {
+              return writeJson(response, envelopedError(403, error.message, "canvas user config management is restricted to the owner"));
+            }
+            if (error instanceof Error && error.message === "method_not_allowed") {
+              return writeJson(response, envelopedError(405, error.message, "method not allowed"));
             }
             throw error;
           }
         }
 
-        if (request.method === "POST" && pathname === "/api/new-canvas/generate") {
-          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
-          if (!idempotencyKey) {
-            return writeIdempotencyKeyRequired(response);
+        const canvasAgentConversationMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/conversations$/);
+        const canvasAgentModelsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/agent-models$/);
+        if (request.method === "GET" && canvasAgentModelsMatch) {
+          await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: decodeURIComponent(canvasAgentModelsMatch[1] ?? ""),
+            action: "view",
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(200, {
+            models: await listAvailableCanvasAgentModels(db),
+          }));
+        }
+        if (canvasAgentConversationMatch) {
+          const canvasProjectId = decodeURIComponent(canvasAgentConversationMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: request.method === "GET" ? "view" : "run",
+            now: new Date(),
+          });
+          const body = request.method === "GET"
+            ? {}
+            : (await readJsonBody(request)) as Record<string, unknown>;
+          const agentActor = canvasAgentActorFromCanvasScope(canvasScope);
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, {
+              conversations: await listCanvasAgentConversations(db, {
+                canvasId: canvasProjectId,
+                actor: agentActor,
+                limit: Number(url.searchParams.get("limit") ?? 50),
+              }),
+            }));
           }
-          const body = (await readJsonBody(request)) as Record<string, unknown>;
-          const canvasProjectId = readString(body.canvasProjectId);
-          if (!canvasProjectId) {
-            return writeJson(response, envelopedError(400, "canvas_project_id_required", "独立画布生成需要 canvasProjectId。"));
+          if (request.method === "PATCH") {
+            return writeJson(response, enveloped(200, {
+              conversation: await updateCanvasAgentConversation(db, {
+                canvasId: canvasProjectId,
+                conversationId: String(body.conversationId ?? ""),
+                actor: agentActor,
+                title: typeof body.title === "string" ? body.title : undefined,
+                status: body.status === "archived" ? "archived" : body.status === "active" ? "active" : undefined,
+                pinned: typeof body.pinned === "boolean" ? body.pinned : undefined,
+                now: new Date(),
+              }),
+            }));
+          }
+          if (request.method === "DELETE") {
+            return writeJson(response, enveloped(200, {
+              conversation: await deleteCanvasAgentConversation(db, {
+                canvasId: canvasProjectId,
+                conversationId: String(url.searchParams.get("conversationId") ?? body.conversationId ?? ""),
+                actor: agentActor,
+                now: new Date(),
+              }),
+            }));
+          }
+          if (request.method !== "POST") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const conversation = await createCanvasAgentConversation(db, {
+            canvasId: canvasProjectId,
+            actor: agentActor,
+            title: typeof body.title === "string" ? body.title : undefined,
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(201, { conversation }));
+        }
+
+        const canvasAgentMemoryMatch = pathname.match(
+          /^\/api\/canvas\/([^/]+)\/conversations\/([^/]+)\/memories(?:\/([^/]+))?$/,
+        );
+        if (canvasAgentMemoryMatch) {
+          if (!new Set(["GET", "PATCH", "DELETE"]).has(request.method ?? "")) {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const canvasProjectId = decodeURIComponent(canvasAgentMemoryMatch[1] ?? "");
+          const conversationId = decodeURIComponent(canvasAgentMemoryMatch[2] ?? "");
+          const memoryId = decodeURIComponent(canvasAgentMemoryMatch[3] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: request.method === "GET" ? "view" : "run",
+            now: new Date(),
+          });
+          const actor = canvasAgentActorFromCanvasScope(canvasScope);
+          const knowledge = new CanvasAgentKnowledgeService(db);
+          try {
+            if (request.method === "GET") {
+              if (memoryId) return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+              return writeJson(response, enveloped(200, {
+                memories: await knowledge.listMemories({
+                  canvasId: canvasProjectId,
+                  conversationId,
+                  actor,
+                  limit: Number(url.searchParams.get("limit") ?? 100),
+                  includeInactive: url.searchParams.get("includeInactive") === "true",
+                  category: url.searchParams.get("category"),
+                  source: url.searchParams.get("source"),
+                }),
+              }));
+            }
+            if (!memoryId) return writeJson(response, envelopedError(400, "canvas_agent_memory_id_required", "memory id is required"));
+            if (request.method === "DELETE") {
+              return writeJson(response, enveloped(200, {
+                memory: await knowledge.deleteMemory({ canvasId: canvasProjectId, conversationId, memoryId, actor }),
+              }));
+            }
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            const value = body.value && typeof body.value === "object" && !Array.isArray(body.value)
+              ? body.value as Record<string, unknown>
+              : undefined;
+            return writeJson(response, enveloped(200, {
+              memory: await knowledge.updateMemory({
+                canvasId: canvasProjectId,
+                conversationId,
+                memoryId,
+                actor,
+                key: typeof body.key === "string" ? body.key : undefined,
+                value,
+                category: typeof body.category === "string" || body.category === null ? body.category : undefined,
+                status: body.status === "active" || body.status === "revoked" ? body.status : undefined,
+                now: new Date(),
+              }),
+            }));
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "canvas_agent_memory_error";
+            if (code === "canvas_agent_memory_not_found" || code === "canvas_agent_conversation_not_found") {
+              return writeJson(response, envelopedError(404, code, "Canvas Agent memory not found"));
+            }
+            if (code === "canvas_agent_memory_key_conflict") {
+              return writeJson(response, envelopedError(409, code, "Canvas Agent memory key already exists"));
+            }
+            if (code.startsWith("canvas_agent_memory_")) {
+              return writeJson(response, envelopedError(400, code, code));
+            }
+            throw error;
+          }
+        }
+
+        const canvasAgentMessageMatch = pathname.match(
+          /^\/api\/canvas\/([^/]+)\/conversations\/([^/]+)\/messages$/,
+        );
+        if (canvasAgentMessageMatch) {
+          if (request.method !== "GET" && request.method !== "POST") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const canvasProjectId = decodeURIComponent(canvasAgentMessageMatch[1] ?? "");
+          const conversationId = decodeURIComponent(canvasAgentMessageMatch[2] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: request.method === "GET" ? "view" : "run",
+            now: new Date(),
+          });
+          const agentActor = canvasAgentActorFromCanvasScope(canvasScope);
+          if (request.method === "GET") {
+            try {
+              return writeJson(response, enveloped(200, {
+                messages: await listCanvasAgentMessages(db, {
+                  canvasId: canvasProjectId,
+                  conversationId,
+                  actor: agentActor,
+                  limit: Number(url.searchParams.get("limit") ?? 200),
+                }),
+              }));
+            } catch (error) {
+              if (error instanceof Error && error.message === "canvas_agent_conversation_not_found") {
+                return writeJson(response, envelopedError(404, error.message, "Canvas Agent conversation not found"));
+              }
+              throw error;
+            }
           }
           const canvas = await findCanvasByCanvasProjectId(db, {
             canvasProjectId,
-            userId: authenticated.user.id,
+            actorScope: canvasScope,
           });
           if (!canvas) {
-            return writeJson(response, envelopedError(404, "canvas_project_not_found", "画布不存在。"));
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const mode = normalizeCanvasAgentMode(body.mode);
+          const runtimeConfiguration = await loadCanvasAgentRuntimeConfiguration(db);
+          const modelCode = selectCanvasAgentModelCode(
+            runtimeConfiguration,
+            mode,
+            body.modelCode ?? body.model,
+          );
+          if (!modelCode) {
+            return writeJson(response, envelopedError(400, "agent_model_required", "modelCode is required"));
+          }
+          const model = await new AdminBackedTextModelResolver(db).resolve(modelCode);
+          const task = await createCanvasAgentTask(db, {
+            canvasId: canvasProjectId,
+            conversationId,
+            actor: agentActor,
+            mode,
+            modelCode: model.id,
+            modelConfigSnapshot: model.snapshot,
+            budget: readJsonRecord(body.budget),
+            baseRevision: canvas.serverRevision,
+            userMessage: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(202, { task }));
+        }
+
+        const canvasAgentFileGrantRoute = matchCanvasAgentFileGrantRoute(pathname);
+        if (canvasAgentFileGrantRoute) {
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasAgentFileGrantRoute.canvasId,
+            action: request.method === "GET" ? "view" : "run",
+            now: new Date(),
+          });
+          const service = createCanvasAgentFileGrantHttpService(db);
+          try {
+            const result = await service.handle({
+              method: request.method ?? "GET",
+              route: canvasAgentFileGrantRoute,
+              actor: canvasAgentActorFromCanvasScope(canvasScope),
+              body: request.method === "POST"
+                ? (await readJsonBody(request)) as Record<string, unknown>
+                : undefined,
+              includeInactive: url.searchParams.get("includeInactive") === "true",
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(result.status, result.data));
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "canvas_agent_file_grant_error";
+            const status = code === "method_not_allowed" ? 405
+              : code === "canvas_agent_file_grant_not_found" || code === "canvas_agent_conversation_not_found" ? 404
+                : 400;
+            return writeJson(response, envelopedError(status, code, code));
+          }
+        }
+
+        const canvasAgentEventsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/agent-tasks\/([^/]+)\/events$/);
+        if (request.method === "GET" && canvasAgentEventsMatch) {
+          const canvasProjectId = decodeURIComponent(canvasAgentEventsMatch[1] ?? "");
+          const taskId = decodeURIComponent(canvasAgentEventsMatch[2] ?? "");
+          const taskContext = await resolveCanvasAgentTaskActor(db, authenticated.sessionToken, canvasProjectId, taskId, "view");
+          const headerCursor = Array.isArray(request.headers["last-event-id"])
+            ? request.headers["last-event-id"]?.[0]
+            : request.headers["last-event-id"];
+          const after = Number(headerCursor ?? url.searchParams.get("after") ?? 0);
+          const limit = Number(url.searchParams.get("limit") ?? 200);
+          const afterSequence = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+          const events = await listCanvasAgentEventsForActor(db, {
+            taskId,
+            canvasId: canvasProjectId,
+            actor: taskContext.actor,
+            afterSequence,
+            limit: Number.isFinite(limit) ? limit : 200,
+          });
+          const wantsStream = request.headers.accept?.includes("text/event-stream")
+            || url.searchParams.get("stream") === "1"
+            || url.searchParams.get("stream") === "live"
+            || url.searchParams.get("live") === "1";
+          if (wantsStream) {
+            const liveStream = url.searchParams.get("live") === "1"
+              || url.searchParams.get("stream") === "live";
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/event-stream; charset=utf-8");
+            response.setHeader("cache-control", "no-cache, no-transform");
+            response.setHeader("connection", "keep-alive");
+            response.setHeader("x-accel-buffering", "no");
+            response.flushHeaders?.();
+            response.write("retry: 1000\n\n");
+            let cursor = afterSequence;
+            for (const event of events) {
+              response.write(formatCanvasAgentSseChunk(event));
+              cursor = Math.max(cursor, event.sequence);
+            }
+            if (!events.length) {
+              response.write(`: canvas-agent cursor ${afterSequence}\n\n`);
+            }
+            if (liveStream) {
+              let closed = false;
+              const markClosed = () => { closed = true; };
+              request.on("aborted", markClosed);
+              response.on("close", markClosed);
+              const stopHeartbeat = startSseHeartbeat(response, 10_000);
+              const expiresAt = Date.now() + 25_000;
+              try {
+                while (!closed && !response.writableEnded && Date.now() < expiresAt) {
+                  await delay(500);
+                  if (closed || response.writableEnded) break;
+                  let liveContext;
+                  try {
+                    liveContext = await resolveCanvasAgentTaskActor(
+                      db,
+                      authenticated.sessionToken,
+                      canvasProjectId,
+                      taskId,
+                      "view",
+                    );
+                  } catch {
+                    response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
+                    break;
+                  }
+                  const nextEvents = await listCanvasAgentEventsForActor(db, {
+                    taskId,
+                    canvasId: canvasProjectId,
+                    actor: liveContext.actor,
+                    afterSequence: cursor,
+                    limit: Number.isFinite(limit) ? limit : 200,
+                  });
+                  for (const event of nextEvents) {
+                    response.write(formatCanvasAgentSseChunk(event));
+                    cursor = Math.max(cursor, event.sequence);
+                  }
+                  if (nextEvents.some((event) => isTerminalCanvasAgentEvent(event.eventType))) break;
+                }
+              } finally {
+                stopHeartbeat();
+                request.off("aborted", markClosed);
+                response.off("close", markClosed);
+              }
+            }
+            response.end();
+            return;
+          }
+          return writeJson(response, enveloped(200, { events }));
+        }
+
+        const canvasAgentControlMatch = pathname.match(
+          /^\/api\/canvas\/([^/]+)\/agent-tasks\/([^/]+)\/(pause|resume|stop|replan|interject|approve|rewind|skip)$/,
+        );
+        if (request.method === "POST" && canvasAgentControlMatch) {
+          const canvasProjectId = decodeURIComponent(canvasAgentControlMatch[1] ?? "");
+          const taskId = decodeURIComponent(canvasAgentControlMatch[2] ?? "");
+          const action = canvasAgentControlMatch[3] ?? "";
+          const context = await resolveCanvasAgentTaskActor(db, authenticated.sessionToken, canvasProjectId, taskId, "run");
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          let result;
+          if (action === "pause") {
+            result = await pauseCanvasAgentTask(db, { taskId, now: new Date() });
+          } else if (action === "resume") {
+            result = await resumeCanvasAgentTask(db, { taskId, now: new Date() });
+          } else if (action === "stop") {
+            result = await stopCanvasAgentTask(db, { taskId, now: new Date() });
+          } else if (action === "replan") {
+            result = await replanCanvasAgentTask(db, {
+              taskId,
+              reason: typeof body.reason === "string" ? body.reason : undefined,
+              now: new Date(),
+            });
+          } else if (action === "skip") {
+            result = await skipCanvasAgentStep(db, {
+              taskId,
+              stepId: typeof body.stepId === "string" ? body.stepId : null,
+              actor: context.actor,
+              reason: typeof body.reason === "string" ? body.reason : null,
+              now: new Date(),
+            });
+          } else if (action === "interject") {
+            result = await interjectCanvasAgentTask(db, {
+              taskId,
+              conversationId: context.task.conversationId,
+              actor: context.actor,
+              content: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+              now: new Date(),
+            });
+          } else if (action === "rewind") {
+            let stepId = String(body.stepId ?? "").trim();
+            let checkpointRevision = Number(body.checkpointRevision);
+            const step = stepId
+              ? await queryOne<{ id: string; checkpoint_json: Record<string, unknown> }>(db, `
+                  SELECT id,checkpoint_json FROM canvas_agent_steps WHERE id=$1 AND task_id=$2 LIMIT 1
+                `, [stepId, taskId])
+              : await queryOne<{ id: string; checkpoint_json: Record<string, unknown> }>(db, `
+                  SELECT id,checkpoint_json FROM canvas_agent_steps
+                  WHERE task_id=$1 AND checkpoint_json ? 'revision'
+                  ORDER BY step_no DESC,id DESC LIMIT 1
+                `, [taskId]);
+            if (!step) {
+              return writeJson(response, envelopedError(404, "canvas_agent_step_not_found", "Canvas Agent step not found"));
+            }
+            stepId = step.id;
+            if (!Number.isSafeInteger(checkpointRevision) || checkpointRevision < 1) {
+              checkpointRevision = Number(step.checkpoint_json?.revision);
+            }
+            if (!Number.isSafeInteger(checkpointRevision) || checkpointRevision < 1) {
+              return writeJson(response, envelopedError(400, "canvas_agent_rewind_input_invalid", "checkpoint revision is invalid"));
+            }
+            const checkpoint = new CanvasAgentCheckpointService({
+              db,
+              canvas: {
+                async readRevision({ canvasId, actor }) {
+                  const current = await findCanvasByCanvasProjectId(db, {
+                    canvasProjectId: canvasId,
+                    actorScope: canvasActorScopeFromAgentActor(canvasId, actor),
+                  });
+                  if (!current) throw new CanvasAuthorizationError("canvas_not_found");
+                  return current.serverRevision;
+                },
+                async restoreRevision({ canvasId, actor, checkpointRevision: revision, expectedRevision, reason }) {
+                  const source = await queryOne<{ document_json: Record<string, unknown> }>(db, `
+                    SELECT document_json FROM creator_canvas_revisions
+                    WHERE canvas_project_id=$1 AND server_revision=$2
+                    LIMIT 1
+                  `, [canvasId, revision]);
+                  if (!source) throw new CanvasAgentStateConflictError();
+                  const saved = await saveCanvasByCanvasProjectId(db, {
+                    canvasProjectId: canvasId,
+                    actorScope: canvasActorScopeFromAgentActor(canvasId, actor),
+                    clientRevision: expectedRevision,
+                    document: source.document_json,
+                    events: [{ type: "canvas_agent.rewind", reason }],
+                    now: new Date(),
+                  });
+                  return { revision: saved.serverRevision };
+                },
+              },
+            });
+            result = await checkpoint.rewind({
+              taskId,
+              stepId,
+              canvasId: canvasProjectId,
+              actor: context.actor,
+              checkpointRevision,
+              now: new Date(),
+            });
+          } else {
+            const decision = body.decision === "rejected" ? "rejected" : "approved";
+            result = await decideCanvasAgentApproval(db, {
+              taskId,
+              approvalId: String(body.approvalId ?? ""),
+              actor: context.actor,
+              decision,
+              reason: typeof body.reason === "string" ? body.reason : null,
+              now: new Date(),
+            });
+          }
+          return writeJson(response, enveloped(200, { result }));
+        }
+
+        const canvasBatchCollectionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/generation-batches$/);
+        const canvasBatchItemMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/generation-batches\/([^/]+)$/);
+        const canvasBatchActionMatch = pathname.match(
+          /^\/api\/canvas\/([^/]+)\/generation-batches\/([^/]+)\/(reconcile|cancel)$/,
+        );
+        if (request.method === "POST" && canvasBatchCollectionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasBatchCollectionMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             capability: capabilities.generationStart,
             now: new Date(),
           });
-          const kind = body.kind === "audio" ? "audio" : body.kind === "video" ? "video" : "image";
-          const result = await createGenerationTask(db, {
-            kind,
-            episodeId: null,
-            body: {
-              ...body,
-              targetType: "canvas",
-              targetId: String(body.targetId ?? body.canvasNodeId ?? canvasProjectId),
-              canvasProjectId,
-            },
+          const requestedNodes = Array.isArray(body.nodes) ? body.nodes as Array<{
+            nodeKey: string;
+            mediaKind: "text" | "image" | "video" | "audio";
+            dependsOn?: string[];
+            payload?: Record<string, unknown>;
+          }> : [];
+          const nodes = await resolveCanvasBatchPromptDependencies(db, canvasScope, requestedNodes);
+          const mediaNodes = nodes.filter((node): node is typeof node & { mediaKind: "image" | "video" | "audio" } => node.mediaKind !== "text");
+          const itemCredits = canvasScope.actorTeamMemberId || mediaNodes.length !== nodes.length
+            ? null
+            : await estimateCanvasGenerationBatchItemCredits(db, mediaNodes, runtimeEnv);
+          const batch = await createCanvasGenerationBatch(db, {
+            canvasProjectId,
+            actorScope: canvasScope,
             idempotencyKey,
-            authenticated,
-            context: {
-              actor,
-              project: null,
-              canvasProjectId,
-              userId: authenticated.user.id,
-            },
-            runtime: storageRuntime,
-            env: runtimeEnv,
-            fetchImpl: options.fetchImpl,
-            signedUrlExpiresInSeconds,
+            nodes,
+            ...(itemCredits && Object.values(itemCredits).every((amount) => amount > 0)
+              ? { billing: { mode: "batch_reservation" as const, itemCredits } }
+              : {}),
+            dispatchNode: createCanvasGenerationBatchDispatch({
+              db, canvasProjectId, canvasScope, actor, authenticated,
+              runtime: storageRuntime, env: runtimeEnv, fetchImpl: options.fetchImpl,
+              signedUrlExpiresInSeconds,
+              textGateway: aiStoryboardTextChatGateway,
+            }),
             now: new Date(),
           });
-          if (!result.body) {
-            return writeJson(response, envelopedError(result.status, "new_canvas_generation_failed", "独立画布生成任务创建失败。"));
+          return writeJson(response, enveloped(201, { batch }));
+        }
+        if (request.method === "GET" && canvasBatchItemMatch) {
+          const canvasProjectId = decodeURIComponent(canvasBatchItemMatch[1] ?? "");
+          await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(200, {
+            batch: await getCanvasGenerationBatch(
+              db,
+              decodeURIComponent(canvasBatchItemMatch[2] ?? ""),
+              canvasProjectId,
+            ),
+          }));
+        }
+        if (request.method === "POST" && canvasBatchActionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasBatchActionMatch[1] ?? "");
+          const batchId = decodeURIComponent(canvasBatchActionMatch[2] ?? "");
+          const action = canvasBatchActionMatch[3] ?? "";
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          if (action === "reconcile") {
+            const actor = await resolveActorContext(db, {
+              sessionToken: authenticated.sessionToken,
+              capability: capabilities.generationStart,
+              now: new Date(),
+            });
+            const batch = await reconcileCanvasGenerationBatch(db, {
+              batchId,
+              canvasProjectId,
+              dispatchNode: createCanvasGenerationBatchDispatch({
+                db,
+                canvasProjectId,
+                canvasScope,
+                actor,
+                authenticated,
+                runtime: storageRuntime,
+                env: runtimeEnv,
+                fetchImpl: options.fetchImpl,
+                signedUrlExpiresInSeconds,
+                textGateway: aiStoryboardTextChatGateway,
+              }),
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, { batch }));
           }
-          return writeJson(response, enveloped(result.status, result.body));
+          if (action === "cancel") {
+            const now = new Date();
+            const batch = await cancelCanvasGenerationBatch(db, {
+              batchId,
+              canvasProjectId,
+              actorScope: canvasScope,
+              cancelTask: (taskId) => cancelGenerationTask(db, {
+                taskId,
+                env: runtimeEnv,
+                fetchImpl: options.fetchImpl,
+                now,
+              }),
+              now,
+            });
+            return writeJson(response, enveloped(200, { batch }));
+          }
+        }
+
+        const canvasHistoryCollectionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/generation-history$/);
+        const canvasHistoryItemMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/generation-history\/([^/]+)$/);
+        if (request.method === "GET" && canvasHistoryCollectionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasHistoryCollectionMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
+          const cursor = decodeCanvasGenerationHistoryCursor(url.searchParams.get("cursor"));
+          if (url.searchParams.get("cursor") && !cursor) {
+            return writeJson(response, envelopedError(400, "canvas_history_cursor_invalid", "cursor is invalid"));
+          }
+          if (url.searchParams.get("format") === "json") {
+            return writeJson(response, enveloped(200, await exportCanvasGenerationHistoryJson(db, {
+              canvasProjectId,
+              actorScope: canvasScope,
+              nodeKey: url.searchParams.get("nodeKey"),
+              search: url.searchParams.get("search"),
+              now: new Date(),
+            })));
+          }
+          const history = await listCanvasGenerationHistory(db, {
+            canvasProjectId,
+            actorScope: canvasScope,
+            nodeKey: url.searchParams.get("nodeKey"),
+            status: url.searchParams.get("status"),
+            mediaKind: url.searchParams.get("mediaKind"),
+            search: url.searchParams.get("search"),
+            limit: Number(url.searchParams.get("limit") ?? 50),
+            cursor,
+          });
+          const hydratedHistory = await hydrateCanvasGenerationHistoryArtifactUrls(history, (storageObjectId) =>
+            buildSignedObjectUrls(db, {
+              actorScope: canvasScope,
+              storageObjectId,
+              adapter: storageRuntime.adapter,
+              now: new Date(),
+              expiresInSeconds: signedUrlExpiresInSeconds,
+              publicBaseUrl: storageRuntime.publicBaseUrl,
+              region: storageRuntime.region,
+            }));
+          return writeJson(response, enveloped(200, {
+            ...hydratedHistory,
+            nextCursor: hydratedHistory.nextCursor ? encodeCanvasGenerationHistoryCursor(hydratedHistory.nextCursor) : null,
+          }));
+        }
+        if (request.method === "DELETE" && canvasHistoryItemMatch) {
+          const canvasProjectId = decodeURIComponent(canvasHistoryItemMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(200, await softDeleteCanvasGenerationRun(db, {
+            canvasProjectId,
+            runId: decodeURIComponent(canvasHistoryItemMatch[2] ?? ""),
+            actorScope: canvasScope,
+            now: new Date(),
+          })));
+        }
+        if (request.method === "DELETE" && canvasHistoryCollectionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasHistoryCollectionMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const scope = String(body.scope ?? "").trim();
+          const nodeKey = String(body.nodeKey ?? "").trim();
+          if (scope !== "all" && scope !== "node") {
+            return writeJson(response, envelopedError(400, "canvas_history_delete_scope_invalid", "history delete scope is invalid"));
+          }
+          if (scope === "node" && !nodeKey) {
+            return writeJson(response, envelopedError(400, "canvas_history_node_key_required", "nodeKey is required"));
+          }
+          return writeJson(response, enveloped(200, await softDeleteCanvasGenerationRuns(db, {
+            canvasProjectId,
+            actorScope: canvasScope,
+            nodeKey: scope === "node" ? nodeKey : null,
+            now: new Date(),
+          })));
+        }
+
+        const canvasSettingsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/settings$/);
+        if (canvasSettingsMatch && (request.method === "GET" || request.method === "PATCH")) {
+          const canvasProjectId = decodeURIComponent(canvasSettingsMatch[1] ?? "");
+          const action = request.method === "PATCH" ? "edit" : "view";
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action,
+            now: new Date(),
+          });
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, await getCanvasSettings(db, { actorScope: canvasScope })));
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          if (!body.patch || typeof body.patch !== "object" || Array.isArray(body.patch)) {
+            return writeJson(response, envelopedError(400, "canvas_settings_patch_required", "settings patch is required"));
+          }
+          return writeJson(response, enveloped(200, await updateCanvasSettings(db, {
+            actorScope: canvasScope,
+            expectedRevision: Number(body.expectedRevision),
+            patch: body.patch,
+            now: new Date(),
+          })));
+        }
+
+        const canvasCharactersCollectionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/characters$/);
+        const canvasCharacterItemMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/characters\/([^/]+)$/);
+        const canvasCharacterReferencesMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/characters\/([^/]+)\/references$/);
+        const canvasCharacterReferenceItemMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/characters\/([^/]+)\/references\/([^/]+)$/);
+        const canvasCharacterCopyMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/characters\/([^/]+)\/copy$/);
+        if (canvasCharactersCollectionMatch && (request.method === "GET" || request.method === "POST")) {
+          const canvasProjectId = decodeURIComponent(canvasCharactersCollectionMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: request.method === "GET" ? "view" : "edit",
+            now: new Date(),
+          });
+          if (request.method === "GET") {
+            const scope = url.searchParams.get("scope");
+            return writeJson(response, enveloped(200, {
+              characters: (await listCanvasCharacters(db, {
+                actorScope: canvasScope,
+                ...(scope ? { scope: scope as CanvasCharacterScope } : {}),
+                limit: Number(url.searchParams.get("limit") ?? 100),
+              })).map(withCanvasCharacterPreviewUrls),
+            }));
+          }
+          if (request.method === "POST") {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            return writeJson(response, enveloped(201, {
+              character: withCanvasCharacterPreviewUrls(await createCanvasCharacter(db, {
+                actorScope: canvasScope,
+                scope: String(body.scope ?? "canvas") as CanvasCharacterScope,
+                name: String(body.name ?? ""),
+                description: body.description === undefined ? undefined : String(body.description),
+                prompt: body.prompt === undefined ? undefined : String(body.prompt),
+                references: Array.isArray(body.references)
+                  ? body.references as CanvasCharacterReferenceInput[]
+                  : [],
+                now: new Date(),
+              })),
+            }));
+          }
+        }
+        if (canvasCharacterCopyMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasCharacterCopyMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          return writeJson(response, enveloped(201, {
+            character: withCanvasCharacterPreviewUrls(await copyCanvasCharacter(db, {
+              actorScope: canvasScope,
+              sourceCharacterId: decodeURIComponent(canvasCharacterCopyMatch[2] ?? ""),
+              expectedRevision: Number(body.expectedRevision),
+              targetScope: String(body.targetScope ?? "global") as CanvasCharacterScope,
+              name: body.name === undefined ? undefined : String(body.name),
+              now: new Date(),
+            })),
+          }));
+        }
+        if (canvasCharacterReferencesMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasCharacterReferencesMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const added = await addCanvasCharacterReference(db, {
+            actorScope: canvasScope,
+            characterId: decodeURIComponent(canvasCharacterReferencesMatch[2] ?? ""),
+            expectedRevision: Number(body.expectedRevision),
+            reference: readJsonRecord(body.reference) as CanvasCharacterReferenceInput,
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(201, {
+            character: withCanvasCharacterPreviewUrls(added.character),
+            reference: withCanvasCharacterReferencePreviewUrl(added.reference),
+          }));
+        }
+        if (canvasCharacterReferenceItemMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+          const canvasProjectId = decodeURIComponent(canvasCharacterReferenceItemMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const characterId = decodeURIComponent(canvasCharacterReferenceItemMatch[2] ?? "");
+          const referenceId = decodeURIComponent(canvasCharacterReferenceItemMatch[3] ?? "");
+          if (request.method === "PATCH") {
+            return writeJson(response, enveloped(200, {
+              character: withCanvasCharacterPreviewUrls(await updateCanvasCharacterReference(db, {
+                actorScope: canvasScope,
+                characterId,
+                referenceId,
+                expectedRevision: Number(body.expectedRevision),
+                patch: readJsonRecord(body.patch) as CanvasCharacterReferenceInput,
+                now: new Date(),
+              })),
+            }));
+          }
+          return writeJson(response, enveloped(200, await deleteCanvasCharacterReference(db, {
+            actorScope: canvasScope,
+            characterId,
+            referenceId,
+            expectedRevision: Number(body.expectedRevision),
+            now: new Date(),
+          })));
+        }
+        if (canvasCharacterItemMatch && (request.method === "GET" || request.method === "PATCH" || request.method === "DELETE")) {
+          const canvasProjectId = decodeURIComponent(canvasCharacterItemMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: request.method === "GET" ? "view" : "edit",
+            now: new Date(),
+          });
+          const characterId = decodeURIComponent(canvasCharacterItemMatch[2] ?? "");
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, {
+              character: withCanvasCharacterPreviewUrls(await getCanvasCharacter(db, { actorScope: canvasScope, characterId })),
+            }));
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          if (request.method === "PATCH") {
+            return writeJson(response, enveloped(200, {
+              character: withCanvasCharacterPreviewUrls(await updateCanvasCharacter(db, {
+                actorScope: canvasScope,
+                characterId,
+                expectedRevision: Number(body.expectedRevision),
+                patch: readJsonRecord(body.patch),
+                now: new Date(),
+              })),
+            }));
+          }
+          return writeJson(response, enveloped(200, await deleteCanvasCharacter(db, {
+            actorScope: canvasScope,
+            characterId,
+            expectedRevision: Number(body.expectedRevision),
+            now: new Date(),
+          })));
+        }
+
+        const canvasFingerprintMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/uploads\/fingerprint$/);
+        if (canvasFingerprintMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasFingerprintMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const result = await registerOrReuseCanvasUploadFingerprint(db, {
+            canvasProjectId,
+            ownerUserId: canvasScope.ownerUserId,
+            storageObjectId: String(body.storageObjectId ?? ""),
+            fingerprint: String(body.fingerprint ?? ""),
+            contentType: String(body.contentType ?? "application/octet-stream"),
+            sizeBytes: Number(body.sizeBytes),
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(200, result));
+        }
+
+        const canvasStyleReferenceAssetImportMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/style-reference-assets\/import$/);
+        if (canvasStyleReferenceAssetImportMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasStyleReferenceAssetImportMatch[1] ?? "");
+          const initialScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const source = readJsonRecord(body.source);
+          const sourceKind = readString(source.kind);
+          const sourceId = readString(source.sourceId);
+          const label = readString(body.label);
+          if (!isUuid(sourceId) || !["project_asset_version", "drama_asset_version", "team_asset"].includes(sourceKind)) {
+            return writeJson(response, envelopedError(400, "canvas_style_reference_source_invalid", "stable project, drama, or team asset source is required"));
+          }
+          if (label.length > 120) {
+            return writeJson(response, envelopedError(400, "canvas_style_reference_label_invalid", "style reference label is too long"));
+          }
+          type StyleReferenceImportSource = {
+            project_id: string | null;
+            owner_user_id: string;
+            storage_object_id: string;
+            object_key: string;
+            bucket: string;
+            content_type: string;
+            size_bytes: number | string | null;
+            checksum: string | null;
+            asset_key: string;
+          };
+          let sourceVersion: StyleReferenceImportSource | undefined;
+          if (sourceKind === "project_asset_version" || sourceKind === "drama_asset_version") {
+            sourceVersion = await queryOne<StyleReferenceImportSource>(db, `
+              SELECT asset.project_id,project.owner_user_id,storage.id AS storage_object_id,
+                storage.object_key,storage.bucket,storage.content_type,storage.size_bytes,
+                storage.checksum,asset.asset_key
+              FROM asset_versions version
+              JOIN assets asset ON asset.id=version.asset_id AND asset.project_id IS NOT NULL
+              JOIN projects project ON project.id=asset.project_id
+              JOIN storage_objects storage
+                ON storage.id=version.storage_object_id
+               AND storage.project_id=asset.project_id
+               AND storage.canvas_project_id IS NULL
+               AND storage.status='available'
+               AND storage.deleted_at IS NULL
+              WHERE version.id=$1
+                AND storage.content_type ILIKE 'image/%'
+              LIMIT 1
+            `, [sourceId]);
+          } else {
+            const entitled = await hasActiveUserEntitlement(db, {
+              userId: initialScope.ownerUserId,
+              entitlementKey: "team_asset_library",
+              now: new Date(),
+            });
+            if (!entitled) {
+              return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
+            }
+            sourceVersion = await queryOne<StyleReferenceImportSource>(db, `
+              SELECT NULL::uuid AS project_id,team.admin_user_id AS owner_user_id,
+                storage.id AS storage_object_id,storage.object_key,storage.bucket,
+                storage.content_type,storage.size_bytes,storage.checksum,team.asset_name AS asset_key
+              FROM team_assets team
+              JOIN storage_objects storage
+                ON storage.id=team.storage_object_id
+               AND storage.project_id IS NULL
+               AND storage.canvas_project_id IS NULL
+               AND storage.created_by_user_id=team.admin_user_id
+               AND storage.status='available'
+               AND storage.deleted_at IS NULL
+              WHERE team.id=$1
+                AND team.asset_status='active'
+                AND team.asset_category IN ('character','scene','prop')
+                AND storage.content_type ILIKE 'image/%'
+              LIMIT 1
+            `, [sourceId]);
+          }
+          if (!sourceVersion || sourceVersion.owner_user_id !== initialScope.ownerUserId) {
+            return writeJson(response, envelopedError(404, "canvas_style_reference_source_not_found", "style reference source was not found"));
+          }
+          if (sourceVersion.project_id) {
+            await resolveActorContext(db, {
+              sessionToken: authenticated.sessionToken,
+              projectId: sourceVersion.project_id,
+              now: new Date(),
+            });
+          }
+          const now = new Date();
+          const sourceBytes = await readUploadedStorageObjectBytes(db, {
+            sessionToken: authenticated.sessionToken,
+            storageObjectId: sourceVersion.storage_object_id,
+            bucket: sourceVersion.bucket,
+            objectKey: sourceVersion.object_key,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+            now,
+            fetchImpl: options.fetchImpl ?? fetch,
+          });
+          const finalScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now,
+          });
+          const existing = await queryOne<{
+            artifact_id: string;
+            asset_id: string;
+            asset_version_id: string;
+            storage_object_id: string;
+          }>(db, `
+            SELECT artifact.id AS artifact_id,asset.id AS asset_id,version.id AS asset_version_id,storage.id AS storage_object_id
+            FROM assets asset
+            JOIN asset_versions version ON version.asset_id=asset.id
+            JOIN creator_canvas_node_artifacts artifact
+              ON artifact.canvas_project_id=asset.canvas_project_id
+             AND artifact.asset_id=asset.id
+             AND artifact.asset_version_id=version.id
+             AND artifact.deleted_at IS NULL
+            JOIN storage_objects storage
+              ON storage.id=version.storage_object_id
+             AND storage.canvas_project_id=asset.canvas_project_id
+             AND storage.status='available'
+             AND storage.deleted_at IS NULL
+            WHERE asset.canvas_project_id=$1
+              AND asset.asset_type='shot_image'
+              AND asset.asset_key=$2
+            LIMIT 1
+          `, [canvasProjectId, `style-reference:${sourceKind}:${sourceId}`]);
+          if (existing) {
+            const previewUrl = `/api/storage/objects/${encodeURIComponent(existing.storage_object_id)}/content?proxy=1`;
+            return writeJson(response, enveloped(200, { asset: {
+              id: existing.artifact_id,
+              artifactId: existing.artifact_id,
+              assetId: existing.asset_id,
+              assetVersionId: existing.asset_version_id,
+              storageObjectId: existing.storage_object_id,
+              kind: "image",
+              title: label || sourceVersion.asset_key,
+              previewUrl,
+              url: previewUrl,
+            } }));
+          }
+          const copiedStorage = await createScopedStorageObject(db, {
+            userId: finalScope.ownerUserId,
+            actorScope: finalScope,
+            canvasProjectId,
+            bucket: storageRuntime.bucket,
+            objectName: `style-reference/${sourceId}.image`,
+            contentType: sourceVersion.content_type,
+            sizeBytes: sourceBytes.byteLength,
+            checksum: sourceVersion.checksum,
+            provider: storageRuntime.provider,
+            status: "pending_upload",
+            metadata: { sourceKind, sourceId, sourceProjectId: sourceVersion.project_id },
+            createdByUserId: finalScope.ownerUserId,
+            now,
+          });
+          let copiedWrite: { eTag?: string | null; versionId?: string | null } | undefined;
+          if ((storageRuntime.mode === "cos" || storageRuntime.mode === "s3_compatible") && typeof storageRuntime.adapter.putObject === "function") {
+            copiedWrite = await storageRuntime.adapter.putObject({
+              bucket: copiedStorage.bucket,
+              objectKey: copiedStorage.objectKey,
+              body: sourceBytes,
+              contentType: copiedStorage.contentType,
+              contentLength: sourceBytes.byteLength,
+            });
+          } else {
+            await writeLocalStorageObject({
+              bucket: copiedStorage.bucket,
+              objectKey: copiedStorage.objectKey,
+              bytes: sourceBytes,
+            });
+          }
+          const availableCopiedStorage = await markStorageObjectAvailable(db, {
+            storageObjectId: copiedStorage.id,
+            contentType: copiedStorage.contentType,
+            sizeBytes: sourceBytes.byteLength,
+            checksum: sourceVersion.checksum,
+            eTag: copiedWrite?.eTag ?? null,
+            versionId: copiedWrite?.versionId ?? null,
+            metadata: copiedStorage.metadata,
+            now,
+          });
+          if (!availableCopiedStorage || availableCopiedStorage.canvasProjectId !== canvasProjectId) {
+            return writeJson(response, envelopedError(409, "canvas_style_reference_copy_failed", "project style reference copy was not available"));
+          }
+          const assetKey = `style-reference:${sourceKind}:${sourceId}`;
+          const asset = await queryOne<{ id: string }>(db, `
+            INSERT INTO assets (id,project_id,canvas_project_id,asset_type,asset_key,created_by_user_id,created_at,updated_at)
+            VALUES ($1,NULL,$2,'shot_image',$3,$4,$5,$5)
+            ON CONFLICT (canvas_project_id,asset_type,asset_key) WHERE canvas_project_id IS NOT NULL
+            DO UPDATE SET updated_at=EXCLUDED.updated_at
+            RETURNING id
+          `, [randomUUID(), canvasProjectId, assetKey, finalScope.ownerUserId, now]);
+          const assetVersionId = randomUUID();
+          await db.query(`
+            INSERT INTO asset_versions (
+              id,asset_id,version_number,storage_object_id,storage_object_key,metadata_json,
+              source_task_id,source_attempt_id,created_by_user_id,created_at
+            ) VALUES ($1,$2,1,$3,$4,$5::jsonb,NULL,NULL,$6,$7)
+          `, [
+            assetVersionId,
+            asset!.id,
+            availableCopiedStorage.id,
+            availableCopiedStorage.objectKey,
+            JSON.stringify({
+              source: `canvas-style-reference-${sourceKind}-import`,
+              label: label || sourceVersion.asset_key,
+              mimeType: copiedStorage.contentType,
+              sourceKind,
+              sourceId,
+              sourceProjectId: sourceVersion.project_id,
+              sourceStorageObjectId: sourceVersion.storage_object_id,
+              materializedByPrincipalKey: finalScope.principalKey,
+              materializedByTeamMemberId: finalScope.actorTeamMemberId,
+            }),
+            finalScope.ownerUserId,
+            now,
+          ]);
+          const styleReferenceNodeKey = "__style_reference__";
+          await db.query(`
+            INSERT INTO creator_canvas_nodes (
+              id,canvas_project_id,node_key,node_type,title,status,media_kind,source_kind,
+              created_by_user_id,updated_by_user_id,created_at,updated_at
+            ) VALUES ($1,$2,$3,'asset-library','风格母图','idle','image','style-reference',$4,$4,$5,$5)
+            ON CONFLICT (canvas_project_id,node_key)
+            DO UPDATE SET deleted_at=NULL,updated_by_user_id=EXCLUDED.updated_by_user_id,updated_at=EXCLUDED.updated_at
+          `, [randomUUID(), canvasProjectId, styleReferenceNodeKey, finalScope.ownerUserId, now]);
+          const artifact = await appendCanvasNodeArtifact(db, {
+            canvasProjectId,
+            nodeKey: styleReferenceNodeKey,
+            artifactKind: "image",
+            assetId: asset!.id,
+            assetVersionId,
+            storageObjectId: availableCopiedStorage.id,
+            url: `/api/storage/objects/${encodeURIComponent(availableCopiedStorage.id)}/content?proxy=1`,
+            thumbnailUrl: `/api/storage/objects/${encodeURIComponent(availableCopiedStorage.id)}/content?proxy=1`,
+            selected: true,
+            selectionRole: "style-reference",
+            metadata: {
+              source: `canvas-style-reference-${sourceKind}-import`,
+              title: label || sourceVersion.asset_key,
+              mimeType: copiedStorage.contentType,
+            },
+            userId: authenticated.user.id,
+            now,
+          });
+          const previewUrl = `/api/storage/objects/${encodeURIComponent(availableCopiedStorage.id)}/content?proxy=1`;
+          return writeJson(response, enveloped(201, { asset: {
+            id: artifact.id,
+            artifactId: artifact.id,
+            assetId: asset!.id,
+            assetVersionId,
+            storageObjectId: availableCopiedStorage.id,
+            kind: "image",
+            title: label || sourceVersion.asset_key,
+            previewUrl,
+            url: previewUrl,
+          } }));
+        }
+
+        const canvasStyleReferenceAssetMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/style-reference-assets$/);
+        if (canvasStyleReferenceAssetMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasStyleReferenceAssetMatch[1] ?? "");
+          const initialScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const uploadSessionId = readString(body.uploadSessionId);
+          const storageObjectId = readString(body.storageObjectId);
+          const label = readString(body.label);
+          if (!isUuid(uploadSessionId) || !isUuid(storageObjectId)) {
+            return writeJson(response, envelopedError(400, "canvas_style_reference_upload_required", "uploaded style reference is required"));
+          }
+          if (label.length > 120) {
+            return writeJson(response, envelopedError(400, "canvas_style_reference_label_invalid", "style reference label is too long"));
+          }
+          const uploadSession = await queryOne<{
+            storage_object_id: string;
+            project_id: string | null;
+            purpose: string;
+            status: string;
+            created_by_user_id: string | null;
+            original_file_name: string;
+          }>(db, `
+            SELECT storage_object_id,project_id,purpose,status,created_by_user_id,original_file_name
+            FROM storage_upload_sessions
+            WHERE id=$1
+            LIMIT 1
+          `, [uploadSessionId]);
+          const storageObject = await findStorageObject(db, storageObjectId);
+          const isValidUpload = uploadSession
+            && uploadSession.storage_object_id === storageObjectId
+            && uploadSession.project_id === null
+            && uploadSession.purpose === "new-canvas/style-reference"
+            && uploadSession.status === "uploaded"
+            && uploadSession.created_by_user_id === initialScope.ownerUserId
+            && storageObject
+            && storageObject.status === "available"
+            && storageObject.deletedAt === null
+            && storageObject.createdByUserId === initialScope.ownerUserId
+            && storageObject.projectId === null
+            && (!storageObject.canvasProjectId || storageObject.canvasProjectId === canvasProjectId)
+            && storageObject.contentType.toLowerCase().startsWith("image/");
+          if (!isValidUpload) {
+            return writeJson(response, envelopedError(404, "canvas_style_reference_upload_not_found", "uploaded style reference was not found"));
+          }
+
+          // Re-check the actor and object immediately before making the uploaded object Canvas-scoped.
+          const finalScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const finalStorageObject = await findStorageObject(db, storageObjectId);
+          if (!finalStorageObject
+            || finalStorageObject.status !== "available"
+            || finalStorageObject.deletedAt !== null
+            || finalStorageObject.createdByUserId !== finalScope.ownerUserId
+            || finalStorageObject.projectId !== null
+            || (finalStorageObject.canvasProjectId && finalStorageObject.canvasProjectId !== canvasProjectId)
+            || !finalStorageObject.contentType.toLowerCase().startsWith("image/")) {
+            return writeJson(response, envelopedError(409, "canvas_style_reference_upload_revoked", "uploaded style reference is no longer available"));
+          }
+          const now = new Date();
+          const scopeUpdate = await queryOne<{ id: string }>(db, `
+            UPDATE storage_objects
+            SET canvas_project_id=$2,project_id=NULL
+            WHERE id=$1
+              AND created_by_user_id=$3
+              AND status='available'
+              AND deleted_at IS NULL
+              AND project_id IS NULL
+              AND (canvas_project_id IS NULL OR canvas_project_id=$2)
+            RETURNING id
+          `, [storageObjectId, canvasProjectId, finalScope.ownerUserId]);
+          if (!scopeUpdate) {
+            return writeJson(response, envelopedError(409, "canvas_style_reference_upload_revoked", "uploaded style reference is no longer available"));
+          }
+          const assetKey = `style-reference:${storageObjectId}`;
+          const asset = await queryOne<{ id: string }>(db, `
+            INSERT INTO assets (id,project_id,canvas_project_id,asset_type,asset_key,created_by_user_id,created_at,updated_at)
+            VALUES ($1,NULL,$2,'shot_image',$3,$4,$5,$5)
+            ON CONFLICT (canvas_project_id,asset_type,asset_key) WHERE canvas_project_id IS NOT NULL
+            DO UPDATE SET updated_at=EXCLUDED.updated_at
+            RETURNING id
+          `, [randomUUID(), canvasProjectId, assetKey, finalScope.ownerUserId, now]);
+          const existingVersion = await queryOne<{ id: string }>(db, `
+            SELECT id FROM asset_versions
+            WHERE asset_id=$1 AND storage_object_id=$2
+            ORDER BY version_number DESC,id DESC
+            LIMIT 1
+          `, [asset!.id, storageObjectId]);
+          const assetVersionId = existingVersion?.id ?? randomUUID();
+          if (!existingVersion) {
+            await db.query(`
+              INSERT INTO asset_versions (
+                id,asset_id,version_number,storage_object_id,storage_object_key,metadata_json,
+                source_task_id,source_attempt_id,created_by_user_id,created_at
+              ) VALUES ($1,$2,1,$3,$4,$5::jsonb,NULL,NULL,$6,$7)
+            `, [
+              assetVersionId,
+              asset!.id,
+              storageObjectId,
+              finalStorageObject.objectKey,
+              JSON.stringify({
+                source: "canvas-style-reference-upload",
+                label: label || uploadSession!.original_file_name,
+                mimeType: finalStorageObject.contentType,
+                originalFileName: uploadSession!.original_file_name,
+                uploadSessionId,
+                storageObjectId,
+                sizeBytes: finalStorageObject.sizeBytes,
+                checksum: finalStorageObject.checksum,
+                materializedByPrincipalKey: finalScope.principalKey,
+                materializedByTeamMemberId: finalScope.actorTeamMemberId,
+              }),
+              finalScope.ownerUserId,
+              now,
+            ]);
+          }
+          const styleReferenceNodeKey = "__style_reference__";
+          await db.query(`
+            INSERT INTO creator_canvas_nodes (
+              id,canvas_project_id,node_key,node_type,title,status,media_kind,source_kind,
+              created_by_user_id,updated_by_user_id,created_at,updated_at
+            ) VALUES ($1,$2,$3,'asset-library','风格母图','idle','image','style-reference',$4,$4,$5,$5)
+            ON CONFLICT (canvas_project_id,node_key)
+            DO UPDATE SET deleted_at=NULL,updated_by_user_id=EXCLUDED.updated_by_user_id,updated_at=EXCLUDED.updated_at
+          `, [randomUUID(), canvasProjectId, styleReferenceNodeKey, finalScope.ownerUserId, now]);
+          const existingArtifact = await queryOne<{ id: string }>(db, `
+            SELECT id FROM creator_canvas_node_artifacts
+            WHERE canvas_project_id=$1 AND asset_id=$2 AND asset_version_id=$3 AND deleted_at IS NULL
+            LIMIT 1
+          `, [canvasProjectId, asset!.id, assetVersionId]);
+          const artifact = existingArtifact ?? await appendCanvasNodeArtifact(db, {
+            canvasProjectId,
+            nodeKey: styleReferenceNodeKey,
+            artifactKind: "image",
+            assetId: asset!.id,
+            assetVersionId,
+            storageObjectId,
+            url: `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`,
+            thumbnailUrl: `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`,
+            selected: true,
+            selectionRole: "style-reference",
+            metadata: {
+              source: "canvas-style-reference-upload",
+              title: label || uploadSession!.original_file_name,
+              mimeType: finalStorageObject.contentType,
+            },
+            userId: authenticated.user.id,
+            now,
+          });
+          const previewUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+          return writeJson(response, enveloped(201, {
+            asset: {
+              id: artifact.id,
+              artifactId: artifact.id,
+              assetId: asset!.id,
+              assetVersionId,
+              storageObjectId,
+              kind: "image",
+              title: label || uploadSession!.original_file_name,
+              previewUrl,
+              url: previewUrl,
+            },
+          }));
+        }
+
+        const canvasStorageHealthMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/storage-health$/);
+        if (canvasStorageHealthMatch && request.method === "GET") {
+          const canvasProjectId = decodeURIComponent(canvasStorageHealthMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(200, {
+            health: await getCanvasStorageHealth(db, { canvasProjectId, actorScope: canvasScope }),
+          }));
+        }
+
+        const canvasDirectorArtifactMatch = pathname.match(
+          /^\/api\/canvas\/([^/]+)\/nodes\/([^/]+)\/director-artifacts$/,
+        );
+        if (canvasDirectorArtifactMatch && request.method === "POST") {
+          const canvasProjectId = decodeURIComponent(canvasDirectorArtifactMatch[1] ?? "");
+          const nodeKey = decodeURIComponent(canvasDirectorArtifactMatch[2] ?? "");
+          const initialScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const storageObjectId = String(body.storageObjectId ?? "").trim();
+          const directorDeskKey = String(body.directorDeskKey ?? "").trim();
+          const artifactKind = String(body.artifactKind ?? "image").trim().toLowerCase();
+          if (!storageObjectId || !directorDeskKey) {
+            return writeJson(response, envelopedError(400, "canvas_director_artifact_fields_required", "storageObjectId and directorDeskKey are required"));
+          }
+          if (!["image", "video"].includes(artifactKind)) {
+            return writeJson(response, envelopedError(400, "canvas_director_artifact_kind_invalid", "artifactKind is invalid"));
+          }
+          const expectedRevision = body.expectedRevision == null ? null : Number(body.expectedRevision);
+          if (expectedRevision !== null && !Number.isFinite(expectedRevision)) {
+            return writeJson(response, envelopedError(400, "canvas_revision_invalid", "expectedRevision is invalid"));
+          }
+          const initialCanvas = await findCanvasByCanvasProjectId(db, {
+            canvasProjectId,
+            actorScope: initialScope,
+          });
+          const initialNode = initialCanvas?.document?.nodes?.find((node) => node.id === nodeKey);
+          if (!initialCanvas || !initialNode || initialNode.type !== "ai-director") {
+            return writeJson(response, envelopedError(404, "canvas_director_node_not_found", "director node not found"));
+          }
+          if (expectedRevision !== null && Number.isFinite(expectedRevision) && expectedRevision !== initialCanvas.serverRevision) {
+            return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
+              serverRevision: initialCanvas.serverRevision,
+            }));
+          }
+          const nodeDeskKey = String(
+            initialNode.data?.directorDeskKey
+              ?? initialNode.data?.deskKey
+              ?? initialNode.data?.instanceId
+              ?? directorDeskKey,
+          ).trim();
+          if (nodeDeskKey !== directorDeskKey) {
+            return writeJson(response, envelopedError(403, "director_desk_node_mismatch", "director desk is not assigned to this node"));
+          }
+          const storageObject = await findStorageObject(db, storageObjectId);
+          if (!storageObject || storageObject.status !== "available" || storageObject.createdByUserId !== initialScope.ownerUserId) {
+            return writeJson(response, envelopedError(404, "canvas_director_artifact_storage_not_found", "storage object not found"));
+          }
+          const initialDeskScene = await directorDeskService.readScene({
+            userId: initialScope.ownerUserId,
+            deskKey: directorDeskKey,
+            teamMemberId: authenticated.user.teamMember?.id,
+          });
+          if (initialDeskScene === undefined) {
+            return writeJson(response, envelopedError(403, "director_desk_access_forbidden", "director desk access denied"));
+          }
+
+          // Re-check both assignments immediately before the artifact append.
+          const finalScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          const finalCanvas = await findCanvasByCanvasProjectId(db, {
+            canvasProjectId,
+            actorScope: finalScope,
+          });
+          const finalNode = finalCanvas?.document?.nodes?.find((node) => node.id === nodeKey);
+          if (!finalCanvas || !finalNode || finalNode.type !== "ai-director") {
+            return writeJson(response, envelopedError(409, "canvas_director_node_revoked", "director node access was revoked"));
+          }
+          const finalDeskScene = await directorDeskService.readScene({
+            userId: finalScope.ownerUserId,
+            deskKey: directorDeskKey,
+            teamMemberId: authenticated.user.teamMember?.id,
+          });
+          if (finalDeskScene === undefined) {
+            return writeJson(response, envelopedError(403, "director_desk_access_forbidden", "director desk access denied"));
+          }
+          const finalStorageObject = await findStorageObject(db, storageObjectId);
+          if (!finalStorageObject || finalStorageObject.status !== "available" || finalStorageObject.createdByUserId !== finalScope.ownerUserId) {
+            return writeJson(response, envelopedError(409, "canvas_director_artifact_storage_revoked", "storage object is no longer available"));
+          }
+          const artifact = await appendCanvasNodeArtifact(db, {
+            canvasProjectId,
+            nodeKey,
+            artifactKind,
+            storageObjectId,
+            selected: true,
+            selectionRole: "current",
+            metadata: {
+              ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}),
+              source: "director-desk",
+              directorDeskKey,
+            },
+            userId: authenticated.user.id,
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(201, { artifact }));
+        }
+
+        const canvasArtifactTagsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/artifacts\/([^/]+)\/tags$/);
+        if (canvasArtifactTagsMatch && request.method === "PATCH") {
+          const canvasProjectId = decodeURIComponent(canvasArtifactTagsMatch[1] ?? "");
+          const artifactId = decodeURIComponent(canvasArtifactTagsMatch[2] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          const body = (await readJsonBody(request)) as { tags?: unknown };
+          const tags = normalizeTeamAssetTags(body.tags);
+          if (!Array.isArray(body.tags) || tags.length > 12 || tags.some((tag) => tag.length > 32)) {
+            return writeJson(response, envelopedError(400, "canvas_artifact_tags_invalid", "Canvas artifact tags must be an array of up to 12 tags with 32 characters each"));
+          }
+          const updated = await queryOne<{ asset_version_id: string; metadata_json: Record<string, unknown> | string }>(db, `
+            UPDATE asset_versions version
+            SET metadata_json = COALESCE(version.metadata_json, '{}'::jsonb) || jsonb_build_object('tags', $3::jsonb)
+            FROM assets asset, creator_canvas_node_artifacts artifact
+            WHERE artifact.id=$2
+              AND artifact.asset_version_id=version.id
+              AND artifact.canvas_project_id=$1
+              AND artifact.deleted_at IS NULL
+              AND version.asset_id=asset.id
+              AND asset.canvas_project_id=$1
+            RETURNING version.id AS asset_version_id,version.metadata_json
+          `, [canvasProjectId, artifactId, JSON.stringify(tags)]);
+          if (!updated) {
+            return writeJson(response, envelopedError(404, "canvas_artifact_not_found", "Canvas artifact was not found"));
+          }
+          return writeJson(response, enveloped(200, {
+            artifactId,
+            assetVersionId: updated.asset_version_id,
+            tags: normalizeTeamAssetTags(parseMetadataJson(updated.metadata_json).tags),
+            actor: canvasScope.principalKey,
+          }));
+        }
+
+        const canvasAssetReferencesMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/asset-references$/);
+        if (canvasAssetReferencesMatch && request.method === "GET") {
+          const canvasProjectId = decodeURIComponent(canvasAssetReferencesMatch[1] ?? "");
+          await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(200, await inspectCanvasAssetReferenceUsage(db, {
+            canvasProjectId,
+            storageObjectId: readString(url.searchParams.get("storageObjectId")) || null,
+            assetId: readString(url.searchParams.get("assetId")) || null,
+            assetVersionId: readString(url.searchParams.get("assetVersionId")) || null,
+          })));
+        }
+
+        const canvasDerivationCollectionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/derivations$/);
+        const canvasDerivationItemMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/derivations\/([^/]+)$/);
+        const canvasDerivationActionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/derivations\/([^/]+)\/(attach-task|complete|fail)$/);
+        if (request.method === "POST" && canvasDerivationCollectionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasDerivationCollectionMatch[1] ?? "");
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "run", now: new Date() });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const created = await startCanvasMediaDerivation(db, {
+            canvasProjectId,
+            nodeKey: String(body.nodeKey ?? ""),
+            derivationType: String(body.derivationType ?? ""),
+            baseCanvasRevision: Number(body.baseCanvasRevision),
+            source: readJsonRecord(body.source) as { assetId: string | null; assetVersionId: string | null; storageObjectId: string | null },
+            requestSnapshot: readJsonRecord(body.requestSnapshot),
+            taskId: readString(body.taskId) || null,
+            actorScope: scope,
+            now: new Date(),
+          });
+          return writeJson(response, enveloped(201, { derivation: created }));
+        }
+        if (request.method === "POST" && canvasDerivationActionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasDerivationActionMatch[1] ?? "");
+          const derivationId = decodeURIComponent(canvasDerivationActionMatch[2] ?? "");
+          const action = canvasDerivationActionMatch[3] ?? "";
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "run", now: new Date() });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const taskId = readString(body.taskId);
+          const task = taskId
+            ? await queryOne<{ task_id: string }>(db, "SELECT id AS task_id FROM tasks WHERE id=$1 AND canvas_project_id=$2", [taskId, canvasProjectId])
+            : null;
+          if (!task) return writeJson(response, envelopedError(400, "canvas_derivation_task_required", "derivation task is required"));
+          if (action === "attach-task") {
+            return writeJson(response, enveloped(200, { derivation: await attachCanvasMediaDerivationTask(db, { derivationId, canvasProjectId, taskId: task.task_id, now: new Date() }) }));
+          }
+          if (action === "complete") {
+            return writeJson(response, enveloped(200, {
+              derivation: await completeCanvasMediaDerivation(db, {
+                derivationId,
+                artifact: {
+                  artifactKind: String(body.artifactKind ?? "image"),
+                  assetId: readString(body.assetId) || null,
+                  assetVersionId: readString(body.assetVersionId) || null,
+                  storageObjectId: readString(body.storageObjectId) || null,
+                  url: readString(body.url) || null,
+                  thumbnailUrl: readString(body.thumbnailUrl) || null,
+                  metadata: readJsonRecord(body.metadata),
+                },
+                now: new Date(),
+              }),
+            }));
+          }
+          return writeJson(response, enveloped(200, {
+            derivation: await failCanvasMediaDerivation(db, {
+              derivationId,
+              failure: readJsonRecord(body.failure),
+              now: new Date(),
+            }),
+          }));
+        }
+        if (request.method === "GET" && canvasDerivationItemMatch) {
+          const canvasProjectId = decodeURIComponent(canvasDerivationItemMatch[1] ?? "");
+          await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "view", now: new Date() });
+          const derivation = await queryOne<Record<string, unknown>>(
+            db,
+            "SELECT * FROM creator_canvas_media_derivations WHERE id=$1 AND canvas_project_id=$2",
+            [decodeURIComponent(canvasDerivationItemMatch[2] ?? ""), canvasProjectId],
+          );
+          return derivation
+            ? writeJson(response, enveloped(200, { derivation }))
+            : writeJson(response, envelopedError(404, "canvas_derivation_not_found", "derivation not found"));
+        }
+
+        const canvasImageBatchCollectionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/image-batch-groups$/);
+        const canvasImageBatchItemMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/image-batch-groups\/([^/]+)$/);
+        const canvasImageBatchSelectMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/image-batch-groups\/([^/]+)\/select$/);
+        if (request.method === "POST" && canvasImageBatchCollectionMatch) {
+          const canvasProjectId = decodeURIComponent(canvasImageBatchCollectionMatch[1] ?? "");
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "edit", now: new Date() });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const artifacts = Array.isArray(body.artifacts) ? body.artifacts.map((value) => {
+            const item = readJsonRecord(value);
+            return { artifactId: String(item.artifactId ?? ""), parameters: readJsonRecord(item.parameters) };
+          }) : [];
+          return writeJson(response, enveloped(201, { group: await createCanvasImageBatchGroup(db, {
+            canvasProjectId,
+            nodeKey: String(body.nodeKey ?? ""),
+            sourceRunId: readString(body.sourceRunId) || null,
+            artifacts,
+            actorScope: scope,
+            now: new Date(),
+          }) }));
+        }
+        if (request.method === "GET" && canvasImageBatchItemMatch) {
+          const canvasProjectId = decodeURIComponent(canvasImageBatchItemMatch[1] ?? "");
+          await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "view", now: new Date() });
+          return writeJson(response, enveloped(200, { group: await getCanvasImageBatchGroup(db, decodeURIComponent(canvasImageBatchItemMatch[2] ?? ""), canvasProjectId) }));
+        }
+        if (request.method === "POST" && canvasImageBatchSelectMatch) {
+          const canvasProjectId = decodeURIComponent(canvasImageBatchSelectMatch[1] ?? "");
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "edit", now: new Date() });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          return writeJson(response, enveloped(200, { selection: await selectCanvasImageBatchArtifact(db, {
+            groupId: decodeURIComponent(canvasImageBatchSelectMatch[2] ?? ""),
+            artifactId: String(body.artifactId ?? ""), actorScope: scope, now: new Date(),
+          }) }));
+        }
+
+        const canvasAnnotationLayersMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/annotation-layers$/);
+        if (request.method === "GET" && canvasAnnotationLayersMatch) {
+          const canvasProjectId = decodeURIComponent(canvasAnnotationLayersMatch[1] ?? "");
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "view", now: new Date() });
+          const layers = await listCanvasAnnotationLayers(db, {
+            canvasProjectId,
+            nodeKey: String(url.searchParams.get("nodeKey") ?? ""),
+            actorScope: scope,
+            includeInactive: url.searchParams.get("includeInactive") === "true",
+            limit: Number(url.searchParams.get("limit") ?? 100),
+          });
+          const hydratedLayers = await Promise.all(layers.map(async (layer) => {
+            if (!layer.layerStorageObjectId) return { ...layer, previewUrl: null };
+            try {
+              const signed = await createSignedReadUrl(db, {
+                actorScope: scope,
+                storageObjectId: layer.layerStorageObjectId,
+                adapter: storageRuntime.adapter,
+                now: new Date(),
+                expiresInSeconds: signedUrlExpiresInSeconds,
+              });
+              return { ...layer, previewUrl: signed.url };
+            } catch {
+              return { ...layer, previewUrl: null };
+            }
+          }));
+          return writeJson(response, enveloped(200, { layers: hydratedLayers }));
+        }
+        if (request.method === "POST" && canvasAnnotationLayersMatch) {
+          const canvasProjectId = decodeURIComponent(canvasAnnotationLayersMatch[1] ?? "");
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "edit", now: new Date() });
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          return writeJson(response, enveloped(201, { layer: await createCanvasAnnotationLayer(db, {
+            canvasProjectId,
+            nodeKey: String(body.nodeKey ?? ""),
+            layerKind: String(body.layerKind ?? "mask") as "mask" | "raster_annotation" | "vector_annotation",
+            sourceAssetId: readString(body.sourceAssetId) || null,
+            sourceAssetVersionId: readString(body.sourceAssetVersionId) || null,
+            layerAssetId: readString(body.layerAssetId) || null,
+            layerAssetVersionId: readString(body.layerAssetVersionId) || null,
+            layerStorageObjectId: readString(body.layerStorageObjectId) || null,
+            projectionPolicy: (readString(body.projectionPolicy) || "retain") as "retain" | "reproject" | "discard",
+            metadata: readJsonRecord(body.metadata), actorScope: scope, now: new Date(),
+          }) }));
+        }
+
+        const canvasCardSnapshotMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/card-snapshots$/);
+        if (request.method === "POST" && canvasCardSnapshotMatch) {
+          const canvasProjectId = decodeURIComponent(canvasCardSnapshotMatch[1] ?? "");
+          const scope = await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "edit", now: new Date() });
+          return writeJson(response, enveloped(201, { snapshot: await startCanvasCardSnapshot(db, {
+            canvasProjectId, canvasRevision: Number(((await readJsonBody(request)) as Record<string, unknown>).canvasRevision), userId: scope.ownerUserId, now: new Date(),
+          }) }));
+        }
+        if (request.method === "GET" && canvasCardSnapshotMatch) {
+          const canvasProjectId = decodeURIComponent(canvasCardSnapshotMatch[1] ?? "");
+          await authorizeCanvasActor(db, { sessionToken: authenticated.sessionToken, canvasId: canvasProjectId, action: "view", now: new Date() });
+          return writeJson(response, enveloped(200, { snapshot: await getLatestCanvasCardSnapshot(db, { canvasProjectId, canvasRevision: Number(url.searchParams.get("revision") ?? "0") || undefined }) }));
+        }
+
+        const canvasSessionMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/session$/);
+        if (canvasSessionMatch && (request.method === "GET" || request.method === "PUT")) {
+          const canvasProjectId = decodeURIComponent(canvasSessionMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, {
+              session: await getCanvasSession(db, { canvasProjectId, actorScope: canvasScope }),
+            }));
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          return writeJson(response, enveloped(200, {
+            session: await saveCanvasSession(db, {
+              canvasProjectId,
+              actorScope: canvasScope,
+              viewport: readJsonRecord(body.viewport),
+              selectedNodeKeys: Array.isArray(body.selectedNodeKeys) ? body.selectedNodeKeys : [],
+              selectedEdgeKeys: Array.isArray(body.selectedEdgeKeys) ? body.selectedEdgeKeys : [],
+              uiState: readJsonRecord(body.uiState),
+              lastSeenRevision: Number(body.lastSeenRevision ?? 1),
+              now: new Date(),
+            }),
+          }));
         }
 
         const canvasHeadMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/head$/);
@@ -20291,18 +23703,19 @@ export function createPhoneAuthDevServer(
           if (!isUuid(canvasProjectId)) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
           const canvas = await findCanvasByCanvasProjectId(db, {
             canvasProjectId,
-            userId: authenticated.user.id,
+            actorScope: canvasScope,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
-          await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            capability: capabilities.accountRead,
-            now: new Date(),
-          });
           return writeJson(response, enveloped(200, {
             head: {
               canvasProjectId: canvas.canvasProjectId,
@@ -20321,9 +23734,15 @@ export function createPhoneAuthDevServer(
           if (!isUuid(canvasProjectId)) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
           const canvas = await findCanvasByCanvasProjectId(db, {
             canvasProjectId,
-            userId: authenticated.user.id,
+            actorScope: canvasScope,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
@@ -20333,6 +23752,11 @@ export function createPhoneAuthDevServer(
             capability: capabilities.accountRead,
             now: new Date(),
           });
+          const lastEventIdHeader = Array.isArray(request.headers["last-event-id"])
+            ? request.headers["last-event-id"]?.[0]
+            : request.headers["last-event-id"];
+          recordCanvasCanaryRuntimeMetric("sse_connect");
+          if (String(lastEventIdHeader ?? "").trim()) recordCanvasCanaryRuntimeMetric("sse_resume");
           response.statusCode = 200;
           response.setHeader("content-type", "text/event-stream; charset=utf-8");
           response.setHeader("cache-control", "no-cache, no-transform");
@@ -20340,14 +23764,27 @@ export function createPhoneAuthDevServer(
           response.setHeader("x-accel-buffering", "no");
           response.flushHeaders?.();
           const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+          const permissionRecheckMs = runtimeEnv.NODE_ENV === "test" ? 50 : 15_000;
+          const permissionRecheck = setInterval(() => {
+            void authorizeCanvasActor(db, {
+              sessionToken: authenticated.sessionToken,
+              canvasId: canvasProjectId,
+              action: "view",
+              now: new Date(),
+            }).catch(() => {
+              if (!response.destroyed && !response.writableEnded) response.end();
+            });
+          }, permissionRecheckMs);
+          permissionRecheck.unref?.();
           const unsubscribe = canvasLiveHub.subscribe({
             canvasProjectId,
             member: {
               memberId: actor.teamMember ? `team:${actor.teamMember.id}` : `user:${actor.userId}`,
               displayName: actor.teamMember?.memberName ?? authenticated.user.displayName ?? "用户",
             },
+            afterEventId: String(lastEventIdHeader ?? "").trim() || null,
             send: (event) => {
-              if (!response.destroyed && !response.writableEnded) writeSseData(response, event);
+              if (!response.destroyed && !response.writableEnded) writeCanvasLiveSseData(response, event);
             },
             close: () => {
               if (!response.destroyed && !response.writableEnded) response.end();
@@ -20358,6 +23795,7 @@ export function createPhoneAuthDevServer(
             if (cleaned) return;
             cleaned = true;
             stopHeartbeat();
+            clearInterval(permissionRecheck);
             unsubscribe();
           };
           request.once("aborted", cleanup);
@@ -20370,22 +23808,38 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && canvasNodeRunsMatch) {
           const canvasProjectId = decodeURIComponent(canvasNodeRunsMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunsMatch[2] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
           const canvas = await findCanvasByCanvasProjectId(db, {
             canvasProjectId,
-            userId: authenticated.user.id,
+            actorScope: canvasScope,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
-          await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            capability: capabilities.accountRead,
-            now: new Date(),
-          });
           return writeJson(response, enveloped(200, await listCanvasNodeRuns(db, {
             canvasProjectId,
             nodeKey,
+            actorScope: canvasScope,
           })));
+        }
+
+        const canvasFrontendErrorMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/telemetry\/frontend-errors$/);
+        if (request.method === "POST" && canvasFrontendErrorMatch) {
+          const canvasProjectId = decodeURIComponent(canvasFrontendErrorMatch[1] ?? "");
+          await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
+          await readJsonBody(request);
+          recordCanvasCanaryRuntimeMetric("frontend_error");
+          return writeJson(response, enveloped(202, { accepted: true }));
         }
 
         const canvasArtifactSelectMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/artifacts\/([^/]+)\/select$/);
@@ -20393,18 +23847,19 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasArtifactSelectMatch[1] ?? "");
           const artifactId = decodeURIComponent(canvasArtifactSelectMatch[2] ?? "");
           const body = (await readJsonBody(request)) as { selectionRole?: unknown };
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
           const canvas = await findCanvasByCanvasProjectId(db, {
             canvasProjectId,
-            userId: authenticated.user.id,
+            actorScope: canvasScope,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
-          await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            capability: capabilities.accountRead,
-            now: new Date(),
-          });
           try {
             return writeJson(response, enveloped(200, {
               artifact: await selectCanvasNodeArtifact(db, {
@@ -20412,6 +23867,7 @@ export function createPhoneAuthDevServer(
                 artifactId,
                 selectionRole: typeof body.selectionRole === "string" ? body.selectionRole : "current",
                 userId: authenticated.user.id,
+                actorScope: canvasScope,
                 now: new Date(),
               }),
             }));
@@ -20434,9 +23890,15 @@ export function createPhoneAuthDevServer(
           const canvasProjectId = decodeURIComponent(canvasNodeRunMatch[1] ?? "");
           const nodeKey = decodeURIComponent(canvasNodeRunMatch[2] ?? "");
           const body = (await readJsonBody(request)) as Record<string, unknown>;
-          let canvas = await findCanvasByCanvasProjectId(db, {
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "run",
+            now: new Date(),
+          });
+          const canvas = await findCanvasByCanvasProjectId(db, {
             canvasProjectId,
-            userId: authenticated.user.id,
+            actorScope: canvasScope,
           });
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
@@ -20476,8 +23938,34 @@ export function createPhoneAuthDevServer(
             }
           }
           const requestedMediaKind = String(body.kind ?? body.mediaKind ?? node.data?.mediaKind ?? "image");
+          if (requestedMediaKind === "text" || node.type === "ai-text" || node.type === "ai-markdown") {
+            try {
+              const result = await runCanvasTextNode(db, {
+                canvas,
+                nodeKey,
+                idempotencyKey,
+                body,
+                userId: authenticated.user.id,
+                actorScope: canvasScope,
+                gateway: aiStoryboardTextChatGateway,
+                now: new Date(),
+              });
+              const resultStatus = result.status === "created" || result.status === "running" ? 202 : 200;
+              return writeJson(response, enveloped(resultStatus, result));
+            } catch (error) {
+              if (error instanceof CanvasTextNodeRunError) {
+                return writeJson(response, envelopedError(
+                  error.status,
+                  error.code,
+                  error.message,
+                  error.details,
+                ));
+              }
+              throw error;
+            }
+          }
           const mediaKind = requestedMediaKind === "audio" ? "audio" : requestedMediaKind === "video" ? "video" : "image";
-          if (mediaKind === "audio" && (node.type !== "audio" || node.data?.mediaKind !== "audio")) {
+          if (mediaKind === "audio" && (!["audio", "ai-audio"].includes(node.type) || node.data?.mediaKind !== "audio")) {
             return writeJson(
               response,
               envelopedError(400, "canvas_audio_node_invalid", "Only an audio generation node can run an audio task"),
@@ -20495,6 +23983,26 @@ export function createPhoneAuthDevServer(
               envelopedError(410, "image_generation_entry_removed", "Use /api/generation/image-tasks for image generation"),
             );
           }
+          if (mediaKind === "audio" && isCanvasPlainTextTranscriptionRequest(canvas, nodeKey, body)) {
+            try {
+              const localResult = await runCanvasPlainTextTranscription(db, {
+                canvas,
+                nodeKey,
+                idempotencyKey,
+                body,
+                actorScope: canvasScope,
+                userId: authenticated.user.id,
+                now: new Date(),
+              });
+              return writeJson(response, enveloped(200, localResult));
+            } catch (error) {
+              if (error instanceof CanvasAudioTextInputError) {
+                return writeJson(response, envelopedError(error.status, error.code, error.message));
+              }
+              throw error;
+            }
+          }
+          const resolvedPromptBody = await resolveCanvasGenerationPromptBody(db, canvasScope, body, mediaKind);
           const run = await createCanvasNodeRun(db, {
             canvasProjectId,
             nodeKey,
@@ -20506,16 +24014,17 @@ export function createPhoneAuthDevServer(
             targetType: "canvas",
             targetId: nodeKey,
             inputSnapshot: {
-              ...body,
+              ...resolvedPromptBody,
               canvasProjectId,
               nodeKey,
               nodeData: node.data ?? {},
             },
             userId: authenticated.user.id,
+            actorScope: canvasScope,
             now: new Date(),
           });
           const generationBody = {
-            ...body,
+            ...resolvedPromptBody,
             targetType: "canvas",
             targetId: nodeKey,
             canvasProjectId,
@@ -20531,6 +24040,7 @@ export function createPhoneAuthDevServer(
               actor,
               project: null,
               canvasProjectId,
+              canvasActorScope: canvasScope,
               userId: authenticated.user.id,
             },
             runtime: storageRuntime,
@@ -20745,6 +24255,7 @@ export function createPhoneAuthDevServer(
                 projectId: project.id ?? episode.project_id,
                 name: project.name ?? "",
                 status: project.phase ?? null,
+                projectType: project.project_style_code,
               },
               navigation: {
                 backTarget: "project_episodes",
@@ -20817,6 +24328,31 @@ export function createPhoneAuthDevServer(
         }
 
         if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.endsWith("/assets")
+        ) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_delete_forbidden", "team member cannot delete project assets"));
+          }
+          const assetType = String(url.searchParams.get("assetType") ?? "").trim();
+          if (!["role", "scene", "prop"].includes(assetType)) {
+            return writeJson(response, envelopedError(400, "invalid_asset_type", "asset type must be role, scene, or prop"));
+          }
+          const episodeId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
+          const result = await deleteEpisodeAssetsByType(db, {
+            episodeId,
+            assetType: assetType as "role" | "scene" | "prop",
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
           request.method === "POST" &&
           pathname.startsWith("/api/episodes/") &&
           pathname.endsWith("/assets/import")
@@ -20870,6 +24406,30 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           });
           if (!result?.asset) {
+            return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
+          }
+          return writeJson(response, enveloped(200, result));
+        }
+
+        if (
+          request.method === "DELETE" &&
+          pathname.startsWith("/api/episodes/") &&
+          pathname.includes("/assets/") &&
+          pathname.endsWith("/fixed-image")
+        ) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_delete_forbidden", "team member cannot delete project assets"));
+          }
+          const parts = pathname.split("/");
+          const episodeId = decodeURIComponent(parts.at(3) ?? "");
+          const assetId = decodeURIComponent(parts.at(5) ?? "");
+          const result = await clearEpisodeAssetFixedImage(db, {
+            episodeId,
+            assetId,
+            authenticated,
+            now: new Date(),
+          });
+          if (!result) {
             return writeJson(response, envelopedError(404, "resource_not_found", "resource not found"));
           }
           return writeJson(response, enveloped(200, result));
@@ -22146,7 +25706,7 @@ export function createPhoneAuthDevServer(
           return writeJson(response, enveloped(200, { brandKitId, brandKit }));
         }
 
-        if (pathname === "/api/creator/canvas-projects") {
+        if (pathname === "/api/creator/canvases" || pathname === "/api/creator/canvas-projects") {
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             capability: undefined,
@@ -22155,6 +25715,7 @@ export function createPhoneAuthDevServer(
           const visibleProjects = await listCanvasProjects(db, {
             userId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id,
+            includeDeleted: url.searchParams.get("includeDeleted") === "true",
           });
 
           if (request.method === "GET") {
@@ -22183,7 +25744,7 @@ export function createPhoneAuthDevServer(
         }
 
         const canvasRevisionsMatch = pathname.match(
-          /^\/api\/creator\/canvas-projects\/([^/]+)\/revisions(?:\/([^/]+))?$/,
+          /^\/api\/creator\/(?:canvases|canvas-projects)\/([^/]+)\/revisions(?:\/([^/]+))?$/,
         );
         if (canvasRevisionsMatch) {
           if (request.method !== "GET") {
@@ -22209,12 +25770,18 @@ export function createPhoneAuthDevServer(
           if (!canvas) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "view",
+            now: new Date(),
+          });
           try {
             if (revisionId) {
               const revision = await getCanvasRevision(db, {
                 canvasProjectId,
                 revisionId,
-                userId: authenticated.user.id,
+                actorScope: canvasScope,
               });
               if (!revision) {
                 return writeJson(response, envelopedError(404, "canvas_revision_not_found", "canvas revision not found"));
@@ -22228,7 +25795,7 @@ export function createPhoneAuthDevServer(
               : undefined;
             const revisions = await listCanvasRevisions(db, {
               canvasProjectId,
-              userId: authenticated.user.id,
+              actorScope: canvasScope,
               limit: requestedLimit,
               beforeRevision,
             });
@@ -22240,7 +25807,7 @@ export function createPhoneAuthDevServer(
             if (lastRevision !== null && revisions.length === requestedLimit) {
               const following = await listCanvasRevisions(db, {
                 canvasProjectId,
-                userId: authenticated.user.id,
+                actorScope: canvasScope,
                 limit: 1,
                 beforeRevision: lastRevision,
               });
@@ -22259,12 +25826,20 @@ export function createPhoneAuthDevServer(
           }
         }
 
-        const standaloneCanvasMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)\/canvas$/);
+        const standaloneCanvasMatch = pathname.match(
+          /^\/api\/creator\/(?:canvases\/([^/]+)\/document|canvas-projects\/([^/]+)\/canvas)$/,
+        );
         if (standaloneCanvasMatch) {
           if (request.method !== "GET" && request.method !== "PUT") {
             return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
           }
-          const canvasProjectId = decodeURIComponent(standaloneCanvasMatch[1] ?? "");
+          const canvasProjectId = decodeURIComponent(standaloneCanvasMatch[1] ?? standaloneCanvasMatch[2] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: request.method === "PUT" ? "edit" : "view",
+            now: new Date(),
+          });
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             capability: capabilities.accountRead,
@@ -22284,23 +25859,26 @@ export function createPhoneAuthDevServer(
               return writeJson(response, enveloped(200, {
                 canvas: await findCanvasByCanvasProjectId(db, {
                   canvasProjectId,
-                  userId: authenticated.user.id,
+                  actorScope: canvasScope,
                 }),
               }));
             }
-            const body = (await readJsonBody(request)) as {
+            const rawCanvasBody = await readLimitedTextBody(request, 6 * 1024 * 1024);
+            const body = (rawCanvasBody ? JSON.parse(rawCanvasBody) : {}) as {
               clientRevision?: unknown;
               serverRevision?: unknown;
               document?: unknown;
               events?: Array<Record<string, unknown>>;
             };
             const clientRevision = Number(body.clientRevision ?? body.serverRevision ?? 0);
+            recordCanvasCanaryRuntimeMetric("save_attempt");
             const savedCanvas = await saveCanvasByCanvasProjectId(db, {
               canvasProjectId,
               userId: authenticated.user.id,
               clientRevision,
               document: body.document,
               events: Array.isArray(body.events) ? body.events : [],
+              actorScope: canvasScope,
               now,
             });
             if (savedCanvas.serverRevision > clientRevision) {
@@ -22314,21 +25892,59 @@ export function createPhoneAuthDevServer(
             return writeJson(response, enveloped(200, { canvas: savedCanvas }));
           } catch (error) {
             if (error instanceof CanvasConflictError) {
+              recordCanvasCanaryRuntimeMetric("save_conflict");
               return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
                 serverRevision: error.serverRevision,
                 serverDocument: error.serverDocument as Record<string, unknown>,
               }));
             }
             if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
-              return writeJson(response, envelopedError(400, error.code, error.message));
+              const status = error.code === "canvas_document_too_large" ? 413 : 400;
+              return writeJson(response, envelopedError(status, error.code, error.message));
+            }
+            if (error instanceof Error && error.message === "request_body_too_large") {
+              return writeJson(response, envelopedError(413, "canvas_request_body_too_large", "canvas request body exceeds the size limit"));
             }
             throw error;
           }
         }
 
-        const canvasProjectMatch = pathname.match(/^\/api\/creator\/canvas-projects\/([^/]+)$/);
+        const canvasRestoreMatch = pathname.match(
+          /^\/api\/creator\/(?:canvases|canvas-projects)\/([^/]+)\/restore$/,
+        );
+        if (canvasRestoreMatch) {
+          if (request.method !== "POST") {
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          const projectId = decodeURIComponent(canvasRestoreMatch[1] ?? "");
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            capability: capabilities.projectEdit,
+            now: new Date(),
+          });
+          if (actor.teamMember) {
+            return writeJson(response, envelopedError(403, "team_member_canvas_manage_forbidden", "team member cannot manage canvas projects"));
+          }
+          const restored = await restoreCanvasProjectRecord(db, {
+            userId: authenticated.user.id,
+            projectId,
+            now: new Date(),
+          });
+          if (!restored) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+          return writeJson(response, enveloped(200, { project: serializeCanvasProject(restored) }));
+        }
+
+        const canvasProjectMatch = pathname.match(/^\/api\/creator\/(?:canvases|canvas-projects)\/([^/]+)$/);
         if (canvasProjectMatch) {
           const projectId = decodeURIComponent(canvasProjectMatch[1] ?? "");
+          if (!isUuid(projectId)) {
+            return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             capability: request.method === "PATCH" || request.method === "DELETE"
@@ -22344,6 +25960,12 @@ export function createPhoneAuthDevServer(
 
           if (!project) {
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
+          }
+
+          if (request.method === "GET") {
+            return writeJson(response, enveloped(200, {
+              project: serializeCanvasProject(project),
+            }));
           }
 
           if (request.method === "PATCH") {
@@ -22537,7 +26159,7 @@ export function createPhoneAuthDevServer(
         }
 
         const scriptCardMatch = pathname.match(/^\/api\/creator\/scripts\/([^/]+)$/);
-        if (scriptCardMatch) {
+        if (scriptCardMatch && (request.method === "PATCH" || request.method === "DELETE")) {
           const scriptId = decodeURIComponent(scriptCardMatch[1] ?? "");
           if (!isUuid(scriptId)) {
             return writeJson(response, envelopedError(400, "invalid_script_id", "script id is invalid"));
@@ -22628,42 +26250,133 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "POST" && pathname === "/api/creator/scripts/ai-script-analysis") {
-          await resolveActorContext(db, {
+          const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             now: new Date(),
           });
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
-            skipScriptStage?: boolean | null;
-            packages?: {
-              genrePackageId?: string | null;
-              emotionPackageId?: string | null;
-            } | null;
+            skillId?: string | null;
+            modelCode?: string | null;
           };
           const scriptText = String(body.scriptText ?? "").trim();
-          const genrePackageId = String(body.packages?.genrePackageId ?? "");
-          const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
+          const skillId = String(body.skillId ?? "").trim();
+          const modelCode = String(body.modelCode ?? "").trim();
           if (!scriptText) {
             return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
           }
-          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
-            return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
+          if (!skillId) {
+            return writeJson(response, envelopedError(400, "script_conversion_skill_required", "script conversion skill is required"));
           }
-
-          await ensureDefaultStoryboardPromptData(db);
-          const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
-            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
-            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
-            findDefaultTabooStoryboardPromptPackagesForPreview(db),
-          ]);
-          if (!genrePackage || !emotionPackage) {
-            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
+          if (!isUuid(skillId)) {
+            return writeJson(response, envelopedError(400, "script_conversion_skill_invalid", "script conversion skill id is invalid"));
           }
-          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
-          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
-          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
+          if (!modelCode) {
+            return writeJson(response, envelopedError(400, "script_conversion_model_required", "script conversion model is required"));
+          }
+          const now = new Date();
+          if (!await hasActiveGenerationMembership(db, { userId: authenticated.user.id, now })) {
+            throw new GenerationMembershipRequiredError();
+          }
+          if (!options.textChatGateway) {
+            await new AdminBackedTextModelResolver(db).resolve(modelCode);
+          }
+          const scriptModelConfig = await findActiveAiModelConfigByCode(db, modelCode);
+          if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
+            throw new TextModelGatewayError("model_not_configured");
+          }
+          let skill: Awaited<ReturnType<ReturnType<typeof createPromptMarketplaceService>["resolveScriptConversionSkill"]>>;
+          try {
+            skill = await createPromptMarketplaceService({ db }).resolveScriptConversionSkill({
+              userId: authenticated.user.id,
+              itemId: skillId,
+              now,
+            });
+          } catch (error) {
+            if (error instanceof PromptMarketplaceError) {
+              return writeJson(response, envelopedError(error.status, error.code, error.message));
+            }
+            throw error;
+          }
+          const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig);
+          const skillCreditCost = Math.max(0, Math.round(Number(skill.priceCredits) || 0));
+          const creditCost = modelCreditCost + skillCreditCost;
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request) ?? randomUUID();
+          const billingMetadata = {
+            modelCode,
+            modelLabel: scriptModelConfig.displayName,
+            skillId: skill.id,
+            skillTitle: skill.title,
+            modelCreditCost,
+            skillCreditCost,
+            creditCost,
+            taskType: "user_script_analysis",
+            operation: "user_script_analysis",
+          };
+          const skillAuthorGrant = !skill.official && skillCreditCost > 0 && skill.ownerUserId
+            ? {
+                userId: skill.ownerUserId,
+                amount: skillCreditCost,
+                sourceId: uuidFromIdempotencyKey(`${idempotencyKey}:skill-author:${skill.id}`),
+                metadata: {
+                  skillId: skill.id,
+                  skillTitle: skill.title,
+                  payerUserId: authenticated.user.id,
+                  teamMemberId: actor.teamMember?.id ?? null,
+                  modelCode,
+                  skillCreditCost,
+                },
+              }
+            : null;
+          try {
+            if (actor.teamMember) {
+              await reserveAndConsumeSimpleTeamMemberCredits(db, {
+                projectId: null,
+                teamMemberId: actor.teamMember.id,
+                idempotencyKey,
+                promptPreview: scriptText.slice(0, 200),
+                modelConfig: {
+                  ...scriptModelConfig,
+                  pricing: {
+                    ...scriptModelConfig.pricing,
+                    baseCredits: creditCost,
+                    resolutionCredits: {},
+                  },
+                },
+                billingMetadata,
+                skillAuthorGrant,
+                now,
+              });
+            } else if (creditCost > 0) {
+              await reserveConsumeAndGrantUserScriptAnalysisCredits(db, {
+                userId: authenticated.user.id,
+                amount: creditCost,
+                idempotencyKey,
+                metadata: billingMetadata,
+                skillAuthorGrant,
+                now,
+              });
+            }
+          } catch (error) {
+            if (error instanceof IdempotencyConflictError) {
+              return writeJson(response, envelopedError(409, error.code, "幂等键已用于其他小说转剧本请求。"));
+            }
+            throw error;
+          }
+          const creditBalanceRow = actor.teamMember
+            ? await queryOne<{ balance: number | string }>(
+                db,
+                "SELECT member_credits AS balance FROM team_members WHERE id = $1 LIMIT 1",
+                [actor.teamMember.id],
+              )
+            : await queryOne<{ balance: number | string }>(
+                db,
+                "SELECT credit_balance_cached AS balance FROM users WHERE id = $1 LIMIT 1",
+                [authenticated.user.id],
+              );
+          const creditBalance = Number(creditBalanceRow?.balance ?? 0);
 
-          const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
+          const analysisService = createAiScriptAnalysisService({ gateway: aiScriptAnalysisTextChatGateway });
           response.statusCode = 200;
           response.setHeader("content-type", "text/event-stream; charset=utf-8");
           response.setHeader("cache-control", "no-cache, no-transform");
@@ -22672,21 +26385,31 @@ export function createPhoneAuthDevServer(
           const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
           const abortController = createRequestAbortController(request, response);
           try {
+            let generationCompleted = false;
             for await (const event of analysisService.generateScriptStream({
               projectId: null,
               createdByUserId: authenticated.user.id,
+              modelCode,
               scriptText,
               packages: {
-                genrePrompt,
-                emotionPrompt,
-                tabooPrompt,
+                skillPrompt: skill.content,
               },
               signal: abortController.signal,
             })) {
               if (abortController.signal.aborted) {
                 break;
               }
-              writeSseData(response, event);
+              if (event.type === "complete") generationCompleted = true;
+              writeSseData(response, event.type === "complete"
+                ? { ...event, creditBalance, creditCost, modelCreditCost, skillCreditCost }
+                : event);
+            }
+            if (generationCompleted) {
+              await grantPromptSkillAuthorCredits(db, {
+                payerUserId: authenticated.user.id,
+                skillAuthorGrant,
+                now,
+              });
             }
             stopHeartbeat();
             abortController.cleanup();
@@ -22735,14 +26458,16 @@ export function createPhoneAuthDevServer(
           if (!scriptText) {
             return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
           }
-          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
+          if (
+            (!isUuid(genrePackageId) && !isAutomaticStoryboardPromptPackageSelection(genrePackageId)) ||
+            (!isUuid(emotionPackageId) && !isAutomaticStoryboardPromptPackageSelection(emotionPackageId))
+          ) {
             return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
           }
-
           await ensureDefaultStoryboardPromptData(db);
           const [genrePackage, emotionPackage, tabooPackages] = await Promise.all([
-            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
-            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
+            resolveStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
+            resolveStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
             findDefaultTabooStoryboardPromptPackagesForPreview(db),
           ]);
           if (!genrePackage || !emotionPackage) {
@@ -22752,7 +26477,7 @@ export function createPhoneAuthDevServer(
           const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
           const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
 
-          const analysisService = createAiScriptAnalysisService({ gateway: aiStoryboardTextChatGateway });
+          const analysisService = createAiScriptAnalysisService({ gateway: aiScriptAnalysisTextChatGateway });
           response.statusCode = 200;
           response.setHeader("content-type", "text/event-stream; charset=utf-8");
           response.setHeader("cache-control", "no-cache, no-transform");
@@ -22812,74 +26537,175 @@ export function createPhoneAuthDevServer(
           });
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
+            skillId?: string | null;
+            modelCode?: string | null;
+            skipScriptStage?: boolean | null;
+            skills?: Partial<Record<"script" | "shot" | "prop_extract" | "character_extract" | "scene_extract", string | null>> | null;
             packages?: {
               genrePackageId?: string | null;
               emotionPackageId?: string | null;
             } | null;
           };
           const scriptText = String(body.scriptText ?? "").trim();
+          const skipScriptStage = body.skipScriptStage === true;
+          const skillId = String(body.skillId ?? "").trim();
+          const workflowSkillCategories = ["script", "shot", "prop_extract", "character_extract", "scene_extract"] as const;
+          const requestedSkillIds = Object.fromEntries(
+            workflowSkillCategories
+              .map((category) => [category, String(body.skills?.[category] ?? (category === "script" ? skillId : "")).trim()])
+              .filter(([, itemId]) => Boolean(itemId)),
+          ) as Partial<Record<(typeof workflowSkillCategories)[number], string>>;
+          if (skipScriptStage) {
+            delete requestedSkillIds.script;
+          }
           const genrePackageId = String(body.packages?.genrePackageId ?? "");
           const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
           if (!scriptText) {
             return writeJson(response, envelopedError(400, "script_text_required", "script text is required"));
           }
-          if (!isUuid(genrePackageId) || !isUuid(emotionPackageId)) {
+          if (Object.values(requestedSkillIds).some((itemId) => !isUuid(itemId))) {
+            return writeJson(response, envelopedError(400, "workflow_prompt_skill_invalid", "workflow prompt skill id is invalid"));
+          }
+          const usesLegacyPackages = !skipScriptStage && !requestedSkillIds.script && Object.keys(requestedSkillIds).length === 0;
+          if (usesLegacyPackages && (
+            (!isUuid(genrePackageId) && !isAutomaticStoryboardPromptPackageSelection(genrePackageId)) ||
+            (!isUuid(emotionPackageId) && !isAutomaticStoryboardPromptPackageSelection(emotionPackageId))
+          )) {
             return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
           }
-
+          if (!skipScriptStage && !requestedSkillIds.script && !usesLegacyPackages) {
+            return writeJson(response, envelopedError(400, "script_conversion_skill_required", "script conversion skill is required"));
+          }
+          let workflowSkills: Array<Awaited<ReturnType<ReturnType<typeof createPromptMarketplaceService>["resolveWorkflowPromptSkill"]>>> = [];
+          try {
+            const promptMarketplace = createPromptMarketplaceService({ db });
+            workflowSkills = await Promise.all(
+              workflowSkillCategories
+                .filter((category) => requestedSkillIds[category])
+                .map((category) => promptMarketplace.resolveWorkflowPromptSkill({
+                  userId: authenticated.user.id,
+                  itemId: requestedSkillIds[category]!,
+                  category,
+                  now: new Date(),
+                })),
+            );
+          } catch (error) {
+            if (error instanceof PromptMarketplaceError) {
+              return writeJson(response, envelopedError(error.status, error.code, error.message));
+            }
+            throw error;
+          }
+          const workflowSkillByCategory = new Map(workflowSkills.map((item) => [item.category, item]));
           await Promise.all([
-            ensureDefaultStoryboardPromptData(db),
+            ...(usesLegacyPackages ? [ensureDefaultStoryboardPromptData(db)] : []),
             ensureDefaultScenePromptTemplates(db),
             ensureDefaultCharacterPromptTemplates(db),
             ensureDefaultPropPromptTemplates(db),
             ensureDefaultShotPromptTemplates(db),
           ]);
-          const [
-            genrePackage,
-            emotionPackage,
-            tabooPackages,
-            sceneTemplate,
-            characterTemplate,
-            propTemplate,
-            shotTemplate,
-          ] = await Promise.all([
-            findEnabledStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
-            findEnabledStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
-            findDefaultTabooStoryboardPromptPackagesForPreview(db),
+          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = await Promise.all([
             findDefaultScenePromptTemplateForPreview(db),
             findDefaultCharacterPromptTemplateForPreview(db),
             findDefaultPropPromptTemplateForPreview(db),
             findDefaultShotPromptTemplateForPreview(db),
           ]);
-          if (!genrePackage || !emotionPackage) {
-            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
-          }
           if (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
-          const genrePrompt = formatStoryboardPromptPackageContents([genrePackage]);
-          const emotionPrompt = formatStoryboardPromptPackageContents([emotionPackage]);
-          const tabooPrompt = formatStoryboardPromptPackageContents(tabooPackages);
-          const preferredScriptModelCode = body.skipScriptStage === true ? "deepseek-noval" : "deepseek-script";
-          const scriptModelConfig = await findActiveScriptGenerationModelConfig(db, preferredScriptModelCode);
-          if (actor.teamMember) {
-            await reserveAndConsumeSimpleTeamMemberCredits(db, {
-              projectId,
-              teamMemberId: actor.teamMember.id,
-              idempotencyKey,
-              promptPreview: scriptText.slice(0, 200),
-              modelConfig: scriptModelConfig,
-              now: new Date(),
-            });
-          } else {
-            await reserveAndConsumeAiStoryboardPreviewCredits(db, {
-              projectId,
-              createdByUserId: authenticated.user.id,
-              idempotencyKey,
-              promptPreview: scriptText.slice(0, 200),
-              modelConfig: scriptModelConfig,
-              now: new Date(),
-            });
+          const [genrePackage, emotionPackage, tabooPackages] = usesLegacyPackages
+            ? await Promise.all([
+                resolveStoryboardPromptPackageForPreview(db, genrePackageId, "genre"),
+                resolveStoryboardPromptPackageForPreview(db, emotionPackageId, "emotion"),
+                findDefaultTabooStoryboardPromptPackagesForPreview(db),
+              ])
+            : [null, null, []];
+          if (usesLegacyPackages && (!genrePackage || !emotionPackage)) {
+            return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
+          }
+          const bodyModelCode = String(body.modelCode ?? "").trim();
+          const requestedModelCode = bodyModelCode || (skipScriptStage ? "deepseek-noval" : "deepseek-script");
+          const scriptModelConfig = bodyModelCode
+            ? await findActiveAiModelConfigByCode(db, requestedModelCode)
+            : await findActiveScriptGenerationModelConfig(db, requestedModelCode);
+          if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
+            throw new TextModelGatewayError("model_not_configured");
+          }
+          const resolvedModelCode = scriptModelConfig.modelCode;
+          const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig);
+          const skillCreditCost = workflowSkills.reduce(
+            (sum, item) => sum + Math.max(0, Math.round(Number(item.priceCredits) || 0)),
+            0,
+          );
+          const creditCost = modelCreditCost + skillCreditCost;
+          const skillSelectionKey = workflowSkills
+            .map((item) => `${item.category}:${item.id}`)
+            .sort()
+            .join("|");
+          const billingMetadata = {
+            projectId,
+            modelCode: resolvedModelCode,
+            modelCreditCost,
+            skillId: skillSelectionKey || null,
+            skills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title, priceCredits: item.priceCredits })),
+            skillCreditCost,
+            creditCost,
+            taskType: "ai_storyboard_preview",
+            operation: "ai_storyboard_preview",
+          };
+          const skillAuthorGrants = workflowSkills
+            .filter((item) => !item.official && item.priceCredits > 0 && item.ownerUserId)
+            .map((item) => ({
+                userId: item.ownerUserId!,
+                amount: Math.max(0, Math.round(Number(item.priceCredits) || 0)),
+                sourceId: uuidFromIdempotencyKey(`${idempotencyKey}:ai-storyboard-preview:skill-author:${item.id}`),
+                metadata: {
+                  skillId: item.id,
+                  skillCategory: item.category,
+                  skillTitle: item.title,
+                  payerUserId: authenticated.user.id,
+                  teamMemberId: actor.teamMember?.id ?? null,
+                  projectId,
+                  modelCode: resolvedModelCode,
+                  skillCreditCost: item.priceCredits,
+                },
+              }));
+          try {
+            if (actor.teamMember) {
+              await reserveAndConsumeSimpleTeamMemberCredits(db, {
+                projectId,
+                teamMemberId: actor.teamMember.id,
+                idempotencyKey,
+                promptPreview: scriptText.slice(0, 200),
+                modelConfig: {
+                  ...scriptModelConfig,
+                  pricing: {
+                    ...scriptModelConfig.pricing,
+                    baseCredits: creditCost,
+                    resolutionCredits: {},
+                  },
+                },
+                billingMetadata,
+                skillAuthorGrants,
+                now: new Date(),
+              });
+            } else {
+              await reserveAndConsumeAiStoryboardPreviewCredits(db, {
+                projectId,
+                createdByUserId: authenticated.user.id,
+                idempotencyKey,
+                promptPreview: scriptText.slice(0, 200),
+                modelConfig: scriptModelConfig,
+                billingMetadata,
+                skillCreditCost,
+                skillAuthorGrants,
+                now: new Date(),
+              });
+            }
+          } catch (error) {
+            if (error instanceof IdempotencyConflictError) {
+              return writeJson(response, envelopedError(409, error.code, "幂等键已用于其他小说转剧本请求。"));
+            }
+            throw error;
           }
 
           const previewInput = {
@@ -22887,17 +26713,18 @@ export function createPhoneAuthDevServer(
             createdByUserId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
-            skipScriptStage: body.skipScriptStage === true,
+            skipScriptStage,
             packages: {
-              genrePrompt,
-              emotionPrompt,
-              tabooPrompt,
+              skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
+              genrePrompt: genrePackage ? formatStoryboardPromptPackageContents([genrePackage]) : "",
+              emotionPrompt: emotionPackage ? formatStoryboardPromptPackageContents([emotionPackage]) : "",
+              tabooPrompt: formatStoryboardPromptPackageContents(tabooPackages),
             },
             templates: {
-              scenePrompt: sceneTemplate.prompt_content,
-              characterPrompt: characterTemplate.prompt_content,
-              propPrompt: propTemplate.prompt_content,
-              shotPrompt: shotTemplate.prompt_content,
+              scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate.prompt_content,
+              characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate.prompt_content,
+              propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate.prompt_content,
+              shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate.prompt_content,
             },
           };
           const previewService = createAiStoryboardPreviewService({ gateway: aiStoryboardTextChatGateway });
@@ -22911,6 +26738,7 @@ export function createPhoneAuthDevServer(
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
             const abortController = createRequestAbortController(request, response);
             try {
+              let generationCompleted = false;
               const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
                 userId: authenticated.user.id,
                 teamMemberId: actor.teamMember?.id ?? null,
@@ -22923,20 +26751,32 @@ export function createPhoneAuthDevServer(
                   break;
                 }
                 if (event.type === "complete") {
+                  generationCompleted = true;
                   writeSseData(response, {
                     type: "complete",
                     ...event.preview,
                     creditBalance: creditBalance.creditBalance,
                     displayCreditBalance: creditBalance.displayCreditBalance,
-                    selectedPackages: {
+                    creditCost,
+                    modelCreditCost,
+                    skillCreditCost,
+                    selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
+                    selectedPackages: genrePackage && emotionPackage ? {
                       genre: { id: genrePackage.id, name: genrePackage.name },
                       emotion: { id: emotionPackage.id, name: emotionPackage.name },
                       taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
-                    },
+                    } : null,
                   });
                 } else {
                   writeSseData(response, event);
                 }
+              }
+              if (generationCompleted) {
+                await grantPromptSkillAuthorCredits(db, {
+                  payerUserId: authenticated.user.id,
+                  skillAuthorGrants,
+                  now: new Date(),
+                });
               }
               stopHeartbeat();
               abortController.cleanup();
@@ -22972,6 +26812,11 @@ export function createPhoneAuthDevServer(
 
           try {
             const preview = await previewService.generatePreview(previewInput);
+            await grantPromptSkillAuthorCredits(db, {
+              payerUserId: authenticated.user.id,
+              skillAuthorGrants,
+              now: new Date(),
+            });
             const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
               userId: authenticated.user.id,
               teamMemberId: actor.teamMember?.id ?? null,
@@ -22980,11 +26825,15 @@ export function createPhoneAuthDevServer(
               ...preview,
               creditBalance: creditBalance.creditBalance,
               displayCreditBalance: creditBalance.displayCreditBalance,
-              selectedPackages: {
+              creditCost,
+              modelCreditCost,
+              skillCreditCost,
+              selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
+              selectedPackages: genrePackage && emotionPackage ? {
                 genre: { id: genrePackage.id, name: genrePackage.name },
                 emotion: { id: emotionPackage.id, name: emotionPackage.name },
                 taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
-              },
+              } : null,
             }));
           } catch (error) {
             if (actor.teamMember) {
@@ -23084,6 +26933,7 @@ export function createPhoneAuthDevServer(
             scriptInput?: string;
             aspectRatio: string;
             resolution: string;
+            projectType?: string;
             scriptUploadSessionId?: string | null;
             scriptStorageObjectId?: string | null;
             scriptFileName?: string | null;
@@ -23112,6 +26962,7 @@ export function createPhoneAuthDevServer(
             scriptInput: String(body.scriptInput ?? ""),
             aspectRatio: body.aspectRatio,
             resolution: body.resolution,
+            projectType: String(body.projectType ?? "animation"),
           };
           return writeJson(
             response,
@@ -23628,7 +27479,11 @@ export function createPhoneAuthDevServer(
             }
             if (query) {
               params.push(`%${query.toLowerCase()}%`);
-              conditions.push(`(LOWER(asset_name) LIKE $${params.length} OR LOWER(COALESCE(asset_prompt, '')) LIKE $${params.length})`);
+              conditions.push(`(
+                LOWER(asset_name) LIKE $${params.length}
+                OR LOWER(COALESCE(asset_prompt, '')) LIKE $${params.length}
+                OR LOWER(COALESCE(tags_json::text, '')) LIKE $${params.length}
+              )`);
             }
             const rows = await db.query<Record<string, unknown>>(
               `SELECT team_assets.*,
@@ -23694,6 +27549,142 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        if (request.method === "POST" && pathname === "/api/creator/team-assets/import-project-asset") {
+          const now = new Date();
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            now,
+          });
+          if (!(await hasActiveUserEntitlement(db, {
+            userId: actor.userId,
+            entitlementKey: "team_asset_library",
+            now,
+          }))) {
+            return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
+          }
+          if (typeof storageRuntime.adapter.putObject !== "function") {
+            return writeJson(response, envelopedError(500, "cloud_storage_required", "Cloud storage is required for team assets"));
+          }
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const assetVersionId = readString(body.assetVersionId);
+          if (!isUuid(assetVersionId)) {
+            return writeJson(response, envelopedError(400, "project_asset_version_required", "A stable project asset version is required"));
+          }
+          const source = await queryOne<{
+            project_id: string;
+            owner_user_id: string;
+            asset_key: string;
+            asset_type: string;
+            storage_object_id: string;
+            object_key: string;
+            bucket: string;
+            content_type: string;
+            size_bytes: number | string | null;
+            checksum: string | null;
+            metadata_json: Record<string, unknown> | string | null;
+          }>(db, `
+            SELECT asset.project_id,project.owner_user_id,asset.asset_key,asset.asset_type,
+              storage.id AS storage_object_id,storage.object_key,storage.bucket,storage.content_type,
+              storage.size_bytes,storage.checksum,version.metadata_json
+            FROM asset_versions version
+            JOIN assets asset ON asset.id=version.asset_id AND asset.project_id IS NOT NULL
+            JOIN projects project ON project.id=asset.project_id
+            JOIN storage_objects storage
+              ON storage.id=version.storage_object_id
+             AND storage.project_id=asset.project_id
+             AND storage.canvas_project_id IS NULL
+             AND storage.status='available'
+             AND storage.deleted_at IS NULL
+            WHERE version.id=$1
+              AND asset.asset_type IN ('character_sheet','scene_reference','prop_reference')
+              AND storage.content_type ILIKE 'image/%'
+            LIMIT 1
+          `, [assetVersionId]);
+          if (!source || source.owner_user_id !== actor.userId) {
+            return writeJson(response, envelopedError(404, "project_asset_version_not_found", "Project asset version was not found"));
+          }
+          await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId: source.project_id,
+            capability: capabilities.projectEdit,
+            now,
+          });
+          const category = source.asset_type === "character_sheet"
+            ? "character"
+            : source.asset_type === "scene_reference"
+              ? "scene"
+              : "prop";
+          const assetName = readString(body.name) || source.asset_key;
+          if (!assetName || await hasTeamAssetNameConflict(db, {
+            adminUserId: actor.userId,
+            category,
+            name: assetName,
+          })) {
+            return writeJson(response, envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"));
+          }
+          const sourceBytes = await readUploadedStorageObjectBytes(db, {
+            sessionToken: authenticated.sessionToken,
+            storageObjectId: source.storage_object_id,
+            bucket: source.bucket,
+            objectKey: source.object_key,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+            now,
+            fetchImpl: options.fetchImpl ?? fetch,
+          });
+          const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
+          const uploaded = await uploadTrackedCloudObject(db, {
+            runtime: storageRuntime,
+            objectKey: buildTeamAssetUploadObjectKey({
+              adminUserId: actor.userId,
+              category,
+              fileName: `project-${source.asset_key}`,
+              now,
+              env: runtimeEnv,
+            }),
+            bytes: sourceBytes,
+            contentType: source.content_type,
+            fileName: `project-${source.asset_key}`,
+            actorUserId: actor.userId,
+            actorDisplayName: operatorName,
+            pageKey: "team-assets",
+            pageUrl: serverOriginFromRequest(request) + (request.url ?? pathname),
+            sourceAction: `team_asset_import_project/${category}`,
+            metadata: { projectId: source.project_id, assetVersionId, category },
+            signedUrlExpiresInSeconds,
+            now,
+          });
+          if (!uploaded.publicUrl?.startsWith("https://")) {
+            return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
+          }
+          const metadata = source.metadata_json && typeof source.metadata_json === "object"
+            ? source.metadata_json
+            : {};
+          const inserted = await queryOne<Record<string, unknown>>(db, `
+            INSERT INTO team_assets (
+              id,admin_user_id,asset_name,asset_prompt,asset_category,asset_status,
+              asset_url,resource_type,resource_size,created_at,updated_at,
+              created_by_name,updated_by_name,is_admin_created,created_user_id,storage_object_id,tags_json
+            ) VALUES ($1,$2,$3,$4,$5,'active',$6,'image',$7,$8,$8,$9,$9,$10,$11,$12,$13::jsonb)
+            RETURNING *
+          `, [
+            randomUUID(),
+            actor.userId,
+            assetName,
+            readString(metadata.description) || null,
+            category,
+            uploaded.publicUrl,
+            sourceBytes.byteLength,
+            now,
+            operatorName,
+            !actor.teamMember,
+            actor.teamMember?.id ?? actor.userId,
+            uploaded.storageObjectId,
+            JSON.stringify(normalizeTeamAssetTags(metadata.tags)),
+          ]);
+          return writeJson(response, enveloped(201, { asset: teamAssetRow(inserted!) }));
         }
 
         if (request.method === "POST" && pathname === "/api/creator/team-assets/upload") {
@@ -23773,9 +27764,9 @@ export function createPhoneAuthDevServer(
                 id, admin_user_id, asset_name, asset_prompt, asset_category,
                 asset_status, asset_url, resource_type, resource_size,
                 created_at, updated_at, created_by_name, updated_by_name,
-                is_admin_created, created_user_id
+                is_admin_created, created_user_id, storage_object_id
               )
-              VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9, $10, $10, $11, $12)
+              VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9, $10, $10, $11, $12, $13)
               RETURNING *
             `,
             [
@@ -23791,6 +27782,7 @@ export function createPhoneAuthDevServer(
               operatorName,
               !actor.teamMember,
               createdUserId,
+              uploaded.storageObjectId,
             ],
           );
           return writeJson(response, { status: 200, body: { asset: teamAssetRow(inserted!) } });
@@ -23869,13 +27861,13 @@ export function createPhoneAuthDevServer(
           }
           const updated = await queryOne<Record<string, unknown>>(db, `
             UPDATE team_assets
-            SET asset_url = $3, resource_type = $4, resource_size = $5,
+            SET asset_url = $3, resource_type = $4, resource_size = $5, storage_object_id = $11,
                 asset_name = COALESCE($6, asset_name),
                 asset_prompt = CASE WHEN $7::boolean THEN $8 ELSE asset_prompt END,
                 asset_status = 'active', updated_at = $9, updated_by_name = $10
             WHERE id = $1 AND admin_user_id = $2
             RETURNING *
-          `, [assetId, actor.userId, assetUrl, teamAssetResourceKind(file.type || "application/octet-stream"), bytes.byteLength, assetName, hasAssetPrompt, assetPrompt, now, operatorName]);
+          `, [assetId, actor.userId, assetUrl, teamAssetResourceKind(file.type || "application/octet-stream"), bytes.byteLength, assetName, hasAssetPrompt, assetPrompt, now, operatorName, uploaded.storageObjectId]);
           return writeJson(response, { status: 200, body: { asset: teamAssetRow(updated!) } });
         }
 
@@ -23890,11 +27882,31 @@ export function createPhoneAuthDevServer(
           const assetName = body.name === undefined ? undefined : String(body.name ?? "").trim();
           const assetPrompt = body.prompt === undefined ? undefined : String(body.prompt ?? "").trim();
           const assetUrl = body.assetUrl === undefined ? undefined : String(body.assetUrl ?? "").trim();
+          const folderName = body.folderName === undefined ? undefined : String(body.folderName ?? "").trim();
+          const hasTags = body.tags !== undefined;
+          const assetTags = hasTags ? normalizeTeamAssetTags(body.tags) : undefined;
           if (assetName !== undefined && !assetName) {
             return writeJson(response, envelopedError(400, "invalid_team_asset_name", "Team asset name is required"));
           }
           if (assetUrl !== undefined && !assetUrl.startsWith("https://")) {
             return writeJson(response, envelopedError(400, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
+          }
+          if (folderName !== undefined && folderName.length > 64) {
+            return writeJson(response, envelopedError(400, "team_asset_folder_name_invalid", "Team asset folder name must be at most 64 characters"));
+          }
+          if (hasTags && (!Array.isArray(body.tags) || assetTags!.length > 12 || assetTags!.some((tag) => tag.length > 32))) {
+            return writeJson(response, envelopedError(400, "team_asset_tags_invalid", "Team asset tags must be an array of up to 12 tags with 32 characters each"));
+          }
+          if (assetUrl !== undefined) {
+            const boundStorage = await queryOne<{ storage_object_id: string | null }>(db, `
+              SELECT storage_object_id
+              FROM team_assets
+              WHERE id=$1 AND admin_user_id=$2 AND asset_status IN ('active','failed')
+              LIMIT 1
+            `, [assetId, actor.userId]);
+            if (boundStorage?.storage_object_id) {
+              return writeJson(response, envelopedError(409, "team_asset_storage_url_managed", "Team asset URL is managed by its storage object"));
+            }
           }
           if (assetName !== undefined) {
             const existing = await queryOne<{ asset_category: string }>(db, `
@@ -23920,13 +27932,28 @@ export function createPhoneAuthDevServer(
             SET asset_name = COALESCE($3, asset_name),
                 asset_prompt = CASE WHEN $4::boolean THEN $5 ELSE asset_prompt END,
                 asset_url = COALESCE($6, asset_url),
-                updated_at = $7,
-                updated_by_name = $8
+                tags_json = CASE WHEN $7::boolean THEN $8::jsonb ELSE tags_json END,
+                folder_name = CASE WHEN $9::boolean THEN $10 ELSE folder_name END,
+                updated_at = $11,
+                updated_by_name = $12
             WHERE id = $1
               AND admin_user_id = $2
               AND asset_status IN ('active', 'failed')
             RETURNING *
-          `, [assetId, actor.userId, assetName ?? null, assetPrompt !== undefined, assetPrompt ?? null, assetUrl ?? null, now, operatorName]);
+          `, [
+            assetId,
+            actor.userId,
+            assetName ?? null,
+            assetPrompt !== undefined,
+            assetPrompt ?? null,
+            assetUrl ?? null,
+            hasTags,
+            JSON.stringify(assetTags ?? []),
+            folderName !== undefined,
+            folderName ?? "",
+            now,
+            operatorName,
+          ]);
           return writeJson(response, updated
             ? { status: 200, body: { asset: teamAssetRow(updated) } }
             : { status: 404, body: { error: "team_asset_not_found" } });
@@ -23977,6 +28004,7 @@ export function createPhoneAuthDevServer(
             generationTaskId?: string | null;
             generationStatus?: string | null;
             generationResult?: Record<string, unknown> | null;
+            tags?: string[] | null;
           };
           return writeJson(
             response,
@@ -24847,13 +28875,36 @@ export function createPhoneAuthDevServer(
           });
         }
 
+        if (request.method === "GET" && pathname === "/api/admin/ops/canvas-agent-metrics") {
+          return writeJson(response, {
+            status: 200,
+            body: await inspectCanvasAgentMetrics(db, {
+              now: new Date(),
+              windowHours: Number(url.searchParams.get("windowHours") ?? 24),
+              failureLimit: Number(url.searchParams.get("failureLimit") ?? 20),
+            }),
+          });
+        }
+
+
+        if (request.method === "GET" && pathname === "/api/admin/ops/canvas-canary-metrics") {
+          return writeJson(response, {
+            status: 200,
+            body: await inspectCanvasCanaryMetrics(db, {
+              now: new Date(),
+              windowHours: Number(url.searchParams.get("windowHours") ?? 24),
+            }),
+          });
+        }
+
         if (
           request.method === "GET" &&
           pathname === "/api/admin/ops/generation-queues"
         ) {
+          const generationQueueConfig = loadGenerationQueueConfig(runtimeEnv);
           const queueHealth = options.generationQueueHealthService ??
             createBullMQGenerationQueueHealthService(
-              loadGenerationQueueConfig(runtimeEnv),
+              generationQueueConfig,
               async () => (await listGenerationQueueShards(db)).map((shard) => ({
                 role: `${shard.mediaType}_${shard.stage}`,
                 name: shard.queueName,
@@ -24861,14 +28912,26 @@ export function createPhoneAuthDevServer(
             );
           let healthSnapshot: Awaited<ReturnType<typeof queueHealth.inspect>>;
           try {
-            healthSnapshot = await queueHealth.inspect();
+            const failedSampleSize = Math.min(
+              200,
+              Math.max(1, Math.floor(Number(url.searchParams.get("failedSampleSize") ?? 100) || 100)),
+            );
+            healthSnapshot = await queueHealth.inspect({ failedSampleSize });
           } finally {
             await queueHealth.close().catch(() => undefined);
           }
-          const platformMetrics = await inspectGenerationPlatformMetrics(db, { now: new Date() });
+          const platformMetrics = await inspectGenerationPlatformMetrics(db, {
+            now: new Date(),
+            outboxStaleMs: generationQueueConfig.repair.staleDispatchMs,
+          });
+          const status = healthSnapshot.status === "unavailable"
+            ? "unavailable"
+            : healthSnapshot.status === "degraded" || platformMetrics.status === "degraded"
+              ? "degraded"
+              : "healthy";
           return writeJson(response, {
             status: 200,
-            body: { ...healthSnapshot, platformMetrics },
+            body: { ...healthSnapshot, status, platformMetrics },
           });
         }
 
@@ -25393,6 +29456,12 @@ export function createPhoneAuthDevServer(
 }
 
 export type { Server };
+
+export const __phoneAuthDevServerTestUtils = {
+  appendImageStylePromptForGeneration,
+  resolveCanvasGenerationPromptBody,
+  validateGenerationQueueReplay,
+};
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const server = createPhoneAuthDevServer();

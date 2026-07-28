@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearDirectorDeskHostBridge,
+  clearDirectorDeskCaptureHandler,
+  clearDirectorDeskVideoHandler,
   DIRECTOR_DESK_SESSION_OPENED_EVENT,
   initDirectorDeskHostBridge,
+  postDirectorDeskCapturesToHost,
+  setDirectorDeskCaptureHandler,
 } from "./hostBridge";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
 
@@ -39,6 +43,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await useDirectorStore.getState().openScopedScene(null);
   clearDirectorDeskHostBridge();
+  clearDirectorDeskCaptureHandler();
+  clearDirectorDeskVideoHandler();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -184,4 +190,17 @@ it("does not notify the host canvas when disabled panorama messages are ignored"
     }),
     window.location.origin
   );
+});
+
+it("delivers captures to the in-process host callback without postMessage", () => {
+  const captureHandler = vi.fn();
+  const postMessage = vi.spyOn(window.parent, "postMessage").mockImplementation(() => undefined);
+  setDirectorDeskCaptureHandler(captureHandler);
+
+  postDirectorDeskCapturesToHost([{ dataUrl: "data:image/png;base64,YQ==", fileName: "shot.png" }]);
+
+  expect(captureHandler).toHaveBeenCalledWith([
+    { dataUrl: "data:image/png;base64,YQ==", fileName: "shot.png" },
+  ]);
+  expect(postMessage).not.toHaveBeenCalled();
 });

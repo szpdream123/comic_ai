@@ -24,15 +24,43 @@ const migrations = [
   ["20260722-generation-queue-elastic-shards.sql", "packages/db/migrations/20260722-generation-queue-elastic-shards.sql"],
   ["20260723-correct-generation-queue-lifecycle.sql", "packages/db/migrations/20260723-correct-generation-queue-lifecycle.sql"],
   ["20260724-durable-generation-queue-assignment-lifecycle.sql", "packages/db/migrations/20260724-durable-generation-queue-assignment-lifecycle.sql"],
+  ["20260725-create-canvas-agent-runtime.sql", "packages/db/migrations/20260725-create-canvas-agent-runtime.sql"],
   ["20260725-generation-queue-worker-leases.sql", "packages/db/migrations/20260725-generation-queue-worker-leases.sql"],
   ["20260725-z-generation-queue-admin-commands.sql", "packages/db/migrations/20260725-z-generation-queue-admin-commands.sql"],
   ["20260726-generation-queue-job-cancellations.sql", "packages/db/migrations/20260726-generation-queue-job-cancellations.sql"],
   ["20260727-generation-queue-publish-cancellation-fencing.sql", "packages/db/migrations/20260727-generation-queue-publish-cancellation-fencing.sql"],
   ["20260727-generation-queue-worker-lease-db-clock.sql", "packages/db/migrations/20260727-generation-queue-worker-lease-db-clock.sql"],
+  ["20260728-canvas-actor-principals.sql", "packages/db/migrations/20260728-canvas-actor-principals.sql"],
+  ["20260728-comfyui-workflow-library.sql", "packages/db/migrations/20260728-comfyui-workflow-library.sql"],
+  ["20260728-z-remove-legacy-workflow-runtime.sql", "packages/db/migrations/20260728-z-remove-legacy-workflow-runtime.sql"],
+  ["20260729-canvas-generation-runtime.sql", "packages/db/migrations/20260729-canvas-generation-runtime.sql"],
+  ["20260729-canvas-user-config-library.sql", "packages/db/migrations/20260729-canvas-user-config-library.sql"],
+  ["20260729-create-prompt-marketplace.sql", "packages/db/migrations/20260729-create-prompt-marketplace.sql"],
+  ["20260730-canvas-media-derivations.sql", "packages/db/migrations/20260730-canvas-media-derivations.sql"],
+  ["20260730-z-unify-prompt-storage.sql", "packages/db/migrations/20260730-z-unify-prompt-storage.sql"],
+  ["20260731-canvas-generation-batch-billing.sql", "packages/db/migrations/20260731-canvas-generation-batch-billing.sql"],
+  ["20260731-z-canvas-agent-model-compatibility-probes.sql", "packages/db/migrations/20260731-z-canvas-agent-model-compatibility-probes.sql"],
+  ["20260802-canvas-settings.sql", "packages/db/migrations/20260802-canvas-settings.sql"],
+  ["20260803-canvas-agent-conversation-pins.sql", "packages/db/migrations/20260803-canvas-agent-conversation-pins.sql"],
+  ["20260804-canvas-prompt-directive-configs.sql", "packages/db/migrations/20260804-canvas-prompt-directive-configs.sql"],
+  ["20260805-canvas-agent-conversation-locks.sql", "packages/db/migrations/20260805-canvas-agent-conversation-locks.sql"],
+  ["20260806-backfill-prompt-summaries.sql", "packages/db/migrations/20260806-backfill-prompt-summaries.sql"],
+  ["20260807-canvas-agent-provider-config-drafts.sql", "packages/db/migrations/20260807-canvas-agent-provider-config-drafts.sql"],
+  ["20260808-canvas-agent-media-prompt-preferences.sql", "packages/db/migrations/20260808-canvas-agent-media-prompt-preferences.sql"],
+  ["20260809-canvas-character-library.sql", "packages/db/migrations/20260809-canvas-character-library.sql"],
+  ["20260809-z-enable-canvas-agent-text-model.sql", "packages/db/migrations/20260809-z-enable-canvas-agent-text-model.sql"],
+  ["20260809-zz-canvas-agent-structured-json-fallback.sql", "packages/db/migrations/20260809-zz-canvas-agent-structured-json-fallback.sql"],
+  ["20260810-canvas-agent-knowledge-boundary-tables.sql", "packages/db/migrations/20260810-canvas-agent-knowledge-boundary-tables.sql"],
+  ["20260810-z-canvas-agent-step-input-json.sql", "packages/db/migrations/20260810-z-canvas-agent-step-input-json.sql"],
+  ["20260812-canvas-agent-step-skip.sql", "packages/db/migrations/20260812-canvas-agent-step-skip.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
 const compatibleChecksumTransitions = new Map([
+  ["20260725-create-canvas-agent-runtime.sql", {
+    recorded: "e8bda0ec7ec8d507b7dc3156406787e346e07029330c2980e8a09cb048f93e4a",
+    current: "28ffba53b3940b5d9cf993662b8b3f523c7c8d6876ae21405b420990fc545345",
+  }],
   ["20260720-enable-project-multi-canvases.sql", {
     recorded: "5984810d4b1fd7e6f1aecf6b5413536a28ae7e936794d36dd9581f8db8a25f17",
     current: "56a92229a07dcb0abc46ec88416ca27ddb7fe4ecc32f7a3833033127bf1b9bc9",
@@ -66,6 +94,7 @@ try {
     console.log("dry-run rolled back");
   } else {
     await applyOrValidate(client, loaded, true, registerExisting);
+    await client.query("DISCARD PLANS");
     await assertCleanSchema(client);
     console.log("migration complete");
   }
@@ -136,6 +165,22 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
     }
     if (recorded) {
       console.log(`${apply ? "skip" : "dry-run skip"} ${migration.name}`);
+      continue;
+    }
+
+    // A prior deployment may have completed prompt consolidation before the
+    // migration ledger write. Preserve that data and repair only the ledger.
+    if (
+      migration.name === "20260730-z-unify-prompt-storage.sql" &&
+      await tableExists(db, "prompts") &&
+      await tableExists(db, "prompt_user_links")
+    ) {
+      await db.query(
+        "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
+        [migration.name, migration.checksum],
+      );
+      applied.set(migration.name, migration.checksum);
+      console.log(`${apply ? "registered existing" : "dry-run register existing"} ${migration.name}`);
       continue;
     }
 

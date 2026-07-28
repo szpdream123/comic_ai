@@ -10,6 +10,8 @@ export interface UserModelRequestLogCreateInput {
   workflowId?: string | null;
   taskId?: string | null;
   attemptId?: string | null;
+  agentTaskId?: string | null;
+  agentStepId?: string | null;
   userId?: string | null;
   providerName: string;
   providerOperation: string;
@@ -43,6 +45,8 @@ interface UserModelRequestLogRow {
   workflow_id: string | null;
   task_id: string | null;
   attempt_id: string | null;
+  agent_task_id: string | null;
+  agent_step_id: string | null;
   user_id: string | null;
   provider_name: string;
   provider_operation: string;
@@ -74,6 +78,8 @@ export interface UserModelRequestLogRecord {
   workflowId: string | null;
   taskId: string | null;
   attemptId: string | null;
+  agentTaskId?: string | null;
+  agentStepId?: string | null;
   userId: string | null;
   providerName: string;
   providerOperation: string;
@@ -112,6 +118,8 @@ export async function createUserModelRequestLog(
         workflow_id,
         task_id,
         attempt_id,
+        agent_task_id,
+        agent_step_id,
         user_id,
         provider_name,
         provider_operation,
@@ -130,9 +138,9 @@ export async function createUserModelRequestLog(
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8,
-        $9, $10, $11, $12, $13, $14, $15, $16,
-        COALESCE($17, 'openai_chat_completions'), $18::jsonb, $19, 'submitted', $20, $20, $20
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $15, $16, $17, $18,
+        COALESCE($19, 'openai_chat_completions'), $20::jsonb, $21, 'submitted', $22, $22, $22
       )
       ON CONFLICT (provider_request_id)
       DO UPDATE SET
@@ -151,6 +159,8 @@ export async function createUserModelRequestLog(
       input.workflowId ?? null,
       input.taskId ?? null,
       input.attemptId ?? null,
+      input.agentTaskId ?? null,
+      input.agentStepId ?? null,
       input.userId ?? null,
       input.providerName,
       input.providerOperation,
@@ -213,6 +223,8 @@ function userModelRequestLogFromRow(
     workflowId: row.workflow_id,
     taskId: row.task_id,
     attemptId: row.attempt_id,
+    ...(row.agent_task_id ? { agentTaskId: row.agent_task_id } : {}),
+    ...(row.agent_step_id ? { agentStepId: row.agent_step_id } : {}),
     userId: row.user_id,
     providerName: row.provider_name,
     providerOperation: row.provider_operation,

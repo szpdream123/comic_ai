@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createAuthSession } from "../../identity/session.service.ts";
+import { restoreCanvasActorScope } from "../../identity/canvas-actor-scope.service.ts";
 import { UserAuthorizationError as AuthorizationError } from "../../identity/user-actor-context.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
@@ -84,6 +85,96 @@ describe("signed storage URLs", { concurrency: false }, () => {
         },
       );
       assert.equal(adapter.calls.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("signs only objects from canvases assigned to a team member", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new DeterministicStorageAdapter();
+    const ownerUserId = "00000000-0000-4000-8000-000000000001";
+    const memberId = "00000000-0000-4000-8000-000000000011";
+    const assignedCanvasId = "00000000-0000-4000-8000-000000000021";
+    const unassignedCanvasId = "00000000-0000-4000-8000-000000000022";
+
+    try {
+      await seedUsers(db);
+      await db.query(
+        `
+          INSERT INTO team_members (
+            id, user_id, member_account, member_account_suffix, member_login_account,
+            member_name, member_password_hash, member_credits, status
+          )
+          VALUES ($1, $2, 'storage-member', 'u00011', 'storage-member@u00011', 'Storage Member', 'hash', 0, 'active')
+        `,
+        [memberId, ownerUserId],
+      );
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects (id, title, status, server_revision, created_by_user_id, updated_by_user_id)
+          VALUES
+            ($1, 'Assigned storage canvas', 'draft', 1, $3, $3),
+            ($2, 'Private storage canvas', 'draft', 1, $3, $3)
+        `,
+        [assignedCanvasId, unassignedCanvasId, ownerUserId],
+      );
+      await db.query(
+        "INSERT INTO team_member_canvases (id, member_id, user_id, canvas_id) VALUES ($1, $2, $3, $4)",
+        ["00000000-0000-4000-8000-000000000031", memberId, ownerUserId, assignedCanvasId],
+      );
+      await insertSession(db, {
+        userId: ownerUserId,
+        token: "canvas-storage-member-token",
+        teamMemberId: memberId,
+      });
+      const assignedObject = await createScopedStorageObject(db, {
+        userId: ownerUserId,
+        canvasProjectId: assignedCanvasId,
+        bucket: "creator-assets",
+        objectName: "assigned.png",
+        contentType: "image/png",
+        now: new Date("2026-05-09T10:00:00.000Z"),
+      });
+      const privateObject = await createScopedStorageObject(db, {
+        userId: ownerUserId,
+        canvasProjectId: unassignedCanvasId,
+        bucket: "creator-assets",
+        objectName: "private.png",
+        contentType: "image/png",
+        now: new Date("2026-05-09T10:00:00.000Z"),
+      });
+
+      await createSignedReadUrl(db, {
+        sessionToken: "canvas-storage-member-token",
+        storageObjectId: assignedObject.id,
+        adapter,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+        expiresInSeconds: 60,
+      });
+      const workerScope = await restoreCanvasActorScope(db, {
+        canvasId: assignedCanvasId,
+        ownerUserId,
+        actorTeamMemberId: memberId,
+      });
+      await createSignedReadUrl(db, {
+        actorScope: workerScope,
+        storageObjectId: assignedObject.id,
+        adapter,
+        now: new Date("2026-05-09T10:01:00.000Z"),
+        expiresInSeconds: 60,
+      });
+      await assert.rejects(
+        createSignedReadUrl(db, {
+          actorScope: workerScope,
+          storageObjectId: privateObject.id,
+          adapter,
+          now: new Date("2026-05-09T10:01:00.000Z"),
+          expiresInSeconds: 60,
+        }),
+        (error: unknown) => error instanceof StorageAccessError && error.code === "storage_object_not_found",
+      );
+      assert.equal(adapter.calls.length, 2);
     } finally {
       await db.close();
     }
@@ -243,7 +334,7 @@ async function seedUsers(
 
 async function insertSession(
   db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
-  input: { userId: string; token: string },
+  input: { userId: string; token: string; teamMemberId?: string },
 ) {
   const created = await createAuthSession({
     userId: input.userId,
@@ -276,4 +367,23 @@ async function insertSession(
       new Date("2026-05-09T09:00:00.000Z"),
     ],
   );
+  if (input.teamMemberId) {
+    await db.query(
+      `
+        INSERT INTO team_member_auth_sessions (
+          id, auth_session_id, user_id, member_id, status, expires_at, last_seen_at, created_at
+        )
+        VALUES ($1, $2, $3, $4, 'active', $5, $6, $7)
+      `,
+      [
+        "00000000-0000-4000-8000-000000000041",
+        created.session.id,
+        created.session.userId,
+        input.teamMemberId,
+        created.session.expiresAt,
+        created.session.lastSeenAt,
+        new Date("2026-05-09T09:00:00.000Z"),
+      ],
+    );
+  }
 }

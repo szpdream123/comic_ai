@@ -90,14 +90,19 @@ export function PilotHud({
         <span><kbd>滚轮</kbd> 调整远近</span>
       </div>
 
+      <div className="pilot-touch-help" aria-label="掌镜触控手势">
+        <span>单指拖动转向</span>
+        <span>双指捏合调焦</span>
+      </div>
+
       <div className="pilot-hud-actions">
         <button type="button" className="pilot-hud-secondary" onClick={onExit} aria-label="退出掌镜模式">
           <LogOut aria-hidden="true" size={15} />
-          Esc 退出
+          <span><span className="pilot-hud-shortcut-label">Esc </span>退出</span>
         </button>
         <button type="button" className="pilot-hud-primary" onClick={onRecord} aria-label="记录当前轨迹点">
           <CornerDownLeft aria-hidden="true" size={15} />
-          Enter 记录轨迹点
+          <span><span className="pilot-hud-shortcut-label">Enter </span>记录轨迹点</span>
         </button>
       </div>
     </div>

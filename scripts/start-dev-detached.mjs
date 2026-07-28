@@ -1,22 +1,20 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const runtime = findNodeRuntime(18);
 const runDir = join(process.cwd(), ".local", "run");
 const logDir = join(process.cwd(), ".local", "logs");
 const pidFile = join(runDir, "creator-dev-stack.pid");
+const startLockFile = join(runDir, "creator-dev-stack.start.lock");
 const outLog = join(logDir, "creator-dev-stack.out.log");
 const errLog = join(logDir, "creator-dev-stack.err.log");
 
 mkdirSync(runDir, { recursive: true });
 mkdirSync(logDir, { recursive: true });
 
-const listenerPid = findListenerPid(Number(process.env.PORT ?? "4310"));
-if (listenerPid) {
-  terminateProcessTree(listenerPid);
-  await waitForPortRelease(Number(process.env.PORT ?? "4310"), 10_000);
-}
+const releaseStartLock = acquireStartLock(startLockFile);
+process.once("exit", releaseStartLock);
 
 const existingPid = readPidFile(pidFile);
 if (existingPid && isProcessAlive(existingPid)) {
@@ -28,11 +26,18 @@ if (existingPid) {
   rmSync(pidFile, { force: true });
 }
 
+const listenerPid = findListenerPid(Number(process.env.PORT ?? "4310"));
+if (listenerPid) {
+  terminateProcessTree(listenerPid);
+  await waitForPortRelease(Number(process.env.PORT ?? "4310"), 10_000);
+}
+
 const outFd = openSync(outLog, "a");
 const errFd = openSync(errLog, "a");
 const child = spawnDetached(runtime, ["scripts/run-creator-dev-stack.mjs"], outFd, errFd);
 
 writeFileSync(pidFile, `${child.pid}\n`, "utf8");
+releaseStartLock();
 console.log(`Detached creator-dev stack pid=${child.pid}`);
 console.log(`Logs: ${outLog}`);
 
@@ -53,6 +58,30 @@ function readPidFile(path) {
   const value = readFileSync(path, "utf8").trim();
   const pid = Number(value);
   return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function acquireStartLock(path) {
+  for (;;) {
+    try {
+      const fd = openSync(path, "wx");
+      writeFileSync(fd, `${process.pid}\n`, "utf8");
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        closeSync(fd);
+        rmSync(path, { force: true });
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const lockPid = readPidFile(path);
+      if (lockPid && isProcessAlive(lockPid)) {
+        console.log(`creator-dev stack start already in progress (pid=${lockPid})`);
+        process.exit(0);
+      }
+      rmSync(path, { force: true });
+    }
+  }
 }
 
 function isProcessAlive(pid) {

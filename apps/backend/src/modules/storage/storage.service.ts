@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  authorizeCanvasActor,
+  CanvasAuthorizationError,
+  assertCanvasActorAction,
+  type CanvasActorScope,
+} from "../identity/canvas-actor-scope.service.ts";
+import {
   resolveUserActorContext,
   UserAuthorizationError,
 } from "../identity/user-actor-context.service.ts";
@@ -113,6 +119,7 @@ export async function createScopedStorageObject(
   db: SqlDatabase,
   input: {
     userId: string;
+    actorScope?: CanvasActorScope;
     projectId?: string | null;
     canvasProjectId?: string | null;
     bucket: string;
@@ -129,6 +136,15 @@ export async function createScopedStorageObject(
     now: Date;
   },
 ): Promise<StorageObjectRecord> {
+  if (input.actorScope) {
+    if (input.canvasProjectId !== input.actorScope.canvasId) {
+      throw new StorageAccessError("invalid_storage_scope");
+    }
+    if (input.userId !== input.actorScope.ownerUserId) {
+      throw new StorageAccessError("invalid_storage_scope");
+    }
+    assertCanvasActorAction(input.actorScope, "edit");
+  }
   await assertStorageScope(db, {
     userId: input.userId,
     projectId: input.projectId ?? null,
@@ -198,7 +214,8 @@ export async function createScopedStorageObject(
 export async function createSignedReadUrl(
   db: SqlDatabase,
   input: {
-    sessionToken: string;
+    sessionToken?: string;
+    actorScope?: CanvasActorScope;
     storageObjectId: string;
     adapter: StorageAdapter;
     now: Date;
@@ -214,14 +231,48 @@ export async function createSignedReadUrl(
     throw new StorageAccessError("storage_object_not_found");
   }
 
-  const actor = await resolveUserActorContext(db, {
-    sessionToken: input.sessionToken,
-    projectId: object.projectId ?? undefined,
-    now: input.now,
-  });
+  if (object.canvasProjectId) {
+    try {
+      if (input.actorScope) {
+        if (input.actorScope.canvasId !== object.canvasProjectId) {
+          throw new CanvasAuthorizationError("canvas_not_found");
+        }
+        assertCanvasActorAction(input.actorScope, "view");
+      } else {
+        await authorizeCanvasActor(db, {
+          sessionToken: input.sessionToken ?? "",
+          canvasId: object.canvasProjectId,
+          action: "view",
+          now: input.now,
+        });
+      }
+    } catch (error) {
+      if (error instanceof CanvasAuthorizationError) {
+        const authorizedByCharacterReference = await canReadCanvasCharacterStorageReference(db, {
+          sessionToken: input.sessionToken,
+          actorScope: input.actorScope,
+          storageObjectId: object.id,
+          now: input.now,
+        });
+        if (!authorizedByCharacterReference) {
+          throw new StorageAccessError("storage_object_not_found");
+        }
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  const actor = object.canvasProjectId
+    ? null
+    : await resolveUserActorContext(db, {
+        sessionToken: input.sessionToken ?? "",
+        projectId: object.projectId ?? undefined,
+        now: input.now,
+      });
 
   if (
-    !object.projectId && object.userId !== actor.userId
+    !object.canvasProjectId && !object.projectId && object.userId !== actor!.userId
   ) {
     throw new UserAuthorizationError("project_not_found");
   }
@@ -239,10 +290,67 @@ export async function createSignedReadUrl(
   };
 }
 
+async function canReadCanvasCharacterStorageReference(
+  db: SqlDatabase,
+  input: {
+    sessionToken?: string;
+    actorScope?: CanvasActorScope;
+    storageObjectId: string;
+    now: Date;
+  },
+) {
+  const references = await db.query<{
+    scope: "canvas" | "global";
+    canvas_id: string | null;
+    owner_user_id: string;
+    principal_key: string | null;
+  }>(`
+    SELECT DISTINCT character.scope,character.canvas_id,character.owner_user_id,character.principal_key
+    FROM canvas_character_asset_references reference
+    JOIN canvas_character_assets character ON character.id=reference.character_id
+    WHERE reference.storage_object_id=$1
+      AND reference.deleted_at IS NULL
+      AND character.deleted_at IS NULL
+  `, [input.storageObjectId]);
+  if (!references.rows.length) return false;
+  if (input.actorScope) {
+    assertCanvasActorAction(input.actorScope, "view");
+    return references.rows.some((reference) => reference.scope === "canvas"
+      ? reference.canvas_id === input.actorScope!.canvasId
+        && reference.owner_user_id === input.actorScope!.ownerUserId
+      : reference.owner_user_id === input.actorScope!.ownerUserId
+        && reference.principal_key === input.actorScope!.principalKey);
+  }
+  const actor = await resolveUserActorContext(db, {
+    sessionToken: input.sessionToken ?? "",
+    now: input.now,
+  });
+  const principalKey = actor.teamMember ? `member:${actor.teamMember.id}` : `owner:${actor.userId}`;
+  for (const reference of references.rows) {
+    if (reference.owner_user_id !== actor.userId) continue;
+    if (reference.scope === "global" && reference.principal_key === principalKey) return true;
+    if (reference.scope === "canvas" && reference.canvas_id) {
+      try {
+        await authorizeCanvasActor(db, {
+          sessionToken: input.sessionToken ?? "",
+          canvasId: reference.canvas_id,
+          action: "view",
+          now: input.now,
+        });
+        return true;
+      } catch (error) {
+        if (!(error instanceof CanvasAuthorizationError)) throw error;
+      }
+    }
+  }
+  return false;
+}
+
 export async function buildSignedObjectUrls(
   db: SqlDatabase,
   input: {
-    sessionToken: string;
+    sessionToken?: string;
+    actorScope?: CanvasActorScope;
     storageObjectId: string;
     adapter: StorageAdapter;
     now: Date;

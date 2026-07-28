@@ -14,6 +14,7 @@ vi.mock("@react-three/fiber", () => fiberMocks);
 
 import {
   CameraPilotController,
+  getPilotFovAfterPinch,
   getPilotFovAfterWheel,
   getPilotMouseSensitivity,
 } from "./CameraPilotController";
@@ -64,6 +65,17 @@ function renderController(overrides: {
 function dispatchPointerMove(clientX: number, clientY: number) {
   const event = new Event("pointermove");
   Object.defineProperties(event, {
+    clientX: { configurable: true, value: clientX },
+    clientY: { configurable: true, value: clientY },
+  });
+  window.dispatchEvent(event);
+}
+
+function dispatchTouchPointerMove(pointerId: number, clientX: number, clientY: number) {
+  const event = new Event("pointermove");
+  Object.defineProperties(event, {
+    pointerId: { configurable: true, value: pointerId },
+    pointerType: { configurable: true, value: "touch" },
     clientX: { configurable: true, value: clientX },
     clientY: { configurable: true, value: clientY },
   });
@@ -207,13 +219,35 @@ describe("CameraPilotController", () => {
     expect(largeDeltaChange).toBeLessThanOrEqual(1);
   });
 
+  it("uses one touch to look and a two-finger pinch to adjust pilot FOV", () => {
+    const { unmount } = renderController();
+
+    expect(canvas.style.touchAction).toBe("none");
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, pointerType: "touch", clientX: 100, clientY: 100 });
+    dispatchTouchPointerMove(1, 130, 85);
+    act(() => frameCallback({}, 1 / 60));
+    expect(snapshotRef.current.target).not.toEqual(INITIAL_SNAPSHOT.target);
+
+    const fovBeforePinch = camera.fov;
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 2, pointerType: "touch", clientX: 200, clientY: 100 });
+    dispatchTouchPointerMove(2, 250, 100);
+
+    expect(camera.fov).toBeLessThan(fovBeforePinch);
+    unmount();
+    expect(canvas.style.touchAction).toBe("");
+  });
+
   it("scales pilot turning and zooming with the shared viewport sensitivity", () => {
     expect(getPilotMouseSensitivity(0.15)).toBeLessThan(getPilotMouseSensitivity(0.9));
 
     const slowFov = getPilotFovAfterWheel(50, 100, 0.15);
     const fastFov = getPilotFovAfterWheel(50, 100, 0.9);
+    const pinchOutFov = getPilotFovAfterPinch(50, 100, 140, 0.65);
+    const pinchInFov = getPilotFovAfterPinch(50, 140, 100, 0.65);
 
     expect(slowFov).toBeGreaterThan(50);
     expect(fastFov - 50).toBeGreaterThan(slowFov - 50);
+    expect(pinchOutFov).toBeLessThan(50);
+    expect(pinchInFov).toBeGreaterThan(50);
   });
 });

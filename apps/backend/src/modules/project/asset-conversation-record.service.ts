@@ -75,7 +75,11 @@ interface AssetConversationEntrySummaryRow {
   task_id: string | null;
   status: string | null;
   created_at: string | null;
+  returned_at: string | null;
   selected_model_id: string | null;
+  model_label: string | null;
+  style_label: string | null;
+  skill_id: string | null;
   aspect_ratio: string | null;
   resolution: string | null;
   credit_cost: number | string | null;
@@ -114,6 +118,8 @@ const conversationSummaryItemKeys = [
   "referenceId",
   "composerOrder",
   "duration",
+  "originalName",
+  "isGenerationStyleReference",
 ] as const;
 
 function compactConversationItemArraySql(sourceSql: string) {
@@ -429,7 +435,38 @@ export async function listAssetConversationEntrySummaries(
         COALESCE(results.task_id, task_statuses.task_id, user_requests.task_id, results.payload_json->>'taskId', task_statuses.payload_json->>'taskId', user_requests.payload_json->>'taskId') AS task_id,
         COALESCE(results.status, task_statuses.status, user_requests.status, results.payload_json->>'status', task_statuses.payload_json->>'status', user_requests.payload_json->>'status') AS status,
         COALESCE(results.payload_json->>'createdAt', task_statuses.payload_json->>'createdAt', user_requests.payload_json->>'createdAt') AS created_at,
-        COALESCE(results.payload_json->>'selectedModelId', task_statuses.payload_json->>'selectedModelId', user_requests.payload_json->>'selectedModelId') AS selected_model_id,
+        COALESCE(
+          results.payload_json->>'returnedAt',
+          task_statuses.payload_json->>'returnedAt',
+          user_requests.payload_json->>'returnedAt',
+          results.payload_json->>'completedAt',
+          task_statuses.payload_json->>'completedAt',
+          user_requests.payload_json->>'completedAt'
+        ) AS returned_at,
+        COALESCE(
+          results.payload_json->>'selectedModelId',
+          task_statuses.payload_json->>'selectedModelId',
+          user_requests.payload_json->>'selectedModelId',
+          results.payload_json->>'model',
+          task_statuses.payload_json->>'model',
+          user_requests.payload_json->>'model',
+          results.payload_json->>'modelCode',
+          task_statuses.payload_json->>'modelCode',
+          user_requests.payload_json->>'modelCode'
+        ) AS selected_model_id,
+        COALESCE(
+          results.payload_json->>'modelLabel',
+          task_statuses.payload_json->>'modelLabel',
+          user_requests.payload_json->>'modelLabel',
+          results.payload_json->>'modelName',
+          task_statuses.payload_json->>'modelName',
+          user_requests.payload_json->>'modelName',
+          results.payload_json->>'displayName',
+          task_statuses.payload_json->>'displayName',
+          user_requests.payload_json->>'displayName'
+        ) AS model_label,
+        COALESCE(results.payload_json->>'styleLabel', task_statuses.payload_json->>'styleLabel', user_requests.payload_json->>'styleLabel') AS style_label,
+        COALESCE(results.payload_json->>'skillId', task_statuses.payload_json->>'skillId', user_requests.payload_json->>'skillId') AS skill_id,
         COALESCE(results.payload_json->>'aspectRatio', task_statuses.payload_json->>'aspectRatio', user_requests.payload_json->>'aspectRatio') AS aspect_ratio,
         COALESCE(results.payload_json->>'resolution', task_statuses.payload_json->>'resolution', user_requests.payload_json->>'resolution') AS resolution,
         COALESCE(results.payload_json->>'creditCost', task_statuses.payload_json->>'creditCost', user_requests.payload_json->>'creditCost') AS credit_cost,
@@ -447,9 +484,29 @@ export async function listAssetConversationEntrySummaries(
     `,
     [input.thread.threadId],
   );
+  const modelCodes = [...new Set(
+    result.rows.map((row) => String(row.selected_model_id ?? "").trim()).filter(Boolean),
+  )];
+  const modelDisplayNames = new Map<string, string>();
+  if (modelCodes.length) {
+    const modelRows = await db.query<{ model_code: string; display_name: string }>(
+      `SELECT model_code, display_name FROM ai_model_configs WHERE model_code = ANY($1::text[])`,
+      [modelCodes],
+    );
+    for (const model of modelRows.rows) {
+      const modelCode = String(model.model_code ?? "").trim();
+      const displayName = String(model.display_name ?? "").trim();
+      if (modelCode && displayName) modelDisplayNames.set(modelCode, displayName);
+    }
+  }
 
   return result.rows.map((row) => {
     const creditCost = row.credit_cost === null ? null : Number(row.credit_cost);
+    const storedModelLabel = String(row.model_label ?? "").trim();
+    const modelDisplayName = (
+      modelDisplayNames.get(String(row.selected_model_id ?? "").trim())
+      ?? (storedModelLabel && storedModelLabel !== row.selected_model_id ? storedModelLabel : "")
+    ) || (row.selected_model_id ? "默认模型" : "");
     return {
       turnId: row.turn_key,
       assetId: row.asset_id ?? input.thread.assetId,
@@ -465,7 +522,10 @@ export async function listAssetConversationEntrySummaries(
       taskId: row.task_id ?? null,
       status: row.status ?? "running",
       createdAt: row.created_at ?? new Date(row.order_created_at).toISOString(),
-      selectedModelId: row.selected_model_id ?? null,
+      returnedAt: row.returned_at ?? null,
+      modelLabel: modelDisplayName || null,
+      styleLabel: row.style_label ?? null,
+      skillId: row.skill_id ?? null,
       aspectRatio: row.aspect_ratio ?? null,
       resolution: row.resolution ?? null,
       creditCost: Number.isFinite(creditCost) ? creditCost : null,

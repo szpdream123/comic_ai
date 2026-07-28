@@ -1,0 +1,184 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, it } from "node:test";
+
+import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { __canvasAgentRuntimeTestUtils } from "../canvas-agent-runtime.factory.ts";
+import {
+  loadCanvasAgentRuntimeConfiguration,
+  normalizeCanvasAgentRuntimeConfiguration,
+  selectCanvasAgentModelCode,
+} from "../canvas-agent-runtime-config.service.ts";
+
+describe("Canvas Agent runtime composition", () => {
+  it("applies bounded JSON patch operations without mutating the input", () => {
+    const document = {
+      version: 1,
+      canvasProjectId: "canvas-1",
+      viewport: {},
+      nodes: [{ id: "node-1", type: "text", data: { text: "before" } }],
+      edges: [],
+      createdAt: "2026-07-25T00:00:00.000Z",
+      updatedAt: "2026-07-25T00:00:00.000Z",
+    };
+    const patched = __canvasAgentRuntimeTestUtils.applyCanvasPatch(document, [
+      { op: "replace", path: "/nodes/0/data/text", value: "after" },
+      { op: "add", path: "/nodes/-", value: { id: "node-2", type: "image" } },
+    ]);
+
+    assert.equal(document.nodes.length, 1);
+    assert.equal((patched.nodes as Array<Record<string, unknown>>).length, 2);
+    assert.equal((((patched.nodes as Array<Record<string, unknown>>)[0]?.data) as Record<string, unknown>).text, "after");
+    assert.throws(
+      () => __canvasAgentRuntimeTestUtils.applyCanvasPatch(document, [{ op: "copy", path: "/nodes" }]),
+      /canvas_agent_patch_operation_invalid/,
+    );
+  });
+
+  it("registers a supervised worker launcher for development and production", () => {
+    const launcherPath = join(process.cwd(), "scripts", "run-canvas-agent-worker.mjs");
+    const packageJson = readFileSync(join(process.cwd(), "package.json"), "utf8");
+    const development = readFileSync(join(process.cwd(), "scripts", "run-creator-dev-stack.mjs"), "utf8");
+    const production = readFileSync(join(process.cwd(), "scripts", "run-phone-auth-production.mjs"), "utf8");
+
+    assert.equal(existsSync(launcherPath), true);
+    assert.match(packageJson, /"worker:canvas-agent"/);
+    assert.match(development, /supervisor\.start\("canvas-agent"/);
+    assert.match(production, /supervisor\.start\("canvas-agent"/);
+    const launcher = readFileSync(launcherPath, "utf8");
+    assert.match(launcher, /createCanvasAgentWorkerRuntime/);
+    assert.match(launcher, /loadCanvasAgentRuntimeConfiguration/);
+    assert.match(launcher, /webSearchModelCode: runtimeConfiguration\.webSearchModelCode/);
+    assert.match(launcher, /runUntilStopped/);
+    assert.match(launcher, /createDevDb/);
+  });
+
+  it("maps the admin runtime configuration into bounded C-mode policy settings", async () => {
+    const normalized = normalizeCanvasAgentRuntimeConfiguration({
+      defaultModelCode: " agent-default ",
+      expertModelCode: "agent-expert",
+      webSearchModelCode: "search-primary",
+      maxRounds: 999,
+      maxToolCalls: 40,
+      allowAutomaticCanvasWrites: true,
+      allowAutomaticMediaGeneration: false,
+      webSearchProvider: "search-primary",
+      mcpAllowlist: ["assets", "assets", ""],
+    });
+    assert.equal(normalized.maxRounds, 64);
+    assert.equal(normalized.maxToolCalls, 40);
+    assert.equal(normalized.defaultModelCode, "agent-default");
+    assert.equal(normalized.expertModelCode, "agent-expert");
+    assert.equal(normalized.webSearchModelCode, "search-primary");
+    assert.equal(selectCanvasAgentModelCode(normalized, "b", null), "agent-default");
+    assert.equal(selectCanvasAgentModelCode(normalized, "c", undefined), "agent-default");
+    assert.equal(selectCanvasAgentModelCode(normalized, "plan", ""), "agent-default");
+    assert.equal(selectCanvasAgentModelCode(normalized, "expert", null), "agent-expert");
+    assert.equal(selectCanvasAgentModelCode(normalized, "expert", "agent-explicit"), "agent-explicit");
+    assert.equal(selectCanvasAgentModelCode({ defaultModelCode: "agent-default", expertModelCode: null }, "expert", null), "agent-default");
+    assert.equal(normalized.policy.allowAutomaticCanvasWrites, true);
+    assert.equal(normalized.policy.allowAutomaticMediaGeneration, false);
+    assert.deepEqual(normalized.policy.webSearchProviderAllowlist, ["search-primary"]);
+    assert.deepEqual(normalized.policy.mcpServerAllowlist, ["assets"]);
+    const legacySearchSelection = normalizeCanvasAgentRuntimeConfiguration({ webSearchProvider: "legacy-search" });
+    assert.equal(legacySearchSelection.webSearchModelCode, "legacy-search");
+
+    const queries: string[] = [];
+    const loaded = await loadCanvasAgentRuntimeConfiguration({
+      async query<T>(sql: string) {
+        queries.push(sql);
+        return { rows: [{ value_json: { defaultModelCode: "loaded-default", allowAutomaticCanvasWrites: false, maxRounds: 6 } }] as T[] };
+      },
+    });
+    assert.match(queries[0] ?? "", /runtime_config_entries/);
+    assert.equal(loaded.maxRounds, 6);
+    assert.equal(loaded.defaultModelCode, "loaded-default");
+    assert.equal(loaded.policy.allowAutomaticCanvasWrites, false);
+  });
+
+  it("revokes an owner runtime actor when the owner account is disabled", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedActorFixture(db);
+    try {
+      await db.query("UPDATE users SET status='disabled' WHERE id=$1", [fixture.userId]);
+      await assert.rejects(
+        __canvasAgentRuntimeTestUtils.resolveRuntimeActor(db, {
+          canvasId: fixture.canvasId,
+          ownerUserId: fixture.userId,
+          actorTeamMemberId: null,
+        }),
+        /canvas_agent_actor_access_revoked/,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("revokes a member runtime actor when the owner account is disabled", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedActorFixture(db);
+    try {
+      await db.query("UPDATE users SET status='disabled' WHERE id=$1", [fixture.userId]);
+      await assert.rejects(
+        __canvasAgentRuntimeTestUtils.resolveRuntimeActor(db, {
+          canvasId: fixture.canvasId,
+          ownerUserId: fixture.userId,
+          actorTeamMemberId: fixture.memberId,
+        }),
+        /canvas_agent_actor_access_revoked/,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("revokes a member runtime actor when the Canvas assignment is removed", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedActorFixture(db);
+    try {
+      await db.query("DELETE FROM team_member_canvases WHERE member_id=$1 AND canvas_id=$2", [
+        fixture.memberId,
+        fixture.canvasId,
+      ]);
+      await assert.rejects(
+        __canvasAgentRuntimeTestUtils.resolveRuntimeActor(db, {
+          canvasId: fixture.canvasId,
+          ownerUserId: fixture.userId,
+          actorTeamMemberId: fixture.memberId,
+        }),
+        /canvas_agent_actor_access_revoked/,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+async function seedActorFixture(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
+  const userId = randomUUID();
+  const memberId = randomUUID();
+  const canvasId = randomUUID();
+  const memberAccount = `runtime-${memberId.slice(0, 8)}`;
+  const memberAccountSuffix = memberId.slice(0, 6);
+  await db.query("INSERT INTO users (id, status) VALUES ($1, 'active')", [userId]);
+  await db.query(
+    `INSERT INTO team_members (
+       id, user_id, member_account, member_account_suffix, member_login_account,
+       member_name, member_password_hash, member_credits, status
+     ) VALUES ($1, $2, $3, $4, $5, 'Runtime Member', 'hash', 100, 'active')`,
+    [memberId, userId, memberAccount, memberAccountSuffix, `${memberAccount}@${memberAccountSuffix}`],
+  );
+  await db.query(
+    `INSERT INTO creator_canvas_projects
+       (id, title, status, server_revision, created_by_user_id, updated_by_user_id)
+     VALUES ($1, 'Runtime Canvas', 'active', 1, $2, $2)`,
+    [canvasId, userId],
+  );
+  await db.query(
+    "INSERT INTO team_member_canvases (id, member_id, user_id, canvas_id) VALUES ($1, $2, $3, $4)",
+    [randomUUID(), memberId, userId, canvasId],
+  );
+  return { userId, memberId, canvasId };
+}

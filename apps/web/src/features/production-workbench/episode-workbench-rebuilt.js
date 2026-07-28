@@ -143,6 +143,7 @@ export function renderEpisodeWorkbench({
   storyboardPagination = null,
   assetImportOfficialAssets = [],
   projectLibraryAssetsByType = null,
+  assetImageStyleSkillModal = "",
   importedAssets = null,
   episodeVoiceTeamAssets = [],
   episodeVoiceTeamLoading = false,
@@ -248,7 +249,7 @@ export function renderEpisodeWorkbench({
     selectedAsset?.id ?? null,
     effectiveMediaMode === "video" ? "video" : "image",
     imageGenerationResult,
-  );
+  ).map((entry) => enrichGenerationStyleDisplayMetadata(entry, generationUiState));
   const hasAssetConversationEntries = assetConversationEntries.length > 0;
   const isEmptyAssetComposer = scopeMode === "assets" && allAssetIds.length === 0 && !hasAssetConversationEntries;
   const storyboardMediaKind = effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video" : "image";
@@ -257,7 +258,7 @@ export function renderEpisodeWorkbench({
     currentStoryboard?.id ?? null,
     storyboardMediaKind,
     storyboardMediaKind === "video" ? videoGenerationResult : imageGenerationResult,
-  );
+  ).map((entry) => enrichGenerationStyleDisplayMetadata(entry, generationUiState));
   const assetStageTitle = selectedAsset
     ? `${resolveAssetLabel(normalizedActiveAssetTab)}${selectedAsset?.name ?? ""}`
     : "";
@@ -435,6 +436,7 @@ export function renderEpisodeWorkbench({
         error: episodeVoiceTeamError,
       })}
       ${renderAssetInspectorModal(assetInspector)}
+      ${assetImageStyleSkillModal}
       ${assetImportModal
         ? renderAssetImportModal({
             projectPanelMode: "episode-workbench",
@@ -1210,7 +1212,7 @@ function resolveStoryboardConversationEntries(historyMap = {}, storyboardId, med
 
 export function renderAssetGeneratedStage(asset, activeAssetTab, generationResult, mediaMode, generationHistory = []) {
   const entries = Array.isArray(generationHistory) && generationHistory.length
-    ? generationHistory
+    ? [...generationHistory].sort(compareAssetConversationEntryOrder)
     : (generationResult ? [generationResult] : []);
   if (!entries.length) {
     return renderAssetStage({
@@ -1230,11 +1232,29 @@ export function renderAssetGeneratedStage(asset, activeAssetTab, generationResul
   `;
 }
 
+function compareAssetConversationEntryOrder(left, right) {
+  const leftCreatedAt = Date.parse(String(left?.createdAt ?? left?.submittedAt ?? ""));
+  const rightCreatedAt = Date.parse(String(right?.createdAt ?? right?.submittedAt ?? ""));
+  if (Number.isFinite(leftCreatedAt) && Number.isFinite(rightCreatedAt) && leftCreatedAt !== rightCreatedAt) {
+    return leftCreatedAt - rightCreatedAt;
+  }
+  return 0;
+}
+
 function renderAssetConversationEntry(generationResult, assetKind = "character", mediaMode = "image") {
   const fullPromptPreview = String(generationResult?.promptPreview ?? "").trim();
   const promptPreview = truncateDisplayText(fullPromptPreview, 140);
   const userMeta = buildAssetGenerationUserMeta(generationResult);
-  const quickReferenceItems = generationResult?.quickReferenceItems ?? [];
+  const quickReferenceItems = Array.isArray(generationResult?.quickReferenceItems)
+    ? generationResult.quickReferenceItems
+    : [];
+  const attachmentItems = Array.isArray(generationResult?.attachmentItems)
+    ? generationResult.attachmentItems.filter((item) => String(item?.type ?? item?.kind ?? "") !== "audio")
+    : [];
+  const userQuickReferenceItems = filterComposerQuickReferenceItems([
+    ...quickReferenceItems,
+    ...attachmentItems,
+  ].filter((item) => !isGenerationStyleReferenceItem(item, generationResult)));
   const failureMessage = resolveGenerationResultFailureMessage(generationResult);
   const hasFixedImages = Array.isArray(generationResult?.fixedImages) && generationResult.fixedImages.length > 0;
   const taskId = resolveGenerationTaskId(generationResult);
@@ -1243,9 +1263,9 @@ function renderAssetConversationEntry(generationResult, assetKind = "character",
     ? ` data-generation-task-id="${escapeAttr(String(taskId))}" data-generation-media-kind="${escapeAttr(String(mediaKind))}"`
     : "";
   return `
-    <section class="episode-replica-asset-conversation-entry"${taskAttrs}>
+      <section class="episode-replica-asset-conversation-entry"${taskAttrs}>
       <div class="episode-replica-message-thread">
-        ${promptPreview ? renderLegacyUserMessage(promptPreview, userMeta, quickReferenceItems, fullPromptPreview) : ""}
+        ${userMeta || userQuickReferenceItems.length ? renderLegacyUserMessage(promptPreview, userMeta, userQuickReferenceItems, fullPromptPreview) : ""}
       </div>
       ${failureMessage && !hasFixedImages ? renderFailedFixedImageResult(generationResult, assetKind, failureMessage) : ""}
       ${hasFixedImages ? renderFixedImageResults(generationResult, assetKind) : ""}
@@ -1280,19 +1300,219 @@ function resolveGenerationResolutionLabel(generationResult) {
 }
 
 function buildAssetGenerationUserMeta(generationResult) {
-  const taskId = resolveGenerationTaskId(generationResult);
-  const workflowStatus = String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending").toLowerCase();
-  const progressLabel = resolveAssetGenerationProgressLabel(generationResult, workflowStatus);
-  return [
-    taskId ? `任务ID：${taskId}` : null,
-    progressLabel ? `任务进度：${progressLabel}` : null,
-  ]
-    .filter(Boolean)
-    .join(" / ");
+  return renderGenerationUserMeta(generationResult);
 }
 
 function resolveAssetGenerationProgressLabel(generationResult, workflowStatus) {
-  return resolveWorkflowStatusLabel(workflowStatus || generationResult?.status || generationResult?.platform?.workflowStatus);
+  return resolveWorkflowStatusLabel(
+    workflowStatus || generationResult?.status || generationResult?.platform?.workflowStatus,
+    generationResult,
+  );
+}
+
+function buildGenerationUserMetaItems(generationResult, { imageName = "", modelLabel = "" } = {}) {
+  const taskId = resolveGenerationTaskId(generationResult);
+  const workflowStatus = String(
+    generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "pending",
+  ).toLowerCase();
+  const progressLabel = resolveAssetGenerationProgressLabel(generationResult, workflowStatus);
+  const progressPercent = resolveExplicitGenerationProgressPercent(generationResult);
+  const isTerminalFailure = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(workflowStatus);
+  const createdAt =
+    generationResult?.createdAt ??
+    generationResult?.submittedAt ??
+    "";
+  const returnedAt = resolveGenerationReturnedAt(generationResult);
+  const modelId = String(generationResult?.selectedModelId ?? generationResult?.model ?? "").trim();
+  const explicitModelLabel = [
+    modelLabel,
+    generationResult?.modelLabel,
+    generationResult?.modelName,
+    generationResult?.displayModelName,
+    generationResult?.result?.modelLabel,
+    generationResult?.result?.modelName,
+  ].map((value) => String(value ?? "").trim()).find(Boolean) ?? "";
+  const resolvedModelLabel = modelId || explicitModelLabel
+    ? resolveGenerationModelLabel(modelId, explicitModelLabel)
+    : "";
+  const resolvedImageName = resolveGenerationImageName(generationResult, imageName);
+  const styleReference = [
+    ...(Array.isArray(generationResult?.quickReferenceItems) ? generationResult.quickReferenceItems : []),
+    ...(Array.isArray(generationResult?.attachmentItems) ? generationResult.attachmentItems : []),
+  ].find((item) => isGenerationStyleReferenceItem(item, generationResult));
+  return [
+    { key: "image-name", label: "生图名称", value: resolvedImageName || "未命名生图", emphasis: true },
+    {
+      key: "progress",
+      label: "任务进度",
+      value: progressLabel ? `${progressLabel}${progressPercent === null || isTerminalFailure ? "" : ` ${progressPercent}%`}` : "生成中",
+      tone: resolveGenerationSummaryTone(workflowStatus),
+    },
+    { key: "model", label: "提交模型", value: resolvedModelLabel || "未指定" },
+    {
+      key: "style",
+      label: "风格",
+      value: resolveGenerationStyleLabel(generationResult),
+      preview: resolveReferencePreview(styleReference) || String(generationResult?.stylePreview ?? "").trim(),
+    },
+    { key: "created-at", label: "提交时间", value: createdAt ? formatGenerationDisplayDate(createdAt) : "待提交" },
+    ...(returnedAt
+      ? [{ key: "completed-at", label: "完成时间", value: formatGenerationDisplayDate(returnedAt) }]
+      : []),
+    { key: "task-id", label: "任务ID", value: taskId || "待创建", wide: true },
+  ];
+}
+
+function resolveGenerationReturnedAt(generationResult) {
+  return [
+    generationResult?.returnedAt,
+    generationResult?.completedAt,
+    generationResult?.platform?.returnedAt,
+    generationResult?.platform?.completedAt,
+    generationResult?.result?.returnedAt,
+    generationResult?.result?.completedAt,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) ?? "";
+}
+
+function renderGenerationUserMeta(generationResult, options = {}) {
+  const items = buildGenerationUserMetaItems(generationResult, options);
+  const imageName = items.find((item) => item.key === "image-name");
+  const progress = items.find((item) => item.key === "progress");
+  const details = items.filter((item) => item.key !== "image-name" && item.key !== "progress");
+  return `
+    <div class="episode-replica-user-message-meta episode-generation-summary" data-generation-summary>
+      <div class="episode-generation-summary-head">
+        <div class="episode-generation-summary-title">
+          <span class="episode-generation-summary-kicker">生成记录</span>
+          <strong title="${escapeAttr(imageName.value)}">${escapeHtml(imageName.value)}</strong>
+        </div>
+        <span class="episode-generation-summary-status ${escapeAttr(progress.tone)}">
+          <i aria-hidden="true"></i>
+          <span>${escapeHtml(progress.label)}：${escapeHtml(progress.value)}</span>
+        </span>
+      </div>
+      <div class="episode-generation-summary-grid">
+        ${details.map((item) => `
+          <div class="episode-generation-summary-item ${item.wide ? "wide" : ""} ${item.key === "style" ? "style" : ""}">
+            <span>${escapeHtml(item.label)}</span>
+            ${item.key === "style"
+              ? `<div class="episode-generation-summary-style-value">
+                  <span class="episode-generation-summary-style-thumb ${item.preview ? "has-preview" : "fallback"}">
+                    ${item.preview
+                      ? `<img src="${escapeAttr(resolveApiUrl(item.preview))}" alt="" loading="lazy" />`
+                      : escapeHtml([...item.value][0] ?? "风")}
+                  </span>
+                  <strong title="${escapeAttr(item.value)}">${escapeHtml(item.value)}</strong>
+                </div>`
+              : `<strong title="${escapeAttr(item.value)}">${escapeHtml(item.value)}</strong>`}
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function resolveGenerationSummaryTone(status) {
+  const normalized = String(status ?? "").toLowerCase();
+  if (["completed", "succeeded", "success"].includes(normalized)) {
+    return "completed";
+  }
+  if (["failed", "canceled", "manual_review_required", "result_unknown"].includes(normalized)) {
+    return "failed";
+  }
+  return "pending";
+}
+
+function resolveGenerationStyleLabel(generationResult) {
+  const explicitLabel = [
+    generationResult?.styleLabel,
+    generationResult?.styleName,
+    generationResult?.selectedStyleName,
+    generationResult?.skillLabel,
+    generationResult?.skillName,
+    generationResult?.style?.label,
+    generationResult?.style?.name,
+    generationResult?.skill?.label,
+    generationResult?.skill?.name,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean);
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+  const styleReference = [
+    ...(Array.isArray(generationResult?.quickReferenceItems) ? generationResult.quickReferenceItems : []),
+    ...(Array.isArray(generationResult?.attachmentItems) ? generationResult.attachmentItems : []),
+  ].find((item) => isGenerationStyleReferenceItem(item, generationResult));
+  const referenceLabel = String(styleReference?.name ?? styleReference?.label ?? "")
+    .trim()
+    .replace(/^引入\s*/u, "");
+  return referenceLabel || "默认风格";
+}
+
+function enrichGenerationStyleDisplayMetadata(generationResult, generationUiState = {}) {
+  const skillId = String(generationResult?.skillId ?? "").trim();
+  if (!skillId) {
+    return generationResult;
+  }
+  const style = [
+    ...(Array.isArray(generationUiState?.assetImageStyleOfficialSkills) ? generationUiState.assetImageStyleOfficialSkills : []),
+    ...(Array.isArray(generationUiState?.assetImageStylePrivateSkills) ? generationUiState.assetImageStylePrivateSkills : []),
+  ].find((item) => String(item?.id ?? "").trim() === skillId);
+  if (!style) {
+    return generationResult;
+  }
+  const styleLabel = String(
+    generationResult?.styleLabel ?? style?.label ?? style?.name ?? style?.title ?? "",
+  ).trim();
+  const stylePreview = String(
+    generationResult?.stylePreview ??
+      style?.preview ??
+      style?.previewUrl ??
+      style?.coverImageUrl ??
+      style?.cover_image_url ??
+      "",
+  ).trim();
+  return {
+    ...generationResult,
+    ...(styleLabel ? { styleLabel } : {}),
+    ...(stylePreview ? { stylePreview } : {}),
+  };
+}
+
+function isGenerationStyleReferenceItem(item, generationResult = null) {
+  const itemId = String(item?.id ?? "").trim().toLowerCase();
+  const itemName = String(item?.name ?? item?.label ?? "").trim();
+  const styleLabel = String(
+    generationResult?.styleLabel ?? generationResult?.styleName ?? generationResult?.selectedStyleName ?? "",
+  ).trim();
+  return Boolean(
+    item?.isGenerationStyleReference === true ||
+      String(item?.role ?? "").trim().toLowerCase() === "style" ||
+      String(item?.kind ?? "").trim().toLowerCase() === "style" ||
+      String(item?.originalName ?? "").trim() === "图片风格参考图" ||
+      /(?:^|:)(?:style|image-style)(?:[:_-]|$)/u.test(itemId) ||
+      /(?:^|[:_-])style(?:[:_-]|$)/u.test(itemId) ||
+      /style-reference/u.test(itemId) ||
+      (styleLabel && itemName === styleLabel),
+  );
+}
+
+function resolveGenerationImageName(generationResult, fallback = "") {
+  return [
+    fallback,
+    generationResult?.imageName,
+    generationResult?.generationName,
+    generationResult?.selectionContext?.selectedAssetName,
+    generationResult?.selectionContext?.storyboardTitle,
+    generationResult?.selectedAssetName,
+    generationResult?.assetName,
+    generationResult?.fixedImages?.[0]?.label,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) ?? "";
 }
 
 function resolveExplicitGenerationProgressPercent(generationResult) {
@@ -1501,6 +1721,12 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
     selectedStoryboard?.generationState?.quickReferenceItems ??
     [];
   const attachmentItems = generationResult?.attachmentItems ?? [];
+  const userQuickReferenceItems = quickReferenceItems.filter(
+    (item) => !isGenerationStyleReferenceItem(item, generationResult),
+  );
+  const userAttachmentItems = attachmentItems.filter(
+    (item) => !isGenerationStyleReferenceItem(item, generationResult),
+  );
   const fullPromptPreview = String(
     generationResult?.promptPreview ??
       selectedStoryboard?.generationState?.lastSubmission?.promptPreview ??
@@ -1523,6 +1749,9 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
       selectedStoryboard?.generationState?.lastSubmission?.status ??
       "",
   ).toLowerCase();
+  const userMeta = renderGenerationUserMeta(generationResult, {
+    imageName: selectedStoryboard?.displayTitle ?? selectedStoryboard?.title ?? "分镜",
+  });
   const failureMessage = resolveGenerationResultFailureMessage(generationResult, workflowStatus);
   const isFailure = isGenerationFailureStatus(workflowStatus);
   const hasVideoResult = isVideo && Boolean(resolveGeneratedVideoUrl(generationResult, null));
@@ -1533,8 +1762,9 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
       ${renderResultMessageThread({
         promptPreview,
         fullPromptPreview,
-        quickReferenceItems,
-        attachmentItems,
+        userMeta,
+        quickReferenceItems: userQuickReferenceItems,
+        attachmentItems: userAttachmentItems,
         generatedAudioItems:
           generationResult?.generatedAudioItems ??
           generationResult?.result?.generatedAudioItems ??
@@ -1546,7 +1776,10 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
           "",
         taskId:
           taskId,
-        modelLabel: resolveGenerationModelLabel(generationResult?.selectedModelId),
+        modelLabel: resolveGenerationModelLabel(
+          generationResult?.selectedModelId,
+          generationResult?.modelLabel ?? generationResult?.modelName,
+        ),
         systemContent: `
           ${
             isFailure && !showResultActions
@@ -1877,6 +2110,7 @@ function renderGenerationProgressTrack(progressState) {
 function renderResultMessageThread({
   promptPreview = "",
   fullPromptPreview = "",
+  userMeta = "",
   quickReferenceItems = [],
   attachmentItems = [],
   generatedAudioItems = [],
@@ -1888,10 +2122,11 @@ function renderResultMessageThread({
   return `
     <div class="episode-replica-message-thread">
       ${
-        promptPreview
+        userMeta || promptPreview || quickReferenceItems.length || attachmentItems.length
           ? renderEnhancedUserMessage({
               promptPreview,
               fullPromptPreview,
+              userMeta,
               quickReferenceItems,
               attachmentItems,
               generatedAudioItems,
@@ -1913,6 +2148,7 @@ function renderResultMessageThread({
 function renderEnhancedUserMessage({
   promptPreview = "",
   fullPromptPreview = "",
+  userMeta = "",
   quickReferenceItems = [],
   attachmentItems = [],
   generatedAudioItems = [],
@@ -1927,16 +2163,19 @@ function renderEnhancedUserMessage({
     ...(quickReferenceItems ?? []),
     ...(attachmentItems ?? []).filter((item) => String(item?.type ?? item?.kind ?? "") !== "audio"),
   ];
-  const compactVisualItems = visualItems.slice(0, 3);
+  const compactVisualItems = filterComposerQuickReferenceItems(visualItems).slice(0, 3);
   const compactAudioItems = audioItems.slice(0, 1);
-  const taskMeta = taskId ? `任务id:${taskId}` : "";
-  const fullPrompt = String(fullPromptPreview || promptPreview || "").trim();
+  const generationMeta = userMeta || renderGenerationUserMeta({
+    createdAt,
+    taskId,
+    quickReferenceItems,
+    status: "pending",
+  }, { modelLabel });
   return `
     <div class="episode-replica-message-row user">
-      <article class="episode-replica-user-message">
-        ${renderUserMessageCopyWithPopover(promptPreview, fullPrompt)}
+      <article class="episode-replica-user-message ${generationMeta ? "generation-record" : ""}">
         ${
-          compactAudioItems.length || compactVisualItems.length || taskMeta || createdAt
+          compactAudioItems.length || compactVisualItems.length || generationMeta
             ? `<div class="episode-replica-user-message-footer">
                 ${
                   compactAudioItems.length || compactVisualItems.length
@@ -1947,11 +2186,8 @@ function renderEnhancedUserMessage({
                     : ""
                 }
                 ${
-                  taskMeta || createdAt
-                    ? `<div class="episode-replica-user-message-meta">
-                        ${taskMeta ? `<span class="episode-replica-user-task-inline">${escapeHtml(taskMeta)}</span>` : ""}
-                        ${createdAt ? `<time class="episode-replica-user-time">${escapeHtml(formatGenerationDisplayDate(createdAt))}</time>` : ""}
-                      </div>`
+                  generationMeta
+                    ? generationMeta
                     : ""
                 }
               </div>`
@@ -1999,13 +2235,12 @@ function renderLegacyUserMessage(promptPreview, metaText = "", quickReferenceIte
     <div class="episode-replica-message-row user">
       <article class="episode-replica-user-message legacy">
         <span class="episode-replica-message-badge">用户</span>
-        ${renderUserMessageCopyWithPopover(promptPreview, fullPromptPreview || promptPreview)}
         ${
           quickReferenceItems.length
             ? `<div class="episode-replica-user-message-refs">${quickReferenceItems.map((item) => renderUserReferenceItem(item)).join("")}</div>`
             : ""
         }
-        ${metaText ? `<div class="episode-replica-user-message-meta">${escapeHtml(metaText)}</div>` : ""}
+        ${metaText ? `${metaText}` : ""}
       </article>
     </div>
   `;
@@ -2336,20 +2571,12 @@ function renderSelectionContextInline(selectionContext) {
   return label ? `<span>${escapeHtml(String(label))}</span>` : "";
 }
 
-function resolveGenerationModelLabel(modelId) {
-  const catalog = {
-    "gpt-image-2-cn": "GPT Image 2",
-    "vidu-q3-pro": "Vidu Q3 Pro",
-    "jimeng-4-5": "gpt image 2（链路G）",
-    "jimeng-4-5-vip": "gpt image 2 VIP（链路G）",
-    "tnb-pro": "nano banana 2（链路G）",
-    "tnb-fast": "nano banana fast（链路G）",
-    "tnb-ultra": "nano banana pro（链路G）",
-    "hailuo-2-0": "海螺 2.0",
-    "seedance-2-0-vip": "SeeDance 2.0 VIP",
-    "happy-horse": "Happy Horse",
-  };
-  return catalog[modelId] ?? "默认模型";
+export function resolveGenerationModelLabel(modelId, explicitLabel = "") {
+  const normalizedExplicitLabel = String(explicitLabel ?? "").trim();
+  if (normalizedExplicitLabel) {
+    return normalizedExplicitLabel;
+  }
+  return "默认模型";
 }
 
 function renderStageCanvas(selectedStoryboard, generationResult, video = false) {
@@ -2438,9 +2665,29 @@ export function renderPromptDock({
   const openGenerationSelectMenu = generationUiState.openGenerationSelectMenu ?? null;
   const projectStyles = normalizePromptDockProjectStyles(generationUiState.projectStyles);
   const selectedProjectStyle = resolvePromptDockProjectStyle(projectStyles, {
-    selectedCode: generationUiState.selectedProjectStyleCode,
+    selectedCode: scopeMode === "assets"
+      ? generationUiState.projectStyleCode || generationUiState.selectedProjectStyleCode
+      : generationUiState.selectedProjectStyleCode,
     projectCode: generationUiState.projectStyleCode,
   });
+  const imageStyleSkills = [
+    ...(Array.isArray(generationUiState.assetImageStyleOfficialSkills) ? generationUiState.assetImageStyleOfficialSkills : []),
+    ...(Array.isArray(generationUiState.assetImageStylePrivateSkills) ? generationUiState.assetImageStylePrivateSkills : []),
+  ];
+  const selectedImageStyleSkillId = String(generationUiState.assetImageStyleSkillId ?? "project-style");
+  const selectedImageStyleSkill = imageStyleSkills.find((item) => String(item?.id ?? "") === selectedImageStyleSkillId) ?? null;
+  const selectedImageStyleLabel = selectedImageStyleSkill?.label
+    ?? selectedImageStyleSkill?.title
+    ?? selectedProjectStyle?.name
+    ?? "";
+  const selectedImageStylePreview = String(
+    selectedImageStyleSkill?.preview
+      ?? selectedImageStyleSkill?.coverImageUrl
+      ?? selectedImageStyleSkill?.cover_image_url
+      ?? selectedProjectStyle?.coverImageUrl
+      ?? "",
+  ).trim();
+  const selectedImageStyleCredits = Math.max(0, Math.round(Number(selectedImageStyleSkill?.priceCredits) || 0));
   const selectedPreset = generationUiState.referencePromptPreset ?? "none";
   const isVideoMode = mediaMode === "video" || mediaMode === "lip-sync";
   const isVideoSettingsPanelOpen = isVideoMode && openGenerationSelectMenu === "video-settings-panel";
@@ -2479,11 +2726,15 @@ export function renderPromptDock({
     : generationAttachmentCards;
   const visibleAttachments = isSingleFrameInputMode
     ? []
-    : (attachments ?? []);
+    : (attachments ?? []).filter((item) => (
+        isVideoMode || resolveComposerReferenceMediaType(item) === "image"
+      ));
   const shouldHideReferenceCards = isSingleFrameInputMode || (isReferenceFreeImageMode && scopeMode !== "assets");
   const visibleQuickReferenceItems = shouldHideReferenceCards
     ? []
-    : filterComposerQuickReferenceItems(quickReferenceItems, [
+    : filterComposerQuickReferenceItems(quickReferenceItems.filter((item) => (
+        isVideoMode || resolveComposerReferenceMediaType(item) === "image"
+      )), [
         ...visibleGenerationAttachmentCards,
         ...visibleAttachments,
       ]);
@@ -2539,7 +2790,13 @@ export function renderPromptDock({
   `;
   const generateAction =
     mediaMode === "video" || mediaMode === "lip-sync" ? "generate-videos" : "generate-images";
-  const generateCost = resolveGenerateCost(mediaMode, generationControls, selectedModel);
+  const modelGenerateCost = resolveGenerateCost(mediaMode, generationControls, selectedModel);
+  const generateCost = !isVideoMode
+    ? modelGenerateCost + selectedImageStyleCredits
+    : modelGenerateCost;
+  const generateCostLabel = !isVideoMode && selectedImageStyleCredits > 0
+    ? `${modelGenerateCost} + ${selectedImageStyleCredits}积分`
+    : String(generateCost);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -2624,23 +2881,29 @@ export function renderPromptDock({
                 : parameterControls.join("")
           }
           ${
-            selectedProjectStyle
-              ? renderControlMenu(
-                  "projectStyle",
-                  selectedProjectStyle.name,
-                  openGenerationSelectMenu,
-                  projectStyles.map((style) => [style.code, style.name, "", style.coverImageUrl]),
-                  "select-episode-generation-style",
-                  `风格：${selectedProjectStyle.name}`,
-                  "toggle-generation-select-menu",
-                  selectedProjectStyle.code,
-                )
+            scopeMode === "assets" || scopeMode === "storyboard"
+              ? `<span class="episode-replica-control-wrap episode-image-style-skill-wrap">
+                <button
+                  class="episode-replica-control episode-image-style-skill-trigger"
+                  type="button"
+                  data-action="open-asset-image-style-skill-modal"
+                  aria-haspopup="dialog"
+                  aria-expanded="${generationUiState.assetImageStyleSkillModalOpen ? "true" : "false"}"
+                  aria-label="生图风格：${escapeAttr(selectedImageStyleLabel)}"
+                >
+                  ${selectedImageStylePreview
+                    ? `<img class="episode-image-style-skill-thumb" src="${escapeAttr(selectedImageStylePreview)}" alt="" />`
+                    : `<span class="episode-image-style-skill-thumb fallback" aria-hidden="true">${escapeHtml([...selectedImageStyleLabel][0] ?? "风")}</span>`}
+                  <span class="episode-image-style-skill-name">${escapeHtml(selectedImageStyleLabel)}</span>
+                </button>
+                </span>`
               : ""
           }
         </div>
         ${renderGenerationSubmitButton({
           action: generateAction,
           cost: generateCost,
+          costLabel: generateCostLabel,
           busy,
           label: generationPollingActive ? "生成中" : "生成",
         })}
@@ -2651,7 +2914,7 @@ export function renderPromptDock({
 }
 
 function normalizePromptDockProjectStyles(styles = []) {
-  return (Array.isArray(styles) ? styles : [])
+  const normalized = (Array.isArray(styles) ? styles : [])
     .filter((style) => style && typeof style === "object" && style.status !== "disabled")
     .map((style) => ({
       code: String(style.code ?? style.id ?? "").trim(),
@@ -2659,6 +2922,7 @@ function normalizePromptDockProjectStyles(styles = []) {
       coverImageUrl: String(style.coverImageUrl ?? style.cover_image_url ?? style.image ?? "").trim(),
     }))
     .filter((style) => style.code && style.name);
+  return normalized;
 }
 
 function resolvePromptDockProjectStyle(styles, { selectedCode = "", projectCode = "" } = {}) {
@@ -4111,12 +4375,16 @@ export function renderEpisodeBatchModal(modal) {
   const selectedCount = modal.items?.length ?? 0;
   const title = mode === "video" ? "批量生成视频" : mode === "upscale" ? "批量高清处理" : "批量生图";
   const totalCredits = modal.totalCredits ?? 0;
+  const skillCredits = mode === "image" ? resolveEpisodeBatchSkillCredits(modal) * selectedCount : 0;
+  const modelCredits = Math.max(0, Number(totalCredits) - skillCredits);
   const primaryLabel =
     mode === "video"
       ? "生成"
       : mode === "upscale"
         ? `处理 ${selectedCount} 项素材 | ${totalCredits} 积分`
-        : `生成${selectedCount}张图 | ${totalCredits} 积分`;
+        : skillCredits > 0
+          ? `生成 ${modelCredits} + ${skillCredits}积分`
+          : `生成 ${totalCredits} 积分`;
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true" data-episode-batch-modal-layer>
       <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal"></button>
@@ -4152,6 +4420,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const customStyles = Array.isArray(modal.customStyles) ? modal.customStyles : [];
   const styleCards = styleTab === "custom" ? customStyles : publicStyles;
   const selectedStyleId = modal.selectedStyleId ?? styleCards[0]?.id ?? "";
+  const selectedStyle = [...publicStyles, ...customStyles].find((style) => String(style?.id ?? "") === String(selectedStyleId)) ?? null;
   const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
   const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
   const selectedImageModel = imageModelOptions.find((option) => option.value === String(modal.imageModelId ?? "").trim()) ?? imageModelOptions[0] ?? null;
@@ -4162,9 +4431,10 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   return `
     <div class="episode-batch-image-panel">
       <section class="episode-batch-style-panel">
-        <div class="episode-batch-section-title">模型画风</div>
+        ${selectedStyle ? `<div class="episode-batch-selected-style episode-batch-selected-style-top" title="已选风格：${escapeAttr(selectedStyle.label)}"><span class="episode-batch-selected-style-thumb">${selectedStyle.preview ? `<img src="${escapeAttr(resolveApiUrl(selectedStyle.preview))}" alt="" />` : escapeHtml([...selectedStyle.label][0] ?? "风")}</span><span>${escapeHtml(selectedStyle.label)}</span></div>` : ""}
         <div class="episode-batch-style-tabs">
-          <button class="${styleTab === "public" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="public">官方样式</button>
+          <button class="${styleTab === "public" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="public">官方技能</button>
+          <button class="${styleTab === "custom" ? "active" : ""}" type="button" data-action="set-episode-batch-style-tab" data-tab="custom">私人技能库</button>
         </div>
         <div class="episode-batch-style-grid">
           ${styleCards.length ? styleCards.map((card) => `
@@ -4176,13 +4446,14 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
             >
               ${card.preview ? `<img src="${escapeAttr(resolveApiUrl(card.preview))}" alt="${escapeAttr(card.label)}" />` : ""}
               <strong>${escapeHtml(card.label)}</strong>
+              <small>${formatEpisodeBatchSkillCredits(card.priceCredits)}</small>
             </button>
-          `).join("") : '<div class="episode-replica-right-empty">当前没有可用画风，请先在后台配置。</div>'}
+          `).join("") : `<div class="episode-replica-right-empty">当前没有可用${styleTab === "custom" ? "私人" : "官方"}生图风格技能。</div>`}
         </div>
       </section>
       <footer class="episode-batch-footer image-composer">
         <div class="episode-batch-footer-controls">
-          ${renderEpisodeBatchSelectField("imageModelId", "", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions), { compact: true, menuDirection: "up" })}
+          ${renderEpisodeBatchSelectField("imageModelId", "", imageModel, modal.openField === "imageModelId", groupBatchImageModelOptions(imageModelOptions), { compact: true, menuDirection: "up", modelControl: true })}
           ${renderEpisodeBatchImageSettingsControl({
             open: modal.openField === "image-settings-panel",
             clarity: modal.imageClarity ?? "2K",
@@ -4196,6 +4467,20 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
       </footer>
     </div>
   `;
+}
+
+function formatEpisodeBatchSkillCredits(value) {
+  const credits = Math.max(0, Math.round(Number(value) || 0));
+  return credits > 0 ? `${credits}积分/张` : "免费";
+}
+
+function resolveEpisodeBatchSkillCredits(modal) {
+  const selectedStyleId = String(modal?.selectedStyleId ?? "").trim();
+  const selectedStyle = [
+    ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
+    ...(Array.isArray(modal?.customStyles) ? modal.customStyles : []),
+  ].find((style) => String(style?.id ?? "").trim() === selectedStyleId);
+  return Math.max(0, Math.round(Number(selectedStyle?.priceCredits) || 0));
 }
 
 function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope) {
@@ -4270,7 +4555,7 @@ function renderEpisodeBatchSelectField(field, label, value, open, options, displ
   const selectedPreview = String(displayOptions.selectedPreview ?? "").trim();
   const menuDirection = displayOptions.menuDirection ?? (field === "imageModelId" || field === "videoModelId" ? "down" : "up");
   return `
-    <div class="episode-batch-select-group ${compact ? "compact" : ""}">
+    <div class="episode-batch-select-group ${compact ? "compact" : ""} ${displayOptions.modelControl === true ? "model-control" : ""}">
       ${label ? `<span class="episode-batch-field-label">${escapeHtml(label)}</span>` : ""}
       <div class="episode-batch-select-wrap menu-${menuDirection} ${open ? "open" : ""}">
         <button
@@ -4726,6 +5011,7 @@ function resolveReferencePreview(item) {
     item?.previewUrl,
     item?.publicUrl,
     item?.coverImageUrl,
+    item?.coverUrl,
     item?.src,
     item?.imageUrl,
     item?.url,

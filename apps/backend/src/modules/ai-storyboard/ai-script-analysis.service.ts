@@ -13,8 +13,10 @@ export type AiScriptAnalysisStreamEvent =
 export interface AiScriptAnalysisInput {
   projectId?: string | null;
   createdByUserId?: string | null;
+  modelCode?: string | null;
   scriptText: string;
   packages: {
+    skillPrompt?: string;
     genrePrompt?: string;
     emotionPrompt?: string;
     tabooPrompt?: string;
@@ -25,13 +27,14 @@ export interface AiScriptAnalysisInput {
 export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLike }) {
   async function* generateScriptStream(input: AiScriptAnalysisInput): AsyncIterable<AiScriptAnalysisStreamEvent> {
     const prompt = buildScriptAnalysisPrompt(input);
+    const modelCode = String(input.modelCode ?? "deepseek-noval").trim() || "deepseek-noval";
     yield { type: "script_prompt", text: prompt };
     yield { type: "script_start" };
 
     let rawText = "";
     const stream = deps.gateway.streamJson
       ? deps.gateway.streamJson({
-          model: "deepseek-chat",
+          model: modelCode,
           prompt,
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
@@ -40,7 +43,7 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
           signal: input.signal,
         })
       : completeAsStream(deps.gateway, {
-          model: "deepseek-chat",
+          model: modelCode,
           prompt,
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
@@ -76,6 +79,7 @@ async function* completeAsStream(
 
 function buildScriptAnalysisPrompt(input: AiScriptAnalysisInput) {
   return [
+    input.packages.skillPrompt || "",
     input.packages.genrePrompt || "",
     input.packages.emotionPrompt || "",
     input.packages.tabooPrompt || "",

@@ -5,7 +5,7 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 
-export const DEEPSEEK_STORYBOARD_MAX_TOKENS = 384000;
+export const DEEPSEEK_STORYBOARD_MAX_TOKENS = 8192;
 const LIVE_ECHO_CHUNK_SIZE = 32;
 
 type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
@@ -57,6 +57,7 @@ export interface AiStoryboardPreviewInput {
   scriptText: string;
   skipScriptStage?: boolean;
   packages: {
+    skillPrompt?: string;
     genrePrompt?: string;
     emotionPrompt?: string;
     cameraPrompt?: string;
@@ -283,10 +284,11 @@ function* splitTextForLiveEcho(text: string) {
 }
 
 function buildScriptPrompt(input: AiStoryboardPreviewInput) {
+  const skillPrompt = String(input.packages.skillPrompt ?? "").trim();
   return [
-    input.packages.genrePrompt || "",
-    input.packages.emotionPrompt || "",
-    input.packages.tabooPrompt || "",
+    skillPrompt || input.packages.genrePrompt || "",
+    skillPrompt ? "" : input.packages.emotionPrompt || "",
+    skillPrompt ? "" : input.packages.tabooPrompt || "",
     input.scriptText,
   ].map((part) => part.trim()).filter(Boolean).join("\n\n");
 }
@@ -309,7 +311,12 @@ function buildShotPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
 
 function buildAssetStagePrompt(stage: AssetPromptStage, template: string, scriptText: string) {
   const rendered = renderPromptTemplate(template, scriptText).trim();
-  return rendered || `【剧本】\n${scriptText}`;
+  if (!rendered) {
+    return `【剧本】\n${scriptText}`;
+  }
+  return rendered.includes(scriptText)
+    ? rendered
+    : `${rendered}\n\n【剧本】\n${scriptText}`;
 }
 
 function normalizePreview(scriptText: string, promptResult: Record<string, unknown>) {

@@ -400,6 +400,23 @@ async function* postJsonSse(url, body, options = {}) {
     body: JSON.stringify(body ?? {}),
     signal: options.signal,
   });
+  await assertSseResponse(response);
+  yield* readSseResponse(response, options);
+}
+
+async function* getSse(url, options = {}) {
+  const response = await fetch(resolveApiUrl(url), {
+    method: "GET",
+    credentials: "include",
+    headers: { accept: "text/event-stream", ...(options.headers ?? {}) },
+    cache: "no-store",
+    signal: options.signal,
+  });
+  await assertSseResponse(response);
+  yield* readSseResponse(response, options);
+}
+
+async function assertSseResponse(response) {
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     let payload = {};
@@ -427,6 +444,9 @@ async function* postJsonSse(url, body, options = {}) {
     error.requestId = payload.requestId ?? null;
     throw error;
   }
+}
+
+async function* readSseResponse(response, options = {}) {
   const reader = response.body?.getReader?.();
   if (!reader) {
     return;
@@ -467,13 +487,14 @@ function parseSseMessage(raw) {
     return null;
   }
   const lines = text.split(/\r?\n/);
+  const id = lines.find((line) => line.startsWith("id:"))?.slice(3).trim() || "";
   const eventName = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
   const dataText = lines
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
   if (!dataText) {
-    return { event: eventName, data: null };
+    return { event: eventName, data: null, ...(id ? { id } : {}) };
   }
   try {
     const data = JSON.parse(dataText);
@@ -481,14 +502,15 @@ function parseSseMessage(raw) {
       data && typeof data === "object" && typeof data.type === "string" && data.type.trim()
         ? data.type.trim()
         : eventName;
-    return { event: inferredEventName, data };
+    return { event: inferredEventName, data, ...(id ? { id } : {}) };
   } catch {
-    return { event: eventName, data: dataText };
+    return { event: eventName, data: dataText, ...(id ? { id } : {}) };
   }
 }
 
 export const creatorApiTestHooks = {
   postJsonSse,
+  getSse,
 };
 
 async function postMultipart(url, formData) {
@@ -1067,41 +1089,76 @@ export const creatorApi = {
     });
   },
 
-  getCanvasProjects() {
-    return fetchJsonWithTtl("/api/creator/canvas-projects", {
-      cacheKey: "GET /api/creator/canvas-projects",
+  getCanvasProjects(input = {}) {
+    const path = input.includeDeleted === true
+      ? "/api/creator/canvases?includeDeleted=true"
+      : "/api/creator/canvases";
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
       cacheTtlMs: 60000,
     });
   },
 
-  sendNewCanvasAssistantMessage(input) {
-    return postJson("/api/creator/new-canvas/assistant", input);
+  // Standalone Canvas aliases keep the new in-app host independent from the
+  // historical production-workbench naming while sharing the same contracts.
+  listCanvases(input = {}) {
+    return this.getCanvasProjects(input);
   },
 
   createCanvasProject(input) {
-    return postJsonWithIdempotency("/api/creator/canvas-projects", input, {
+    return postJsonWithIdempotency("/api/creator/canvases", input, {
       action: "canvas-project.create",
     });
   },
 
+  createCanvas(input) {
+    return this.createCanvasProject(input);
+  },
+
   updateCanvasProject(projectId, input) {
-    return patchJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`, input);
+    return patchJson(`/api/creator/canvases/${encodeURIComponent(projectId)}`, input);
   },
 
   deleteCanvasProject(projectId) {
-    return deleteJson(`/api/creator/canvas-projects/${encodeURIComponent(projectId)}`);
+    return deleteJson(`/api/creator/canvases/${encodeURIComponent(projectId)}`);
+  },
+
+  getCanvas(canvasProjectId) {
+    return fetchJson(
+      `/api/creator/canvases/${encodeURIComponent(canvasProjectId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  restoreCanvas(canvasProjectId, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/restore`,
+      {},
+      {
+        action: "canvas.restore",
+        idempotencyKey: options.idempotencyKey,
+      },
+    );
   },
 
   getStandaloneCanvas(canvasProjectId) {
-    const path = `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`;
+    const path = `/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/document`;
     return fetchJsonWithTtl(path, {
       cacheKey: `GET ${path}`,
       cacheTtlMs: 30000,
     });
   },
 
+  getCanvasDocument(canvasProjectId) {
+    return this.getStandaloneCanvas(canvasProjectId);
+  },
+
   saveStandaloneCanvas(canvasProjectId, input) {
-    return putJson(`/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/canvas`, input);
+    return putJson(`/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/document`, input);
+  },
+
+  saveCanvasDocument(canvasProjectId, input) {
+    return this.saveStandaloneCanvas(canvasProjectId, input);
   },
 
   listToolPresets() {
@@ -1167,6 +1224,35 @@ export const creatorApi = {
     );
   },
 
+  streamCanvasLive(canvasProjectId, input = {}) {
+    const lastEventId = String(input.lastEventId ?? "").trim();
+    return getSse(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/live`,
+      {
+        signal: input.signal,
+        headers: lastEventId ? { "last-event-id": lastEventId } : {},
+      },
+    );
+  },
+
+  reportCanvasFrontendError(canvasProjectId, input = {}) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/telemetry/frontend-errors`, {
+      kind: String(input.kind ?? "error").slice(0, 40),
+      component: "new-canvas",
+    });
+  },
+
+  getCanvasSession(canvasProjectId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/session`,
+      { cache: "no-store" },
+    );
+  },
+
+  saveCanvasSession(canvasProjectId, input = {}) {
+    return putJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/session`, input);
+  },
+
   listCanvasRevisions(canvasProjectId, input = {}) {
     const requestedLimit = Number(input.limit ?? 50);
     const limit = Number.isFinite(requestedLimit)
@@ -1177,14 +1263,14 @@ export const creatorApi = {
       ? `&beforeRevision=${Math.trunc(beforeRevision)}`
       : "";
     return fetchJson(
-      `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/revisions?limit=${limit}${cursor}`,
+      `/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/revisions?limit=${limit}${cursor}`,
       { cache: "no-store" },
     );
   },
 
   getCanvasRevision(canvasProjectId, revisionId) {
     return fetchJson(
-      `/api/creator/canvas-projects/${encodeURIComponent(canvasProjectId)}/revisions/${encodeURIComponent(revisionId)}`,
+      `/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/revisions/${encodeURIComponent(revisionId)}`,
       { cache: "no-store" },
     );
   },
@@ -1201,8 +1287,187 @@ export const creatorApi = {
     );
   },
 
+  runCanvas(canvasProjectId, nodeKey, input, options = {}) {
+    return this.runCanvasNode(canvasProjectId, nodeKey, input, options);
+  },
+
   listCanvasNodeRuns(canvasProjectId, nodeKey) {
     return fetchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/runs`);
+  },
+
+  listCanvasRuns(canvasProjectId, nodeKey) {
+    return this.listCanvasNodeRuns(canvasProjectId, nodeKey);
+  },
+
+  createCanvasGenerationBatch(canvasProjectId, input, options = {}) {
+    return postJsonWithIdempotency(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-batches`,
+      input,
+      { action: "canvas.batch.create", idempotencyKey: options.idempotencyKey, signal: options.signal },
+    );
+  },
+
+  getCanvasGenerationBatch(canvasProjectId, batchId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-batches/${encodeURIComponent(batchId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  reconcileCanvasGenerationBatch(canvasProjectId, batchId) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-batches/${encodeURIComponent(batchId)}/reconcile`,
+      {},
+    );
+  },
+
+  cancelCanvasGenerationBatch(canvasProjectId, batchId) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-batches/${encodeURIComponent(batchId)}/cancel`,
+      {},
+    );
+  },
+
+  listCanvasGenerationHistory(canvasProjectId, input = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["nodeKey", "status", "mediaKind", "search", "cursor", "limit", "format"]) {
+      if (input[key] != null && input[key] !== "") params.set(key, String(input[key]));
+    }
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-history${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  exportCanvasGenerationHistory(canvasProjectId, input = {}) {
+    return this.listCanvasGenerationHistory(canvasProjectId, { ...input, format: "json" });
+  },
+
+  deleteCanvasGenerationRun(canvasProjectId, runId) {
+    return deleteJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-history/${encodeURIComponent(runId)}`,
+    );
+  },
+
+  deleteCanvasGenerationHistory(canvasProjectId, input) {
+    return deleteJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/generation-history`,
+      input,
+    );
+  },
+
+  updateCanvasArtifactTags(canvasProjectId, artifactId, input = {}) {
+    return patchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/artifacts/${encodeURIComponent(artifactId)}/tags`,
+      input,
+    );
+  },
+
+  getCanvasSettings(canvasProjectId) {
+    return fetchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/settings`, { cache: "no-store" });
+  },
+
+  updateCanvasSettings(canvasProjectId, input) {
+    return patchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/settings`, input);
+  },
+
+  materializeCanvasStyleReferenceAsset(canvasProjectId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/style-reference-assets`,
+      input,
+    );
+  },
+
+  importCanvasStyleReferenceAsset(canvasProjectId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/style-reference-assets/import`,
+      input,
+    );
+  },
+
+  listCanvasCharacters(canvasProjectId, input = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["scope", "limit"]) {
+      if (input[key] != null && input[key] !== "") params.set(key, String(input[key]));
+    }
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  getCanvasCharacter(canvasProjectId, characterId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  createCanvasCharacter(canvasProjectId, input) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/characters`, input);
+  },
+
+  updateCanvasCharacter(canvasProjectId, characterId, input) {
+    return patchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}`,
+      input,
+    );
+  },
+
+  deleteCanvasCharacter(canvasProjectId, characterId, input) {
+    return deleteJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}`,
+      input,
+    );
+  },
+
+  copyCanvasCharacter(canvasProjectId, characterId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}/copy`,
+      input,
+    );
+  },
+
+  addCanvasCharacterReference(canvasProjectId, characterId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}/references`,
+      input,
+    );
+  },
+
+  updateCanvasCharacterReference(canvasProjectId, characterId, referenceId, input) {
+    return patchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}/references/${encodeURIComponent(referenceId)}`,
+      input,
+    );
+  },
+
+  deleteCanvasCharacterReference(canvasProjectId, characterId, referenceId, input) {
+    return deleteJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/characters/${encodeURIComponent(characterId)}/references/${encodeURIComponent(referenceId)}`,
+      input,
+    );
+  },
+
+  registerCanvasUploadFingerprint(canvasProjectId, input) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/uploads/fingerprint`, input);
+  },
+
+  getCanvasStorageHealth(canvasProjectId) {
+    return fetchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/storage-health`, { cache: "no-store" });
+  },
+
+  getCanvasAssetReferences(canvasProjectId, input = {}) {
+    const params = new URLSearchParams();
+    for (const key of ["storageObjectId", "assetId", "assetVersionId"]) {
+      if (input[key]) params.set(key, String(input[key]));
+    }
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/asset-references?${params}`,
+      { cache: "no-store" },
+    );
   },
 
   selectCanvasNodeArtifact(canvasProjectId, artifactId, input = {}) {
@@ -1210,6 +1475,291 @@ export const creatorApi = {
       `/api/canvas/${encodeURIComponent(canvasProjectId)}/artifacts/${encodeURIComponent(artifactId)}/select`,
       input,
     );
+  },
+
+  appendCanvasDirectorArtifact(canvasProjectId, nodeKey, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/director-artifacts`,
+      input,
+    );
+  },
+
+  createDirectorDesk(input = {}) {
+    return postJson("/api/director-desks", input);
+  },
+
+  listDirectorDesks() {
+    return fetchJson("/api/director-desks", { cache: "no-store" });
+  },
+
+  listCanvasAgentEvents(canvasProjectId, taskId, input = {}) {
+    const after = Number(input.after ?? 0);
+    const limit = Number(input.limit ?? 200);
+    const params = new URLSearchParams({
+      after: String(Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0),
+      limit: String(Number.isFinite(limit) ? Math.min(1000, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-tasks/${encodeURIComponent(taskId)}/events?${params}`,
+      { cache: "no-store" },
+    );
+  },
+
+  streamCanvasAgentEvents(canvasProjectId, taskId, input = {}) {
+    const after = Number(input.after ?? 0);
+    const limit = Number(input.limit ?? 200);
+    const cursor = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+    const params = new URLSearchParams({
+      live: "1",
+      limit: String(Number.isFinite(limit) ? Math.min(1000, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return getSse(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-tasks/${encodeURIComponent(taskId)}/events?${params}`,
+      {
+        signal: input.signal,
+        headers: cursor > 0 ? { "last-event-id": String(cursor) } : {},
+      },
+    );
+  },
+
+  listCanvasAgentModels(canvasProjectId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-models`,
+      { cache: "no-store" },
+    );
+  },
+
+  createCanvasAgentConversation(canvasProjectId, input = {}) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations`, input);
+  },
+
+  listCanvasAgentConversations(canvasProjectId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.limit != null) params.set("limit", String(input.limit));
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  updateCanvasAgentConversation(canvasProjectId, input = {}) {
+    return patchJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations`, input);
+  },
+
+  deleteCanvasAgentConversation(canvasProjectId, conversationId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations?conversationId=${encodeURIComponent(conversationId)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  sendCanvasAgentMessage(canvasProjectId, conversationId, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+      input,
+    );
+  },
+
+  listCanvasAgentMessages(canvasProjectId, conversationId, input = {}) {
+    const limit = Number(input.limit ?? 200);
+    const params = new URLSearchParams({
+      limit: String(Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/messages?${params}`,
+      { cache: "no-store" },
+    );
+  },
+
+  listCanvasAgentFileGrants(canvasProjectId, conversationId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.includeInactive === true) params.set("includeInactive", "true");
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/file-grants${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  createCanvasAgentFileGrant(canvasProjectId, conversationId, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/file-grants`,
+      input,
+    );
+  },
+
+  revokeCanvasAgentFileGrant(canvasProjectId, conversationId, grantId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/file-grants/${encodeURIComponent(grantId)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  listCanvasAgentMemories(canvasProjectId, conversationId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.includeInactive === true) params.set("includeInactive", "true");
+    if (input.category) params.set("category", String(input.category));
+    if (input.source) params.set("source", String(input.source));
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/memories${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  updateCanvasAgentMemory(canvasProjectId, conversationId, memoryId, input = {}) {
+    return patchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/memories/${encodeURIComponent(memoryId)}`,
+      input,
+    );
+  },
+
+  deleteCanvasAgentMemory(canvasProjectId, conversationId, memoryId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/conversations/${encodeURIComponent(conversationId)}/memories/${encodeURIComponent(memoryId)}`,
+      { method: "DELETE" },
+    );
+  },
+
+  controlCanvasAgentTask(canvasProjectId, taskId, action, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-tasks/${encodeURIComponent(taskId)}/${encodeURIComponent(action)}`,
+      input,
+    );
+  },
+
+  rewindCanvasAgentTask(canvasProjectId, taskId, input = {}) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-tasks/${encodeURIComponent(taskId)}/rewind`,
+      input,
+    );
+  },
+
+  listCanvasUserConfigs(input = {}) {
+    const params = new URLSearchParams();
+    if (input.type) params.set("type", String(input.type));
+    if (input.includeArchived) params.set("includeArchived", "true");
+    if (input.limit != null) params.set("limit", String(input.limit));
+    const query = params.toString();
+    return fetchJson(`/api/canvas-library/configs${query ? `?${query}` : ""}`, { cache: "no-store" });
+  },
+
+  createCanvasUserConfig(input) {
+    return postJson("/api/canvas-library/configs", input);
+  },
+
+  getCanvasUserConfig(configId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.versionId) params.set("versionId", String(input.versionId));
+    if (input.type) params.set("type", String(input.type));
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas-library/configs/${encodeURIComponent(configId)}${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  listCanvasUserConfigVersions(configId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.limit != null) params.set("limit", String(input.limit));
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas-library/configs/${encodeURIComponent(configId)}/versions${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  createCanvasUserConfigVersion(configId, input) {
+    return postJson(`/api/canvas-library/configs/${encodeURIComponent(configId)}/versions`, input);
+  },
+
+  archiveCanvasUserConfig(configId) {
+    return deleteJson(`/api/canvas-library/configs/${encodeURIComponent(configId)}`);
+  },
+
+  startCanvasMediaDerivation(canvasProjectId, input) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/derivations`, input);
+  },
+
+  getCanvasMediaDerivation(canvasProjectId, derivationId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/derivations/${encodeURIComponent(derivationId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  attachCanvasMediaDerivationTask(canvasProjectId, derivationId, taskId) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/derivations/${encodeURIComponent(derivationId)}/attach-task`,
+      { taskId },
+    );
+  },
+
+  completeCanvasMediaDerivation(canvasProjectId, derivationId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/derivations/${encodeURIComponent(derivationId)}/complete`,
+      input,
+    );
+  },
+
+  failCanvasMediaDerivation(canvasProjectId, derivationId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/derivations/${encodeURIComponent(derivationId)}/fail`,
+      input,
+    );
+  },
+
+  createCanvasImageBatchGroup(canvasProjectId, input) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/image-batch-groups`, input);
+  },
+
+  getCanvasImageBatchGroup(canvasProjectId, groupId) {
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/image-batch-groups/${encodeURIComponent(groupId)}`,
+      { cache: "no-store" },
+    );
+  },
+
+  selectCanvasImageBatchArtifact(canvasProjectId, groupId, input) {
+    return postJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/image-batch-groups/${encodeURIComponent(groupId)}/select`,
+      input,
+    );
+  },
+
+  createCanvasAnnotationLayer(canvasProjectId, input) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/annotation-layers`, input);
+  },
+
+  listCanvasAnnotationLayers(canvasProjectId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.nodeKey) params.set("nodeKey", String(input.nodeKey));
+    if (input.includeInactive === true) params.set("includeInactive", "true");
+    if (input.limit != null) params.set("limit", String(input.limit));
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/annotation-layers${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  startCanvasCardSnapshot(canvasProjectId, input) {
+    return postJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/card-snapshots`, input);
+  },
+
+  getCanvasCardSnapshot(canvasProjectId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.canvasRevision != null) params.set("canvasRevision", String(input.canvasRevision));
+    const query = params.toString();
+    return fetchJson(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/card-snapshots${query ? `?${query}` : ""}`,
+      { cache: "no-store" },
+    );
+  },
+
+  selectCanvasArtifact(canvasProjectId, artifactId, input = {}) {
+    return this.selectCanvasNodeArtifact(canvasProjectId, artifactId, input);
   },
 
   getUserScripts(input = {}) {
@@ -1406,6 +1956,10 @@ export const creatorApi = {
 
   updateTeamAsset(assetId, input = {}) {
     return patchJson(`/api/creator/team-assets/${encodeURIComponent(assetId)}`, input);
+  },
+
+  importProjectAssetToTeamLibrary(input = {}) {
+    return postJson("/api/creator/team-assets/import-project-asset", input);
   },
 
   replaceTeamAssetFile(assetId, file, input = {}) {
@@ -1746,6 +2300,66 @@ export const creatorApi = {
     });
   },
 
+  getPromptMarketplace(input = {}) {
+    const params = new URLSearchParams();
+    if (input.category && input.category !== "all") params.set("category", input.category);
+    if (String(input.query ?? "").trim()) params.set("query", String(input.query).trim());
+    const page = Math.max(1, Math.floor(Number(input.page) || 1));
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(input.pageSize) || 12)));
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return fetchJson(`/api/creator/prompt-marketplace${suffix}`, { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  getPromptMarketplaceLibrary() {
+    return fetchJson("/api/creator/prompt-marketplace/library", { cache: "no-store", unwrapEnvelope: false });
+  },
+
+  setPromptMarketplaceDefault(category, itemId) {
+    return fetchJson(`/api/creator/prompt-marketplace/defaults/${encodeURIComponent(category)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ itemId }),
+    });
+  },
+
+  clearPromptMarketplaceDefault(category) {
+    return fetchJson(`/api/creator/prompt-marketplace/defaults/${encodeURIComponent(category)}`, { method: "DELETE" });
+  },
+
+  createPromptMarketplaceItem(input) {
+    return postJson("/api/creator/prompt-marketplace/items", input);
+  },
+
+  updatePromptMarketplaceItem(itemId, input) {
+    return fetchJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  },
+
+  purchasePromptMarketplaceItem(itemId) {
+    return postJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}/purchase`, {});
+  },
+
+  usePromptMarketplaceItem(itemId) {
+    return postJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}/use`, {});
+  },
+
+  ratePromptMarketplaceItem(itemId, rating) {
+    return postJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}/rating`, { rating });
+  },
+
+  removePromptMarketplaceLibraryItem(itemId) {
+    return fetchJson(`/api/creator/prompt-marketplace/library/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+  },
+
+  deletePromptMarketplaceItem(itemId) {
+    return fetchJson(`/api/creator/prompt-marketplace/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+  },
+
   createAiStoryboardPreview(projectId, input, options = {}) {
     return fetchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview`, {
       method: "POST",
@@ -1949,6 +2563,11 @@ export const creatorApi = {
     return deleteJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}`);
   },
 
+  deleteEpisodeAssetsByType(episodeId, assetType) {
+    const query = new URLSearchParams({ assetType: String(assetType ?? "") });
+    return deleteJson(`/api/episodes/${encodeURIComponent(episodeId)}/assets?${query}`);
+  },
+
   saveEpisodeAssetToLibrary(episodeId, assetId) {
     return postJson(
       `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/save-to-library`,
@@ -2118,31 +2737,6 @@ export const creatorApi = {
     );
   },
 
-  createStandaloneCanvasGenerationTask(input, options = {}) {
-    return postJsonWithIdempotency(
-      "/api/new-canvas/generate",
-      input,
-      {
-        action: "new-canvas.generation",
-        idempotencyKey: options.idempotencyKey,
-        timeoutMs: 60000,
-        signal: options.signal,
-      },
-    );
-  },
-
-  createNewCanvasVideoComposition(input, options = {}) {
-    return postJsonWithIdempotency(
-      "/api/new-canvas/video-compositions",
-      input,
-      {
-        ...options,
-        action: "new-canvas.video-composition",
-        timeoutMs: options.timeoutMs ?? 120000,
-      },
-    );
-  },
-
   createVideoTask(episodeId, input, options = {}) {
     return postJsonWithIdempotency(
       `/api/episodes/${encodeURIComponent(episodeId)}/generation/video-tasks`,
@@ -2203,6 +2797,12 @@ export const creatorApi = {
         action: "episode.asset.set-fixed-image",
         idempotencyKey: options.idempotencyKey,
       },
+    );
+  },
+
+  clearFixedImage(episodeId, assetId) {
+    return deleteJson(
+      `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/fixed-image`,
     );
   },
 

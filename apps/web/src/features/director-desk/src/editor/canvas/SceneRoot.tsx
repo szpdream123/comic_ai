@@ -16,9 +16,11 @@ import {
 } from "three";
 import type { TransformControls as TransformControlsImpl } from "three-stdlib";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader.js";
 import type {
   DirectorAssetRef,
+  DirectorAnimationAssetRef,
   DirectorCameraShot,
   DirectorCameraMotionKeyframe,
   DirectorObject,
@@ -35,6 +37,7 @@ import {
   sampleObjectMotionPath,
 } from "../schema/objectMotion";
 import { getAnimatedCameraFocusTarget } from "../schema/cameraTarget";
+import { parseImportedCharacterActionId } from "../schema/importedCharacterAction";
 import { BuiltInLifeModel } from "../modelLibrary/BuiltInLifeModel";
 import {
   VIEWPORT_CAMERA_ASPECT,
@@ -82,6 +85,7 @@ const VIEWPORT_CAMERA_WORLD_UP = new Vector3(0, 1, 0);
 const HIDE_FROM_VIEWPORT_CAPTURE_KEY = "hideFromViewportCapture";
 const AXIS_ONLY_GIZMO_MARKER = "axisOnlyGizmo";
 const TRANSLATE_PLANE_NAMES = new Set(["XY", "YZ", "XZ"]);
+const EMPTY_ANIMATION_ASSETS: DirectorAnimationAssetRef[] = [];
 
 function normalizeRouteColor(value: string | undefined, fallbackIndex: number, usedColors?: Set<string>) {
   const fallback = CHARACTER_ROUTE_COLORS[fallbackIndex % CHARACTER_ROUTE_COLORS.length];
@@ -505,6 +509,19 @@ function ObjModel({ url }: { url: string }) {
   return <NormalizedImportedObject object={object} />;
 }
 
+function GlbModel({ url }: { url: string }) {
+  const gltf = useLoader(GLTFLoader, url) as { scene: Object3D };
+
+  return <NormalizedImportedObject object={gltf.scene} />;
+}
+
+export function getImportedModelLoaderKind(fileName: string) {
+  if (/\.fbx$/i.test(fileName)) return "fbx";
+  if (/\.obj$/i.test(fileName)) return "obj";
+  if (/\.glb$/i.test(fileName)) return "glb";
+  return null;
+}
+
 function ImportedModel({
   fileName,
   url,
@@ -513,8 +530,10 @@ function ImportedModel({
   url: string;
 }) {
   if (url.startsWith("builtin://life/")) return <BuiltInLifeModel modelId={fileName} />;
-  if (/\.fbx$/i.test(fileName)) return <FbxModel url={url} />;
-  if (/\.obj$/i.test(fileName)) return <ObjModel url={url} />;
+  const loaderKind = getImportedModelLoaderKind(fileName);
+  if (loaderKind === "fbx") return <FbxModel url={url} />;
+  if (loaderKind === "obj") return <ObjModel url={url} />;
+  if (loaderKind === "glb") return <GlbModel url={url} />;
   return null;
 }
 
@@ -859,9 +878,19 @@ function ObjectSceneNode({
     position: [number, number, number];
   } | null>(null);
   const updateObjectDisplayTransform = useDirectorStore((state) => state.updateObjectDisplayTransform);
+  const animationAssets = useDirectorStore((state) => state.project.animationAssets ?? EMPTY_ANIMATION_ASSETS);
   const pilotHoveredTargetId = useDirectorStore((state) => state.cameraPilotHoveredTargetId);
   const pilotLockedTargetId = useDirectorStore((state) => state.cameraPilotLockedTargetId);
   const isImportedModel = asset?.sourceType === "model";
+  const importedAction = useMemo(() => {
+    const reference = parseImportedCharacterActionId(item.characterRig?.actionPresetId);
+    if (!reference) return null;
+    const animationAsset = animationAssets.find((candidate) => candidate.id === reference.animationAssetId);
+    const clip = animationAsset?.clips.find((candidate) => candidate.name === reference.clipName);
+    return animationAsset && clip
+      ? { url: animationAsset.url, format: animationAsset.modelFormat, clipName: clip.name }
+      : null;
+  }, [animationAssets, item.characterRig?.actionPresetId]);
   const characterLabelKey = `${item.id}:${item.bodyType ?? ""}:${item.characterRig?.rigType ?? ""}`;
   const fallbackCharacterLabelY =
     item.kind === "character"
@@ -1015,8 +1044,12 @@ function ObjectSceneNode({
           <Suspense fallback={null}>
             <CharacterModel
               assetUrl={isImportedModel ? asset?.url : undefined}
+              assetFormat={asset?.modelFormat}
+              animationTimeSeconds={motionTimeSeconds}
+              boneMap={asset?.characterBoneMap}
               bodyType={item.bodyType}
               color={item.color}
+              externalAnimation={importedAction}
               motionWalking={motionWalking}
               onLabelAnchorYChange={handleCharacterLabelAnchorYChange}
               rigState={animatedCharacterRig}

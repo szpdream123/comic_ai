@@ -13,6 +13,9 @@ describe("generation queue health service", () => {
         async ping() {
           return "PONG";
         },
+        async get() {
+          return new Date().toISOString();
+        },
       },
       queueFactory: (queueName) => ({
         name: queueName,
@@ -34,6 +37,9 @@ describe("generation queue health service", () => {
             ...(queueName === "generation-dead-letter" ? { waiting: 2 } : {}),
             paused: 0,
           };
+        },
+        async getWorkersCount() {
+          return queueName === "generation-dead-letter" ? 0 : 1;
         },
         async getJobs(types, start, end, asc) {
           if (types[0] === "waiting" && types[1] === "delayed" && end === 0) {
@@ -92,6 +98,7 @@ describe("generation queue health service", () => {
       ],
     );
     assert.equal(health.queues[1].counts.waiting, 8);
+    assert.equal(health.queues[1].workerCount, 1);
     assert.equal(health.queues[3].counts.delayed, 12);
     assert.equal(health.queues[5].counts.active, 3);
     assert.equal(health.queues[6].failedJobs[0].failureReason, "provider_timeout");
@@ -111,6 +118,9 @@ describe("generation queue health service", () => {
       redis: {
         async ping() {
           return "PONG";
+        },
+        async get() {
+          return new Date().toISOString();
         },
       },
       queueFactory: (queueName) => ({
@@ -155,7 +165,10 @@ describe("generation queue health service", () => {
           oldestJobAgeMs: 60_000,
         },
       },
-      redis: { async ping() { return "PONG"; } },
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return new Date().toISOString(); },
+      },
       queueFactory: (queueName) => ({
         name: queueName,
         async getJobCounts() {
@@ -181,12 +194,78 @@ describe("generation queue health service", () => {
     assert.match(imageQueue?.error ?? "", /oldest_pending_age_ms:/);
   });
 
+  it("marks a work queue degraded when BullMQ has no registered consumer", async () => {
+    const service = createGenerationQueueHealthService({
+      config: testConfig(),
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return new Date().toISOString(); },
+      },
+      queueFactory: (queueName) => ({
+        name: queueName,
+        async getJobCounts() {
+          return { waiting: 0, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 };
+        },
+        async getWorkersCount() {
+          return queueName === "generation-submit-image" ? 0 : 1;
+        },
+        async getJobs() { return []; },
+        async close() {},
+      }),
+    });
+
+    const health = await service.inspect();
+    const imageQueue = health.queues.find((queue) => queue.role === "submit_image");
+
+    assert.equal(health.status, "degraded");
+    assert.equal(imageQueue?.workerCount, 0);
+    assert.equal(imageQueue?.status, "degraded");
+    assert.match(imageQueue?.error ?? "", /worker_count:0/);
+  });
+
+  it("marks the snapshot degraded when the outbox dispatcher heartbeat is missing", async () => {
+    const service = createGenerationQueueHealthService({
+      config: testConfig(),
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return null; },
+      },
+      queueFactory: healthyQueue,
+    });
+
+    const health = await service.inspect();
+
+    assert.equal(health.status, "degraded");
+    assert.equal(health.outboxDispatcher.status, "unavailable");
+    assert.equal(health.outboxDispatcher.error, "dispatcher_heartbeat_missing");
+  });
+
+  it("marks the snapshot degraded when the outbox dispatcher heartbeat is stale", async () => {
+    const service = createGenerationQueueHealthService({
+      config: testConfig(),
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return "2020-01-01T00:00:00.000Z"; },
+      },
+      queueFactory: healthyQueue,
+    });
+
+    const health = await service.inspect();
+
+    assert.equal(health.status, "degraded");
+    assert.equal(health.outboxDispatcher.status, "unavailable");
+    assert.match(health.outboxDispatcher.error ?? "", /dispatcher_heartbeat_stale:/);
+  });
+
   it("reports unavailable when Redis ping fails and skips queue inspection", async () => {
     let queueFactoryCalled = false;
     const service = createGenerationQueueHealthService({
       config: testConfig(),
       redis: {
         async ping() {
+          throw new Error("redis_down");
+        },
+        async get() {
           throw new Error("redis_down");
         },
       },
@@ -209,7 +288,10 @@ describe("generation queue health service", () => {
     const queueNames: string[] = [];
     const service = createGenerationQueueHealthService({
       config: testConfig(),
-      redis: { async ping() { return "PONG"; } },
+      redis: {
+        async ping() { return "PONG"; },
+        async get() { return new Date().toISOString(); },
+      },
       queueDiscovery: async () => [
         { role: "submit_image", name: "generation-image-submit-r1-000" },
         { role: "submit_image", name: "generation-image-submit-r1-001" },
@@ -309,5 +391,17 @@ function testConfig(): GenerationQueueConfig {
         maxAttempts: 120,
       },
     },
+  };
+}
+
+function healthyQueue(queueName: string) {
+  return {
+    name: queueName,
+    async getJobCounts() {
+      return { waiting: 0, delayed: 0, active: 0, completed: 0, failed: 0, paused: 0 };
+    },
+    async getWorkersCount() { return queueName === "generation-dead-letter" ? 0 : 1; },
+    async getJobs() { return []; },
+    async close() {},
   };
 }

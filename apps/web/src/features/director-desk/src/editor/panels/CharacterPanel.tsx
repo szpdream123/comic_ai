@@ -13,7 +13,13 @@ import { MANNEQUIN_POSE_PRESETS } from "../presets/mannequinPosePresets";
 import { CHARACTER_ACTION_PRESETS } from "../presets/characterActionPresets";
 import { getCameraMotionPath } from "../schema/cameraMotion";
 import { getObjectMotionSnapshot, normalizeObjectMotionPath } from "../schema/objectMotion";
+import { createImportedCharacterActionId } from "../schema/importedCharacterAction";
+import { DIRECTOR_CHARACTER_BONE_PARTS } from "../schema/semanticBody";
 import { getCrowdAnchorTransform, useDirectorStore } from "../store/directorStore";
+import { isCharacterAnimationCompatible } from "./characterAnimationCompatibility";
+import type { DirectorAnimationAssetRef } from "../schema/directorProject";
+
+const EMPTY_ANIMATION_ASSETS: DirectorAnimationAssetRef[] = [];
 
 function replaceAxis(tuple: [number, number, number], axis: 0 | 1 | 2, value: number): [number, number, number] {
   return tuple.map((item, index) => (index === axis ? value : item)) as [number, number, number];
@@ -36,6 +42,8 @@ export function CharacterPanel() {
   const selectedCrowdId = useDirectorStore((state) => state.selectedCrowdId);
   const selectedObjectId = useDirectorStore((state) => state.selectedObjectId);
   const objects = useDirectorStore((state) => state.project.objects);
+  const assets = useDirectorStore((state) => state.project.assets);
+  const animationAssets = useDirectorStore((state) => state.project.animationAssets ?? EMPTY_ANIMATION_ASSETS);
   const cameras = useDirectorStore((state) => state.project.cameras);
   const activeCameraId = useDirectorStore((state) => state.project.activeCameraId);
   const cameraMotionProgress = useDirectorStore((state) => state.cameraMotionProgress);
@@ -52,6 +60,7 @@ export function CharacterPanel() {
   const updateCrowdPoseControl = useDirectorStore((state) => state.updateCrowdPoseControl);
   const applyCharacterActionPreset = useDirectorStore((state) => state.applyCharacterActionPreset);
   const applyCrowdActionPreset = useDirectorStore((state) => state.applyCrowdActionPreset);
+  const updateCharacterAssetBoneMap = useDirectorStore((state) => state.updateCharacterAssetBoneMap);
   const setCameraMotionProgress = useDirectorStore((state) => state.setCameraMotionProgress);
   const setCameraMotionPlaying = useDirectorStore((state) => state.setCameraMotionPlaying);
   const setViewMode = useDirectorStore((state) => state.setViewMode);
@@ -158,6 +167,8 @@ export function CharacterPanel() {
   const routeDeleteIds = selectedRoutePointIds.filter((id) => validRoutePointIds.has(id));
   const activeCamera = cameras.find((item) => item.id === activeCameraId) ?? cameras[0];
   const timelineDuration = activeCamera ? getCameraMotionPath(activeCamera).duration : 6;
+  const characterAsset = role.assetRefId ? assets.find((asset) => asset.id === role.assetRefId) : undefined;
+  const compatibleAnimationAssets = animationAssets.filter((asset) => isCharacterAnimationCompatible(characterAsset, asset));
   const poseGroups = [
     {
       title: "身体",
@@ -577,6 +588,31 @@ export function CharacterPanel() {
                   ))}
                 </div>
               </InspectorSection>
+              {!isCrowd && characterAsset?.characterBoneNames?.length ? (
+                <InspectorSection title="骨骼映射" className="pose-adjust-section">
+                  <p>自动识别结果可按模型实际骨骼名修正；完整映射后可绑定通用动作文件。</p>
+                  <div className="pose-groups">
+                    {DIRECTOR_CHARACTER_BONE_PARTS.map((part) => (
+                      <label key={part} className="inspector-field">
+                        <span>{part}</span>
+                        <select
+                          aria-label={`映射 ${part} 骨骼`}
+                          value={characterAsset.characterBoneMap?.[part] ?? ""}
+                          onChange={(event) => updateCharacterAssetBoneMap(characterAsset.id, {
+                            ...characterAsset.characterBoneMap,
+                            [part]: event.currentTarget.value || undefined,
+                          })}
+                        >
+                          <option value="">未映射</option>
+                          {(characterAsset.characterBoneNames ?? []).map((boneName) => (
+                            <option key={boneName} value={boneName}>{boneName}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                </InspectorSection>
+              ) : null}
             </>
           ) : (
             <p>该模型未识别到标准 humanoid 骨骼，暂不支持姿势编辑。</p>
@@ -613,7 +649,29 @@ export function CharacterPanel() {
                 <small>{preset.duration.toFixed(2)} 秒</small>
               </button>
             ))}
+            {compatibleAnimationAssets.flatMap((asset) => asset.clips.map((clip) => ({ asset, clip }))).map(({ asset, clip }) => {
+              const actionId = createImportedCharacterActionId(asset.id, clip.name);
+              return (
+                <button
+                  key={actionId}
+                  className={role.characterRig?.actionPresetId === actionId ? "is-active" : undefined}
+                  type="button"
+                  aria-label={`播放导入动作 ${clip.name}`}
+                  onClick={() => {
+                    applyCharacterActionPreset(role.id, actionId);
+                    setCameraMotionProgress(0);
+                    setCameraMotionPlaying(true);
+                  }}
+                >
+                  <span>{clip.name}</span>
+                  <small>{asset.name}</small>
+                </button>
+              );
+            })}
           </div>
+          {!isCrowd && characterAsset?.sourceType === "model" && animationAssets.length && !compatibleAnimationAssets.length ? (
+            <p>没有兼容的动作文件。请完成骨骼映射，或导入同一骨架类型的动作。</p>
+          ) : null}
         </InspectorSection>
       ) : (
         <InspectorSection title="人物路线" className="pose-preset-section">

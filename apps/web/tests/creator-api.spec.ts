@@ -291,6 +291,72 @@ test("getProjects sends backend pagination query parameters", async () => {
   assert.deepEqual(payload.pagination, { page: 2, pageSize: 18, total: 19, totalPages: 2 });
 });
 
+test("Canvas resource helpers use the formal canvases API", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: {} }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listCanvases({ includeDeleted: true });
+  await creatorApi.createCanvas({ title: "API 画布" });
+  await creatorApi.getCanvas("canvas/1");
+  await creatorApi.updateCanvasProject("canvas/1", { title: "API 画布 2" });
+  await creatorApi.getCanvasDocument("canvas/1");
+  await creatorApi.saveCanvasDocument("canvas/1", { clientRevision: 1, document: {} });
+  await creatorApi.listCanvasRevisions("canvas/1", { limit: 20, beforeRevision: 5 });
+  await creatorApi.getCanvasRevision("canvas/1", "revision/1");
+  await creatorApi.deleteCanvasProject("canvas/1");
+  await creatorApi.restoreCanvas("canvas/1", { idempotencyKey: "restore-key" });
+
+  assert.deepEqual(calls.map((call) => [call.url, call.options.method ?? "GET"]), [
+    ["/api/creator/canvases?includeDeleted=true", "GET"],
+    ["/api/creator/canvases", "POST"],
+    ["/api/creator/canvases/canvas%2F1", "GET"],
+    ["/api/creator/canvases/canvas%2F1", "PATCH"],
+    ["/api/creator/canvases/canvas%2F1/document", "GET"],
+    ["/api/creator/canvases/canvas%2F1/document", "PUT"],
+    ["/api/creator/canvases/canvas%2F1/revisions?limit=20&beforeRevision=5", "GET"],
+    ["/api/creator/canvases/canvas%2F1/revisions/revision%2F1", "GET"],
+    ["/api/creator/canvases/canvas%2F1", "DELETE"],
+    ["/api/creator/canvases/canvas%2F1/restore", "POST"],
+  ]);
+  assert.equal(calls[9].options.headers["idempotency-key"], "restore-key");
+});
+
+test("getPromptMarketplace forwards filters and backend pagination", async () => {
+  const calls: Array<{ url: string }> = [];
+  globalThis.fetch = async (url) => {
+    calls.push({ url: String(url) });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        items: [],
+        ranking: [],
+        pagination: { page: 3, pageSize: 12, total: 40, totalPages: 4 },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const payload = await creatorApi.getPromptMarketplace({
+    category: "storyboard",
+    query: "高燃 分镜",
+    page: 3,
+    pageSize: 12,
+  });
+
+  assert.equal(
+    calls[0]?.url,
+    "/api/creator/prompt-marketplace?category=storyboard&query=%E9%AB%98%E7%87%83+%E5%88%86%E9%95%9C&page=3&pageSize=12",
+  );
+  assert.deepEqual(payload.pagination, { page: 3, pageSize: 12, total: 40, totalPages: 4 });
+});
+
 test("importEpisodeAsset targets the episode-scoped import route", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -466,6 +532,227 @@ test("canvas node history helpers target canvas-scoped routes", async () => {
   assert.equal(calls[1].options.method, undefined);
   assert.equal(calls[2].options.method, "POST");
   assert.deepEqual(JSON.parse(calls[2].options.body), { selectionRole: "current" });
+});
+
+test("Canvas director binding creates a real director desk through the authenticated API", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: { desk: { id: "desk-1" } } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listDirectorDesks();
+  await creatorApi.createDirectorDesk({ name: "场景调度 导演台" });
+
+  assert.equal(calls[0].url, "/api/director-desks");
+  assert.equal(calls[0].options.method, undefined);
+  assert.equal(calls[1].url, "/api/director-desks");
+  assert.equal(calls[1].options.method, "POST");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { name: "场景调度 导演台" });
+});
+
+test("Canvas generation history supports scoped bulk deletion", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: { deletedCount: 2 } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.deleteCanvasGenerationHistory("canvas/1", { scope: "node", nodeKey: "node/1" });
+
+  assert.equal(calls[0].url, "/api/canvas/canvas%2F1/generation-history");
+  assert.equal(calls[0].options.method, "DELETE");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { scope: "node", nodeKey: "node/1" });
+});
+
+test("Canvas settings helpers use the canvas-scoped revision route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: { revision: 2 } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getCanvasSettings("canvas/1");
+  await creatorApi.updateCanvasSettings("canvas/1", {
+    expectedRevision: 1,
+    patch: { promptSuffixes: { image: "detail" } },
+  });
+
+  assert.deepEqual(calls.map((call) => [call.url, call.options.method]), [
+    ["/api/canvas/canvas%2F1/settings", undefined],
+    ["/api/canvas/canvas%2F1/settings", "PATCH"],
+  ]);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    expectedRevision: 1,
+    patch: { promptSuffixes: { image: "detail" } },
+  });
+});
+
+test("Canvas character library helpers preserve scope, ids, and revision bodies", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: { character: {} } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listCanvasCharacters("canvas/1", { scope: "global", limit: 20 });
+  await creatorApi.getCanvasCharacter("canvas/1", "character/1");
+  await creatorApi.createCanvasCharacter("canvas/1", { scope: "canvas", name: "角色" });
+  await creatorApi.updateCanvasCharacter("canvas/1", "character/1", { expectedRevision: 1, patch: { name: "角色 2" } });
+  await creatorApi.copyCanvasCharacter("canvas/1", "character/1", { expectedRevision: 2, targetScope: "global" });
+  await creatorApi.addCanvasCharacterReference("canvas/1", "character/1", { expectedRevision: 2, reference: { storageObjectId: "storage-1" } });
+  await creatorApi.updateCanvasCharacterReference("canvas/1", "character/1", "reference/1", { expectedRevision: 3, patch: { primary: true } });
+  await creatorApi.deleteCanvasCharacterReference("canvas/1", "character/1", "reference/1", { expectedRevision: 4 });
+  await creatorApi.deleteCanvasCharacter("canvas/1", "character/1", { expectedRevision: 5 });
+
+  assert.deepEqual(calls.map((call) => [call.url, call.options.method]), [
+    ["/api/canvas/canvas%2F1/characters?scope=global&limit=20", undefined],
+    ["/api/canvas/canvas%2F1/characters/character%2F1", undefined],
+    ["/api/canvas/canvas%2F1/characters", "POST"],
+    ["/api/canvas/canvas%2F1/characters/character%2F1", "PATCH"],
+    ["/api/canvas/canvas%2F1/characters/character%2F1/copy", "POST"],
+    ["/api/canvas/canvas%2F1/characters/character%2F1/references", "POST"],
+    ["/api/canvas/canvas%2F1/characters/character%2F1/references/reference%2F1", "PATCH"],
+    ["/api/canvas/canvas%2F1/characters/character%2F1/references/reference%2F1", "DELETE"],
+    ["/api/canvas/canvas%2F1/characters/character%2F1", "DELETE"],
+  ]);
+  assert.deepEqual(JSON.parse(calls[7].options.body), { expectedRevision: 4 });
+  assert.deepEqual(JSON.parse(calls[8].options.body), { expectedRevision: 5 });
+});
+
+test("Canvas Agent model catalog targets the canvas-scoped eligible model route", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ requestId: "request-1", data: { models: [] } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listCanvasAgentModels("canvas/1");
+  assert.equal(calls[0].url, "/api/canvas/canvas%2F1/agent-models");
+  assert.equal(calls[0].options.credentials, "include");
+  assert.equal(calls[0].options.cache, "no-store");
+});
+
+test("Canvas Agent conversation aliases expose list, update, and delete lifecycle routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ data: {} }) };
+  };
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listCanvasAgentConversations("canvas/1", { limit: 20 });
+  await creatorApi.updateCanvasAgentConversation("canvas/1", { conversationId: "conversation/1", status: "archived" });
+  await creatorApi.listCanvasAgentMessages("canvas/1", "conversation/1", { limit: 40 });
+  await creatorApi.listCanvasAgentFileGrants("canvas/1", "conversation/1", { includeInactive: true });
+  await creatorApi.createCanvasAgentFileGrant("canvas/1", "conversation/1", { storageObjectId: "storage/1", purpose: "reference" });
+  await creatorApi.revokeCanvasAgentFileGrant("canvas/1", "conversation/1", "grant/1");
+  await creatorApi.deleteCanvasAgentConversation("canvas/1", "conversation/1");
+  await creatorApi.rewindCanvasAgentTask("canvas/1", "task/1");
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/canvas/canvas%2F1/conversations?limit=20",
+    "/api/canvas/canvas%2F1/conversations",
+    "/api/canvas/canvas%2F1/conversations/conversation%2F1/messages?limit=40",
+    "/api/canvas/canvas%2F1/conversations/conversation%2F1/file-grants?includeInactive=true",
+    "/api/canvas/canvas%2F1/conversations/conversation%2F1/file-grants",
+    "/api/canvas/canvas%2F1/conversations/conversation%2F1/file-grants/grant%2F1",
+    "/api/canvas/canvas%2F1/conversations?conversationId=conversation%2F1",
+    "/api/canvas/canvas%2F1/agent-tasks/task%2F1/rewind",
+  ]);
+  assert.equal(calls[1].options.method, "PATCH");
+  assert.equal(calls[2].options.cache, "no-store");
+  assert.equal(calls[3].options.cache, "no-store");
+  assert.equal(calls[4].options.method, "POST");
+  assert.equal(calls[5].options.method, "DELETE");
+  assert.equal(calls[6].options.method, "DELETE");
+});
+
+test("Canvas Agent memory aliases preserve filters and scoped record mutations", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ data: {} }) };
+  };
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.listCanvasAgentMemories("canvas/1", "conversation/1", {
+    includeInactive: true,
+    category: "preference",
+    source: "agent_task",
+  });
+  await creatorApi.updateCanvasAgentMemory("canvas/1", "conversation/1", "memory/1", {
+    key: "preference.style",
+    value: { text: "水墨" },
+    category: "preference",
+    status: "active",
+  });
+  await creatorApi.deleteCanvasAgentMemory("canvas/1", "conversation/1", "memory/1");
+  assert.deepEqual(calls.map((call) => [call.url, call.options.method]), [
+    ["/api/canvas/canvas%2F1/conversations/conversation%2F1/memories?includeInactive=true&category=preference&source=agent_task", undefined],
+    ["/api/canvas/canvas%2F1/conversations/conversation%2F1/memories/memory%2F1", "PATCH"],
+    ["/api/canvas/canvas%2F1/conversations/conversation%2F1/memories/memory%2F1", "DELETE"],
+  ]);
+  assert.equal(calls[0].options.cache, "no-store");
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    key: "preference.style",
+    value: { text: "水墨" },
+    category: "preference",
+    status: "active",
+  });
+});
+
+test("Canvas media and config aliases target the new Canvas routes", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ data: {} }) };
+  };
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.startCanvasMediaDerivation("canvas/1", { derivationType: "crop" });
+  await creatorApi.getCanvasMediaDerivation("canvas/1", "derivation/1");
+  await creatorApi.attachCanvasMediaDerivationTask("canvas/1", "derivation/1", "task/1");
+  await creatorApi.createCanvasImageBatchGroup("canvas/1", { artifacts: [] });
+  await creatorApi.createCanvasAnnotationLayer("canvas/1", { layerKind: "mask" });
+  await creatorApi.listCanvasAnnotationLayers("canvas/1", { nodeKey: "node/1", includeInactive: true, limit: 25 });
+  await creatorApi.getCanvasStorageHealth("canvas/1");
+  await creatorApi.startCanvasCardSnapshot("canvas/1", { canvasRevision: 2 });
+  await creatorApi.getCanvasSession("canvas/1");
+  await creatorApi.saveCanvasSession("canvas/1", { viewport: { x: 0, y: 0, zoom: 1 } });
+  await creatorApi.createCanvasUserConfigVersion("config/1", { manifest: {} });
+  await creatorApi.archiveCanvasUserConfig("config/1");
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/canvas/canvas%2F1/derivations",
+    "/api/canvas/canvas%2F1/derivations/derivation%2F1",
+    "/api/canvas/canvas%2F1/derivations/derivation%2F1/attach-task",
+    "/api/canvas/canvas%2F1/image-batch-groups",
+    "/api/canvas/canvas%2F1/annotation-layers",
+    "/api/canvas/canvas%2F1/annotation-layers?nodeKey=node%2F1&includeInactive=true&limit=25",
+    "/api/canvas/canvas%2F1/storage-health",
+    "/api/canvas/canvas%2F1/card-snapshots",
+    "/api/canvas/canvas%2F1/session",
+    "/api/canvas/canvas%2F1/session",
+    "/api/canvas-library/configs/config%2F1/versions",
+    "/api/canvas-library/configs/config%2F1",
+  ]);
+  assert.equal(calls[9].options.method, "PUT");
 });
 
 test("billing read routes target explicit order and payment intent resources", async () => {
@@ -716,6 +1003,82 @@ test("streaming ai storyboard preview does not create a fixed abort timeout", as
     globalThis.fetch = previousFetch;
     globalThis.setTimeout = previousSetTimeout;
     globalThis.clearTimeout = previousClearTimeout;
+  }
+});
+
+test("Canvas Agent GET SSE preserves event ids and sends the resume cursor", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  const encoded = new TextEncoder().encode(
+    'id: 7\nevent: task.started\ndata: {"sequence":7,"eventType":"task.started","event":{}}\n\n',
+  );
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push([url, options]);
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded);
+          controller.close();
+        },
+      }),
+    };
+  };
+  try {
+    const { creatorApiTestHooks } = await import("../src/shared/creator-api.js");
+    const events = [];
+    for await (const event of creatorApiTestHooks.getSse("/api/canvas/canvas-1/agent-tasks/task-1/events?live=1", {
+      headers: { "last-event-id": "6" },
+    })) {
+      events.push(event);
+    }
+    assert.deepEqual(events, [{
+      event: "task.started",
+      id: "7",
+      data: { sequence: 7, eventType: "task.started", event: {} },
+    }]);
+    assert.equal(calls[0][1].headers["last-event-id"], "6");
+    assert.equal(calls[0][1].headers.accept, "text/event-stream");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("Canvas live SSE sends Last-Event-ID and preserves revision event ids", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  const encoded = new TextEncoder().encode(
+    'id: revision-12\ndata: {"type":"revision","eventId":"revision-12","serverRevision":12}\n\n',
+  );
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded);
+          controller.close();
+        },
+      }),
+    };
+  };
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    const events = [];
+    for await (const event of creatorApi.streamCanvasLive("canvas/1", { lastEventId: "revision-11" })) {
+      events.push(event);
+    }
+
+    assert.equal(calls[0].url, "/api/canvas/canvas%2F1/live");
+    assert.equal(calls[0].options.headers["last-event-id"], "revision-11");
+    assert.equal(calls[0].options.headers.accept, "text/event-stream");
+    assert.deepEqual(events, [{
+      event: "revision",
+      id: "revision-12",
+      data: { type: "revision", eventId: "revision-12", serverRevision: 12 },
+    }]);
+  } finally {
+    globalThis.fetch = previousFetch;
   }
 });
 

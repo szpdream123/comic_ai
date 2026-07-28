@@ -88,6 +88,14 @@ export function resolvePromptEditorMentionPreview(item = {}, assetKind = null) {
       item.thumbnailUrl,
       item.posterUrl,
       item.coverImageUrl,
+      item.publicUrl,
+      item.sourceUrl,
+      item.src,
+      item.url,
+      item.downloadUrl,
+      item.latestVersion?.previewUrl,
+      item.latestVersion?.metadata?.previewUrl,
+      item.latestVersion?.metadata?.fixedImageUrl,
     ]);
   }
   const explicitImagePreview = firstPreviewValue([
@@ -99,7 +107,14 @@ export function resolvePromptEditorMentionPreview(item = {}, assetKind = null) {
     item.coverUrl,
     item.fixedImageUrl,
     item.imageUrl,
+    item.publicUrl,
+    item.sourceUrl,
+    item.src,
+    item.url,
+    item.downloadUrl,
+    item.latestVersion?.previewUrl,
     item.latestVersion?.thumbnailUrl,
+    item.latestVersion?.metadata?.previewUrl,
     item.latestVersion?.metadata?.thumbnailUrl,
     item.latestVersion?.metadata?.coverImageUrl,
   ], { rejectMediaSource: true });

@@ -237,10 +237,12 @@ vi.mock("./SceneRoot", () => ({
   SceneRoot: () => null,
 }));
 
-import App from "../../App";
+import DirectorDeskApp from "../../App";
 import { getCameraViewSnapshotFromShot } from "../schema/cameraGeometry";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
 import { DirectorCanvas } from "./DirectorCanvas";
+
+const App = () => <DirectorDeskApp authenticated={false} />;
 
 it("renders a live R3F viewport and director scene controls", () => {
   render(<App />);
@@ -631,7 +633,7 @@ it("captures screenshots from the same safe-area frame shown by the aspect overl
     source: "capture-panel",
   });
 
-  const expectedFrame = getViewportAspectFrameRect("16:9", 1000, 700, 124, {
+  const expectedFrame = getViewportAspectFrameRect("16:9", 1000, 700, 134, {
     left: 196,
     right: 276,
     top: 0,

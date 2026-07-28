@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
+import { assertPromptCanBeDeactivated, ensureOfficialPromptDefault } from "../prompt-marketplace/prompt-skill-default.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
@@ -8,49 +9,33 @@ export const defaultStoryboardBasePrompt = "请将所选小说章节改编为可
 
 const seedUpdatedAt = new Date("2026-06-06T08:00:00.000Z");
 
-type JsonValue = unknown;
-
 interface StoryboardPromptPackageRow {
   id: string;
   name: string;
-  code: string;
-  package_type: string;
-  audience: string | null;
-  tags: JsonValue;
+  summary: string;
   cover_image_url: string | null;
+  cover_storage_object_id: string | null;
   prompt_content: string;
-  key_points: JsonValue;
-  negative_prompt: string | null;
-  applicable_genres: JsonValue;
-  applicable_scene: JsonValue;
-  output_type: string | null;
-  scope: JsonValue;
-  can_stack: boolean;
-  max_select_count: number | string | null;
-  is_default: boolean;
-  is_global_default: boolean;
-  is_recommended: boolean;
-  sort_order: number | string;
   status: string;
-  remark: string | null;
+  price_credits: number;
+  usage_count: number;
+  is_published: boolean;
   created_at: Date | string;
   updated_at: Date | string;
+  is_default?: boolean;
 }
 
 interface StoryboardPromptTemplateRow {
   id: string;
   name: string;
-  code: string;
-  base_prompt: string;
-  genre_package_id: string;
-  emotion_package_ids: JsonValue;
-  camera_package_ids: JsonValue;
-  output_package_id: string | null;
-  taboo_package_ids: JsonValue;
-  is_default: boolean;
-  sort_order: number | string;
+  summary: string;
+  prompt_content: string;
+  cover_image_url: string | null;
+  cover_storage_object_id: string | null;
   status: string;
-  remark: string | null;
+  price_credits: number;
+  usage_count: number;
+  is_published: boolean;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -63,25 +48,28 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     pageSize?: number;
   } = {}) {
     await ensureDefaultStoryboardPromptData(deps.db);
+    await ensureOfficialPromptDefault(deps.db, "script");
     const pageSize = clamp(Number(input.pageSize || 100), 1, 500);
     const keyword = input.keyword?.trim() ? `%${input.keyword.trim().toLowerCase()}%` : null;
     const rows = await deps.db.query<StoryboardPromptPackageRow>(
       `
-        SELECT *
-        FROM storyboard_prompt_packages
-        WHERE deleted_at IS NULL
-          AND ($1::text IS NULL OR package_type = $1)
-          AND ($2::text IS NULL OR status = $2)
+        SELECT prompts.*, EXISTS (
+          SELECT 1 FROM prompt_official_defaults prompt_default
+          WHERE prompt_default.prompt_category = 'script' AND prompt_default.prompt_id = prompts.id
+        ) AS is_default
+        FROM prompts
+        WHERE prompt_category = 'script' AND deleted_at IS NULL
+          AND ($1::text IS NULL OR status = $1)
           AND (
-            $3::text IS NULL
-            OR lower(name) LIKE $3
-            OR lower(code) LIKE $3
-            OR lower(tags::text) LIKE $3
+            $2::text IS NULL
+            OR lower(name) LIKE $2
+            OR lower(prompt_content) LIKE $2
+            OR lower(summary) LIKE $2
           )
-        ORDER BY package_type ASC, sort_order DESC, updated_at DESC, id ASC
-        LIMIT $4
+        ORDER BY updated_at DESC, id ASC
+        LIMIT $3
       `,
-      [input.packageType || null, input.status || null, keyword, pageSize],
+      [input.status || null, keyword, pageSize],
     );
     return { data: rows.rows.map(packageFromRow) };
   }
@@ -91,9 +79,9 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     const rows = await deps.db.query<StoryboardPromptTemplateRow>(
       `
         SELECT *
-        FROM storyboard_prompt_templates
-        WHERE deleted_at IS NULL
-        ORDER BY sort_order DESC, updated_at DESC, id ASC
+        FROM prompts
+        WHERE prompt_category = 'storyboard' AND deleted_at IS NULL
+        ORDER BY updated_at DESC, id ASC
         LIMIT $1
       `,
       [clamp(Number(input.pageSize || 100), 1, 500)],
@@ -103,94 +91,68 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
 
   async function savePackage(input: SavePackageInput) {
     const existing = input.id
-      ? await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM storyboard_prompt_packages WHERE id = $1 AND deleted_at IS NULL", [input.id])
+      ? await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'script' AND deleted_at IS NULL", [input.id])
       : undefined;
-    const normalizedInput = normalizePackageDefaultFlags(mergePackageInputWithExisting(input, existing));
-    const validation = validatePackagePayload(normalizedInput);
+    const validation = validatePackagePayload(input);
     if (validation) return validation;
-    const now = normalizedInput.now;
-    const id = normalizedInput.id || randomUUID();
-    const duplicate = await queryOne<{ id: string }>(
-      deps.db,
-      "SELECT id FROM storyboard_prompt_packages WHERE code = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) AND deleted_at IS NULL",
-      [normalizedInput.code.trim(), normalizedInput.id || null],
-    );
-    if (duplicate) return error(409, "storyboard_prompt_code_duplicate", "提示词包编码已存在");
-
+    const now = input.now;
+    const id = input.id || randomUUID();
+    const status = input.status || "enabled";
+    const priceCredits = input.price_credits ?? existing?.price_credits ?? 0;
+    const isPublished = status === "disabled" ? false : input.is_published ?? existing?.is_published ?? false;
+    if (existing && (status === "disabled" || !isPublished)) await assertPromptCanBeDeactivated(deps.db, existing.id);
     await deps.db.query(
       `
-        INSERT INTO storyboard_prompt_packages (
-          id, name, code, package_type, audience, tags, cover_image_url, prompt_content, key_points,
-          negative_prompt, applicable_genres, applicable_scene, output_type, scope,
-          can_stack, max_select_count, is_default, is_global_default, is_recommended,
-          sort_order, status, remark, created_by_admin_id, updated_by_admin_id,
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, cover_image_url, prompt_content,
+          status, is_official, price_credits, is_published, published_at,
+          created_by_admin_id, updated_by_admin_id,
           created_at, updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb,
-          $10, $11::jsonb, $12::jsonb, $13, $14::jsonb,
-          $15, $16, $17, $18, $19,
-          $20, $21, $22, $23, $23, $24, $24
+          $1, 'script', $2, $3, $4, $5, $6, true, $7, $8, CASE WHEN $8 THEN $10::timestamptz ELSE NULL END,
+          $9, $9, $10, $10
         )
         ON CONFLICT (id)
         DO UPDATE SET
           name = EXCLUDED.name,
-          code = EXCLUDED.code,
-          package_type = EXCLUDED.package_type,
-          audience = EXCLUDED.audience,
-          tags = EXCLUDED.tags,
+          summary = EXCLUDED.summary,
           cover_image_url = EXCLUDED.cover_image_url,
           prompt_content = EXCLUDED.prompt_content,
-          key_points = EXCLUDED.key_points,
-          negative_prompt = EXCLUDED.negative_prompt,
-          applicable_genres = EXCLUDED.applicable_genres,
-          applicable_scene = EXCLUDED.applicable_scene,
-          output_type = EXCLUDED.output_type,
-          scope = EXCLUDED.scope,
-          can_stack = EXCLUDED.can_stack,
-          max_select_count = EXCLUDED.max_select_count,
-          is_default = EXCLUDED.is_default,
-          is_global_default = EXCLUDED.is_global_default,
-          is_recommended = EXCLUDED.is_recommended,
-          sort_order = EXCLUDED.sort_order,
           status = EXCLUDED.status,
-          remark = EXCLUDED.remark,
+          price_credits = EXCLUDED.price_credits,
+          is_published = EXCLUDED.is_published,
+          published_at = EXCLUDED.published_at,
           updated_by_admin_id = EXCLUDED.updated_by_admin_id,
           updated_at = EXCLUDED.updated_at
       `,
-      packageParams({
-        ...normalizedInput,
+      [
         id,
+        input.name.trim(),
+        input.remark?.trim() || "",
+        input.cover_image_url?.trim() || null,
+        input.prompt_content.trim(),
+        status,
+        priceCredits,
+        isPublished,
+        input.actorAdminAccountId,
         now,
-      }),
+      ],
     );
-    if (normalizedInput.is_default) {
-      await clearPackageTypeDefaults({
-        id,
-        packageType: normalizedInput.package_type,
-        actorAdminAccountId: normalizedInput.actorAdminAccountId,
-        now,
-      });
+    if (input.usage_count !== undefined) {
+      await deps.db.query("UPDATE prompts SET usage_count = $2 WHERE id = $1", [id, input.usage_count]);
     }
-    await recordPackageVersion({
-      packageId: id,
-      actorAdminAccountId: normalizedInput.actorAdminAccountId,
-      reason: normalizedInput.reason || (existing ? "update storyboard prompt package" : "create storyboard prompt package"),
-      now,
-    });
-    await audit(normalizedInput, existing ? "admin.storyboard_prompt.package.updated" : "admin.storyboard_prompt.package.created", "storyboard_prompt_package", id);
+    await audit(input, existing ? "admin.storyboard_prompt.package.updated" : "admin.storyboard_prompt.package.created", "storyboard_prompt_package", id);
     return packageResponse(id);
   }
 
   async function copyPackage(input: AdminMutationInput & { id: string }) {
-    const existing = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM storyboard_prompt_packages WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'script' AND deleted_at IS NULL", [input.id]);
     if (!existing) return error(404, "storyboard_prompt_package_not_found", "提示词包不存在");
-    const copyCode = await uniqueCopyCode(existing.code);
     return savePackage({
       ...packageFromRow(existing),
       id: undefined,
       name: `${existing.name} 副本`,
-      code: copyCode,
       actorAdminAccountId: input.actorAdminAccountId,
       reason: input.reason || "copy storyboard prompt package",
       now: input.now,
@@ -199,81 +161,76 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
 
   async function changePackageStatus(input: AdminMutationInput & { id: string; status: string }) {
     if (!["enabled", "disabled"].includes(input.status)) return error(400, "invalid_storyboard_prompt_status", "状态不支持");
-    const existing = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM storyboard_prompt_packages WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'script' AND deleted_at IS NULL", [input.id]);
     if (!existing) return error(404, "storyboard_prompt_package_not_found", "提示词包不存在");
+    if (input.status === "disabled") await assertPromptCanBeDeactivated(deps.db, input.id);
     await deps.db.query(
-      "UPDATE storyboard_prompt_packages SET status = $2, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1",
+      "UPDATE prompts SET status = $2, is_published = CASE WHEN $2 = 'disabled' THEN false ELSE is_published END, published_at = CASE WHEN $2 = 'disabled' THEN NULL ELSE published_at END, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1 AND prompt_category = 'script'",
       [input.id, input.status, input.actorAdminAccountId, input.now],
     );
-    await recordPackageVersion({
-      packageId: input.id,
-      actorAdminAccountId: input.actorAdminAccountId,
-      reason: input.reason || `change status to ${input.status}`,
-      now: input.now,
-    });
     await audit(input, "admin.storyboard_prompt.package.status_changed", "storyboard_prompt_package", input.id, { status: input.status });
     return packageResponse(input.id);
   }
 
   async function saveTemplate(input: SaveTemplateInput) {
     await ensureDefaultStoryboardPromptData(deps.db);
-    if (!input.name.trim() || !input.code.trim()) return error(400, "storyboard_prompt_template_required", "模板名称和编码必填");
-    if (!/^[a-z0-9_]+$/.test(input.code.trim())) return error(400, "invalid_storyboard_prompt_code", "编码只能包含小写字母、数字和下划线");
-    if (!input.genre_package_id) return error(400, "storyboard_prompt_template_packages_required", "???????????");
+    if (!input.name.trim()) return error(400, "storyboard_prompt_template_required", "模板名称必填");
+    if (input.status && !["enabled", "disabled"].includes(input.status)) {
+      return error(400, "invalid_storyboard_prompt_status", "状态不支持");
+    }
+    if (input.price_credits !== undefined && (!Number.isInteger(input.price_credits) || input.price_credits < 0 || input.price_credits > 99_999)) {
+      return error(400, "invalid_storyboard_prompt_price", "积分价格必须是 0 到 99999 的整数");
+    }
+    if (input.usage_count !== undefined && (!Number.isInteger(input.usage_count) || input.usage_count < 0 || input.usage_count > 2_147_483_647)) {
+      return error(400, "invalid_storyboard_prompt_usage_count", "使用次数必须是非负整数");
+    }
     const id = input.id || randomUUID();
+    const existing = input.id
+      ? await queryOne<StoryboardPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'storyboard' AND deleted_at IS NULL", [input.id])
+      : undefined;
+    const status = input.status || "enabled";
+    const priceCredits = input.price_credits ?? existing?.price_credits ?? 0;
+    const isPublished = status === "disabled" ? false : input.is_published ?? existing?.is_published ?? false;
     await deps.db.query(
       `
-        INSERT INTO storyboard_prompt_templates (
-          id, name, code, base_prompt, genre_package_id, emotion_package_ids,
-          camera_package_ids, output_package_id, taboo_package_ids, is_default,
-          sort_order, status, remark, created_by_admin_id, updated_by_admin_id,
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, cover_image_url, prompt_content, status,
+          is_official, price_credits, is_published, published_at,
+          created_by_admin_id, updated_by_admin_id,
           created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, $10, $11, $12, $13, $14, $14, $15, $15)
+        VALUES ($1, 'storyboard', $2, $3, $4, $5, $6, true, $7, $8, CASE WHEN $8 THEN $10::timestamptz ELSE NULL END, $9, $9, $10, $10)
         ON CONFLICT (id)
         DO UPDATE SET
           name = EXCLUDED.name,
-          code = EXCLUDED.code,
-          base_prompt = EXCLUDED.base_prompt,
-          genre_package_id = EXCLUDED.genre_package_id,
-          emotion_package_ids = EXCLUDED.emotion_package_ids,
-          camera_package_ids = EXCLUDED.camera_package_ids,
-          output_package_id = EXCLUDED.output_package_id,
-          taboo_package_ids = EXCLUDED.taboo_package_ids,
-          is_default = EXCLUDED.is_default,
-          sort_order = EXCLUDED.sort_order,
+          summary = EXCLUDED.summary,
+          cover_image_url = EXCLUDED.cover_image_url,
+          prompt_content = EXCLUDED.prompt_content,
           status = EXCLUDED.status,
-          remark = EXCLUDED.remark,
+          price_credits = EXCLUDED.price_credits,
+          is_published = EXCLUDED.is_published,
+          published_at = EXCLUDED.published_at,
           updated_by_admin_id = EXCLUDED.updated_by_admin_id,
           updated_at = EXCLUDED.updated_at
       `,
       [
         id,
         input.name.trim(),
-        input.code.trim(),
+        input.remark?.trim() || "",
+        input.cover_image_url?.trim() || null,
         input.base_prompt?.trim() || defaultStoryboardBasePrompt,
-        input.genre_package_id,
-        JSON.stringify(input.emotion_package_ids || []),
-        JSON.stringify([]),
-        input.output_package_id || null,
-        JSON.stringify(input.taboo_package_ids || []),
-        Boolean(input.is_default),
-        Number(input.sort_order || 0),
-        input.status || "enabled",
-        input.remark?.trim() || null,
+        status,
+        priceCredits,
+        isPublished,
         input.actorAdminAccountId,
         input.now,
       ],
     );
-    if (input.is_default) {
-      await clearTemplateDefaults({
-        id,
-        actorAdminAccountId: input.actorAdminAccountId,
-        now: input.now,
-      });
+    if (input.usage_count !== undefined) {
+      await deps.db.query("UPDATE prompts SET usage_count = $2 WHERE id = $1", [id, input.usage_count]);
     }
     await audit(input, "admin.storyboard_prompt.template.saved", "storyboard_prompt_template", id);
-    const row = await queryOne<StoryboardPromptTemplateRow>(deps.db, "SELECT * FROM storyboard_prompt_templates WHERE id = $1", [id]);
+    const row = await queryOne<StoryboardPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'storyboard'", [id]);
     return { status: 200, body: { data: row ? templateFromRow(row) : { id } } };
   }
 
@@ -324,7 +281,7 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
       for (const id of idList) {
         const row = await queryOne<StoryboardPromptPackageRow>(
           deps.db,
-          "SELECT * FROM storyboard_prompt_packages WHERE id = $1 AND deleted_at IS NULL",
+          "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'script' AND deleted_at IS NULL",
           [id],
         );
         if (row) sections.push({ type, title: `${titlePrefix}：${row.name}`, content: row.prompt_content });
@@ -333,63 +290,14 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     await append("genre", input.genre_package_id, "题材包");
     await append("emotion", input.emotion_package_ids, "情绪包");
     await append("taboo", input.taboo_package_ids, "通用禁忌包");
-    const extraRequest = input.variables?.extra_request || input.extra_request;
+    const extraRequest = input.extra_request;
     if (extraRequest) sections.push({ type: "extra", title: "用户额外要求", content: String(extraRequest) });
     return sections;
   }
 
   async function packageResponse(id: string) {
-    const row = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM storyboard_prompt_packages WHERE id = $1", [id]);
+    const row = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'script'", [id]);
     return { status: 200, body: { data: row ? packageFromRow(row) : { id } } };
-  }
-
-  async function recordPackageVersion(input: { packageId: string; actorAdminAccountId: string; reason: string; now: Date }) {
-    const row = await queryOne<StoryboardPromptPackageRow>(deps.db, "SELECT * FROM storyboard_prompt_packages WHERE id = $1", [input.packageId]);
-    if (!row) return;
-    const versionRow = await queryOne<{ next_version: number | string }>(
-      deps.db,
-      "SELECT COALESCE(MAX(version_no), 0) + 1 AS next_version FROM storyboard_prompt_package_versions WHERE package_id = $1",
-      [input.packageId],
-    );
-    await deps.db.query(
-      `
-        INSERT INTO storyboard_prompt_package_versions (
-          id, package_id, version_no, snapshot_json, change_reason, created_by_admin_id, created_at
-        )
-        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
-      `,
-      [randomUUID(), input.packageId, Number(versionRow?.next_version || 1), JSON.stringify(packageFromRow(row)), input.reason, input.actorAdminAccountId, input.now],
-    );
-  }
-
-  async function clearPackageTypeDefaults(input: { id: string; packageType: string; actorAdminAccountId: string; now: Date }) {
-    await deps.db.query(
-      `
-        UPDATE storyboard_prompt_packages
-        SET is_default = false,
-            is_global_default = CASE WHEN package_type = 'taboo' THEN false ELSE is_global_default END,
-            updated_by_admin_id = $3,
-            updated_at = $4
-        WHERE deleted_at IS NULL
-          AND package_type = $2
-          AND id <> $1
-          AND is_default = true
-      `,
-      [input.id, input.packageType, input.actorAdminAccountId, input.now],
-    );
-  }
-
-  async function clearTemplateDefaults(input: { id: string; actorAdminAccountId: string; now: Date }) {
-    await deps.db.query(
-      `
-        UPDATE storyboard_prompt_templates
-        SET is_default = false, updated_by_admin_id = $2, updated_at = $3
-        WHERE deleted_at IS NULL
-          AND id <> $1
-          AND is_default = true
-      `,
-      [input.id, input.actorAdminAccountId, input.now],
-    );
   }
 
   async function audit(input: AdminMutationInput, eventType: string, targetType: string, targetId: string, metadata: Record<string, unknown> = {}) {
@@ -403,15 +311,6 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
       sensitive: false,
       metadata,
     });
-  }
-
-  async function uniqueCopyCode(code: string) {
-    for (let i = 1; i < 100; i += 1) {
-      const candidate = `${code}_copy${i === 1 ? "" : i}`;
-      const existing = await queryOne<{ id: string }>(deps.db, "SELECT id FROM storyboard_prompt_packages WHERE code = $1", [candidate]);
-      if (!existing) return candidate;
-    }
-    return `${code}_copy_${Date.now()}`;
   }
 
   return {
@@ -431,34 +330,19 @@ export async function ensureDefaultStoryboardPromptData(db: SqlDatabase) {
   for (const item of defaultStoryboardPromptPackages) {
     await db.query(
       `
-        INSERT INTO storyboard_prompt_packages (
-          id, name, code, package_type, audience, tags, prompt_content, key_points,
-          negative_prompt, applicable_scene, output_type, can_stack, max_select_count,
-          is_default, is_global_default, is_recommended, sort_order, status, remark,
-          created_at, updated_at
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, cover_image_url, prompt_content,
+          status, is_official, is_published, published_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, 'enabled', $18, $19, $19)
-        ON CONFLICT (code) DO NOTHING
+        VALUES ($1, 'script', $2, $3, $4, $5, 'enabled', true, true, $6, $6, $6)
+        ON CONFLICT (id) DO NOTHING
       `,
       [
         item.id,
         item.name,
-        item.code,
-        item.package_type,
-        item.audience || null,
-        JSON.stringify(item.tags || []),
+        item.remark || "",
+        item.cover_image_url || null,
         item.prompt_content,
-        JSON.stringify(item.key_points || []),
-        item.negative_prompt || null,
-        JSON.stringify(item.applicable_scene || []),
-        item.output_type || null,
-        item.can_stack ?? true,
-        item.max_select_count ?? null,
-        Boolean(item.is_default),
-        Boolean(item.is_global_default),
-        Boolean(item.is_recommended),
-        Number(item.sort_order || 0),
-        item.remark || null,
         seedUpdatedAt,
       ],
     );
@@ -466,30 +350,24 @@ export async function ensureDefaultStoryboardPromptData(db: SqlDatabase) {
   for (const template of defaultStoryboardPromptTemplates) {
     await db.query(
       `
-        INSERT INTO storyboard_prompt_templates (
-          id, name, code, base_prompt, genre_package_id, emotion_package_ids,
-          camera_package_ids, output_package_id, taboo_package_ids, is_default,
-          sort_order, status, created_at, updated_at
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, $10, $11, 'enabled', $12, $12)
-        ON CONFLICT (code) DO NOTHING
+        VALUES ($1, 'storyboard', $2, $3, $4, 'enabled', true, true, $5, $5, $5)
+        ON CONFLICT (id) DO NOTHING
       `,
       [
         template.id,
         template.name,
-        template.code,
+        template.summary,
         defaultStoryboardBasePrompt,
-        template.genre_package_id,
-        JSON.stringify(template.emotion_package_ids),
-        JSON.stringify([]),
-        template.output_package_id || null,
-        JSON.stringify(template.taboo_package_ids),
-        Boolean(template.is_default),
-        Number(template.sort_order || 0),
         seedUpdatedAt,
       ],
     );
   }
+  await ensureOfficialPromptDefault(db, "script", seedUpdatedAt);
+  await ensureOfficialPromptDefault(db, "storyboard", seedUpdatedAt);
 }
 
 interface AdminMutationInput {
@@ -501,61 +379,24 @@ interface AdminMutationInput {
 interface SavePackageInput extends AdminMutationInput {
   id?: string;
   name: string;
-  code: string;
-  package_type: string;
-  audience?: string | null;
-  tags?: string[];
   prompt_content: string;
   cover_image_url?: string | null;
-  key_points?: string[];
-  negative_prompt?: string | null;
-  applicable_genres?: string[];
-  applicable_scene?: string[];
-  output_type?: string | null;
-  scope?: Record<string, unknown>;
-  can_stack?: boolean;
-  max_select_count?: number | null;
-  is_default?: boolean;
-  is_global_default?: boolean;
-  is_recommended?: boolean;
-  sort_order?: number;
   status?: string;
+  price_credits?: number;
+  usage_count?: number;
+  is_published?: boolean;
   remark?: string | null;
-}
-
-interface NormalizedSavePackageInput extends SavePackageInput {
-  audience: string | null;
-  tags: string[];
-  cover_image_url: string | null;
-  key_points: string[];
-  negative_prompt: string | null;
-  applicable_genres: string[];
-  applicable_scene: string[];
-  output_type: string | null;
-  scope: Record<string, unknown>;
-  can_stack: boolean;
-  max_select_count: number | null;
-  is_default: boolean;
-  is_global_default: boolean;
-  is_recommended: boolean;
-  sort_order: number;
-  status: string;
-  remark: string | null;
 }
 
 interface SaveTemplateInput extends AdminMutationInput {
   id?: string;
   name: string;
-  code: string;
   base_prompt?: string;
-  genre_package_id: string;
-  emotion_package_ids?: string[];
-  camera_package_ids?: string[];
-  output_package_id?: string | null;
-  taboo_package_ids?: string[];
-  is_default?: boolean;
-  sort_order?: number;
+  cover_image_url?: string | null;
   status?: string;
+  price_credits?: number;
+  usage_count?: number;
+  is_published?: boolean;
   remark?: string | null;
 }
 
@@ -566,19 +407,12 @@ interface ComposeInput {
   camera_package_ids?: string[];
   output_package_id?: string;
   taboo_package_ids?: string[];
-  variables?: Record<string, unknown>;
   extra_request?: string;
 }
 
 function validatePackagePayload(input: SavePackageInput) {
-  if (!input.name?.trim() || !input.code?.trim() || !input.package_type?.trim()) {
-    return error(400, "storyboard_prompt_package_required", "名称、编码和类型必填");
-  }
-  if (!/^[a-z0-9_]+$/.test(input.code.trim())) {
-    return error(400, "invalid_storyboard_prompt_code", "编码只能包含小写字母、数字和下划线");
-  }
-  if (!["genre", "emotion", "taboo"].includes(input.package_type)) {
-    return error(400, "invalid_storyboard_prompt_type", "提示词包类型不支持");
+  if (!input.name?.trim()) {
+    return error(400, "storyboard_prompt_package_required", "名称必填");
   }
   if (!input.prompt_content?.trim() || input.prompt_content.trim().length < 20) {
     return error(400, "storyboard_prompt_content_required", "提示词正文不得为空，建议不少于 20 字");
@@ -586,99 +420,36 @@ function validatePackagePayload(input: SavePackageInput) {
   if (input.status && !["enabled", "disabled"].includes(input.status)) {
     return error(400, "invalid_storyboard_prompt_status", "状态不支持");
   }
-  return null;
-}
-
-function mergePackageInputWithExisting(input: SavePackageInput, existing?: StoryboardPromptPackageRow): NormalizedSavePackageInput {
-  const current = existing ? packageFromRow(existing) : null;
-  return {
-    ...input,
-    audience: input.audience ?? current?.audience ?? null,
-    tags: input.tags ?? current?.tags ?? [],
-    cover_image_url: input.cover_image_url ?? current?.cover_image_url ?? current?.coverImageUrl ?? null,
-    key_points: input.key_points ?? current?.key_points ?? current?.keyPoints ?? [],
-    negative_prompt: input.negative_prompt ?? current?.negative_prompt ?? null,
-    applicable_genres: input.applicable_genres ?? current?.applicable_genres ?? [],
-    applicable_scene: input.applicable_scene ?? current?.applicable_scene ?? current?.applicableScene ?? [],
-    output_type: input.output_type ?? current?.output_type ?? null,
-    scope: input.scope ?? current?.scope ?? {},
-    can_stack: input.can_stack ?? current?.can_stack ?? true,
-    max_select_count: input.max_select_count ?? current?.max_select_count ?? null,
-    is_default: input.is_default ?? current?.is_default ?? false,
-    is_global_default: input.is_global_default ?? current?.is_global_default ?? false,
-    is_recommended: input.is_recommended ?? current?.is_recommended ?? false,
-    sort_order: input.sort_order ?? current?.sort_order ?? 0,
-    status: input.status ?? current?.status ?? "enabled",
-    remark: input.remark ?? current?.remark ?? null,
-  };
-}
-
-function normalizePackageDefaultFlags(input: NormalizedSavePackageInput): NormalizedSavePackageInput {
-  if (input.package_type !== "taboo") {
-    return input;
+  if (input.price_credits !== undefined && (!Number.isInteger(input.price_credits) || input.price_credits < 0 || input.price_credits > 99_999)) {
+    return error(400, "invalid_storyboard_prompt_price", "积分价格必须是 0 到 99999 的整数");
   }
-  const isDefault = Boolean(input.is_default);
-  return {
-    ...input,
-    is_default: isDefault,
-    is_global_default: isDefault ? true : Boolean(input.is_global_default),
-  };
-}
-
-function packageParams(input: SavePackageInput & { id: string; now: Date }) {
-  return [
-    input.id,
-    input.name.trim(),
-    input.code.trim(),
-    input.package_type,
-    input.audience?.trim() || null,
-    JSON.stringify(input.tags || []),
-    input.cover_image_url?.trim() || null,
-    input.prompt_content.trim(),
-    JSON.stringify(input.key_points || []),
-    input.negative_prompt?.trim() || null,
-    JSON.stringify(input.applicable_genres || []),
-    JSON.stringify(input.applicable_scene || []),
-    input.output_type?.trim() || null,
-    JSON.stringify(input.scope || {}),
-    input.can_stack ?? true,
-    input.max_select_count ?? null,
-    Boolean(input.is_default),
-    Boolean(input.is_global_default),
-    Boolean(input.is_recommended),
-    Number(input.sort_order || 0),
-    input.status || "enabled",
-    input.remark?.trim() || null,
-    input.actorAdminAccountId,
-    input.now,
-  ];
+  if (input.usage_count !== undefined && (!Number.isInteger(input.usage_count) || input.usage_count < 0 || input.usage_count > 2_147_483_647)) {
+    return error(400, "invalid_storyboard_prompt_usage_count", "使用次数必须是非负整数");
+  }
+  return null;
 }
 
 function packageFromRow(row: StoryboardPromptPackageRow) {
   return {
     id: row.id,
     name: row.name,
-    code: row.code,
-    package_type: row.package_type,
-    audience: row.audience || "",
-    tags: arrayFromJson(row.tags),
+    prompt_category: "script",
+    category: "script",
+    summary: row.summary || "",
     cover_image_url: row.cover_image_url || "",
     coverImageUrl: row.cover_image_url || "",
+    cover_storage_object_id: row.cover_storage_object_id,
+    coverStorageObjectId: row.cover_storage_object_id,
     prompt_content: row.prompt_content,
-    key_points: arrayFromJson(row.key_points),
-    negative_prompt: row.negative_prompt || "",
-    applicable_genres: arrayFromJson(row.applicable_genres),
-    applicable_scene: arrayFromJson(row.applicable_scene),
-    output_type: row.output_type || "",
-    scope: row.scope || {},
-    can_stack: Boolean(row.can_stack),
-    max_select_count: row.max_select_count === null ? null : Number(row.max_select_count),
-    is_default: Boolean(row.is_default),
-    is_global_default: Boolean(row.is_global_default),
-    is_recommended: Boolean(row.is_recommended),
-    sort_order: Number(row.sort_order || 0),
     status: row.status,
-    remark: row.remark || "",
+    price_credits: row.price_credits,
+    priceCredits: row.price_credits,
+    usage_count: row.usage_count,
+    usageCount: row.usage_count,
+    is_published: row.is_published,
+    isPublished: row.is_published,
+    isDefault: Boolean(row.is_default),
+    remark: (row as StoryboardPromptPackageRow & { summary?: string }).summary || "",
     created_at: dateString(row.created_at),
     updated_at: dateString(row.updated_at),
   };
@@ -688,24 +459,26 @@ function templateFromRow(row: StoryboardPromptTemplateRow) {
   return {
     id: row.id,
     name: row.name,
-    code: row.code,
-    base_prompt: row.base_prompt,
-    genre_package_id: row.genre_package_id,
-    emotion_package_ids: arrayFromJson(row.emotion_package_ids),
-    camera_package_ids: arrayFromJson(row.camera_package_ids),
-    output_package_id: row.output_package_id || "",
-    taboo_package_ids: arrayFromJson(row.taboo_package_ids),
-    is_default: Boolean(row.is_default),
-    sort_order: Number(row.sort_order || 0),
+    prompt_category: "storyboard",
+    category: "storyboard",
+    summary: row.summary || "",
+    cover_image_url: row.cover_image_url || "",
+    coverImageUrl: row.cover_image_url || "",
+    cover_storage_object_id: row.cover_storage_object_id,
+    coverStorageObjectId: row.cover_storage_object_id,
+    prompt_content: row.prompt_content,
+    promptContent: row.prompt_content,
     status: row.status,
-    remark: row.remark || "",
+    price_credits: row.price_credits,
+    priceCredits: row.price_credits,
+    usage_count: row.usage_count,
+    usageCount: row.usage_count,
+    is_published: row.is_published,
+    isPublished: row.is_published,
+    remark: row.summary || "",
     created_at: dateString(row.created_at),
     updated_at: dateString(row.updated_at),
   };
-}
-
-function arrayFromJson(value: JsonValue): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function dateString(value: Date | string) {
@@ -726,23 +499,23 @@ function stableUuid(seed: string) {
 }
 
 const defaultStoryboardPromptPackages = [
-  pkg("genre", "玄幻修仙", "xuanhuan_xiuxian", "按玄幻修仙风格改编。突出修炼升级、宗门压迫、强者威压、法器功法、战斗爆发和境界反转。画面要有古风、灵气、宏大场景和力量感。避免过度解释设定，优先用冲突和画面展示世界观。", 190, ["修炼", "宗门", "战斗"], ["修炼升级", "宗门压迫", "境界反转"], { audience: "male", is_default: true }),
+  pkg("genre", "玄幻修仙", "xuanhuan_xiuxian", "按玄幻修仙风格改编。突出修炼升级、宗门压迫、强者威压、法器功法、战斗爆发和境界反转。画面要有古风、灵气、宏大场景和力量感。避免过度解释设定，优先用冲突和画面展示世界观。", 190, ["修炼", "宗门", "战斗"], ["修炼升级", "宗门压迫", "境界反转"]),
   pkg("genre", "末日求生", "apocalypse_survival", "按末日求生紧张生存风格改编。突出资源短缺、环境危机、怪物威胁、人性试探和生存选择。画面偏废墟、阴冷、压迫、危险逼近。每组分镜都要有风险升级。", 185, ["废墟", "怪物", "生存"], ["资源短缺", "风险升级", "生存选择"]),
   pkg("genre", "重生逆袭", "rebirth_counterattack", "按重生逆袭爽剧风格改编。突出前世惨败、重生觉醒、提前布局、命运改写和打脸反击。重点表现主角的冷静、隐忍和掌控感。", 180, ["重生", "布局", "打脸"], ["重生觉醒", "提前布局", "命运改写"]),
-  pkg("genre", "系统流", "system_growth", "按系统流爽文风格改编。突出系统提示、任务奖励、能力升级、数值变化和规则利用。系统信息需要可视化为弹窗、提示音、光效或数据面板，内容要短、准、能被观众一眼看懂。", 175, ["系统", "任务", "数值"], ["系统提示", "任务奖励", "规则利用"], { audience: "male" }),
-  pkg("genre", "霸总甜宠", "ceo_sweet_romance", "按都市霸总甜宠风格改编。突出身份差、暧昧拉扯、吃醋、误会、保护欲和情绪升温。画面偏都市高级感、近景、眼神特写和柔光。避免油腻台词和角色降智。", 170, ["都市", "暧昧", "甜宠"], ["暧昧拉扯", "保护欲", "情绪升温"], { audience: "female" }),
+  pkg("genre", "系统流", "system_growth", "按系统流爽文风格改编。突出系统提示、任务奖励、能力升级、数值变化和规则利用。系统信息需要可视化为弹窗、提示音、光效或数据面板，内容要短、准、能被观众一眼看懂。", 175, ["系统", "任务", "数值"], ["系统提示", "任务奖励", "规则利用"]),
+  pkg("genre", "霸总甜宠", "ceo_sweet_romance", "按都市霸总甜宠风格改编。突出身份差、暧昧拉扯、吃醋、误会、保护欲和情绪升温。画面偏都市高级感、近景、眼神特写和柔光。避免油腻台词和角色降智。", 170, ["都市", "暧昧", "甜宠"], ["暧昧拉扯", "保护欲", "情绪升温"]),
   pkg("genre", "娱乐圈", "entertainment_industry", "按娱乐圈事业逆袭风格改编。突出咖位压制、舆论风波、舞台高光、镜头前后反差、黑红逆袭和事业线爽点。需要强化公众场景、媒体镜头和社交平台舆论变化。", 165, ["舆论", "舞台", "事业线"], ["舆论风波", "舞台高光", "黑红逆袭"]),
-  pkg("genre", "快穿", "quick_transmigration", "按快穿任务世界风格改编。突出任务世界、身份切换、攻略目标、剧情节点修正和系统倒计时。每个世界需要有明确视觉差异，并让观众快速理解当前任务目标。", 160, ["任务世界", "身份切换", "系统"], ["身份切换", "任务目标", "系统倒计时"], { audience: "female" }),
-  pkg("genre", "团宠", "group_pet_healing", "按团宠治愈爽感风格改编。突出主角被多人保护、身份揭露、误会解除、亲情/友情宠爱和集体撑腰的高光场面。情绪基调温暖，但关键反击要有爽点。", 155, ["亲情", "撑腰", "治愈"], ["身份揭露", "集体撑腰", "温暖治愈"], { audience: "female" }),
+  pkg("genre", "快穿", "quick_transmigration", "按快穿任务世界风格改编。突出任务世界、身份切换、攻略目标、剧情节点修正和系统倒计时。每个世界需要有明确视觉差异，并让观众快速理解当前任务目标。", 160, ["任务世界", "身份切换", "系统"], ["身份切换", "任务目标", "系统倒计时"]),
+  pkg("genre", "团宠", "group_pet_healing", "按团宠治愈爽感风格改编。突出主角被多人保护、身份揭露、误会解除、亲情/友情宠爱和集体撑腰的高光场面。情绪基调温暖，但关键反击要有爽点。", 155, ["亲情", "撑腰", "治愈"], ["身份揭露", "集体撑腰", "温暖治愈"]),
   pkg("genre", "逆袭", "counterattack", "按逆袭爽文风格改编。突出低谷受辱、隐忍蓄力、关键反击、众人震惊和地位翻转。节奏要直接，不拖延冲突，不弱化反击瞬间。", 150, ["受辱", "反击", "翻转"], ["低谷受辱", "关键反击", "地位翻转"]),
-  pkg("genre", "先婚后爱", "marriage_first_love_later", "按先婚后爱情感拉扯风格改编。突出契约关系、同居摩擦、暧昧试探、误会吃醋和感情破冰。节奏从克制到升温，重点表现两人关系变化。", 145, ["契约", "同居", "拉扯"], ["契约关系", "同居摩擦", "感情破冰"], { audience: "female" }),
+  pkg("genre", "先婚后爱", "marriage_first_love_later", "按先婚后爱情感拉扯。突出契约关系、同居摩擦、暧昧试探、误会吃醋和感情破冰。节奏从克制到升温，重点表现两人关系变化。", 145, ["契约", "同居", "拉扯"], ["契约关系", "同居摩擦", "感情破冰"]),
   pkg("genre", "悬疑探案", "suspense_detective", "按悬疑探案风格改编。突出线索、物证、嫌疑人、推理反转和真相逼近。镜头多用特写、暗光、遮挡和细节伏笔，不能过早揭底。", 125, ["线索", "推理", "真相"], ["线索伏笔", "嫌疑人试探", "推理反转"]),
-  pkg("emotion", "男频热血", "male_hotblood", "节奏强、冲突硬、反击爽。主角少解释、多行动，突出压迫后的爆发、实力证明和众人震惊。", 100, [], [], { max_select_count: 3 }),
-  pkg("emotion", "女频情感", "female_emotional", "突出关系拉扯、误会、情绪递进和细腻反应。多用眼神、停顿、沉默、微表情和情绪反差推动剧情。", 95, [], [], { max_select_count: 3 }),
-  pkg("emotion", "高燃爽感", "high_burn_refreshing", "每组分镜都要推动冲突升级，强化羞辱、压迫、反击、震惊、揭露身份等爽点。小高潮要密集，结尾保留强钩子。", 80, [], [], { max_select_count: 3 }),
-  pkg("emotion", "悬疑压迫", "suspense_pressure", "整体情绪紧张、克制、疑点重重。重点表现异常细节、人物试探、信息遮挡和真相逼近。", 75, [], [], { max_select_count: 3 }),
-  pkg("taboo", "通用质量禁忌", "common_quality_taboo", "避免魔改原著核心设定；避免角色性格崩坏；避免大段解释性旁白；避免一个镜头塞入多个复杂动作；避免前后服装、场景、道具不一致；避免无意义空镜和重复对白。", 100, [], [], { is_global_default: true }),
-  pkg("taboo", "角色一致性禁忌", "character_consistency_taboo", "避免角色姓名、身份、年龄、外貌、服装、性格前后不一致。每次角色首次出场都要保持和原文设定一致，后续镜头不得随意更换称呼、关系和视觉特征。", 90, [], [], { is_global_default: true }),
+  pkg("emotion", "男频热血", "male_hotblood", "节奏强、冲突硬、反击爽。主角少解释、多行动，突出压迫后的爆发、实力证明和众人震惊。"),
+  pkg("emotion", "女频情感", "female_emotional", "突出关系拉扯、误会、情绪递进和细腻反应。多用眼神、停顿、沉默、微表情和情绪反差推动剧情。"),
+  pkg("emotion", "高燃爽感", "high_burn_refreshing", "每组分镜都要推动冲突升级，强化羞辱、压迫、反击、震惊、揭露身份等爽点。小高潮要密集，结尾保留强钩子。"),
+  pkg("emotion", "悬疑压迫", "suspense_pressure", "整体情绪紧张、克制、疑点重重。重点表现异常细节、人物试探、信息遮挡和真相逼近。"),
+  pkg("taboo", "通用质量禁忌", "common_quality_taboo", "避免魔改原著核心设定；避免角色性格崩坏；避免大段解释性旁白；避免一个镜头塞入多个复杂动作；避免前后服装、场景、道具不一致；避免无意义空镜和重复对白。"),
+  pkg("taboo", "角色一致性禁忌", "character_consistency_taboo", "避免角色姓名、身份、年龄、外貌、服装、性格前后不一致。每次角色首次出场都要保持和原文设定一致，后续镜头不得随意更换称呼、关系和视觉特征。"),
   pkg("taboo", "AI画面负向约束", "ai_image_negative_taboo", "避免多手指、畸形肢体、错乱五官、文字水印、低清晰度、过曝、人物融合、背景穿帮、服装突变和道具消失。画面提示词要具体、可视化、可生成。", 80, [], []),
 ];
 
@@ -752,32 +525,35 @@ const defaultStoryboardPromptTemplates = [
   template("??????", "suspense_comic_panels", "suspense_detective", ["suspense_pressure"], ["common_quality_taboo", "character_consistency_taboo"], 80),
 ];
 
-function pkg(packageType: string, name: string, code: string, promptContent: string, sortOrder: number, tags: string[], keyPoints: string[], extra: Record<string, unknown> = {}) {
+function pkg(_legacyType: string, name: string, _legacyIdentifier: string, promptContent: string, ..._legacyMetadata: unknown[]) {
   return {
-    id: stableUuid(`storyboard-prompt-package:${code}`),
+    id: stableUuid(`storyboard-prompt-package:${name}`),
     name,
-    code,
-    package_type: packageType,
     prompt_content: promptContent,
-    sort_order: sortOrder,
-    tags,
-    key_points: keyPoints,
-    ...extra,
+    remark: scriptPromptSummary(name),
   };
 }
 
-function template(name: string, code: string, genreCode: string, emotionCodes: string[], tabooCodes: string[], sortOrder: number, isDefault = false) {
-  const idFor = (packageCode: string) => stableUuid(`storyboard-prompt-package:${packageCode}`);
+function template(name: string, legacyIdentifier: string, ..._legacyMetadata: unknown[]) {
   return {
-    id: stableUuid(`storyboard-prompt-template:${code}`),
+    id: stableUuid(`storyboard-prompt-template:${name}`),
     name,
-    code,
-    genre_package_id: idFor(genreCode),
-    emotion_package_ids: emotionCodes.map(idFor),
-    camera_package_ids: [],
-    output_package_id: null,
-    taboo_package_ids: tabooCodes.map(idFor),
-    sort_order: sortOrder,
-    is_default: isDefault,
+    summary: storyboardTemplateSummary(legacyIdentifier, name),
   };
+}
+
+function scriptPromptSummary(name: string) {
+  if (name.includes("负向约束")) return "汇总画面生成中的负向限制，减少文字水印、结构畸变、主体缺失与低质量画面。";
+  if (name.includes("一致性禁忌")) return "约束角色身份、外貌、服装与关系连续性，避免跨场景设定漂移。";
+  if (name.includes("质量禁忌")) return "统一过滤剧情和画面中的常见质量问题，提升后续分镜与生成结果的稳定性。";
+  return `围绕「${name}」题材设计冲突、情绪钩子与剧情节奏，辅助将小说改编为短剧剧本。`;
+}
+
+function storyboardTemplateSummary(legacyIdentifier: string, name: string) {
+  const summaries: Record<string, string> = {
+    xuanhuan_hotblood_short: "将玄幻修仙剧情编排为节奏紧凑、战斗递进、高潮明确的连续故事板。",
+    romance_emotion_pull: "将情感剧情编排为突出眼神、动作、关系拉扯与情绪递进的连续故事板。",
+    suspense_comic_panels: "将悬疑剧情编排为线索清晰、信息克制、压迫感递进的漫画故事板。",
+  };
+  return summaries[legacyIdentifier] || `用于「${name}」故事板生成，组织连续画面、角色动作、台词与场景衔接。`;
 }

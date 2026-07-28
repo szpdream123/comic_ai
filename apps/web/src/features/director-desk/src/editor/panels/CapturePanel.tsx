@@ -44,7 +44,16 @@ export function CapturePanel() {
         onClick={() => {
           const blob = new Blob([serializeProject(project)], { type: "application/json" });
           const url = URL.createObjectURL(blob);
-          window.open(url, "_blank");
+          const anchor = document.createElement("a");
+          try {
+            anchor.href = url;
+            anchor.download = "director-desk-project.json";
+            document.body.appendChild(anchor);
+            anchor.click();
+          } finally {
+            anchor.remove();
+            URL.revokeObjectURL(url);
+          }
         }}
       >
         导出工程 JSON

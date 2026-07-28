@@ -18,6 +18,7 @@ export interface CanvasNodeLike {
 
 export interface CanvasEdgeLike {
   id?: unknown;
+  kind?: unknown;
   sourceNodeId?: unknown;
   sourcePortId?: unknown;
   targetNodeId?: unknown;
@@ -29,6 +30,20 @@ export interface CanvasDocumentLike {
   nodes?: CanvasNodeLike[];
   edges?: CanvasEdgeLike[];
 }
+
+export const CANVAS_DOCUMENT_LIMITS = CANVAS_PRODUCT_LIMITS.document;
+
+export const CANVAS_DOCUMENT_NODE_TYPES = Object.freeze([
+  "ai-text", "ai-image", "ai-video", "ai-audio",
+  "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard", "ai-director",
+  "source-text", "source-image", "source-video", "source-audio", "comment", "group",
+  // Historical X6 documents remain readable while the frontend migrates to the versioned names.
+  "script", "send", "image", "video", "audio", "upload", "director", "output",
+  "text", "markdown", "shape", "loomic_scene",
+] as const);
+
+const canvasDocumentNodeTypeSet = new Set<string>(CANVAS_DOCUMENT_NODE_TYPES);
+const canvasEdgeKinds = new Set(["execution", "reference", "layout", "control"]);
 
 /**
  * The node/port contract shared by executable workflow presets and the canvas
@@ -96,6 +111,50 @@ export class CanvasValidationError extends Error {
   }
 }
 
+export function validateCanvasDocumentEnvelope(document: unknown) {
+  const serialized = JSON.stringify(document);
+  if (new TextEncoder().encode(serialized).byteLength > CANVAS_DOCUMENT_LIMITS.maximumBytes) {
+    throw new CanvasValidationError("canvas_document_too_large", "canvas document exceeds the size limit");
+  }
+  const record = document && typeof document === "object"
+    ? document as Record<string, unknown>
+    : {};
+  if (Array.isArray(record.nodes) && record.nodes.length > CANVAS_DOCUMENT_LIMITS.maximumNodes) {
+    throw new CanvasValidationError("canvas_node_limit_exceeded", "canvas document exceeds the node limit");
+  }
+  if (Array.isArray(record.edges) && record.edges.length > CANVAS_DOCUMENT_LIMITS.maximumEdges) {
+    throw new CanvasValidationError("canvas_edge_limit_exceeded", "canvas document exceeds the edge limit");
+  }
+  assertJsonDepth(document, CANVAS_DOCUMENT_LIMITS.maximumJsonDepth);
+  assertCanvasPersistenceSafety(document);
+}
+
+export function validateCanvasDocumentProtocol(document: CanvasDocumentLike) {
+  const nodeIds = new Set<string>();
+  for (const node of Array.isArray(document.nodes) ? document.nodes : []) {
+    const nodeId = String(node?.id ?? "").trim();
+    if (!nodeId || nodeIds.has(nodeId)) {
+      throw new CanvasValidationError("canvas_node_id_invalid", "canvas node ids must be non-empty and unique");
+    }
+    nodeIds.add(nodeId);
+    if (!canvasDocumentNodeTypeSet.has(String(node?.type ?? "").trim())) {
+      throw new CanvasValidationError("canvas_node_type_invalid", "canvas node type is not supported");
+    }
+  }
+  const edgeIds = new Set<string>();
+  for (const edge of Array.isArray(document.edges) ? document.edges : []) {
+    const edgeId = String(edge?.id ?? "").trim();
+    if (!edgeId || edgeIds.has(edgeId)) {
+      throw new CanvasValidationError("canvas_edge_id_invalid", "canvas edge ids must be non-empty and unique");
+    }
+    edgeIds.add(edgeId);
+    const kind = canvasEdgeKind(edge);
+    if (!canvasEdgeKinds.has(kind)) {
+      throw new CanvasValidationError("canvas_edge_kind_invalid", "canvas edge kind is not supported");
+    }
+  }
+}
+
 export function validateCanvasDocumentGraph(document: CanvasDocumentLike) {
   const nodes = Array.isArray(document.nodes) ? document.nodes : [];
   const edges = Array.isArray(document.edges) ? document.edges : [];
@@ -105,7 +164,7 @@ export function validateCanvasDocumentGraph(document: CanvasDocumentLike) {
     validateCanvasEdge(edge, nodeMap);
   }
 
-  assertCanvasAcyclic(edges);
+  assertCanvasAcyclic(edges.filter((edge) => canvasEdgeKind(edge) === "execution"));
 }
 
 export function validateCanvasEdge(edge: CanvasEdgeLike, nodeMap: Map<string, CanvasNodeLike>) {
@@ -200,3 +259,86 @@ function assertCanvasAcyclic(edges: CanvasEdgeLike[]) {
     visit(nodeId);
   }
 }
+
+function canvasEdgeKind(edge: CanvasEdgeLike) {
+  const direct = String(edge?.kind ?? "").trim();
+  if (direct) return direct;
+  const nested = edge?.data && typeof edge.data === "object"
+    ? String((edge.data as Record<string, unknown>).edgeKind ?? "").trim()
+    : "";
+  return nested || "execution";
+}
+
+function assertJsonDepth(value: unknown, maximumDepth: number) {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 1 }];
+  const seen = new WeakSet<object>();
+  while (stack.length) {
+    const current = stack.pop()!;
+    if (!current.value || typeof current.value !== "object") continue;
+    if (current.depth > maximumDepth) {
+      throw new CanvasValidationError("canvas_json_depth_exceeded", "canvas document exceeds the JSON depth limit");
+    }
+    if (seen.has(current.value)) continue;
+    seen.add(current.value);
+    const children = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value as Record<string, unknown>);
+    for (const child of children) {
+      if (child && typeof child === "object") {
+        stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+  }
+}
+
+function assertCanvasPersistenceSafety(value: unknown) {
+  const forbiddenKeys = new Set([
+    "apikey", "api_key", "authorization", "password", "secret", "secretvalue", "secret_value",
+    "accesstoken", "access_token", "refreshtoken", "refresh_token", "bearertoken", "bearer_token",
+    "signedurl", "signed_url", "bloburl", "blob_url", "dataurl", "data_url", "localpath", "local_path",
+    "absolutepath", "absolute_path",
+  ]);
+  const stack: unknown[] = [value];
+  const seen = new WeakSet<object>();
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    if (Array.isArray(current)) {
+      stack.push(...current);
+      continue;
+    }
+    for (const [key, child] of Object.entries(current as Record<string, unknown>)) {
+      if (forbiddenKeys.has(key.toLowerCase())) {
+        throw new CanvasValidationError("canvas_document_sensitive_field_forbidden", "canvas document contains a sensitive field");
+      }
+      if (typeof child === "string" && isForbiddenCanvasPersistentString(child)) {
+        throw new CanvasValidationError("canvas_document_ephemeral_value_forbidden", "canvas document contains an ephemeral or local value");
+      }
+      if (child && typeof child === "object") stack.push(child);
+    }
+  }
+}
+
+function isForbiddenCanvasPersistentString(value: string) {
+  const normalized = value.trim();
+  if (/(?:^|\s)(?:data|blob|file):/i.test(normalized)) return true;
+  if (/(?:^|\s)(?:[a-z]:[\\/]|\\\\)/i.test(normalized)) return true;
+  if (/(?:^|\s)\/(?:Users|home|tmp|var|etc)(?:\/|$)/i.test(normalized)) return true;
+  if (/\b(?:sk-[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16}|gh[opsu]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/.test(normalized)) {
+    return true;
+  }
+  for (const candidate of normalized.match(/https?:\/\/[^\s"'<>]+/gi) ?? []) {
+    try {
+      const url = new URL(candidate);
+      if ([...url.searchParams.keys()].some((key) => /^(?:token|signature|sig|key|api_key|access_token|x-amz-|q-sign)/i.test(key))) {
+        return true;
+      }
+    } catch {
+      // Malformed text is not treated as a persisted URL.
+    }
+  }
+  return false;
+}
+import { CANVAS_PRODUCT_LIMITS } from "./canvas-product-limits.ts";

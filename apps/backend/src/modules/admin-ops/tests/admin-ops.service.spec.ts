@@ -502,6 +502,67 @@ describe("admin ops service", { concurrency: false }, () => {
     }
   });
 
+  it("resumes a failed image task from its existing external request", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedOpsFixture(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET task_type = 'episode_generate_image',
+              status = 'failed',
+              failure_code = 'generation_queue_error',
+              queue_name = 'generation-submit-image',
+              input_snapshot_json = '{"kind":"image","model":"global-ai-opc-nano-banana-2","providerExecutor":"gpt-image-2"}'::jsonb
+          WHERE id = $1
+        `,
+        [unknownTaskId],
+      );
+      await db.query(
+        "UPDATE task_attempts SET status = 'failed', failure_code = 'generation_queue_error' WHERE id = $1",
+        [attemptId],
+      );
+      await db.query(
+        "UPDATE provider_requests SET status = 'accepted', failure_code = NULL WHERE id = $1",
+        [providerRequestId],
+      );
+      const service = createAdminOpsService({ db });
+
+      const recovered = await service.recoverTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-resume-failed-image-poll",
+        body: {
+          taskId: unknownTaskId,
+          action: "resume_provider_poll",
+          reason: "Resume the accepted image request without another provider submission.",
+        },
+        now: new Date("2026-05-19T10:08:00.000Z"),
+      });
+      const task = await db.query<{ status: string }>(
+        "SELECT status FROM tasks WHERE id = $1",
+        [unknownTaskId],
+      );
+      const attempt = await db.query<{ status: string }>(
+        "SELECT status FROM task_attempts WHERE id = $1",
+        [attemptId],
+      );
+      const outbox = await db.query<{ event_type: string; payload_json: Record<string, unknown> }>(
+        "SELECT event_type, payload_json FROM outbox_events ORDER BY created_at ASC",
+      );
+
+      assert.equal(recovered.status, 200);
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(attempt.rows[0]?.status, "running");
+      assert.equal(outbox.rows.length, 1);
+      assert.equal(outbox.rows[0]?.event_type, "generation.task.poll_requested");
+      assert.equal(outbox.rows[0]?.payload_json.taskId, unknownTaskId);
+      assert.equal(outbox.rows[0]?.payload_json.providerExecutor, "gpt-image-2");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("rebuilds finalization only from a verified succeeded provider request", async () => {
     const db = await createMigratedTestDb();
 

@@ -949,7 +949,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                       scheduled_at = $2,
                       updated_at = $2
                   WHERE id = $1
-                    AND status IN ('running', 'result_unknown', 'manual_review_required')
+                    AND status IN ('running', 'failed', 'result_unknown', 'manual_review_required')
                 `,
                 [task.id, input.now],
               );
@@ -961,7 +961,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                       finished_at = NULL,
                       updated_at = $2
                   WHERE id = $1
-                    AND status IN ('result_unknown', 'manual_review_required')
+                    AND status IN ('failed', 'result_unknown', 'manual_review_required')
                 `,
                 [providerRequest?.attempt_id, input.now],
               );
@@ -1681,8 +1681,8 @@ function canResumeProviderPoll(
   task: AdminTaskView,
   providerRequest: ProviderRequestOpsRow | undefined,
 ) {
-  return task.taskType === "episode_generate_video"
-    && ["running", "result_unknown", "manual_review_required"].includes(task.status)
+  return ["episode_generate_image", "episode_generate_video", "episode_generate_audio"].includes(task.taskType)
+    && ["running", "failed", "result_unknown", "manual_review_required"].includes(task.status)
     && Boolean(providerRequest?.external_submission_started_at)
     && Boolean(providerRequest?.external_request_id)
     && ["submitted", "accepted", "running", "result_unknown"].includes(

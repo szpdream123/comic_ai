@@ -11,7 +11,7 @@ describe("app login modal shell", () => {
     assert.match(js, /session: activeSession/);
     assert.match(js, /api: createAnonymousApi\(creatorApi\)/);
     assert.match(js, /const sessionPromise = creatorApi\.getSession\(\)/);
-    assert.match(js, /void sessionPromise\.then\(async \(session\)/);
+    assert.match(js, /await sessionPromise\.then\(async \(session\)/);
     assert.match(js, /updateSession\?\.\(session, creatorApi\)/);
     const workbenchJs = await readFile(
       new URL("../src/features/production-workbench/index.js", import.meta.url),

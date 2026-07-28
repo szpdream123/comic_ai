@@ -31,11 +31,13 @@ export function isStoryboardPromptClearedForSelection(ui = {}, storyboardId = nu
 
 export function resolveStoryboardPromptForMode(storyboard, mediaMode = "image") {
   const generationState = storyboard?.generationState ?? {};
+  const hasImagePrompt = Object.prototype.hasOwnProperty.call(generationState, "imagePrompt");
+  const hasVideoPrompt = Object.prototype.hasOwnProperty.call(generationState, "videoPrompt");
   if (mediaMode === "video" || mediaMode === "lip-sync") {
-    return generationState.videoPrompt ?? generationState.prompt ?? "";
+    return hasVideoPrompt ? generationState.videoPrompt ?? "" : hasImagePrompt ? "" : generationState.prompt ?? "";
   }
   if (mediaMode === "image") {
-    return generationState.imagePrompt ?? generationState.prompt ?? "";
+    return hasImagePrompt ? generationState.imagePrompt ?? "" : hasVideoPrompt ? "" : generationState.prompt ?? "";
   }
   return generationState.prompt ?? "";
 }

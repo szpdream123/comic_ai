@@ -3,6 +3,7 @@ export function createCreatorDevServiceSupervisor(input) {
   const restartBaseMs = positiveInteger(input.restartBaseMs ?? 500);
   const restartMaxMs = positiveInteger(input.restartMaxMs ?? 10_000);
   const stableRunMs = positiveInteger(input.stableRunMs ?? 30_000);
+  const maxRestartAttempts = positiveInteger(input.maxRestartAttempts ?? Number.MAX_SAFE_INTEGER);
   let stopping = false;
 
   function start(name, args, options = {}) {
@@ -26,6 +27,10 @@ export function createCreatorDevServiceSupervisor(input) {
     const child = input.spawnProcess(state.name, state.args);
     state.child = child;
     input.onSpawn?.(state.name, child);
+    child.once("error", (error) => {
+      input.onSpawnError?.(state.name, error);
+      handleExit(state, child, null, null);
+    });
     child.once("exit", (code, signal) => handleExit(state, child, code, signal));
   }
 
@@ -41,12 +46,16 @@ export function createCreatorDevServiceSupervisor(input) {
 
     const runtimeMs = Math.max(0, input.now() - state.startedAt);
     if (runtimeMs >= stableRunMs) state.restartAttempt = 0;
+    if (state.restartAttempt >= maxRestartAttempts) {
+      input.onRestartLimitReached?.(state.name, state.restartAttempt, code, signal);
+      return;
+    }
     const delayMs = Math.min(
       restartMaxMs,
       restartBaseMs * (2 ** Math.min(state.restartAttempt, 20)),
     );
     state.restartAttempt += 1;
-    input.onRestartScheduled?.(state.name, delayMs, code, signal);
+    input.onRestartScheduled?.(state.name, delayMs, code, signal, state.restartAttempt);
     state.restartTimer = input.setTimeout(() => {
       state.restartTimer = null;
       spawnService(state);

@@ -8,21 +8,34 @@ import {
   defaultPasswordFromPhone,
 } from "../../modules/identity/team-account-credentials.service.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
-import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
+import { createPhoneAuthDevServer, formatCanvasLiveSseChunk } from "../phone-auth-dev-server.ts";
 
 describe.configure?.({ concurrency: 1 });
 
 describe("canvas live HTTP", { concurrency: false }, () => {
+  it("emits revision event IDs for Last-Event-ID resume", () => {
+    assert.match(formatCanvasLiveSseChunk({
+      type: "revision",
+      eventId: "revision-event-2",
+      sourceId: "server-a",
+      canvasProjectId: "canvas-a",
+      actorId: "owner-a",
+      serverRevision: 2,
+      at: "2026-07-26T00:00:00.000Z",
+    }), /^id: revision-event-2\ndata:/);
+  });
+
   it("authenticates the SSE channel and pushes a committed revision without waiting for polling", async () => {
     const db = await createMigratedTestDb();
     const phone = normalizeCnPhone("13800138991");
     const password = defaultPasswordFromPhone(phone);
+    const userId = randomUUID();
     await db.query(
       `
         INSERT INTO users (id, phone_e164, password_hash, status)
         VALUES ($1, $2, $3, 'active')
       `,
-      [randomUUID(), phone, await createUserPasswordHash(password)],
+      [userId, phone, await createUserPasswordHash(password)],
     );
     const server = createPhoneAuthDevServer({ db, env: { NODE_ENV: "test" } });
     const streamController = new AbortController();
@@ -83,6 +96,12 @@ describe("canvas live HTTP", { concurrency: false }, () => {
       const revision = await live.next((event) => event.type === "revision");
       assert.equal(revision.canvasProjectId, canvasProjectId);
       assert.equal(revision.serverRevision, 2);
+
+      await db.query("UPDATE users SET status = 'disabled' WHERE id = $1", [userId]);
+      await assert.rejects(
+        () => live.next(() => false),
+        /canvas_live_sse_ended/,
+      );
     } finally {
       streamController.abort();
       await server.close();
@@ -153,6 +172,30 @@ describe("canvas live HTTP", { concurrency: false }, () => {
       assert.equal(head.data.head.canvasProjectId, canvasProjectId);
       assert.equal(head.data.head.serverRevision, 3);
       assert.equal(head.data.head.document.nodes[0].id, "head-latest");
+
+      const savedSessionResponse = await fetch(`${server.origin}/api/canvas/${canvasProjectId}/session`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          viewport: { x: 120, y: -40, zoom: 1.25 },
+          selectedNodeKeys: ["head-latest"],
+          selectedEdgeKeys: [],
+          uiState: { sidebar: "assets" },
+          lastSeenRevision: 3,
+        }),
+      });
+      const savedSession = await savedSessionResponse.json();
+      assert.equal(savedSessionResponse.status, 200, JSON.stringify(savedSession));
+      assert.equal(savedSession.data.session.principalKey.startsWith("owner:"), true);
+
+      const sessionResponse = await fetch(`${server.origin}/api/canvas/${canvasProjectId}/session`, {
+        headers: { cookie },
+      });
+      const session = await sessionResponse.json();
+      assert.equal(sessionResponse.status, 200, JSON.stringify(session));
+      assert.deepEqual(session.data.session.viewport, { x: 120, y: -40, zoom: 1.25 });
+      assert.deepEqual(session.data.session.selectedNodeKeys, ["head-latest"]);
+      assert.equal(session.data.session.lastSeenRevision, 3);
     } finally {
       await server.close();
     }

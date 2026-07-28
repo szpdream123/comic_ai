@@ -69,6 +69,42 @@ describe("provider request no blind retry after external start", () => {
       await db.close();
     }
   });
+
+  it("recovers an external request id without submitting the provider request again", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new RecoveringProviderAdapter();
+    try {
+      const prepared = await createOrReuseProviderRequest(db, {
+        ...providerInput(),
+        requestKey: "task-recovery:attempt-1",
+        requestHash: "hash-recovery",
+        payloadHash: "payload-hash-recovery",
+        payloadRef: "payloads/task-recovery.json",
+      });
+      await markExternalSubmissionStarted(db, {
+        providerRequestId: prepared.request.id,
+        externalRequestId: null,
+        now: new Date("2026-05-09T10:05:00.000Z"),
+      });
+
+      const retry = await submitProviderRequest(db, {
+        ...providerInput(),
+        requestKey: "task-recovery:attempt-1",
+        requestHash: "hash-recovery",
+        payloadHash: "payload-hash-recovery",
+        payloadRef: "payloads/task-recovery.json",
+        adapter,
+        now: new Date("2026-05-09T10:06:00.000Z"),
+      });
+
+      assert.equal(retry.kind, "submitted");
+      assert.equal(retry.request.externalRequestId, "external-recovered");
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 class FailingIfCalledProviderAdapter implements ProviderAdapter {
@@ -77,6 +113,25 @@ class FailingIfCalledProviderAdapter implements ProviderAdapter {
   async submit(): Promise<never> {
     this.calls += 1;
     throw new Error("provider_should_not_be_called");
+  }
+}
+
+class RecoveringProviderAdapter implements ProviderAdapter {
+  submitCalls = 0;
+  recoveryCalls = 0;
+
+  async submit(): Promise<never> {
+    this.submitCalls += 1;
+    throw new Error("provider_should_not_be_called");
+  }
+
+  async recoverSubmission() {
+    this.recoveryCalls += 1;
+    return {
+      externalRequestId: "external-recovered",
+      status: "accepted" as const,
+      redactedResponse: { providerStatus: "submission_recovered" },
+    };
   }
 }
 

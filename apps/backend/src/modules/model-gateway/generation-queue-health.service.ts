@@ -2,6 +2,10 @@ import { Queue } from "bullmq";
 import Redis from "ioredis";
 
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import {
+  generationOutboxDispatcherHeartbeatKey,
+  generationOutboxDispatcherHeartbeatTtlMs,
+} from "./generation-outbox-heartbeat.ts";
 
 type QueueHealthStatus = "healthy" | "degraded" | "unavailable";
 
@@ -29,6 +33,7 @@ interface GenerationQueueSnapshot {
   role: string;
   name: string;
   status: QueueHealthStatus;
+  workerCount: number | null;
   counts: GenerationQueueCounts;
   failedJobs: GenerationQueueFailedJob[];
   error: string | null;
@@ -45,16 +50,25 @@ export interface GenerationQueueHealthSnapshot {
   queuePrefix: string;
   workersEnabled: boolean;
   outboxDispatcherEnabled: boolean;
+  outboxDispatcher: {
+    enabled: boolean;
+    status: "healthy" | "unavailable" | "disabled";
+    lastHeartbeatAt: string | null;
+    heartbeatAgeMs: number | null;
+    error: string | null;
+  };
   queues: GenerationQueueSnapshot[];
 }
 
 interface RedisHealthClient {
   ping(): Promise<string>;
+  get(key: string): Promise<string | null>;
 }
 
 interface QueueHealthClient {
   name: string;
   getJobCounts(...statuses: string[]): Promise<Record<string, number>>;
+  getWorkersCount?(): Promise<number>;
   getJobs(
     types: string[],
     start: number,
@@ -99,22 +113,34 @@ export function createGenerationQueueHealthService(
           queuePrefix: deps.config.queuePrefix,
           workersEnabled: deps.config.workersEnabled,
           outboxDispatcherEnabled: deps.config.outboxDispatcherEnabled,
+          outboxDispatcher: {
+            enabled: deps.config.outboxDispatcherEnabled,
+            status: deps.config.outboxDispatcherEnabled ? "unavailable" : "disabled",
+            lastHeartbeatAt: null,
+            heartbeatAgeMs: null,
+            error: deps.config.outboxDispatcherEnabled ? "redis_unavailable" : null,
+          },
           queues: [],
         };
       }
 
-      const queues = await Promise.all(
-        (await resolveQueueTargets(deps)).map((target) =>
+      const now = new Date(inspectedAt);
+      const [outboxDispatcher, queues] = await Promise.all([
+        inspectOutboxDispatcher(deps.redis, deps.config, now),
+        Promise.all((await resolveQueueTargets(deps)).map((target) =>
           inspectQueue({
             target,
             queue: deps.queueFactory(target.name),
             failedSampleSize,
-            now: new Date(inspectedAt),
+            now,
             health: deps.config.health,
-          }),
-        ),
-      );
-      const degraded = queues.some((queue) => queue.status !== "healthy");
+            requireWorkers: deps.config.workersEnabled,
+          }))),
+      ]);
+      const degraded = !deps.config.workersEnabled ||
+        !deps.config.outboxDispatcherEnabled ||
+        outboxDispatcher.status !== "healthy" ||
+        queues.some((queue) => queue.status !== "healthy");
 
       return {
         status: degraded ? "degraded" : "healthy",
@@ -123,10 +149,72 @@ export function createGenerationQueueHealthService(
         queuePrefix: deps.config.queuePrefix,
         workersEnabled: deps.config.workersEnabled,
         outboxDispatcherEnabled: deps.config.outboxDispatcherEnabled,
+        outboxDispatcher,
         queues,
       };
     },
   };
+}
+
+async function inspectOutboxDispatcher(
+  redis: RedisHealthClient,
+  config: GenerationQueueConfig,
+  now: Date,
+): Promise<GenerationQueueHealthSnapshot["outboxDispatcher"]> {
+  if (!config.outboxDispatcherEnabled) {
+    return {
+      enabled: false,
+      status: "disabled",
+      lastHeartbeatAt: null,
+      heartbeatAgeMs: null,
+      error: null,
+    };
+  }
+  try {
+    const heartbeat = await redis.get(
+      generationOutboxDispatcherHeartbeatKey(config.queuePrefix),
+    );
+    if (!heartbeat) {
+      return {
+        enabled: true,
+        status: "unavailable",
+        lastHeartbeatAt: null,
+        heartbeatAgeMs: null,
+        error: "dispatcher_heartbeat_missing",
+      };
+    }
+    const heartbeatAt = new Date(heartbeat);
+    const heartbeatAgeMs = now.getTime() - heartbeatAt.getTime();
+    if (!Number.isFinite(heartbeatAgeMs) || heartbeatAgeMs < 0) {
+      return {
+        enabled: true,
+        status: "unavailable",
+        lastHeartbeatAt: heartbeat,
+        heartbeatAgeMs: null,
+        error: "dispatcher_heartbeat_invalid",
+      };
+    }
+    const staleAfterMs = generationOutboxDispatcherHeartbeatTtlMs(
+      config.outbox.dispatchIntervalMs,
+    );
+    return {
+      enabled: true,
+      status: heartbeatAgeMs > staleAfterMs ? "unavailable" : "healthy",
+      lastHeartbeatAt: heartbeatAt.toISOString(),
+      heartbeatAgeMs,
+      error: heartbeatAgeMs > staleAfterMs
+        ? `dispatcher_heartbeat_stale:${heartbeatAgeMs}`
+        : null,
+    };
+  } catch (error) {
+    return {
+      enabled: true,
+      status: "unavailable",
+      lastHeartbeatAt: null,
+      heartbeatAgeMs: null,
+      error: errorMessage(error),
+    };
+  }
 }
 
 export function createBullMQGenerationQueueHealthService(
@@ -176,10 +264,11 @@ async function inspectQueue(input: {
   failedSampleSize: number;
   now: Date;
   health: GenerationQueueConfig["health"];
+  requireWorkers: boolean;
 }): Promise<GenerationQueueSnapshot> {
   try {
-    const counts = normalizeCounts(
-      await input.queue.getJobCounts(
+    const [rawCounts, workerCount] = await Promise.all([
+      input.queue.getJobCounts(
         "waiting",
         "delayed",
         "active",
@@ -187,7 +276,11 @@ async function inspectQueue(input: {
         "failed",
         "paused",
       ),
-    );
+      typeof input.queue.getWorkersCount === "function"
+        ? input.queue.getWorkersCount()
+        : Promise.resolve(null),
+    ]);
+    const counts = normalizeCounts(rawCounts);
     const sampleTypes = input.target.role === "dead_letter"
       ? ["waiting", "delayed", "failed"]
       : ["failed"];
@@ -225,12 +318,18 @@ async function inspectQueue(input: {
       input.target.role === "dead_letter" && sampleCount > 0
         ? `dead_letter_count:${sampleCount}`
         : null,
+      input.target.role !== "dead_letter" &&
+        input.requireWorkers &&
+        workerCount === 0
+        ? "worker_count:0"
+        : null,
     ].filter((reason): reason is string => Boolean(reason));
 
     return {
       role: input.target.role,
       name: input.target.name,
       status: degradationReasons.length ? "degraded" : "healthy",
+      workerCount,
       counts,
       failedJobs,
       error: degradationReasons.length ? degradationReasons.join(",") : null,
@@ -240,6 +339,7 @@ async function inspectQueue(input: {
       role: input.target.role,
       name: input.target.name,
       status: "unavailable",
+      workerCount: null,
       counts: emptyCounts(),
       failedJobs: [],
       error: errorMessage(error),

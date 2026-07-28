@@ -216,6 +216,28 @@ describe("aliyun bailian audio provider adapter", () => {
     }]);
   });
 
+  it("preserves structured transcript and lyrics returned alongside an audio artifact", async () => {
+    const adapter = new AliyunBailianAudioProviderAdapter({
+      apiKey: "bailian-secret",
+      createTaskEndpoint: "https://dashscope.aliyuncs.com/create",
+      fetchImpl: (async () => new Response(JSON.stringify({
+        request_id: "audio-transcription-1",
+        output: {
+          audio_url: "https://dashscope-result.example.com/transcription.mp3",
+          transcript: "识别后的文本",
+          lyrics: "沿着微光回家",
+          task_status: "SUCCEEDED",
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+    const result = await adapter.submit({
+      ...submission,
+      redactedPayload: { text: "audio bytes", parameters: { voice: "longxiaochun_v2" } },
+    });
+    assert.equal(result.artifacts?.[0]?.transcript, "识别后的文本");
+    assert.equal(result.artifacts?.[0]?.lyrics, "沿着微光回家");
+  });
+
   it("rejects fake inline artifacts and terminal success without an audio URL", async () => {
     const inlineAdapter = new AliyunBailianAudioProviderAdapter({
       apiKey: "bailian-secret",

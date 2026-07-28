@@ -1,32 +1,26 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { appendAuditEvent } from "../audit/audit.service.ts";
+import { assertPromptCanBeDeactivated, ensureOfficialPromptDefault } from "../prompt-marketplace/prompt-skill-default.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 const seedUpdatedAt = new Date("2026-06-06T08:00:00.000Z");
 
-type JsonValue = unknown;
-
 interface CharacterPromptTemplateRow {
   id: string;
   name: string;
-  code: string;
-  stage: string;
-  model_family: string;
-  tags: JsonValue;
-  variables: JsonValue;
-  chunk_min_chars: number | string;
-  chunk_max_chars: number | string;
-  overlap_chars: number | string;
-  json_schema: string | null;
+  summary: string;
   prompt_content: string;
-  is_default: boolean;
-  sort_order: number | string;
+  cover_image_url?: string | null;
+  cover_storage_object_id: string | null;
   status: string;
-  remark: string | null;
+  price_credits: number;
+  usage_count: number;
+  is_published: boolean;
   created_at: Date | string;
   updated_at: Date | string;
+  is_default?: boolean;
 }
 
 interface AdminMutationInput {
@@ -38,48 +32,43 @@ interface AdminMutationInput {
 interface SaveCharacterPromptTemplateInput extends AdminMutationInput {
   id?: string;
   name: string;
-  code: string;
-  stage: string;
-  model_family?: string;
-  tags?: string[];
-  variables?: string[];
-  chunk_min_chars?: number;
-  chunk_max_chars?: number;
-  overlap_chars?: number;
-  json_schema?: string | null;
   prompt_content: string;
-  is_default?: boolean;
-  sort_order?: number;
+  cover_image_url?: string | null;
   status?: string;
+  price_credits?: number;
+  usage_count?: number;
+  is_published?: boolean;
   remark?: string | null;
 }
 
 export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
   async function listTemplates(input: {
-    stage?: string | null;
     keyword?: string | null;
     status?: string | null;
     pageSize?: number;
   } = {}) {
     await ensureDefaultCharacterPromptTemplates(deps.db);
+    await ensureOfficialPromptDefault(deps.db, "character_extract");
     const keyword = input.keyword?.trim() ? `%${input.keyword.trim().toLowerCase()}%` : null;
     const rows = await deps.db.query<CharacterPromptTemplateRow>(
       `
-        SELECT *
-        FROM character_prompt_templates
-        WHERE deleted_at IS NULL
-          AND ($1::text IS NULL OR stage = $1)
-          AND ($2::text IS NULL OR status = $2)
+        SELECT prompts.*, EXISTS (
+          SELECT 1 FROM prompt_official_defaults prompt_default
+          WHERE prompt_default.prompt_category = 'character_extract' AND prompt_default.prompt_id = prompts.id
+        ) AS is_default
+        FROM prompts
+        WHERE prompt_category = 'character_extract' AND deleted_at IS NULL
+          AND ($1::text IS NULL OR status = $1)
           AND (
-            $3::text IS NULL
-            OR lower(name) LIKE $3
-            OR lower(code) LIKE $3
-            OR lower(tags::text) LIKE $3
+            $2::text IS NULL
+            OR lower(name) LIKE $2
+            OR lower(prompt_content) LIKE $2
+            OR lower(summary) LIKE $2
           )
-        ORDER BY stage ASC, sort_order DESC, updated_at DESC, id ASC
-        LIMIT $4
+        ORDER BY updated_at DESC, id ASC
+        LIMIT $3
       `,
-      [input.stage || null, input.status || null, keyword, clamp(Number(input.pageSize || 100), 1, 500)],
+      [input.status || null, keyword, clamp(Number(input.pageSize || 100), 1, 500)],
     );
     return { data: rows.rows.map(templateFromRow) };
   }
@@ -89,86 +78,61 @@ export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
     if (validation) return validation;
     const id = input.id || randomUUID();
     const existing = input.id
-      ? await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM character_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.id])
+      ? await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'character_extract' AND deleted_at IS NULL", [input.id])
       : undefined;
-    const duplicate = await queryOne<{ id: string }>(
-      deps.db,
-      "SELECT id FROM character_prompt_templates WHERE code = $1 AND ($2::uuid IS NULL OR id <> $2::uuid) AND deleted_at IS NULL",
-      [input.code.trim(), input.id || null],
-    );
-    if (duplicate) return error(409, "character_prompt_code_duplicate", "人物提示词编码已存在");
-
+    const status = input.status || "enabled";
+    const priceCredits = input.price_credits ?? existing?.price_credits ?? 0;
+    const isPublished = status === "disabled" ? false : input.is_published ?? existing?.is_published ?? false;
+    if (existing && (status === "disabled" || !isPublished)) await assertPromptCanBeDeactivated(deps.db, existing.id);
     await deps.db.query(
       `
-        INSERT INTO character_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, chunk_min_chars,
-          chunk_max_chars, overlap_chars, json_schema, prompt_content, is_default,
-          sort_order, status, remark, created_by_admin_id, updated_by_admin_id,
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, cover_image_url, prompt_content, status,
+          is_official, price_credits, is_published, published_at,
+          created_by_admin_id, updated_by_admin_id,
           created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, $18, $18)
+        VALUES ($1, 'character_extract', $2, $3, $4, $5, $6, true, $7, $8, CASE WHEN $8 THEN $10::timestamptz ELSE NULL END, $9, $9, $10, $10)
         ON CONFLICT (id)
         DO UPDATE SET
           name = EXCLUDED.name,
-          code = EXCLUDED.code,
-          stage = EXCLUDED.stage,
-          model_family = EXCLUDED.model_family,
-          tags = EXCLUDED.tags,
-          variables = EXCLUDED.variables,
-          chunk_min_chars = EXCLUDED.chunk_min_chars,
-          chunk_max_chars = EXCLUDED.chunk_max_chars,
-          overlap_chars = EXCLUDED.overlap_chars,
-          json_schema = EXCLUDED.json_schema,
+          summary = EXCLUDED.summary,
+          cover_image_url = EXCLUDED.cover_image_url,
           prompt_content = EXCLUDED.prompt_content,
-          is_default = EXCLUDED.is_default,
-          sort_order = EXCLUDED.sort_order,
           status = EXCLUDED.status,
-          remark = EXCLUDED.remark,
+          price_credits = EXCLUDED.price_credits,
+          is_published = EXCLUDED.is_published,
+          published_at = EXCLUDED.published_at,
           updated_by_admin_id = EXCLUDED.updated_by_admin_id,
           updated_at = EXCLUDED.updated_at
       `,
       [
         id,
         input.name.trim(),
-        input.code.trim(),
-        input.stage,
-        input.model_family || "general",
-        JSON.stringify(input.tags || []),
-        JSON.stringify(normalizeVariables(input.variables || extractTemplateVariables(input.prompt_content))),
-        Number(input.chunk_min_chars || 0),
-        Number(input.chunk_max_chars || 0),
-        Number(input.overlap_chars || 0),
-        input.json_schema?.trim() || null,
+        input.remark?.trim() || "",
+        input.cover_image_url?.trim() || null,
         input.prompt_content.trim(),
-        Boolean(input.is_default),
-        Number(input.sort_order || 0),
-        input.status || "enabled",
-        input.remark?.trim() || null,
+        status,
+        priceCredits,
+        isPublished,
         input.actorAdminAccountId,
         input.now,
       ],
     );
-    if (input.is_default) {
-      await clearStageDefaults({
-        id,
-        stage: input.stage,
-        actorAdminAccountId: input.actorAdminAccountId,
-        now: input.now,
-      });
+    if (input.usage_count !== undefined) {
+      await deps.db.query("UPDATE prompts SET usage_count = $2 WHERE id = $1", [id, input.usage_count]);
     }
     await audit(input, existing ? "admin.character_prompt.template.updated" : "admin.character_prompt.template.created", id);
     return templateResponse(id);
   }
 
   async function copyTemplate(input: AdminMutationInput & { id: string }) {
-    const existing = await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM character_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'character_extract' AND deleted_at IS NULL", [input.id]);
     if (!existing) return error(404, "character_prompt_template_not_found", "人物提示词模板不存在");
     return saveTemplate({
       ...templateFromRow(existing),
       id: undefined,
       name: `${existing.name} 副本`,
-      code: await uniqueCopyCode(existing.code),
-      is_default: false,
       actorAdminAccountId: input.actorAdminAccountId,
       reason: input.reason || "copy character prompt template",
       now: input.now,
@@ -177,24 +141,25 @@ export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
 
   async function changeTemplateStatus(input: AdminMutationInput & { id: string; status: string }) {
     if (!["enabled", "disabled"].includes(input.status)) return error(400, "invalid_character_prompt_status", "状态不支持");
-    const existing = await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM character_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.id]);
+    const existing = await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'character_extract' AND deleted_at IS NULL", [input.id]);
     if (!existing) return error(404, "character_prompt_template_not_found", "人物提示词模板不存在");
+    if (input.status === "disabled") await assertPromptCanBeDeactivated(deps.db, input.id);
     await deps.db.query(
-      "UPDATE character_prompt_templates SET status = $2, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1",
+      "UPDATE prompts SET status = $2, is_published = CASE WHEN $2 = 'disabled' THEN false ELSE is_published END, published_at = CASE WHEN $2 = 'disabled' THEN NULL ELSE published_at END, updated_by_admin_id = $3, updated_at = $4 WHERE id = $1 AND prompt_category = 'character_extract'",
       [input.id, input.status, input.actorAdminAccountId, input.now],
     );
     await audit(input, "admin.character_prompt.template.status_changed", input.id, { status: input.status });
     return templateResponse(input.id);
   }
 
-  async function compose(input: { template_id?: string | null; template_code?: string | null; variables?: Record<string, unknown> }) {
+  async function compose(input: { template_id?: string | null; variables?: Record<string, unknown> }) {
     await ensureDefaultCharacterPromptTemplates(deps.db);
     const row = input.template_id
-      ? await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM character_prompt_templates WHERE id = $1 AND deleted_at IS NULL", [input.template_id])
-      : await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM character_prompt_templates WHERE code = $1 AND deleted_at IS NULL", [input.template_code || ""]);
+      ? await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'character_extract' AND deleted_at IS NULL", [input.template_id])
+      : undefined;
     if (!row) return error(404, "character_prompt_template_not_found", "人物提示词模板不存在");
     const template = templateFromRow(row);
-    const requiredVariables = normalizeVariables(template.variables.length ? template.variables : extractTemplateVariables(template.prompt_content));
+    const requiredVariables = extractTemplateVariables(template.prompt_content);
     const missingVariables = requiredVariables.filter((name) => !hasVariable(input.variables || {}, name));
     if (missingVariables.length > 0) {
       return {
@@ -223,31 +188,8 @@ export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
   }
 
   async function templateResponse(id: string) {
-    const row = await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM character_prompt_templates WHERE id = $1", [id]);
+    const row = await queryOne<CharacterPromptTemplateRow>(deps.db, "SELECT * FROM prompts WHERE id = $1 AND prompt_category = 'character_extract'", [id]);
     return { status: 200, body: { data: row ? templateFromRow(row) : { id } } };
-  }
-
-  async function clearStageDefaults(input: { id: string; stage: string; actorAdminAccountId: string; now: Date }) {
-    await deps.db.query(
-      `
-        UPDATE character_prompt_templates
-        SET is_default = false, updated_by_admin_id = $3, updated_at = $4
-        WHERE deleted_at IS NULL
-          AND stage = $2
-          AND id <> $1
-          AND is_default = true
-      `,
-      [input.id, input.stage, input.actorAdminAccountId, input.now],
-    );
-  }
-
-  async function uniqueCopyCode(code: string) {
-    for (let index = 1; index < 100; index += 1) {
-      const candidate = `${code}_copy${index === 1 ? "" : index}`;
-      const existing = await queryOne<{ id: string }>(deps.db, "SELECT id FROM character_prompt_templates WHERE code = $1", [candidate]);
-      if (!existing) return candidate;
-    }
-    return `${code}_copy_${Date.now()}`;
   }
 
   async function audit(input: AdminMutationInput, eventType: string, targetId: string, metadata: Record<string, unknown> = {}) {
@@ -273,59 +215,48 @@ export function createAdminCharacterPromptService(deps: { db: SqlDatabase }) {
 }
 
 export async function ensureDefaultCharacterPromptTemplates(db: SqlDatabase) {
-  const existing = await queryOne<{ count: string | number }>(db, "SELECT COUNT(*) AS count FROM character_prompt_templates WHERE deleted_at IS NULL");
-  if (Number(existing?.count || 0) > 0) return;
+  const existing = await queryOne<{ count: string | number }>(db, "SELECT COUNT(*) AS count FROM prompts WHERE prompt_category = 'character_extract' AND deleted_at IS NULL");
+  if (Number(existing?.count || 0) > 0) {
+    await ensureOfficialPromptDefault(db, "character_extract", seedUpdatedAt);
+    return;
+  }
   for (const item of defaultCharacterPromptTemplates) {
     await db.query(
       `
-        INSERT INTO character_prompt_templates (
-          id, name, code, stage, model_family, tags, variables, chunk_min_chars,
-          chunk_max_chars, overlap_chars, json_schema, prompt_content, is_default,
-          sort_order, status, remark, created_at, updated_at
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, status,
+          is_official, is_published, published_at, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, 'enabled', $15, $16, $16)
-        ON CONFLICT (code) DO NOTHING
+        VALUES ($1, 'character_extract', $2, $3, $4, 'enabled', true, true, $5, $5, $5)
+        ON CONFLICT (id) DO NOTHING
       `,
       [
         item.id,
         item.name,
-        item.code,
-        item.stage,
-        item.model_family,
-        JSON.stringify(item.tags),
-        JSON.stringify(item.variables),
-        item.chunk_min_chars,
-        item.chunk_max_chars,
-        item.overlap_chars,
-        item.json_schema,
+        item.remark || "",
         item.prompt_content,
-        item.is_default,
-        item.sort_order,
-        item.remark,
         seedUpdatedAt,
       ],
     );
   }
+  await ensureOfficialPromptDefault(db, "character_extract", seedUpdatedAt);
 }
 
 function validateTemplatePayload(input: SaveCharacterPromptTemplateInput) {
-  if (!input.name?.trim() || !input.code?.trim() || !input.stage?.trim()) {
-    return error(400, "character_prompt_template_required", "名称、编码和阶段必填");
-  }
-  if (!/^[a-z0-9_]+$/.test(input.code.trim())) {
-    return error(400, "invalid_character_prompt_code", "编码只能包含小写字母、数字和下划线");
-  }
-  if (!["extract"].includes(input.stage)) {
-    return error(400, "invalid_character_prompt_stage", "人物提示词阶段不支持");
-  }
-  if (input.model_family && !["general", "doubao", "seedream"].includes(input.model_family)) {
-    return error(400, "invalid_character_prompt_model_family", "模型族不支持");
+  if (!input.name?.trim()) {
+    return error(400, "character_prompt_template_required", "名称必填");
   }
   if (!input.prompt_content?.trim() || input.prompt_content.trim().length < 20) {
     return error(400, "character_prompt_content_required", "人物提示词正文不得为空，建议不少于 20 字");
   }
   if (input.status && !["enabled", "disabled"].includes(input.status)) {
     return error(400, "invalid_character_prompt_status", "状态不支持");
+  }
+  if (input.price_credits !== undefined && (!Number.isInteger(input.price_credits) || input.price_credits < 0 || input.price_credits > 99_999)) {
+    return error(400, "invalid_character_prompt_price", "积分价格必须是 0 到 99999 的整数");
+  }
+  if (input.usage_count !== undefined && (!Number.isInteger(input.usage_count) || input.usage_count < 0 || input.usage_count > 2_147_483_647)) {
+    return error(400, "invalid_character_prompt_usage_count", "使用次数必须是非负整数");
   }
   return null;
 }
@@ -334,20 +265,23 @@ function templateFromRow(row: CharacterPromptTemplateRow) {
   return {
     id: row.id,
     name: row.name,
-    code: row.code,
-    stage: row.stage,
-    model_family: row.model_family,
-    tags: arrayFromJson(row.tags),
-    variables: arrayFromJson(row.variables),
-    chunk_min_chars: Number(row.chunk_min_chars || 0),
-    chunk_max_chars: Number(row.chunk_max_chars || 0),
-    overlap_chars: Number(row.overlap_chars || 0),
-    json_schema: row.json_schema || "",
+    prompt_category: "character_extract",
+    category: "character_extract",
+    summary: row.summary || "",
+    cover_image_url: row.cover_image_url || "",
+    coverImageUrl: row.cover_image_url || "",
+    cover_storage_object_id: row.cover_storage_object_id,
+    coverStorageObjectId: row.cover_storage_object_id,
     prompt_content: row.prompt_content,
-    is_default: Boolean(row.is_default),
-    sort_order: Number(row.sort_order || 0),
     status: row.status,
-    remark: row.remark || "",
+    price_credits: row.price_credits,
+    priceCredits: row.price_credits,
+    usage_count: row.usage_count,
+    usageCount: row.usage_count,
+    is_published: row.is_published,
+    isPublished: row.is_published,
+    isDefault: Boolean(row.is_default),
+    remark: row.summary || "",
     created_at: dateString(row.created_at),
     updated_at: dateString(row.updated_at),
   };
@@ -361,10 +295,6 @@ function extractTemplateVariables(template: string) {
   return Array.from(template.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)).map((match) => match[1]);
 }
 
-function normalizeVariables(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.replace(/[{}]/g, "").trim()).filter(Boolean)));
-}
-
 function hasVariable(variables: Record<string, unknown>, name: string) {
   const value = variables[name];
   if (value === undefined || value === null) return false;
@@ -376,10 +306,6 @@ function variableToText(value: unknown) {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
-}
-
-function arrayFromJson(value: JsonValue): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function dateString(value: Date | string) {
@@ -403,15 +329,6 @@ const defaultCharacterPromptTemplates = [
   {
     id: stableUuid("character-prompt-template:novel_character_extract"),
     name: "长篇小说人物线索抽取",
-    code: "novel_character_extract",
-    stage: "extract",
-    model_family: "general",
-    tags: ["分块抽取", "证据", "JSON"],
-    variables: ["chunk_id", "novel_chunk"],
-    chunk_min_chars: 3000,
-    chunk_max_chars: 8000,
-    overlap_chars: 500,
-    json_schema: "characters[].name, aliases, gender, age_text, identity, faction, importance, evidence arrays, confidence",
     prompt_content: `你是小说人物抽取专家。请只分析当前小说片段，抽取片段中出现的主要人物、重要配角、反派、推动剧情的人物，以及对人物完整人物外观、身份、服装、武器、性格、关系、场景有用的信息。
 
 重要规则：
@@ -427,8 +344,6 @@ chunk_id：
 
 小说片段：
 {{novel_chunk}}`,
-    is_default: true,
-    sort_order: 300,
     remark: "第一步只负责证据抽取。",
   },
 ];

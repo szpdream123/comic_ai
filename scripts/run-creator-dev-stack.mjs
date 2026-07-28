@@ -42,6 +42,7 @@ const supervisor = createCreatorDevServiceSupervisor({
   now: () => Date.now(),
   setTimeout,
   clearTimeout,
+  maxRestartAttempts: 3,
   spawnProcess(name, args) {
     const child = spawn(runtime, args, {
       cwd: process.cwd(),
@@ -56,10 +57,19 @@ const supervisor = createCreatorDevServiceSupervisor({
     pipeWithPrefix(child.stderr, name);
     return child;
   },
-  onRestartScheduled(name, delayMs, code, signal) {
+  onRestartScheduled(name, delayMs, code, signal, attempt) {
+    if (attempt > 1) return;
     console.error(
       `[creator-dev] ${name} exited unexpectedly with code=${code ?? "null"} signal=${signal ?? "null"}; restarting in ${delayMs}ms`,
     );
+  },
+  onRestartLimitReached(name, attempts, code, signal) {
+    console.error(
+      `[creator-dev] ${name} restart limit reached after ${attempts} attempts (code=${code ?? "null"} signal=${signal ?? "null"}); stopping the dev stack.`,
+    );
+    stopping = true;
+    supervisor.stop("SIGTERM");
+    process.exitCode = 1;
   },
   onFatalExit(name, code, signal) {
     console.error(`[creator-dev] ${name} exited unexpectedly with code=${code ?? "null"} signal=${signal ?? "null"}`);
@@ -83,6 +93,10 @@ if (generationQueueEnabled) {
   supervisor.start("generation-worker", [
     ...resolveTsxRuntimeArgs(runtime),
     "scripts/run-generation-video-worker.mjs",
+  ], { restartOnFailure: true });
+  supervisor.start("canvas-agent", [
+    ...resolveTsxRuntimeArgs(runtime),
+    "scripts/run-canvas-agent-worker.mjs",
   ], { restartOnFailure: true });
 } else {
   console.warn("[creator-dev] Generation queues are disabled. Model tasks will run only through synchronous fallback paths.");

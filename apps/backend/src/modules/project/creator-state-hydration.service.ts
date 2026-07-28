@@ -134,6 +134,7 @@ export async function loadProjectBundleFromSql(
     cover_storage_object_id: string | null;
     aspect_ratio: string;
     resolution: string;
+    project_style_code: string;
     phase: "script_input" | "asset_review" | "shot_generation" | "export";
     created_by_user_id: string | null;
     created_at: Date | string;
@@ -182,6 +183,7 @@ export async function loadProjectBundleFromSql(
       coverStorageObjectId: project.cover_storage_object_id,
       aspectRatio: project.aspect_ratio,
       resolution: project.resolution,
+      projectType: project.project_style_code,
       phase: project.phase,
       createdByUserId: project.created_by_user_id,
       createdAt: new Date(project.created_at),

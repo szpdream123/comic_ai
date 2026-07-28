@@ -33,14 +33,17 @@ export async function recordGenerationArtifactHandoff(
   const updated = await db.query<{ task_id: string }>(
     `
       UPDATE ai_generation_task_snapshots
-      SET status = 'running',
-          progress_stage = 'artifact_fetched',
-          progress_percent = GREATEST(COALESCE(progress_percent, 0), 80),
+      SET status = CASE WHEN status IN ('queued', 'running') THEN 'running' ELSE status END,
+          progress_stage = CASE WHEN status IN ('queued', 'running') THEN 'artifact_fetched' ELSE progress_stage END,
+          progress_percent = CASE
+            WHEN status IN ('queued', 'running') THEN GREATEST(COALESCE(progress_percent, 0), 80)
+            ELSE progress_percent
+          END,
           provider_status_json = COALESCE(provider_status_json, '{}'::jsonb)
             || jsonb_build_object('artifactHandoff', $2::jsonb),
           updated_at = $3
       WHERE task_id = $1
-        AND status IN ('queued', 'running', 'result_unknown', 'manual_review_required')
+        AND status IN ('queued', 'running', 'failed', 'result_unknown', 'manual_review_required', 'succeeded')
       RETURNING task_id
     `,
     [input.taskId, JSON.stringify(handoff), input.now],

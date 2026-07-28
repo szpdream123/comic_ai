@@ -34,6 +34,7 @@ describe("create project command handler", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.body.project.phase, "script_input");
+    assert.equal(response.body.project.projectType, "animation");
     assert.equal(response.body.script.status, "ready");
     assert.deepEqual(auditLog, [
       { eventType: createProjectCommand.auditEvent, targetId: response.body.project.id },
@@ -81,6 +82,7 @@ describe("create project command handler", () => {
         scriptInput: "",
         aspectRatio: "1:1",
         resolution: "4k",
+        projectType: "animation",
       },
       idempotencyKey: "invalid-create-project",
       now: new Date("2026-05-15T10:00:00.000Z"),

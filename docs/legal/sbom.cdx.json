@@ -1,0 +1,5972 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:00000000-0000-4000-8000-000000000001",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "comic-ai"
+    },
+    "tools": [
+      {
+        "vendor": "comic-ai",
+        "name": "generate-third-party-notices.mjs"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "@antv/x6",
+      "version": "3.1.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40antv%2Fx6@3.1.7",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@antv/x6"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/checksums",
+      "version": "3.1000.18",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fchecksums@3.1000.18",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/checksums"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/client-s3",
+      "version": "3.1091.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fclient-s3@3.1091.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/client-s3"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/core",
+      "version": "3.975.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcore@3.975.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/core"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-env",
+      "version": "3.972.59",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-env@3.972.59",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-env"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-http",
+      "version": "3.972.61",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-http@3.972.61",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-http"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-ini",
+      "version": "3.973.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-ini@3.973.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-ini"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-login",
+      "version": "3.972.66",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-login@3.972.66",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-login"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-node",
+      "version": "3.972.70",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-node@3.972.70",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-node"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-process",
+      "version": "3.972.59",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-process@3.972.59",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-process"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-sso",
+      "version": "3.973.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-sso@3.973.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-sso"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/credential-provider-web-identity",
+      "version": "3.972.65",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fcredential-provider-web-identity@3.972.65",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/credential-provider-web-identity"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/lib-storage",
+      "version": "3.1091.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Flib-storage@3.1091.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/lib-storage"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/middleware-sdk-s3",
+      "version": "3.972.64",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fmiddleware-sdk-s3@3.972.64",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/middleware-sdk-s3"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/nested-clients",
+      "version": "3.997.33",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fnested-clients@3.997.33",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/nested-clients"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/s3-request-presigner",
+      "version": "3.1054.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fs3-request-presigner@3.1054.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/s3-request-presigner"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/signature-v4-multi-region",
+      "version": "3.996.41",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fsignature-v4-multi-region@3.996.41",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/signature-v4-multi-region"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/token-providers",
+      "version": "3.1088.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Ftoken-providers@3.1088.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/token-providers"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/types",
+      "version": "3.974.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Ftypes@3.974.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws-sdk/xml-builder",
+      "version": "3.972.36",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws-sdk%2Fxml-builder@3.972.36",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/xml-builder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@aws/lambda-invoke-store",
+      "version": "0.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40aws%2Flambda-invoke-store@0.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws/lambda-invoke-store"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@electric-sql/pglite",
+      "version": "0.4.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40electric-sql%2Fpglite@0.4.6",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@electric-sql/pglite"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/aix-ppc64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Faix-ppc64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/aix-ppc64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/android-arm",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fandroid-arm@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/android-arm"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/android-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fandroid-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/android-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/android-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fandroid-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/android-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/darwin-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fdarwin-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/darwin-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fdarwin-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/freebsd-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Ffreebsd-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/freebsd-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/freebsd-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Ffreebsd-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/freebsd-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-arm",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-arm@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-arm"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-ia32",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-ia32@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-ia32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-loong64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-loong64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-loong64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-mips64el",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-mips64el@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-mips64el"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-ppc64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-ppc64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-ppc64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-riscv64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-riscv64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-riscv64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-s390x",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-s390x@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-s390x"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/linux-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Flinux-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/linux-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/netbsd-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fnetbsd-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/netbsd-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/netbsd-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fnetbsd-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/netbsd-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/openbsd-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fopenbsd-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/openbsd-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/openbsd-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fopenbsd-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/openbsd-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/openharmony-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fopenharmony-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/openharmony-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/sunos-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fsunos-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/sunos-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/win32-arm64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fwin32-arm64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/win32-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/win32-ia32",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fwin32-ia32@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/win32-ia32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@esbuild/win32-x64",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild%2Fwin32-x64@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@esbuild/win32-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/darwin-arm64",
+      "version": "4.1.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "https://git.ffmpeg.org/gitweb/ffmpeg.git/blob_plain/HEAD:/LICENSE.md"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Fdarwin-arm64@4.1.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/darwin-x64",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-2.1"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Fdarwin-x64@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/ffmpeg",
+      "version": "1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-2.1"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Fffmpeg@1.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/ffmpeg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/linux-arm",
+      "version": "4.1.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPLv3"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Flinux-arm@4.1.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/linux-arm"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/linux-arm64",
+      "version": "4.1.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPLv3"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Flinux-arm64@4.1.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/linux-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/linux-ia32",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPLv3"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Flinux-ia32@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/linux-ia32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/linux-x64",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPLv3"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Flinux-x64@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/linux-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/win32-ia32",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPLv3"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Fwin32-ia32@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/win32-ia32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffmpeg-installer/win32-x64",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPLv3"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffmpeg-installer%2Fwin32-x64@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffmpeg-installer/win32-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/darwin-arm64",
+      "version": "5.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-2.1"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Fdarwin-arm64@5.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/darwin-x64",
+      "version": "5.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Fdarwin-x64@5.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/ffprobe",
+      "version": "2.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "LGPL-2.1"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Fffprobe@2.1.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/ffprobe"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/linux-arm",
+      "version": "5.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Flinux-arm@5.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/linux-arm"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/linux-arm64",
+      "version": "5.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Flinux-arm64@5.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/linux-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/linux-ia32",
+      "version": "5.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Flinux-ia32@5.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/linux-ia32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/linux-x64",
+      "version": "5.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Flinux-x64@5.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/linux-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/win32-ia32",
+      "version": "5.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Fwin32-ia32@5.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/win32-ia32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ffprobe-installer/win32-x64",
+      "version": "5.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "GPL-3.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ffprobe-installer%2Fwin32-x64@5.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ffprobe-installer/win32-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@floating-ui/core",
+      "version": "1.8.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40floating-ui%2Fcore@1.8.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@floating-ui/core"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@floating-ui/dom",
+      "version": "1.8.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40floating-ui%2Fdom@1.8.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@floating-ui/dom"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@floating-ui/utils",
+      "version": "0.2.12",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40floating-ui%2Futils@0.2.12",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@floating-ui/utils"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@ioredis/commands",
+      "version": "1.5.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40ioredis%2Fcommands@1.5.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@ioredis/commands"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@msgpackr-extract/msgpackr-extract-darwin-arm64",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40msgpackr-extract%2Fmsgpackr-extract-darwin-arm64@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@msgpackr-extract/msgpackr-extract-darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@msgpackr-extract/msgpackr-extract-darwin-x64",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40msgpackr-extract%2Fmsgpackr-extract-darwin-x64@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@msgpackr-extract/msgpackr-extract-darwin-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@msgpackr-extract/msgpackr-extract-linux-arm",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40msgpackr-extract%2Fmsgpackr-extract-linux-arm@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@msgpackr-extract/msgpackr-extract-linux-arm"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@msgpackr-extract/msgpackr-extract-linux-arm64",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40msgpackr-extract%2Fmsgpackr-extract-linux-arm64@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@msgpackr-extract/msgpackr-extract-linux-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@msgpackr-extract/msgpackr-extract-linux-x64",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40msgpackr-extract%2Fmsgpackr-extract-linux-x64@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@msgpackr-extract/msgpackr-extract-linux-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@msgpackr-extract/msgpackr-extract-win32-x64",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40msgpackr-extract%2Fmsgpackr-extract-win32-x64@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@msgpackr-extract/msgpackr-extract-win32-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@smithy/core",
+      "version": "3.29.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40smithy%2Fcore@3.29.6",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@smithy/core"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@smithy/credential-provider-imds",
+      "version": "4.4.11",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40smithy%2Fcredential-provider-imds@4.4.11",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@smithy/credential-provider-imds"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@smithy/fetch-http-handler",
+      "version": "5.6.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40smithy%2Ffetch-http-handler@5.6.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@smithy/fetch-http-handler"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@smithy/node-http-handler",
+      "version": "4.9.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40smithy%2Fnode-http-handler@4.9.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@smithy/node-http-handler"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@smithy/signature-v4",
+      "version": "5.6.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40smithy%2Fsignature-v4@5.6.7",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@smithy/signature-v4"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@smithy/types",
+      "version": "4.16.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40smithy%2Ftypes@4.16.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@smithy/types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/core",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fcore@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/core"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/extension-document",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fextension-document@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/extension-document"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/extension-hard-break",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fextension-hard-break@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/extension-hard-break"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/extension-mention",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fextension-mention@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/extension-mention"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/extension-paragraph",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fextension-paragraph@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/extension-paragraph"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/extension-text",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fextension-text@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/extension-text"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/extensions",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fextensions@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/extensions"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/pm",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fpm@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/pm"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@tiptap/suggestion",
+      "version": "3.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40tiptap%2Fsuggestion@3.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@tiptap/suggestion"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/archiver",
+      "version": "7.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40types%2Farchiver@7.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@types/archiver"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/node",
+      "version": "26.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40types%2Fnode@26.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@types/node"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@types/readdir-glob",
+      "version": "1.1.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40types%2Freaddir-glob@1.1.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@types/readdir-glob"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "@xmldom/xmldom",
+      "version": "0.8.13",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40xmldom%2Fxmldom@0.8.13",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@xmldom/xmldom"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "abort-controller",
+      "version": "3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/abort-controller@3.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/abort-controller"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "agent-base",
+      "version": "6.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/agent-base@6.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/agent-base"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ansi-regex",
+      "version": "5.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/ansi-regex@5.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/ansi-regex"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ansi-styles",
+      "version": "4.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/ansi-styles@4.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/ansi-styles"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "archiver",
+      "version": "8.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/archiver@8.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/archiver"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "argparse",
+      "version": "1.0.10",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/argparse@1.0.10",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/argparse"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "async",
+      "version": "3.2.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/async@3.2.6",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/async"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "asynckit",
+      "version": "0.4.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/asynckit@0.4.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/asynckit"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "axios",
+      "version": "1.18.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/axios@1.18.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/axios"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "b4a",
+      "version": "1.8.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/b4a@1.8.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/b4a"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "balanced-match",
+      "version": "4.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/balanced-match@4.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/balanced-match"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-events",
+      "version": "2.9.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bare-events@2.9.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bare-events"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-fs",
+      "version": "4.7.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bare-fs@4.7.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bare-fs"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-path",
+      "version": "3.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bare-path@3.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bare-path"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-stream",
+      "version": "2.13.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bare-stream@2.13.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bare-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-url",
+      "version": "2.4.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bare-url@2.4.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bare-url"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "base64-js",
+      "version": "1.5.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/base64-js@1.5.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/base64-js"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bignumber.js",
+      "version": "9.3.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bignumber.js@9.3.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bignumber.js"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bluebird",
+      "version": "3.4.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bluebird@3.4.7",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bluebird"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bowser",
+      "version": "2.14.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bowser@2.14.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bowser"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "brace-expansion",
+      "version": "5.0.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/brace-expansion@5.0.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/brace-expansion"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "buffer",
+      "version": "5.6.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/buffer@5.6.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/@aws-sdk/lib-storage/node_modules/buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "buffer",
+      "version": "6.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/buffer@6.0.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "buffer-crc32",
+      "version": "1.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/buffer-crc32@1.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/buffer-crc32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bullmq",
+      "version": "5.78.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/bullmq@5.78.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/bullmq"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "call-bind-apply-helpers",
+      "version": "1.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/call-bind-apply-helpers@1.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/call-bind-apply-helpers"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "call-bound",
+      "version": "1.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/call-bound@1.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/call-bound"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "camelcase",
+      "version": "5.3.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/camelcase@5.3.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/camelcase"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "cliui",
+      "version": "6.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/cliui@6.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/cliui"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "cluster-key-slot",
+      "version": "1.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/cluster-key-slot@1.1.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/cluster-key-slot"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "color-convert",
+      "version": "2.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/color-convert@2.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/color-convert"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "color-name",
+      "version": "1.1.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/color-name@1.1.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/color-name"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "combined-stream",
+      "version": "1.0.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/combined-stream@1.0.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/combined-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "compress-commons",
+      "version": "7.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/compress-commons@7.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/compress-commons"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "core-util-is",
+      "version": "1.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/core-util-is@1.0.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/core-util-is"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "cos-js-sdk-v5",
+      "version": "1.8.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/cos-js-sdk-v5@1.8.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/cos-js-sdk-v5"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "crc-32",
+      "version": "1.2.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/crc-32@1.2.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/crc-32"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "crc32-stream",
+      "version": "7.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/crc32-stream@7.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/crc32-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "cron-parser",
+      "version": "4.9.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/cron-parser@4.9.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/cron-parser"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "debug",
+      "version": "4.4.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/debug@4.4.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/debug"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "decamelize",
+      "version": "1.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/decamelize@1.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/decamelize"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "delayed-stream",
+      "version": "1.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/delayed-stream@1.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/delayed-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "denque",
+      "version": "2.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/denque@2.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/denque"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "detect-libc",
+      "version": "2.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/detect-libc@2.1.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/detect-libc"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "dijkstrajs",
+      "version": "1.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/dijkstrajs@1.0.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/dijkstrajs"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "dingbat-to-unicode",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/dingbat-to-unicode@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/dingbat-to-unicode"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "dom-align",
+      "version": "1.12.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/dom-align@1.12.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/dom-align"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "duck",
+      "version": "0.1.12",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD"
+          }
+        }
+      ],
+      "purl": "pkg:npm/duck@0.1.12",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/duck"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "dunder-proto",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/dunder-proto@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/dunder-proto"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "emoji-regex",
+      "version": "8.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/emoji-regex@8.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/emoji-regex"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "es-define-property",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/es-define-property@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/es-define-property"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "es-errors",
+      "version": "1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/es-errors@1.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/es-errors"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "es-object-atoms",
+      "version": "1.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/es-object-atoms@1.1.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/es-object-atoms"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "es-set-tostringtag",
+      "version": "2.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/es-set-tostringtag@2.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/es-set-tostringtag"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "esbuild",
+      "version": "0.28.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/esbuild@0.28.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/esbuild"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "event-target-shim",
+      "version": "5.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/event-target-shim@5.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/event-target-shim"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "events",
+      "version": "3.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/events@3.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/events"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "events-universal",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/events-universal@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/events-universal"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "fast-fifo",
+      "version": "1.3.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/fast-fifo@1.3.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/fast-fifo"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "find-up",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/find-up@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/find-up"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "follow-redirects",
+      "version": "1.16.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/follow-redirects@1.16.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/follow-redirects"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "form-data",
+      "version": "3.0.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/form-data@3.0.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tencentcloud-sdk-nodejs-common/node_modules/form-data"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "form-data",
+      "version": "4.0.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/form-data@4.0.6",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/form-data"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "fsevents",
+      "version": "2.3.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/fsevents@2.3.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/fsevents"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "function-bind",
+      "version": "1.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/function-bind@1.1.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/function-bind"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "get-caller-file",
+      "version": "2.0.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/get-caller-file@2.0.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/get-caller-file"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "get-intrinsic",
+      "version": "1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/get-intrinsic@1.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/get-intrinsic"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "get-proto",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/get-proto@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/get-proto"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "get-stream",
+      "version": "6.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/get-stream@6.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/get-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "gopd",
+      "version": "1.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/gopd@1.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/gopd"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "has-symbols",
+      "version": "1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/has-symbols@1.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/has-symbols"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "has-tostringtag",
+      "version": "1.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/has-tostringtag@1.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/has-tostringtag"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "hasown",
+      "version": "2.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/hasown@2.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/hasown"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "https-proxy-agent",
+      "version": "5.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/https-proxy-agent@5.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/https-proxy-agent"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ieee754",
+      "version": "1.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/ieee754@1.2.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/ieee754"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "immediate",
+      "version": "3.0.6",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/immediate@3.0.6",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/immediate"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "inherits",
+      "version": "2.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/inherits@2.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/inherits"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ini",
+      "version": "2.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/ini@2.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/ini"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ioredis",
+      "version": "5.10.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/ioredis@5.10.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/ioredis"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "is-fullwidth-code-point",
+      "version": "3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/is-fullwidth-code-point@3.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/is-fullwidth-code-point"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "is-stream",
+      "version": "2.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/is-stream@2.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/is-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "is-stream",
+      "version": "4.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/is-stream@4.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/archiver/node_modules/is-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "is-stream",
+      "version": "4.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/is-stream@4.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/compress-commons/node_modules/is-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "isarray",
+      "version": "1.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/isarray@1.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/isarray"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "json-bigint",
+      "version": "1.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/json-bigint@1.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/json-bigint"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "jszip",
+      "version": "3.10.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "(MIT OR GPL-3.0-or-later)"
+          }
+        }
+      ],
+      "purl": "pkg:npm/jszip@3.10.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/jszip"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lazystream",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lazystream@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lazystream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lie",
+      "version": "3.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lie@3.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lie"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "locate-path",
+      "version": "5.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/locate-path@5.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/locate-path"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lodash-es",
+      "version": "4.18.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lodash-es@4.18.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lodash-es"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lodash.defaults",
+      "version": "4.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lodash.defaults@4.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lodash.defaults"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lodash.isarguments",
+      "version": "3.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lodash.isarguments@3.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lodash.isarguments"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lop",
+      "version": "0.4.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lop@0.4.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lop"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lucide-react",
+      "version": "0.468.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/lucide-react@0.468.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/lucide-react"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "luxon",
+      "version": "3.7.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/luxon@3.7.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/luxon"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mammoth",
+      "version": "1.12.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/mammoth@1.12.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/mammoth"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "math-intrinsics",
+      "version": "1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/math-intrinsics@1.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/math-intrinsics"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mime-db",
+      "version": "1.52.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/mime-db@1.52.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/mime-db"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mime-types",
+      "version": "2.1.35",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/mime-types@2.1.35",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/mime-types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "minimatch",
+      "version": "10.2.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "BlueOak-1.0.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/minimatch@10.2.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/minimatch"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mousetrap",
+      "version": "1.6.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0 WITH LLVM-exception"
+          }
+        }
+      ],
+      "purl": "pkg:npm/mousetrap@1.6.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/mousetrap"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ms",
+      "version": "2.1.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/ms@2.1.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/ms"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "msgpackr",
+      "version": "2.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/msgpackr@2.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/msgpackr"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "msgpackr-extract",
+      "version": "3.0.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/msgpackr-extract@3.0.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/msgpackr-extract"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "node-abort-controller",
+      "version": "3.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/node-abort-controller@3.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/node-abort-controller"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "node-fetch",
+      "version": "2.7.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/node-fetch@2.7.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/node-fetch"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "node-gyp-build-optional-packages",
+      "version": "5.2.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/node-gyp-build-optional-packages@5.2.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/node-gyp-build-optional-packages"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "normalize-path",
+      "version": "3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/normalize-path@3.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/normalize-path"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "object-inspect",
+      "version": "1.13.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/object-inspect@1.13.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/object-inspect"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "openai",
+      "version": "6.39.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/openai@6.39.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/openai"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "option",
+      "version": "0.2.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/option@0.2.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/option"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "orderedmap",
+      "version": "2.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/orderedmap@2.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/orderedmap"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "p-limit",
+      "version": "2.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/p-limit@2.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/p-limit"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "p-locate",
+      "version": "4.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/p-locate@4.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/p-locate"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "p-try",
+      "version": "2.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/p-try@2.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/p-try"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pako",
+      "version": "1.0.11",
+      "licenses": [
+        {
+          "license": {
+            "id": "(MIT AND Zlib)"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pako@1.0.11",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pako"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "path-exists",
+      "version": "4.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/path-exists@4.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/path-exists"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "path-is-absolute",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/path-is-absolute@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/path-is-absolute"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg",
+      "version": "8.21.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg@8.21.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg-cloudflare",
+      "version": "1.4.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg-cloudflare@1.4.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg-cloudflare"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg-connection-string",
+      "version": "2.13.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg-connection-string@2.13.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg-connection-string"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg-int8",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg-int8@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg-int8"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg-pool",
+      "version": "3.14.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg-pool@3.14.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg-pool"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg-protocol",
+      "version": "1.14.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg-protocol@1.14.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg-protocol"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pg-types",
+      "version": "2.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pg-types@2.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pg-types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pgpass",
+      "version": "1.0.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pgpass@1.0.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pgpass"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "pngjs",
+      "version": "5.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/pngjs@5.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/pngjs"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "postgres-array",
+      "version": "2.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/postgres-array@2.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/postgres-array"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "postgres-bytea",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/postgres-bytea@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/postgres-bytea"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "postgres-date",
+      "version": "1.0.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/postgres-date@1.0.7",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/postgres-date"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "postgres-interval",
+      "version": "1.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/postgres-interval@1.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/postgres-interval"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "process",
+      "version": "0.11.10",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/process@0.11.10",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/process"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "process-nextick-args",
+      "version": "2.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/process-nextick-args@2.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/process-nextick-args"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-changeset",
+      "version": "2.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-changeset@2.4.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-changeset"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-commands",
+      "version": "1.7.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-commands@1.7.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-commands"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-dropcursor",
+      "version": "1.8.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-dropcursor@1.8.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-dropcursor"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-gapcursor",
+      "version": "1.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-gapcursor@1.4.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-gapcursor"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-history",
+      "version": "1.5.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-history@1.5.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-history"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-inputrules",
+      "version": "1.5.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-inputrules@1.5.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-inputrules"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-keymap",
+      "version": "1.2.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-keymap@1.2.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-keymap"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-model",
+      "version": "1.25.11",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-model@1.25.11",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-model"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-schema-list",
+      "version": "1.5.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-schema-list@1.5.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-schema-list"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-state",
+      "version": "1.4.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-state@1.4.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-state"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-tables",
+      "version": "1.8.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-tables@1.8.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-tables"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-transform",
+      "version": "1.12.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-transform@1.12.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-transform"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "prosemirror-view",
+      "version": "1.42.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/prosemirror-view@1.42.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/prosemirror-view"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "proxy-from-env",
+      "version": "2.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/proxy-from-env@2.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/proxy-from-env"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "qcloud-cos-sts",
+      "version": "3.1.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/qcloud-cos-sts@3.1.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/qcloud-cos-sts"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "qrcode",
+      "version": "1.5.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/qrcode@1.5.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/qrcode"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "qs",
+      "version": "6.15.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/qs@6.15.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/qs"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "react",
+      "version": "19.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/react@19.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/react"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "react-dom",
+      "version": "19.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/react-dom@19.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/react-dom"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readable-stream",
+      "version": "2.3.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readable-stream@2.3.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/readable-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readable-stream",
+      "version": "3.6.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readable-stream@3.6.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/stream-browserify/node_modules/readable-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readable-stream",
+      "version": "4.7.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readable-stream@4.7.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/archiver/node_modules/readable-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readable-stream",
+      "version": "4.7.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readable-stream@4.7.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/compress-commons/node_modules/readable-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readable-stream",
+      "version": "4.7.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readable-stream@4.7.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/crc32-stream/node_modules/readable-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readable-stream",
+      "version": "4.7.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readable-stream@4.7.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/zip-stream/node_modules/readable-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "readdir-glob",
+      "version": "3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/readdir-glob@3.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/readdir-glob"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "redis-errors",
+      "version": "1.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/redis-errors@1.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/redis-errors"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "redis-parser",
+      "version": "3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/redis-parser@3.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/redis-parser"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "require-directory",
+      "version": "2.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/require-directory@2.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/require-directory"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "require-main-filename",
+      "version": "2.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/require-main-filename@2.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/require-main-filename"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "rope-sequence",
+      "version": "1.3.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/rope-sequence@1.3.4",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/rope-sequence"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "safe-buffer",
+      "version": "5.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/safe-buffer@5.1.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/safe-buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/safe-buffer@5.2.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/archiver/node_modules/safe-buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/safe-buffer@5.2.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/compress-commons/node_modules/safe-buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/safe-buffer@5.2.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/crc32-stream/node_modules/safe-buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "safe-buffer",
+      "version": "5.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/safe-buffer@5.2.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/zip-stream/node_modules/safe-buffer"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "scheduler",
+      "version": "0.25.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/scheduler@0.25.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/scheduler"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "semver",
+      "version": "7.8.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/semver@7.8.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/semver"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "set-blocking",
+      "version": "2.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/set-blocking@2.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/set-blocking"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "setimmediate",
+      "version": "1.0.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/setimmediate@1.0.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/setimmediate"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "side-channel",
+      "version": "1.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/side-channel@1.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/side-channel"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "side-channel-list",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/side-channel-list@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/side-channel-list"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "side-channel-map",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/side-channel-map@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/side-channel-map"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "side-channel-weakmap",
+      "version": "1.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/side-channel-weakmap@1.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/side-channel-weakmap"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "split2",
+      "version": "4.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/split2@4.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/split2"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "sprintf-js",
+      "version": "1.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/sprintf-js@1.0.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/sprintf-js"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "standard-as-callback",
+      "version": "2.1.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/standard-as-callback@2.1.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/standard-as-callback"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "stream-browserify",
+      "version": "3.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/stream-browserify@3.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/stream-browserify"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "streamx",
+      "version": "2.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/streamx@2.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/streamx"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "string_decoder",
+      "version": "1.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/string_decoder@1.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/string_decoder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "string_decoder",
+      "version": "1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/string_decoder@1.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/archiver/node_modules/string_decoder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "string_decoder",
+      "version": "1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/string_decoder@1.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/compress-commons/node_modules/string_decoder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "string_decoder",
+      "version": "1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/string_decoder@1.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/crc32-stream/node_modules/string_decoder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "string_decoder",
+      "version": "1.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/string_decoder@1.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/zip-stream/node_modules/string_decoder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "string-width",
+      "version": "4.2.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/string-width@4.2.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/string-width"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "strip-ansi",
+      "version": "6.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/strip-ansi@6.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/strip-ansi"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tar-stream",
+      "version": "3.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tar-stream@3.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tar-stream"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "teex",
+      "version": "1.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/teex@1.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/teex"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tencentcloud-sdk-nodejs-common",
+      "version": "4.1.220",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tencentcloud-sdk-nodejs-common@4.1.220",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tencentcloud-sdk-nodejs-common"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tencentcloud-sdk-nodejs-sms",
+      "version": "4.1.240",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tencentcloud-sdk-nodejs-sms@4.1.240",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tencentcloud-sdk-nodejs-sms"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "text-decoder",
+      "version": "1.2.7",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:npm/text-decoder@1.2.7",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/text-decoder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "three",
+      "version": "0.184.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/three@0.184.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/three"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tr46",
+      "version": "0.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tr46@0.0.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tr46"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tslib",
+      "version": "1.13.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "0BSD"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tslib@1.13.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tencentcloud-sdk-nodejs-common/node_modules/tslib"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tslib",
+      "version": "1.13.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "0BSD"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tslib@1.13.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tencentcloud-sdk-nodejs-sms/node_modules/tslib"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tslib",
+      "version": "2.8.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "0BSD"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tslib@2.8.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tslib"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "tsx",
+      "version": "4.22.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/tsx@4.22.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/tsx"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "underscore",
+      "version": "1.13.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/underscore@1.13.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/underscore"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "undici",
+      "version": "6.28.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/undici@6.28.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/undici"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "undici-types",
+      "version": "8.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/undici-types@8.3.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/undici-types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "util-deprecate",
+      "version": "1.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/util-deprecate@1.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/util-deprecate"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "utility-types",
+      "version": "3.11.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/utility-types@3.11.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/utility-types"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "uuid",
+      "version": "11.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/uuid@11.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/uuid"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "w3c-keyname",
+      "version": "2.2.8",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/w3c-keyname@2.2.8",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/w3c-keyname"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "webidl-conversions",
+      "version": "3.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-2-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:npm/webidl-conversions@3.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/webidl-conversions"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "whatwg-url",
+      "version": "5.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/whatwg-url@5.0.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/whatwg-url"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "which-module",
+      "version": "2.0.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/which-module@2.0.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/which-module"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "wrap-ansi",
+      "version": "6.2.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/wrap-ansi@6.2.0",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/wrap-ansi"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "xmlbuilder",
+      "version": "10.1.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/xmlbuilder@10.1.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/xmlbuilder"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "xtend",
+      "version": "4.0.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/xtend@4.0.2",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/xtend"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "y18n",
+      "version": "4.0.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/y18n@4.0.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/y18n"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "yargs",
+      "version": "15.4.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/yargs@15.4.1",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/yargs"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "yargs-parser",
+      "version": "18.1.3",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "purl": "pkg:npm/yargs-parser@18.1.3",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/yargs-parser"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "zip-stream",
+      "version": "7.0.5",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:npm/zip-stream@7.0.5",
+      "properties": [
+        {
+          "name": "comic-ai:lockPath",
+          "value": "node_modules/zip-stream"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "AI-Canvas-tauri",
+      "version": "87731295a121be601b1d4fa8616b0f2d1a38a3bb",
+      "licenses": [
+        {
+          "license": {
+            "name": "AI Canvas Tauri Source-Available License + separate author authorization"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Tenney95/AI-Canvas-tauri"
+        }
+      ],
+      "properties": [
+        {
+          "name": "comic-ai:integration",
+          "value": "authorized-adaptation"
+        }
+      ]
+    }
+  ]
+}

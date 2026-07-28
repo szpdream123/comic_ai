@@ -7,6 +7,22 @@ export const CANVAS_NODE_SIZES = {
   upload: { width: 360, height: 220 },
   director: { width: 500, height: 340 },
   output: { width: 460, height: 280 },
+  markdown: { width: 360, height: 220 },
+  comment: { width: 300, height: 180 },
+  group: { width: 560, height: 360 },
+  "ai-text": { width: 360, height: 220 },
+  "ai-image": { width: 420, height: 378 },
+  "ai-video": { width: 420, height: 378 },
+  "ai-audio": { width: 390, height: 220 },
+  "ai-animation": { width: 420, height: 378 },
+  "ai-panorama": { width: 420, height: 438 },
+  "ai-markdown": { width: 360, height: 220 },
+  "ai-storyboard": { width: 420, height: 356 },
+  "ai-director": { width: 500, height: 340 },
+  "source-text": { width: 340, height: 200 },
+  "source-image": { width: 360, height: 220 },
+  "source-video": { width: 360, height: 220 },
+  "source-audio": { width: 390, height: 220 },
 };
 
 export function createDefaultCanvasDocument(input = {}) {
@@ -14,7 +30,7 @@ export function createDefaultCanvasDocument(input = {}) {
   return {
     version: 1,
     canvasProjectId: String(input.canvasProjectId ?? ""),
-    viewport: { x: 0, y: 0, zoom: 1 },
+    viewport: { x: 0, y: 0, zoom: 1, interactionMode: "default" },
     nodes: [],
     edges: [],
     createdAt: now,
@@ -33,7 +49,7 @@ export function createLegacyStarterCanvasDocument(input = {}) {
         position: { x: 120, y: 120 },
         size: CANVAS_NODE_SIZES.script,
         data: {
-          title: "文本源",
+          title: "剧本源",
           status: "ready",
           source: "manual",
           text: "",

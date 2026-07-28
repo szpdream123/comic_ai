@@ -93,6 +93,8 @@ it("matches the provided right inspector layout dimensions and field styling", (
   expect(css).toMatch(/\.right-sidebar\s*\.right-inspector-tabs\s*button\[aria-pressed="true"\]::after\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*3px;[\s\S]*?border-radius:\s*0;/);
   expect(css).toMatch(/\.right-inspector-content\s*\{[\s\S]*?gap:\s*20px;[\s\S]*?width:\s*var\(--right-sidebar-content-width\);[\s\S]*?padding-bottom:\s*20px;[\s\S]*?margin-top:\s*25px;/);
   expect(css).toMatch(/\.right-sidebar\s*\.right-inspector\s*label\.inspector-field\s*\{[\s\S]*?gap:\s*10px;/);
+  expect(css).toMatch(/\.right-panel-stack\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex:\s*0 0 auto;[\s\S]*?flex-direction:\s*column;[\s\S]*?min-width:\s*0;/);
+  expect(css).toMatch(/\.right-panel-stack\s*>\s*\.right-inspector\s*\{[\s\S]*?min-height:\s*0;/);
   expect(css).toMatch(/\.right-inspector-content\s*>\s*\.inspector-field:first-child\s*\{[\s\S]*?margin-bottom:\s*5px;/);
   expect(css).toMatch(/\.inspector-field-label\s*\{[\s\S]*?font-size:\s*12px;[\s\S]*?line-height:\s*17px;[\s\S]*?color:\s*rgb\(var\(--text-dim-rgb\)\);/);
   expect(css).toMatch(/\.inspector-text-input\s*\{[\s\S]*?width:\s*var\(--right-sidebar-content-width\);[\s\S]*?height:\s*40px;[\s\S]*?background:\s*rgb\(var\(--field-rgb\)\);[\s\S]*?border-radius:\s*8px;[\s\S]*?font-size:\s*12px;/);
@@ -225,7 +227,7 @@ it("renders the model library panel with the same frosted glass background treat
 
   expect(css).toMatch(/\.model-library-panel\s*\{[\s\S]*?border:\s*1px solid rgb\(var\(--border-rgb\) \/ 0\.35\);[\s\S]*?background:\s*rgb\(var\(--panel-rgb\) \/ 0\.9\);[\s\S]*?backdrop-filter:\s*blur\(32px\);[\s\S]*?-webkit-backdrop-filter:\s*blur\(32px\);/);
   expect(css).toMatch(/\.model-library-thumbnail-renderer\s*\{[\s\S]*?left:\s*-10000px;[\s\S]*?width:\s*192px;[\s\S]*?height:\s*128px;[\s\S]*?pointer-events:\s*none;/);
-  expect(css).toMatch(/\.model-library-tabs\s*\{[\s\S]*?grid-auto-columns:\s*minmax\(88px,\s*1fr\);[\s\S]*?grid-auto-flow:\s*column;[\s\S]*?overflow-x:\s*auto;[\s\S]*?overflow-y:\s*hidden;/);
+  expect(css).toMatch(/\.model-library-tabs\s*\{[\s\S]*?grid-auto-columns:\s*minmax\(64px,\s*1fr\);[\s\S]*?grid-auto-flow:\s*column;[\s\S]*?overflow-x:\s*auto;[\s\S]*?overflow-y:\s*hidden;/);
   expect(css).toMatch(/\.model-library-tab\.is-active::after\s*\{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*3px;[\s\S]*?border-radius:\s*0;[\s\S]*?background:\s*rgb\(var\(--accent-rgb\)\);/);
   expect(css).toMatch(/\.model-library-close-button\s*\{[\s\S]*?display:\s*grid;[\s\S]*?place-items:\s*center;[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;[\s\S]*?padding:\s*0;[\s\S]*?line-height:\s*0;/);
   expect(css).toMatch(/\.model-library-close-button\s*svg\s*\{[\s\S]*?display:\s*block;/);
@@ -414,6 +416,39 @@ it("keeps the demo usable in narrower in-app browser widths", () => {
   expect(css).toContain("@media (max-width: 1180px)");
   expect(css).toMatch(/@media \(max-width: 1180px\)\s*\{[\s\S]*?\.director-shell-fullbleed\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/);
   expect(css).not.toContain("min-width: 1280px;");
+});
+
+it("restores the scene and properties panels as mobile sheets", () => {
+  const css = readFileSync("src/styles/index.css", "utf8");
+  const mobileStart = css.indexOf("@media (max-width: 600px)");
+  const mobileCss = css.slice(mobileStart);
+
+  expect(mobileCss).toMatch(/\.director-mobile-panel-actions\s*\{[\s\S]*?display:\s*flex;/);
+  expect(mobileCss).toMatch(/\.director-mobile-panel-actions button,[\s\S]*?\.director-mobile-panel-close\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/);
+  expect(mobileCss).toMatch(/\.director-mobile-panel-backdrop\s*\{[\s\S]*?z-index:\s*44;[\s\S]*?display:\s*block;/);
+  expect(mobileCss).toMatch(/\.director-shell-fullbleed\s*>\s*\.director-sidebar\.is-mobile-open\s*\{[\s\S]*?--right-sidebar-content-width:\s*calc\(100% - 32px\);[\s\S]*?z-index:\s*45;[\s\S]*?display:\s*flex;[\s\S]*?width:\s*min\(92vw, 380px\);[\s\S]*?padding-bottom:\s*env\(safe-area-inset-bottom\);/);
+});
+
+it("keeps all editor header actions on one row at phone widths", () => {
+  const css = readFileSync("src/styles/index.css", "utf8");
+  const mobileStart = css.lastIndexOf("@media (max-width: 600px)");
+  const mobileCss = css.slice(mobileStart);
+
+  expect(mobileCss).toMatch(/\.top-bar\s*\{[\s\S]*?grid-template-columns:\s*34px minmax\(0,\s*1fr\) 36px;[\s\S]*?column-gap:\s*6px;/);
+  expect(mobileCss).toMatch(/\.mode-toggle\s*\{[\s\S]*?width:\s*min\(100%,\s*180px\);/);
+  expect(mobileCss).toMatch(/\.mode-toggle-button\.ui-segmented-item\s*\{[\s\S]*?width:\s*50%;[\s\S]*?height:\s*32px;/);
+});
+
+it("switches the pilot HUD to touch guidance and 44px actions on phones", () => {
+  const css = readFileSync("src/styles/index.css", "utf8");
+  const mobileStart = css.lastIndexOf("@media (max-width: 600px)");
+  const mobileCss = css.slice(mobileStart);
+
+  expect(css).toMatch(/\.pilot-touch-help\s*\{\s*display:\s*none;/);
+  expect(mobileCss).toMatch(/\.pilot-keyboard-help\s*\{\s*display:\s*none;/);
+  expect(mobileCss).toMatch(/\.pilot-touch-help\s*\{[\s\S]*?bottom:\s*calc\(max\(12px, env\(safe-area-inset-bottom\)\) \+ 52px\);[\s\S]*?display:\s*flex;/);
+  expect(mobileCss).toMatch(/\.director-shell\.is-camera-piloting \.pilot-hud-actions\s*\{[\s\S]*?right:\s*8px;[\s\S]*?left:\s*8px;/);
+  expect(mobileCss).toMatch(/\.pilot-hud-actions button\s*\{[\s\S]*?height:\s*44px;/);
 });
 
 it("keeps the viewport toolbar above the wrapped motion transport", () => {

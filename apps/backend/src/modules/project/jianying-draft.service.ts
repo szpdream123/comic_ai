@@ -3,7 +3,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import archiver from "archiver";
+import { ZipArchive, type Archiver } from "archiver";
 
 export interface JianyingDraftClip {
   storyboardId: string;
@@ -410,10 +410,10 @@ function sanitizeJianyingDraftFolderName(value: string) {
 
 async function writeArchive(
   archivePath: string,
-  populate: (archive: archiver.Archiver) => void,
+  populate: (archive: Archiver) => void,
 ) {
   const output = createWriteStream(archivePath);
-  const archive = archiver("zip", { store: true });
+  const archive = new ZipArchive({ store: true });
   const completed = new Promise<void>((resolve, reject) => {
     output.once("close", resolve);
     output.once("error", reject);

@@ -47,8 +47,68 @@ describe("asset conversation history summaries", () => {
 
     assert.match(capturedSql, /jsonb_array_elements/);
     assert.match(capturedSql, /jsonb_object_agg/);
-    assert.match(capturedSql, /field\.key IN \('id',[\s\S]*'thumbnailUrl', 'duration'\)/);
+    assert.match(capturedSql, /field\.key IN \('id',[\s\S]*'thumbnailUrl',[\s\S]*'duration',[\s\S]*'originalName', 'isGenerationStyleReference'\)/);
     assert.match(capturedSql, /field\.key IN \('assetTab', 'selectedAssetId', 'selectedAssetName', 'selectedStoryboardId', 'storyboardId'\)/);
     assert.match(capturedSql, /field\.key IN \('failureCode', 'displayMessage', 'providerMessage', 'errorMessage', 'noticeType'\)/);
+    assert.match(capturedSql, /returnedAt/);
+    assert.match(capturedSql, /completedAt/);
+  });
+
+  it("returns only the configured display name for conversation models", async () => {
+    let queryCount = 0;
+    const db: SqlDatabase = {
+      async query<T>() {
+        queryCount += 1;
+        if (queryCount === 1) {
+          return { rows: [{
+            turn_key: "turn-1",
+            order_created_at: new Date("2026-07-16T00:00:00.000Z"),
+            asset_id: "asset-1",
+            media_kind: "image",
+            prompt_preview: "角色图",
+            quick_reference_items: [],
+            attachment_items: [],
+            mention_references: [],
+            generated_audio_items: [],
+            fixed_images: [],
+            fixed_videos: [],
+            selection_context: null,
+            task_id: "task-1",
+            status: "completed",
+            created_at: "2026-07-16T00:00:00.000Z",
+            returned_at: null,
+            selected_model_id: "gpt-image-2",
+            model_label: "gpt-image-2",
+            style_label: null,
+            skill_id: null,
+            aspect_ratio: null,
+            resolution: null,
+            credit_cost: null,
+            failure_code: null,
+            failure: null,
+            notice_type: null,
+          }] as T[] };
+        }
+        return { rows: [{ model_code: "gpt-image-2", display_name: "Image-2(优越)" }] as T[] };
+      },
+    };
+
+    const entries = await listAssetConversationEntrySummaries(db, {
+      thread: {
+        threadId: "thread-1",
+        projectId: "project-1",
+        episodeId: "episode-1",
+        assetId: "asset-1",
+        mediaMode: "image",
+        latestMessageAt: new Date("2026-07-16T00:00:00.000Z"),
+        createdByUserId: null,
+        createdAt: new Date("2026-07-16T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-16T00:00:00.000Z"),
+      },
+    });
+
+    assert.equal(entries[0]?.modelLabel, "Image-2(优越)");
+    assert.equal(Object.hasOwn(entries[0] ?? {}, "selectedModelId"), false);
+    assert.equal(JSON.stringify(entries).includes("gpt-image-2"), false);
   });
 });

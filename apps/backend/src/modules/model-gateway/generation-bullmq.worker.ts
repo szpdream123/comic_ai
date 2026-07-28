@@ -31,6 +31,7 @@ type FinalizeArtifactResult =
   | { status: "skipped" };
 
 type GenerationArtifactJobData = {
+  outboxEventId?: string;
   taskId: string;
   workflowId: string;
   mediaType: "video" | "image" | "audio";
@@ -122,7 +123,7 @@ export async function handleGenerationSubmitVideoJob(
     outboxEventId?: string;
   }>,
 ): Promise<{ status: SubmitVideoResult["status"]; queuedPoll: boolean }> {
-  if (input.job.data.providerExecutor !== "seedance") {
+  if (!isVideoProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_video_provider_executor:${input.job.data.providerExecutor}`);
   }
 
@@ -252,7 +253,7 @@ export async function handleGenerationSubmitAudioJob(
     outboxEventId?: string;
   }>,
 ): Promise<{ status: SubmitAudioResult["status"]; queuedPoll?: boolean; queuedFinalize?: boolean; failureCode?: string }> {
-  if (input.job.data.providerExecutor !== "aliyun-bailian-audio") {
+  if (!isAudioProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_audio_provider_executor:${input.job.data.providerExecutor}`);
   }
   if (!input.processors.submitAudio) throw new Error("audio_submit_processor_missing");
@@ -284,7 +285,7 @@ export async function handleGenerationPollVideoJob(
     pollAttempt: number;
   }>,
 ): Promise<{ status: PollVideoResult["status"]; queuedPoll: boolean; queuedFinalize?: boolean; queuedSubmit?: boolean; failureCode?: string }> {
-  if (input.job.data.providerExecutor !== "seedance") {
+  if (!isVideoProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_video_provider_executor:${input.job.data.providerExecutor}`);
   }
 
@@ -342,7 +343,7 @@ export async function handleGenerationPollAudioJob(
     pollAttempt: number;
   }>,
 ): Promise<{ status: PollVideoResult["status"]; queuedPoll: boolean; queuedFinalize?: boolean; queuedSubmit?: boolean; failureCode?: string }> {
-  if (input.job.data.providerExecutor !== "aliyun-bailian-audio") {
+  if (!isAudioProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_audio_provider_executor:${input.job.data.providerExecutor}`);
   }
   if (!input.processors.pollAudio) throw new Error("audio_poll_processor_missing");
@@ -392,7 +393,7 @@ export async function handleGenerationFinalizeArtifactJob(
   }
 
   try {
-    if (input.job.data.providerExecutor === "seedance" && input.job.data.artifactKind === "video") {
+    if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
       if (!input.processors.finalizeSeedanceVideoArtifact) {
         throw new Error("seedance_finalize_processor_missing");
       }
@@ -419,7 +420,7 @@ export async function handleGenerationFinalizeArtifactJob(
       }
       return { status: result.status };
     }
-    if (input.job.data.providerExecutor === "aliyun-bailian-audio" && input.job.data.artifactKind === "audio") {
+    if (isAudioProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "audio") {
       if (!input.processors.finalizeAudioArtifact) throw new Error("audio_finalize_processor_missing");
       const result = await input.processors.finalizeAudioArtifact({ taskId: input.job.data.taskId, now: input.now });
       return result.status === "failed"
@@ -484,7 +485,7 @@ async function runFetchArtifactProcessor(
   input: GenerationWorkerHandlerInput<GenerationArtifactJobData>,
 ): Promise<FinalizeArtifactResult> {
   const task = { taskId: input.job.data.taskId, now: input.now };
-  if (input.job.data.providerExecutor === "seedance" && input.job.data.artifactKind === "video") {
+  if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
     if (!input.processors.fetchSeedanceVideoArtifact) throw new Error("seedance_fetch_processor_missing");
     return input.processors.fetchSeedanceVideoArtifact(task);
   }
@@ -492,7 +493,7 @@ async function runFetchArtifactProcessor(
     if (!input.processors.fetchGptImageArtifact) throw new Error("gpt_image_fetch_processor_missing");
     return input.processors.fetchGptImageArtifact(task);
   }
-  if (input.job.data.providerExecutor === "aliyun-bailian-audio" && input.job.data.artifactKind === "audio") {
+  if (isAudioProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "audio") {
     if (!input.processors.fetchAudioArtifact) throw new Error("audio_fetch_processor_missing");
     return input.processors.fetchAudioArtifact(task);
   }
@@ -502,7 +503,7 @@ async function runFetchArtifactProcessor(
 async function handlePersistOnlyFinalizeArtifactJob(
   input: GenerationWorkerHandlerInput<GenerationArtifactJobData>,
 ): Promise<{ status: FinalizeArtifactResult["status"]; failureCode?: string }> {
-  if (input.job.data.providerExecutor === "seedance" && input.job.data.artifactKind === "video") {
+  if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
     if (!input.processors.persistSeedanceVideoArtifact) {
       throw new Error("seedance_persist_processor_missing");
     }
@@ -528,7 +529,7 @@ async function handlePersistOnlyFinalizeArtifactJob(
       : { status: result.status };
   }
 
-  if (input.job.data.providerExecutor === "aliyun-bailian-audio" && input.job.data.artifactKind === "audio") {
+  if (isAudioProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "audio") {
     if (!input.processors.persistAudioArtifact) throw new Error("audio_persist_processor_missing");
     const result = await input.processors.persistAudioArtifact({ taskId: input.job.data.taskId, now: input.now });
     return result.status === "failed"
@@ -541,6 +542,14 @@ async function handlePersistOnlyFinalizeArtifactJob(
 
 function isImageProviderExecutor(providerExecutor: string) {
   return providerExecutor === "gpt-image-2" || providerExecutor === "image-http";
+}
+
+function isVideoProviderExecutor(providerExecutor: string) {
+  return providerExecutor === "seedance";
+}
+
+function isAudioProviderExecutor(providerExecutor: string) {
+  return providerExecutor === "aliyun-bailian-audio" || providerExecutor === "apimart-audio";
 }
 
 async function acquireFinalizePermit(
@@ -669,6 +678,7 @@ async function enqueueFinalizeRateLimitRetryJob(
     artifactKind: input.job.data.artifactKind,
     ...(input.job.data.artifactStage ? { artifactStage: input.job.data.artifactStage } : {}),
     ...(input.job.data.finalizeMode ? { finalizeMode: input.job.data.finalizeMode } : {}),
+    ...(input.job.data.outboxEventId ? { outboxEventId: input.job.data.outboxEventId } : {}),
     retrySequence,
     ...(input.job.data.storageBucket ? { storageBucket: input.job.data.storageBucket } : {}),
     ...generationPriorityJobData(input.job.data),
@@ -708,6 +718,12 @@ async function enqueuePersistArtifactJob(
   input: GenerationWorkerHandlerInput<GenerationArtifactJobData>,
 ) {
   const mediaType = input.job.data.mediaType;
+  const outboxEventId = typeof input.job.data.outboxEventId === "string"
+    ? input.job.data.outboxEventId.trim()
+    : "";
+  const recoveryToken = input.job.data.finalizeMode === "retry_finalize" && outboxEventId
+    ? outboxEventId
+    : undefined;
   await input.publisher.add(
     input.config.queues.finalizeArtifact,
     `generation.${mediaType}.persist`,
@@ -720,11 +736,16 @@ async function enqueuePersistArtifactJob(
       artifactKind: input.job.data.artifactKind,
       artifactStage: "persist",
       finalizeMode: "retry_persist_asset",
+      ...(outboxEventId ? { outboxEventId } : {}),
       ...(input.job.data.storageBucket ? { storageBucket: input.job.data.storageBucket } : {}),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      jobId: buildGenerationBullMQJobId(`generation.${mediaType}.persist`, input.job.data.taskId),
+      jobId: buildGenerationBullMQJobId(
+        `generation.${mediaType}.persist`,
+        input.job.data.taskId,
+        ...(recoveryToken ? [recoveryToken] : []),
+      ),
       ...generationPriorityJobOptions(input.job.data),
       attempts: input.config.retry.finalize.attempts,
       backoff: { type: "exponential", delay: input.config.retry.finalize.backoffMs },

@@ -203,6 +203,15 @@ function generationTaskModeAliases(mode: string): Set<string> {
     aliases.add("video.lip_sync");
     aliases.add("lip_sync");
     aliases.add("video");
+  } else if (normalized === "tts" || normalized === "text-to-speech" || normalized === "text_to_speech") {
+    aliases.add("audio.text_to_speech");
+    aliases.add("audio");
+  } else if (normalized === "music" || normalized === "music-generation" || normalized === "music_generation") {
+    aliases.add("audio.music_generation");
+    aliases.add("audio");
+  } else if (normalized === "transcription" || normalized === "speech-to-text" || normalized === "speech_to_text") {
+    aliases.add("audio.transcription");
+    aliases.add("audio");
   }
   return aliases;
 }

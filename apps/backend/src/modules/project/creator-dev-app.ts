@@ -71,6 +71,7 @@ export class CreatorDevApp {
     scriptInput: string;
     aspectRatio: string;
     resolution: string;
+    projectType?: string;
     seedBundle?: ProjectBundle;
   }) {
     if (input.seedBundle) {
@@ -90,6 +91,7 @@ export class CreatorDevApp {
       scriptInput: input.scriptInput,
       aspectRatio: input.aspectRatio,
       resolution: input.resolution,
+      projectType: input.projectType ?? "animation",
       idempotencyKey: `creator-dev-create-${this.requestCounter}`,
     });
 

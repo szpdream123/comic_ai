@@ -1136,6 +1136,7 @@ CREATE TABLE IF NOT EXISTS "projects" (
   "cover_image_url" text,
   "aspect_ratio" text NOT NULL,
   "resolution" text NOT NULL,
+  "project_style_code" text DEFAULT 'animation'::text NOT NULL,
   "phase" text NOT NULL,
   "created_by_user_id" uuid,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,

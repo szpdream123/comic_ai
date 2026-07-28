@@ -351,6 +351,49 @@ it("uses a full-width director desk frame instead of floating card columns", asy
   expect(screen.getByLabelText("属性")).toHaveClass("right-sidebar");
 });
 
+it("opens and closes the mobile scene and properties panels", async () => {
+  const user = userEvent.setup();
+  render(<App initialInstanceId="desk_1" />);
+  await screen.findByLabelText("3D视口");
+
+  const scenePanel = screen.getByLabelText("场景");
+  const propertiesPanel = screen.getByLabelText("属性");
+  const openScene = screen.getByRole("button", { name: "打开场景面板" });
+  const openProperties = screen.getByRole("button", { name: "打开属性面板" });
+
+  await user.click(openScene);
+  expect(scenePanel).toHaveClass("is-mobile-open");
+  expect(propertiesPanel).not.toHaveClass("is-mobile-open");
+  expect(openScene).toHaveAttribute("aria-expanded", "true");
+
+  await user.click(openProperties);
+  expect(scenePanel).not.toHaveClass("is-mobile-open");
+  expect(propertiesPanel).toHaveClass("is-mobile-open");
+  expect(propertiesPanel).not.toHaveAttribute("aria-hidden");
+
+  await user.click(screen.getByRole("button", { name: "关闭属性面板" }));
+  expect(propertiesPanel).not.toHaveClass("is-mobile-open");
+
+  await user.click(openProperties);
+  await user.keyboard("{Escape}");
+  expect(propertiesPanel).not.toHaveClass("is-mobile-open");
+
+  await user.click(openScene);
+  await user.click(screen.getByRole("button", { name: "关闭移动端面板" }));
+  expect(scenePanel).not.toHaveClass("is-mobile-open");
+
+  await user.click(openProperties);
+  act(() => {
+    useDirectorStore.setState({
+      ...useDirectorStore.getState(),
+      motionStudioOpen: true,
+    } as ReturnType<typeof useDirectorStore.getState>);
+  });
+  await vi.waitFor(() => expect(propertiesPanel).not.toHaveClass("is-mobile-open"));
+  expect(screen.queryByRole("button", { name: "打开场景面板" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开属性面板" })).not.toBeInTheDocument();
+});
+
 it("collapses both side panels from the fullscreen toolbar action", async () => {
   const { container, rerender } = render(<App initialInstanceId="desk_1" />);
   await screen.findByLabelText("3D视口");

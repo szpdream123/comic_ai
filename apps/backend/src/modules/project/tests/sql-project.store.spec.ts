@@ -175,6 +175,7 @@ function createInput() {
     scriptInput: "Episode: a creator tests durable SQL state.",
     aspectRatio: "9:16",
     resolution: "1080p",
+    projectType: "animation",
     idempotencyKey: `${operationNames.projectCreate}:pilot`,
   };
 }
