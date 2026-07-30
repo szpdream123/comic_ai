@@ -54,13 +54,13 @@ export function getActiveCameraWaypointIndex(progress: number, times: number[]) 
 
 function getExportUnavailableReason(input: {
   hasCamera: boolean;
-  keyframeCount: number;
+  hasPlayableMotion: boolean;
   hasFormat: boolean;
   exporting: boolean;
 }) {
   if (input.exporting) return "正在录制参考视频，请稍候";
   if (!input.hasCamera) return "当前没有可用的摄像机，请先创建或打开摄像机";
-  if (input.keyframeCount < 2) return "至少在运镜中添加两个跟拍";
+  if (!input.hasPlayableMotion) return "至少添加两个摄像机运镜点，或为人物/道具添加动作路线";
   if (!input.hasFormat) return "当前浏览器没有可用的视频导出格式";
   return null;
 }
@@ -142,19 +142,23 @@ export function MotionStudio({
     : supportedExportFormats.length
       ? "当前浏览器不支持 MP4 格式导出，已显示当前可用格式。"
       : "当前浏览器不支持 MP4、WebM 或 OGG 格式导出。";
+  const canPlay = (activeMotionPath?.keyframes.length ?? 0) >= 2
+    || sceneObjects.some((item) => (item.motionPath?.keyframes?.length ?? 0) >= 2 || Boolean(item.characterRig?.actionPresetId));
   const exportUnavailableReason = getExportUnavailableReason({
     hasCamera: Boolean(activeCamera && activeMotionPath),
-    keyframeCount: activeMotionPath?.keyframes.length ?? 0,
+    hasPlayableMotion: canPlay,
     hasFormat: Boolean(selectedExportFormat),
     exporting,
   });
   const isPilotCameraPlayback = cameraPilotMode !== "idle"
     && cameraMotionPlaying
     && (activeMotionPath?.keyframes.length ?? 0) >= 2;
+  const canvasEntryMode = getDirectorDeskThemeRoot().dataset.directorDeskEntryMode === "canvas";
+  const exportActionLabel = canvasEntryMode ? "导出到画布" : "导出";
 
   const exportButton = (
-    <button type="button" className="motion-studio-export" aria-label="导出运镜" aria-expanded={exportOpen} onClick={() => setExportOpen((current) => !current)}>
-      <Download aria-hidden="true" size={14} />导出
+    <button type="button" className="motion-studio-export" aria-label={canvasEntryMode ? exportActionLabel : "导出运镜"} aria-expanded={exportOpen} onClick={() => setExportOpen((current) => !current)}>
+      <Download aria-hidden="true" size={14} />{exportActionLabel}
     </button>
   );
   const exportPanel = exportOpen ? (
@@ -192,7 +196,6 @@ export function MotionStudio({
 
   const motionPath = activeMotionPath;
   const trackableObjects = sceneObjects.filter(isCameraFocusableObject);
-  const canPlay = motionPath.keyframes.length >= 2 || sceneObjects.some((item) => (item.motionPath?.keyframes?.length ?? 0) >= 2);
   const selectedKeyframe = motionPath.keyframes.find((item) => item.id === selectedCameraKeyframeId) ?? null;
   const trackingObjectId = selectedKeyframe?.targetMode === "object"
     ? selectedKeyframe.targetObjectId ?? ""
@@ -344,7 +347,7 @@ export function MotionStudio({
   }
 
   async function exportReferenceVideo() {
-    if (!activeCamera || !activeMotionPath || activeMotionPath.keyframes.length < 2 || exporting) return;
+    if (!activeCamera || !activeMotionPath || !canPlay || exporting) return;
     if (!selectedExportFormat) {
       setExportStatus("当前浏览器没有可用的视频导出格式");
       return;

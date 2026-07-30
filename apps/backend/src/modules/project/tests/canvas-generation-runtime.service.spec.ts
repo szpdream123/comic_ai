@@ -5,6 +5,11 @@ import { describe, it } from "node:test";
 import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
 import { grantCredits, reserveCredits } from "../../credit-billing/credit-ledger.service.ts";
 import type { CanvasActorScope } from "../../identity/canvas-actor-scope.service.ts";
+import {
+  markGenerationTaskSnapshotFailed,
+  upsertQueuedGenerationTaskSnapshot,
+} from "../../model-gateway/generation-task-snapshot.service.ts";
+import { createOrReuseProviderRequest } from "../../model-gateway/provider-request.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createScopedStorageObject, markStorageObjectAvailable } from "../../storage/storage.service.ts";
 import { registerOrReuseCanvasUploadFingerprint } from "../../storage/canvas-upload-fingerprint.service.ts";
@@ -590,6 +595,140 @@ describe("Canvas generation runtime", { concurrency: false }, () => {
         canvasProjectId: fixture.canvasId, actorScope: fixture.scope,
       });
       assert.equal(empty.items.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("projects terminal snapshot and task state into queued Canvas history runs", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedCanvas(db);
+    const now = new Date("2026-07-25T09:10:00.000Z");
+    try {
+      const snapshotWorkflow = await createWorkflowWithTasks(db, {
+        userId: fixture.userId,
+        projectId: null,
+        canvasProjectId: fixture.canvasId,
+        workflowType: "canvas_history_snapshot",
+        inputSnapshot: {},
+        tasks: [{
+          taskType: "episode_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "canvas",
+          targetEntityId: fixture.canvasId,
+          inputSnapshot: {},
+        }],
+      });
+      const snapshotTask = snapshotWorkflow.tasks[0]!;
+      const snapshotRun = await createCanvasNodeRun(db, {
+        canvasProjectId: fixture.canvasId,
+        nodeKey: "alpha",
+        idempotencyKey: "history-terminal-snapshot",
+        status: "queued",
+        mediaKind: "image",
+        taskId: snapshotTask.id,
+        actorScope: fixture.scope,
+        now,
+      });
+      await upsertQueuedGenerationTaskSnapshot(db, {
+        projectId: null,
+        canvasProjectId: fixture.canvasId,
+        episodeId: null,
+        targetType: "canvas",
+        targetId: fixture.canvasId,
+        workflowId: snapshotWorkflow.workflow.id,
+        taskId: snapshotTask.id,
+        modelConfigId: null,
+        creditReservationId: null,
+        modelCode: "canvas-test-model",
+        mediaType: "image",
+        taskMode: "sync",
+        estimatedCredits: 0,
+        requestSummary: {},
+        now,
+      });
+      const provider = await createOrReuseProviderRequest(db, {
+        userId: fixture.userId,
+        projectId: null,
+        canvasProjectId: fixture.canvasId,
+        workflowId: snapshotWorkflow.workflow.id,
+        taskId: snapshotTask.id,
+        providerName: "canvas-history-test",
+        providerOperation: "image_generation",
+        requestKey: randomUUID(),
+        requestHash: "snapshot-request-hash",
+        payloadRef: `creator://generation/canvas/${fixture.canvasId}`,
+        payloadHash: "snapshot-payload-hash",
+        redactedPayload: {},
+        now,
+      });
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: snapshotTask.id,
+        providerRequestId: provider.request.id,
+        failure: {
+          failureCode: "content_policy_rejected",
+          displayMessage: "Reference image or prompt was rejected.",
+        },
+        now: new Date("2026-07-25T09:10:01.000Z"),
+      });
+      await db.query(
+        "UPDATE tasks SET status='failed', failure_code='content_policy_rejected', updated_at=$2 WHERE id=$1",
+        [snapshotTask.id, new Date("2026-07-25T09:10:01.000Z")],
+      );
+
+      const taskWorkflow = await createWorkflowWithTasks(db, {
+        userId: fixture.userId,
+        projectId: null,
+        canvasProjectId: fixture.canvasId,
+        workflowType: "canvas_history_task",
+        inputSnapshot: {},
+        tasks: [{
+          taskType: "episode_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "canvas",
+          targetEntityId: fixture.canvasId,
+          inputSnapshot: {},
+        }],
+      });
+      const taskOnly = taskWorkflow.tasks[0]!;
+      const taskRun = await createCanvasNodeRun(db, {
+        canvasProjectId: fixture.canvasId,
+        nodeKey: "beta",
+        idempotencyKey: "history-terminal-task",
+        status: "queued",
+        mediaKind: "image",
+        taskId: taskOnly.id,
+        actorScope: fixture.scope,
+        now: new Date("2026-07-25T09:11:00.000Z"),
+      });
+      await db.query(
+        "UPDATE tasks SET status='failed', failure_code='provider_failed', updated_at=$2 WHERE id=$1",
+        [taskOnly.id, new Date("2026-07-25T09:11:01.000Z")],
+      );
+
+      const failed = await listCanvasGenerationHistory(db, {
+        canvasProjectId: fixture.canvasId,
+        actorScope: fixture.scope,
+        status: "failed",
+      });
+      const byId = new Map(failed.items.map((item) => [item.id, item]));
+      const snapshotItem = byId.get(snapshotRun.id)!;
+      assert.equal(snapshotItem.status, "failed");
+      assert.equal(snapshotItem.taskId, snapshotTask.id);
+      assert.equal(snapshotItem.providerRequestId, provider.request.id);
+      assert.ok(snapshotItem.generationSnapshotId);
+      assert.equal((snapshotItem.failure as { failureCode?: string }).failureCode, "content_policy_rejected");
+      assert.ok((snapshotItem.failure as { displayMessage?: string }).displayMessage);
+      const taskItem = byId.get(taskRun.id)!;
+      assert.equal(taskItem.status, "failed");
+      assert.deepEqual(taskItem.failure, { failureCode: "provider_failed" });
+
+      const queued = await listCanvasGenerationHistory(db, {
+        canvasProjectId: fixture.canvasId,
+        actorScope: fixture.scope,
+        status: "queued",
+      });
+      assert.equal(queued.items.length, 0);
     } finally {
       await db.close();
     }

@@ -378,7 +378,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   if (deps.createProviderConfigDraft) {
     registry.register({
       id: "provider.config_draft",
-      description: "Draft a Canvas-local default model and safe generation setting change using an active administrator model.",
+      description: "Create a Canvas-local provider configuration draft only; this does not change settings. Use it only when the user asks to change defaults, then call provider.config_apply with the returned draft id before relying on the new settings.",
       effect: "config_write",
       requiredCapability: "canvas:edit",
       inputSchema: {
@@ -411,7 +411,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   if (deps.applyProviderConfigDraft) {
     registry.register({
       id: "provider.config_apply",
-      description: "Apply an approved Canvas-local provider configuration draft with settings revision validation.",
+      description: "Apply a provider configuration draft returned by provider.config_draft. Settings do not change until this tool succeeds.",
       effect: "config_write",
       requiredCapability: "canvas:edit",
       inputSchema: {
@@ -477,7 +477,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   }
   registry.register({
     id: "canvas.patch",
-    description: "Apply validated canvas operations against an expected revision.",
+    description: "Apply validated canvas operations against an expected revision. Use RFC 6902 add/replace/remove operations, or {type:'addEdge',edge:{id,kind,sourceNodeId,sourcePortId,targetNodeId,targetPortId,data}}. Edge node and port IDs must exist in the current canvas, and execution edges must remain acyclic.",
     effect: "canvas_write",
     requiredCapability: "canvas:edit",
     inputSchema: {
@@ -506,14 +506,25 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   });
   registry.register({
     id: "generation.create",
-    description: "Submit media generation through the platform generation intake.",
+    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass the model directly for one-off generation; do not change Canvas provider defaults merely to run this tool.",
     effect: "media_generation",
     requiredCapability: "canvas:run",
     inputSchema: {
       type: "object",
       properties: {
         kind: { type: "string", enum: ["image", "video", "audio"] },
-        request: { type: "object" },
+        request: {
+          type: "object",
+          properties: {
+            model: { type: "string", minLength: 1 },
+            prompt: { type: "string" },
+            text: { type: "string" },
+            motionPrompt: { type: "string" },
+            parameters: { type: "object", additionalProperties: true },
+          },
+          required: ["model"],
+          additionalProperties: true,
+        },
       },
       required: ["kind", "request"],
       additionalProperties: false,

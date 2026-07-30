@@ -388,8 +388,34 @@ it("explains why reference video export is unavailable", async () => {
 
   await user.click(exportButton);
 
-  expect(onNotify).toHaveBeenCalledWith("至少在运镜中添加两个跟拍", "error");
-  expect(screen.queryByText("至少在运镜中添加两个跟拍")).not.toBeInTheDocument();
+  expect(onNotify).toHaveBeenCalledWith("至少添加两个摄像机运镜点，或为人物/道具添加动作路线", "error");
+  expect(screen.queryByText("至少添加两个摄像机运镜点，或为人物/道具添加动作路线")).not.toBeInTheDocument();
+});
+
+it("allows reference video export when an object route exists without camera waypoints", async () => {
+  const state = useDirectorStore.getState();
+  useDirectorStore.setState({
+    ...state,
+    project: {
+      ...state.project,
+      objects: state.project.objects.map((item) => item.id === "char_default_a" ? {
+        ...item,
+        motionPath: {
+          interpolation: "linear" as const,
+          keyframes: [
+            { id: "route-1", time: 0, transform: item.transform },
+            { id: "route-2", time: 1, transform: { ...item.transform, position: [3, 0, 0] as [number, number, number] } },
+          ],
+        },
+      } : item),
+    },
+  });
+  const user = userEvent.setup();
+  render(<MotionStudio getViewportCameraSnapshot={() => ({ position: [0, 2, 8], target: [0, 1, 0], fov: 50 })} />);
+
+  await user.click(screen.getByRole("button", { name: "导出运镜" }));
+
+  expect(screen.getByRole("button", { name: "导出 WebM" })).toHaveAttribute("aria-disabled", "false");
 });
 
 it("prefers MP4 when the browser supports it", async () => {
@@ -427,6 +453,25 @@ it("places export controls in the top view switcher when it is available", async
     await user.click(exportButton);
 
     expect(within(topBarCenter).getByRole("region", { name: "导出运镜设置" })).toBeInTheDocument();
+  } finally {
+    directorDeskHost.remove();
+  }
+});
+
+it("labels the export action for Canvas writeback when embedded from Canvas", () => {
+  const directorDeskHost = document.createElement("div");
+  directorDeskHost.dataset.directorDeskEntryMode = "canvas";
+  const shadowRoot = directorDeskHost.attachShadow({ mode: "open" });
+  const topBarCenter = document.createElement("div");
+  topBarCenter.dataset.directorExportHost = "true";
+  shadowRoot.append(topBarCenter);
+  document.body.append(directorDeskHost);
+  setDirectorDeskThemeRoot(directorDeskHost);
+
+  try {
+    render(<MotionStudio getViewportCameraSnapshot={() => ({ position: [0, 2, 8], target: [0, 1, 0], fov: 50 })} />);
+
+    expect(within(topBarCenter).getByRole("button", { name: "导出到画布" })).toBeInTheDocument();
   } finally {
     directorDeskHost.remove();
   }

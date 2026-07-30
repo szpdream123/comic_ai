@@ -8436,7 +8436,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -11854,6 +11854,11 @@
         return provider.includes("bananarouter") || provider.includes("banana router") || provider.includes("香蕉");
       }
 
+      function isCumobProviderName(providerName = "") {
+        const provider = String(providerName || "").trim().toLowerCase();
+        return provider.includes("cumob") || provider.includes("酷模");
+      }
+
       const MODEL_ADAPTER_OPTIONS = [
         { value: "openai_images", label: "OpenAI 图片适配器", mediaTypes: ["image"] },
         { value: "cumob_image", label: "酷模图片适配器", mediaTypes: ["image"] },
@@ -11867,6 +11872,7 @@
         { value: "saier_video", label: "塞尔视频适配器", mediaTypes: ["video"] },
         { value: "banana_router", label: "BananaRouter 模型适配器", mediaTypes: ["image", "video"] },
         { value: "openai_compatible_chat", label: "OpenAI 兼容文本适配器", mediaTypes: ["text"] },
+        { value: "cumob_chat", label: "酷模文本适配器", mediaTypes: ["text"] },
         { value: "custom_http", label: "通用 HTTP 图片适配器", mediaTypes: ["image"] },
       ];
 
@@ -11875,7 +11881,7 @@
         const isVideo = mediaType === "video";
         const isText = mediaType === "text";
         return isText
-          ? "openai_compatible_chat"
+          ? (isCumobProviderName(providerName) ? "cumob_chat" : "openai_compatible_chat")
           : isVideo
           ? (
             isBananaRouterProviderName(providerName)
@@ -11950,7 +11956,9 @@
           capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"] } : { input: ["prompt", "image"], output: ["image"] },
           defaultParams: {},
           providerConfig: isText
-            ? { baseURL: "", requestPath: "/chat/completions", apiKeyEnv: "", requestFormat: "openai_compatible_chat", timeoutMs: 120000 }
+            ? (protocol === "cumob_chat"
+              ? { baseURL: "https://api.cumob.com", requestPath: "/v1/chat/completions", apiKeyEnv: "CUMOB_API_KEY", requestFormat: "cumob_chat", timeoutMs: 120000 }
+              : { baseURL: "", requestPath: "/chat/completions", apiKeyEnv: "", requestFormat: "openai_compatible_chat", timeoutMs: 120000 })
             : isVideo
             ? (
               protocol === "banana_router"
@@ -12367,6 +12375,8 @@
                 <label class="field"><span>\u8bf7\u6c42\u9002\u914d\u5668</span><select name="providerAdapter">${modelAdapterOptionsMarkup(modelKindOption(selectedModelKind).mediaType, selectedModelAdapter, base.providerName)}</select></label>
                 <label class="field"><span>\u8ba1\u8d39\u6a21\u5f0f</span><select name="billingMode"><option value="fixed" ${String(base.pricing?.billingMode || "fixed") !== "duration" ? "selected" : ""}>\u56fa\u5b9a\u8ba1\u8d39</option><option value="duration" ${String(base.pricing?.billingMode || "fixed") === "duration" ? "selected" : ""}>\u65f6\u957f\u8ba1\u8d39</option></select></label>
                 ${modelKindOption(selectedModelKind).mediaType === "video" ? "" : `<label class="field"><span>\u79ef\u5206</span><input name="baseCredits" type="number" min="1" step="1" value="${Number(base.pricing?.baseCredits || 90)}" required /></label>`}
+                <label class="field" data-canvas-agent-pricing-field ${modelKindOption(selectedModelKind).mediaType === "text" ? "" : "hidden"}><span>\u753b\u5e03\u534f\u4f5c\u8ba1\u8d39\u6a21\u5f0f</span><select name="canvasAgentBillingMode"><option value="token" selected>\u6309\u603b Token \u8ba1\u8d39</option></select></label>
+                <label class="field" data-canvas-agent-pricing-field ${modelKindOption(selectedModelKind).mediaType === "text" ? "" : "hidden"}><span>\u753b\u5e03\u534f\u4f5c Token \u5355\u4ef7\uff08\u79ef\u5206 / 100\u4e07 Token\uff09</span><input name="canvasAgentTokenCreditsPerMillion" type="number" min="0.000001" step="0.000001" value="${escapeAttribute(base.pricing?.canvasAgentTokenCreditsPerMillion ?? base.pricing?.tokenCreditsPerMillion ?? "")}" ${modelKindOption(selectedModelKind).mediaType === "text" ? "required" : ""} /></label>
                 <label class="field"><span>API \u5bc6\u94a5</span><select name="modelApiKeyEnv">${modelSecretReferenceOptions(selectedApiKeyEnv, base.providerName)}</select></label>
                 <label class="field"><span>\u5907\u6ce8</span><input name="remark" value="${escapeAttribute(base.remark || "")}" /></label>
               </div>
@@ -12400,6 +12410,10 @@
         });
         form.elements.modelKind.addEventListener("change", () => {
           const kind = modelKindOption(form.elements.modelKind.value);
+          form.querySelectorAll("[data-canvas-agent-pricing-field]").forEach((field) => {
+            field.hidden = kind.mediaType !== "text";
+          });
+          form.elements.canvasAgentTokenCreditsPerMillion.required = kind.mediaType === "text";
           form.elements.providerAdapter.innerHTML = modelAdapterOptionsMarkup(kind.mediaType, form.elements.providerAdapter.value, form.elements.providerName.value);
           const template = fixedModelTemplate(kind.mediaType, form.elements.providerName.value, form.elements.providerAdapter.value);
           form.elements.requestPath.value = template.providerConfig.requestPath || template.providerConfig.createTaskEndpoint || template.providerConfig.endpoint || "";
@@ -12475,6 +12489,17 @@
           billingMode: String(form.get("billingMode") || "fixed") === "duration" ? "duration" : "fixed",
           baseCredits: baseCreditsFromForm(form, existing?.pricing?.baseCredits ?? fixed.pricing.baseCredits, resolutionCredits),
         };
+        if (mediaType === "text") {
+          pricing.canvasAgentBillingMode = String(form.get("canvasAgentBillingMode") || "token");
+          pricing.canvasAgentTokenCreditsPerMillion = Number(form.get("canvasAgentTokenCreditsPerMillion"));
+          delete pricing.tokenCreditsPerMillion;
+          delete pricing.inputCreditsPerMillion;
+          delete pricing.outputCreditsPerMillion;
+        } else {
+          delete pricing.canvasAgentBillingMode;
+          delete pricing.canvasAgentTokenCreditsPerMillion;
+          delete pricing.tokenCreditsPerMillion;
+        }
         if (Object.keys(resolutionCredits).length > 0) {
           pricing.resolutionCredits = resolutionCredits;
         } else {

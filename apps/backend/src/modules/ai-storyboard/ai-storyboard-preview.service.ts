@@ -29,6 +29,7 @@ export type AiStoryboardPreviewStreamEvent =
   | { type: "complete"; preview: ReturnType<typeof normalizePreview> & { rawMarkdown?: AiStoryboardPreviewRawMarkdown } };
 
 type AssetPromptStage = "scene" | "character" | "prop" | "shot";
+type AiStoryboardPromptStage = "script" | AssetPromptStage;
 
 export interface TextChatGatewayLike {
   completeJson(input: {
@@ -55,6 +56,8 @@ export interface AiStoryboardPreviewInput {
   projectId: string;
   createdByUserId?: string | null;
   scriptText: string;
+  modelCode?: string | null;
+  selectedStages?: AiStoryboardPromptStage[];
   skipScriptStage?: boolean;
   packages: {
     skillPrompt?: string;
@@ -88,10 +91,16 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
   }
 
   async function* generatePreviewStream(input: AiStoryboardPreviewInput): AsyncIterable<AiStoryboardPreviewStreamEvent> {
-    const shouldSkipScriptStage = input.skipScriptStage === true;
+    const selectedStages = Array.isArray(input.selectedStages)
+      ? new Set(input.selectedStages)
+      : null;
+    const shouldRunScriptStage = selectedStages
+      ? selectedStages.has("script")
+      : input.skipScriptStage !== true;
+    const modelCode = String(input.modelCode ?? "deepseek-chat").trim() || "deepseek-chat";
     let scriptText = "";
     let scriptRaw = "";
-    if (shouldSkipScriptStage) {
+    if (!shouldRunScriptStage) {
       scriptText = String(input.scriptText ?? "").trim();
       if (!scriptText) {
         throw new Error("ai_storyboard_script_empty");
@@ -104,7 +113,7 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       yield { type: "script_start" };
       for await (const delta of streamJsonText({
         gateway: deps.gateway,
-        model: "deepseek-chat",
+        model: modelCode,
         prompt: scriptPrompt,
         projectId: input.projectId,
         createdByUserId: input.createdByUserId,
@@ -122,10 +131,19 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
       throw new Error("ai_storyboard_script_empty");
     }
 
-    const sceneRaw = yield* runAssetPromptStage("scene", "场景提示词生成", buildScenePrompt(scriptText, input), input);
-    const characterRaw = yield* runAssetPromptStage("character", "角色提示词生成", buildCharacterPrompt(scriptText, input), input);
-    const propRaw = yield* runAssetPromptStage("prop", "道具提示词生成", buildPropPrompt(scriptText, input), input);
-    const shotRaw = yield* runAssetPromptStage("shot", "分镜提示词生成", buildShotPrompt(scriptText, input), input);
+    const shouldRunStage = (stage: AssetPromptStage) => !selectedStages || selectedStages.has(stage);
+    const sceneRaw = shouldRunStage("scene")
+      ? yield* runAssetPromptStage("scene", "场景提示词生成", buildScenePrompt(scriptText, input), input, modelCode)
+      : "";
+    const characterRaw = shouldRunStage("character")
+      ? yield* runAssetPromptStage("character", "角色提示词生成", buildCharacterPrompt(scriptText, input), input, modelCode)
+      : "";
+    const propRaw = shouldRunStage("prop")
+      ? yield* runAssetPromptStage("prop", "道具提示词生成", buildPropPrompt(scriptText, input), input, modelCode)
+      : "";
+    const shotRaw = shouldRunStage("shot")
+      ? yield* runAssetPromptStage("shot", "分镜提示词生成", buildShotPrompt(scriptText, input), input, modelCode)
+      : "";
 
     yield { type: "complete", preview: {
       ...normalizePreview(scriptText, {
@@ -148,13 +166,14 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     title: string,
     prompt: string,
     input: AiStoryboardPreviewInput,
+    modelCode: string,
   ): AsyncIterable<AiStoryboardPreviewStreamEvent> {
     yield { type: "asset_prompt", stage, title, text: prompt };
     yield { type: "asset_start", stage, title };
     let raw = "";
     for await (const delta of streamJsonText({
       gateway: deps.gateway,
-      model: "deepseek-chat",
+      model: modelCode,
       prompt,
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,

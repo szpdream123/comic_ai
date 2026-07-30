@@ -16,6 +16,7 @@ import {
   resolveCanvasPromptWithDirectives,
   validateCanvasPromptExpansionDirectiveContract,
 } from "../canvas-prompt-reference.service.ts";
+import { upsertLibraryAssetWithVersion } from "../asset-library.service.ts";
 import { createCanvasUserConfig, createCanvasUserConfigVersion } from "../canvas-user-config.service.ts";
 
 describe("Canvas server prompt references", { concurrency: false }, () => {
@@ -153,6 +154,85 @@ describe("Canvas server prompt references", { concurrency: false }, () => {
         (error: unknown) => error instanceof CanvasPromptReferenceError
           && error.code === "canvas_prompt_reference_unavailable"
           && error.reference?.id === "gpt-image-by-display-name",
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("resolves official and owner team library assets for Canvas generation", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedCanvas(db);
+    const now = new Date("2026-07-25T08:20:00.000Z");
+    const officialId = randomUUID();
+    const officialVersionId = randomUUID();
+    const teamId = randomUUID();
+    const teamVersionId = randomUUID();
+    try {
+      for (const asset of [
+        {
+          id: officialId,
+          versionId: officialVersionId,
+          scope: "official" as const,
+          ownerUserId: null,
+          name: "官方医生",
+          description: "白大褂医生，医院走廊",
+          previewUrl: "/assets/library/official/characters/doctor.png",
+        },
+        {
+          id: teamId,
+          versionId: teamVersionId,
+          scope: "team" as const,
+          ownerUserId: fixture.userId,
+          name: "团队主角",
+          description: "红衣银发女主角",
+          previewUrl: "https://cdn.test/team-hero.png",
+        },
+      ]) {
+        await upsertLibraryAssetWithVersion(db, {
+          asset: {
+            id: asset.id,
+            scope: asset.scope,
+            ownerUserId: asset.ownerUserId,
+            createdByUserId: asset.ownerUserId,
+            assetType: "character",
+            category: "character",
+            folder: "角色",
+            name: asset.name,
+            description: asset.description,
+            tags: [],
+            status: "active",
+            requiresProEntitlement: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+          version: {
+            id: asset.versionId,
+            versionNumber: 1,
+            storageObjectKey: `library/${asset.id}.png`,
+            previewUrl: asset.previewUrl,
+            mimeType: "image/png",
+            width: 720,
+            height: 960,
+            metadata: {},
+            createdAt: now,
+          },
+        });
+      }
+
+      const sourcePrompt = `@drama:${officialId} | @drama:${teamId}@${teamVersionId}`;
+      const result = await resolveCanvasPromptReferences(db, {
+        actorScope: fixture.scope,
+        sourcePrompt,
+      });
+
+      assert.equal(result.expandedPrompt, "白大褂医生，医院走廊 | 红衣银发女主角");
+      assert.deepEqual(result.references.map((item) => item.resolvedVersionId), [officialVersionId, teamVersionId]);
+      assert.deepEqual(
+        applyCanvasPromptDramaBindings({}, result.executionBindings.drama).referenceImages,
+        [
+          { url: "https://cdn.test/team-hero.png" },
+        ],
       );
     } finally {
       await db.close();

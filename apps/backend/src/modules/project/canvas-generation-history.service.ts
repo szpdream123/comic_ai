@@ -29,8 +29,18 @@ export async function listCanvasGenerationHistory(
   const limit = Math.max(1, Math.min(200, Math.trunc(input.limit ?? 50)));
   const params: unknown[] = [input.canvasProjectId];
   const where = ["run.canvas_project_id = $1", "run.deleted_at IS NULL"];
+  const snapshotStatus = "COALESCE(snapshot_by_id.status, snapshot_by_task.status)";
+  const effectiveStatus = `CASE
+    WHEN run.status IN ('succeeded','failed','canceled','result_unknown','manual_review_required') THEN run.status
+    WHEN ${snapshotStatus} IN ('succeeded','failed','canceled','result_unknown','manual_review_required') THEN ${snapshotStatus}
+    WHEN task.status IN ('succeeded','failed','canceled','result_unknown','manual_review_required') THEN task.status
+    WHEN ${snapshotStatus} IN ('queued','running') THEN ${snapshotStatus}
+    WHEN task.status = 'cancel_requested' THEN 'running'
+    WHEN task.status IN ('queued','running') THEN task.status
+    ELSE run.status
+  END`;
   if (input.nodeKey?.trim()) { params.push(input.nodeKey.trim()); where.push(`run.node_key = $${params.length}`); }
-  if (input.status?.trim()) { params.push(input.status.trim()); where.push(`run.status = $${params.length}`); }
+  if (input.status?.trim()) { params.push(input.status.trim()); where.push(`${effectiveStatus} = $${params.length}`); }
   if (input.mediaKind?.trim()) { params.push(input.mediaKind.trim()); where.push(`run.media_kind = $${params.length}`); }
   if (input.search?.trim()) {
     params.push(`%${input.search.trim().replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
@@ -47,16 +57,39 @@ export async function listCanvasGenerationHistory(
   }
   params.push(limit + 1);
   const rows = await db.query<Record<string, unknown>>(`
-    SELECT run.id, run.node_key, run.run_no, run.status, run.media_kind, run.model_code,
+    SELECT run.id, run.node_key, run.run_no, ${effectiveStatus} AS status, run.media_kind, run.model_code,
            run.target_type, run.target_id, run.input_snapshot_json, run.output_snapshot_json,
-           run.failure_json, run.task_id, run.created_at, run.updated_at,
+           CASE WHEN ${effectiveStatus} = 'succeeded' THEN NULL ELSE COALESCE(
+             run.failure_json,
+             snapshot_by_id.failure_json,
+             snapshot_by_task.failure_json,
+             CASE WHEN task.status IN ('failed','canceled','result_unknown','manual_review_required')
+               THEN jsonb_build_object('failureCode', COALESCE(task.failure_code, task.status))
+               ELSE NULL
+             END
+           ) END AS failure_json,
+           COALESCE(run.task_id, snapshot_by_id.task_id, snapshot_by_task.task_id) AS task_id,
+           COALESCE(run.generation_snapshot_id, snapshot_by_id.id, snapshot_by_task.id) AS generation_snapshot_id,
+           COALESCE(run.provider_request_id, snapshot_by_id.provider_request_id, snapshot_by_task.provider_request_id) AS provider_request_id,
+           run.created_at, run.updated_at,
            COALESCE(jsonb_agg(to_jsonb(artifact) ORDER BY artifact.created_at DESC)
              FILTER (WHERE artifact.id IS NOT NULL), '[]'::jsonb) AS artifacts
     FROM creator_canvas_node_runs run
+    LEFT JOIN ai_generation_task_snapshots snapshot_by_id
+      ON snapshot_by_id.id = run.generation_snapshot_id
+    LEFT JOIN ai_generation_task_snapshots snapshot_by_task
+      ON snapshot_by_task.task_id = run.task_id AND snapshot_by_id.id IS NULL
+    LEFT JOIN tasks task
+      ON task.id = COALESCE(run.task_id, snapshot_by_id.task_id, snapshot_by_task.task_id)
     LEFT JOIN creator_canvas_node_artifacts artifact
       ON artifact.run_id = run.id AND artifact.deleted_at IS NULL
     WHERE ${where.join(" AND ")}
-    GROUP BY run.id
+    GROUP BY run.id,
+             snapshot_by_id.id, snapshot_by_id.status, snapshot_by_id.failure_json,
+             snapshot_by_id.task_id, snapshot_by_id.provider_request_id,
+             snapshot_by_task.id, snapshot_by_task.status, snapshot_by_task.failure_json,
+             snapshot_by_task.task_id, snapshot_by_task.provider_request_id,
+             task.id, task.status, task.failure_code
     ORDER BY run.created_at DESC, run.id DESC
     LIMIT $${params.length}
   `, params);
@@ -225,6 +258,8 @@ function serializeHistoryRow(row: Record<string, unknown>) {
     outputSnapshot: parseJson(row.output_snapshot_json),
     failure: parseJson(row.failure_json),
     taskId: row.task_id ?? null,
+    generationSnapshotId: row.generation_snapshot_id ?? null,
+    providerRequestId: row.provider_request_id ?? null,
     artifacts: parseJson(row.artifacts) ?? [],
     createdAt: new Date(String(row.created_at)).toISOString(),
     updatedAt: new Date(String(row.updated_at)).toISOString(),

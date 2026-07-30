@@ -17,7 +17,7 @@ export function canvasDocumentToX6Data(document) {
       y: Number(node.position?.y ?? 0),
       width: size.width,
       height: size.height,
-      zIndex: node?.type === "group" ? 1 : 2,
+      zIndex: node?.type === "group" ? -1 : 2,
       ...(node.parentGroupId && visibleNodeIds.has(node.parentGroupId)
         ? { parent: node.parentGroupId }
         : {}),
@@ -34,7 +34,7 @@ export function canvasDocumentToX6Data(document) {
     .filter((edge) => visibleNodeIds.has(edge.sourceNodeId) && visibleNodeIds.has(edge.targetNodeId))
     .map((edge) => ({
     id: edge.id,
-    shape: "edge",
+    shape: "comic-ai-canvas-edge",
     source: {
       cell: edge.sourceNodeId,
       port: edge.sourcePortId,
@@ -55,6 +55,9 @@ export function canvasDocumentToX6Data(document) {
 
 function normalizeCanvasX6NodeSize(node = {}) {
   const defaults = CANVAS_NODE_SIZES[node?.type] ?? { width: 300, height: 180 };
+  if (["script", "upload", "source-text", "source-image", "source-video", "source-audio"].includes(node?.type)) {
+    return { width: defaults.width, height: defaults.height };
+  }
   const requestedWidth = Number(node?.size?.width);
   const requestedHeight = Number(node?.size?.height);
   const minimumWidth = Math.max(240, Math.round(Number(defaults.width ?? 300) * 0.7));
@@ -68,6 +71,9 @@ function normalizeCanvasX6NodeSize(node = {}) {
 function buildX6EdgeAttrs(edge) {
   const active = edge?.data?.status === "running";
   return {
+    lines: {
+      connection: true,
+    },
     line: {
       stroke: active ? "#5ec7ff" : "rgba(156,168,174,0.82)",
       strokeWidth: active ? 3 : 2.2,
@@ -76,6 +82,11 @@ function buildX6EdgeAttrs(edge) {
         width: 8,
         height: 6,
       },
+    },
+    flow: {
+      stroke: active ? "#8edcff" : "#5ec7ff",
+      strokeWidth: active ? 2.4 : 2,
+      opacity: active ? 0.96 : 0.78,
     },
   };
 }
@@ -95,7 +106,9 @@ function buildX6NodeAttrs(node) {
     body: {
       stroke: status === "running" ? "#5ec7ff" : "rgba(255,255,255,0.18)",
       strokeWidth: status === "running" ? 2 : 1,
-      fill: node?.type === "send" ? "#181f22" : "#161717",
+      fill: node?.type === "group"
+        ? "transparent"
+        : node?.type === "send" ? "#181f22" : "#161717",
       rx: 8,
       ry: 8,
     },
@@ -294,7 +307,7 @@ function normalizeCanvasGrouping(nodes, preferredParents = new Map()) {
     if (parentGroupId) groupChildren.get(parentGroupId)?.push(nodeId);
   }
 
-  return clonedNodes.map((node) => {
+  const normalizedNodes = clonedNodes.map((node) => {
     const nodeId = String(node?.id ?? "");
     if (node?.type === "group") {
       node.data = {
@@ -308,6 +321,33 @@ function normalizeCanvasGrouping(nodes, preferredParents = new Map()) {
     if (parentGroupId) node.parentGroupId = parentGroupId;
     else delete node.parentGroupId;
     return node;
+  });
+  return constrainCanvasGroupNodePositions(normalizedNodes);
+}
+
+export function constrainCanvasGroupNodePositions(nodes = []) {
+  const nextNodes = nodes.map(structuredCloneSafe);
+  const groupById = new Map(nextNodes
+    .filter((node) => node?.type === "group")
+    .map((node) => [String(node?.id ?? ""), node]));
+  return nextNodes.map((node) => {
+    const group = groupById.get(String(node?.parentGroupId ?? ""));
+    if (!group || node?.type === "group") return node;
+    const groupSize = normalizeCanvasX6NodeSize(group);
+    const nodeSize = normalizeCanvasX6NodeSize(node);
+    const minX = Number(group.position?.x ?? 0);
+    const minY = Number(group.position?.y ?? 0);
+    const maxX = Math.max(minX, minX + groupSize.width - nodeSize.width);
+    const maxY = Math.max(minY, minY + groupSize.height - nodeSize.height);
+    const requestedX = Number(node.position?.x ?? minX);
+    const requestedY = Number(node.position?.y ?? minY);
+    return {
+      ...node,
+      position: {
+        x: Math.min(maxX, Math.max(minX, Number.isFinite(requestedX) ? requestedX : minX)),
+        y: Math.min(maxY, Math.max(minY, Number.isFinite(requestedY) ? requestedY : minY)),
+      },
+    };
   });
 }
 

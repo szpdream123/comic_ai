@@ -38,7 +38,6 @@ export function renderCanvasConfigLibraryShell(ui = {}) {
   const state = ensureCanvasConfigLibraryState(ui);
   return `
     <div class="canvas-config-library-shell" data-canvas-config-library>
-      <button class="canvas-config-library-launch" type="button" data-config-action="open" aria-label="配置库" title="配置库">库</button>
       ${state.open ? renderDrawer(state, ui) : ""}
     </div>
   `;

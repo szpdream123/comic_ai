@@ -147,6 +147,7 @@ ALTER TABLE ai_model_configs
     'creator_dev',
     'openai_images',
     'openai_compatible_chat',
+    'cumob_chat',
     'volcengine_ark_image',
     'volcengine_ark_video',
     'aliyun_bailian_video',

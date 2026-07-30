@@ -40,7 +40,7 @@ test("Canvas asset transfer streams authenticated storage content with progress"
     onProgress: (event) => progress.push(event),
   });
 
-  assert.equal(calls[0][0], "/api/storage/objects/storage%2F1/content");
+  assert.equal(calls[0][0], "/api/storage/objects/storage%2F1/content?download=1");
   assert.equal(calls[0][1].credentials, "include");
   assert.equal(result.totalBytes, 3);
   assert.equal(result.blob.size, 3);

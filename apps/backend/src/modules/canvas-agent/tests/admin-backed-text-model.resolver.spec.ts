@@ -10,6 +10,41 @@ import {
 } from "../admin-backed-text-model.resolver.ts";
 
 describe("admin-backed Canvas Agent model compatibility isolation", { concurrency: false }, () => {
+  it("lists and resolves an active backend text model without Agent-only metadata", async () => {
+    const db = await createMigratedTestDb();
+    const modelConfigId = randomUUID();
+    const modelCode = `canvas-text-${randomUUID()}`;
+    try {
+      await db.query(
+        `
+          INSERT INTO ai_model_configs (
+            id, model_code, display_name, provider_name, provider_model,
+            provider_protocol, invocation_mode, media_type, task_modes_json,
+            capabilities_json, parameter_schema_json, default_params_json,
+            provider_config_json, pricing_json, limits_json, ui_config_json,
+            status, sort_order, created_at, updated_at
+          ) VALUES (
+            $1, $2, 'Configured Text Model', 'test-provider', 'text-model',
+            'openai_compatible_chat', 'stream', 'text', '["text.script"]'::jsonb,
+            '{"input":["prompt"],"output":["text","json"]}'::jsonb,
+            '{}'::jsonb, '{}'::jsonb,
+            '{"baseURL":"https://provider.example/v1","apiKey":"must-not-leak"}'::jsonb,
+            '{"unit":"text","baseCredits":1}'::jsonb, '{}'::jsonb,
+            '{"modelKind":"text.script"}'::jsonb, 'active', 1, now(), now()
+          )
+        `,
+        [modelConfigId, modelCode],
+      );
+
+      assert.equal((await listAvailableCanvasAgentModels(db)).some((model) => model.modelCode === modelCode), true);
+      const resolution = await new AdminBackedTextModelResolver(db).resolve(modelCode);
+      assert.equal(resolution.id, modelCode);
+      assert.equal("apiKey" in resolution.snapshot.providerConfig, false);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("hides and rejects a model after a failed probe while allowing an explicit re-probe", async () => {
     const db = await createMigratedTestDb();
     const modelConfigId = randomUUID();

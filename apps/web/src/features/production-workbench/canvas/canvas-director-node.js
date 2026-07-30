@@ -82,6 +82,36 @@ export function updateCanvasDirectorCaptureDocument(document, nodeId, capture) {
   return changed ? { ...document, nodes } : document;
 }
 
+export function removeCanvasDirectorCaptureDocument(document, nodeId, artifactId) {
+  const normalizedNodeId = text(nodeId);
+  const normalizedArtifactId = text(artifactId);
+  if (!normalizedNodeId || !normalizedArtifactId || !Array.isArray(document?.nodes)) return document;
+  let changed = false;
+  const nodes = document.nodes.map((node) => {
+    if (node?.id !== normalizedNodeId || node?.type !== "ai-director") return node;
+    const existing = Array.isArray(node.data?.directorCaptures)
+      ? node.data.directorCaptures.map(normalizeCanvasDirectorCapture).filter(Boolean)
+      : [];
+    const directorCaptures = existing.filter((capture) => capture.artifactId !== normalizedArtifactId);
+    if (directorCaptures.length === existing.length) return node;
+    const current = directorCaptures.at(-1) ?? null;
+    changed = true;
+    return {
+      ...node,
+      data: {
+        ...(node.data ?? {}),
+        directorCaptures,
+        artifactId: current?.artifactId ?? null,
+        assetId: current?.assetId ?? null,
+        assetVersionId: current?.assetVersionId ?? null,
+        storageObjectId: current?.storageObjectId ?? null,
+        mediaKind: current?.artifactKind ?? null,
+      },
+    };
+  });
+  return changed ? { ...document, nodes } : document;
+}
+
 export function canvasDirectorRecentCaptures(node, limit = 4) {
   const captures = Array.isArray(node?.data?.directorCaptures)
     ? node.data.directorCaptures.map(normalizeCanvasDirectorCapture).filter(Boolean)
@@ -94,11 +124,16 @@ export function renderCanvasDirectorNodeBody(node = {}) {
   const captures = canvasDirectorRecentCaptures(node, 4);
   const total = Array.isArray(node?.data?.directorCaptures) ? node.data.directorCaptures.length : captures.length;
   const preview = captures.length
-    ? `<div class="canvas-director-capture-grid">${captures.map((capture) => {
+    ? `<div class="canvas-director-capture-grid" data-capture-count="${captures.length}">${captures.map((capture) => {
         const url = canvasDirectorCaptureUrl(capture);
-        return capture.artifactKind === "video"
-          ? `<video src="${escapeAttr(url)}" muted playsinline preload="metadata" aria-label="导演台参考视频"></video>`
+        const media = capture.artifactKind === "video"
+          ? `<video src="${escapeAttr(url)}" controls role="application" playsinline preload="metadata" aria-label="导演台参考视频"></video>`
           : `<img src="${escapeAttr(url)}" alt="导演台截图" draggable="false" loading="lazy" />`;
+        const mediaLabel = capture.artifactKind === "video" ? "视频" : "图片";
+        return `<div class="canvas-director-capture-item" data-artifact-id="${escapeAttr(capture.artifactId)}" data-media-kind="${escapeAttr(capture.artifactKind)}">
+          ${media}
+          <button type="button" class="canvas-director-capture-delete" data-action="delete-canvas-director-capture" data-node-id="${escapeAttr(nodeId)}" data-artifact-id="${escapeAttr(capture.artifactId)}" data-media-kind="${escapeAttr(capture.artifactKind)}" aria-label="删除导演台${mediaLabel}" title="删除">×</button>
+        </div>`;
       }).join("")}</div>`
     : `<div class="canvas-director-empty"><span aria-hidden="true">3D</span><strong>3D 导演台</strong><small>打开导演台并同步当前帧</small></div>`;
   return `<section class="canvas-director-node-body" data-canvas-director-body data-node-id="${escapeAttr(nodeId)}">

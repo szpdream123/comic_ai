@@ -1,5 +1,6 @@
 import type { TextGatewayChatCompletionChunk } from "../model-gateway/openai-compatible-text.adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../model-gateway/openai-compatible-text.adapter.ts";
+import { CumobTextAdapter } from "../model-gateway/cumob-text.adapter.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
   AdminBackedTextModelResolver,
@@ -40,11 +41,13 @@ interface CanvasAgentProbeAdapter {
 export class CanvasAgentModelCompatibilityProbeService {
   private readonly resolver: CanvasAgentProbeResolver;
   private readonly adapter: CanvasAgentProbeAdapter;
+  private readonly cumobAdapter: CanvasAgentProbeAdapter;
 
   constructor(input: {
     db: SqlDatabase;
     resolver?: CanvasAgentProbeResolver;
     adapter?: CanvasAgentProbeAdapter;
+    cumobAdapter?: CanvasAgentProbeAdapter;
     now?: () => number;
     timeoutMs?: number;
   }) {
@@ -52,6 +55,7 @@ export class CanvasAgentModelCompatibilityProbeService {
       allowFailedCompatibilityProbe: true,
     });
     this.adapter = input.adapter ?? new OpenAICompatibleTextAdapter();
+    this.cumobAdapter = input.cumobAdapter ?? new CumobTextAdapter();
     this.now = input.now ?? Date.now;
     this.timeoutMs = Math.max(1_000, Number(input.timeoutMs ?? 15_000));
   }
@@ -78,7 +82,10 @@ export class CanvasAgentModelCompatibilityProbeService {
     try {
       const structuredPromptFallback = model.capabilities.structuredJsonPrompt === true
         && model.capabilities.jsonSchema !== true;
-      const stream = await this.adapter.createChatCompletionStream({
+      const adapter = model.providerProtocol === "cumob_chat"
+        ? this.cumobAdapter
+        : this.adapter;
+      const stream = await adapter.createChatCompletionStream({
         baseURL: model.baseURL,
         apiKey: model.apiKey,
         providerModel: model.providerModel,

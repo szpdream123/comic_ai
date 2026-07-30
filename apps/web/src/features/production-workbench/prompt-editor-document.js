@@ -64,6 +64,7 @@ export function normalizePromptEditorSuggestion(item = {}) {
   const referenceId = String(
     item.referenceId ?? `mention-ref:${assetKind}:${assetId || label}`,
   ).trim();
+  const source = resolvePromptEditorMentionMediaSource(item, assetKind);
   return {
     ...item,
     id: assetId || referenceId,
@@ -72,6 +73,7 @@ export function normalizePromptEditorSuggestion(item = {}) {
     label,
     name: label,
     preview: resolvePromptEditorMentionPreview(item, assetKind),
+    ...(source ? { source } : {}),
     description: String(item.description ?? "").trim(),
     referenceId,
   };
@@ -147,6 +149,7 @@ function parsePromptLine(line, referenceByName) {
         label,
         name: label,
         preview: reference?.preview ?? reference?.previewUrl ?? "",
+        source: reference?.source ?? reference?.src ?? reference?.url ?? "",
         referenceId: reference?.id ?? "",
       }),
     });
@@ -165,6 +168,7 @@ function normalizeMentionAttributes(attrs) {
   const referenceId = String(
     attrs.referenceId ?? (assetId ? `mention-ref:${assetKind}:${assetId}` : ""),
   ).trim();
+  const source = resolvePromptEditorMentionMediaSource(attrs, assetKind);
   return {
     id: String(attrs.id ?? assetId ?? referenceId ?? label).trim() || label,
     assetId,
@@ -173,8 +177,35 @@ function normalizeMentionAttributes(attrs) {
     label,
     name: label,
     preview: resolvePromptEditorMentionPreview(attrs, assetKind),
+    ...(source ? { source } : {}),
     referenceId,
   };
+}
+
+function resolvePromptEditorMentionMediaSource(item = {}, assetKind = null) {
+  const kind = String(assetKind ?? item.assetKind ?? item.kind ?? "").trim();
+  if (kind !== "video") {
+    return "";
+  }
+  const explicitSource = firstPreviewValue([
+    item.source,
+    item.videoUrl,
+    item.resultVideoUrl,
+    item.sourceUrl,
+    item.src,
+    item.url,
+    item.downloadUrl,
+    item.latestVersion?.videoUrl,
+    item.latestVersion?.sourceUrl,
+    item.latestVersion?.src,
+    item.latestVersion?.url,
+  ]);
+  if (explicitSource) {
+    return explicitSource;
+  }
+  return [item.preview, item.previewUrl]
+    .map((candidate) => String(candidate ?? "").trim())
+    .find((candidate) => isMediaSourcePreview(candidate)) ?? "";
 }
 
 function firstPreviewValue(candidates, { rejectMediaSource = false } = {}) {

@@ -20,6 +20,7 @@ import {
   generateStoryboardVideos,
   handleCanvasLiveEventForTest,
   handleLocalStoryboardImageFileForTest,
+  handleNewCanvasHostChangeForTest,
   handleNewCanvasHostInputForTest,
   hasActiveWorkbenchTextSelection,
   handleWorkbenchActionForTest,
@@ -34,12 +35,15 @@ import {
   loadCanvasGenerationAssetsForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
+  persistCanvasSessionForTest,
   persistStoryboardCardDescriptionForTest,
   persistStoryboardDescriptionFromCardForTest,
   preserveStoryboardPromptRichTextForTest,
   reconcilePersistedStoryboardDescriptionForTest,
+  refreshCanvasAfterAgentPatchForTest,
   sanitizeEpisodeWorkbenchSelection,
   findProjectCoverInput,
+  flushProjectCanvasSaveForTest,
   refreshProductionWorkbenchForTest,
   reconcilePromptMentionMediaItemsForTest,
   reconcileSelectedStoryboardPendingGenerationForTest,
@@ -60,7 +64,9 @@ import {
   scheduleGenerationPollingForTest,
   scheduleTaskCenterPollingForTest,
   syncTeamMemberCreateDraftFromDomForTest,
+  syncCanvasProjectIdInLocationForTest,
   syncCanvasProjectsFromApiForTest,
+  syncCanvasRouteStateForTest,
   syncEpisodeStoryboardMapForTest,
   syncEpisodeAssetDescriptionState,
   updatePromptMentionState,
@@ -138,7 +144,7 @@ describe("production workbench home shell", () => {
         "第二个操作失败。",
       ]);
       assert.deepEqual(workbench.ui.toastQueue.map((toast) => toast.tone), ["success", "error"]);
-      assert.deepEqual(timers.map((timer) => timer.delay), [5000, 5000]);
+      assert.deepEqual(timers.map((timer) => timer.delay), [3000, 3000]);
 
       workbench.ui.toast = "";
 
@@ -154,7 +160,7 @@ describe("production workbench home shell", () => {
         "第一个操作成功。",
         "第三个操作成功。",
       ]);
-      assert.deepEqual(timers.map((timer) => timer.delay), [5000, 5000, 5000]);
+      assert.deepEqual(timers.map((timer) => timer.delay), [3000, 3000, 3000]);
 
       const firstToastId = workbench.ui.toastQueue[0].id;
       const removedToastIds = [];
@@ -176,6 +182,68 @@ describe("production workbench home shell", () => {
       timers[0].callback();
       assert.deepEqual(workbench.ui.toastQueue.map((toast) => toast.message), ["第三个操作成功。"]);
       assert.deepEqual(removedToastIds, [firstToastId]);
+    } finally {
+      if (previousWindow) {
+        globalThis.window = previousWindow;
+      } else {
+        delete globalThis.window;
+      }
+    }
+  });
+
+  it("dismisses Canvas success and error toasts from the ShadowRoot after three seconds", () => {
+    const previousWindow = globalThis.window;
+    const timers = [];
+    const visibleToastIds = new Set();
+    const removedToastIds = [];
+    let stackRemoved = 0;
+    const stack = {
+      querySelector(selector) {
+        if (selector === ".global-workbench-toast") {
+          return visibleToastIds.size ? {} : null;
+        }
+        const toastId = [...visibleToastIds].find((id) => selector === `[data-toast-id="${id}"]`);
+        return toastId
+          ? { remove: () => {
+              visibleToastIds.delete(toastId);
+              removedToastIds.push(toastId);
+            } }
+          : null;
+      },
+      remove() { stackRemoved += 1; },
+    };
+    globalThis.window = {
+      setTimeout(callback, delay) {
+        const id = timers.length + 1;
+        timers.push({ id, callback, delay });
+        return id;
+      },
+      clearTimeout() {},
+    };
+    try {
+      const workbench = {
+        ui: { busy: false, toast: "", toastQueue: [] },
+        toastDismissTimers: new Map(),
+        toastSequence: 0,
+        persistentToastId: null,
+        newCanvasMount: {
+          shadowRoot: {
+            querySelector(selector) { return selector === "#app-status" ? stack : null; },
+          },
+        },
+        root: { querySelector() { return null; } },
+      };
+      installWorkbenchToastQueueForTest(workbench);
+
+      workbench.ui.toast = { tone: "success", message: "保存成功。" };
+      workbench.ui.toast = { tone: "error", message: "保存失败。" };
+      workbench.ui.toastQueue.forEach((toast) => visibleToastIds.add(toast.id));
+
+      assert.deepEqual(timers.map((timer) => timer.delay), [3000, 3000]);
+      timers.forEach((timer) => timer.callback());
+      assert.deepEqual(workbench.ui.toastQueue, []);
+      assert.equal(removedToastIds.length, 2);
+      assert.equal(stackRemoved, 1);
     } finally {
       if (previousWindow) {
         globalThis.window = previousWindow;
@@ -757,7 +825,10 @@ describe("production workbench home shell", () => {
         async listGlobalGenerationConfig(options) {
           assert.deepEqual(options, { fresh: true, mediaType: "text" });
           return {
-            models: [{ modelCode: "deepseek-noval", mediaType: "text", pricing: { baseCredits: 160 } }],
+            models: [
+              { modelCode: "deepseek-noval", modelLabel: "DeepSeek 剧本模型", mediaType: "text", pricing: { baseCredits: 160 } },
+              { modelCode: "custom-script-model", modelLabel: "自定义剧本模型", mediaType: "text", pricing: { baseCredits: 80 } },
+            ],
           };
         },
       },
@@ -776,8 +847,18 @@ describe("production workbench home shell", () => {
     assert.equal(workbench.ui.scriptModalMode, "manual");
     assert.equal(workbench.ui.scriptTab, "script-library");
     assert.equal(workbench.ui.selectedScriptConversionSkillId, "official-script-skill");
+    assert.equal(workbench.ui.singleEpisodeTextModelCode, "deepseek-noval");
+    assert.match(workbench.root.innerHTML, /data-action="toggle-single-episode-text-model-menu"/);
     assert.match(workbench.root.innerHTML, /小说转剧本技能/);
     assert.match(workbench.root.innerHTML, /开始分析 160 \+ 9积分/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-single-episode-text-model", modelCode: "custom-script-model" },
+    });
+
+    assert.equal(workbench.ui.singleEpisodeTextModelCode, "custom-script-model");
+    assert.match(workbench.root.innerHTML, /自定义剧本模型/);
+    assert.match(workbench.root.innerHTML, /开始分析 80 \+ 9积分/);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "open-script-modal", scriptModalMode: "upload" },
@@ -32119,7 +32200,7 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /canvas-stage[^>]+--canvas-grid-size:24\.3px;--canvas-grid-x:-120px;--canvas-grid-y:48px/);
+    assert.match(html, /canvas-stage[^>]+--canvas-grid-size:27px;--canvas-grid-major-size:135px;--canvas-grid-x:-120px;--canvas-grid-y:48px/);
     assert.match(html, /canvas-flow[^>]+--canvas-pan-x:-120px;--canvas-pan-y:48px;--canvas-zoom:1\.35/);
     assert.match(html, /135%/);
   });
@@ -32589,6 +32670,84 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.openGenerationSelectMenu, "canvas:video-settings-panel");
   });
 
+  it("restores the selected canvas project from the detail URL after refresh", () => {
+    let replacedUrl = "";
+    const location = {
+      pathname: "/canvas",
+      search: "?source=gallery",
+      hash: "#tools-canvas",
+    };
+    syncCanvasProjectIdInLocationForTest("canvas-b", location, {
+      replaceState(_state, _title, url) {
+        replacedUrl = String(url);
+      },
+    });
+
+    assert.equal(replacedUrl, "/canvas?source=gallery&canvasProjectId=canvas-b#tools-canvas");
+    const restoredLocation = new URL(replacedUrl, "http://127.0.0.1:4310");
+    const workbench = {
+      ui: {
+        activeNavTab: "tools",
+        projectPanelMode: "library",
+        canvasProjectView: "list",
+        selectedCanvasProjectId: "canvas-a",
+      },
+    };
+    syncCanvasRouteStateForTest(workbench, restoredLocation.hash, restoredLocation);
+
+    assert.equal(workbench.ui.canvasProjectView, "detail");
+    assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-b");
+  });
+
+  it("keeps the detail URL project while canvas projects are loading", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: {
+        pathname: "/canvas",
+        search: "?canvasProjectId=canvas-b",
+        hash: "#tools-canvas",
+      },
+    };
+    const loadedProjectIds = [];
+    const workbench = {
+      api: {
+        async getCanvasProjects() {
+          workbench.ui.selectedCanvasProjectId = null;
+          return {
+            projects: [
+              { id: "canvas-a", title: "画布 A" },
+              { id: "canvas-b", title: "画布 B" },
+            ],
+          };
+        },
+        async getStandaloneCanvas(canvasProjectId) {
+          loadedProjectIds.push(canvasProjectId);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 1,
+              document: createDefaultCanvasDocument({ projectId: canvasProjectId }),
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-b",
+        canvasProjects: null,
+      }),
+    };
+
+    try {
+      await syncCanvasProjectsFromApiForTest(workbench);
+      assert.deepEqual(loadedProjectIds, ["canvas-b"]);
+      assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-b");
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
   it("loads backend generation config when opening a canvas project and renders image parameters", async () => {
     const configCalls = [];
     const workbench = {
@@ -32962,6 +33121,56 @@ describe("production workbench project tab", () => {
       });
       await refreshPromise;
 
+      assert.equal(workbench.ui.canvasDocument.nodes[0]?.id, "persisted-node");
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("keeps the Canvas detail usable when generation config is temporarily unavailable", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: { hash: "#tools-canvas", pathname: "/canvas" },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { id: "user-1", phone: "+86 13800138000" } },
+      api: {
+        async getCanvasProjects() {
+          return { projects: [{ id: "canvas-main", title: "画布项目", status: "草稿" }] };
+        },
+        async getStandaloneCanvas() {
+          return {
+            canvas: {
+              canvasProjectId: "canvas-main",
+              serverRevision: 2,
+              document: {
+                version: 2,
+                canvasProjectId: "canvas-main",
+                viewport: { x: 0, y: 0, zoom: 1 },
+                nodes: [{ id: "persisted-node", type: "text", data: { title: "已保存节点" } }],
+                edges: [],
+              },
+            },
+          };
+        },
+        async listGlobalGenerationConfig() {
+          throw new Error("request_timeout");
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        canvasProjects: [],
+        canvasDocumentsByProject: null,
+        canvasDocument: null,
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      await assert.doesNotReject(() => refreshProductionWorkbenchForTest(workbench));
       assert.equal(workbench.ui.canvasDocument.nodes[0]?.id, "persisted-node");
     } finally {
       globalThis.window = previousWindow;
@@ -33476,6 +33685,40 @@ describe("production workbench project tab", () => {
     assert.match(mediaHtml, /frame\.png/);
   });
 
+  it("distinguishes source nodes from generic uploads by media type", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasNodeId: "source-image",
+        canvasEditorOpen: true,
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "episode-primary",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            { id: "source-image", type: "source-image", position: { x: 120, y: 120 }, data: { mediaKind: "image", ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] } } },
+            { id: "source-video", type: "source-video", position: { x: 520, y: 120 }, data: { mediaKind: "video", ports: { inputs: [], outputs: [{ id: "out_video", kind: "video" }] } } },
+            { id: "source-audio", type: "source-audio", position: { x: 920, y: 120 }, data: { mediaKind: "audio", ports: { inputs: [], outputs: [{ id: "out_audio", kind: "audio" }] } } },
+          ],
+          edges: [],
+        },
+      }),
+    });
+    const nodeHtml = (nodeId) => {
+      const start = html.indexOf(`data-canvas-node-id="${nodeId}"`);
+      return html.slice(start, html.indexOf("</article>", start));
+    };
+
+    assert.match(nodeHtml("source-image"), /来源节点[\s\S]*上传图片素材[\s\S]*accept="image\/\*"/);
+    assert.match(nodeHtml("source-video"), /来源节点[\s\S]*上传视频素材[\s\S]*accept="video\/\*"/);
+    assert.match(nodeHtml("source-audio"), /来源节点[\s\S]*上传音频素材[\s\S]*accept="audio\/\*"/);
+    assert.doesNotMatch(html, /canvas-node-editor/);
+  });
+
   it("zooms canvas controls around the stage center", async () => {
     const stage = {
       getBoundingClientRect() {
@@ -33556,21 +33799,28 @@ describe("production workbench project tab", () => {
     assert.match(saveScheduler, /if \(workbench\.canvasSaveInFlight\)[\s\S]*?canvasSaveQueuedDocument = document/);
   });
 
-  it("centers icons inside the canvas zoom controls", () => {
+  it("keeps the enlarged canvas zoom controls above the graph with hover tooltips", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
     const buttonBlock = [...css.matchAll(/\.canvas-zoom-tools button\s*\{(?<body>[^}]*)\}/g)]
       .map((match) => match.groups?.body ?? "")
-      .find((body) => /width:\s*1\.85rem/.test(body)) ?? "";
+      .find((body) => /width:\s*2\.35rem/.test(body)) ?? "";
+    const toolbarBlock = css.match(/^\.canvas-zoom-tools\s*\{\s*position:\s*absolute(?<body>[^}]*)\}/m)?.groups?.body ?? "";
     const labelBlock = css.match(/\.canvas-zoom-tools strong\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const graphZIndex = Number(css.match(/\.canvas-stage\.is-x6-ready \.canvas-x6-mount\s*\{[^}]*z-index:\s*(\d+)/)?.[1] ?? 0);
+    const toolbarZIndex = Number(toolbarBlock.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
 
     assert.match(buttonBlock, /display:\s*grid/);
+    assert.match(buttonBlock, /height:\s*2\.35rem/);
     assert.match(buttonBlock, /place-items:\s*center/);
     assert.match(buttonBlock, /padding:\s*0/);
     assert.match(buttonBlock, /line-height:\s*1/);
     assert.match(labelBlock, /place-items:\s*center/);
+    assert.ok(toolbarZIndex > graphZIndex);
+    assert.match(css, /\.canvas-zoom-tools button\[title\]::after\s*\{[^}]*content:\s*attr\(title\)/s);
+    assert.match(css, /\.canvas-zoom-tools button\[title\]:hover::after/);
   });
 
   it("allows canvas nodes to be dragged beyond the canvas origin", () => {
@@ -33715,7 +33965,7 @@ describe("production workbench project tab", () => {
         canvasDocument: {
           version: 1,
           nodes: [
-            { id: "text-a", type: "ai-text", data: { mediaKind: "text", prompt: "编写角色设定", modelCode: "text-model" } },
+            { id: "text-a", type: "ai-text", data: { mediaKind: "text", prompt: "编写角色设定", modelCode: "text-model", promptSkillId: "skill-script", promptSkillCategory: "script" } },
             { id: "image-b", type: "ai-image", data: { mediaKind: "image", prompt: "绘制角色", modelCode: "image-model" } },
           ],
           edges: [{ id: "edge-text-image", sourceNodeId: "text-a", targetNodeId: "image-b" }],
@@ -33727,6 +33977,7 @@ describe("production workbench project tab", () => {
     assert.equal(nodes.length, 2);
     assert.equal(nodes[0].mediaKind, "text");
     assert.equal(nodes[0].payload.text, "编写角色设定");
+    assert.deepEqual(nodes[0].payload.skill, { id: "skill-script", category: "script" });
     assert.deepEqual(nodes[1].dependsOn, ["text-a"]);
   });
 
@@ -34689,6 +34940,7 @@ describe("production workbench project tab", () => {
     assert.match(wheelBlock, /isCanvasInteractionOverlayTarget\(eventTarget\)/);
     assert.match(panBlock, /\.canvas-script-picker/);
     assert.match(overlayBlock, /\.canvas-script-picker/);
+    assert.match(overlayBlock, /\.selection-picker-layer/);
   });
 
   it("copies selected independent script episode text into the canvas node", async () => {
@@ -35169,10 +35421,327 @@ describe("production workbench project tab", () => {
     const editorHtml = html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
 
     assert.doesNotMatch(imageNodeHtml, /canvas-generation-references/);
+    assert.match(imageNodeHtml, /生成节点/);
     assert.match(editorHtml, /canvas-editor-reference-row/);
+    assert.match(editorHtml, /data-action="pick-canvas-generation-reference-file"/);
+    assert.match(editorHtml, /aria-label="添加参考素材"/);
+    assert.match(editorHtml, /data-canvas-generation-reference-input/);
+    assert.equal((editorHtml.match(/data-action="open-canvas-prompt-reference-picker"/g) ?? []).length, 1);
     assert.match(editorHtml, /canvas-generation-references/);
     assert.match(editorHtml, /https:\/\/example\.test\/a\.png/);
     assert.match(editorHtml, /https:\/\/example\.test\/b\.png/);
+  });
+
+  it("keeps upload and prompt-reference controls separate across generation node media", () => {
+    const renderEditor = (type, mediaKind, inputs) => {
+      const html = renderProductionWorkbench({
+        state: buildProjectState(),
+        session: { user: { phone: "+86 13800138000" } },
+        ui: buildProjectUi({
+          activeNavTab: "tools",
+          canvasProjectView: "detail",
+          selectedCanvasNodeId: "target",
+          canvasEditorOpen: true,
+          canvasDocument: {
+            version: 1,
+            projectId: "canvas-project-main",
+            nodes: [{
+              id: "target",
+              type,
+              position: { x: 400, y: 100 },
+              size: { width: 420, height: 378 },
+              data: { mediaKind, prompt: "", ports: { inputs, outputs: [] } },
+            }],
+            edges: [],
+          },
+        }),
+      });
+      const editorIndex = html.indexOf("canvas-node-editor generation-editor");
+      return html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
+    };
+
+    for (const type of ["ai-image", "ai-animation", "ai-panorama", "ai-storyboard"]) {
+      const editorHtml = renderEditor(type, "image", [{ id: "in_asset", kind: "any", accepts: ["text", "image"] }]);
+      assert.match(editorHtml, /data-action="pick-canvas-generation-reference-file"/);
+      assert.match(editorHtml, /accept="image\/\*"/);
+      assert.equal((editorHtml.match(/data-action="open-canvas-prompt-reference-picker"/g) ?? []).length, 1);
+    }
+
+    const videoEditor = renderEditor("ai-video", "video", [{ id: "in_asset", kind: "any", accepts: ["image", "video", "audio"] }]);
+    assert.match(videoEditor, /accept="image\/\*,video\/\*,audio\/\*"/);
+    const audioEditor = renderEditor("ai-audio", "audio", [{ id: "in_text", kind: "text", accepts: ["text", "audio"] }]);
+    assert.match(audioEditor, /accept="audio\/\*"/);
+    const textEditor = renderEditor("ai-text", "text", [{ id: "in_text", kind: "text" }]);
+    assert.doesNotMatch(textEditor, /pick-canvas-generation-reference-file|data-canvas-generation-reference-input/);
+    assert.match(textEditor, /data-action="open-canvas-prompt-reference-picker"/);
+    assert.match(textEditor, /data-action="open-canvas-text-skill-modal"/);
+    const markdownEditor = renderEditor("ai-markdown", "text", [{ id: "in_text", kind: "text" }]);
+    assert.match(markdownEditor, /data-action="open-canvas-text-skill-modal"/);
+  });
+
+  it("keeps Canvas AI text skill selections isolated by node", async () => {
+    const canvasDocument = {
+      version: 2,
+      canvasProjectId: "canvas-project-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: "text-a", type: "ai-text", data: { mediaKind: "text", promptSkillId: "skill-a", promptSkillCategory: "script" } },
+        { id: "text-b", type: "ai-text", data: { mediaKind: "text", promptSkillId: "skill-b", promptSkillCategory: "shot" } },
+      ],
+      edges: [],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        canvasDocument,
+        canvasDocumentsByProject: { "canvas-project-main": canvasDocument },
+        canvasTextSkillsLoaded: true,
+        canvasTextOfficialSkills: [
+          { id: "skill-a", title: "剧本技能", category: "script" },
+          { id: "skill-shot-new", title: "新分镜技能", category: "shot" },
+        ],
+        canvasTextPrivateSkills: [],
+        canvasTextSkillModalOpen: true,
+        canvasTextSkillNodeId: "text-a",
+        canvasTextSkillSourceTab: "official",
+        canvasTextSkillCategory: "shot",
+        canvasTextSkillDraftId: "skill-a",
+        canvasTextSkillDraftCategory: "script",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-canvas-text-skill-draft", skillCategory: "shot", skillId: "skill-shot-new" },
+    });
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-canvas-text-skill" } });
+
+    const nodeA = workbench.ui.canvasDocument.nodes.find((node) => node.id === "text-a");
+    const nodeB = workbench.ui.canvasDocument.nodes.find((node) => node.id === "text-b");
+    assert.equal(nodeA.data.promptSkillId, "skill-shot-new");
+    assert.equal(nodeA.data.promptSkillCategory, "shot");
+    assert.equal(nodeB.data.promptSkillId, "skill-b");
+    assert.equal(nodeB.data.promptSkillCategory, "shot");
+    assert.equal(workbench.ui.canvasTextSkillModalOpen, false);
+  });
+
+  it("uploads an audio reference as a connected source node when legacy ports are absent", async () => {
+    const previousCreateObjectUrl = globalThis.URL.createObjectURL;
+    const previousRevokeObjectUrl = globalThis.URL.revokeObjectURL;
+    globalThis.URL.createObjectURL = () => "blob:audio-reference";
+    globalThis.URL.revokeObjectURL = () => {};
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        selectedCanvasNodeId: "audio-target",
+        canvasEditorOpen: true,
+        canvasDocument: {
+          version: 1,
+          canvasProjectId: "canvas-project-main",
+          nodes: [{
+            id: "audio-target",
+            type: "ai-audio",
+            position: { x: 500, y: 120 },
+            size: { width: 390, height: 220 },
+            data: {
+              mediaKind: "audio",
+              prompt: "转录音频",
+            },
+          }],
+          edges: [],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      const result = await handleNewCanvasHostChangeForTest(workbench, {
+        dataset: { nodeId: "audio-target" },
+        files: [{ name: "voice.mp3", type: "audio/mpeg", size: 3 }],
+        value: "voice.mp3",
+        matches(selector) { return selector === "[data-canvas-generation-reference-input]"; },
+      });
+      const sourceNode = workbench.ui.canvasDocument.nodes.find((node) => node.type === "source-audio");
+      assert.equal(result, true);
+      assert.equal(sourceNode?.data?.fileName, "voice.mp3");
+      assert.ok(workbench.ui.canvasDocument.edges.some((edge) => (
+        edge.sourceNodeId === sourceNode?.id
+        && edge.targetNodeId === "audio-target"
+        && edge.data?.kind === "audio"
+      )));
+      assert.equal(workbench.ui.selectedCanvasNodeId, "audio-target");
+      assert.equal(workbench.ui.canvasEditorOpen, true);
+      assert.equal(workbench.ui.canvasPromptReferencePicker, undefined);
+    } finally {
+      globalThis.URL.createObjectURL = previousCreateObjectUrl;
+      globalThis.URL.revokeObjectURL = previousRevokeObjectUrl;
+    }
+  });
+
+  it("keeps the hand tool active after uploading media into a Canvas node", async () => {
+    const previousCreateObjectUrl = globalThis.URL.createObjectURL;
+    globalThis.URL.createObjectURL = () => "blob:canvas-upload";
+    const canvasDocument = {
+      version: 1,
+      canvasProjectId: "canvas-project-main",
+      viewport: { x: 15, y: 25, zoom: 0.6, interactionMode: "hand" },
+      nodes: [{
+        id: "upload-node",
+        type: "upload",
+        position: { x: 120, y: 120 },
+        size: { width: 360, height: 220 },
+        data: {
+          title: "上传",
+          status: "empty",
+          source: "upload",
+          ports: { inputs: [], outputs: [{ id: "out_any", kind: "any" }] },
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-main",
+        selectedCanvasNodeId: "upload-node",
+        canvasEditorOpen: false,
+        canvasDocument,
+        canvasDocumentsByProject: { "canvas-project-main": canvasDocument },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      const result = await handleNewCanvasHostChangeForTest(workbench, {
+        dataset: { nodeId: "upload-node" },
+        files: [{ name: "reference.png", type: "image/png", size: 3 }],
+        value: "reference.png",
+        matches(selector) { return selector === "[data-canvas-upload-input]"; },
+      });
+
+      assert.equal(result, true);
+      assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "ready");
+      assert.equal(workbench.ui.canvasDocument.viewport.interactionMode, "hand");
+    } finally {
+      globalThis.URL.createObjectURL = previousCreateObjectUrl;
+    }
+  });
+
+  it("persists uploaded Canvas video media without ephemeral URLs before resolving the upload flow", async () => {
+    const previousCreateObjectUrl = globalThis.URL.createObjectURL;
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    const saveCalls = [];
+    let resolveUploadStarted;
+    let releaseUpload;
+    const uploadStarted = new Promise((resolve) => {
+      resolveUploadStarted = resolve;
+    });
+    const uploadGate = new Promise((resolve) => {
+      releaseUpload = resolve;
+    });
+    const uploadResult = {
+      previewUrl: "https://signed.test/video.mp4?X-Amz-Signature=secret",
+      publicUrl: "https://signed.test/video.mp4?token=secret",
+      storageObjectId: "storage-uploaded-video",
+      storageObjectKey: "canvas-uploads/reference.mp4",
+      mimeType: "video/mp4",
+    };
+    globalThis.URL.createObjectURL = () => "blob:canvas-upload";
+    globalThis.setTimeout = () => 1;
+    globalThis.clearTimeout = () => {};
+    const canvasDocument = {
+      version: 1,
+      canvasProjectId: "canvas-project-uploaded",
+      nodes: [{
+        id: "upload-node",
+        type: "upload",
+        position: { x: 120, y: 120 },
+        size: { width: 360, height: 220 },
+        data: {
+          title: "上传",
+          status: "empty",
+          source: "upload",
+          ports: { inputs: [], outputs: [{ id: "out_any", kind: "any" }] },
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async uploadFile() {
+          resolveUploadStarted?.();
+          await uploadGate;
+          return { upload: uploadResult };
+        },
+        async saveStandaloneCanvas(canvasProjectId, payload) {
+          saveCalls.push({ canvasProjectId, payload });
+          return {
+            canvasProjectId,
+            serverRevision: 2,
+            document: payload.document,
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-project-uploaded",
+        selectedCanvasNodeId: "upload-node",
+        canvasEditorOpen: false,
+        canvasDocument,
+        canvasDocumentsByProject: { "canvas-project-uploaded": canvasDocument },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      const uploadFlow = handleNewCanvasHostChangeForTest(workbench, {
+        dataset: { nodeId: "upload-node" },
+        files: [{ name: "reference.mp4", type: "video/mp4", size: 3 }],
+        value: "reference.mp4",
+        matches(selector) { return selector === "[data-canvas-upload-input]"; },
+      });
+
+      await uploadStarted;
+      assert.doesNotMatch(JSON.stringify(workbench.ui.canvasDocument), /(?:blob|data):/i);
+      assert.equal(saveCalls.length, 0);
+      releaseUpload();
+      await uploadFlow;
+      assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "ready");
+      assert.equal(saveCalls.length, 1, JSON.stringify({
+        toast: workbench.ui.toast,
+        selectedCanvasProjectId: workbench.ui.selectedCanvasProjectId,
+        canvasSaveStatus: workbench.ui.canvasSaveStatus,
+        canvasSaveError: workbench.ui.canvasSaveError,
+        nodeData: workbench.ui.canvasDocument.nodes[0].data,
+      }));
+      assert.equal(saveCalls[0].canvasProjectId, "canvas-project-uploaded");
+      assert.equal(saveCalls[0].payload.document.nodes[0].data.storageObjectId, "storage-uploaded-video");
+      assert.equal(saveCalls[0].payload.document.nodes[0].data.url, "/api/storage/objects/storage-uploaded-video/content?proxy=1");
+      assert.equal(saveCalls[0].payload.document.nodes[0].data.previewUrl, "/api/storage/objects/storage-uploaded-video/content?proxy=1");
+      assert.doesNotMatch(JSON.stringify(saveCalls[0].payload.document), /(?:blob|data:|X-Amz-Signature|token=)/i);
+    } finally {
+      globalThis.URL.createObjectURL = previousCreateObjectUrl;
+      globalThis.setTimeout = previousSetTimeout;
+      globalThis.clearTimeout = previousClearTimeout;
+    }
   });
 
   it("renders connected image references in the video generation editor", () => {
@@ -37279,6 +37848,63 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasServerRevision, 3);
   });
 
+  it("does not persist an unchanged Canvas workspace session after every document revision", async () => {
+    const sessionSaves = [];
+    const workbench = {
+      api: {
+        async saveCanvasSession(canvasProjectId, payload) {
+          sessionSaves.push({ canvasProjectId, payload });
+          return { session: payload };
+        },
+      },
+      ui: {
+        canvasDocument: { viewport: { x: 10, y: 20, zoom: 1 } },
+        selectedCanvasNodeId: "node-1",
+        canvasSessionUiState: {},
+        canvasServerRevision: 1,
+      },
+    };
+
+    await persistCanvasSessionForTest(workbench, "canvas-main", 1);
+    await persistCanvasSessionForTest(workbench, "canvas-main", 2);
+    assert.equal(sessionSaves.length, 1);
+
+    workbench.ui.selectedCanvasNodeId = "node-2";
+    await persistCanvasSessionForTest(workbench, "canvas-main", 2);
+    assert.equal(sessionSaves.length, 2);
+    assert.deepEqual(sessionSaves[1].payload.selectedNodeKeys, ["node-2"]);
+  });
+
+  it("flushes the current Canvas viewport before the page is hidden", () => {
+    const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+    const functionSource = source.match(/function persistCanvasViewportBeforePageHide\(workbench\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    let persistedDocument = null;
+    const persistCanvasViewportBeforePageHide = Function(
+      "syncCanvasGraphViewport",
+      `"use strict";\n${functionSource}\nreturn persistCanvasViewportBeforePageHide;`,
+    )((graph, owner) => {
+      const translation = graph.translate();
+      persistedDocument = {
+        ...owner.ui.canvasDocument,
+        viewport: { ...owner.ui.canvasDocument.viewport, x: translation.tx, y: translation.ty, zoom: graph.zoom() },
+      };
+      return true;
+    });
+    const workbench = {
+      canvasGraph: {
+        translate: () => ({ tx: 48, ty: -24 }),
+        zoom: () => 0.37,
+      },
+      ui: {
+        canvasDocument: { canvasProjectId: "canvas-main", viewport: { x: 0, y: 0, zoom: 1 } },
+      },
+    };
+
+    assert.equal(persistCanvasViewportBeforePageHide(workbench), true);
+    assert.deepEqual(persistedDocument.viewport, { x: 48, y: -24, zoom: 0.37 });
+    assert.match(source, /addEventListener\?\.\("pagehide", workbench\.persistCanvasViewportBeforePageHide, \{ once: true \}\)/);
+  });
+
   it("preserves the local Canvas draft and exposes recovery data on a revision conflict", async () => {
     const localDocument = {
       version: 2,
@@ -37393,6 +38019,43 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].id, "remote-node");
   });
 
+  it("refreshes the Canvas head immediately after an Agent patch without a live stream", async () => {
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "local-node", type: "text", data: { text: "本地内容" } }],
+      edges: [],
+    };
+    const remoteDocument = {
+      ...localDocument,
+      nodes: [{ id: "agent-node", type: "text", data: { text: "Agent 已修改" } }],
+    };
+    const workbench = {
+      api: {
+        async getCanvasHead() {
+          return { head: { canvasProjectId: "canvas-main", serverRevision: 3, document: remoteDocument } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 2,
+        canvasSaveStatus: "saved",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+      }),
+    };
+
+    await refreshCanvasAfterAgentPatchForTest(workbench);
+
+    assert.equal(workbench.ui.canvasServerRevision, 3);
+    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "agent-node");
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
+  });
+
   it("resolves a Canvas revision conflict only after an explicit local or server choice", async () => {
     const localDocument = {
       version: 2,
@@ -37483,6 +38146,7 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /画布版本发生冲突/);
+    assert.match(html, /当前画布已被修改，请确认是否保存到最新版本。/);
     assert.match(html, /本地草稿节点/);
     assert.match(html, /服务端图片节点/);
     assert.match(html, /data-canvas-conflict-version="server"/);
@@ -37663,6 +38327,60 @@ describe("production workbench project tab", () => {
     pendingSaves[1].resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 3, document: pendingSaves[1].payload.document } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(pendingSaves.length, 2);
+  });
+
+  it("flushes an in-flight canvas save and its latest queued document before batch execution", async () => {
+    const pendingSaves = [];
+    const initialDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "node-1", type: "ai-image", data: { prompt: "first" } }],
+      edges: [],
+    };
+    const workbench = {
+      api: {
+        saveStandaloneCanvas(canvasProjectId, payload) {
+          return new Promise((resolve) => pendingSaves.push({ canvasProjectId, payload, resolve }));
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 1,
+        canvasProjects: [{ id: "canvas-main", title: "画布" }],
+        canvasDocument: initialDocument,
+        canvasDocumentsByProject: { "canvas-main": initialDocument },
+      }),
+    };
+
+    const firstSave = saveProjectCanvasNowForTest(workbench);
+    workbench.ui.canvasDocument = {
+      ...initialDocument,
+      nodes: [{ ...initialDocument.nodes[0], data: { prompt: "latest" } }],
+    };
+    scheduleProjectCanvasSaveForTest(workbench, { delayMs: 0 });
+    const flush = flushProjectCanvasSaveForTest(workbench);
+
+    assert.equal(pendingSaves.length, 1);
+    pendingSaves[0].resolve({ canvas: {
+      canvasProjectId: "canvas-main",
+      serverRevision: 2,
+      document: pendingSaves[0].payload.document,
+    } });
+    await firstSave;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(pendingSaves.length, 2);
+    assert.equal(pendingSaves[1].payload.document.nodes[0].data.prompt, "latest");
+
+    pendingSaves[1].resolve({ canvas: {
+      canvasProjectId: "canvas-main",
+      serverRevision: 3,
+      document: pendingSaves[1].payload.document,
+    } });
+    await flush;
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasServerRevision, 3);
   });
 
   it("submits canvas image runs with empty prompt when connected text and images are present", async () => {
@@ -46193,6 +46911,8 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(singleEpisodeHtml, /创作技能/);
+    assert.match(singleEpisodeHtml, /文本模型/);
+    assert.match(singleEpisodeHtml, /data-action="toggle-single-episode-text-model-menu"/);
     assert.match(singleEpisodeHtml, /single-episode-look-trigger/);
     assert.match(singleEpisodeHtml, /episode-skill-picker-modal/);
     assert.match(singleEpisodeHtml, /官方技能/);
@@ -46206,8 +46926,8 @@ describe("production workbench project tab", () => {
     assert.match(singleEpisodeHtml, /episode-selected-skills/);
     assert.match(singleEpisodeHtml, /已选技能/);
     assert.match(singleEpisodeHtml, /官方分镜/);
-    assert.match(singleEpisodeHtml, /AI 小说分镜 200 \+ 47积分/);
-    assert.match(singleEpisodeHtml, /AI剧本分镜 160 \+ 24积分/);
+    assert.match(singleEpisodeHtml, /AI 小说分镜 1000 \+ 47积分/);
+    assert.doesNotMatch(singleEpisodeHtml, /data-action="confirm-single-episode-storyboard"/);
     assert.doesNotMatch(singleEpisodeHtml, /selection-picker-modal/);
     assert.doesNotMatch(singleEpisodeHtml, /题材看点/);
     assert.doesNotMatch(singleEpisodeHtml, /情绪看点/);
@@ -46221,8 +46941,7 @@ describe("production workbench project tab", () => {
         episodePromptPrivateSkills: baseUi.episodePromptPrivateSkills.map((item) => ({ ...item, priceCredits: 0 })),
       },
     });
-    assert.match(freeSkillsHtml, /AI 小说分镜 200积分/);
-    assert.match(freeSkillsHtml, /AI剧本分镜 160积分/);
+    assert.match(freeSkillsHtml, /AI 小说分镜 1000积分/);
     assert.doesNotMatch(freeSkillsHtml, /\+ 0积分/);
   });
 
@@ -46315,6 +47034,8 @@ describe("production workbench project tab", () => {
     assert.match(html, /id="manual-script-input"/);
     assert.match(html, /script-manual-look-controls/);
     assert.match(html, /<div class="modal-actions upload-modal-actions">[\s\S]*script-manual-look-controls[\s\S]*data-action="confirm-single-episode"/);
+    assert.match(html, /aria-label="文本模型"/);
+    assert.match(html, /data-action="toggle-single-episode-text-model-menu"/);
     assert.match(html, /小说转剧本技能/);
     assert.match(html, /selection-picker-modal/);
     assert.match(html, /官方技能/);
@@ -46413,6 +47134,10 @@ describe("production workbench project tab", () => {
           scriptSubmitLabel: "开始分析",
           scriptManualDraft: "框内原始文案",
           selectedScriptConversionSkillId: "script-skill-1",
+          singleEpisodeTextModelCode: "custom-script-model",
+          episodeGenerationConfig: {
+            models: [{ modelCode: "custom-script-model", modelLabel: "自定义剧本模型", mediaType: "text" }],
+          },
         }),
       },
       root: {
@@ -46433,7 +47158,7 @@ describe("production workbench project tab", () => {
     assert.equal(previewCalls.length, 1);
     assert.equal(previewCalls[0].scriptText, "框内最新文案");
     assert.equal(previewCalls[0].skillId, "script-skill-1");
-    assert.equal(previewCalls[0].modelCode, "deepseek-noval");
+    assert.equal(previewCalls[0].modelCode, "custom-script-model");
     assert.equal(Object.hasOwn(previewCalls[0], "creditCost"), false);
     assert.equal(Object.hasOwn(previewCalls[0], "modelCreditCost"), false);
     assert.equal(Object.hasOwn(previewCalls[0], "skillCreditCost"), false);
@@ -46481,6 +47206,10 @@ describe("production workbench project tab", () => {
           scriptSubmitLabel: "开始分析",
           scriptManualDraft: "独立剧本文案",
           selectedScriptConversionSkillId: "script-skill-2",
+          singleEpisodeTextModelCode: "deepseek-noval",
+          episodeGenerationConfig: {
+            models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek 剧本模型", mediaType: "text" }],
+          },
         }),
       },
       root: {
@@ -46934,6 +47663,55 @@ describe("production workbench project tab", () => {
     assert.match(html, /麻烦您了/);
     assert.match(html, /任小野递出饭食/);
     assert.match(html, /中景固定镜头/);
+  });
+
+  it("allows a single selected non-script skill and sends the selected text model", async () => {
+    const previewCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          yield { event: "complete", data: {
+            scriptText: "现成剧本。",
+            displayTables: {
+              script: { title: "剧本", columns: ["内容"], rows: [{ scriptContent: "现成剧本。" }] },
+              scenes: { title: "场景", columns: [], rows: [] },
+              characters: { title: "角色", columns: [], rows: [] },
+              props: { title: "道具", columns: [], rows: [] },
+              storyboards: { title: "分镜", columns: ["分镜剧情"], rows: [{ plot: "只生成分镜" }] },
+            },
+          } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "detail",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "现成剧本。",
+          singleEpisodeTextModelCode: "custom-text-model",
+          episodePromptOfficialSkills: [
+            { id: "official-shot-skill", title: "官方分镜提示词", category: "shot", official: true, priceCredits: 6 },
+          ],
+          selectedEpisodePromptSkillIds: { shot: "official-shot-skill" },
+          episodeGenerationConfig: {
+            models: [{ modelCode: "custom-text-model", modelLabel: "自定义文本模型", mediaType: "text", pricing: { baseCredits: 20 } }],
+          },
+        }),
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, { dataset: { action: "confirm-single-episode" } });
+
+    assert.equal(previewCalls.length, 1);
+    assert.deepEqual(previewCalls[0].input.skills, { shot: "official-shot-skill" });
+    assert.equal(previewCalls[0].input.modelCode, "custom-text-model");
+    assert.equal(Object.hasOwn(previewCalls[0].input, "skipScriptStage"), false);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
   });
 
   it("keeps the single episode modal open when AI storyboard membership validation fails", async () => {
@@ -47617,6 +48395,91 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(scriptOutput.scrollTop, scriptOutput.scrollHeight);
+  });
+
+  it("paints the first script delta before a buffered complete event can replace the loading preview", async () => {
+    let releaseComplete = () => {};
+    const completeGate = new Promise<void>((resolve) => {
+      releaseComplete = resolve;
+    });
+    let markWaitingForComplete = () => {};
+    const waitingForComplete = new Promise<void>((resolve) => {
+      markWaitingForComplete = resolve;
+    });
+    const overlay = {
+      _outerHTML: '<section class="single-episode-ai-overlay"></section>',
+      get outerHTML() {
+        return this._outerHTML;
+      },
+      set outerHTML(value) {
+        this._outerHTML = String(value ?? "");
+      },
+    };
+    const root = {
+      _innerHTML: "",
+      get innerHTML() {
+        return this._innerHTML;
+      },
+      set innerHTML(value) {
+        this._innerHTML = String(value ?? "");
+      },
+      querySelector(selector) {
+        if (selector === ".single-episode-ai-overlay") return overlay;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_prompt", data: { text: "改编提示词" } };
+          yield { event: "script_start", data: {} };
+          yield { event: "script_delta", data: { text: "第一段实时剧本" } };
+          markWaitingForComplete();
+          await completeGate;
+          yield {
+            event: "complete",
+            data: {
+              scriptText: "第一段实时剧本",
+              displayTables: createSingleEpisodeAiLiveDisplayTables(),
+              commitPayload: { storyboards: [] },
+            },
+          };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "detail",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+          isSingleEpisodeModalOpen: true,
+          singleEpisodeScript: "任小野把小草托付给闵婶子。",
+          storyboardPromptPackages: [
+            { id: "genre-1", name: "玄幻修仙", package_type: "genre", status: "enabled" },
+            { id: "emotion-1", name: "男频热血", package_type: "emotion", status: "enabled" },
+          ],
+          selectedSingleEpisodeLookPackageIds: {
+            genre: ["genre-1"],
+            emotion: ["emotion-1"],
+          },
+        }),
+      },
+      root,
+    };
+
+    const action = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+    await waitingForComplete;
+
+    assert.match(overlay.outerHTML, /第一段实时剧本/);
+
+    releaseComplete();
+    await action;
   });
 
   it("renders the AI preview overlay immediately when shot live tables receive rows", async () => {
@@ -50638,7 +51501,7 @@ describe("storyboard state", () => {
     assert.deepEqual(configCalls, [{ fresh: true, mediaType: undefined }]);
     assert.equal(workbench.ui.selectedEpisodePromptSkillIds.script, "fresh-script-skill");
     assert.equal(workbench.ui.selectedEpisodePromptSkillIds.shot, "official-shot-default");
-    assert.match(workbench.root.innerHTML, /AI 小说分镜 35 \+ 9积分/);
+    assert.match(workbench.root.innerHTML, /AI 小说分镜 70 \+ 9积分/);
     assert.doesNotMatch(workbench.root.innerHTML, /AI 小说分镜 200 \+/);
   });
 

@@ -59,7 +59,9 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /reconcileGenerationQueueWorkerLeases/);
     assert.match(launcherScript, /releaseGenerationQueueWorkerLeases/);
     assert.match(launcherScript, /prioritizeGenerationShards/);
-    assert.match(launcherScript, /closeWorkersOnDiscoveryFailure: true/);
+    assert.match(launcherScript, /closeWorkersOnDiscoveryFailure: false/);
+    assert.match(launcherScript, /onRefreshError/);
+    assert.match(launcherScript, /runWithRedisStartupRetry/);
     assert.match(launcherScript, /readGenerationQueueRunnableCounts/);
     assert.match(launcherScript, /pipeline\.llen/);
     assert.match(launcherScript, /pipeline\.zcard/);

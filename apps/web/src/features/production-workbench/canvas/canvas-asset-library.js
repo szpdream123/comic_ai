@@ -21,8 +21,35 @@ export function canvasAssetsFromGenerationHistory(payload) {
       if (!dedupeKey || seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       const kind = text(artifact.artifactKind ?? artifact.artifact_kind ?? run?.mediaKind) || "image";
+      const normalizedKind = kind.toLowerCase();
+      const directMediaUrl = text(
+        artifact.url
+          ?? artifact.videoUrl
+          ?? artifact.video_url
+          ?? artifact.sourceUrl
+          ?? artifact.source_url
+          ?? artifact.downloadUrl
+          ?? artifact.download_url
+          ?? metadata.videoUrl
+          ?? metadata.video_url
+          ?? metadata.sourceUrl
+          ?? metadata.downloadUrl
+          ?? metadata.url,
+      );
+      const storageProxyUrl = storageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+        : "";
       const url = text(
-        artifact.thumbnailUrl ?? artifact.thumbnail_url ?? artifact.url ?? metadata.previewUrl ?? metadata.url,
+        normalizedKind === "video"
+          ? directMediaUrl || artifact.thumbnailUrl || artifact.thumbnail_url || metadata.previewUrl || storageProxyUrl
+          : artifact.thumbnailUrl ?? artifact.thumbnail_url ?? artifact.url ?? metadata.previewUrl ?? metadata.url,
+      );
+      const thumbnailUrl = text(
+        artifact.thumbnailUrl
+          ?? artifact.thumbnail_url
+          ?? metadata.previewUrl
+          ?? metadata.thumbnailUrl
+          ?? metadata.thumbnail_url,
       );
       assets.push({
         id: dedupeKey,
@@ -32,7 +59,7 @@ export function canvasAssetsFromGenerationHistory(payload) {
         storageObjectId: storageObjectId || null,
         assetId: text(artifact.assetId ?? artifact.asset_id) || null,
         assetVersionId: text(artifact.assetVersionId ?? artifact.asset_version_id) || null,
-        kind,
+        kind: normalizedKind,
         title: text(metadata.title ?? metadata.fileName ?? metadata.name) || `${text(run?.nodeKey) || "生成"}产物`,
         meta: `${kind} · ${text(run?.modelCode) || "Canvas"}`,
         status: artifact.selected === true ? "已选" : "可用",
@@ -42,6 +69,7 @@ export function canvasAssetsFromGenerationHistory(payload) {
           : [],
         url,
         previewUrl: url,
+        ...(normalizedKind === "video" && thumbnailUrl && thumbnailUrl !== url ? { posterUrl: thumbnailUrl } : {}),
       });
     }
   }
@@ -63,5 +91,6 @@ export function canvasAssetNodeData(asset) {
     assetId: text(source.assetId) || null,
     assetVersionId: text(source.assetVersionId) || null,
     ...(url ? { url, previewUrl: url } : {}),
+    ...(text(source.posterUrl) ? { posterUrl: text(source.posterUrl) } : {}),
   };
 }

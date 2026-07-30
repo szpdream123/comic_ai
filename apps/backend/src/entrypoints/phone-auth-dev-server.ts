@@ -155,6 +155,7 @@ import {
   listCanvasNodeRuns,
   markCanvasNodeRunQueued,
   saveCanvasByCanvasProjectId,
+  saveCanvasNodePositionsByCanvasProjectId,
   selectCanvasNodeArtifact,
 } from "../modules/project/creator-canvas-record.service.ts";
 import {
@@ -255,6 +256,8 @@ import {
 import {
   CanvasTextNodeRunError,
   runCanvasTextNode,
+  type CanvasTextNodeBilling,
+  type CanvasTextPromptSkill,
 } from "../modules/project/canvas-text-node-run.service.ts";
 import {
   completeProjectUploadRecord,
@@ -361,7 +364,7 @@ import {
   type JianyingDraftPackageClip,
 } from "../modules/project/jianying-draft.service.ts";
 import { upsertEpisodeGenerationDraft } from "../modules/project/episode-generation-draft.service.ts";
-import { assertExternalCreditReservationInTransaction, InsufficientCreditsError, grantCredits, grantCreditsInTransaction, grantPromptSkillsUsageCredits, reserveCreditsInTransaction, settleReservationAllocation, settleReservationAllocationInTransaction } from "../modules/credit-billing/credit-ledger.service.ts";
+import { assertExternalCreditReservationInTransaction, InsufficientCreditsError, grantCredits, grantCreditsInTransaction, grantPromptSkillsUsageCredits, reserveCredits, reserveCreditsInTransaction, settleReservationAllocation, settleReservationAllocationInTransaction } from "../modules/credit-billing/credit-ledger.service.ts";
 import {
   refundTeamMemberGenerationCreditsInTransaction,
   refundTeamMemberGenerationCredits as refundTeamMemberGenerationCreditsIdempotently,
@@ -3652,6 +3655,7 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
     idempotencyKey: string;
     promptPreview: string;
     modelConfig?: AiModelConfigRecord;
+    modelCreditCost?: number;
     billingMetadata?: Record<string, unknown>;
     skillCreditCost?: number;
     skillAuthorGrant?: {
@@ -3669,7 +3673,11 @@ async function reserveAndConsumeAiStoryboardPreviewCredits(
     now: Date;
   },
 ) {
-  const amount = generationCostFromModelConfig(0, input.modelConfig)
+  const configuredModelCreditCost = Number(input.modelCreditCost);
+  const modelCreditCost = Number.isFinite(configuredModelCreditCost) && configuredModelCreditCost >= 0
+    ? configuredModelCreditCost
+    : generationCostFromModelConfig(0, input.modelConfig);
+  const amount = modelCreditCost
     + Math.max(0, Math.round(Number(input.skillCreditCost) || 0));
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
@@ -3717,6 +3725,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
     idempotencyKey: string;
     promptPreview: string;
     modelConfig?: AiModelConfigRecord;
+    creditCostOverride?: number;
     billingMetadata?: Record<string, unknown>;
     skillAuthorGrant?: {
       userId: string;
@@ -3733,7 +3742,9 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
     now: Date;
   },
 ) {
-  const amount = generationCostFromModelConfig(0, input.modelConfig);
+  const amount = Number.isFinite(input.creditCostOverride) && Number(input.creditCostOverride) >= 0
+    ? Math.round(Number(input.creditCostOverride))
+    : generationCostFromModelConfig(0, input.modelConfig);
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
   }
@@ -7687,6 +7698,340 @@ interface GenerationTaskContext {
   userId: string;
 }
 
+async function createCanvasTextNodeBilling(input: {
+  db: Awaited<ReturnType<typeof createDevDb>>;
+  canvasProjectId: string;
+  canvasScope: CanvasActorScope;
+  actor: ActorContext;
+  userId: string;
+  modelCode: string;
+  parameters?: Record<string, unknown>;
+  batchBilling?: CanvasGenerationBatchBilling;
+}): Promise<CanvasTextNodeBilling> {
+  const modelConfig = await findActiveAiModelConfigByCode(input.db, input.modelCode);
+  const modelCreditCost = generationCostFromModelConfig(0, modelConfig, input.parameters ?? {});
+  const teamMemberId = input.actor.teamMember?.id ?? input.canvasScope.actorTeamMemberId;
+  const batchBilling = input.batchBilling?.mode === "batch_reservation" ? input.batchBilling : null;
+  const billingMetadata = (runId: string, skill: CanvasTextPromptSkill | null, amount: number) => ({
+    targetUserId: input.userId,
+    memberId: teamMemberId ?? undefined,
+    canvasProjectId: input.canvasProjectId,
+    canvasNodeRunId: runId,
+    mediaType: "text",
+    kind: "text",
+    modelCode: input.modelCode,
+    amount,
+    modelCreditCost,
+    skillCreditCost: Math.max(0, Math.round(Number(skill?.priceCredits) || 0)),
+    skillId: skill?.id ?? undefined,
+    skillCategory: skill?.category ?? undefined,
+    skillTitle: skill?.title ?? undefined,
+    promptSkill: skill ? {
+      id: skill.id,
+      category: skill.category,
+      title: skill.title,
+      priceCredits: skill.priceCredits,
+      official: skill.official,
+      ownerUserId: skill.ownerUserId,
+    } : undefined,
+  });
+
+  return {
+    modelCreditCost,
+    async reserve({ runId, skill, now }) {
+      if (!await hasActiveGenerationMembership(input.db, { userId: input.userId, now })) {
+        throw new CanvasTextNodeRunError(
+          "generation_membership_required",
+          403,
+          "有效会员已过期或未开通，请先开通会员。",
+        );
+      }
+      const skillCreditCost = Math.max(0, Math.round(Number(skill?.priceCredits) || 0));
+      const amount = modelCreditCost + skillCreditCost;
+      if (amount <= 0) return null;
+      const metadata = billingMetadata(runId, skill, amount);
+      const sourceId = `canvas-text:${runId}`;
+      try {
+        if (teamMemberId) {
+          await reserveAndConsumeSimpleTeamMemberCredits(input.db, {
+            projectId: null,
+            teamMemberId,
+            idempotencyKey: sourceId,
+            promptPreview: skill?.title ?? "AI 文本生成",
+            modelConfig,
+            creditCostOverride: amount,
+            billingMetadata: metadata,
+            now,
+          });
+          return { amount, modelCreditCost, skillCreditCost, mode: "team_member", sourceId: runId };
+        }
+        if (batchBilling) {
+          if (batchBilling.estimatedCredits !== amount) {
+            throw new CanvasTextNodeRunError(
+              "canvas_batch_billing_binding_invalid",
+              400,
+              "Canvas batch billing reservation does not match this text task",
+            );
+          }
+          await input.db.query("BEGIN");
+          try {
+            await assertExternalCreditReservationInTransaction(input.db, {
+              reservationId: batchBilling.reservationId,
+              userId: input.userId,
+              canvasProjectId: input.canvasProjectId,
+              amount,
+            });
+            await input.db.query("COMMIT");
+          } catch (error) {
+            await input.db.query("ROLLBACK").catch(() => undefined);
+            throw error;
+          }
+          return {
+            amount,
+            modelCreditCost,
+            skillCreditCost,
+            mode: "batch_reservation",
+            reservationId: batchBilling.reservationId,
+            allocationKey: batchBilling.allocationKey,
+          };
+        }
+        const reservation = await reserveCredits(input.db, {
+          userId: input.userId,
+          canvasProjectId: input.canvasProjectId,
+          amount,
+          sourceType: "canvas_text_node_run",
+          sourceId: runId,
+          reason: "text generation",
+          metadata: {
+            ...metadata,
+            billingEvent: "reserved",
+            outcome: "reserved",
+          },
+          createdByUserId: input.userId,
+          now,
+        });
+        return {
+          amount,
+          modelCreditCost,
+          skillCreditCost,
+          mode: "reservation",
+          reservationId: reservation.reservation.id,
+          allocationKey: "canvas-text-result",
+        };
+      } catch (error) {
+        if (isInsufficientCreditsFailure(error)) {
+          throw new CanvasTextNodeRunError("insufficient_credits", 402, "积分余额不足，请充值后再生成。");
+        }
+        throw error;
+      }
+    },
+    async consume({ runId, receipt, now }) {
+      if (receipt.mode === "team_member" || !receipt.reservationId || !receipt.allocationKey) return;
+      await settleReservationAllocation(input.db, {
+        reservationId: receipt.reservationId,
+        allocationKey: receipt.allocationKey,
+        amount: receipt.amount,
+        outcome: "consumed",
+        metadata: {
+          canvasProjectId: input.canvasProjectId,
+          canvasNodeRunId: runId,
+          billingEvent: "consumed",
+          outcome: "consumed",
+        },
+        now,
+      });
+    },
+    async release({ runId, receipt, failureCode, now }) {
+      if (receipt.mode === "team_member") {
+        await releaseSimpleTeamMemberCredits(input.db, {
+          teamMemberId: teamMemberId!,
+          amount: receipt.amount,
+          sourceId: receipt.sourceId ?? `canvas-text:${runId}`,
+          reason: "text generation失败返还积分",
+          metadata: { canvasProjectId: input.canvasProjectId, canvasNodeRunId: runId, failureCode },
+          now,
+        });
+        return;
+      }
+      if (!receipt.reservationId || !receipt.allocationKey) return;
+      await settleReservationAllocation(input.db, {
+        reservationId: receipt.reservationId,
+        allocationKey: receipt.allocationKey,
+        amount: receipt.amount,
+        outcome: "released",
+        metadata: {
+          canvasProjectId: input.canvasProjectId,
+          canvasNodeRunId: runId,
+          failureCode,
+          billingEvent: "released",
+          outcome: "released",
+        },
+        now,
+      });
+    },
+    async grantSkillAuthor({ runId, skill, now }) {
+      await grantPromptSkillsUsageCredits(input.db, {
+        skills: [skill],
+        sourceId: runId,
+        payerUserId: input.userId,
+        teamMemberId,
+        projectId: null,
+        modelCode: input.modelCode,
+        now,
+      });
+    },
+  };
+}
+
+const CANVAS_ANIMATION_SPRITE_ACTIONS = {
+  idle: { label: "待机", description: "自然呼吸和轻微重心起伏的原地循环" },
+  walk: { label: "行走", description: "左右腿和对侧手臂交替摆动的原地行走循环" },
+  run: { label: "奔跑", description: "包含触地、蹬地和腾空阶段的原地奔跑循环" },
+  jump: { label: "跳跃", description: "从下蹲、腾空到落地恢复的一次完整跳跃" },
+  attack: { label: "攻击", description: "从蓄力、命中到收势的一次完整攻击" },
+  hit: { label: "受击", description: "从冲击、后仰到恢复的一次完整受击" },
+} as const;
+
+const CANVAS_ANIMATION_SPRITE_GRIDS = {
+  6: { cols: 3, rows: 2, aspectRatio: "3:2" },
+  8: { cols: 4, rows: 2, aspectRatio: "2:1" },
+  10: { cols: 5, rows: 2, aspectRatio: "21:9" },
+  12: { cols: 4, rows: 3, aspectRatio: "4:3" },
+  16: { cols: 4, rows: 4, aspectRatio: "1:1" },
+  20: { cols: 5, rows: 4, aspectRatio: "5:4" },
+} as const;
+
+const CANVAS_GENERATION_SKILL_CATEGORIES = [
+  "script",
+  "shot",
+  "prop_extract",
+  "character_extract",
+  "scene_extract",
+  "image_style",
+  "storyboard",
+  "other",
+] as const;
+type CanvasGenerationSkillCategory = (typeof CANVAS_GENERATION_SKILL_CATEGORIES)[number];
+
+function readCanvasGenerationSkillSelection(
+  body: Record<string, unknown>,
+  node?: { data?: Record<string, unknown> } | null,
+) {
+  const raw = Object.prototype.hasOwnProperty.call(body, "skill")
+    ? body.skill
+    : node?.data?.promptSkillId || node?.data?.promptSkillCategory
+      ? { id: node.data.promptSkillId, category: node.data.promptSkillCategory }
+      : firstCanvasGenerationLegacySkill(node?.data?.promptSkillIds);
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new GenerationRequestValidationError("canvas_prompt_skill_invalid", "Canvas prompt skill is invalid");
+  }
+  const record = raw as Record<string, unknown>;
+  const id = readString(record.id);
+  const category = readString(record.category);
+  if (!id && !category) return null;
+  if (!id || !isUuid(id) || !CANVAS_GENERATION_SKILL_CATEGORIES.includes(category as CanvasGenerationSkillCategory)) {
+    throw new GenerationRequestValidationError("canvas_prompt_skill_invalid", "Canvas prompt skill is invalid");
+  }
+  return { id, category: category as CanvasGenerationSkillCategory };
+}
+
+function firstCanvasGenerationLegacySkill(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  for (const category of CANVAS_GENERATION_SKILL_CATEGORIES) {
+    const id = readString(record[category]);
+    if (id) return { id, category };
+  }
+  return null;
+}
+
+async function resolveCanvasGenerationSkill(
+  db: SqlDatabase,
+  userId: string,
+  selection: ReturnType<typeof readCanvasGenerationSkillSelection>,
+) {
+  if (!selection) return null;
+  try {
+    return await createPromptMarketplaceService({ db }).resolveWorkflowPromptSkill({
+      userId,
+      itemId: selection.id,
+      category: selection.category,
+      now: new Date(),
+    });
+  } catch (error) {
+    if (error instanceof PromptMarketplaceError) {
+      throw new GenerationRequestValidationError(error.code, error.message);
+    }
+    throw error;
+  }
+}
+
+function prependCanvasGenerationSkill(
+  body: Record<string, unknown>,
+  skill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>>,
+) {
+  if (!skill?.content?.trim()) return body;
+  const content = skill.content.trim();
+  const next = { ...body };
+  let applied = false;
+  for (const key of ["prompt", "promptOverride", "motionPrompt", "text"] as const) {
+    const current = readString(next[key]);
+    if (!current) continue;
+    next[key] = current.startsWith(content) ? current : `${content}\n\n${current}`;
+    applied = true;
+  }
+  if (!applied) next.prompt = content;
+  return next;
+}
+
+function generationTaskPromptSkill(
+  skill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>>,
+): NonNullable<GenerationTaskContext["promptSkill"]> | null {
+  return skill ? {
+    id: skill.id,
+    category: skill.category,
+    title: skill.title,
+    priceCredits: Math.max(0, Math.round(Number(skill.priceCredits) || 0)),
+    official: skill.official,
+    ownerUserId: skill.ownerUserId,
+  } : null;
+}
+
+function appendCanvasAnimationSpritePrompt(prompt: string, parameters: Record<string, unknown>) {
+  if (readString(parameters.outputKind) !== "sprite-sheet") return prompt;
+  const referencePriorityRules = [
+    "Reference image is authoritative. Preserve its character identity, face, hair, body, outfit, weapons, colors and style; change only pose and motion.",
+    "If text conflicts, follow the reference; use text only for the action and unseen details.",
+  ];
+  if (/character animation Sprite Sheet with exactly \d+ frames/i.test(prompt)) {
+    return /reference image is authoritative/i.test(prompt)
+      ? prompt
+      : [...referencePriorityRules, prompt.trim()].filter(Boolean).join("\n");
+  }
+  const requestedFrames = Number(parameters.animationFrames);
+  const frames = Object.hasOwn(CANVAS_ANIMATION_SPRITE_GRIDS, requestedFrames)
+    ? requestedFrames as keyof typeof CANVAS_ANIMATION_SPRITE_GRIDS
+    : 8;
+  const requestedAction = readString(parameters.animationAction) as keyof typeof CANVAS_ANIMATION_SPRITE_ACTIONS;
+  const actionId = Object.hasOwn(CANVAS_ANIMATION_SPRITE_ACTIONS, requestedAction) ? requestedAction : "idle";
+  const action = CANVAS_ANIMATION_SPRITE_ACTIONS[actionId];
+  const grid = CANVAS_ANIMATION_SPRITE_GRIDS[frames];
+  const sequenceRule = ["idle", "walk", "run"].includes(actionId)
+    ? "The motion must loop cleanly: the final frame leads into the first without repeating the first frame."
+    : "Show one chronological action from preparation through recovery without duplicate or reordered poses.";
+  return [
+    ...referencePriorityRules,
+    prompt.trim(),
+    `Create one ${action.label} character animation Sprite Sheet with exactly ${frames} frames.`,
+    `Action: ${action.description}. ${sequenceRule}`,
+    `Use a ${grid.cols} column by ${grid.rows} row grid in left-to-right, top-to-bottom playback order; the complete sheet aspect ratio is ${grid.aspectRatio}.`,
+    "Keep the same single character, scale, camera, lighting, colors and body proportions in every equally sized cell.",
+    "Frame the full body as large as possible in every cell, filling most of the cell with only small consistent margins.",
+    "Keep feet and body anchors stable inside each cell. Do not add text, frame numbers, borders, separators, extra characters, mirrored duplicates or motion trails.",
+  ].filter(Boolean).join("\n");
+}
+
 async function resolveCanvasGenerationPromptBody(
   db: SqlDatabase,
   actorScope: CanvasActorScope,
@@ -7732,6 +8077,7 @@ async function resolveCanvasGenerationPromptBody(
   const currentParameters = resolvedBody.parameters && typeof resolvedBody.parameters === "object" && !Array.isArray(resolvedBody.parameters)
     ? resolvedBody.parameters as Record<string, unknown>
     : {};
+  const expandedPrompt = appendCanvasAnimationSpritePrompt(resolved.expandedPrompt, currentParameters);
   const styleReferenceAssetId = settings.settings.visualStyle.styleReferenceEnabled === true
     && (mediaKind === "image" || mediaKind === "video")
     ? settings.settings.visualStyle.styleReferenceAssetId
@@ -7784,14 +8130,14 @@ async function resolveCanvasGenerationPromptBody(
   );
   return {
     ...resolvedBody,
-    prompt: resolved.expandedPrompt,
-    ...(body.promptOverride === undefined ? {} : { promptOverride: resolved.expandedPrompt }),
-    ...(body.motionPrompt === undefined ? {} : { motionPrompt: resolved.expandedPrompt }),
-    ...(body.text === undefined ? {} : { text: resolved.expandedPrompt }),
+    prompt: expandedPrompt,
+    ...(body.promptOverride === undefined ? {} : { promptOverride: expandedPrompt }),
+    ...(body.motionPrompt === undefined ? {} : { motionPrompt: expandedPrompt }),
+    ...(body.text === undefined ? {} : { text: expandedPrompt }),
     canvasContext: {
       ...canvasContext,
       sourcePrompt: resolved.sourcePrompt,
-      expandedPrompt: resolved.expandedPrompt,
+      expandedPrompt,
       promptReferences: resolved.references,
       promptExpansionOrder: resolved.expansionOrder,
       promptDirectives: resolved.directives,
@@ -8084,6 +8430,7 @@ async function createGenerationTask(
     try {
       if (context.canvasActorScope) {
         return (await createSignedReadUrl(db, {
+          sessionToken: input.authenticated.sessionToken,
           actorScope: context.canvasActorScope,
           storageObjectId,
           adapter: input.runtime.adapter,
@@ -9577,7 +9924,7 @@ function createImageGenerationTargetRegistry() {
             envelopedError(404, "canvas_node_not_found", "canvas node not found"),
           );
         }
-        if (requestedNode.type !== "image") {
+        if (!["image", "ai-image", "ai-animation", "ai-panorama", "ai-storyboard"].includes(requestedNode.type)) {
           throw new ImageGenerationTargetRouteError(
             envelopedError(400, "canvas_image_node_invalid", "Only an image generation node can run an image task"),
           );
@@ -9596,6 +9943,8 @@ function createImageGenerationTargetRegistry() {
           userId: context.authenticated.user.id,
         };
         const resolvedPromptBody = await resolveCanvasGenerationPromptBody(context.db, canvasScope, context.body, "image");
+        const selectedSkill = readCanvasGenerationSkillSelection(context.body, node);
+        if (selectedSkill) resolvedPromptBody.skill = selectedSkill;
         const run = await createCanvasNodeRun(context.db, {
           canvasProjectId,
           nodeKey,
@@ -9925,13 +10274,33 @@ async function createUnifiedImageGenerationTask(
   },
 ) {
   const prepared = await createImageGenerationTargetRegistry().prepare(input.body.target, input);
+  const canvasSkillSelection = input.body.target?.kind === "canvas"
+    ? readCanvasGenerationSkillSelection(prepared.body)
+    : null;
   const requestedSkillId = String(input.body.skillId ?? "").trim();
   const promptSkillCategory = input.body.target?.kind === "storyboard" ? "storyboard" : "image_style";
   let promptSkill: GenerationTaskContext["promptSkill"] = null;
   const promptSkills: Array<NonNullable<GenerationTaskContext["promptSkill"]>> = [];
   let promptSkillContent = "";
   let imageStyleContent = "";
-  if (requestedSkillId) {
+  if (canvasSkillSelection) {
+    if (requestedSkillId && requestedSkillId !== canvasSkillSelection.id) {
+      throw new ImageGenerationTargetRouteError(
+        envelopedError(400, "canvas_prompt_skill_invalid", "Canvas generation accepts only one prompt skill"),
+      );
+    }
+    try {
+      const skill = await resolveCanvasGenerationSkill(input.db, input.authenticated.user.id, canvasSkillSelection);
+      promptSkill = generationTaskPromptSkill(skill);
+      if (promptSkill) promptSkills.push(promptSkill);
+      promptSkillContent = String(skill?.content ?? "").trim();
+    } catch (error) {
+      if (error instanceof GenerationRequestValidationError) {
+        throw new ImageGenerationTargetRouteError(envelopedError(400, error.code, error.message));
+      }
+      throw error;
+    }
+  } else if (requestedSkillId) {
     if (!isUuid(requestedSkillId)) {
       throw new ImageGenerationTargetRouteError(
         envelopedError(
@@ -10012,6 +10381,7 @@ async function createUnifiedImageGenerationTask(
     ));
     imageStyleContent = String(selectedStyle?.prompt_content ?? selectedStyle?.promptContent ?? "").trim();
   }
+  const generationSourceBody = input.body.target?.kind === "canvas" ? prepared.body : input.body;
   const storyboardPromptContent = promptSkillCategory === "storyboard"
     ? String(input.body.storyboardPrompt ?? "").trim()
     : "";
@@ -10022,7 +10392,7 @@ async function createUnifiedImageGenerationTask(
     imageStyleCode: _imageStyleCode,
     storyboardPrompt: _storyboardPrompt,
     ...generationBody
-  } = input.body;
+  } = generationSourceBody;
   const originalPrompt = String(
     generationBody.prompt ?? generationBody.promptOverride ?? generationBody.text ?? "",
   ).trim();
@@ -10087,6 +10457,8 @@ export function createCanvasGenerationBatchDispatch(input: {
         actorScope: input.canvasScope,
       });
       if (!canvas) throw new CanvasGenerationBatchError("canvas_project_not_found");
+      const modelCode = readString(resolvedPromptPayload.model) ?? readString(resolvedPromptPayload.modelCode)
+        ?? "deepseek-chat";
       const result = await runCanvasTextNode(input.db, {
         canvas,
         nodeKey: item.nodeKey,
@@ -10101,14 +10473,36 @@ export function createCanvasGenerationBatchDispatch(input: {
         userId: input.authenticated.user.id,
         actorScope: input.canvasScope,
         gateway: input.textGateway,
+        billing: await createCanvasTextNodeBilling({
+          db: input.db,
+          canvasProjectId: input.canvasProjectId,
+          canvasScope: input.canvasScope,
+          actor: input.actor,
+          userId: input.authenticated.user.id,
+          modelCode,
+          parameters: readJsonRecord(resolvedPromptPayload.parameters),
+          batchBilling: item.billing,
+        }),
         now,
       });
       if (result.status !== "succeeded" || !result.runId) {
         throw new CanvasGenerationBatchError("canvas_batch_text_run_not_succeeded");
       }
-      return { status: "succeeded", taskId: null, runId: result.runId };
+      return {
+        status: "succeeded",
+        taskId: null,
+        runId: result.runId,
+        creditReservationId: "creditReservationId" in result ? result.creditReservationId ?? null : null,
+      };
     }
-    const modelCode = readString(resolvedPromptPayload.model) ?? readString(resolvedPromptPayload.modelCode);
+    const selectedPromptSkill = await resolveCanvasGenerationSkill(
+      input.db,
+      input.authenticated.user.id,
+      readCanvasGenerationSkillSelection(resolvedPromptPayload),
+    );
+    const generationPromptPayload = prependCanvasGenerationSkill(resolvedPromptPayload, selectedPromptSkill);
+    const promptSkill = generationTaskPromptSkill(selectedPromptSkill);
+    const modelCode = readString(generationPromptPayload.model) ?? readString(generationPromptPayload.modelCode);
     const run = await createCanvasNodeRun(input.db, {
       canvasProjectId: input.canvasProjectId,
       nodeKey: item.nodeKey,
@@ -10119,9 +10513,10 @@ export function createCanvasGenerationBatchDispatch(input: {
       targetType: "canvas",
       targetId: item.nodeKey,
       inputSnapshot: {
-        ...resolvedPromptPayload,
+        ...generationPromptPayload,
         batchId: item.batchId,
         batchItemId: item.itemId,
+        ...(promptSkill ? { promptSkill } : {}),
       },
       actorScope: input.canvasScope,
       now,
@@ -10131,7 +10526,7 @@ export function createCanvasGenerationBatchDispatch(input: {
         kind: item.mediaKind,
         episodeId: null,
         body: {
-          ...resolvedPromptPayload,
+          ...generationPromptPayload,
           targetType: "canvas",
           targetId: item.nodeKey,
           canvasProjectId: input.canvasProjectId,
@@ -10147,6 +10542,8 @@ export function createCanvasGenerationBatchDispatch(input: {
           canvasProjectId: input.canvasProjectId,
           canvasActorScope: input.canvasScope,
           ...(item.billing.mode === "batch_reservation" ? { canvasBatchBilling: item.billing } : {}),
+          promptSkill,
+          ...(promptSkill ? { promptSkills: [promptSkill] } : {}),
           userId: input.actor.userId,
         },
         runtime: input.runtime,
@@ -16032,18 +16429,27 @@ export function createPhoneAuthDevServer(
           signedUrlExpiresInSeconds,
         });
         const directorDeskService = new DirectorDeskService(new SqlDirectorDeskStore(db));
-      const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+        const aiStoryboardTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
           gateway: new TextModelGatewayService({
             db,
-          adapter: new OpenAICompatibleTextAdapter(),
-          env: runtimeEnv,
-        }),
-      });
+            adapter: new OpenAICompatibleTextAdapter(),
+            resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
+            env: runtimeEnv,
+          }),
+        });
       const aiScriptAnalysisTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
         gateway: new TextModelGatewayService({
           db,
           adapter: new OpenAICompatibleTextAdapter(),
           resolver: new AdminBackedTextModelResolver(db),
+          env: runtimeEnv,
+        }),
+      });
+      const canvasTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+        gateway: new TextModelGatewayService({
+          db,
+          adapter: new OpenAICompatibleTextAdapter(),
+          resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
           env: runtimeEnv,
         }),
       });
@@ -21467,7 +21873,10 @@ export function createPhoneAuthDevServer(
             if (object.status !== "available") {
               return writeJson(response, envelopedError(409, "storage_object_not_ready", "Storage object is not ready"));
             }
-            if (url.searchParams.get("proxy") === "1" && object.contentType.startsWith("image/")) {
+            if (
+              url.searchParams.get("download") === "1"
+              || (url.searchParams.get("proxy") === "1" && object.contentType.startsWith("image/"))
+            ) {
               const bytes = await readUploadedStorageObjectBytes(db, {
                 sessionToken: authenticated.sessionToken,
                 storageObjectId: object.id,
@@ -22583,7 +22992,8 @@ export function createPhoneAuthDevServer(
           }> : [];
           const nodes = await resolveCanvasBatchPromptDependencies(db, canvasScope, requestedNodes);
           const mediaNodes = nodes.filter((node): node is typeof node & { mediaKind: "image" | "video" | "audio" } => node.mediaKind !== "text");
-          const itemCredits = canvasScope.actorTeamMemberId || mediaNodes.length !== nodes.length
+          const hasPromptSkills = mediaNodes.some((node) => Boolean(readCanvasGenerationSkillSelection(readJsonRecord(node.payload))));
+          const itemCredits = canvasScope.actorTeamMemberId || mediaNodes.length !== nodes.length || hasPromptSkills
             ? null
             : await estimateCanvasGenerationBatchItemCredits(db, mediaNodes, runtimeEnv);
           const batch = await createCanvasGenerationBatch(db, {
@@ -22598,7 +23008,7 @@ export function createPhoneAuthDevServer(
               db, canvasProjectId, canvasScope, actor, authenticated,
               runtime: storageRuntime, env: runtimeEnv, fetchImpl: options.fetchImpl,
               signedUrlExpiresInSeconds,
-              textGateway: aiStoryboardTextChatGateway,
+              textGateway: canvasTextChatGateway,
             }),
             now: new Date(),
           });
@@ -22649,7 +23059,7 @@ export function createPhoneAuthDevServer(
                 env: runtimeEnv,
                 fetchImpl: options.fetchImpl,
                 signedUrlExpiresInSeconds,
-                textGateway: aiStoryboardTextChatGateway,
+                textGateway: canvasTextChatGateway,
               }),
               now: new Date(),
             });
@@ -24005,6 +24415,83 @@ export function createPhoneAuthDevServer(
           }
           const requestedMediaKind = String(body.kind ?? body.mediaKind ?? node.data?.mediaKind ?? "image");
           if (requestedMediaKind === "text" || node.type === "ai-text" || node.type === "ai-markdown") {
+            const textModelCode = readString(body.model) ?? readString(body.modelCode)
+              ?? readString(node.data?.modelCode) ?? "deepseek-chat";
+            const textBilling = await createCanvasTextNodeBilling({
+              db,
+              canvasProjectId,
+              canvasScope,
+              actor,
+              userId: authenticated.user.id,
+              modelCode: textModelCode,
+              parameters: readJsonRecord(body.parameters),
+            });
+            const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("stream") === "1";
+            if (wantsStream) {
+              response.statusCode = 200;
+              response.setHeader("content-type", "text/event-stream; charset=utf-8");
+              response.setHeader("cache-control", "no-cache, no-transform");
+              response.setHeader("connection", "keep-alive");
+              response.flushHeaders?.();
+              const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
+              const abortController = createRequestAbortController(request, response);
+              try {
+                writeSseData(response, { type: "start", nodeKey });
+                const result = await runCanvasTextNode(db, {
+                  canvas,
+                  nodeKey,
+                  idempotencyKey,
+                  body,
+                  userId: authenticated.user.id,
+                  actorScope: canvasScope,
+                  gateway: {
+                    async completeJson(gatewayInput) {
+                      let text = "";
+                      if (canvasTextChatGateway.streamJson) {
+                        for await (const delta of canvasTextChatGateway.streamJson({
+                          ...gatewayInput,
+                          signal: abortController.signal,
+                        })) {
+                          if (abortController.signal.aborted) {
+                            throw Object.assign(new Error("AbortError"), { name: "AbortError" });
+                          }
+                          text += delta;
+                          writeSseData(response, { type: "delta", delta, text });
+                        }
+                        return text;
+                      }
+                      text = await canvasTextChatGateway.completeJson({
+                        ...gatewayInput,
+                        signal: abortController.signal,
+                      });
+                      if (text) writeSseData(response, { type: "delta", delta: text, text });
+                      return text;
+                    },
+                  },
+                  billing: textBilling,
+                  now: new Date(),
+                });
+                if (!abortController.signal.aborted && !response.destroyed && !response.writableEnded) {
+                  writeSseData(response, { type: "complete", run: result });
+                }
+              } catch (error) {
+                if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+                  writeSseData(response, {
+                    type: "error",
+                    errorCode: error instanceof CanvasTextNodeRunError ? error.code : "canvas_text_generation_failed",
+                    error: error instanceof CanvasTextNodeRunError
+                      ? error.message
+                      : translateProviderErrorMessage(error instanceof Error ? error : "AI text generation failed"),
+                    details: error instanceof CanvasTextNodeRunError ? error.details : {},
+                  });
+                }
+              } finally {
+                stopHeartbeat();
+                abortController.cleanup();
+                if (!response.destroyed && !response.writableEnded) response.end();
+              }
+              return;
+            }
             try {
               const result = await runCanvasTextNode(db, {
                 canvas,
@@ -24013,7 +24500,8 @@ export function createPhoneAuthDevServer(
                 body,
                 userId: authenticated.user.id,
                 actorScope: canvasScope,
-                gateway: aiStoryboardTextChatGateway,
+                gateway: canvasTextChatGateway,
+                billing: textBilling,
                 now: new Date(),
               });
               const resultStatus = result.status === "created" || result.status === "running" ? 202 : 200;
@@ -24037,7 +24525,7 @@ export function createPhoneAuthDevServer(
               envelopedError(400, "canvas_audio_node_invalid", "Only an audio generation node can run an audio task"),
             );
           }
-          if (mediaKind === "video" && node.type !== "video") {
+          if (mediaKind === "video" && !["video", "ai-video"].includes(node.type)) {
             return writeJson(
               response,
               envelopedError(400, "canvas_video_node_invalid", "Only a video generation node can run a video task"),
@@ -24069,6 +24557,13 @@ export function createPhoneAuthDevServer(
             }
           }
           const resolvedPromptBody = await resolveCanvasGenerationPromptBody(db, canvasScope, body, mediaKind);
+          const selectedPromptSkill = await resolveCanvasGenerationSkill(
+            db,
+            authenticated.user.id,
+            readCanvasGenerationSkillSelection(body, node),
+          );
+          const generationPromptBody = prependCanvasGenerationSkill(resolvedPromptBody, selectedPromptSkill);
+          const promptSkill = generationTaskPromptSkill(selectedPromptSkill);
           const run = await createCanvasNodeRun(db, {
             canvasProjectId,
             nodeKey,
@@ -24080,17 +24575,18 @@ export function createPhoneAuthDevServer(
             targetType: "canvas",
             targetId: nodeKey,
             inputSnapshot: {
-              ...resolvedPromptBody,
+              ...generationPromptBody,
               canvasProjectId,
               nodeKey,
               nodeData: node.data ?? {},
+              ...(promptSkill ? { promptSkill } : {}),
             },
             userId: authenticated.user.id,
             actorScope: canvasScope,
             now: new Date(),
           });
           const generationBody = {
-            ...resolvedPromptBody,
+            ...generationPromptBody,
             targetType: "canvas",
             targetId: nodeKey,
             canvasProjectId,
@@ -24107,6 +24603,8 @@ export function createPhoneAuthDevServer(
               project: null,
               canvasProjectId,
               canvasActorScope: canvasScope,
+              promptSkill,
+              ...(promptSkill ? { promptSkills: [promptSkill] } : {}),
               userId: authenticated.user.id,
             },
             runtime: storageRuntime,
@@ -25900,6 +26398,48 @@ export function createPhoneAuthDevServer(
           }
         }
 
+        const canvasPositionsMatch = pathname.match(/^\/api\/creator\/canvases\/([^/]+)\/positions$/);
+        if (canvasPositionsMatch && request.method === "PATCH") {
+          const canvasProjectId = decodeURIComponent(canvasPositionsMatch[1] ?? "");
+          const canvasScope = await authorizeCanvasActor(db, {
+            sessionToken: authenticated.sessionToken,
+            canvasId: canvasProjectId,
+            action: "edit",
+            now: new Date(),
+          });
+          try {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            const rawPositions = Array.isArray(body.positions) ? body.positions : [];
+            const positions = rawPositions.map((item) => ({
+              nodeKey: String((item as Record<string, unknown>)?.nodeKey ?? "").trim(),
+              x: Number((item as Record<string, unknown>)?.x),
+              y: Number((item as Record<string, unknown>)?.y),
+            })).filter((item) => item.nodeKey && Number.isFinite(item.x) && Number.isFinite(item.y));
+            if (!positions.length || positions.length !== rawPositions.length) {
+              return writeJson(response, envelopedError(400, "canvas_positions_invalid", "canvas positions are invalid"));
+            }
+            const saved = await saveCanvasNodePositionsByCanvasProjectId(db, {
+              canvasProjectId,
+              actorScope: canvasScope,
+              clientRevision: Number(body.clientRevision ?? body.serverRevision ?? 0),
+              positions,
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, { canvas: saved }));
+          } catch (error) {
+            if (error instanceof CanvasConflictError) {
+              return writeJson(response, envelopedError(409, "canvas_revision_conflict", "canvas revision conflict", {
+                serverRevision: error.serverRevision,
+                serverDocument: error.serverDocument as Record<string, unknown>,
+              }));
+            }
+            if (error instanceof CanvasDocumentError || error instanceof CanvasValidationError) {
+              return writeJson(response, envelopedError(400, error.code, error.message));
+            }
+            throw error;
+          }
+        }
+
         const standaloneCanvasMatch = pathname.match(
           /^\/api\/creator\/(?:canvases\/([^/]+)\/document|canvas-projects\/([^/]+)\/canvas)$/,
         );
@@ -26647,8 +27187,8 @@ export function createPhoneAuthDevServer(
           )) {
             return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
           }
-          if (!skipScriptStage && !requestedSkillIds.script && !usesLegacyPackages) {
-            return writeJson(response, envelopedError(400, "script_conversion_skill_required", "script conversion skill is required"));
+          if (!usesLegacyPackages && Object.keys(requestedSkillIds).length === 0) {
+            return writeJson(response, envelopedError(400, "workflow_prompt_skill_required", "at least one workflow prompt skill is required"));
           }
           let workflowSkills: Array<Awaited<ReturnType<ReturnType<typeof createPromptMarketplaceService>["resolveWorkflowPromptSkill"]>>> = [];
           try {
@@ -26670,20 +27210,24 @@ export function createPhoneAuthDevServer(
             throw error;
           }
           const workflowSkillByCategory = new Map(workflowSkills.map((item) => [item.category, item]));
-          await Promise.all([
-            ...(usesLegacyPackages ? [ensureDefaultStoryboardPromptData(db)] : []),
-            ensureDefaultScenePromptTemplates(db),
-            ensureDefaultCharacterPromptTemplates(db),
-            ensureDefaultPropPromptTemplates(db),
-            ensureDefaultShotPromptTemplates(db),
-          ]);
-          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = await Promise.all([
-            findDefaultScenePromptTemplateForPreview(db),
-            findDefaultCharacterPromptTemplateForPreview(db),
-            findDefaultPropPromptTemplateForPreview(db),
-            findDefaultShotPromptTemplateForPreview(db),
-          ]);
-          if (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate) {
+          if (usesLegacyPackages) {
+            await Promise.all([
+              ensureDefaultStoryboardPromptData(db),
+              ensureDefaultScenePromptTemplates(db),
+              ensureDefaultCharacterPromptTemplates(db),
+              ensureDefaultPropPromptTemplates(db),
+              ensureDefaultShotPromptTemplates(db),
+            ]);
+          }
+          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = usesLegacyPackages
+            ? await Promise.all([
+                findDefaultScenePromptTemplateForPreview(db),
+                findDefaultCharacterPromptTemplateForPreview(db),
+                findDefaultPropPromptTemplateForPreview(db),
+                findDefaultShotPromptTemplateForPreview(db),
+              ])
+            : [null, null, null, null];
+          if (usesLegacyPackages && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
           const [genrePackage, emotionPackage, tabooPackages] = usesLegacyPackages
@@ -26705,7 +27249,10 @@ export function createPhoneAuthDevServer(
             throw new TextModelGatewayError("model_not_configured");
           }
           const resolvedModelCode = scriptModelConfig.modelCode;
-          const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig);
+          const modelRunCount = usesLegacyPackages
+            ? (skipScriptStage ? 4 : 5)
+            : workflowSkills.length;
+          const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
           const skillCreditCost = workflowSkills.reduce(
             (sum, item) => sum + Math.max(0, Math.round(Number(item.priceCredits) || 0)),
             0,
@@ -26719,6 +27266,7 @@ export function createPhoneAuthDevServer(
             projectId,
             modelCode: resolvedModelCode,
             modelCreditCost,
+            modelRunCount,
             skillId: skillSelectionKey || null,
             skills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title, priceCredits: item.priceCredits })),
             skillCreditCost,
@@ -26769,6 +27317,7 @@ export function createPhoneAuthDevServer(
                 idempotencyKey,
                 promptPreview: scriptText.slice(0, 200),
                 modelConfig: scriptModelConfig,
+                modelCreditCost,
                 billingMetadata,
                 skillCreditCost,
                 skillAuthorGrants,
@@ -26787,6 +27336,16 @@ export function createPhoneAuthDevServer(
             createdByUserId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
+            modelCode: resolvedModelCode,
+            selectedStages: usesLegacyPackages
+              ? undefined
+              : workflowSkills.map((item) => item.category === "scene_extract"
+                  ? "scene"
+                  : item.category === "character_extract"
+                    ? "character"
+                    : item.category === "prop_extract"
+                      ? "prop"
+                      : item.category) as Array<"script" | "scene" | "character" | "prop" | "shot">,
             skipScriptStage,
             packages: {
               skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
@@ -26795,10 +27354,10 @@ export function createPhoneAuthDevServer(
               tabooPrompt: formatStoryboardPromptPackageContents(tabooPackages),
             },
             templates: {
-              scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate.prompt_content,
-              characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate.prompt_content,
-              propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate.prompt_content,
-              shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate.prompt_content,
+              scenePrompt: workflowSkillByCategory.get("scene_extract")?.content ?? sceneTemplate?.prompt_content ?? "",
+              characterPrompt: workflowSkillByCategory.get("character_extract")?.content ?? characterTemplate?.prompt_content ?? "",
+              propPrompt: workflowSkillByCategory.get("prop_extract")?.content ?? propTemplate?.prompt_content ?? "",
+              shotPrompt: workflowSkillByCategory.get("shot")?.content ?? shotTemplate?.prompt_content ?? "",
             },
           };
           const previewService = createAiStoryboardPreviewService({ gateway: aiStoryboardTextChatGateway });
@@ -26808,6 +27367,7 @@ export function createPhoneAuthDevServer(
             response.setHeader("content-type", "text/event-stream; charset=utf-8");
             response.setHeader("cache-control", "no-cache, no-transform");
             response.setHeader("connection", "keep-alive");
+            response.setHeader("x-accel-buffering", "no");
             response.flushHeaders?.();
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
             const abortController = createRequestAbortController(request, response);
@@ -26833,6 +27393,7 @@ export function createPhoneAuthDevServer(
                     displayCreditBalance: creditBalance.displayCreditBalance,
                     creditCost,
                     modelCreditCost,
+                    modelRunCount,
                     skillCreditCost,
                     selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
                     selectedPackages: genrePackage && emotionPackage ? {
@@ -26864,7 +27425,7 @@ export function createPhoneAuthDevServer(
                 if (actor.teamMember) {
                   await releaseSimpleTeamMemberCredits(db, {
                     teamMemberId: actor.teamMember.id,
-                    amount: generationCostFromModelConfig(0, scriptModelConfig),
+                    amount: creditCost,
                     sourceId: idempotencyKey,
                     reason: "剧本预览失败返还积分",
                     metadata: {
@@ -26901,6 +27462,7 @@ export function createPhoneAuthDevServer(
               displayCreditBalance: creditBalance.displayCreditBalance,
               creditCost,
               modelCreditCost,
+              modelRunCount,
               skillCreditCost,
               selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
               selectedPackages: genrePackage && emotionPackage ? {
@@ -29509,7 +30071,12 @@ export function createPhoneAuthDevServer(
       await canvasLiveHub.close();
       if (httpServer.listening) {
         await new Promise<void>((resolve, reject) => {
+          const forceCloseTimer = setTimeout(() => {
+            httpServer.closeAllConnections();
+          }, 1_000);
+          forceCloseTimer.unref?.();
           httpServer.close((error) => {
+            clearTimeout(forceCloseTimer);
             if (error) {
               reject(error);
               return;
@@ -29517,6 +30084,7 @@ export function createPhoneAuthDevServer(
 
             resolve();
           });
+          httpServer.closeIdleConnections();
         });
       }
 
@@ -29533,6 +30101,7 @@ export type { Server };
 
 export const __phoneAuthDevServerTestUtils = {
   appendImageStylePromptForGeneration,
+  appendCanvasAnimationSpritePrompt,
   resolveCanvasGenerationPromptBody,
   validateGenerationQueueReplay,
 };

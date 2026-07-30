@@ -81,11 +81,14 @@ export function buildCanvasAnimationSpritePrompt(characterPrompt, input = {}) {
     ? "The motion must loop cleanly: the final frame leads into the first without repeating the first frame."
     : "Show one chronological action from preparation through recovery without duplicate or reordered poses.";
   return [
+    "Reference image is authoritative. Preserve its character identity, face, hair, body, outfit, weapons, colors and style; change only pose and motion.",
+    "If text conflicts, follow the reference; use text only for the action and unseen details.",
     String(characterPrompt ?? "").trim(),
     `Create one ${action.label} character animation Sprite Sheet with exactly ${state.frames} frames.`,
     `Action: ${action.description}. ${sequenceRule}`,
     `Use a ${state.grid.cols} column by ${state.grid.rows} row grid in left-to-right, top-to-bottom playback order; the complete sheet aspect ratio is ${sheetAspectRatio}.`,
     "Keep the same single character, scale, camera, lighting, colors and body proportions in every equally sized cell.",
+    "Frame the full body as large as possible in every cell, filling most of the cell with only small consistent margins.",
     "Keep feet and body anchors stable inside each cell. Do not add text, frame numbers, borders, separators, extra characters, mirrored duplicates or motion trails.",
   ].filter(Boolean).join("\n");
 }
@@ -123,14 +126,18 @@ export function renderCanvasAnimationNodeBody(node = {}) {
   const state = normalizeCanvasAnimationState(data);
   const mediaUrl = resolveCanvasAnimationMediaUrl(data);
   const status = String(data.status ?? "ready").trim().toLowerCase();
-  const generating = ["queued", "running", "processing"].includes(status);
   const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
-  const preview = mediaUrl
-    ? state.previewMode === "sheet"
+  const taskId = String(data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? "").trim();
+  const generating = !failed && (
+    ["queued", "running", "processing"].includes(status)
+    || (!mediaUrl && Boolean(taskId))
+  );
+  const preview = generating
+    ? `<div class="canvas-animation-empty is-loading canvas-image-generation-mask" role="status" aria-label="正在生成图片"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成图片</strong><small>${state.frames} 帧 · ${state.grid.cols}×${state.grid.rows}</small></div>`
+    : mediaUrl
+      ? state.previewMode === "sheet"
       ? `<img class="canvas-animation-sheet" src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(`${state.actionLabel} Sprite Sheet`)}" draggable="false" />`
       : renderPlayingPreview(mediaUrl, data, state)
-    : generating
-      ? `<div class="canvas-animation-empty is-loading" role="status"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成 Sprite Sheet</strong><small>${state.frames} 帧 · ${state.grid.cols}×${state.grid.rows}</small></div>`
       : failed
         ? `<div class="canvas-animation-empty is-failed" role="alert"><strong>Sprite Sheet 生成失败</strong><small>${escapeHtml(data.failureMessage ?? "请检查生成任务后重试")}</small></div>`
         : `<div class="canvas-animation-empty"><span class="canvas-animation-empty-icon" aria-hidden="true">▶</span><strong>描述角色并生成动画</strong><small>${state.actionLabel} · ${state.frames} 帧 · ${state.grid.cols}×${state.grid.rows}</small></div>`;
@@ -184,15 +191,19 @@ export function resolveCanvasAnimationArtifactPatch(task = null, mediaUrl = "") 
 
 function renderPlayingPreview(mediaUrl, data, state) {
   const geometry = resolveCanvasAnimationFrameGeometry(data);
-  const xValues = geometry.positions.map((position) => formatNumber(position.x)).join(";");
-  const yValues = geometry.positions.map((position) => formatNumber(position.y)).join(";");
   const duration = state.frames * FRAME_INTERVAL_MS;
-  return `<svg class="canvas-animation-frame" viewBox="0 0 100 100" role="img" aria-label="${escapeAttr(`${state.actionLabel}逐帧动画，共 ${state.frames} 帧`)}" preserveAspectRatio="xMidYMid meet">
-    <image href="${escapeAttr(mediaUrl)}" x="${formatNumber(geometry.positions[0].x)}" y="${formatNumber(geometry.positions[0].y)}" width="${formatNumber(geometry.imageWidth)}" height="${formatNumber(geometry.imageHeight)}" preserveAspectRatio="none">
-      <animate attributeName="x" values="${xValues}" dur="${duration}ms" calcMode="discrete" repeatCount="indefinite" />
-      <animate attributeName="y" values="${yValues}" dur="${duration}ms" calcMode="discrete" repeatCount="indefinite" />
-    </image>
-  </svg>`;
+  const animationName = `canvas-animation-frames-${state.frames}`;
+  const keyframes = geometry.positions.map((_, frameIndex) => {
+    const x = -((frameIndex % state.grid.cols) / state.grid.cols) * 100;
+    const y = -(Math.floor(frameIndex / state.grid.cols) / state.grid.rows) * 100;
+    return `${formatNumber((frameIndex / state.frames) * 100)}% { transform: translate(${formatNumber(x)}%, ${formatNumber(y)}%); }`;
+  }).join(" ");
+  const offsetX = (100 - geometry.cellWidth) / 2;
+  const offsetY = (100 - geometry.cellHeight) / 2;
+  return `<div class="canvas-animation-frame" role="img" aria-label="${escapeAttr(`${state.actionLabel}逐帧动画，共 ${state.frames} 帧`)}">
+    <style>@keyframes ${animationName} { ${keyframes} 100% { transform: translate(0%, 0%); } }</style>
+    <img src="${escapeAttr(mediaUrl)}" alt="" draggable="false" style="left:${formatNumber(offsetX)}%;top:${formatNumber(offsetY)}%;width:${formatNumber(geometry.imageWidth)}%;height:${formatNumber(geometry.imageHeight)}%;animation-name:${animationName};animation-duration:${duration}ms" />
+  </div>`;
 }
 
 function resolveCanvasAnimationMediaUrl(data = {}) {

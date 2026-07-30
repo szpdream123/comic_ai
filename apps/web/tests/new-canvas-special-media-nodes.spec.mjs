@@ -11,6 +11,7 @@ import {
   renderCanvasPanoramaNodeBody,
   renderCanvasStoryboardNodeBody,
   resizeCanvasStoryboardGridPositions,
+  syncCanvasStoryboardGridAspectRatio,
   updateCanvasStoryboardGridPosition,
 } from "../src/features/new-canvas/special-media-nodes.js";
 import { createDefaultCanvasDocument } from "../src/features/production-workbench/canvas/canvas-default-document.js";
@@ -150,9 +151,9 @@ test("new Canvas storyboard cells preserve selection, extraction, overrides, and
   assert.equal(cells.length, 4);
   assert.equal(cells[1].empty, true);
   assert.equal(cells[1].draggable, false);
-  assert.equal(cells[2].empty, false);
+  assert.equal(cells[2].empty, true);
   assert.equal(cells[2].override.label, "替换图");
-  assert.equal(cells[2].draggable, true);
+  assert.equal(cells[2].draggable, false);
   assert.equal(cells[3].selected, true);
   assert.deepEqual(cells[3].sourceRect, { x: 50, y: 50, width: 50, height: 50 });
 
@@ -200,9 +201,12 @@ test("new Canvas storyboard body renders keyboard and mobile-operable cell actio
   assert.match(html, /role="gridcell"[^>]*aria-selected="true"/);
   assert.match(html, /data-action="select-canvas-storyboard-cell"/);
   assert.match(html, /data-action="extract-canvas-storyboard-cell"[^>]*data-storyboard-drag-source/);
-  assert.match(html, /draggable="true"/);
+  assert.doesNotMatch(html, /draggable="true"/);
   assert.match(html, /style="touch-action:none"/);
+  assert.match(html, /data-tooltip="拖动剪切图片"/);
+  assert.match(html, /aria-label="拖动剪切分镜 1-1图片"[^>]*data-tooltip="拖动剪切图片"[^>]*><svg/);
   assert.match(html, /data-storyboard-empty="true"/);
+  assert.match(html, /canvas-storyboard-cell-return-mark/);
   assert.match(html, /src="\/source\?a=1&amp;b=2"/);
   assert.doesNotMatch(html, /<script>/i);
 
@@ -231,6 +235,37 @@ test("new Canvas storyboard body renders keyboard and mobile-operable cell actio
   assert.match(customEditor, /data-canvas-storyboard-position-input/);
   assert.match(customEditor, /value="35"/);
   assert.match(customEditor, /value="70"/);
+});
+
+test("new Canvas storyboard shows a blocking preparation mask while extracting a cell", () => {
+  const html = renderCanvasStoryboardNodeBody({
+    id: "storyboard-preparing",
+    data: {
+      imageUrl: "https://example.com/storyboard.png",
+      storyboardEditing: true,
+      storyboardPreparing: true,
+      storyboardRows: 1,
+      storyboardCols: 1,
+    },
+  });
+
+  assert.match(html, /class="canvas-storyboard-node-body[^\"]*is-preparing/);
+  assert.match(html, /aria-busy="true"/);
+  assert.match(html, /canvas-storyboard-preparing-mask canvas-image-generation-mask/);
+  assert.match(html, /正在准备分镜图片中/);
+});
+
+test("new Canvas storyboard uses the loaded source dimensions without stretching cells", () => {
+  const properties = new Map();
+  const grid = {
+    dataset: {},
+    style: { setProperty: (key, value) => properties.set(key, value) },
+    querySelector: () => ({ naturalWidth: 1920, naturalHeight: 1080 }),
+  };
+
+  assert.equal(syncCanvasStoryboardGridAspectRatio({ querySelector: () => grid }), true);
+  assert.equal(properties.get("--canvas-storyboard-source-aspect"), "1920 / 1080");
+  assert.equal(grid.dataset.storyboardSourceAspect, "1920:1080");
 });
 
 test("new Canvas panorama and storyboard use interactive X6 HTML shapes", () => {

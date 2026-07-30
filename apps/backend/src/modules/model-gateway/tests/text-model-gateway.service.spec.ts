@@ -198,6 +198,60 @@ describe("text model gateway service", () => {
     }
   });
 
+  it("marks the provider request failed when the stream ends with a provider error reason", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([
+      chunk("chatcmpl-provider-error", "", "模型服务返回错误，任务没有拿到生成结果，请稍后重试。"),
+      {
+        id: "chatcmpl-provider-error",
+        object: "chat.completion.chunk",
+        created: 1716026400,
+        model: "deepseek-chat",
+        choices: [],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 2048,
+          total_tokens: 2148,
+          completion_tokens_details: { reasoning_tokens: 2048 },
+        },
+      } as TextGatewayChatCompletionChunk,
+    ]);
+    const gateway = createGateway(db, adapter);
+
+    try {
+      const result = await gateway.chat.completions.create(
+        {
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: "Return JSON" }],
+          stream: true,
+        },
+        requestContext("provider-finish-error"),
+      );
+
+      for await (const _chunk of result.stream) {
+        // consume stream
+      }
+      const final = await result.completed;
+      assert.equal(final.status, "failed");
+      assert.equal(final.failureCode, "provider_stream_error");
+
+      const stored = await db.query<{
+        status: string;
+        failure_code: string | null;
+        response_redacted_json: Record<string, unknown>;
+      }>("SELECT status,failure_code,response_redacted_json FROM provider_requests WHERE id=$1", [
+        result.providerRequestId,
+      ]);
+      assert.equal(stored.rows[0]?.status, "failed");
+      assert.equal(stored.rows[0]?.failure_code, "provider_stream_error");
+      assert.deepEqual(stored.rows[0]?.response_redacted_json.finishReasons, [
+        "模型服务返回错误，任务没有拿到生成结果，请稍后重试。",
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("aborts the upstream stream and marks the provider request canceled", async () => {
     const db = await createMigratedTestDb();
     const adapter = new AbortAwareTextAdapter();

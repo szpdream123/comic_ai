@@ -560,6 +560,16 @@ test("model editor exposes base credit pricing and billing mode as dedicated fie
   assert.match(script, /pricing\.resolutionCredits = resolutionCredits/);
   assert.match(script, /billingMode: String\(form\.get\("billingMode"\)/);
   assert.match(script, /pricing\.unit = String\(form\.elements\.pricingUnit\.value/);
+  assert.match(script, /name="canvasAgentTokenCreditsPerMillion"/);
+  assert.match(script, /name="canvasAgentBillingMode"/);
+  assert.match(script, /data-canvas-agent-pricing-field/);
+  assert.match(script, /field\.hidden = kind\.mediaType !== "text"/);
+  assert.match(script, /canvasAgentTokenCreditsPerMillion\.required = kind\.mediaType === "text"/);
+  assert.match(script, /画布协作计费模式|\\u753b\\u5e03\\u534f\\u4f5c\\u8ba1\\u8d39\\u6a21\\u5f0f/);
+  assert.match(script, /按总 Token 计费|\\u6309\\u603b Token \\u8ba1\\u8d39/);
+  assert.match(script, /画布协作 Token 单价|\\u753b\\u5e03\\u534f\\u4f5c Token \\u5355\\u4ef7/);
+  assert.match(script, /pricing\.canvasAgentBillingMode = String\(form\.get\("canvasAgentBillingMode"\)/);
+  assert.match(script, /pricing\.canvasAgentTokenCreditsPerMillion = Number\(form\.get\("canvasAgentTokenCreditsPerMillion"\)\)/);
 });
 
 test("model status drawer changes status without launch checks", () => {
@@ -673,6 +683,8 @@ test("admin model management uses parameter templates and a simplified model edi
     "episodeCount",
     "scriptStyle",
     "openai_compatible_chat",
+    "cumob_chat",
+    "酷模文本适配器",
     "globalaiopc_video",
     "global_ai_opc_image",
     "volcengine_ark_image",

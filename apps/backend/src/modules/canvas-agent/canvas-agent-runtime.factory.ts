@@ -12,6 +12,8 @@ import { OpenAICompatibleTextAdapter } from "../model-gateway/openai-compatible-
 import { TextModelGatewayService } from "../model-gateway/text-model-gateway.service.ts";
 import { upsertQueuedGenerationTaskSnapshot } from "../model-gateway/generation-task-snapshot.service.ts";
 import {
+  CanvasConflictError,
+  createCanvasNodeRun,
   findCanvasByCanvasProjectId,
   saveCanvasByCanvasProjectId,
   selectCanvasNodeArtifact,
@@ -259,9 +261,28 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
   constructor(private readonly deps: { db: SqlDatabase; env: NodeJS.ProcessEnv; now: () => Date }) {}
 
   async create(input: Parameters<CanvasAgentGenerationIntake["create"]>[0]) {
-    const existing = await queryOne<{ id: string; workflow_id: string }>(this.deps.db,
-      "SELECT id, workflow_id FROM tasks WHERE idempotency_key=$1 ORDER BY created_at ASC LIMIT 1", [input.idempotencyKey]);
-    if (existing) return { generationTaskId: existing.id, workflowId: existing.workflow_id };
+    const existing = await queryOne<{
+      id: string;
+      workflow_id: string;
+      input_snapshot_json: Record<string, unknown> | string;
+    }>(this.deps.db,
+      "SELECT id, workflow_id, input_snapshot_json FROM tasks WHERE idempotency_key=$1 ORDER BY created_at ASC LIMIT 1", [input.idempotencyKey]);
+    if (existing) {
+      const existingSnapshot = readRecord(existing.input_snapshot_json);
+      const existingNodeKey = readString(existingSnapshot.targetId);
+      if (existingNodeKey && existingNodeKey !== input.canvasId) {
+        await upsertCanvasAgentGenerationNode(this.deps.db, {
+          ...input,
+          kind: readGenerationKind(existingSnapshot.kind, input.kind),
+          taskId: existing.id,
+          nodeKey: existingNodeKey,
+          modelCode: readString(existingSnapshot.model),
+          prompt: readString(existingSnapshot.prompt ?? existingSnapshot.text),
+          now: this.deps.now(),
+        });
+      }
+      return { generationTaskId: existing.id, workflowId: existing.workflow_id };
+    }
 
     const modelCode = readString(input.request.model ?? input.request.modelCode);
     if (!modelCode) throw new Error("canvas_agent_generation_model_required");
@@ -296,6 +317,16 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     if (!membership) throw new Error("membership_required");
     const estimatedCredits = generationCredits(model.pricing, { ...model.defaultParams, ...executionParameters }, input.kind);
     const snapshot = await createGenerationModelConfigSnapshotForTask(this.deps.db, model);
+    const generationTaskId = randomUUID();
+    const { nodeKey, scopeTargetId } = resolveCanvasAgentGenerationTargets(input);
+    await upsertCanvasAgentGenerationNode(this.deps.db, {
+      ...input,
+      taskId: generationTaskId,
+      nodeKey,
+      modelCode,
+      prompt,
+      now,
+    });
     await this.deps.db.query("BEGIN");
     try {
       const duplicate = await queryOne<{ id: string; workflow_id: string }>(this.deps.db,
@@ -308,7 +339,8 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
         kind: input.kind,
         canvasProjectId: input.canvasId,
         targetType: "canvas",
-        targetId: input.canvasId,
+        targetId: nodeKey,
+        canvasNodeId: nodeKey,
         prompt,
         text: input.kind === "audio" ? prompt : undefined,
         model: modelCode,
@@ -329,6 +361,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
             : "canvas.audio.generate",
         inputSnapshot: { ...requestSnapshot, modelConfigSnapshot: snapshot, providerExecutor: execution.providerExecutor },
         tasks: [{
+          id: generationTaskId,
           taskType: input.kind === "image"
             ? "episode_generate_image"
             : input.kind === "video"
@@ -343,6 +376,20 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
       const task = workflow.tasks[0]!;
       await this.deps.db.query("UPDATE workflows SET idempotency_key=$2 WHERE id=$1", [workflow.workflow.id, input.idempotencyKey]);
       await this.deps.db.query("UPDATE tasks SET idempotency_key=$2 WHERE id=$1", [task.id, input.idempotencyKey]);
+      await createCanvasNodeRun(this.deps.db, {
+        canvasProjectId: input.canvasId,
+        nodeKey,
+        idempotencyKey: input.idempotencyKey,
+        status: "queued",
+        mediaKind: input.kind,
+        modelCode,
+        targetType: "canvas",
+        targetId: nodeKey,
+        inputSnapshot: requestSnapshot,
+        taskId: task.id,
+        actorScope: canvasAgentGenerationActorScope(input),
+        now,
+      });
       let creditReservationId: string | null = null;
       if (input.actorTeamMemberId) {
         const member = await queryOne<{ member_credits: number | string }>(this.deps.db,
@@ -371,7 +418,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
       }
       await upsertQueuedGenerationTaskSnapshot(this.deps.db, {
         projectId: null, canvasProjectId: input.canvasId, episodeId: null,
-        targetType: "canvas", targetId: input.canvasId, workflowId: workflow.workflow.id, taskId: task.id,
+        targetType: "canvas", targetId: scopeTargetId, workflowId: workflow.workflow.id, taskId: task.id,
         modelConfigId: model.id, providerConfigRevisionId: String(snapshot.providerConfigRevisionId ?? "") || null,
         credentialVersionRef: String(snapshot.credentialVersionRef ?? "") || null,
         creditReservationId, modelCode, mediaType: input.kind, taskMode: execution.taskMode,
@@ -380,7 +427,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
       });
       await appendGenerationTaskCreatedOutboxEvent(this.deps.db, {
         userId: input.ownerUserId, workflowId: workflow.workflow.id, taskId: task.id, kind: input.kind,
-        modelCode, queueName: execution.queueName, targetType: "canvas", targetId: input.canvasId,
+        modelCode, queueName: execution.queueName, targetType: "canvas", targetId: nodeKey,
         providerExecutor: execution.providerExecutor,
         providerRouteIdentity: createGenerationProviderRouteIdentity({ modelConfigSnapshot: snapshot }) ?? null,
         providerConfigRevisionId: String(snapshot.providerConfigRevisionId ?? "") || null,
@@ -396,10 +443,170 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
   }
 }
 
+type CanvasAgentGenerationInput = Parameters<CanvasAgentGenerationIntake["create"]>[0];
+
+const CANVAS_AGENT_GENERATION_NODE = {
+  image: {
+    type: "ai-image",
+    title: "AI 图片",
+    size: { width: 420, height: 378 },
+    inputPort: { id: "in_asset", kind: "any", accepts: ["text", "image"], label: "文本/图片" },
+    outputPort: { id: "out_image", kind: "image", label: "图片" },
+  },
+  video: {
+    type: "ai-video",
+    title: "AI 视频",
+    size: { width: 420, height: 378 },
+    inputPort: { id: "in_asset", kind: "any", accepts: ["text", "image", "video", "audio"], label: "素材" },
+    outputPort: { id: "out_video", kind: "video", label: "视频" },
+  },
+  audio: {
+    type: "ai-audio",
+    title: "AI 音频",
+    size: { width: 390, height: 220 },
+    inputPort: { id: "in_text", kind: "text", accepts: ["text", "audio"], label: "文本/音频" },
+    outputPort: { id: "out_audio", kind: "audio", label: "音频" },
+  },
+} as const;
+
+async function upsertCanvasAgentGenerationNode(
+  db: SqlDatabase,
+  input: CanvasAgentGenerationInput & {
+    taskId: string;
+    nodeKey: string;
+    modelCode: string;
+    prompt: string;
+    now: Date;
+  },
+) {
+  const actorScope = canvasAgentGenerationActorScope(input);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const canvas = await findCanvasByCanvasProjectId(db, {
+      canvasProjectId: input.canvasId,
+      actorScope,
+    });
+    if (!canvas) throw new Error("canvas_agent_canvas_not_found");
+    const existingIndex = canvas.document.nodes.findIndex((node) => node.id === input.nodeKey);
+    const existingNode = existingIndex >= 0 ? canvas.document.nodes[existingIndex] : null;
+    if (readString(existingNode?.data?.taskId) === input.taskId) return existingNode;
+
+    const spec = CANVAS_AGENT_GENERATION_NODE[input.kind];
+    const node: CanvasDocument["nodes"][number] = {
+      id: input.nodeKey,
+      type: spec.type,
+      position: existingNode?.position ?? resolveCanvasAgentGenerationNodePosition(canvas.document, spec.size),
+      size: existingNode?.size ?? spec.size,
+      zIndex: existingNode?.zIndex ?? nextCanvasAgentGenerationNodeZIndex(canvas.document),
+      data: {
+        ...(existingNode?.data ?? {}),
+        title: spec.title,
+        status: "queued",
+        mediaKind: input.kind,
+        modelCode: input.modelCode,
+        prompt: input.prompt,
+        taskId: input.taskId,
+        lastTaskId: input.taskId,
+        generationTaskId: input.taskId,
+        generationProgress: 5,
+        generationStage: "task_created",
+        source: "canvas_agent",
+        agentTaskId: input.agentTaskId,
+        agentStepId: input.agentStepId,
+        ports: { inputs: [spec.inputPort], outputs: [spec.outputPort] },
+      },
+    };
+    const nodes = [...canvas.document.nodes];
+    if (existingIndex >= 0) nodes[existingIndex] = node;
+    else nodes.push(node);
+    try {
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: input.canvasId,
+        actorScope,
+        clientRevision: canvas.serverRevision,
+        document: { ...canvas.document, nodes },
+        events: [{
+          type: "canvas_agent.generation_node_created",
+          nodeKey: input.nodeKey,
+          taskId: input.taskId,
+          agentTaskId: input.agentTaskId,
+          agentStepId: input.agentStepId,
+        }],
+        now: input.now,
+      });
+      return node;
+    } catch (error) {
+      if (error instanceof CanvasConflictError && attempt < 2) continue;
+      throw error;
+    }
+  }
+  throw new Error("canvas_agent_generation_node_conflict");
+}
+
+function canvasAgentGenerationActorScope(input: Pick<CanvasAgentGenerationInput, "canvasId" | "ownerUserId" | "actorTeamMemberId">) {
+  return {
+    canvasId: input.canvasId,
+    ownerUserId: input.ownerUserId,
+    principal: input.actorTeamMemberId ? "team_member" as const : "owner" as const,
+    actorTeamMemberId: input.actorTeamMemberId ?? null,
+    principalKey: input.actorTeamMemberId ? `member:${input.actorTeamMemberId}` : `owner:${input.ownerUserId}`,
+    capabilities: input.actorTeamMemberId
+      ? [capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun]
+      : [capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun, capabilities.canvasManage],
+  };
+}
+
+function resolveCanvasAgentGenerationTargets(
+  input: Pick<CanvasAgentGenerationInput, "canvasId" | "kind" | "agentStepId">,
+) {
+  return {
+    scopeTargetId: input.canvasId,
+    nodeKey: `canvas-agent-${input.kind}-${input.agentStepId}`,
+  };
+}
+
+function resolveCanvasAgentGenerationNodePosition(document: CanvasDocument, size: { width: number; height: number }) {
+  const gap = 24;
+  const stepX = size.width + 48;
+  const stepY = size.height + 48;
+  for (let row = 0; row < 40; row += 1) {
+    for (let column = 0; column < 40; column += 1) {
+      const position = { x: 220 + column * stepX, y: 180 + row * stepY };
+      const free = document.nodes.every((node) => {
+        const left = Number(node.position?.x ?? 0);
+        const top = Number(node.position?.y ?? 0);
+        const width = Math.max(1, Number(node.size?.width ?? 420));
+        const height = Math.max(1, Number(node.size?.height ?? 378));
+        return position.x + size.width + gap <= left
+          || position.x >= left + width + gap
+          || position.y + size.height + gap <= top
+          || position.y >= top + height + gap;
+      });
+      if (free) return position;
+    }
+  }
+  return { x: 220, y: 180 + document.nodes.length * stepY };
+}
+
+function nextCanvasAgentGenerationNodeZIndex(document: CanvasDocument) {
+  return document.nodes.reduce((maximum, node) => Math.max(maximum, Number(node.zIndex ?? 0)), 0) + 1;
+}
+
+function readGenerationKind(value: unknown, fallback: CanvasAgentGenerationInput["kind"]) {
+  return value === "image" || value === "video" || value === "audio" ? value : fallback;
+}
+
 function applyCanvasPatch(document: CanvasDocument, operations: unknown[]) {
   const next = structuredClone(document) as Record<string, unknown>;
   for (const rawOperation of operations) {
     const operation = asRecord(rawOperation);
+    if (readString(operation.type) === "addEdge") {
+      const edge = asRecord(operation.edge);
+      if (!Object.keys(edge).length || !Array.isArray(next.edges)) {
+        throw new Error("canvas_agent_patch_operation_invalid");
+      }
+      next.edges.push(structuredClone(edge));
+      continue;
+    }
     const op = readString(operation.op);
     const path = readString(operation.path);
     if (!path.startsWith("/") || !["add", "replace", "remove"].includes(op)) {
@@ -408,13 +615,15 @@ function applyCanvasPatch(document: CanvasDocument, operations: unknown[]) {
     const segments = path.slice(1).split("/").map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"));
     let parent: Record<string, unknown> | unknown[] = next;
     for (const segment of segments.slice(0, -1)) {
-      const child = Array.isArray(parent) ? parent[Number(segment)] : parent[segment];
+      const child = Array.isArray(parent)
+        ? parent[resolveCanvasPatchArrayIndex(parent, segment)]
+        : parent[segment];
       if (!child || typeof child !== "object") throw new Error("canvas_agent_patch_path_not_found");
       parent = child as Record<string, unknown> | unknown[];
     }
     const key = segments.at(-1)!;
     if (Array.isArray(parent)) {
-      const index = key === "-" ? parent.length : Number(key);
+      const index = key === "-" ? parent.length : resolveCanvasPatchArrayIndex(parent, key);
       if (!Number.isInteger(index) || index < 0 || index > parent.length || (op !== "add" && index >= parent.length)) throw new Error("canvas_agent_patch_path_not_found");
       if (op === "remove") parent.splice(index, 1);
       else if (op === "add") parent.splice(index, 0, operation.value);
@@ -427,6 +636,12 @@ function applyCanvasPatch(document: CanvasDocument, operations: unknown[]) {
     }
   }
   return next;
+}
+
+function resolveCanvasPatchArrayIndex(items: unknown[], segment: string) {
+  const numericIndex = Number(segment);
+  if (Number.isInteger(numericIndex) && numericIndex >= 0) return numericIndex;
+  return items.findIndex((item) => readString(asRecord(item).id) === segment);
 }
 
 function generationCredits(
@@ -451,6 +666,15 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function readRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string") return asRecord(value);
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return {};
+  }
+}
+
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -459,4 +683,10 @@ function readStringArray(value: unknown) {
   return Array.isArray(value) ? value.map(readString).filter(Boolean) : [];
 }
 
-export const __canvasAgentRuntimeTestUtils = { applyCanvasPatch, generationCredits, resolveRuntimeActor };
+export const __canvasAgentRuntimeTestUtils = {
+  applyCanvasPatch,
+  generationCredits,
+  resolveCanvasAgentGenerationTargets,
+  resolveRuntimeActor,
+  upsertCanvasAgentGenerationNode,
+};

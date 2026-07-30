@@ -6,8 +6,28 @@
 }
 
 .new-canvas-root {
-  --new-canvas-background: #0f1218;
-  --new-canvas-foreground: #f2f4f7;
+  --new-canvas-background: var(--theme-app-background, #0f1218);
+  --new-canvas-foreground: var(--text-primary, #f2f4f7);
+  --new-canvas-muted: var(--text-muted, #9aa6bb);
+  --new-canvas-panel: var(--theme-panel-background, #101619);
+  --new-canvas-panel-soft: var(--theme-panel-background-soft, #151b20);
+  --new-canvas-surface: var(--theme-surface-background, #171c21);
+  --new-canvas-background-color: var(--color-canvas, #0f1218);
+  --new-canvas-control: var(--theme-control-background, #171c21);
+  --new-canvas-control-hover: var(--theme-control-hover-background, #202a31);
+  --new-canvas-control-active: var(--theme-control-active-background, #2b3150);
+  --new-canvas-control-text: var(--theme-control-active-text, #f3f7fa);
+  --new-canvas-control-border: var(--theme-control-border, #303941);
+  --new-canvas-control-hover-border: var(--theme-control-hover-border, #6e8ea0);
+  --new-canvas-control-active-border: var(--theme-control-active-border, #a98df1);
+  --new-canvas-accent: var(--theme-accent-gradient, linear-gradient(90deg, #7658de, #378ebc));
+  --new-canvas-accent-color: var(--theme-accent-strong, #a98df1);
+  --new-canvas-accent-soft: var(--theme-accent-soft, rgba(154, 126, 228, .16));
+  --new-canvas-field: var(--theme-input-background, #0c1114);
+  --new-canvas-stage: var(--theme-input-background, #0c1417);
+  --new-canvas-danger: #ff9288;
+  --new-canvas-success: #7dde9e;
+  --new-canvas-color-scheme: dark;
   display: block;
   width: 100%;
   height: 100%;
@@ -19,9 +39,9 @@
 
 .new-canvas-minimap {
   position: absolute;
-  right: 366px;
-  bottom: 18px;
-  z-index: 24;
+  left: calc(var(--new-canvas-sidebar-width, 0px) + 1rem);
+  bottom: calc(0.8rem + 3.2rem + 0.75rem);
+  z-index: 32;
   width: min(220px, calc(100% - 36px));
   height: 154px;
   border: 1px solid rgba(112, 139, 148, .58);
@@ -76,8 +96,8 @@
   .new-canvas-minimap {
     width: 160px;
     height: 116px;
-    right: 10px;
-    bottom: 10px;
+    left: calc(var(--new-canvas-sidebar-width, 0px) + 1rem);
+    bottom: calc(0.8rem + 3.2rem + 0.65rem);
   }
 
   .new-canvas-minimap-stage {
@@ -93,12 +113,16 @@
 .new-canvas-layout {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 348px;
-  grid-template-rows: 56px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) var(--canvas-agent-panel-width, 480px);
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-height: inherit;
   background: #090b0e;
+}
+
+.new-canvas-layout.is-agent-collapsed {
+  grid-template-columns: minmax(0, 1fr) 0;
 }
 
 .new-canvas-chrome {
@@ -187,18 +211,19 @@
 }
 
 .new-canvas-chrome-rail {
-  position: absolute;
-  left: calc(50% + var(--new-canvas-sidebar-half-width, 0px));
+  position: fixed;
+  left: 50%;
   bottom: max(14px, env(safe-area-inset-bottom));
   z-index: 31;
   display: flex;
-  max-width: calc(100% - 20px);
+  max-width: calc(100% - 2rem);
   align-items: center;
-  gap: 8px;
+  gap: 0.45rem;
+  min-height: 3.2rem;
   overflow: visible;
-  padding: 8px 10px;
-  border: 1px solid #303941;
-  border-radius: 16px;
+  padding: 0 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
   background: rgba(25, 30, 35, .92);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .28);
   backdrop-filter: blur(12px);
@@ -209,11 +234,43 @@
 .new-canvas-chrome-rail::-webkit-scrollbar { display: none; }
 
 .new-canvas-chrome-tool {
-  width: 38px;
-  height: 38px;
+  position: relative;
+  width: 2.35rem;
+  height: 2.35rem;
   flex: 0 0 auto;
-  border-radius: 10px;
+  border-radius: 7px;
   font-size: 16px;
+}
+
+.new-canvas-chrome-rail :is(button[title], summary[title])::after {
+  position: absolute;
+  bottom: calc(100% + 0.55rem);
+  left: 50%;
+  z-index: 30;
+  max-width: min(18rem, calc(100vw - 2rem));
+  padding: 0.42rem 0.62rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(14, 18, 23, 0.96);
+  box-shadow: 0 0.55rem 1.25rem rgba(0, 0, 0, 0.34);
+  color: rgba(255, 255, 255, 0.92);
+  content: attr(title);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.25;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 0.25rem);
+  transition: opacity 140ms ease, transform 140ms ease;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.new-canvas-chrome-rail :is(button[title], summary[title]):hover::after,
+.new-canvas-chrome-rail :is(button[title], summary[title]):focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
 }
 
 .new-canvas-chrome-tool-menu {
@@ -232,11 +289,11 @@
 .new-canvas-interaction-tool {
   display: flex;
   width: auto;
-  min-width: 38px;
-  padding: 0 10px;
+  min-width: 2.35rem;
+  padding: 0 0.7rem;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 0.45rem;
   white-space: nowrap;
 }
 
@@ -263,6 +320,7 @@
 }
 
 .new-canvas-tool-menu-item {
+  position: relative;
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;
   min-height: 48px;
@@ -368,7 +426,7 @@
 }
 
 .canvas-character-library.is-library-scope {
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
 }
 
 .canvas-character-library button,
@@ -1013,11 +1071,11 @@
 .canvas-config-library-drawer {
   position: absolute;
   top: 0;
-  right: 348px;
+  right: 420px;
   bottom: 0;
   z-index: 13;
   display: flex;
-  width: min(430px, calc(100% - 348px));
+  width: min(430px, calc(100% - 420px));
   min-width: 340px;
   flex-direction: column;
   border-left: 1px solid #4a4131;
@@ -1382,17 +1440,18 @@
 .new-canvas-workspace {
   position: relative;
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
 .canvas-agent-panel {
+  position: relative;
   grid-column: 2;
-  grid-row: 2;
+  grid-row: 1;
   display: grid;
-  grid-template-rows: auto auto auto minmax(160px, 1fr) auto auto auto;
+  grid-template-rows: auto auto minmax(160px, 1fr) auto auto auto;
   min-width: 0;
   min-height: 0;
   border-left: 1px solid #2b3036;
@@ -1401,8 +1460,51 @@
   overflow: hidden;
 }
 
+.canvas-agent-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  z-index: 35;
+  width: 8px;
+  cursor: col-resize;
+}
+
+.canvas-agent-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 42px;
+  border-radius: 2px;
+  background: #34434a;
+  content: "";
+  opacity: .7;
+  transform: translateY(-50%);
+}
+
+.canvas-agent-resize-handle:hover::after,
+.new-canvas-layout.is-agent-resizing .canvas-agent-resize-handle::after {
+  background: #46b9ce;
+  opacity: 1;
+}
+
+.new-canvas-layout.is-agent-resizing,
+.new-canvas-layout.is-agent-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .canvas-agent-panel.has-special-view {
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.canvas-agent-panel.history-open {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.canvas-agent-panel.has-conversation {
+  grid-template-rows: auto auto auto minmax(160px, 1fr) auto auto auto;
 }
 
 .canvas-agent-head,
@@ -1416,17 +1518,43 @@
 }
 
 .canvas-agent-head {
+  position: relative;
   justify-content: space-between;
   min-height: 58px;
   padding: 10px 12px;
   border-bottom: 1px solid #252a30;
 }
 
+.canvas-agent-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #f0f4f6;
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-agent-title-input {
+  width: min(180px, 48%);
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #46b9ce;
+  border-radius: 6px;
+  outline: none;
+  background: #0b1114;
+  color: #f0f4f6;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .canvas-agent-head > .canvas-agent-head-actions {
   display: flex;
   align-items: center;
   flex-direction: row;
-  gap: 5px;
+  gap: 7px;
 }
 
 .canvas-agent-head-actions .canvas-agent-head-tool {
@@ -1451,6 +1579,142 @@
   font-size: 8px;
   font-weight: 800;
   line-height: 1;
+}
+
+.canvas-agent-icon-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  min-height: 38px !important;
+  place-items: center;
+  padding: 0;
+  border-radius: 8px !important;
+}
+
+.canvas-agent-icon-button svg {
+  display: block;
+  width: 19px;
+  height: 19px;
+}
+
+.canvas-agent-history {
+  display: grid;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-bottom: 1px solid #252a30;
+  background: #12171b;
+}
+
+.canvas-agent-history > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 7px;
+  color: #dce7e9;
+}
+
+.canvas-agent-history > header span {
+  color: #82949a;
+  font-size: 11px;
+}
+
+.canvas-agent-history-list {
+  display: grid;
+  align-content: start;
+  grid-auto-rows: 42px;
+  gap: 4px;
+  min-height: 0;
+  padding: 0 10px 10px;
+  overflow: auto;
+}
+
+.canvas-agent-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 32px;
+  gap: 4px;
+  height: 42px;
+  min-width: 0;
+}
+
+.canvas-agent-history-list button {
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  text-align: left;
+}
+
+.canvas-agent-history-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.canvas-agent-history-list button strong,
+.canvas-agent-history-list button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-agent-history-list button small {
+  color: #82949a;
+  font-size: 10px;
+}
+
+.canvas-agent-history-delete {
+  width: 32px;
+  padding: 0;
+  place-items: center;
+}
+
+.canvas-agent-history-status {
+  min-width: 42px;
+  padding: 0 7px;
+  color: #aabdc3;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.canvas-agent-history-delete svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
+.canvas-agent-history-list > p {
+  margin: 0;
+  padding: 10px 4px;
+  color: #82949a;
+  font-size: 12px;
+}
+
+.canvas-agent-reopen {
+  position: absolute;
+  top: 16px;
+  right: 14px;
+  z-index: 32;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #34434a;
+  border-radius: 9px;
+  background: rgba(19, 26, 30, .94);
+  color: #dcebed;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .26);
+}
+
+.canvas-agent-reopen:hover,
+.canvas-agent-reopen:focus-visible {
+  border-color: #46b9ce;
+  background: #17343a;
+  color: #fff;
 }
 
 .canvas-agent-conversation {
@@ -1516,13 +1780,6 @@
   color: #ffb0a7;
 }
 
-.canvas-agent-mode {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 5px;
-  padding: 10px 12px 6px;
-}
-
 .canvas-agent-model {
   display: grid;
   grid-template-columns: 66px minmax(0, 1fr);
@@ -1531,6 +1788,10 @@
   padding: 6px 12px 10px;
   color: #8e98a2;
   font-size: 11px;
+}
+
+.canvas-agent-model-top {
+  padding-bottom: 4px;
 }
 
 .canvas-agent-model select,
@@ -1564,7 +1825,8 @@
 }
 
 .canvas-agent-file-grants {
-  padding: 8px 12px;
+  align-self: start;
+  padding: 5px 12px 6px;
   border-top: 1px solid #252a30;
 }
 
@@ -1626,7 +1888,7 @@
 }
 
 .canvas-agent-file-grants p {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   line-height: 1.5;
 }
 
@@ -1907,7 +2169,7 @@
 
 .canvas-agent-composer textarea {
   display: block;
-  min-height: 76px;
+  min-height: 104px;
   max-height: 180px;
   padding: 9px;
   resize: vertical;
@@ -1919,6 +2181,149 @@
   justify-content: space-between;
   gap: 8px;
   margin-top: 8px;
+}
+
+.canvas-agent-composer-left {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.canvas-agent-mode-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.canvas-agent-panel .canvas-agent-mode-trigger {
+  display: inline-flex;
+  min-width: 92px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.canvas-agent-mode-trigger svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.canvas-agent-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  display: grid;
+  width: min(380px, calc(var(--canvas-agent-panel-width, 480px) - 24px));
+
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid #343b43;
+  border-radius: 7px;
+  background: #15191e;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .42);
+}
+
+/* Keep the Agent panel readable at the default desktop width. */
+.canvas-agent-panel {
+  font-size: 14px;
+}
+
+.canvas-agent-title,
+.canvas-agent-head strong {
+  font-size: 17px;
+}
+
+.canvas-agent-head span,
+.canvas-agent-history > header span,
+.canvas-agent-history-list button small,
+.canvas-agent-history-status,
+.canvas-agent-model,
+.canvas-agent-file-grants header small,
+.canvas-agent-file-grants li small,
+.canvas-agent-file-grants p,
+.canvas-agent-event-title em,
+.canvas-agent-event-meta span,
+.canvas-agent-citations small,
+.canvas-agent-status,
+.canvas-agent-context-usage {
+  font-size: 12px;
+}
+
+.canvas-agent-history > header strong,
+.canvas-agent-history-list button strong,
+.canvas-agent-file-grants header > span,
+.canvas-agent-file-grants li strong,
+.canvas-agent-event strong,
+.canvas-agent-event p,
+.canvas-agent-empty span,
+.canvas-agent-error,
+.canvas-agent-mode-option small {
+  font-size: 13px;
+}
+
+.canvas-agent-empty strong {
+  font-size: 16px;
+}
+
+.canvas-agent-citations span,
+.canvas-agent-panel .canvas-agent-mode-trigger,
+.canvas-agent-panel button {
+  font-size: 13px;
+}
+
+.canvas-agent-model select,
+.canvas-agent-interject input,
+.canvas-agent-composer textarea {
+  font-size: 14px;
+}
+
+.canvas-agent-panel .canvas-agent-mode-option {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+
+.canvas-agent-mode-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.canvas-agent-mode-option strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.canvas-agent-mode-option small {
+  color: #8e98a2;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.canvas-agent-mode-option > svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .canvas-agent-composer-actions {
@@ -2358,7 +2763,7 @@
   background: #0c1013;
 }
 
-.canvas-agent-composer button {
+.canvas-agent-composer button[data-agent-action="send"] {
   min-width: 64px;
   border-color: #46b9ce;
   background: #147285;
@@ -2394,10 +2799,21 @@
 
 .canvas-panorama-node-body,
 .canvas-storyboard-node-body {
+  position: relative;
   display: grid;
   gap: 7px;
   min-width: 0;
   color: #dce7eb;
+}
+
+.canvas-storyboard-node-body {
+  height: 100%;
+  min-height: 0;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .canvas-x6-special-node {
@@ -2482,6 +2898,394 @@
   -webkit-line-clamp: 4;
 }
 
+.canvas-x6-source-text-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: auto;
+}
+
+.canvas-x6-source-text-actions button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 7px;
+  overflow: hidden;
+  border: 1px solid var(--new-canvas-control-border);
+  border-radius: 4px;
+  background: var(--new-canvas-control);
+  color: var(--new-canvas-control-text);
+  font: inherit;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.canvas-x6-source-text-actions button:hover,
+.canvas-x6-source-text-actions button:focus-visible {
+  border-color: var(--new-canvas-control-hover-border);
+  background: var(--new-canvas-control-hover);
+  outline: none;
+}
+
+.canvas-x6-source-text-actions button.danger {
+  color: var(--new-canvas-danger);
+}
+
+.canvas-x6-special-node:is(.is-script, .is-source-text) .canvas-x6-generic-body {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-content: stretch;
+  min-height: 0;
+}
+
+.canvas-x6-generic-body > .canvas-x6-source-text-output {
+  display: block;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  user-select: text;
+  cursor: text;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset;
+  scrollbar-width: thin;
+}
+
+.canvas-x6-special-node:is(.is-markdown, .is-ai-markdown) .canvas-x6-generic-body {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  min-height: 0;
+}
+
+.canvas-x6-generic-body > .canvas-x6-text-output {
+  display: block;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: #9babb1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  user-select: text;
+  cursor: text;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset;
+  scrollbar-width: thin;
+}
+
+.new-canvas-root .canvas-x6-generic-body.has-generation-state {
+  gap: 7px;
+}
+
+.new-canvas-root .canvas-x6-generic-body.has-generation-state > p {
+  -webkit-line-clamp: 2;
+}
+
+.new-canvas-root .canvas-x6-generation-state {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  margin-top: 1px;
+  padding: 8px;
+  border: 1px solid var(--new-canvas-control-border);
+  border-radius: 5px;
+  background: var(--new-canvas-panel-soft);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root .canvas-x6-generation-progress-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.new-canvas-root .canvas-x6-generation-progress-head > span {
+  overflow: hidden;
+  color: var(--new-canvas-accent-color);
+  font-size: 9px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-canvas-root .canvas-x6-generation-progress-head > strong {
+  flex: none;
+  color: var(--new-canvas-foreground);
+  font-size: 10px;
+}
+
+.new-canvas-root .canvas-x6-generation-stage,
+.new-canvas-root .canvas-x6-generation-task {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--new-canvas-muted);
+  font-size: 9px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-canvas-root .canvas-x6-generation-track {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--new-canvas-control-border);
+}
+
+.new-canvas-root .canvas-x6-generation-track > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--new-canvas-accent);
+  transition: width 180ms ease;
+}
+
+.new-canvas-root .canvas-x6-generation-state.is-failure {
+  border-color: color-mix(in srgb, var(--new-canvas-danger) 48%, var(--new-canvas-control-border));
+  background: color-mix(in srgb, var(--new-canvas-danger) 10%, var(--new-canvas-panel-soft));
+}
+
+.new-canvas-root .canvas-x6-generation-state.is-failure > strong {
+  color: var(--new-canvas-danger);
+  font-size: 10px;
+}
+
+.new-canvas-root .canvas-x6-generation-state.is-failure > p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--new-canvas-muted);
+  font-size: 9px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.canvas-x6-source-media-body {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-x6-source-media-preview {
+  position: relative;
+  display: grid;
+  min-height: 72px;
+  align-items: center;
+  justify-items: center;
+  overflow: hidden;
+  border: 1px dashed rgba(94, 199, 255, .38);
+  border-radius: 5px;
+  padding: 8px;
+  background: rgba(5, 10, 12, .24);
+}
+
+.canvas-x6-source-media-preview img,
+.canvas-x6-source-media-preview video {
+  display: block;
+  width: 100%;
+  max-height: 104px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.canvas-x6-special-node.is-storyboard-cut {
+  border-color: color-mix(in srgb, var(--new-canvas-accent-color) 46%, var(--new-canvas-control-border));
+  background: color-mix(in srgb, var(--new-canvas-panel) 90%, #111d20);
+}
+
+.canvas-x6-special-node.is-storyboard-cut > header small {
+  color: var(--new-canvas-accent-color);
+  font-weight: 800;
+}
+
+.canvas-storyboard-cut-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.canvas-storyboard-return-action {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--new-canvas-accent-color) 48%, var(--new-canvas-control-border));
+  border-radius: 4px;
+  background: var(--new-canvas-accent-soft);
+  color: var(--new-canvas-accent-color);
+  cursor: pointer;
+}
+
+.canvas-storyboard-return-action:hover,
+.canvas-storyboard-return-action:focus-visible {
+  border-color: var(--new-canvas-accent-color);
+  background: var(--new-canvas-control-hover);
+  color: var(--new-canvas-control-text);
+  outline: none;
+}
+
+.canvas-storyboard-return-action::after {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  padding: 5px 7px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 4px;
+  background: rgba(14, 18, 23, .96);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .34);
+  color: rgba(255, 255, 255, .92);
+  content: attr(data-tooltip);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.canvas-storyboard-return-action:hover::after,
+.canvas-storyboard-return-action:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.canvas-x6-source-media-body.is-storyboard-cut {
+  height: 100%;
+}
+
+.canvas-x6-source-media-body.is-storyboard-cut .canvas-x6-source-media-preview {
+  min-height: 0;
+  align-items: stretch;
+  justify-items: stretch;
+  padding: 6px;
+  border-style: solid;
+  background: color-mix(in srgb, var(--new-canvas-background-color) 76%, #1e292d);
+}
+
+.canvas-x6-source-media-body.is-storyboard-cut .canvas-x6-source-media-preview img {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.canvas-x6-source-media-body.is-storyboard-cut .canvas-x6-source-upload-action {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-control);
+  color: var(--new-canvas-muted);
+}
+
+.canvas-x6-special-node.is-source-video .canvas-x6-source-media-preview {
+  align-items: stretch;
+  justify-items: stretch;
+  padding: 0;
+}
+
+.canvas-x6-special-node.is-source-video .canvas-x6-source-media-preview video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.canvas-x6-source-media-preview audio {
+  width: 100%;
+}
+
+.canvas-x6-source-uploading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  background: rgba(8, 12, 14, .76);
+  color: #f4fbff;
+  pointer-events: none;
+  text-align: center;
+}
+
+.canvas-x6-source-uploading-mask strong {
+  color: #f4fbff;
+  font-size: 12px;
+}
+
+.canvas-x6-source-uploading-mask small {
+  color: #a8c2cc;
+  font-size: 10px;
+}
+
+.canvas-x6-source-uploading-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(94, 199, 255, .28);
+  border-top-color: #5ec7ff;
+  border-radius: 50%;
+  animation: canvas-x6-source-uploading-spin 900ms linear infinite;
+}
+
+@keyframes canvas-x6-source-uploading-spin {
+  to { transform: rotate(360deg); }
+}
+
+.canvas-x6-source-media-preview strong {
+  color: #dce7eb;
+  font-size: 12px;
+}
+
+.canvas-x6-source-media-preview small {
+  color: #6f858d;
+  font-size: 10px;
+}
+
+.canvas-x6-source-upload-action {
+  display: grid;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-items: center;
+  border: 1px solid rgba(94, 199, 255, .38);
+  border-radius: 5px;
+  padding: 5px 8px;
+  background: rgba(5, 10, 12, .24);
+  color: #dce7eb;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.canvas-x6-source-upload-action:hover {
+  border-color: #5ec7ff;
+  background: rgba(94, 199, 255, .08);
+}
+
+.canvas-x6-source-upload-action:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
 .canvas-x6-special-node.is-generic > footer {
   display: flex;
   justify-content: space-between;
@@ -2496,10 +3300,6 @@
   box-shadow: 0 0 0 1px rgba(94, 199, 255, .32), 0 12px 30px rgba(0, 0, 0, .3);
 }
 
-.new-canvas-root .canvas-stage.is-panning .x6-graph-svg-viewport {
-  will-change: transform;
-}
-
 .new-canvas-root .canvas-stage.is-panning .x6-node:not(.x6-node-selected):hover rect {
   stroke: rgba(255, 255, 255, .18);
   filter: none;
@@ -2508,6 +3308,14 @@
 .new-canvas-root .canvas-stage.is-panning .x6-node:not(.x6-node-selected):hover .canvas-x6-special-node {
   border-color: #334047;
   box-shadow: 0 10px 28px rgba(0, 0, 0, .26);
+}
+
+.new-canvas-root .canvas-stage.is-node-dragging .canvas-x6-special-node {
+  box-shadow: none;
+}
+
+.new-canvas-root .canvas-stage.is-node-dragging .x6-node[data-cell-id="__comic-ai-canvas-editor-overlay__"] {
+  visibility: hidden;
 }
 
 .new-canvas-root .canvas-node-entering {
@@ -2805,7 +3613,10 @@
 }
 
 .canvas-storyboard-grid {
+  width: 100%;
+  height: auto;
   min-height: 210px;
+  aspect-ratio: var(--canvas-storyboard-source-aspect, auto);
 }
 
 .canvas-storyboard-node-body.is-editing .canvas-storyboard-grid {
@@ -2834,25 +3645,50 @@
   box-shadow: inset 0 0 0 1px #55d0e6;
 }
 
+.canvas-storyboard-cell.is-return-target .canvas-storyboard-cell-select {
+  border-color: #55d0e6;
+  background: rgba(85, 208, 230, .16);
+  box-shadow: inset 0 0 0 2px #55d0e6, 0 0 0 2px rgba(85, 208, 230, .24);
+}
+
+.canvas-storyboard-cell.is-return-target::after {
+  position: absolute;
+  inset: 8px;
+  z-index: 2;
+  border: 1px dashed rgba(217, 251, 255, .86);
+  border-radius: 3px;
+  background: rgba(85, 208, 230, .12);
+  content: "";
+  pointer-events: none;
+}
+
 .canvas-storyboard-cell-select img {
   position: absolute;
   max-width: none;
-  object-fit: cover;
   user-select: none;
+}
+
+.canvas-storyboard-cell-source {
+  object-fit: contain;
 }
 
 .canvas-storyboard-cell-fill {
   inset: 0;
   width: 100%;
   height: 100%;
+  object-fit: contain;
 }
 
 .canvas-storyboard-cell-extract {
   position: absolute;
   right: 6px;
   bottom: 6px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid #49646c;
   border-radius: 4px;
   background: rgba(9, 16, 19, .9);
@@ -2860,15 +3696,71 @@
   cursor: grab;
 }
 
-.canvas-storyboard-cell-empty {
+.canvas-storyboard-cell-extract::after {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 3;
+  padding: 5px 7px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 4px;
+  background: rgba(14, 18, 23, .96);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .34);
+  color: rgba(255, 255, 255, .92);
+  content: attr(data-tooltip);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.canvas-storyboard-cell-extract:hover::after,
+.canvas-storyboard-cell-extract:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.canvas-storyboard-cell-extract.is-dragging {
+  border-color: #55d0e6;
+  color: #d9fbff;
+  cursor: grabbing;
+  box-shadow: 0 0 0 2px rgba(85, 208, 230, .2);
+}
+
+.canvas-storyboard-cell-empty,
+.canvas-storyboard-cell-return-mark {
   color: #6b7c83;
   font-size: 20px;
+}
+
+.canvas-storyboard-cell-return-mark {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--new-canvas-accent-color, #55d0e6);
 }
 
 .canvas-storyboard-count {
   justify-self: end;
   color: #74868d;
   font-size: 10px;
+}
+
+.canvas-storyboard-preparing-mask {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: #f4eef5;
+  font-size: 12px;
+  text-align: center;
 }
 
 .canvas-storyboard-error {
@@ -3478,24 +4370,14 @@
 @media (max-width: 760px) {
   .new-canvas-layout {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: max-content minmax(360px, 48vh) max-content;
+    grid-template-rows: minmax(360px, 1fr) max-content;
     overflow: auto;
     height: min(100dvh, var(--new-canvas-viewport-height, 100dvh));
   }
 
-  .new-canvas-chrome {
-    grid-column: 1;
-    grid-row: 1;
-    padding: 8px 10px;
+  .new-canvas-layout.is-agent-collapsed {
+    grid-template-rows: minmax(360px, 1fr);
   }
-
-  .new-canvas-chrome-library {
-    width: 30px;
-    justify-content: center;
-    padding: 0;
-  }
-
-  .new-canvas-chrome-status { display: none; }
 
   .new-canvas-chrome-rail {
     left: 50%;
@@ -3510,7 +4392,7 @@
 
   .new-canvas-workspace {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 1;
   }
 
   .new-canvas-root .canvas-panel {
@@ -3532,9 +4414,14 @@
 
   .canvas-agent-panel {
     grid-column: 1;
-    grid-row: 3;
+    grid-row: 2;
     border-top: 1px solid #2b3036;
     border-left: 0;
+  }
+
+  .canvas-agent-reopen {
+    top: 12px;
+    right: 10px;
   }
 
   .canvas-media-tools-drawer {
@@ -3679,7 +4566,7 @@
   }
 
   .canvas-character-library.is-library-scope {
-    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   }
 
   .canvas-character-library__header,
@@ -3779,10 +4666,1174 @@
     animation: none !important;
   }
 
+  .new-canvas-root .canvas-x6-generation-track > i,
   .new-canvas-root .canvas-generation-progress-track i,
   .new-canvas-root .canvas-node,
   .new-canvas-root .canvas-flow-edge-line,
   .new-canvas-root .canvas-flow-edge-glow {
     transition: none !important;
   }
+}
+
+/* Keep the standalone Shadow DOM surface on the same palette as the workbench. */
+:host-context([data-workbench-theme="daylight"]) .new-canvas-root {
+  --new-canvas-color-scheme: light;
+}
+
+.new-canvas-root {
+  color-scheme: var(--new-canvas-color-scheme);
+  color: var(--new-canvas-foreground);
+  background: var(--new-canvas-background);
+}
+
+.new-canvas-root .new-canvas-layout,
+.new-canvas-root .new-canvas-chrome,
+.new-canvas-root .canvas-panel,
+.new-canvas-root .canvas-sidebar,
+.new-canvas-root .canvas-agent-panel,
+.new-canvas-root .canvas-character-library,
+.new-canvas-root .canvas-config-library-drawer,
+.new-canvas-root .canvas-media-tools-drawer {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-panel);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root .new-canvas-layout {
+  background: var(--new-canvas-background);
+}
+
+.new-canvas-root .new-canvas-chrome {
+  border-bottom-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-panel-soft);
+}
+
+.new-canvas-root .new-canvas-chrome-library,
+.new-canvas-root .new-canvas-chrome-tool,
+.new-canvas-root .new-canvas-chrome-rail,
+.new-canvas-root .new-canvas-tool-menu-popover,
+.new-canvas-root .canvas-agent-history,
+.new-canvas-root .canvas-agent-composer,
+.new-canvas-root .canvas-agent-special-footer,
+.new-canvas-root .canvas-context-menu,
+.new-canvas-root .canvas-script-picker {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-surface);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root .new-canvas-chrome-library,
+.new-canvas-root .new-canvas-chrome-tool {
+  background: var(--new-canvas-control);
+  color: var(--new-canvas-muted);
+}
+
+.new-canvas-root .new-canvas-chrome-library:hover,
+.new-canvas-root .new-canvas-chrome-library:focus-visible,
+.new-canvas-root .new-canvas-chrome-tool:hover,
+.new-canvas-root .new-canvas-chrome-tool:focus-visible,
+.new-canvas-root .new-canvas-tool-menu-item:hover,
+.new-canvas-root .new-canvas-tool-menu-item:focus-visible,
+.new-canvas-root .new-canvas-tool-menu-item.is-active {
+  border-color: var(--new-canvas-control-hover-border);
+  background: var(--new-canvas-control-hover);
+  color: var(--new-canvas-control-text);
+}
+
+.new-canvas-root .new-canvas-chrome-tool.is-primary,
+.new-canvas-root .canvas-agent-composer button[data-agent-action="send"],
+.new-canvas-root .canvas-create-project-button,
+.new-canvas-root .canvas-generate-button,
+.new-canvas-root .canvas-send-button {
+  border-color: transparent;
+  background: var(--new-canvas-accent);
+  color: var(--new-canvas-control-text);
+  box-shadow: 0 0.7rem 1.5rem var(--new-canvas-accent-soft);
+}
+
+.new-canvas-root :where(
+  .canvas-character-library button,
+  .canvas-config-library-drawer button,
+  .canvas-media-tools-drawer button,
+  .canvas-agent-panel button,
+  .canvas-config-library-launch,
+  .canvas-character-library-launch,
+  .canvas-detail-back,
+  .canvas-sidebar-tab,
+  .canvas-filter-select,
+  .canvas-collapse,
+  .canvas-zoom-tools button,
+  .canvas-element-item,
+  .canvas-template-button,
+  .canvas-context-menu button,
+  .canvas-script-picker-list button,
+  .canvas-editor-tabs button,
+  .canvas-editor-controls button,
+  .canvas-editor-upload,
+  .canvas-asset-source-tabs button,
+  .canvas-drama-asset-tools button,
+  .canvas-global-asset-tools button,
+  .canvas-project-asset-tools button,
+  .canvas-panorama-mode-switch button,
+  .canvas-storyboard-mode-switch button,
+  .canvas-storyboard-controls > button,
+  .canvas-panorama-actions button,
+  .canvas-panorama-zoom-controls button,
+  .canvas-storyboard-empty button,
+  .canvas-camera-studio-segments button,
+  .canvas-camera-studio-presets button,
+  .canvas-camera-studio-actions button
+) {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-control);
+  color: var(--new-canvas-muted);
+}
+
+.new-canvas-root :where(
+  .canvas-character-library button:hover:not(:disabled),
+  .canvas-character-library button.active,
+  .canvas-config-library-drawer button:hover:not(:disabled),
+  .canvas-config-library-drawer button.active,
+  .canvas-media-tools-drawer button:hover:not(:disabled),
+  .canvas-media-tools-drawer button.active,
+  .canvas-agent-panel button:hover:not(:disabled),
+  .canvas-agent-panel button.active,
+  .canvas-config-library-launch:hover,
+  .canvas-config-library-launch:focus-visible,
+  .canvas-character-library-launch:hover,
+  .canvas-character-library-launch:focus-visible,
+  .canvas-detail-back:hover,
+  .canvas-sidebar-tab:hover,
+  .canvas-sidebar-tab.active,
+  .canvas-filter-select:hover,
+  .canvas-collapse:hover,
+  .canvas-zoom-tools button:hover,
+  .canvas-zoom-tools button.active,
+  .canvas-element-item:hover,
+  .canvas-element-item.active,
+  .canvas-template-button:hover,
+  .canvas-context-menu button:hover,
+  .canvas-script-picker-list button:hover,
+  .canvas-editor-tabs button:hover,
+  .canvas-editor-tabs button.active,
+  .canvas-editor-controls button:hover,
+  .canvas-editor-upload:hover,
+  .canvas-asset-source-tabs button.active,
+  .canvas-asset-source-tabs button:hover,
+  .canvas-drama-asset-tools button:hover,
+  .canvas-global-asset-tools button:hover,
+  .canvas-project-asset-tools button:hover,
+  .canvas-panorama-mode-switch button[aria-pressed="true"],
+  .canvas-storyboard-mode-switch button[aria-pressed="true"],
+  .canvas-storyboard-controls > button[aria-pressed="true"],
+  .canvas-camera-studio-segments button.active,
+  .canvas-camera-studio-presets button:hover,
+  .canvas-camera-studio-presets button:focus-visible
+) {
+  border-color: var(--new-canvas-control-hover-border);
+  background: var(--new-canvas-control-active);
+  color: var(--new-canvas-control-text);
+}
+
+.new-canvas-root :where(
+  .canvas-character-library button.danger,
+  .canvas-config-library-drawer button.danger,
+  .canvas-agent-panel button.danger,
+  .canvas-agent-error,
+  .canvas-media-error
+) {
+  border-color: color-mix(in srgb, var(--new-canvas-danger) 42%, var(--new-canvas-control-border));
+  color: var(--new-canvas-danger);
+}
+
+.new-canvas-root :where(
+  .canvas-character-library input,
+  .canvas-character-library textarea,
+  .canvas-config-library-drawer input,
+  .canvas-config-library-drawer select,
+  .canvas-config-library-drawer textarea,
+  .canvas-media-tools-drawer input,
+  .canvas-media-tools-drawer select,
+  .canvas-media-tools-drawer textarea,
+  .canvas-agent-panel input,
+  .canvas-agent-panel select,
+  .canvas-agent-panel textarea
+) {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-field);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root :where(
+  .canvas-character-library input:focus,
+  .canvas-character-library textarea:focus,
+  .canvas-config-library-drawer input:focus,
+  .canvas-config-library-drawer select:focus,
+  .canvas-config-library-drawer textarea:focus,
+  .canvas-media-tools-drawer input:focus,
+  .canvas-media-tools-drawer select:focus,
+  .canvas-media-tools-drawer textarea:focus,
+  .canvas-agent-panel input:focus,
+  .canvas-agent-panel select:focus,
+  .canvas-agent-panel textarea:focus
+) {
+  border-color: var(--new-canvas-control-active-border);
+  box-shadow: 0 0 0 2px var(--new-canvas-accent-soft);
+}
+
+.new-canvas-root .canvas-stage {
+  background-color: var(--new-canvas-stage);
+  background-image:
+    radial-gradient(circle at 74% 18%, var(--new-canvas-accent-soft), transparent 26rem),
+    radial-gradient(circle at 12% 84%, var(--new-canvas-accent-soft), transparent 24rem);
+}
+
+.new-canvas-root .canvas-stage.is-canvas-grid-visible {
+  background-image:
+    linear-gradient(90deg, color-mix(in srgb, var(--new-canvas-foreground) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--new-canvas-foreground) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--new-canvas-foreground) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--new-canvas-foreground) 18%, transparent) 1px, transparent 1px),
+    radial-gradient(circle at 74% 18%, var(--new-canvas-accent-soft), transparent 26rem),
+    radial-gradient(circle at 12% 84%, var(--new-canvas-accent-soft), transparent 24rem);
+  background-position:
+    var(--canvas-grid-x, 0) var(--canvas-grid-y, 0),
+    var(--canvas-grid-x, 0) var(--canvas-grid-y, 0),
+    var(--canvas-grid-x, 0) var(--canvas-grid-y, 0),
+    var(--canvas-grid-x, 0) var(--canvas-grid-y, 0),
+    center,
+    center;
+  background-size:
+    var(--canvas-grid-size, 20px) var(--canvas-grid-size, 20px),
+    var(--canvas-grid-size, 20px) var(--canvas-grid-size, 20px),
+    var(--canvas-grid-major-size, 100px) var(--canvas-grid-major-size, 100px),
+    var(--canvas-grid-major-size, 100px) var(--canvas-grid-major-size, 100px),
+    auto,
+    auto;
+}
+
+.new-canvas-root .x6-widget-snapline-vertical,
+.new-canvas-root .x6-widget-snapline-horizontal {
+  stroke: var(--new-canvas-control-text);
+  stroke-width: 1.5px;
+}
+
+.new-canvas-root .canvas-stage::after {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--new-canvas-background-color) 36%, transparent), transparent 7rem),
+    linear-gradient(270deg, color-mix(in srgb, var(--new-canvas-background-color) 42%, transparent), transparent 16rem);
+}
+
+.new-canvas-root :where(
+  .canvas-node,
+  .canvas-x6-special-node,
+  .canvas-special-media-node,
+  .canvas-generation-preview,
+  .canvas-text-card,
+  .canvas-upload-card,
+  .canvas-generation-progress,
+  .canvas-agent-file-grants li,
+  .canvas-agent-citations a,
+  .canvas-agent-citations li > div,
+  .canvas-media-layer-item,
+  .canvas-media-batch-item
+) {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-surface);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root :where(
+  .canvas-node.selected,
+  .canvas-node.running,
+  .canvas-x6-special-node:hover,
+  .canvas-x6-special-node.is-generic:hover,
+  .canvas-media-batch-item.selected
+) {
+  border-color: var(--new-canvas-control-active-border);
+  box-shadow: 0 0 0 1px var(--new-canvas-accent-soft), 0 1rem 2.2rem color-mix(in srgb, var(--new-canvas-background-color) 42%, transparent);
+}
+
+.new-canvas-root :where(
+  .canvas-node-header,
+  .canvas-script-picker header,
+  .canvas-agent-head,
+  .canvas-agent-history > header,
+  .canvas-agent-file-grants,
+  .canvas-agent-special-footer
+) {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-panel-soft);
+}
+
+.new-canvas-root :where(
+  .canvas-panel,
+  .canvas-agent-panel,
+  .canvas-character-library,
+  .canvas-config-library-drawer,
+  .canvas-media-tools-drawer,
+  .canvas-context-menu,
+  .canvas-script-picker,
+  .canvas-node,
+  .canvas-x6-special-node
+) :where(h1, h2, h3, h4, h5, p, span, small, strong, b, em, label, th, td, li, figcaption) {
+  color: inherit;
+}
+
+.new-canvas-root :where(
+  .canvas-character-empty,
+  .canvas-character-image-placeholder,
+  .canvas-character-crop-panel small,
+  .canvas-agent-status,
+  .canvas-agent-empty,
+  .canvas-agent-event p,
+  .canvas-agent-event-meta span,
+  .canvas-agent-model,
+  .canvas-agent-file-grants header small,
+  .canvas-agent-file-grants li small,
+  .canvas-agent-file-grants p,
+  .canvas-media-empty,
+  .canvas-media-layer-item small,
+  .canvas-media-recovery dt,
+  .canvas-media-recovery dd
+) {
+  color: var(--new-canvas-muted);
+}
+
+.new-canvas-root :where(input, select, textarea)::placeholder {
+  color: var(--new-canvas-muted);
+}
+
+.new-canvas-root :where(
+  .canvas-node-state.ready,
+  .canvas-agent-status.succeeded
+) {
+  color: var(--new-canvas-success);
+}
+
+.new-canvas-root :where(
+  .new-canvas-minimap,
+  .canvas-panorama-mode-switch,
+  .canvas-storyboard-mode-switch,
+  .canvas-storyboard-grid-editor,
+  .canvas-camera-studio-segments.compact
+) {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-panel-soft);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root :where(
+  .new-canvas-minimap header,
+  .canvas-panorama-image-preview,
+  .canvas-panorama-viewer,
+  .canvas-panorama-status,
+  .canvas-panorama-empty,
+  .canvas-storyboard-grid,
+  .canvas-storyboard-empty,
+  .canvas-media-crop-stage,
+  .canvas-camera-studio-panel,
+  .canvas-camera-studio-prompt,
+  .canvas-media-composite-preview,
+  .canvas-media-annotation-stage
+) {
+  border-color: var(--new-canvas-control-border);
+  background-color: var(--new-canvas-surface);
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root .new-canvas-minimap-stage {
+  background-color: var(--new-canvas-stage);
+}
+
+.new-canvas-root .new-canvas-minimap-node {
+  border-color: var(--new-canvas-control-active-border);
+  background: var(--new-canvas-accent-soft);
+}
+
+.new-canvas-root .new-canvas-minimap-node.selected,
+.new-canvas-root .canvas-storyboard-cell.is-selected .canvas-storyboard-cell-select {
+  border-color: var(--new-canvas-control-active-border);
+  background: var(--new-canvas-control-active);
+  box-shadow: inset 0 0 0 1px var(--new-canvas-control-active-border);
+}
+
+.new-canvas-root :where(
+  .canvas-storyboard-position-editor,
+  .canvas-storyboard-position-editor input,
+  .canvas-storyboard-axis-stepper button,
+  .canvas-panorama-zoom-controls,
+  .canvas-panorama-zoom-controls button,
+  .canvas-panorama-actions button,
+  .canvas-storyboard-cell-select,
+  .canvas-storyboard-cell-extract
+) {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-control);
+  color: var(--new-canvas-muted);
+}
+
+.new-canvas-root :where(
+  .canvas-storyboard-axis-stepper button:hover,
+  .canvas-panorama-zoom-controls button:hover,
+  .canvas-panorama-actions button:hover,
+  .canvas-storyboard-cell-extract:hover
+) {
+  border-color: var(--new-canvas-control-hover-border);
+  background: var(--new-canvas-control-hover);
+  color: var(--new-canvas-control-text);
+}
+
+.new-canvas-root :where(
+  .canvas-panorama-viewer:focus-visible,
+  .canvas-media-crop-selection:focus-visible
+) {
+  outline: 2px solid var(--new-canvas-control-active-border);
+  outline-offset: 2px;
+}
+
+.new-canvas-root .canvas-media-crop-selection {
+  border-color: var(--new-canvas-control-text);
+  background: var(--new-canvas-accent-soft);
+  box-shadow: 0 0 0 1px var(--new-canvas-background-color);
+}
+
+.new-canvas-root .canvas-media-crop-handle {
+  border-color: var(--new-canvas-field);
+  background: var(--new-canvas-control-text);
+}
+
+.new-canvas-root :where(
+  .canvas-camera-studio-range input[type="range"],
+  .canvas-appearance-settings input[type="checkbox"]
+) {
+  accent-color: var(--new-canvas-accent-color);
+}
+
+/* Legacy Canvas node cards use compound selectors, so keep their inner surfaces
+   on the selected workbench theme as well. */
+.new-canvas-root .canvas-lib-node {
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root .canvas-lib-node-title,
+.new-canvas-root .canvas-lib-node-title strong,
+.new-canvas-root .canvas-text-node .canvas-lib-node-title {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-lib-node .canvas-generation-preview,
+.new-canvas-root .canvas-lib-node .canvas-text-card,
+.new-canvas-root .canvas-lib-node .canvas-upload-card,
+.new-canvas-root .canvas-lib-node .canvas-special-media-node,
+.new-canvas-root .canvas-lib-node .canvas-animation-node-body {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-surface) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-generation-empty,
+.new-canvas-root .canvas-generation-empty strong,
+.new-canvas-root .canvas-upload-empty-text,
+.new-canvas-root .canvas-text-tries,
+.new-canvas-root .canvas-text-tries b,
+.new-canvas-root .canvas-text-tries button,
+.new-canvas-root .canvas-animation-empty,
+.new-canvas-root .canvas-animation-empty strong,
+.new-canvas-root .canvas-animation-param-bar {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-generation-progress,
+.new-canvas-root .canvas-generation-reference-thumb,
+.new-canvas-root .canvas-animation-preview,
+.new-canvas-root .canvas-animation-preview-switch,
+.new-canvas-root .canvas-animation-frame-picker select {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-generation-progress-stage,
+.new-canvas-root .canvas-generation-progress-task,
+.new-canvas-root .canvas-animation-param-bar small,
+.new-canvas-root .canvas-animation-empty small,
+.new-canvas-root .canvas-upload-empty-icon,
+.new-canvas-root .canvas-upload-meta small {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-generation-progress-track {
+  background: var(--new-canvas-control-border) !important;
+}
+
+.new-canvas-root .canvas-generation-progress-track i {
+  background: var(--new-canvas-accent) !important;
+}
+
+.new-canvas-root .canvas-upload-preview,
+.new-canvas-root .canvas-upload-meta,
+.new-canvas-root .canvas-generation-result-action {
+  background: var(--new-canvas-panel-soft) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-node-connect {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-accent-color) !important;
+}
+
+.new-canvas-root .canvas-character-card.is-library-asset,
+.new-canvas-root .canvas-character-card.is-library-asset .canvas-character-card__copy {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-surface) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-character-card.is-library-asset .canvas-character-card__image {
+  background: var(--new-canvas-panel-soft) !important;
+}
+
+.new-canvas-root .canvas-character-card.is-library-asset strong,
+.new-canvas-root .canvas-character-card.is-library-asset small {
+  color: inherit !important;
+}
+
+.new-canvas-root .canvas-character-scope-tabs,
+.new-canvas-root .canvas-character-library-categories,
+.new-canvas-root .canvas-character-library-folders {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+}
+
+.new-canvas-root .canvas-character-scope-tabs button,
+.new-canvas-root .canvas-character-library-categories button,
+.new-canvas-root .canvas-character-library-folders button,
+.new-canvas-root .canvas-character-search input {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-character-scope-tabs button.active,
+.new-canvas-root .canvas-character-library-categories button.active,
+.new-canvas-root .canvas-character-library-folders button.active,
+.new-canvas-root .canvas-character-search input:focus {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-agent-history-list button,
+.new-canvas-root .canvas-agent-task-item,
+.new-canvas-root .canvas-agent-memory-item,
+.new-canvas-root .canvas-agent-memory-item pre,
+.new-canvas-root .canvas-agent-special-footer {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-surface) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-agent-task-item > header strong,
+.new-canvas-root .canvas-agent-memory-item > header strong,
+.new-canvas-root .canvas-agent-memory-item pre,
+.new-canvas-root .canvas-agent-history-list button strong {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-agent-task-item > header span,
+.new-canvas-root .canvas-agent-task-progress,
+.new-canvas-root .canvas-agent-memory-item p,
+.new-canvas-root .canvas-agent-memory-item > small,
+.new-canvas-root .canvas-agent-history-list button small,
+.new-canvas-root .canvas-agent-history-list > p {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-trigger,
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-option,
+.new-canvas-root .canvas-agent-panel .canvas-agent-head-tool,
+.new-canvas-root .canvas-agent-panel .canvas-agent-conversation select,
+.new-canvas-root .canvas-agent-panel .canvas-agent-model select,
+.new-canvas-root .canvas-agent-panel .canvas-agent-interject input,
+.new-canvas-root .canvas-agent-panel .canvas-agent-composer textarea {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-trigger.active,
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-option.active,
+.new-canvas-root .canvas-agent-panel .canvas-agent-head-tool:hover,
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-trigger:hover,
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-option:hover {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-menu {
+  border-color: var(--new-canvas-control-border);
+  background: var(--new-canvas-surface);
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-mode-option small {
+  color: var(--new-canvas-muted);
+}
+
+.new-canvas-root .canvas-zoom-tools,
+.new-canvas-root .canvas-command-tools,
+.new-canvas-root .new-canvas-chrome-rail {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-zoom-tools button,
+.new-canvas-root .canvas-command-tools button,
+.new-canvas-root .new-canvas-chrome-tool {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-zoom-tools button:hover,
+.new-canvas-root .canvas-zoom-tools button.active,
+.new-canvas-root .canvas-command-tools button:hover,
+.new-canvas-root .canvas-command-tools button.active,
+.new-canvas-root .new-canvas-chrome-tool:hover,
+.new-canvas-root .new-canvas-chrome-tool:focus-visible,
+.new-canvas-root .new-canvas-chrome-tool.is-active {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-x6-special-node,
+.new-canvas-root .canvas-x6-special-node.is-generic,
+.new-canvas-root .canvas-x6-generic-body {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-surface) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-x6-generic-body > p,
+.new-canvas-root .canvas-x6-special-node.is-generic > footer,
+.new-canvas-root .canvas-x6-special-node > header small {
+  color: var(--new-canvas-muted) !important;
+}
+
+/* Generation editors, sidebar filters, and media previews are legacy Canvas
+   controls rendered inside the same Shadow DOM surface. */
+.new-canvas-root .canvas-node-editor,
+.new-canvas-root .canvas-context-menu,
+.new-canvas-root .canvas-script-picker,
+.new-canvas-root .canvas-parameter-menu {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-node-editor textarea,
+.new-canvas-root .canvas-node-editor .canvas-audio-options input,
+.new-canvas-root .canvas-node-editor .canvas-audio-options select,
+.new-canvas-root .canvas-node-editor .canvas-music-lyrics-field textarea,
+.new-canvas-root .canvas-send-grid select,
+.new-canvas-root .canvas-prompt-field textarea,
+.new-canvas-root .canvas-inspector textarea {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-field) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-node-editor textarea::placeholder,
+.new-canvas-root .canvas-node-editor .canvas-audio-options small,
+.new-canvas-root .canvas-node-editor .canvas-audio-options label,
+.new-canvas-root .canvas-send-grid span,
+.new-canvas-root .canvas-prompt-field span,
+.new-canvas-root .canvas-inspector label span {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-editor-tabs,
+.new-canvas-root .canvas-editor-reference-row,
+.new-canvas-root .canvas-editor-controls {
+  color: var(--new-canvas-foreground);
+}
+
+.new-canvas-root .canvas-editor-tabs button,
+.new-canvas-root .canvas-editor-controls select,
+.new-canvas-root .canvas-editor-controls button,
+.new-canvas-root .canvas-editor-upload,
+.new-canvas-root .canvas-parameter-menu button {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-editor-tabs button.active,
+.new-canvas-root .canvas-editor-tabs button[aria-selected="true"],
+.new-canvas-root .canvas-editor-controls button:hover,
+.new-canvas-root .canvas-editor-controls select:focus,
+.new-canvas-root .canvas-editor-upload:hover,
+.new-canvas-root .canvas-parameter-menu button:hover {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-editor-controls .canvas-generate-button,
+.new-canvas-root .canvas-editor-controls .canvas-send-button {
+  border-color: transparent !important;
+  background: var(--new-canvas-accent) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-sidebar-tabs,
+.new-canvas-root .canvas-sidebar-filter,
+.new-canvas-root .canvas-sidebar-footer,
+.new-canvas-root .canvas-asset-source-tabs,
+.new-canvas-root .canvas-asset-media-filters,
+.new-canvas-root .canvas-asset-layout-controls,
+.new-canvas-root .canvas-history-filter-row,
+.new-canvas-root .canvas-global-asset-folder-filter {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-sidebar-tab,
+.new-canvas-root .canvas-filter-select,
+.new-canvas-root .canvas-collapse,
+.new-canvas-root .canvas-quick-action,
+.new-canvas-root .canvas-asset-source-tabs button,
+.new-canvas-root .canvas-asset-media-filters button,
+.new-canvas-root .canvas-asset-layout-controls button,
+.new-canvas-root .canvas-asset-layout-controls output,
+.new-canvas-root .canvas-history-filter-row select,
+.new-canvas-root .canvas-global-asset-folder-filter select,
+.new-canvas-root .canvas-global-asset-tools select,
+.new-canvas-root .canvas-project-asset-tools button,
+.new-canvas-root .canvas-global-asset-tools button,
+.new-canvas-root .canvas-drama-asset-tools button,
+.new-canvas-root .canvas-drama-asset-drawer select,
+.new-canvas-root .canvas-drama-asset-create input,
+.new-canvas-root .canvas-drama-asset-description input,
+.new-canvas-root .canvas-drama-asset-create button,
+.new-canvas-root .canvas-drama-asset-description button {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-sidebar-tab.active,
+.new-canvas-root .canvas-sidebar-tab:hover,
+.new-canvas-root .canvas-asset-source-tabs button.active,
+.new-canvas-root .canvas-asset-source-tabs button:hover,
+.new-canvas-root .canvas-asset-media-filters button.active,
+.new-canvas-root .canvas-asset-media-filters button:hover,
+.new-canvas-root .canvas-asset-layout-controls button:hover:not(:disabled),
+.new-canvas-root .canvas-global-asset-tools button:hover,
+.new-canvas-root .canvas-project-asset-tools button:hover {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-element-item,
+.new-canvas-root .canvas-element-item strong,
+.new-canvas-root .canvas-element-item small,
+.new-canvas-root .canvas-filter-label,
+.new-canvas-root .canvas-sidebar-footer {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-element-item small,
+.new-canvas-root .canvas-filter-label,
+.new-canvas-root .canvas-sidebar-footer {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-audio-waveform,
+.new-canvas-root .canvas-video-preview,
+.new-canvas-root .canvas-audio-empty,
+.new-canvas-root .canvas-video-empty {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-surface) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-audio-waveform button,
+.new-canvas-root .canvas-video-actions button {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-accent-color) !important;
+}
+
+.new-canvas-root .canvas-audio-waveform output,
+.new-canvas-root .canvas-audio-empty,
+.new-canvas-root .canvas-video-empty {
+  color: var(--new-canvas-muted) !important;
+}
+
+/* Final theme bridge for controls that still inherit legacy Canvas colors. */
+.new-canvas-root .canvas-agent-panel .canvas-agent-icon-button,
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button:not(.danger),
+.new-canvas-root .canvas-agent-panel .canvas-agent-interject button,
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button:not(.danger),
+.new-canvas-root .canvas-agent-panel .canvas-agent-special-footer button,
+.new-canvas-root .canvas-node-action-toolbar button:not(.danger) {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-icon-button:hover,
+.new-canvas-root .canvas-agent-panel .canvas-agent-icon-button:focus-visible,
+.new-canvas-root .canvas-agent-panel .canvas-agent-icon-button.active,
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button:not(.danger):hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button:not(.danger):focus-visible,
+.new-canvas-root .canvas-agent-panel .canvas-agent-interject button:hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-interject button:focus-visible,
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button:not(.danger):hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button:not(.danger):focus-visible,
+.new-canvas-root .canvas-agent-panel .canvas-agent-special-footer button:hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-special-footer button:focus-visible,
+.new-canvas-root .canvas-node-action-toolbar button:not(.danger):hover,
+.new-canvas-root .canvas-node-action-toolbar button:not(.danger):focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button.danger,
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button.danger,
+.new-canvas-root .canvas-node-action-toolbar button.danger {
+  border-color: color-mix(in srgb, var(--new-canvas-danger) 48%, var(--new-canvas-control-border)) !important;
+  background: color-mix(in srgb, var(--new-canvas-danger) 15%, var(--new-canvas-control)) !important;
+  color: var(--new-canvas-danger) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button.danger:hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button.danger:focus-visible,
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button.danger:hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button.danger:focus-visible,
+.new-canvas-root .canvas-node-action-toolbar button.danger:hover,
+.new-canvas-root .canvas-node-action-toolbar button.danger:focus-visible {
+  border-color: var(--new-canvas-danger) !important;
+  background: color-mix(in srgb, var(--new-canvas-danger) 25%, var(--new-canvas-control)) !important;
+  color: var(--new-canvas-danger) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-task-controls button:disabled,
+.new-canvas-root .canvas-agent-panel .canvas-agent-interject button:disabled,
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval-actions button:disabled,
+.new-canvas-root .canvas-agent-panel .canvas-agent-special-footer button:disabled,
+.new-canvas-root .canvas-node-action-toolbar button:disabled {
+  border-color: var(--new-canvas-control-border) !important;
+  background: color-mix(in srgb, var(--new-canvas-control) 72%, var(--new-canvas-panel)) !important;
+  color: var(--new-canvas-muted) !important;
+  opacity: .56 !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-approval {
+  border-color: color-mix(in srgb, var(--new-canvas-accent-color) 42%, var(--new-canvas-control-border)) !important;
+  background: color-mix(in srgb, var(--new-canvas-control-active) 24%, var(--new-canvas-surface)) !important;
+}
+
+.new-canvas-root .canvas-node-action-toolbar {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+  box-shadow: 0 .45rem 1.2rem color-mix(in srgb, var(--new-canvas-background-color) 24%, transparent) !important;
+}
+
+.new-canvas-root .canvas-node-action-zone + .canvas-node-action-zone {
+  border-left-color: var(--new-canvas-control-border) !important;
+}
+
+.new-canvas-root .canvas-storyboard-node-body,
+.new-canvas-root .canvas-x6-special-node.is-ai-storyboard,
+.new-canvas-root .canvas-storyboard-count {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-storyboard-grid,
+.new-canvas-root .canvas-storyboard-empty,
+.new-canvas-root .canvas-storyboard-count,
+.new-canvas-root .canvas-node-state,
+.new-canvas-root .canvas-context-chip {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-surface) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-node-state.ready {
+  border-color: color-mix(in srgb, var(--new-canvas-success) 48%, var(--new-canvas-control-border)) !important;
+  background: color-mix(in srgb, var(--new-canvas-success) 14%, var(--new-canvas-surface)) !important;
+  color: var(--new-canvas-success) !important;
+}
+
+.new-canvas-root .canvas-node-state.running {
+  border-color: color-mix(in srgb, var(--new-canvas-accent-color) 48%, var(--new-canvas-control-border)) !important;
+  background: var(--new-canvas-accent-soft) !important;
+  color: var(--new-canvas-accent-color) !important;
+}
+
+.new-canvas-root .canvas-storyboard-count {
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.new-canvas-root .canvas-storyboard-mode-switch,
+.new-canvas-root .canvas-storyboard-grid-editor,
+.new-canvas-root .canvas-storyboard-position-editor {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-storyboard-mode-switch button,
+.new-canvas-root .canvas-storyboard-controls > button,
+.new-canvas-root .canvas-storyboard-axis-stepper button,
+.new-canvas-root .canvas-storyboard-position-editor input {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-storyboard-mode-switch button:hover,
+.new-canvas-root .canvas-storyboard-mode-switch button:focus-visible,
+.new-canvas-root .canvas-storyboard-controls > button:hover,
+.new-canvas-root .canvas-storyboard-controls > button:focus-visible,
+.new-canvas-root .canvas-storyboard-axis-stepper button:hover,
+.new-canvas-root .canvas-storyboard-axis-stepper button:focus-visible,
+.new-canvas-root .canvas-storyboard-position-editor input:focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-storyboard-mode-switch button[aria-pressed="true"],
+.new-canvas-root .canvas-storyboard-controls > button[aria-pressed="true"] {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-storyboard-position-editor label,
+.new-canvas-root .canvas-storyboard-position-editor legend,
+.new-canvas-root .canvas-storyboard-axis-stepper,
+.new-canvas-root .canvas-storyboard-axis-stepper output,
+.new-canvas-root .canvas-storyboard-position-empty {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .episode-replica-float-menu,
+.new-canvas-root .episode-replica-video-settings-panel {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel) !important;
+  color: var(--new-canvas-foreground) !important;
+  box-shadow: 0 .8rem 1.8rem color-mix(in srgb, var(--new-canvas-background-color) 28%, transparent) !important;
+}
+
+.new-canvas-root .episode-replica-float-menu button,
+.new-canvas-root .episode-replica-video-settings-panel button,
+.new-canvas-root .canvas-editor-controls .episode-replica-control,
+.new-canvas-root .canvas-editor-controls .episode-replica-video-settings-trigger {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .episode-replica-float-menu button:hover,
+.new-canvas-root .episode-replica-float-menu button:focus-visible,
+.new-canvas-root .episode-replica-video-settings-panel button:hover,
+.new-canvas-root .episode-replica-video-settings-panel button:focus-visible,
+.new-canvas-root .canvas-editor-controls .episode-replica-control:hover,
+.new-canvas-root .canvas-editor-controls .episode-replica-control:focus-visible,
+.new-canvas-root .canvas-editor-controls .episode-replica-video-settings-trigger:hover,
+.new-canvas-root .canvas-editor-controls .episode-replica-video-settings-trigger:focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .episode-replica-float-menu button.is-selected,
+.new-canvas-root .canvas-editor-controls .episode-replica-control.active,
+.new-canvas-root .canvas-editor-controls .episode-replica-video-settings-trigger.is-open {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .episode-replica-float-menu button small,
+.new-canvas-root .episode-replica-float-menu button em,
+.new-canvas-root .episode-replica-video-settings-panel small {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-panorama-mode-switch,
+.new-canvas-root .canvas-animation-preview-switch,
+.new-canvas-root .canvas-animation-param-bar {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-panorama-mode-switch button,
+.new-canvas-root .canvas-animation-preview-switch button,
+.new-canvas-root .canvas-animation-frame-picker select {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-panorama-mode-switch button:hover,
+.new-canvas-root .canvas-panorama-mode-switch button:focus-visible,
+.new-canvas-root .canvas-animation-preview-switch button:hover,
+.new-canvas-root .canvas-animation-preview-switch button:focus-visible,
+.new-canvas-root .canvas-animation-frame-picker select:focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-panorama-mode-switch button[aria-pressed="true"],
+.new-canvas-root .canvas-animation-preview-switch button.active,
+.new-canvas-root .canvas-animation-preview-switch button[aria-pressed="true"] {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-animation-param-bar strong {
+  color: var(--new-canvas-accent-color) !important;
+}
+
+.new-canvas-root .canvas-animation-param-bar small {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-rewind-control button {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-rewind-control button:hover:not(:disabled),
+.new-canvas-root .canvas-agent-panel .canvas-agent-rewind-control button:focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-rewind-control button:disabled {
+  border-color: var(--new-canvas-control-border) !important;
+  background: color-mix(in srgb, var(--new-canvas-control) 72%, var(--new-canvas-panel)) !important;
+  color: var(--new-canvas-muted) !important;
+  opacity: .56 !important;
+}
+
+.new-canvas-root .canvas-panorama-actions button {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-panorama-actions button:hover:not(:disabled),
+.new-canvas-root .canvas-panorama-actions button:focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-panorama-actions button:disabled {
+  border-color: var(--new-canvas-control-border) !important;
+  background: color-mix(in srgb, var(--new-canvas-control) 72%, var(--new-canvas-panel)) !important;
+  color: var(--new-canvas-muted) !important;
+  opacity: .56 !important;
+}
+
+.new-canvas-root .new-canvas-tool-menu-item {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .new-canvas-tool-menu-item:hover,
+.new-canvas-root .new-canvas-tool-menu-item:focus-visible {
+  border-color: var(--new-canvas-control-hover-border) !important;
+  background: var(--new-canvas-control-hover) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .new-canvas-tool-menu-item.is-active {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .new-canvas-tool-menu-item kbd {
+  color: var(--new-canvas-muted) !important;
+}
+
+/* Keep the revision conflict dialog on the active Canvas theme. */
+.new-canvas-root .canvas-revision-conflict-backdrop {
+  background: color-mix(in srgb, var(--new-canvas-background-color) 72%, transparent) !important;
+}
+
+.new-canvas-root .canvas-revision-conflict {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel) !important;
+  color: var(--new-canvas-foreground) !important;
+  box-shadow: 0 1.4rem 4rem color-mix(in srgb, var(--new-canvas-background-color) 50%, transparent) !important;
+}
+
+.new-canvas-root .canvas-revision-conflict-mark {
+  background: var(--new-canvas-accent) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-revision-conflict header p,
+.new-canvas-root .canvas-revision-summary-title span,
+.new-canvas-root .canvas-revision-summary small,
+.new-canvas-root .canvas-revision-summary dt {
+  color: var(--new-canvas-muted) !important;
+}
+
+.new-canvas-root .canvas-revision-conflict-compare {
+  border-color: var(--new-canvas-control-border) !important;
+}
+
+.new-canvas-root .canvas-revision-summary {
+  background: var(--new-canvas-panel-soft) !important;
+}
+
+.new-canvas-root .canvas-revision-summary + .canvas-revision-summary {
+  border-color: var(--new-canvas-control-border) !important;
+}
+
+.new-canvas-root .canvas-revision-summary > p {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-revision-choice {
+  border-color: var(--new-canvas-control-border) !important;
+}
+
+.new-canvas-root .canvas-revision-choice.secondary {
+  background: var(--new-canvas-control) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-revision-choice.primary {
+  border-color: var(--new-canvas-accent-color) !important;
+  background: var(--new-canvas-accent) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-revision-choice:focus-visible {
+  outline: 2px solid var(--new-canvas-accent-color) !important;
+  outline-offset: 2px;
 }

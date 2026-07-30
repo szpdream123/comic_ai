@@ -715,7 +715,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
   async function resolveWorkflowPromptSkill(input: {
     userId: string;
     itemId: string;
-    category: "script" | "shot" | "prop_extract" | "character_extract" | "scene_extract" | "image_style" | "storyboard";
+    category: "script" | "shot" | "prop_extract" | "character_extract" | "scene_extract" | "image_style" | "storyboard" | "other";
     now: Date;
   }) {
     const row = await queryOne<PromptMarketplaceRow & { user_link_id?: string | null }>(

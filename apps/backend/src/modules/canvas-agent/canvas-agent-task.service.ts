@@ -70,6 +70,10 @@ interface AgentEventRow {
 
 export class CanvasAgentStateConflictError extends Error {
   readonly code = "canvas_agent_state_conflict";
+
+  constructor() {
+    super("canvas_agent_state_conflict");
+  }
 }
 
 export class CanvasAgentStepSkipError extends Error {

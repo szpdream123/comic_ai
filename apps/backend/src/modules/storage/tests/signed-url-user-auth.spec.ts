@@ -90,6 +90,41 @@ describe("signed storage URLs", { concurrency: false }, () => {
     }
   });
 
+  it("does not create URLs for deleted storage objects", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new DeterministicStorageAdapter();
+
+    try {
+      await seedUsers(db);
+      const object = await createScopedStorageObject(db, {
+        userId: "00000000-0000-4000-8000-000000000001",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        bucket: "creator-assets",
+        objectName: "deleted-cover.png",
+        contentType: "image/png",
+        now: new Date("2026-05-09T10:00:00.000Z"),
+      });
+      await db.query(
+        "UPDATE storage_objects SET status = 'deleted', deleted_at = $2 WHERE id = $1",
+        [object.id, new Date("2026-05-09T10:01:00.000Z")],
+      );
+
+      await assert.rejects(
+        createSignedReadUrl(db, {
+          sessionToken: "owner-token",
+          storageObjectId: object.id,
+          adapter,
+          now: new Date("2026-05-09T10:02:00.000Z"),
+          expiresInSeconds: 60,
+        }),
+        (error: unknown) => error instanceof StorageAccessError && error.code === "storage_object_not_found",
+      );
+      assert.equal(adapter.calls.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("signs only objects from canvases assigned to a team member", async () => {
     const db = await createMigratedTestDb();
     const adapter = new DeterministicStorageAdapter();

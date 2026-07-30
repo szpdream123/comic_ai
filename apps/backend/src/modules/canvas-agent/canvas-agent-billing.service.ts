@@ -11,8 +11,12 @@ import { refundTeamMemberGenerationCredits } from "../credit-billing/team-member
 export interface CanvasAgentTextUsage {
   promptTokens: number;
   completionTokens: number;
+  cachedTokens?: number;
   totalTokens: number;
 }
+
+export const CANVAS_AGENT_CREDIT_REASON = "画布协作Agent操作消耗";
+const CANVAS_AGENT_BILLING_MODE = "token";
 
 export class CanvasAgentBillingService {
   constructor(private readonly db: SqlDatabase) {}
@@ -20,17 +24,15 @@ export class CanvasAgentBillingService {
   estimateRound(input: {
     pricing: Record<string, unknown>;
     maxTokens?: number;
+    contextWindow?: number;
+    maxPromptTokens?: number;
   }) {
-    const baseCredits = positiveNumber(input.pricing.baseCredits);
     const maxTokens = positiveNumber(input.maxTokens) || positiveNumber(input.pricing.maxTokens) || 2_048;
-    const inputRate = positiveNumber(input.pricing.inputCreditsPerMillion)
-      || positiveNumber(input.pricing.inputCreditsPer1M)
-      || positiveNumber(input.pricing.promptCreditsPerMillion);
-    const outputRate = positiveNumber(input.pricing.outputCreditsPerMillion)
-      || positiveNumber(input.pricing.outputCreditsPer1M)
-      || positiveNumber(input.pricing.completionCreditsPerMillion);
-    const tokenEstimate = Math.ceil((maxTokens * (inputRate + outputRate)) / 1_000_000);
-    return Math.max(1, Math.ceil(baseCredits || tokenEstimate || positiveNumber(input.pricing.minimumCredits) || 1));
+    const contextWindow = positiveNumber(input.contextWindow);
+    const maxPromptTokens = positiveNumber(input.maxPromptTokens);
+    const totalTokenLimit = contextWindow || maxPromptTokens + maxTokens;
+    const tokenEstimate = Math.ceil((totalTokenLimit * canvasAgentTokenRate(input.pricing)) / 1_000_000);
+    return Math.max(1, tokenEstimate, Math.ceil(positiveNumber(input.pricing.minimumCredits)));
   }
 
   async reserveRound(input: {
@@ -58,7 +60,7 @@ export class CanvasAgentBillingService {
         amount: input.amount,
         sourceType: "canvas_agent_text_round",
         sourceId: input.stepId,
-        reason: "Canvas Agent text round",
+        reason: CANVAS_AGENT_CREDIT_REASON,
         canvasProjectId: input.canvasId,
         workflowId: input.workflowId ?? null,
         taskId: input.workflowTaskId ?? null,
@@ -131,7 +133,7 @@ export class CanvasAgentBillingService {
         `,
         [
           randomUUID(), input.ownerUserId, input.actorTeamMemberId, input.amount,
-          Number(updatedMember.member_credits), sourceId, "Canvas Agent text round",
+          Number(updatedMember.member_credits), sourceId, CANVAS_AGENT_CREDIT_REASON,
           JSON.stringify(metadata), input.now,
         ],
       );
@@ -196,7 +198,7 @@ export class CanvasAgentBillingService {
         teamMemberId: input.actorTeamMemberId,
         amount: input.reservedAmount - consumed,
         sourceId: uuidFromStableId(input.stepId),
-        reason: "Canvas Agent text round unused reservation",
+        reason: CANVAS_AGENT_CREDIT_REASON,
         metadata: { canvasId: input.canvasId, agentTaskId: input.agentTaskId, agentStepId: input.stepId },
         now: input.now,
       });
@@ -205,15 +207,26 @@ export class CanvasAgentBillingService {
   }
 
   private usageCost(pricing: Record<string, unknown>, usage: CanvasAgentTextUsage) {
-    const inputRate = positiveNumber(pricing.inputCreditsPerMillion)
-      || positiveNumber(pricing.inputCreditsPer1M)
-      || positiveNumber(pricing.promptCreditsPerMillion);
-    const outputRate = positiveNumber(pricing.outputCreditsPerMillion)
-      || positiveNumber(pricing.outputCreditsPer1M)
-      || positiveNumber(pricing.completionCreditsPerMillion);
-    const tokenCost = Math.ceil((usage.promptTokens * inputRate + usage.completionTokens * outputRate) / 1_000_000);
-    return Math.max(1, tokenCost || positiveNumber(pricing.baseCredits) || 1);
+    const reportedComponents = positiveNumber(usage.promptTokens)
+      + positiveNumber(usage.completionTokens)
+      + positiveNumber(usage.cachedTokens);
+    const totalTokens = reportedComponents || positiveNumber(usage.totalTokens);
+    const tokenCost = Math.ceil((totalTokens * canvasAgentTokenRate(pricing)) / 1_000_000);
+    return Math.max(1, tokenCost);
   }
+}
+
+function canvasAgentTokenRate(pricing: Record<string, unknown>) {
+  const mode = String(pricing.canvasAgentBillingMode ?? CANVAS_AGENT_BILLING_MODE).trim().toLowerCase();
+  if (mode !== CANVAS_AGENT_BILLING_MODE) {
+    throw new Error("canvas_agent_token_billing_mode_invalid");
+  }
+  const rate = positiveNumber(pricing.canvasAgentTokenCreditsPerMillion)
+    || positiveNumber(pricing.tokenCreditsPerMillion);
+  if (!rate) {
+    throw new Error("canvas_agent_token_price_missing");
+  }
+  return rate;
 }
 
 function positiveNumber(value: unknown) {

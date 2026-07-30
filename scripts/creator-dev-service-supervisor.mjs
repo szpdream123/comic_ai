@@ -72,6 +72,23 @@ export function createCreatorDevServiceSupervisor(input) {
           input.clearTimeout(state.restartTimer);
           state.restartTimer = null;
         }
+        if (state.child && !state.child.killed) {
+          if (state.child.connected && typeof state.child.send === "function") {
+            state.child.send({ type: "creator-dev-stop", signal }, (error) => {
+              if (error && state.child && !state.child.killed) {
+                state.child.kill(signal);
+              } else if (state.child?.connected) {
+                state.child.disconnect();
+              }
+            });
+          } else {
+            state.child.kill(signal);
+          }
+        }
+      }
+    },
+    forceStop(signal = "SIGTERM") {
+      for (const state of services.values()) {
         if (state.child && !state.child.killed) state.child.kill(signal);
       }
     },

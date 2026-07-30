@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -49,9 +49,7 @@ if (process.env.NODE_ENV === "production") {
   console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
   process.exit(1);
 }
-const result = spawnSync(
-  runtime,
-  [
+const serverArgs = [
     ...resolveTsxRuntimeArgs(runtime),
     "--input-type=module",
     "--eval",
@@ -79,19 +77,69 @@ const result = spawnSync(
       const port = Number(process.env.PORT ?? "4310");
       await listenWithRetry(server, port);
       console.log("Phone auth dev server listening on " + server.origin);
-      setInterval(() => {}, 1000);
+      const keepAlive = setInterval(() => {}, 1000);
+      let stopping = false;
+      const requestStop = async (signal) => {
+        if (stopping) return;
+        stopping = true;
+        clearInterval(keepAlive);
+        console.log("Phone auth dev server received " + signal + ", closing...");
+        await server.close();
+        console.log("Phone auth dev server stopped.");
+        process.exit(0);
+      };
+      process.on("message", (message) => {
+        if (message?.type === "creator-dev-stop") {
+          void requestStop(message.signal ?? "SIGTERM").catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+        }
+      });
+      for (const signal of ["SIGINT", "SIGTERM"]) {
+        process.once(signal, () => {
+          void requestStop(signal).catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+        });
+      }
     }).catch((error) => {
       console.error(error);
       process.exit(1);
     });`,
-  ],
-  {
-    env: process.env,
-    stdio: "inherit",
-  },
-);
+  ];
+const child = spawn(runtime, serverArgs, {
+  env: process.env,
+  windowsHide: true,
+  stdio: ["inherit", "inherit", "inherit", "ipc"],
+});
 
-process.exit(result.status ?? 1);
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => forwardStop(signal));
+}
+process.on("message", (message) => {
+  if (message?.type === "creator-dev-stop") forwardStop(message.signal ?? "SIGTERM");
+});
+
+const exit = await new Promise((resolve) => {
+  child.once("error", (error) => resolve({ code: 1, error }));
+  child.once("exit", (code, signal) => resolve({ code, signal }));
+});
+if (exit.error) console.error(exit.error);
+process.exitCode = exit.code ?? (exit.signal ? 1 : 0);
+
+function forwardStop(signal) {
+  if (child.killed) return;
+  if (child.connected) {
+    child.send({ type: "creator-dev-stop", signal }, (error) => {
+      if (error && !child.killed) child.kill(signal);
+      else if (child.connected) child.disconnect();
+    });
+  } else {
+    child.kill(signal);
+  }
+}
 
 function pathToFileUrl(filePath) {
   return `file:///${filePath.replace(/\\/g, "/")}`;

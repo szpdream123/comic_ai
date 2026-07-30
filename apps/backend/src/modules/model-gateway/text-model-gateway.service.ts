@@ -4,6 +4,7 @@ import type {
   TextGatewayChatCompletionChunk,
   TextGatewayChatCompletionRequest,
 } from "./openai-compatible-text.adapter.ts";
+import { CumobTextAdapter } from "./cumob-text.adapter.ts";
 import {
   createOrReuseProviderRequest,
   markExternalSubmissionStarted,
@@ -47,6 +48,7 @@ export interface TextModelGatewayRequestContext {
 }
 
 export interface TextModelResolution extends ResolvedTextModelCatalogEntry {
+  providerProtocol?: string;
   providerConfigRevisionId?: string | null;
   credentialVersionRef?: string | null;
 }
@@ -95,6 +97,7 @@ export class TextModelGatewayService {
         OpenAICompatibleTextAdapter,
         "createChatCompletionStream"
       >;
+      cumobAdapter?: Pick<CumobTextAdapter, "createChatCompletionStream">;
       catalog?: readonly TextModelCatalogEntry[];
       resolver?: TextModelResolver;
       env?: NodeJS.ProcessEnv;
@@ -155,6 +158,7 @@ export class TextModelGatewayService {
     const upstreamRequest = prepareProviderChatCompletionRequest(
       request,
       model.providerModel,
+      model.providerProtocol,
     );
     await recordProviderRequestRedactedBody(this.config.db, {
       providerRequestId: started.id,
@@ -196,7 +200,8 @@ export class TextModelGatewayService {
     }
     let upstreamStream: AsyncIterable<TextGatewayChatCompletionChunk>;
     try {
-      upstreamStream = await this.config.adapter.createChatCompletionStream({
+      const adapter = selectTextCompletionAdapter(this.config, model.providerProtocol);
+      upstreamStream = await adapter.createChatCompletionStream({
         baseURL: model.baseURL,
         apiKey: model.apiKey,
         providerModel: model.providerModel,
@@ -297,6 +302,39 @@ export class TextModelGatewayService {
 
       const usage = input.tracker.usage;
       const usageSource = usage ? "provider" : "provider_missing";
+      const redactedResponse = {
+        model: input.modelId,
+        providerModel: input.providerModel,
+        chunkCount: input.tracker.chunkCount,
+        finishReasons: input.tracker.finishReasons,
+        usage,
+        usageSource,
+      };
+      const finishFailureCode = failureCodeFromFinishReasons(input.tracker.finishReasons);
+      if (finishFailureCode) {
+        await markProviderRequestFailed(this.config.db, {
+          providerRequestId: input.providerRequestId,
+          failureCode: finishFailureCode,
+          redactedResponse,
+          now: input.now(),
+        });
+        await completeUserModelRequestLog(this.config.db, {
+          providerRequestId: input.providerRequestId,
+          status: "failed",
+          responseText: input.tracker.responseText,
+          responseUsage: usage,
+          finishReasons: input.tracker.finishReasons,
+          failureCode: finishFailureCode,
+          now: input.now(),
+        });
+        input.resolveCompleted({
+          status: "failed",
+          failureCode: finishFailureCode,
+          usage,
+          usageSource,
+        });
+        return;
+      }
       const final: TextGatewayFinalUsage = {
         status: "succeeded",
         usage,
@@ -306,14 +344,7 @@ export class TextModelGatewayService {
       await markProviderRequestSucceeded(this.config.db, {
         providerRequestId: input.providerRequestId,
         externalRequestId: input.tracker.externalRequestId,
-        redactedResponse: {
-          model: input.modelId,
-          providerModel: input.providerModel,
-          chunkCount: input.tracker.chunkCount,
-          finishReasons: input.tracker.finishReasons,
-          usage,
-          usageSource,
-        },
+        redactedResponse,
         now: input.now(),
       });
       await completeUserModelRequestLog(this.config.db, {
@@ -384,6 +415,12 @@ export class TextModelGatewayService {
   }
 }
 
+function failureCodeFromFinishReasons(finishReasons: string[]) {
+  return finishReasons.some((reason) => /(?:error|failed|failure|错误|失败)/i.test(reason))
+    ? "provider_stream_error"
+    : null;
+}
+
 class StreamTracker {
   chunkCount = 0;
   externalRequestId: string | null = null;
@@ -426,8 +463,9 @@ class StreamTracker {
 function prepareProviderChatCompletionRequest(
   request: TextGatewayChatCompletionRequest,
   providerModel: string,
+  providerProtocol?: string,
 ): TextGatewayChatCompletionRequest {
-  return {
+  const prepared = {
     ...request,
     model: providerModel,
     stream: true,
@@ -436,7 +474,28 @@ function prepareProviderChatCompletionRequest(
       include_usage: true,
     },
   };
+  if (providerProtocol === "cumob_chat") {
+    delete prepared.max_tokens;
+  }
+  return prepared;
 }
+
+function selectTextCompletionAdapter(
+  config: {
+    adapter: Pick<OpenAICompatibleTextAdapter, "createChatCompletionStream">;
+    cumobAdapter?: Pick<CumobTextAdapter, "createChatCompletionStream">;
+  },
+  providerProtocol: string | undefined,
+) {
+  return providerProtocol === "cumob_chat"
+    ? config.cumobAdapter ?? new CumobTextAdapter()
+    : config.adapter;
+}
+
+export const __textModelGatewayTestUtils = {
+  prepareProviderChatCompletionRequest,
+  selectTextCompletionAdapter,
+};
 
 function extractRequestText(messages: TextGatewayChatCompletionRequest["messages"]) {
   return messages

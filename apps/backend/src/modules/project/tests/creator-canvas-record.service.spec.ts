@@ -341,6 +341,111 @@ describe("creator canvas record service", { concurrency: false }, () => {
     }
   });
 
+  it("retries a canvas save after a transient PostgreSQL transaction failure", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T11:15:00.000Z"),
+      });
+      let injected = false;
+      const retryingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+          if (!injected && sql.includes("UPDATE creator_canvas_projects")) {
+            injected = true;
+            throw Object.assign(new Error("deadlock detected"), { code: "40P01" });
+          }
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const saved = await saveCanvasByCanvasProjectId(retryingDb, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          viewport: { ...canvas.document.viewport, x: 12 },
+        },
+        now: new Date("2026-06-12T11:16:00.000Z"),
+      });
+
+      assert.equal(injected, true);
+      assert.equal(saved.serverRevision, canvas.serverRevision + 1);
+      const persisted = await findCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+      });
+      assert.equal(persisted?.serverRevision, saved.serverRevision);
+      assert.equal(persisted?.document.viewport.x, 12);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("allows reconnecting an endpoint after its previous edge was removed", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T11:17:00.000Z"),
+      });
+      const nodes = [
+        canvasNode("source", "script", 0, 0, "text", "Source"),
+        canvasNode("target", "image", 420, 0, "image", "Target"),
+      ];
+      const first = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes,
+          edges: [{
+            id: "edge-first",
+            kind: "execution",
+            sourceNodeId: "source",
+            sourcePortId: "out-text",
+            targetNodeId: "target",
+            targetPortId: "in-text",
+          }],
+        },
+        now: new Date("2026-06-12T11:18:00.000Z"),
+      });
+      const removed = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: first.serverRevision,
+        document: { ...first.document, edges: [] },
+        now: new Date("2026-06-12T11:19:00.000Z"),
+      });
+
+      const reconnected = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: removed.serverRevision,
+        document: {
+          ...removed.document,
+          edges: [{
+            id: "edge-second",
+            kind: "execution",
+            sourceNodeId: "source",
+            sourcePortId: "out-text",
+            targetNodeId: "target",
+            targetPortId: "in-text",
+          }],
+        },
+        now: new Date("2026-06-12T11:20:00.000Z"),
+      });
+
+      assert.equal(reconnected.document.edges[0]?.id, "edge-second");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("samples autosave revision history instead of storing every full snapshot", async () => {
     const db = await createMigratedTestDb();
 

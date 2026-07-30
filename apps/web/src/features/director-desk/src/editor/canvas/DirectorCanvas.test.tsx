@@ -240,7 +240,12 @@ vi.mock("./SceneRoot", () => ({
 import DirectorDeskApp from "../../App";
 import { getCameraViewSnapshotFromShot } from "../schema/cameraGeometry";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
-import { DirectorCanvas } from "./DirectorCanvas";
+import { canRecordReferenceVideo, DirectorCanvas } from "./DirectorCanvas";
+
+it("records reference video for object motion without a camera route", () => {
+  expect(canRecordReferenceVideo({ hasCanvas: true, hasCamera: true, hasPlayableMotion: true })).toBe(true);
+  expect(canRecordReferenceVideo({ hasCanvas: true, hasCamera: true, hasPlayableMotion: false })).toBe(false);
+});
 
 const App = () => <DirectorDeskApp authenticated={false} />;
 

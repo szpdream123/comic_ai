@@ -2303,7 +2303,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(providerProtocol);
 }
 
 function providerRequiresApiKey(providerProtocol: string | undefined) {
@@ -2330,7 +2330,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
@@ -2338,6 +2338,17 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
   }
   if (input.mediaType && !["text", "image", "video", "audio", "multimodal"].includes(input.mediaType)) {
     return error(400, "invalid_media_type", "媒体类型不支持");
+  }
+  const canvasAgentTokenPrice = input.pricing?.canvasAgentTokenCreditsPerMillion ?? input.pricing?.tokenCreditsPerMillion;
+  const canvasAgentBillingMode = readString(input.pricing?.canvasAgentBillingMode);
+  if (input.mediaType === "text" && canvasAgentBillingMode && canvasAgentBillingMode !== "token") {
+    return error(400, "canvas_agent_billing_mode_invalid", "画布协作计费模式只支持按总 Token 计费");
+  }
+  if (
+    input.mediaType === "text" && canvasAgentTokenPrice !== undefined
+    && (!Number.isFinite(Number(canvasAgentTokenPrice)) || Number(canvasAgentTokenPrice) <= 0)
+  ) {
+    return error(400, "canvas_agent_token_price_invalid", "画布协作 Token 单价必须大于 0");
   }
   if (input.status && !["active", "disabled", "archived"].includes(input.status)) {
     return error(400, "invalid_model_status", "模型状态不支持");

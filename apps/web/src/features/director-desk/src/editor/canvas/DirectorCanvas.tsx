@@ -1,5 +1,5 @@
 import { GizmoHelper, GizmoViewport, Grid, OrbitControls } from "@react-three/drei";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree, type RootState } from "@react-three/fiber";
 import { LoaderCircle, Move } from "lucide-react";
 import { createPortal, flushSync } from "react-dom";
 import {
@@ -20,10 +20,9 @@ import { clearViewportCaptureHandler, setViewportCaptureHandler } from "../io/ca
 import { postDirectorDeskVideoToHost } from "../io/hostBridge";
 import {
   clearReferenceVideoExportHandler,
-  getReferenceVideoFormatLabel,
-  getSupportedReferenceVideoMimeType,
   setReferenceVideoExportHandler,
 } from "../io/referenceVideoExport";
+import { encodeReferenceVideo } from "../io/referenceVideoEncoding";
 import { buildScreenshotMeta, type ScreenshotResult } from "../io/screenshotExport";
 import { useDirectorStore, type CameraShotSnapshot } from "../store/directorStore";
 import { getDirectorDeskThemeRoot } from "../theme/themeRoot";
@@ -838,6 +837,14 @@ function getReferenceVideoDimensions(quality: "720p" | "1080p" | "2k" | "4k", ra
   return { width: Math.round(landscapeHeight * aspect), height: landscapeHeight };
 }
 
+export function canRecordReferenceVideo(input: {
+  hasCanvas: boolean;
+  hasCamera: boolean;
+  hasPlayableMotion: boolean;
+}) {
+  return input.hasCanvas && input.hasCamera && input.hasPlayableMotion;
+}
+
 export function DirectorCanvas() {
   const viewMode = useDirectorStore((state) => state.viewMode);
   const openSceneInspector = useDirectorStore((state) => state.openSceneInspector);
@@ -868,6 +875,7 @@ export function DirectorCanvas() {
   const viewportContainerRef = useRef<HTMLDivElement | null>(null);
   const viewportCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const referenceVideoCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const referenceVideoRenderStateRef = useRef<RootState | null>(null);
   const referenceVideoBackgroundErrorRef = useRef<Error | null>(null);
   const referenceVideoBackgroundReadyRef = useRef(false);
   const viewportCameraSnapshotRef = useRef<CameraShotSnapshot>(persistedDirectorViewSnapshot);
@@ -965,6 +973,7 @@ export function DirectorCanvas() {
     : null;
 
   useEffect(() => {
+    if (referenceVideoRendering) return;
     if (!cameraMotionPlaying) return;
     if (!hasPlayableMotion) {
       setCameraMotionPlaying(false);
@@ -998,6 +1007,7 @@ export function DirectorCanvas() {
     activeMotionDuration,
     cameraMotionPlaying,
     hasPlayableMotion,
+    referenceVideoRendering,
     setCameraMotionPlaying,
     setCameraMotionProgress,
   ]);
@@ -1069,67 +1079,55 @@ export function DirectorCanvas() {
           throw new Error("全景图加载失败，无法导出参考视频");
         }
         const canvas = referenceVideoCanvasRef.current;
-        const mimeType = getSupportedReferenceVideoMimeType(format);
-        if (!mimeType) {
-          throw new Error(`当前浏览器不支持 ${getReferenceVideoFormatLabel(format)} 格式导出`);
-        }
         if (panoramaAsset && !referenceVideoBackgroundReadyRef.current) {
           throw new Error("全景图加载超时，无法导出参考视频");
         }
-        if (!canvas || !activeCamera || !activeCameraMotionPath || activeCameraMotionPath.keyframes.length < 2) {
+        if (!canvas || !activeCamera) {
           throw new Error("当前浏览器无法导出参考视频");
         }
-
-        const stream = canvas.captureStream(fps);
-        let recorder: MediaRecorder;
-        try {
-          recorder = new MediaRecorder(stream, {
-            mimeType,
-            videoBitsPerSecond: quality === "4k" ? 45_000_000 : quality === "2k" ? 30_000_000 : quality === "1080p" ? 20_000_000 : 8_000_000,
-          });
-        } catch {
-          stream.getTracks().forEach((track) => track.stop());
-          throw new Error(`当前浏览器不支持 ${getReferenceVideoFormatLabel(format)} 格式导出`);
+        if (!canRecordReferenceVideo({ hasCanvas: true, hasCamera: true, hasPlayableMotion })) {
+          throw new Error("至少添加两个摄像机运镜点，或为人物/道具添加动作路线");
         }
-        const chunks: Blob[] = [];
-        recorder.addEventListener("dataavailable", (event) => {
-          if (event.data.size > 0) chunks.push(event.data);
-        });
-        const stopped = new Promise<void>((resolve, reject) => {
-          recorder.addEventListener("stop", () => resolve(), { once: true });
-          recorder.addEventListener("error", () => reject(new Error("参考视频录制失败")), { once: true });
-        });
 
         setCameraMotionPlaying(false);
         setCameraMotionProgress(0);
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        recorder.start(250);
         setCameraMotionPlaying(true);
-        await new Promise<void>((resolve) => window.setTimeout(resolve, activeMotionDuration * 1000 + 120));
+        const bitrate = quality === "4k" ? 45_000_000 : quality === "2k" ? 30_000_000 : quality === "1080p" ? 20_000_000 : 8_000_000;
+        const blob = await encodeReferenceVideo({
+          bitrate,
+          canvas,
+          durationSeconds: activeMotionDuration,
+          format,
+          fps,
+          renderFrame: async (frame) => {
+            flushSync(() => setCameraMotionProgress(frame.progress));
+            referenceVideoRenderStateRef.current?.advance(frame.timestamp * 1000, true);
+          },
+        });
         setCameraMotionPlaying(false);
         setCameraMotionProgress(1);
-        recorder.stop();
-        await stopped;
-        stream.getTracks().forEach((track) => track.stop());
 
-        const blob = new Blob(chunks, { type: mimeType });
-        postDirectorDeskVideoToHost(blob, fileName);
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = fileName;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        const handedOffToHost = await postDirectorDeskVideoToHost(blob, fileName);
+        if (!handedOffToHost) {
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = fileName;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
       } finally {
         setCameraMotionPlaying(false);
         referenceVideoCanvasRef.current = null;
+        referenceVideoRenderStateRef.current = null;
         setReferenceVideoRendering(false);
       }
     });
     return () => clearReferenceVideoExportHandler();
-  }, [activeCamera, activeCameraMotionPath, activeMotionDuration, panoramaAsset, setCameraMotionPlaying, setCameraMotionProgress]);
+  }, [activeCamera, activeCameraMotionPath, activeMotionDuration, hasPlayableMotion, panoramaAsset, setCameraMotionPlaying, setCameraMotionProgress]);
 
   function getViewportCameraSnapshot(): CameraShotSnapshot {
     return viewportCameraSnapshotRef.current;
@@ -1390,10 +1388,13 @@ export function DirectorCanvas() {
             <Canvas
               camera={{ fov: activeCameraView.fov, position: activeCameraView.position }}
               dpr={1}
+              frameloop="never"
               gl={{ antialias: true, preserveDrawingBuffer: true }}
-              onCreated={({ gl, scene }) => {
+              onCreated={(state) => {
+                const { gl, scene } = state;
                 registerDirectorDeskGpuResources(gl, scene);
                 referenceVideoCanvasRef.current = gl.domElement;
+                referenceVideoRenderStateRef.current = state;
               }}
             >
               <ViewportBackground

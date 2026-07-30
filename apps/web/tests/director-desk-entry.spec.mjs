@@ -264,7 +264,7 @@ test("unbound director nodes create a real desk and persist its stable key befor
 
   assert.deepEqual(calls, [
     ["list"],
-    ["create", { name: "场景调度 导演台" }],
+    ["create", { name: "画布导演台 · director-node-1" }],
     ["bind", "desk-stable-1"],
     ["save", "desk-stable-1"],
   ]);
@@ -273,7 +273,7 @@ test("unbound director nodes create a real desk and persist its stable key befor
   assert.doesNotMatch(JSON.stringify(workbench.ui.canvasDocument), /https?:|blob:|data:image/);
 });
 
-test("unbound director nodes deterministically reuse the lowest assigned desk key", async () => {
+test("primary users create a dedicated desk instead of reusing an existing desk", async () => {
   const calls = [];
   const node = { id: "director-node-1", type: "ai-director", data: { title: "场景调度" } };
   const document = { version: 2, canvasProjectId: "canvas-1", nodes: [node], edges: [] };
@@ -283,7 +283,10 @@ test("unbound director nodes deterministically reuse the lowest assigned desk ke
         calls.push("list");
         return { desks: [{ id: "desk-z" }, { id: "desk-a" }, { id: "desk-m" }] };
       },
-      createDirectorDesk() { throw new Error("must not create"); },
+      async createDirectorDesk(input) {
+        calls.push(["create", input]);
+        return { desk: { id: "desk-canvas", name: input.name } };
+      },
     },
     ui: { selectedCanvasProjectId: "canvas-1", canvasDocument: document },
     updateCanvasDocument() { calls.push("bind"); },
@@ -292,10 +295,10 @@ test("unbound director nodes deterministically reuse the lowest assigned desk ke
 
   const binding = await ensureDirectorDeskNodeBinding(workbench, node);
 
-  assert.deepEqual(calls, ["list", "bind", "save"]);
-  assert.equal(binding.created, false);
-  assert.equal(binding.directorDeskKey, "desk-a");
-  assert.equal(workbench.ui.canvasDocument.nodes[0].data.directorDeskKey, "desk-a");
+  assert.deepEqual(calls, ["list", ["create", { name: "画布导演台 · director-node-1" }], "bind", "save"]);
+  assert.equal(binding.created, true);
+  assert.equal(binding.directorDeskKey, "desk-canvas");
+  assert.equal(workbench.ui.canvasDocument.nodes[0].data.directorDeskKey, "desk-canvas");
 });
 
 test("each director node binds the lowest unoccupied assigned desk", async () => {
@@ -303,6 +306,7 @@ test("each director node binds the lowest unoccupied assigned desk", async () =>
   const secondNode = { id: "director-node-2", type: "ai-director", data: { title: "第二导演" } };
   const document = { version: 2, canvasProjectId: "canvas-1", nodes: [firstNode, secondNode], edges: [] };
   const workbench = {
+    session: { user: { actorType: "team_member" } },
     api: {
       async listDirectorDesks() { return { desks: [{ id: "desk-b" }, { id: "desk-a" }] }; },
       createDirectorDesk() { throw new Error("must not create"); },
@@ -325,6 +329,7 @@ test("director binding restores the previous local document when saving fails", 
   const documentsByProject = { "canvas-1": document };
   const updates = [];
   const workbench = {
+    session: { user: { actorType: "team_member" } },
     api: {
       async listDirectorDesks() { return { desks: [{ id: "desk-a" }] }; },
     },
@@ -376,9 +381,44 @@ test("unbound member director nodes fail clearly when no desk is assigned", asyn
 
 test("bound director nodes reuse their saved key without creating another desk", async () => {
   const node = { id: "director-node-1", type: "ai-director", data: { directorDeskKey: "desk-stable-1" } };
-  const binding = await ensureDirectorDeskNodeBinding({ api: { createDirectorDesk() { throw new Error("must not create"); } } }, node);
+  const document = { version: 2, canvasProjectId: "canvas-1", nodes: [node], edges: [] };
+  const binding = await ensureDirectorDeskNodeBinding({
+    api: {
+      async listDirectorDesks() {
+        return { desks: [{ id: "desk-stable-1", name: "画布导演台 · director-node-1" }] };
+      },
+      createDirectorDesk() { throw new Error("must not create"); },
+    },
+    ui: { selectedCanvasProjectId: "canvas-1", canvasDocument: document },
+    updateCanvasDocument() {},
+    async saveCanvasNow() { return { serverRevision: 3 }; },
+  }, node);
   assert.equal(binding.created, false);
   assert.equal(binding.directorDeskKey, "desk-stable-1");
+});
+
+test("primary users migrate a legacy shared binding to a dedicated Canvas desk", async () => {
+  const node = { id: "director-node-1", type: "ai-director", data: { directorDeskKey: "desk-legacy" } };
+  const document = { version: 2, canvasProjectId: "canvas-1", nodes: [node], edges: [] };
+  const workbench = {
+    api: {
+      async listDirectorDesks() {
+        return { desks: [{ id: "desk-legacy", name: "导演台 1 号" }] };
+      },
+      async createDirectorDesk(input) {
+        return { desk: { id: "desk-dedicated", name: input.name } };
+      },
+    },
+    ui: { selectedCanvasProjectId: "canvas-1", canvasDocument: document },
+    updateCanvasDocument() {},
+    async saveCanvasNow() { return { serverRevision: 3 }; },
+  };
+
+  const binding = await ensureDirectorDeskNodeBinding(workbench, node);
+
+  assert.equal(binding.created, true);
+  assert.equal(binding.directorDeskKey, "desk-dedicated");
+  assert.equal(workbench.ui.canvasDocument.nodes[0].data.directorDeskKey, "desk-dedicated");
 });
 
 test("director node export reuses the embedded reference video bridge", () => {
@@ -389,6 +429,15 @@ test("director node export reuses the embedded reference video bridge", () => {
   assert.match(embedSource, /export async function exportDirectorDeskReferenceVideo/);
   assert.match(embedSource, /requestReferenceVideoExport/);
   assert.match(overlaySource, /exportDirectorDeskReferenceVideo/);
+  assert.match(overlaySource, /entryMode: "canvas"/);
+  const videoWritebackSource = overlaySource.slice(
+    overlaySource.indexOf("const appendVideoCapture"),
+    overlaySource.indexOf("const open"),
+  );
+  assert.match(videoWritebackSource, /await appendFile[\s\S]*?notify\("已回写导演台参考视频", "success"\);/);
+  assert.doesNotMatch(videoWritebackSource, /close\(\)/);
+  assert.match(videoWritebackSource, /catch \(error\)[\s\S]*?导演台参考视频回写失败，请稍后重试/);
+  assert.doesNotMatch(overlaySource, /event\.key === "Escape" && host\) close\(\)/);
   assert.match(hostSource, /onDirectorDeskExportVideo/);
   assert.doesNotMatch(hostSource, /context\.onAction\?\.\(null/);
   assert.match(hostSource, /context\.onDirectorDeskNotify/);

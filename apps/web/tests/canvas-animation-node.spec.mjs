@@ -59,11 +59,15 @@ test("Canvas animation prompt locks one character to an ordered Sprite Sheet gri
   });
 
   assert.match(prompt, /A red-haired mechanic/);
+  assert.match(prompt, /Reference image is authoritative/);
+  assert.match(prompt, /If text conflicts, follow the reference/);
+  assert.match(prompt, /change only pose and motion/);
   assert.match(prompt, /奔跑 character animation Sprite Sheet with exactly 12 frames/);
   assert.match(prompt, /4 column by 3 row grid/);
   assert.match(prompt, /aspect ratio is 4:3/);
   assert.match(prompt, /left-to-right, top-to-bottom playback order/);
   assert.match(prompt, /same single character, scale, camera, lighting, colors and body proportions/);
+  assert.match(prompt, /filling most of the cell with only small consistent margins/);
   assert.match(prompt, /final frame leads into the first without repeating the first frame/);
 });
 
@@ -102,10 +106,12 @@ test("Canvas animation node renders playing and static Sprite Sheet previews", (
     },
   });
   assert.match(playingHtml, /class="canvas-animation-frame"/);
-  assert.match(playingHtml, /<animate attributeName="x"/);
-  assert.match(playingHtml, /dur="1000ms" calcMode="discrete" repeatCount="indefinite"/);
-  assert.match(playingHtml, /values="0;-100;-200;-300;0;-100;-200;-300"/);
-  assert.match(playingHtml, /sheet\.png\?a=1&amp;b=2/);
+  assert.match(playingHtml, /<img src="https:\/\/cdn\.test\/sheet\.png\?a=1&amp;b=2"/);
+  assert.match(playingHtml, /@keyframes canvas-animation-frames-8/);
+  assert.match(playingHtml, /12\.5% \{ transform: translate\(-25%, 0%\); \}/);
+  assert.match(playingHtml, /50% \{ transform: translate\(0%, -50%\); \}/);
+  assert.match(playingHtml, /width:400%;height:200%;animation-name:canvas-animation-frames-8;animation-duration:1000ms/);
+  assert.doesNotMatch(playingHtml, /<svg|<animate|<image/);
   assert.match(playingHtml, /data-action="set-canvas-animation-preview-mode"/);
   assert.match(playingHtml, /data-preview-mode="sheet"/);
   assert.match(playingHtml, /行走/);
@@ -126,6 +132,25 @@ test("Canvas animation node renders playing and static Sprite Sheet previews", (
   });
   assert.doesNotMatch(unsafeHtml, /javascript:/);
   assert.match(unsafeHtml, /描述角色并生成动画/);
+
+  const generatingHtml = renderCanvasAnimationNodeBody({
+    id: "animation-generating",
+    data: {
+      status: "running",
+      taskId: "task-animation-generating",
+      imageUrl: "https://cdn.test/previous-sheet.png",
+      animationFrames: 8,
+    },
+  });
+  assert.match(generatingHtml, /canvas-image-generation-mask/);
+  assert.match(generatingHtml, /正在生成图片/);
+  assert.doesNotMatch(generatingHtml, /canvas-animation-frame|previous-sheet\.png/);
+
+  const persistingHtml = renderCanvasAnimationNodeBody({
+    id: "animation-persisting",
+    data: { status: "completed", taskId: "task-animation-persisting", animationFrames: 8 },
+  });
+  assert.match(persistingHtml, /正在生成图片/);
 });
 
 test("Canvas animation editor exposes every action and supported frame count", () => {
@@ -318,4 +343,21 @@ test("animation nodes use the rich X6 HTML shape and the host wires image genera
   assert.match(graphSource, /renderCanvasAnimationNodeBody\(node\)/);
   assert.match(css, /\.canvas-animation-preview-switch/);
   assert.match(css, /\.canvas-animation-action-picker/);
+
+  const actionBranch = hostSource.slice(
+    hostSource.indexOf('if (action === "set-canvas-animation-preview-mode" || action === "set-canvas-animation-action")'),
+    hostSource.indexOf('if (action === "set-canvas-panorama-mode")'),
+  );
+  const framesBranch = hostSource.slice(
+    hostSource.indexOf('if (target.matches?.("[data-canvas-animation-frames]")'),
+    hostSource.indexOf('if (target.matches?.("[data-canvas-audio-field]")'),
+  );
+  assert.match(actionBranch, /refreshCanvasWorkflowNode\(workbench, nodeId\)/);
+  assert.match(actionBranch, /setAttribute\("aria-pressed", String\(active\)\)/);
+  assert.doesNotMatch(actionBranch, /render\(workbench\)/);
+  assert.match(framesBranch, /refreshCanvasWorkflowNode\(workbench, nodeId\)/);
+  assert.doesNotMatch(framesBranch, /render\(workbench\)/);
+  assert.match(css, /\.canvas-animation-action-picker button \{[\s\S]*?background: var\(--theme-control-background\)/);
+  assert.match(css, /\.canvas-animation-action-picker button\.active \{[\s\S]*?background: var\(--theme-control-active-background\)/);
+  assert.match(css, /\.canvas-animation-frame-picker select \{[\s\S]*?background: var\(--theme-input-background\)/);
 });

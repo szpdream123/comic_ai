@@ -42,10 +42,10 @@ export function renderNewCanvasChromeRail(ui = {}) {
       <details class="new-canvas-chrome-tool-menu">
         <summary class="new-canvas-chrome-tool new-canvas-interaction-tool is-active" data-interaction-mode="${interactionMode}" aria-label="${escapeHtml(interactionLabel)}" title="${escapeHtml(interactionLabel)}">${renderChromeIcon(interactionIcon)}<span>${escapeHtml(interactionLabel)}</span></summary>
         <div class="new-canvas-tool-menu-popover" role="menu" aria-label="画布交互工具">
-          <button type="button" class="new-canvas-tool-menu-item ${interactionMode === "default" ? "is-active" : ""}" data-action="set-canvas-interaction-mode" data-interaction-mode="default" role="menuitemradio" aria-checked="${interactionMode === "default"}">
+          <button type="button" class="new-canvas-tool-menu-item ${interactionMode === "default" ? "is-active" : ""}" data-action="set-canvas-interaction-mode" data-interaction-mode="default" role="menuitemradio" aria-checked="${interactionMode === "default"}" title="移动">
             ${renderChromeIcon("cursor")}<span>移动</span><kbd>V</kbd>
           </button>
-          <button type="button" class="new-canvas-tool-menu-item ${interactionMode === "hand" ? "is-active" : ""}" data-action="set-canvas-interaction-mode" data-interaction-mode="hand" role="menuitemradio" aria-checked="${interactionMode === "hand"}">
+          <button type="button" class="new-canvas-tool-menu-item ${interactionMode === "hand" ? "is-active" : ""}" data-action="set-canvas-interaction-mode" data-interaction-mode="hand" role="menuitemradio" aria-checked="${interactionMode === "hand"}" title="抓手工具">
             ${renderChromeIcon("hand")}<span>抓手工具</span><kbd>H</kbd>
           </button>
         </div>

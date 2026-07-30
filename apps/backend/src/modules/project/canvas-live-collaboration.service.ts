@@ -69,10 +69,11 @@ interface CanvasLiveCollaborationHubOptions {
 const revisionEventDedupeLimit = 2_048;
 const revisionBacklogPerCanvasLimit = 512;
 const redisConnectionOptions = {
-  connectTimeout: 500,
-  commandTimeout: 500,
+  connectTimeout: 2_000,
+  commandTimeout: 5_000,
   maxRetriesPerRequest: 1,
   enableOfflineQueue: false,
+  retryStrategy: (attempt: number) => Math.min(attempt * 500, 2_000),
 } as const;
 
 function sendEvent(subscriber: CanvasLiveSubscriber, event: CanvasLiveEvent) {
@@ -163,7 +164,7 @@ export function createCanvasLiveCollaborationHub(
       options.onTransportError(error);
       return;
     }
-    console.error(`[canvas-live] Revision transport failed: ${safeErrorCode(error)}`);
+    console.error(`[canvas-live] Revision transport failed: ${safeErrorSummary(error)}`);
   };
 
   let stopRevisionTransport: (() => void) | undefined;
@@ -277,7 +278,7 @@ export function createCanvasLiveRevisionTransportFromEnv(
     if (closed || failureReported) return;
     failureReported = true;
     console.error(
-      `[canvas-live] Redis pub/sub connection failed for REDIS_URL (${safeErrorCode(error)}). Local subscribers remain active.`,
+      `[canvas-live] Redis pub/sub connection failed for REDIS_URL (${safeErrorSummary(error)}). Local subscribers remain active.`,
     );
   };
   const reportReady = () => {
@@ -360,10 +361,17 @@ function assertRedisUrl(redisUrl: string) {
   }
 }
 
-function safeErrorCode(error: unknown) {
+function safeErrorSummary(error: unknown) {
+  let code = "";
   if (error && typeof error === "object" && "code" in error) {
-    const code = String((error as { code?: unknown }).code ?? "").trim();
-    if (code) return code.slice(0, 80);
+    code = String((error as { code?: unknown }).code ?? "").trim().slice(0, 80);
   }
-  return error instanceof Error ? error.name : "unknown_error";
+  const message = (error instanceof Error ? error.message : String(error ?? ""))
+    .replace(/(rediss?:\/\/)[^@\s]+@/gi, "$1<redacted>@")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+  return [code || (error instanceof Error ? error.name : "unknown_error"), message]
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join(": ");
 }

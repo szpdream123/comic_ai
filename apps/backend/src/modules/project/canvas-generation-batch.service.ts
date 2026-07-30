@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { capabilities } from "../../../../../packages/contracts/domain/capabilities.ts";
 import type { CanvasActorScope } from "../identity/canvas-actor-scope.service.ts";
+import { runWithDatabaseContext } from "../shared/db/dev-db.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
@@ -480,7 +481,7 @@ async function dispatchReadyCanvasGenerationBatchItems(
   let completedSynchronously = false;
   await Promise.allSettled(claimed.map(async (item) => {
     try {
-      const result = await input.dispatchNode({
+      const result = await runWithDatabaseContext(() => input.dispatchNode({
         batchId: input.batchId,
         itemId: item.id,
         nodeKey: item.node_key,
@@ -495,7 +496,7 @@ async function dispatchReadyCanvasGenerationBatchItems(
               estimatedCredits: Number(item.estimated_credits),
             }
           : { mode: "per_item" },
-      });
+      }));
       const completed = result.status === "succeeded";
       if (!completed && !result.taskId) {
         throw new CanvasGenerationBatchError("canvas_batch_dispatch_task_missing");

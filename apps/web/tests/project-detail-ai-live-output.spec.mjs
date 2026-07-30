@@ -377,7 +377,8 @@ test("global status toasts stack from oldest to newest without overlapping", () 
   assert.match(html, /global-workbench-toast error[^>]+data-toast-id="toast-2"/);
   assert.match(css, /\.global-workbench-toast-stack\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:/s);
   assert.match(css, /\.global-workbench-toast\s*\{[^}]*position:\s*relative;[^}]*width:\s*100%;/s);
-  assert.match(source, /const WORKBENCH_TOAST_DISMISS_MS = 5000;/);
+  assert.match(source, /const WORKBENCH_TOAST_DISMISS_MS = 3000;/);
+  assert.match(source, /const persistent = workbench\.ui\.busy === true && !shouldMountNewCanvas\(workbench\);/);
 });
 
 test("project panel keeps busy status toast visible until generation finishes", () => {

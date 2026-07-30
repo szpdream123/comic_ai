@@ -15,6 +15,7 @@ import {
   resolveCanvasGraphNodeAtClientPoint,
   unmountNewCanvas,
 } from "../src/features/new-canvas/index.js";
+import { resolveNewCanvasHostUpdateOptionsForTest } from "../src/features/production-workbench/index.js";
 import {
   createCanvasConfigLibraryController,
   renderCanvasConfigLibraryShell,
@@ -43,10 +44,27 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /createCanvasAgentController/);
   assert.match(source, /let renderToken = 0/);
   assert.match(source, /token !== renderToken/);
+  assert.match(source, /CANVAS_STYLE_RETRY_DELAYS_MS = \[250, 500, 1_000, 2_000, 4_000, 8_000\]/);
+  assert.match(source, /newCanvasCriticalStyle/);
+  assert.match(source, /\.new-canvas-root \{ visibility: hidden !important; \}/);
+  assert.match(source, /newCanvasStyleGate/);
+  assert.match(source, /loadingGate\.innerHTML = "<span><\/span><span><\/span><span><\/span>"/);
+  assert.match(source, /pendingLinks\.delete\(link\)/);
+  assert.match(source, /pendingLinks\.size === 0[\s\S]*?criticalStyle\.remove\(\)[\s\S]*?loadingGate\.remove\(\)/);
+  assert.match(source, /link\.addEventListener\("load", loaded\)/);
+  assert.match(source, /link\.addEventListener\("error", retry\)/);
+  assert.match(source, /Math\.min\(retryAttempt - 1, CANVAS_STYLE_RETRY_DELAYS_MS\.length - 1\)/);
+  assert.doesNotMatch(source, /retryAttempt >= CANVAS_STYLE_RETRY_DELAYS_MS\.length/);
+  assert.match(source, /new-canvas-style-retry/);
+  assert.match(source, /clearTimeout\(timer\)/);
   assert.match(source, /disposeCanvasGraph\(mountedGraph\)/);
   assert.match(source, /addEventListener\("dblclick", onDoubleClick, true\)/);
+  assert.match(source, /addEventListener\("click", onClick, true\)/);
+  assert.match(source, /removeEventListener\("click", onClick, true\)/);
   assert.match(source, /getAttribute\?\.\("data-cell-id"\)/);
   assert.match(source, /nodeId === "__comic-ai-canvas-editor-overlay__" \? "" : nodeId/);
+  assert.match(source, /event\.target\?\.closest\?\.\("\.canvas-node-editor"\)/);
+  assert.match(source, /event\.target\?\.closest\?\.\("input, textarea, select, \[contenteditable='true'\], \[role='textbox'\], \.canvas-prompt-mention-menu"\)[\s\S]*?event\.stopPropagation\(\)[\s\S]*?return/);
   assert.match(source, /__canvasDirectorHandled/);
 });
 
@@ -117,6 +135,8 @@ test("new-canvas renders the existing production-workbench Canvas surface", () =
   assert.match(html, /data-action="toggle-canvas-zoom-menu"[^>]*data-canvas-zoom-trigger/);
   assert.doesNotMatch(html, /class="canvas-zoom-slider"|type="range"[^>]*data-viewport-patch="zoom-value"/);
   assert.match(html, /data-action="toggle-canvas-sidebar"/);
+  assert.match(html, /class="canvas-sidebar"[^>]*style="display:none"/);
+  assert.doesNotMatch(html, /class="canvas-collapse"/);
   assert.match(html, /data-action="arrange-canvas-nodes"/);
   assert.match(html, /data-action="toggle-canvas-minimap"/);
   assert.match(html, /data-action="toggle-canvas-edges"/);
@@ -127,18 +147,55 @@ test("new-canvas renders the existing production-workbench Canvas surface", () =
   assert.match(html, /class="canvas-empty-quick-start"/);
   assert.match(html, /data-node-kind="ai-text"/);
   assert.match(html, /data-node-kind="ai-image"/);
+  assert.doesNotMatch(html, /template-comment|data-node-kind="comment"/);
+});
+
+test("a selected Canvas group never opens a generation editor", () => {
+  const html = renderCanvasSurfaceForHost({
+    ui: {
+      selectedCanvasProjectId: "canvas-test",
+      selectedCanvasNodeId: "group-1",
+      canvasEditorOpen: true,
+      canvasDocument: {
+        nodes: [{
+          id: "group-1",
+          type: "group",
+          position: { x: 100, y: 120 },
+          size: { width: 600, height: 420 },
+          data: { title: "节点分组", childNodeIds: [] },
+        }],
+        edges: [],
+        viewport: { zoom: 1, x: 0, y: 0 },
+      },
+    },
+  });
+  assert.doesNotMatch(html, /canvas-node-editor generation-editor/);
 });
 
 test("Canvas host actions update the mounted surface without redrawing the workbench shell", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   const hostSource = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
-  assert.match(source, /runNewCanvasHostAction\(workbench, \(\) => handleAction/);
+  const deleteCaptureSource = source.slice(
+    source.indexOf('if (action === "delete-canvas-director-capture")'),
+    source.indexOf('if (action === "toggle-canvas-audio-play"'),
+  );
+  assert.match(source, /workbench: mountedWorkbench/);
+  assert.match(source, /\["open-canvas-director", "sync-canvas-director-frame", "export-canvas-director-video", "add-canvas-node-to-character-library"\]/);
+  assert.match(source, /"export-canvas-director-video",\s*"delete-canvas-director-capture",/);
+  assert.match(source, /runNewCanvasHostAction\(actionWorkbench, \(scopedWorkbench\) => handleAction\(scopedWorkbench, actionTarget\), updateOptions\)/);
+  assert.doesNotMatch(deleteCaptureSource, /window\.confirm/);
+  assert.match(deleteCaptureSource, /canvasDirectorCaptureDeleteTarget = \{[\s\S]*?nodeId,[\s\S]*?artifactId,[\s\S]*?mediaKind:/);
+  assert.match(deleteCaptureSource, /action === "confirm-canvas-director-capture-delete"[\s\S]*?updateActiveCanvasDocument/);
+  assert.match(deleteCaptureSource, /await saveCanvasDirectorCaptureDeletion\(workbench, \{ nodeId, artifactId \}\)[\s\S]*?refreshCanvasWorkflowNode\(workbench, nodeId\)/);
+  assert.match(deleteCaptureSource, /已删除导演台[\s\S]*?删除失败/);
   assert.match(source, /function updateNewCanvasSurfaceForHostAction\(workbench\)/);
   assert.match(source, /if \(updateNewCanvasSurfaceForHostAction\(workbench\)\) return;/);
   assert.match(source, /if \(isCanvasX6InteractionTarget\(eventTarget, event\)\) \{\s*return;\s*\}/);
-  assert.match(source, /updateMountedNewCanvasSurface\(workbench, \{ interactionOnly: true \}\)/);
+  assert.match(source, /surfaceOnly: true/);
   assert.match(hostSource, /\.x6-node, \.canvas-x6-special-node/);
   assert.match(hostSource, /workbench\.onCanvasNodeSelected = \(nodeId\) => \{[\s\S]*?void renderSelection\(\);/);
+  assert.match(hostSource, /if \(next\.ui\) Object\.assign\(workbench\.ui, next\.ui, \{ canvasProjectView: "detail" \}\);/);
+  assert.doesNotMatch(hostSource, /if \(next\.ui\) workbench\.ui = \{/);
   assert.match(hostSource, /canvasNodeId !== workbench\.ui\.selectedCanvasNodeId[\s\S]*?workbench\.onCanvasNodeSelected\?\.\(canvasNodeId\)/);
   assert.match(hostSource, /classList\?\.contains\?\.\("x6-node"\)[\s\S]*?getAttribute\?\.\("data-cell-id"\)/);
   assert.match(hostSource, /if \(nodeId \|\| isCanvasX6Event\(event\)/);
@@ -146,15 +203,131 @@ test("Canvas host actions update the mounted surface without redrawing the workb
   assert.doesNotMatch(hostSource, /graph\?\.hideGrid\?\.\(\)/);
   assert.doesNotMatch(hostSource, /updateCanvasViewport\(canvasDocument, patch\)/);
   assert.match(hostSource, /const applySnapPreference = \(\) =>/);
-  assert.match(hostSource, /action === "toggle-canvas-snap"\) \{\s*event\.stopPropagation\(\);[\s\S]*?renderInteraction\(\)/);
+  assert.match(hostSource, /applyCanvasGraphViewportPreferences\(graph, nextDocument\.viewport\)/);
+  assert.match(hostSource, /action === "toggle-canvas-snap"\) \{\s*event\.preventDefault\?\.\(\);\s*event\.stopPropagation\(\);[\s\S]*?renderInteraction\(\)/);
   assert.match(hostSource, /classList\?\.toggle\?\.\("active", snapEnabled\)/);
   assert.match(hostSource, /setAttribute\?\.\("aria-label", snapEnabled \? "关闭网格吸附" : "开启网格吸附"\)/);
   assert.match(hostSource, /const applyCanvasArrangement = \(\) =>/);
-  assert.match(hostSource, /action === "arrange-canvas-nodes"\) \{\s*event\.stopPropagation\(\);\s*applyCanvasArrangement\(\)/);
+  assert.match(hostSource, /action === "arrange-canvas-nodes"\) \{\s*event\.preventDefault\?\.\(\);\s*event\.stopPropagation\(\);\s*applyCanvasArrangement\(\)/);
   assert.match(hostSource, /event\.altKey && event\.shiftKey[\s\S]*?applyCanvasArrangement\(\)/);
   assert.match(hostSource, /const applyInteractionMode = \(target\) =>/);
   assert.match(hostSource, /event\.stopPropagation\(\);\s*return;/);
   assert.match(source, /selectionOnly: true/);
+});
+
+test("Canvas node controls refresh only their target X6 node", () => {
+  const workbench = {
+    ui: {
+      canvasPromptReferencePicker: {
+        nodeId: "image-1",
+        selectedId: "asset-1",
+        items: [{ id: "asset-1", referenceType: "asset" }],
+      },
+    },
+  };
+  for (const action of [
+    "set-canvas-storyboard-grid-mode",
+    "set-canvas-panorama-mode",
+    "set-canvas-video-generation-mode",
+    "select-canvas-model",
+    "run-canvas-node",
+  ]) {
+    assert.deepEqual(
+      resolveNewCanvasHostUpdateOptionsForTest(workbench, { dataset: { action, nodeId: "node-1" } }),
+      { nodeOnly: true, nodeId: "node-1" },
+    );
+  }
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(workbench, {
+    dataset: { action: "select-generation-field-option", nodeId: "node-1", scope: "canvas" },
+  }), { nodeOnly: true, nodeId: "node-1" });
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(workbench, {
+    dataset: { action: "confirm-canvas-prompt-reference" },
+  }), { nodeOnly: true, nodeId: "image-1" });
+  workbench.ui.canvasPromptReferencePicker = {
+    nodeId: "image-1",
+    selectedId: "source-1",
+    items: [{ id: "source-1", referenceType: "node" }],
+  };
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(workbench, {
+    dataset: { action: "confirm-canvas-prompt-reference" },
+  }), {});
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(workbench, {
+    dataset: { nodeId: "node-1" },
+    matches: (selector) => selector.includes("[data-canvas-upload-input]"),
+  }), { nodeOnly: true, nodeId: "node-1" });
+
+  for (const action of ["extract-canvas-storyboard-cell", "duplicate-canvas-node", "delete-canvas-node", "run-canvas-group"]) {
+    assert.deepEqual(
+      resolveNewCanvasHostUpdateOptionsForTest(workbench, { dataset: { action, nodeId: "node-1" } }),
+      {},
+    );
+  }
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(workbench, {
+    dataset: { nodeId: "node-1" },
+    matches: (selector) => selector.includes("[data-canvas-generation-reference-input]"),
+  }), {});
+  const mountedWorkbench = {
+    ...workbench,
+    newCanvasMount: { shadowRoot: { contains: () => true } },
+  };
+  for (const action of [
+    "toggle-canvas-sidebar",
+    "toggle-canvas-add-menu",
+    "toggle-canvas-zoom-menu",
+    "set-canvas-sidebar-mode",
+    "toggle-canvas-minimap",
+    "toggle-canvas-edges",
+    "set-canvas-edge-style",
+    "set-canvas-viewport",
+  ]) {
+    assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
+      dataset: { action },
+    }), { surfaceOnly: true });
+  }
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
+    dataset: { action: "back-to-canvas-projects" },
+  }), {});
+
+  const hostSource = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const nodeRender = hostSource.match(/const renderNode = async \(nodeId\) => \{[\s\S]*?const applyInteractionMode/)?.[0] ?? "";
+  assert.match(nodeRender, /refreshCanvasWorkflowNode\(workbench, normalizedNodeId\)/);
+  assert.doesNotMatch(nodeRender, /refreshCanvasWorkflowGraph/);
+  assert.match(hostSource, /if \(next\.nodeOnly === true\) return renderNode\(next\.nodeId\)/);
+  assert.match(hostSource, /if \(next\.surfaceOnly === true\) return render\(\)/);
+  assert.match(hostSource, /event\.__newCanvasHandled = true;[\s\S]*?event\.preventDefault\?\.\(\);[\s\S]*?context\.onAction/);
+  assert.match(hostSource, /\.canvas-markdown-fullscreen/);
+  assert.match(hostSource, /\[data-canvas-video-fullscreen\]/);
+  assert.match(hostSource, /\.canvas-inline-toast/);
+
+  const chromeSource = readFileSync(new URL("../src/features/new-canvas/canvas-chrome.js", import.meta.url), "utf8");
+  assert.match(chromeSource, /title="移动"/);
+  assert.match(chromeSource, /title="抓手工具"/);
+  const chromeCss = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  assert.match(chromeCss, /\.new-canvas-chrome-rail :is\(button\[title\], summary\[title\]\)::after/);
+  assert.match(chromeCss, /\.new-canvas-chrome-rail :is\(button\[title\], summary\[title\]\):hover::after/);
+  assert.match(chromeCss, /\.new-canvas-root \.canvas-zoom-tools,[\s\S]*?\.new-canvas-root \.new-canvas-chrome-rail/);
+  assert.match(chromeCss, /\.new-canvas-root \.new-canvas-chrome-tool\.is-active/);
+  assert.match(chromeCss, /\.new-canvas-chrome-rail\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?left:\s*50%;/);
+  assert.match(chromeCss, /\.new-canvas-chrome-tool\s*\{[\s\S]*?width:\s*2\.35rem;[\s\S]*?height:\s*2\.35rem;/);
+  assert.match(chromeCss, /\.new-canvas-minimap\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?left:\s*calc\(var\(--new-canvas-sidebar-width, 0px\) \+ 1rem\);[\s\S]*?bottom:\s*calc\(0\.8rem \+ 3\.2rem/);
+
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  assert.match(workbenchSource, /root\.addEventListener\("click", \(event\) => \{\s*if \(event\.__newCanvasHandled === true\) return;/);
+  const actionScope = workbenchSource.match(/async function runNewCanvasHostAction[\s\S]*?function updateMountedNewCanvasSurface/)?.[0] ?? "";
+  assert.match(workbenchSource, /const newCanvasHostActionOptions = new WeakMap\(\)/);
+  assert.match(actionScope, /const scopedWorkbench = new Proxy\(workbench, \{\}\)/);
+  assert.match(actionScope, /newCanvasHostActionOptions\.set\(scopedWorkbench, \{ \.\.\.options \}\)/);
+  assert.doesNotMatch(actionScope, /newCanvasHostActions|newCanvasHostActionDepth/);
+  const pollingSource = workbenchSource.match(/async function runTaskCenterPolling[\s\S]*?function taskCenterOverlappingWatermark/)?.[0] ?? "";
+  assert.match(pollingSource, /const affectedCanvasNodeIds = new Set\(\)/);
+  assert.match(pollingSource, /nodeOnly: true, nodeId/);
+
+  const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  const nodeRefresh = graphSource.match(/export function refreshCanvasWorkflowNode[\s\S]*?export function classifyCanvasNodeMotion/)?.[0] ?? "";
+  assert.match(nodeRefresh, /cell\.setPosition/);
+  assert.match(nodeRefresh, /cell\.setSize/);
+  assert.match(nodeRefresh, /if \(!portsMatch\) cell\.setProp\?\.\("ports", nextNode\.ports\)/);
+  assert.match(nodeRefresh, /cell\.setZIndex/);
 });
 
 test("X6 HTML node cards leave dragging and ports to the graph surface", () => {
@@ -198,6 +371,7 @@ test("Canvas asset sources render in a desktop waterfall with bounded column con
   const baseUi = {
     selectedCanvasProjectId: "canvas-test",
     canvasSidebarMode: "assets",
+    canvasSidebarCollapsed: false,
     canvasDocument: { nodes: [], edges: [], viewport: { zoom: 1, x: 0, y: 0 } },
   };
   const defaultHtml = renderCanvasSurfaceForHost({
@@ -226,6 +400,10 @@ test("Canvas asset sources render in a desktop waterfall with bounded column con
 
   const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
   assert.match(workbenchSource, /Math\.min\(6, Math\.max\(2, current \+ direction\)\)/);
+
+  const workbenchCss = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+  assert.match(workbenchCss, /\.canvas-element-list\.is-asset-waterfall > \.canvas-history-item\s*{[^}]*grid-template-columns: minmax\(0, 1fr\);[^}]*break-inside: avoid;/s);
+  assert.match(workbenchCss, /\.canvas-element-list\.is-asset-waterfall > \.canvas-history-item > \.canvas-asset-actions\s*{[^}]*justify-content: flex-end;/s);
 });
 
 test("Canvas asset sources incrementally render waterfall cards", () => {
@@ -424,21 +602,27 @@ test("Canvas library source filters assets by the selected media type", () => {
   assert.doesNotMatch(html, /图片资产/);
 });
 
-test("new-canvas editor exposes an upstream-aligned header and feature rail", () => {
+test("new-canvas editor exposes a full-height workspace and feature rail", () => {
   const html = renderNewCanvasLayout("<main data-canvas-x6-mount></main>", {
     selectedCanvasProjectId: "canvas-test",
     canvasProjects: [{ id: "canvas-test", title: "分镜草稿" }],
     canvasAgent: { status: "idle" },
   });
-  assert.match(html, /class="new-canvas-chrome"/);
+  assert.match(html, /--canvas-agent-panel-width:480px/);
+  assert.match(html, /data-canvas-agent-resize/);
+  assert.doesNotMatch(html, /class="new-canvas-chrome"/);
   assert.doesNotMatch(html, /class="new-canvas-chrome-title"/);
   assert.doesNotMatch(html, /data-action="create-canvas-project"/);
   assert.doesNotMatch(html, /data-config-action="open"/);
   assert.match(html, /data-action="toggle-canvas-add-menu"/);
-  assert.match(html, /data-action="back-to-canvas-projects"/);
+  assert.doesNotMatch(html, /data-action="back-to-canvas-projects"/);
   assert.match(html, /data-action="set-canvas-sidebar-mode"/);
   assert.match(html, /data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="assets" aria-label="资产"/);
   assert.match(html, /data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="history" aria-label="输出历史"/);
+  assert.doesNotMatch(html, /class="canvas-character-library-launch"/);
+  assert.doesNotMatch(html, /class="canvas-config-library-launch"/);
+  assert.doesNotMatch(html, /CANVAS AGENT/);
+  assert.doesNotMatch(html, /智能协作/);
   const handRail = renderNewCanvasChromeRail({ canvasDocument: { viewport: { interactionMode: "hand" } } });
   assert.match(handRail, /new-canvas-interaction-tool[^>]*data-interaction-mode="hand"[^>]*aria-label="抓手工具"/);
   assert.match(handRail, /new-canvas-interaction-tool[^>]*>[^<]*<svg[^>]*>.*抓手工具/s);
@@ -473,6 +657,41 @@ test("new-canvas editor exposes an upstream-aligned header and feature rail", ()
   assert.match(html, /data-character-action="open"/);
   assert.match(html, /data-media-action="open"/);
   assert.doesNotMatch(html, /data-new-canvas-action="focus-agent"/);
+});
+
+test("Canvas history uses the same friendly failure message as task center", () => {
+  const html = renderCanvasSurfaceForHost({
+    ui: {
+      selectedCanvasProjectId: "canvas-test",
+      canvasSidebarMode: "history",
+      canvasAssets: [{ id: "run-failed", title: "AI 视频", kind: "video" }],
+      canvasGenerationHistoryItems: [{
+        id: "run-failed",
+        nodeKey: "ai-video-1",
+        runNo: 1,
+        status: "failed",
+        mediaKind: "video",
+        modelCode: "video-model",
+        inputSnapshot: { prompt: "游泳" },
+        outputSnapshot: {},
+        failure: {
+          failureCode: "provider_submission_failed",
+          displayMessage: "该模型不支持视频参考",
+        },
+        artifacts: [],
+        createdAt: "2026-07-29T08:53:51.000Z",
+        updatedAt: "2026-07-29T08:53:55.000Z",
+      }],
+      canvasDocument: {
+        nodes: [{ id: "ai-video-1", type: "ai-video", data: { title: "AI 视频" } }],
+        edges: [],
+        viewport: { zoom: 1, y: 0, x: 0 },
+      },
+    },
+  });
+
+  assert.match(html, /该模型不支持视频参考/);
+  assert.doesNotMatch(html, />provider_submission_failed</);
 });
 
 test("Canvas configuration drawer renders persisted default settings", () => {
@@ -635,7 +854,7 @@ test("Canvas asset drag uses a stable internal type and maps viewport coordinate
   }, 460, 300, { x: 40, y: 20, zoom: 2 }), { x: 160, y: 100 });
   const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
   assert.match(source, /onCanvasAssetDrop/);
-  assert.match(source, /addEventListener\("drop", onDrop\)/);
+  assert.match(source, /addEventListener\("drop", onDrop, true\)/);
 });
 
 test("Canvas storyboard cell drag uses a structured payload and a dedicated drop callback", () => {
@@ -648,9 +867,44 @@ test("Canvas storyboard cell drag uses a structured payload and a dedicated drop
   assert.equal(parseCanvasStoryboardCellDragPayload('{"nodeId":"storyboard-1","cellIndex":1.5}'), null);
 
   const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  const newCanvasCss = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
   assert.match(source, /setData\(CANVAS_STORYBOARD_CELL_DRAG_TYPE, storyboardPayload\)/);
   assert.match(source, /onCanvasStoryboardCellDrop/);
   assert.match(source, /is-canvas-storyboard-drop-target/);
+  assert.match(source, /canvasEventPathTarget[\s\S]*?data-storyboard-drag-source/);
+  assert.match(source, /addEventListener\("dragstart", onDragStart, true\)/);
+  assert.match(source, /addEventListener\("dragover", onDragOver, true\)/);
+  assert.match(source, /addEventListener\("drop", onDrop, true\)/);
+  assert.match(source, /let storyboardCellPointer = null/);
+  assert.match(source, /storyboardCell\.setPointerCapture\?\.\(event\.pointerId\)/);
+  assert.match(source, /storyboardCellPointer\.dragging = true/);
+  assert.match(source, /context\.onCanvasStoryboardCellDrop\?\.\(\{/);
+  assert.match(source, /context\.onCanvasStoryboardImageReturn\?\.\(input/);
+  assert.match(source, /suppressStoryboardExtractClickUntil = Date\.now\(\) \+ 500/);
+  assert.match(graphSource, /storyboardBody\?\.addEventListener\?\.\("wheel", \(event\) => event\.stopPropagation\(\), \{ passive: true \}\)/);
+  assert.match(graphSource, /function resolveCanvasStoryboardReturnTarget/);
+  assert.match(graphSource, /function resolveCanvasStoryboardCutReference/);
+  assert.match(graphSource, /workbench\.onCanvasStoryboardImageReturn\?\.\(\{/);
+  assert.match(graphSource, /is-storyboard-cut/);
+  assert.match(graphSource, /data-action="return-canvas-storyboard-image"/);
+  assert.match(newCanvasCss, /\.canvas-storyboard-node-body\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s);
+  assert.match(newCanvasCss, /\.canvas-x6-source-media-body\.is-storyboard-cut \.canvas-x6-source-media-preview img\s*\{[^}]*height:\s*100%;[^}]*max-height:\s*none;[^}]*object-fit:\s*contain;/s);
+  assert.match(newCanvasCss, /\.canvas-storyboard-cell\.is-return-target::after/);
+  assert.match(newCanvasCss, /\.canvas-storyboard-return-action::after/);
+  assert.match(
+    workbenchSource,
+    /function resolveCanvasSpecialImageUrl\(node\) \{[\s\S]*?data\.storageObjectId[\s\S]*?\/api\/storage\/objects\/\$\{encodeURIComponent\(storageObjectId\)\}\/content\?proxy=1/,
+  );
+  assert.match(
+    workbenchSource,
+    /setCanvasStoryboardPreparing\(workbench, nodeId, true\);[\s\S]*?finally \{\s*setCanvasStoryboardPreparing\(workbench, nodeId, false\);/,
+  );
+  assert.match(workbenchSource, /updateCanvasNodeData\(document, nodeId, patch\)\);\s*workbench\.ui\.selectedCanvasNodeId = nodeId;\s*workbench\.ui\.canvasEditorOpen = true;/);
+  assert.match(workbenchSource, /function handleNewCanvasStoryboardImageReturn[\s\S]*?restoreCanvasStoryboardCutImage/);
+  assert.match(workbenchSource, /action === "return-canvas-storyboard-image"/);
+  assert.match(graphSource, /canvasStoryboardPreparing\?\.\[nodeId\] === true/);
 });
 
 test("Canvas accepts external media files and plain text without confusing internal drags", () => {
@@ -688,7 +942,7 @@ test("toolbar manifests remain compatible without rendering the removed command 
     },
   };
   assert.deepEqual(resolveCanvasToolbarLayout(ui), {
-    zones: [["comment", "connect", "select"]],
+    zones: [["connect", "select"]],
     direction: "vertical",
     position: "right",
     configured: true,
@@ -775,6 +1029,7 @@ test("Director and Markdown parity controls render on the actual Canvas surface"
     ui: {
       selectedCanvasProjectId: "canvas-parity",
       selectedCanvasNodeId: "director-1",
+      canvasEditorOpen: true,
       editingCanvasTextNodeId: "markdown-1",
       canvasMarkdownFullscreen: { open: true, nodeId: "markdown-1", viewMode: "edit" },
       canvasDocument: {
@@ -802,9 +1057,61 @@ test("Director and Markdown parity controls render on the actual Canvas surface"
   assert.match(html, /data-canvas-director-body/);
   assert.match(html, /data-action="open-canvas-director"/);
   assert.match(html, /data-action="sync-canvas-director-frame"/);
+  assert.match(html, /data-action="delete-canvas-director-capture"/);
+  assert.doesNotMatch(html, /class="canvas-node-editor generation-editor/);
+  assert.doesNotMatch(html, /data-canvas-prompt-input/);
   assert.match(html, /data-canvas-markdown-fullscreen/);
   assert.match(html, /data-canvas-markdown-text-stats/);
   assert.match(html, /data-action="copy-canvas-markdown-text"/);
+});
+
+test("ordinary Markdown stays inline while AI Markdown keeps its text generation editor", () => {
+  const markdownHtml = renderCanvasSurfaceForHost({
+    ui: {
+      selectedCanvasProjectId: "canvas-markdown",
+      selectedCanvasNodeId: "markdown-1",
+      canvasEditorOpen: true,
+      canvasDocument: {
+        viewport: { x: 0, y: 0, zoom: 1 },
+        edges: [],
+        nodes: [{
+          id: "markdown-1",
+          type: "markdown",
+          position: { x: 120, y: 120 },
+          size: { width: 310, height: 300 },
+          data: { text: "# 标题\n正文", ports: { inputs: [], outputs: [] } },
+        }],
+      },
+    },
+  });
+  assert.match(markdownHtml, /class="canvas-markdown-toolbar"/);
+  assert.doesNotMatch(markdownHtml, /class="canvas-node-editor generation-editor/);
+  assert.doesNotMatch(markdownHtml, /请输入您的生图要求/);
+
+  const aiMarkdownHtml = renderCanvasSurfaceForHost({
+    ui: {
+      selectedCanvasProjectId: "canvas-ai-markdown",
+      selectedCanvasNodeId: "ai-markdown-1",
+      canvasEditorOpen: true,
+      episodeGenerationConfig: {
+        models: [{ modelCode: "text-live", modelLabel: "Text Live", mediaType: "text", enabled: true }],
+      },
+      canvasDocument: {
+        viewport: { x: 0, y: 0, zoom: 1 },
+        edges: [],
+        nodes: [{
+          id: "ai-markdown-1",
+          type: "ai-markdown",
+          position: { x: 120, y: 120 },
+          size: { width: 310, height: 300 },
+          data: { mediaKind: "text", modelCode: "text-live", ports: { inputs: [], outputs: [] } },
+        }],
+      },
+    },
+  });
+  assert.match(aiMarkdownHtml, /class="canvas-node-editor generation-editor text"/);
+  assert.match(aiMarkdownHtml, /描述需要生成的 Markdown 文档结构和内容/);
+  assert.doesNotMatch(aiMarkdownHtml, /请输入您的生图要求/);
 });
 
 test("AI text generation editor opens above low canvas nodes", () => {
@@ -869,6 +1176,7 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(detailHtml, /data-new-canvas-mount/);
   assert.match(detailHtml, /new-canvas-loading-skeleton/);
   assert.match(detailHtml, /role="status"/);
+  assert.match(detailHtml, /data-workbench-global-overlays/);
   assert.doesNotMatch(detailHtml, /data-canvas-x6-mount/);
 
   const workbenchSource = readFileSync(
@@ -878,8 +1186,19 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(workbenchSource, /syncNewCanvasMount/);
   assert.match(workbenchSource, /prepareNewCanvasMountForRender/);
   assert.match(workbenchSource, /restoreNewCanvasMountAfterRender/);
+  assert.match(workbenchSource, /function replaceWorkbenchChrome/);
+  assert.match(workbenchSource, /function renderWorkbenchChrome/);
+  assert.match(workbenchSource, /currentStatusbar\.replaceWith\(nextStatusbar\)/);
+  assert.match(workbenchSource, /currentOverlays\.replaceWith\(nextOverlays\)/);
+  const chromeRenderBlock = workbenchSource.match(/function renderWorkbenchChrome[\s\S]*?function shouldMountNewCanvas/)?.[0] ?? "";
+  assert.doesNotMatch(chromeRenderBlock, /newCanvasInstance\.update|refreshCanvasWorkflowGraph|prepareNewCanvasMountForRender/);
+  assert.match(workbenchSource, /if \(action === "open-task-center"\)[\s\S]*?renderWorkbenchChrome\(workbench\)/);
+  assert.match(workbenchSource, /if \(action === "close-task-center"\)[\s\S]*?renderWorkbenchChrome\(workbench\)/);
+  assert.match(workbenchSource, /if \(action === "open-pricing"\)[\s\S]*?renderWorkbenchChrome\(workbench\)/);
+  assert.match(workbenchSource, /if \(action === "close-pricing"\)[\s\S]*?renderWorkbenchChrome\(workbench\)/);
   assert.match(workbenchSource, /unmountNewCanvas/);
-  assert.match(workbenchSource, /onAction\(event, \{ actionTarget: resolvedActionTarget \} = \{\}\)[\s\S]*?handleAction\(workbench, actionTarget\)/);
+  assert.match(workbenchSource, /onAction\(event, \{ actionTarget: resolvedActionTarget, workbench: mountedWorkbench \} = \{\}\)/);
+  assert.match(workbenchSource, /includes\(actionTarget\.dataset\?\.action\) \? mountedWorkbench \?\? workbench : workbench/);
   assert.match(workbenchSource, /onInput\(_event, context\)/);
   assert.match(workbenchSource, /onChange\(_event, context\)/);
   assert.match(readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8"), /context.onInput/);
@@ -897,5 +1216,27 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(workbenchCss, /\.canvas-global-asset-folder-filter\s*\{[\s\S]*?display:\s*flex/);
   assert.match(workbenchCss, /\.canvas-library-asset-folder\s*\{[\s\S]*?display:\s*flex/);
   assert.match(workbenchCss, /\.canvas-library-asset-details\s*\{[\s\S]*?display:\s*grid/);
+  assert.match(workbenchCss, /\.canvas-x6-editor-overlay \.canvas-node-editor\s*\{[\s\S]*?position:\s*relative !important;/);
+  assert.match(newCanvasCss, /\.canvas-storyboard-cell-extract::after\s*\{[\s\S]*?content:\s*attr\(data-tooltip\)/);
   assert.doesNotMatch(newCanvasCss, /\.new-canvas-root \.canvas-zoom-tools\s*\{/);
+});
+
+test("Canvas Director capture deletion uses the built-in confirmation modal", () => {
+  const html = renderCanvasSurfaceForHost({
+    ui: {
+      activeNavTab: "tools",
+      canvasProjectView: "detail",
+      canvasHostMount: true,
+      canvasDirectorCaptureDeleteTarget: {
+        nodeId: "director-1",
+        artifactId: "artifact-1",
+        mediaKind: "video",
+      },
+    },
+  });
+  assert.match(html, /class="modal-backdrop delete-project-backdrop"[^>]*aria-label="确认删除导演台视频"/);
+  assert.match(html, /class="delete-project-modal canvas-director-capture-delete-modal"/);
+  assert.match(html, /data-action="close-canvas-director-capture-delete-modal"/);
+  assert.match(html, /data-action="confirm-canvas-director-capture-delete"/);
+  assert.match(html, /确定删除这个视频吗/);
 });

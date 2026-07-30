@@ -176,6 +176,7 @@ test("Canvas sidebar filter, search, and collapse controls expose working state"
     ui: {
       activeNavTab: "new-canvas",
       canvasProjectView: "detail",
+      canvasSidebarCollapsed: false,
       canvasDocument: {
         nodes: [
           { id: "text-1", type: "ai-text", data: { title: "旁白节点" } },
@@ -207,7 +208,7 @@ test("Canvas sidebar filter, search, and collapse controls expose working state"
   const html = renderProjectDetail({ state: {}, session: workbench.session, ui: { ...workbench.ui, canvasHostMount: false } });
   assert.doesNotMatch(html, /canvas-help-panel|toggle-canvas-help|画布说明/);
   assert.match(html, /data-canvas-node-filter aria-label="筛选画布节点"/);
-  assert.match(html, /data-action="toggle-canvas-sidebar"[^>]+aria-label="展开侧栏"/);
+  assert.match(html, /data-action="toggle-canvas-sidebar"[^>]+aria-label="展开资产管理"/);
   assert.match(html, /主视觉/);
   assert.doesNotMatch(html, /旁白节点/);
 });

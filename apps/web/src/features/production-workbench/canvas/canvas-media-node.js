@@ -191,12 +191,15 @@ export function renderCanvasVideoNodeBody(node = {}, options = {}) {
   const data = nodeData(node);
   const nodeId = firstText(options.nodeId, node?.id, data.id);
   const fullscreen = normalizeCanvasVideoFullscreenState(node, options);
+  const directUrl = resolveCanvasMediaUrl(resolveCanvasMediaDirectUrl(node, "video", options), "video");
+  const playing = options.playing === true || data.videoPlaying === true;
   const status = String(options.status ?? data.status ?? (fullscreen.url ? "ready" : "empty")).toLowerCase();
   const loading = ["queued", "running", "processing", "loading", "uploading"].includes(status);
   const preview = fullscreen.url
     ? `<div class="canvas-video-preview" data-canvas-video-preview>
-        <video data-canvas-video-player src="${escapeAttr(fullscreen.url)}"${fullscreen.poster ? ` poster="${escapeAttr(fullscreen.poster)}"` : ""} controls playsinline preload="metadata" aria-label="${escapeAttr(fullscreen.label)}"></video>
+        <video data-canvas-video-player draggable="false" src="${escapeAttr(fullscreen.url)}"${directUrl && directUrl !== fullscreen.url ? ` data-canvas-video-fallback-src="${escapeAttr(directUrl)}"` : ""}${fullscreen.poster ? ` poster="${escapeAttr(fullscreen.poster)}"` : ""} playsinline preload="metadata" tabindex="-1" aria-label="${escapeAttr(fullscreen.label)}"></video>
         <div class="canvas-video-actions" role="toolbar" aria-label="视频工具">
+          <button type="button" data-action="toggle-canvas-video-play" data-node-id="${escapeAttr(nodeId)}" aria-label="${playing ? "暂停视频" : "播放视频"}" title="${playing ? "暂停视频" : "播放视频"}" aria-pressed="${playing}"><span aria-hidden="true">${playing ? "Ⅱ" : "▶"}</span></button>
           <button type="button" data-action="capture-canvas-video-frame" data-node-id="${escapeAttr(nodeId)}" aria-label="截取当前帧" title="截取当前帧"><span aria-hidden="true">▣</span></button>
           <button type="button" data-action="toggle-canvas-video-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="全屏查看" title="全屏查看" aria-pressed="${fullscreen.open}"><span aria-hidden="true">↗</span></button>
         </div>
@@ -252,12 +255,17 @@ export function resolveCanvasMediaNodeSource(node = {}, mediaKind = "", options 
   if (identity.storageObjectId) {
     return `/api/storage/objects/${encodeURIComponent(identity.storageObjectId)}/content?proxy=1`;
   }
-  const directUrl = mediaKind === "audio"
+  const directUrl = resolveCanvasMediaDirectUrl(node, mediaKind, options);
+  return resolveCanvasMediaUrl(directUrl, mediaKind);
+}
+
+export function resolveCanvasMediaDirectUrl(node = {}, mediaKind = "", options = {}) {
+  const data = nodeData(node);
+  return mediaKind === "audio"
     ? firstText(options.url, data.audioUrl, data.resultAudioUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl)
     : mediaKind === "video"
       ? firstText(options.url, data.videoUrl, data.resultVideoUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl)
       : firstText(options.url, data.imageUrl, data.resultUrl, data.url, data.assetUrl, data.thumbnailUrl, data.previewUrl);
-  return resolveCanvasMediaUrl(directUrl, mediaKind);
 }
 
 export function resolveCanvasMediaStableIdentity(data = {}, assets = []) {
@@ -353,7 +361,7 @@ export function resolveCanvasMediaActionBody(target, options = {}) {
 
 export function bindCanvasMediaControlPointerGuards(root) {
   const controls = [...(root?.querySelectorAll?.(
-    "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-body] video, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video",
+    "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video",
   ) ?? [])];
   controls.forEach((control) => {
     if (control.dataset.canvasMediaPointerGuard === "true") return;

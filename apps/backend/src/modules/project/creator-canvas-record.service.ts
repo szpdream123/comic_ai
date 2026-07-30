@@ -201,12 +201,29 @@ export async function findCanvasByCanvasProjectId(
     `,
     [canvas.id, canvas.server_revision],
   );
-  const normalized = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(document?.document_json ?? {}, {
+  let normalized = canonicalizeCanvasDocumentOwnership(normalizeCanvasDocument(document?.document_json ?? {}, {
     canvasProjectId: canvas.id,
     now: new Date().toISOString(),
   }), {
     canvasProjectId: canvas.id,
   });
+  const positions = await db.query<{ node_key: string; position_x: number; position_y: number }>(`
+    SELECT node_key, position_x, position_y
+    FROM creator_canvas_nodes
+    WHERE canvas_project_id = $1 AND deleted_at IS NULL
+  `, [canvas.id]);
+  if (positions.rows.length) {
+    const positionByKey = new Map(positions.rows.map((position) => [String(position.node_key), position]));
+    normalized = {
+      ...normalized,
+      nodes: normalized.nodes.map((node) => {
+        const position = positionByKey.get(String(node.id));
+        return position
+          ? { ...node, position: { x: Number(position.position_x), y: Number(position.position_y) } }
+          : node;
+      }),
+    };
+  }
   return {
     canvasProjectId: canvas.id,
     serverRevision: canvas.server_revision,
@@ -312,8 +329,9 @@ export async function saveCanvasByCanvasProjectId(
   },
 ): Promise<CanvasRecord> {
   const access = resolveCanvasRecordAccess(input, "edit");
-  await db.query("BEGIN");
-  try {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await db.query("BEGIN");
+    try {
   const canvas = await queryOne<CanvasProjectRow>(
     db,
     `
@@ -416,10 +434,72 @@ export async function saveCanvasByCanvasProjectId(
       selectedEdgeIds: [],
     },
   };
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => undefined);
+      if (isRetryableCanvasTransactionError(error) && attempt < 2) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new CanvasDocumentError("canvas_save_failed", "canvas could not be saved");
+}
+
+export async function saveCanvasNodePositionsByCanvasProjectId(
+  db: SqlDatabase,
+  input: CanvasRecordAccess & {
+    canvasProjectId: string;
+    clientRevision: number;
+    positions: Array<{ nodeKey: string; x: number; y: number }>;
+    now: Date;
+  },
+): Promise<Pick<CanvasRecord, "canvasProjectId" | "serverRevision">> {
+  const access = resolveCanvasRecordAccess(input, "edit");
+  await db.query("BEGIN");
+  try {
+    const canvas = await queryOne<CanvasProjectRow>(db, `
+      SELECT id, title, server_revision, latest_document_id
+      FROM creator_canvas_projects
+      WHERE id = $1 AND created_by_user_id = $2 AND deleted_at IS NULL
+      LIMIT 1 FOR UPDATE
+    `, [input.canvasProjectId, access.ownerUserId]);
+    if (!canvas) throw new CanvasDocumentError("canvas_project_not_found", "canvas project not found");
+    if (Number(input.clientRevision) !== canvas.server_revision) {
+      const server = await findCanvasByCanvasProjectId(db, input);
+      throw new CanvasConflictError(canvas.server_revision, server?.document ?? null);
+    }
+    await db.query(`
+      WITH positions(node_key, position_x, position_y) AS (
+        SELECT node_key, position_x, position_y
+        FROM jsonb_to_recordset($2::jsonb) AS item(node_key text, position_x numeric, position_y numeric)
+      )
+      UPDATE creator_canvas_nodes AS node
+      SET position_x = positions.position_x, position_y = positions.position_y,
+          updated_by_user_id = $3, updated_at = $4
+      FROM positions
+      WHERE node.canvas_project_id = $1 AND node.node_key = positions.node_key AND node.deleted_at IS NULL
+    `, [canvas.id, JSON.stringify(input.positions.map((item) => ({
+      node_key: item.nodeKey, position_x: item.x, position_y: item.y,
+    }))), access.ownerUserId, input.now]);
+    await db.query(`
+      UPDATE creator_canvas_projects
+      SET updated_by_user_id = $2, updated_at = $3
+      WHERE id = $1
+    `, [canvas.id, access.ownerUserId, input.now]);
+    await db.query("COMMIT");
+    return { canvasProjectId: canvas.id, serverRevision: canvas.server_revision };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
   }
+}
+
+function isRetryableCanvasTransactionError(error: unknown) {
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  return code === "40P01" || code === "40001";
 }
 
 export async function createCanvasNodeRun(
@@ -1834,8 +1914,12 @@ async function syncCanvasNodesAndEdges(
           edge."edgeKind", edge.status, '{}'::jsonb, edge.data, NULL,
           $2, $2, $4, $4
         FROM edge_rows edge
-        ON CONFLICT (canvas_project_id, edge_key)
+        ON CONFLICT (
+          canvas_project_id, source_node_key, source_port_id,
+          target_node_key, target_port_id
+        )
         DO UPDATE SET
+          edge_key = EXCLUDED.edge_key,
           source_node_key = EXCLUDED.source_node_key,
           source_port_id = EXCLUDED.source_port_id,
           target_node_key = EXCLUDED.target_node_key,

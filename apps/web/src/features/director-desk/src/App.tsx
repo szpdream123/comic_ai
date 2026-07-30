@@ -87,6 +87,7 @@ const DIRECTOR_DESK_MANUAL_INTERFACE_ROWS: Array<[string, string]> = [
 
 export interface DirectorDeskAppProps {
   initialInstanceId?: string;
+  entryMode?: "standalone" | "canvas";
   onClose?: () => void;
   onRequireLogin?: () => void | Promise<void>;
   onAuthorizeCreate?: (options?: { interactive?: boolean }) => boolean | Promise<boolean>;
@@ -110,6 +111,8 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 
 export default function App({
   initialInstanceId,
+  entryMode = "standalone",
+  onClose,
   onRequireLogin,
   onAuthorizeCreate,
   initialScreen = "editor",
@@ -264,6 +267,10 @@ export default function App({
 
   function handleClose() {
     setManualOpen(false);
+    if (entryMode === "canvas") {
+      onClose?.();
+      return;
+    }
     setScreen("home");
   }
 

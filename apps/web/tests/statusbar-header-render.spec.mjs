@@ -571,6 +571,43 @@ test("global overlays render pricing and wallet from the project panel branch", 
   assert.match(html, /积分明细/);
 });
 
+test("credit ledger labels current and historical Canvas Agent charges in Chinese", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000", availableCredits: 2036 } },
+    ui: {
+      activeNavTab: "home",
+      creditLedgerOpen: true,
+      creditLedgerRows: [
+        {
+          entryType: "reservation",
+          amount: 20,
+          availableDelta: -20,
+          balanceAfter: 2016,
+          sourceType: "canvas_agent_text_round",
+          reason: "Canvas Agent text round",
+          metadata: { agentStepId: "agent-step-1" },
+          createdAt: "2026-07-30T09:22:00.000Z",
+        },
+        {
+          entryType: "consume",
+          amount: 20,
+          consumedDelta: 20,
+          balanceAfter: 2016,
+          sourceType: "credit_reservation_allocation",
+          reason: "reservation allocation consumed",
+          metadata: { agentStepId: "agent-step-1" },
+          createdAt: "2026-07-30T09:22:01.000Z",
+        },
+      ],
+      creditLedgerSummary: { displayAvailableCredits: 2016 },
+    },
+  });
+
+  assert.equal((html.match(/画布协作Agent操作消耗/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /Canvas Agent text round/);
+});
+
 test("membership pricing overlay renders from every workbench module", () => {
   const cases = [
     ["home", { activeNavTab: "home" }],

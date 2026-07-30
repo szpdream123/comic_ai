@@ -6,7 +6,9 @@ import {
   DIRECTOR_DESK_SESSION_OPENED_EVENT,
   initDirectorDeskHostBridge,
   postDirectorDeskCapturesToHost,
+  postDirectorDeskVideoToHost,
   setDirectorDeskCaptureHandler,
+  setDirectorDeskVideoHandler,
 } from "./hostBridge";
 import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
 
@@ -203,4 +205,46 @@ it("delivers captures to the in-process host callback without postMessage", () =
     { dataUrl: "data:image/png;base64,YQ==", fileName: "shot.png" },
   ]);
   expect(postMessage).not.toHaveBeenCalled();
+});
+
+it("waits for the Canvas host to finish importing a reference video", async () => {
+  let finishImport: (() => void) | undefined;
+  const importFinished = new Promise<void>((resolve) => {
+    finishImport = resolve;
+  });
+  const videoHandler = vi.fn(() => importFinished);
+  setDirectorDeskVideoHandler(videoHandler);
+
+  let settled = false;
+  const handoff = postDirectorDeskVideoToHost(
+    new Blob(["video"], { type: "video/webm" }),
+    "reference.webm",
+  ).then((result) => {
+    settled = true;
+    return result;
+  });
+
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect(videoHandler).toHaveBeenCalledWith(expect.objectContaining({
+    name: "reference.webm",
+    type: "video/webm",
+  }));
+
+  finishImport?.();
+  await expect(handoff).resolves.toBe(true);
+});
+
+it("keeps standalone export available and propagates Canvas import failures", async () => {
+  await expect(postDirectorDeskVideoToHost(
+    new Blob(["video"], { type: "video/webm" }),
+    "standalone.webm",
+  )).resolves.toBe(false);
+
+  const importError = new Error("canvas import failed");
+  setDirectorDeskVideoHandler(() => Promise.reject(importError));
+  await expect(postDirectorDeskVideoToHost(
+    new Blob(["video"], { type: "video/webm" }),
+    "canvas.webm",
+  )).rejects.toBe(importError);
 });

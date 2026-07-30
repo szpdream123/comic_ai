@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { Worker } from "bullmq";
 import Redis from "ioredis";
 
+import { runWithRedisStartupRetry } from "../apps/backend/src/modules/model-gateway/redis-readiness.ts";
+
 loadDotEnvFile(join(process.cwd(), ".env"));
 
 const [
@@ -239,10 +241,6 @@ const processors = {
   },
 };
 
-console.info(
-  `[generation-video] Worker started. GENERATION_SUBMIT_IMAGE_QUEUE=${config.queues.submitImage} GENERATION_SUBMIT_VIDEO_QUEUE=${config.queues.submitVideo} GENERATION_POLL_IMAGE_QUEUE=${config.queues.pollImage} GENERATION_POLL_VIDEO_QUEUE=${config.queues.pollVideo} GENERATION_POLL_AUDIO_QUEUE=${config.queues.pollAudio} GENERATION_FINALIZE_ARTIFACT_QUEUE=${config.queues.finalizeArtifact}`,
-);
-
 const submitImageWorker = new Worker(
   config.queues.submitImage,
   async (job) => runGenerationQueueJobWithRetryPolicy(() => runWithDatabaseContext(async () => (job.data?.mediaType === "audio"
@@ -369,7 +367,10 @@ const finalizeArtifactWorker = new Worker(
 const dynamicShardRunner = config.sharding.enabled
   ? createGenerationShardWorkerRunner({
       maxQueuesPerProcess: config.sharding.workerQueuesPerProcess,
-      closeWorkersOnDiscoveryFailure: true,
+      closeWorkersOnDiscoveryFailure: false,
+      onRefreshError(error) {
+        console.error(`[generation-video] shard discovery refresh failed ${error instanceof Error ? error.message : String(error)}`);
+      },
       defaultRateLimitMax: config.sharding.rateLimitMax,
       defaultRateLimitDurationMs: config.sharding.rateLimitDurationMs,
       discover: async () => {
@@ -464,7 +465,13 @@ const dynamicShardRunner = config.sharding.enabled
   : null;
 
 if (dynamicShardRunner) {
-  await dynamicShardRunner.start();
+  await runWithRedisStartupRetry({
+    redis: queueDirectoryRedis,
+    run: () => dynamicShardRunner.start(),
+    timeoutMs: 10_000,
+    maxAttempts: 3,
+    baseDelayMs: 250,
+  });
 }
 
 const exhaustedGenerationJobs = new Set();
@@ -490,6 +497,10 @@ for (const worker of [submitImageWorker, submitVideoWorker, pollImageWorker, pol
     );
   });
 }
+
+console.info(
+  `[generation-video] Worker started. GENERATION_SUBMIT_IMAGE_QUEUE=${config.queues.submitImage} GENERATION_SUBMIT_VIDEO_QUEUE=${config.queues.submitVideo} GENERATION_POLL_IMAGE_QUEUE=${config.queues.pollImage} GENERATION_POLL_VIDEO_QUEUE=${config.queues.pollVideo} GENERATION_POLL_AUDIO_QUEUE=${config.queues.pollAudio} GENERATION_FINALIZE_ARTIFACT_QUEUE=${config.queues.finalizeArtifact}`,
+);
 
 function trackGenerationAssignmentRelease(job, reason) {
   generationAssignmentReleases.track(releaseGenerationAssignment(job, reason));
@@ -640,11 +651,20 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
-    shutdown(signal).catch((error) => {
-      console.error(error);
-      process.exit(1);
-    });
+    requestShutdown(signal);
   });
+}
+process.on("message", (message) => {
+  if (message?.type === "creator-dev-stop") requestShutdown(message.signal ?? "SIGTERM");
+});
+
+let shutdownPromise = null;
+function requestShutdown(signal) {
+  shutdownPromise ??= shutdown(signal).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+  return shutdownPromise;
 }
 
 async function shutdown(signal) {

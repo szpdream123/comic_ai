@@ -753,6 +753,7 @@ test("Canvas media and config aliases target the new Canvas routes", async () =>
     "/api/canvas-library/configs/config%2F1",
   ]);
   assert.equal(calls[9].options.method, "PUT");
+  assert.equal(calls[9].options.keepalive, true);
 });
 
 test("billing read routes target explicit order and payment intent resources", async () => {

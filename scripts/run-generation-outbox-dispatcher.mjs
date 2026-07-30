@@ -28,18 +28,11 @@ const db = await createDevDb();
 const publisher = createBullMQGenerationPublisher(config);
 const wakeSignal = createGenerationOutboxWakeSignal();
 const heartbeatRedis = new Redis(redisConnectionFromUrl(config.redisUrl));
-heartbeatRedis.on("error", () => undefined);
 const heartbeatKey = generationOutboxDispatcherHeartbeatKey(config.queuePrefix);
 const heartbeatTtlMs = generationOutboxDispatcherHeartbeatTtlMs(
   config.outbox.dispatchIntervalMs,
 );
 const notificationClient = new Client({ connectionString: process.env.DATABASE_URL });
-await notificationClient.connect();
-await notificationClient.query(`LISTEN ${generationOutboxWakeChannel}`);
-await writeDispatcherHeartbeat();
-notificationClient.on("notification", (message) => {
-  if (message.channel === generationOutboxWakeChannel) wakeSignal.notify();
-});
 let stopping = false;
 let lastCompletedLoopAt = Date.now();
 const stallTimeoutMs = Math.max(120_000, heartbeatTtlMs * 2);
@@ -52,24 +45,38 @@ const watchdog = setInterval(() => {
   }
 }, Math.min(5_000, Math.max(1_000, Math.floor(stallTimeoutMs / 4))));
 watchdog.unref();
+heartbeatRedis.on("error", (error) => {
+  console.error(`[generation-outbox] Redis heartbeat failed for REDIS_URL: ${error instanceof Error ? error.message : String(error)}`);
+});
 notificationClient.on("error", (error) => {
   console.error(`[generation-outbox] PostgreSQL LISTEN failed for DATABASE_URL: ${error instanceof Error ? error.message : String(error)}`);
   stopping = true;
   wakeSignal.close();
 });
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    stopping = true;
-    wakeSignal.close();
-    console.info(`[generation-outbox] Received ${signal}, draining current batch...`);
-  });
+  process.once(signal, () => requestStop(signal));
+}
+process.on("message", (message) => {
+  if (message?.type === "creator-dev-stop") requestStop(message.signal ?? "SIGTERM");
+});
+
+function requestStop(signal) {
+  if (stopping) return;
+  stopping = true;
+  wakeSignal.close();
+  console.info(`[generation-outbox] Received ${signal}, draining current batch...`);
 }
 
-console.info(
-  `[generation-outbox] Dispatcher started. batch=${config.outbox.dispatchBatchSize} intervalMs=${config.outbox.dispatchIntervalMs}`,
-);
-
 try {
+  await notificationClient.connect();
+  await notificationClient.query(`LISTEN ${generationOutboxWakeChannel}`);
+  await writeDispatcherHeartbeat();
+  notificationClient.on("notification", (message) => {
+    if (message.channel === generationOutboxWakeChannel) wakeSignal.notify();
+  });
+  console.info(
+    `[generation-outbox] Dispatcher started. batch=${config.outbox.dispatchBatchSize} intervalMs=${config.outbox.dispatchIntervalMs}`,
+  );
   while (!stopping) {
     const startedAt = Date.now();
     const result = await runWithDatabaseContext(async () => {
@@ -129,7 +136,11 @@ function redisConnectionFromUrl(redisUrl) {
     password: url.password ? decodeURIComponent(url.password) : undefined,
     db: url.pathname.length > 1 ? Number(url.pathname.slice(1)) : 0,
     tls: url.protocol === "rediss:" ? {} : undefined,
-    maxRetriesPerRequest: null,
+    connectTimeout: 2_000,
+    commandTimeout: 5_000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    retryStrategy: (attempt) => attempt <= 3 ? Math.min(attempt * 500, 1_500) : null,
   };
 }
 

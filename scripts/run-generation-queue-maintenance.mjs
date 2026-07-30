@@ -57,10 +57,16 @@ let forcedExitTimer = null;
 const reportMaintenanceError = createDedupedErrorReporter("generation-maintenance");
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    stopping = true;
-    console.info(`[generation-maintenance] Received ${signal}, draining current cycle...`);
-  });
+  process.once(signal, () => requestStop(signal));
+}
+process.on("message", (message) => {
+  if (message?.type === "creator-dev-stop") requestStop(message.signal ?? "SIGTERM");
+});
+
+function requestStop(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.info(`[generation-maintenance] Received ${signal}, draining current cycle...`);
 }
 
 console.info(
