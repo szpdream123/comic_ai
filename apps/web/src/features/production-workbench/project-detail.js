@@ -514,7 +514,7 @@ function renderImportedAssetGenerationBadge(status) {
 }
 
 function isImportedAssetGeneratingStatus(status) {
-  return ["created", "queued", "running", "generating", "pending", "submitted", "accepted", "provider_submitted", "processing"]
+  return ["created", "queued", "running", "generating", "pending", "submitted", "external_submitted", "accepted", "provider_submitted", "processing"]
     .includes(String(status ?? "").trim().toLowerCase());
 }
 
@@ -1246,7 +1246,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
 }
 
 function countActiveTaskCenterTasks(ui = {}) {
-  const activeStatuses = new Set(["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"]);
+  const activeStatuses = new Set(["queued", "running", "pending", "submitted", "external_submitted", "accepted", "provider_submitted", "processing"]);
   return Object.values(ui.taskCenterTasksById ?? {})
     .filter((task) => activeStatuses.has(String(task?.status ?? task?.workflowStatus ?? "").trim().toLowerCase()))
     .length;

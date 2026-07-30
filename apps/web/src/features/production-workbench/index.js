@@ -1558,6 +1558,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
   root.addEventListener("click", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (isNativeMediaControlInteraction(eventTarget, event)) {
+      return;
+    }
     if (isCanvasX6InteractionTarget(eventTarget, event)) {
       return;
     }
@@ -3106,24 +3109,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     }
 
     if (target?.matches?.(".episode-replica-shot-desc-input")) {
-      const storyboardId = target.dataset.storyboardId ?? "";
-      if (storyboardId) {
-        workbench.ui.selectedStoryboardId = storyboardId;
-      }
-      const counter = target.closest(".episode-replica-shot-card")?.querySelector(".count");
-      if (counter) {
-        counter.textContent = `${[...target.value].length} / 3000`;
-      }
-      if (storyboardId) {
-        updateActiveStoryboards(workbench, (storyboard) =>
-          String(storyboard?.id ?? "") === String(storyboardId)
-            ? {
-                ...storyboard,
-                description: target.value,
-              }
-            : storyboard,
-        );
-      }
+      updateStoryboardDescriptionFromInput(workbench, target);
       return;
     }
 
@@ -3192,50 +3178,35 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     }
 
     const nextDescription = String(target.value ?? "");
-    const persistedDescription = String(
-      storyboard.sceneAnalysis ?? storyboard.description ?? storyboard.plotPreview ?? "",
-    );
-    if (nextDescription === persistedDescription) {
-      return;
-    }
-
-    updateStoryboardById(workbench, storyboardId, (currentStoryboard) => ({
-      ...currentStoryboard,
-      description: nextDescription,
-      sceneAnalysis: nextDescription,
-    }));
 
     try {
-      const { savedVideoDraft } = await persistStoryboardCardDescription(
+      const { changed, savedVideoDraft } = await persistStoryboardDescriptionFromCard(
         workbench,
         storyboard,
-        nextDescription,
+        target,
       );
-      updateStoryboardById(workbench, storyboardId, (currentStoryboard) => ({
-        ...currentStoryboard,
-        description: nextDescription,
-        sceneAnalysis: nextDescription,
-        ...(savedVideoDraft
-          ? {
-              generationDrafts: [
-                ...normalizeEpisodeStoryboardGenerationDrafts(currentStoryboard.generationDrafts)
-                  .filter((draft) => draft.mode !== "video"),
-                savedVideoDraft,
-              ],
-              videoPromptDraft: savedVideoDraft,
-              generationState: {
-                ...currentStoryboard.generationState,
-                prompt: nextDescription,
-                videoPrompt: nextDescription,
-              },
-            }
-          : {}),
-      }));
+      if (!changed) {
+        return;
+      }
+      let hasNewerLocalEdit = false;
+      updateStoryboardById(workbench, storyboardId, (currentStoryboard) => {
+        const reconciled = reconcilePersistedStoryboardDescription(
+          currentStoryboard,
+          nextDescription,
+          savedVideoDraft,
+        );
+        hasNewerLocalEdit = reconciled.hasNewerLocalEdit;
+        return reconciled.storyboard;
+      });
       workbench.ui.toast = "修改成功";
-      render(workbench);
+      if (hasNewerLocalEdit) {
+        renderEpisodeWorkbenchActionStateOnly(workbench);
+      } else {
+        renderPreservingStoryboardGridScroll(workbench);
+      }
     } catch (error) {
       workbench.ui.toast = `分镜内容保存失败：${friendlyError(error)}`;
-      render(workbench);
+      renderEpisodeWorkbenchActionStateOnly(workbench);
     }
   });
 
@@ -3283,11 +3254,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       const assetId = target.dataset.assetId ?? "";
       const assetKind = target.dataset.assetKind ?? "character";
       await saveEpisodeAssetDescription(workbench, assetKind, assetId, target.value);
-      return;
-    }
-    if (target?.matches?.(".episode-replica-shot-desc-input")) {
-      const storyboardId = target.dataset.storyboardId ?? "";
-      await saveStoryboardDescriptionInline(workbench, storyboardId, target.value);
       return;
     }
     if (
@@ -7691,6 +7657,18 @@ function renderPreservingEpisodeAssetScroll(workbench) {
   }
 }
 
+function renderPreservingStoryboardGridScroll(workbench) {
+  const previousScrollTop = workbench.root.querySelector(".episode-replica-storyboard-grid")?.scrollTop ?? null;
+  render(workbench);
+  if (previousScrollTop == null) {
+    return;
+  }
+  const scrollContainer = workbench.root.querySelector(".episode-replica-storyboard-grid");
+  if (scrollContainer) {
+    scrollContainer.scrollTop = previousScrollTop;
+  }
+}
+
 function syncEpisodeWorkbenchBatchSelectionOnly(workbench) {
   const root = workbench?.root;
   if (!root?.querySelectorAll || workbench.ui.projectPanelMode !== "episode-workbench") {
@@ -7947,6 +7925,53 @@ function requestEpisodeWorkbenchConversationScroll(workbench) {
   workbench.ui.episodeWorkbenchConversationScrollStickyUntil = Date.now() + 1800;
 }
 
+function isCurrentEpisodeComposerGenerationPending(workbench, scopeMode, mediaMode, target = {}) {
+  const mediaKind = mediaMode === "video" || mediaMode === "lip-sync" ? "video" : "image";
+  const result = mediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult;
+  if (scopeMode === "assets") {
+    const assetId = target.assetId ?? workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? null;
+    return [
+      ...listAssetConversationHistoryEntries(workbench, assetId, mediaKind),
+      result,
+    ].some((entry) =>
+      isAssetConversationEntryForTarget(entry, assetId, mediaKind) &&
+      isGenerationTaskPendingStatus(resolveWorkflowStatus(
+        entry?.status ?? entry?.workflowStatus ?? entry?.platform?.workflowStatus,
+      )),
+    );
+  }
+  const storyboardId = target.storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
+  const submissionKey = `${workbench.ui.selectedEpisodeId ?? ""}:${storyboardId ?? ""}:${mediaKind}`;
+  if (mediaKind === "video" && workbench.videoGenerationSubmissionKeys?.has(submissionKey)) {
+    return true;
+  }
+  const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId) ?? null;
+  const storyboardIdentitySet = resolveStoryboardConversationIdentitySet(workbench, storyboardId);
+  const taskCenterEntries = Object.values(workbench.ui.taskCenterTasksById ?? {}).filter((entry) => {
+    const entryMediaKind = String(entry?.kind ?? entry?.mediaKind ?? "").trim().toLowerCase();
+    const entryTargetType = String(entry?.targetType ?? "").trim().toLowerCase();
+    const entryTargetId = String(entry?.storyboardId ?? entry?.targetId ?? "").trim();
+    return entryMediaKind === mediaKind &&
+      (entryTargetType === "storyboard" || entryTargetType === "shot") &&
+      storyboardIdentitySet.has(entryTargetId);
+  });
+  return [
+    ...listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind),
+    storyboard?.generationState?.lastSubmission ?? null,
+    result,
+    ...taskCenterEntries,
+  ].some((entry) =>
+    isStoryboardConversationEntryForTarget(workbench, entry, storyboardId) &&
+    isGenerationTaskPendingStatus(resolveWorkflowStatus(
+      entry?.status ?? entry?.workflowStatus ?? entry?.platform?.workflowStatus,
+    )),
+  );
+}
+
+export function isCurrentEpisodeComposerGenerationPendingForTest(workbench, scopeMode, mediaMode, target = {}) {
+  return isCurrentEpisodeComposerGenerationPending(workbench, scopeMode, mediaMode, target);
+}
+
 function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
   const root = workbench?.root;
   const currentPromptDock = root?.querySelector?.(".episode-replica-prompt");
@@ -8022,7 +8047,10 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
     videoMode: workbench.ui.videoGenerationMode ?? "reference-video",
     attachments: workbench.ui.episodeWorkbenchAttachments ?? [],
     selectedAttachmentIds: workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [],
-    generationPollingActive: Boolean(workbench.ui.generationPollingActive),
+    generationPollingActive: isCurrentEpisodeComposerGenerationPending(workbench, scopeMode, mediaMode, {
+      storyboardId: selectedStoryboard?.id ?? null,
+      assetId: selectedAsset?.id ?? null,
+    }),
     scopeMode,
   });
   const nextPromptDock = replacement.firstElementChild;
@@ -9155,7 +9183,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "submit-community-comment",
     "submit-community-reply",
   ]);
+  const videoSubmissionPreparationActions = new Set([
+    "set-muse-scope-mode",
+    "set-muse-board-mode",
+    "set-episode-media-mode",
+    "set-video-generation-mode",
+  ]);
+  const videoSubmissionPreparationKey = `${workbench.ui.selectedEpisodeId ?? ""}:${workbench.ui.selectedStoryboardId ?? ""}:video`;
   if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
+    return;
+  }
+  if (
+    videoSubmissionPreparationActions.has(action) &&
+    workbench.videoGenerationSubmissionKeys?.has(videoSubmissionPreparationKey)
+  ) {
     return;
   }
   clearWorkbenchToast(workbench);
@@ -14015,6 +14056,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "select-storyboard") {
     stopLipSyncAudioPreview(workbench);
+    workbench.videoGenerationSelectionVersion = Number(workbench.videoGenerationSelectionVersion ?? 0) + 1;
     workbench.ui.selectedStoryboardId = target.dataset.storyboardId ?? null;
     syncStoryboardPaginationForSelection(workbench);
     workbench.ui.isStoryboardDescriptionModalOpen = false;
@@ -15362,6 +15404,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
 
     if (resultAction === "download") {
+      const actionTaskId = String(target.dataset.taskId ?? "").trim();
+      if (actionTaskId) {
+        const selectedStoryboardId = selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId ?? null;
+        const currentResult = mediaKind === "video" || mediaKind === "lip-sync"
+          ? workbench.ui.videoGenerationResult
+          : workbench.ui.imageGenerationResult;
+        const matchingCurrentResult =
+          resolveGenerationTaskIdForConversation(currentResult) === actionTaskId &&
+          isStoryboardConversationEntryForTarget(workbench, currentResult, selectedStoryboardId)
+            ? currentResult
+            : null;
+        const selectedResult = resolveStoryboardConversationActionResult(
+          workbench,
+          actionTaskId,
+          mediaKind,
+          selectedStoryboardId,
+        ) ?? matchingCurrentResult;
+        if (downloadStoryboardConversationResult(workbench, selectedStoryboard, selectedResult, mediaKind)) {
+          syncWorkbenchToastOnly(workbench);
+          return;
+        }
+        workbench.ui.toast = `当前结果没有可下载的${mediaKind === "video" ? "视频" : "图片"}。`;
+        syncWorkbenchToastOnly(workbench);
+        return;
+      }
       if (mediaKind === "video") {
         downloadStoryboardVideo(
           workbench,
@@ -15375,6 +15442,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           selectedStoryboard?.currentImageAssetVersionId ?? selectedStoryboard?.uploadedImages?.[0]?.id ?? "",
         );
       }
+      syncWorkbenchToastOnly(workbench);
       return;
     }
 
@@ -15421,11 +15489,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
     if (resultAction === "delete") {
       const normalizedMediaKind = mediaKind === "video" || mediaKind === "lip-sync" ? "video" : "image";
+      const selectedResult = resolveStoryboardConversationActionResult(
+        workbench,
+        target.dataset.taskId ?? "",
+        normalizedMediaKind,
+        selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId ?? null,
+      ) ?? (normalizedMediaKind === "video" ? workbench.ui.videoGenerationResult : workbench.ui.imageGenerationResult);
       workbench.ui.generationResultDeleteTarget = {
         scope: "storyboard",
         mediaKind: normalizedMediaKind,
         storyboardId: selectedStoryboard?.id ?? workbench.ui.selectedStoryboardId ?? "",
-        taskId: target.dataset.taskId ?? "",
+        taskId: String(target.dataset.taskId ?? "").trim() || resolveGenerationDeletionIdForConversation(selectedResult),
       };
       if (!syncGenerationResultDeleteModalOnly(workbench)) {
         render(workbench);
@@ -25372,6 +25446,26 @@ export function persistStoryboardCardDescriptionForTest(workbench, storyboard, d
   return persistStoryboardCardDescription(workbench, storyboard, description);
 }
 
+export function isNativeMediaControlInteractionForTest(eventTarget, event) {
+  return isNativeMediaControlInteraction(eventTarget, event);
+}
+
+export function persistStoryboardDescriptionFromCardForTest(workbench, storyboard, target) {
+  return persistStoryboardDescriptionFromCard(workbench, storyboard, target);
+}
+
+export function preserveStoryboardPromptRichTextForTest(currentStoryboard, nextStoryboard) {
+  return preserveStoryboardPromptRichText(currentStoryboard, nextStoryboard);
+}
+
+export function reconcilePersistedStoryboardDescriptionForTest(currentStoryboard, description, savedVideoDraft) {
+  return reconcilePersistedStoryboardDescription(currentStoryboard, description, savedVideoDraft);
+}
+
+export function updateStoryboardDescriptionFromInputForTest(workbench, target) {
+  updateStoryboardDescriptionFromInput(workbench, target);
+}
+
 export function syncEpisodeStoryboardMapForTest(currentMap, primaryStoryboards, customEpisodes = []) {
   return syncEpisodeStoryboardMap(currentMap, primaryStoryboards, customEpisodes);
 }
@@ -29623,14 +29717,16 @@ function preserveStoryboardPromptRichText(currentStoryboard, nextStoryboard) {
     currentGenerationDrafts,
     nextGenerationDrafts,
   );
-  const preferredVideoPrompt = chooseEpisodeStoryboardPreferredPrompt(currentVideoPrompt, nextVideoPrompt);
-  const preferredImagePrompt = chooseEpisodeStoryboardPreferredPrompt(currentImagePrompt, nextImagePrompt);
+  const mergedVideoDraft = mergedGenerationDrafts.find((draft) => draft.mode === "video") ?? null;
+  const mergedImageDraft = mergedGenerationDrafts.find((draft) => draft.mode === "image") ?? null;
+  const preferredVideoPrompt = mergedVideoDraft?.prompt ||
+    chooseEpisodeStoryboardPreferredPrompt(currentVideoPrompt, nextVideoPrompt);
+  const preferredImagePrompt = mergedImageDraft?.prompt ||
+    chooseEpisodeStoryboardPreferredPrompt(currentImagePrompt, nextImagePrompt);
   const mergedStoryboard = {
     ...next,
     generationDrafts: mergedGenerationDrafts,
   };
-  const mergedVideoDraft = mergedGenerationDrafts.find((draft) => draft.mode === "video") ?? null;
-  const mergedImageDraft = mergedGenerationDrafts.find((draft) => draft.mode === "image") ?? null;
   if (preferredVideoPrompt) {
     mergedStoryboard.chapterVideoPrompt = preferredVideoPrompt;
     mergedStoryboard.videoPrompt = preferredVideoPrompt;
@@ -29698,13 +29794,22 @@ function mergeEpisodeStoryboardGenerationDrafts(currentDrafts, nextDrafts) {
       continue;
     }
     const preferredPrompt = chooseEpisodeStoryboardPreferredPrompt(draft.prompt, existing.prompt);
-    const shouldUseCurrent = preferredPrompt === String(draft.prompt ?? "").trim() && preferredPrompt !== "";
+    const currentUpdatedAt = Date.parse(String(draft.updatedAt ?? ""));
+    const nextUpdatedAt = Date.parse(String(existing.updatedAt ?? ""));
+    const hasCurrentUpdatedAt = Number.isFinite(currentUpdatedAt);
+    const hasNextUpdatedAt = Number.isFinite(nextUpdatedAt);
+    const shouldUseCurrent = hasCurrentUpdatedAt &&
+      hasNextUpdatedAt &&
+      currentUpdatedAt > nextUpdatedAt;
+    const selectedDraft = shouldUseCurrent ? draft : existing;
+    const fallbackDraft = shouldUseCurrent ? existing : draft;
+    const resolvedPrompt = String(selectedDraft.prompt ?? "").trim();
     mergedByMode.set(draft.mode, {
-      ...(shouldUseCurrent ? existing : draft),
-      ...(shouldUseCurrent ? draft : existing),
-      prompt: preferredPrompt || existing.prompt || draft.prompt || "",
-      payload: existing.payload && Object.keys(existing.payload).length > 0 ? existing.payload : (draft.payload ?? {}),
-      updatedAt: existing.updatedAt ?? draft.updatedAt ?? null,
+      ...fallbackDraft,
+      ...selectedDraft,
+      prompt: resolvedPrompt || preferredPrompt || existing.prompt || draft.prompt || "",
+      payload: selectedDraft.payload ?? {},
+      updatedAt: selectedDraft.updatedAt ?? null,
     });
   }
   return [...mergedByMode.values()];
@@ -36068,10 +36173,38 @@ export async function generateStoryboardImages(workbench, options = {}) {
 }
 
 export async function generateStoryboardVideos(workbench) {
+  const submissionEpisodeId = workbench.ui.selectedEpisodeId ?? null;
+  const selectedStoryboardId = workbench.ui.selectedStoryboardId ?? null;
+  const submissionSelectionVersion = Number(workbench.videoGenerationSelectionVersion ?? 0);
+  const submissionStoryboard = getSelectedStoryboard(getActiveStoryboards(workbench), selectedStoryboardId);
+  if (!submissionStoryboard) {
+    throw new Error("creator_shots_missing");
+  }
+  const submissionKey = `${submissionEpisodeId ?? ""}:${selectedStoryboardId ?? ""}:video`;
+  const submissionKeys = workbench.videoGenerationSubmissionKeys ?? new Set();
+  workbench.videoGenerationSubmissionKeys = submissionKeys;
+  if (
+    submissionKeys.has(submissionKey) ||
+    isCurrentEpisodeComposerGenerationPending(workbench, "storyboard", "video", { storyboardId: selectedStoryboardId })
+  ) {
+    return;
+  }
+  submissionKeys.add(submissionKey);
+  if (workbench.root?.querySelector?.(".episode-replica-prompt")) {
+    renderEpisodeWorkbenchPromptDockOnly(workbench);
+  }
+  try {
   await ensureGenerationReady(workbench, { mediaKind: "video" });
+  if (
+    workbench.ui.selectedEpisodeId !== submissionEpisodeId ||
+    workbench.ui.selectedStoryboardId !== selectedStoryboardId ||
+    Number(workbench.videoGenerationSelectionVersion ?? 0) !== submissionSelectionVersion
+  ) {
+    return;
+  }
   const selectedStoryboard = getSelectedStoryboard(
     getActiveStoryboards(workbench),
-    workbench.ui.selectedStoryboardId,
+    selectedStoryboardId,
   );
   if (!selectedStoryboard) {
     throw new Error("creator_shots_missing");
@@ -36080,6 +36213,7 @@ export async function generateStoryboardVideos(workbench) {
   normalizeCurrentVideoAssetTablePromptByFileOrder(workbench, selectedStoryboard);
   stopGenerationPolling(workbench);
   const composerDraft = captureStoryboardGenerationComposerDraft(workbench, selectedStoryboard);
+  const previousVideoGenerationResult = workbench.ui.videoGenerationResult ?? null;
   const submission = createGenerationSubmissionSnapshot(workbench, selectedStoryboard, "video");
   updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
     ...generationState,
@@ -36108,7 +36242,7 @@ export async function generateStoryboardVideos(workbench) {
     });
     const result = isRealEpisodeWorkbench(workbench) && typeof workbench.api.createVideoTask === "function"
       ? normalizeEpisodeTaskForLegacyResult(
-          await workbench.api.createVideoTask(workbench.ui.selectedEpisodeId, {
+          await workbench.api.createVideoTask(submissionEpisodeId, {
             ...payload,
             targetType: "storyboard",
             targetId: selectedStoryboard.linkedShotId ?? selectedStoryboard.id,
@@ -36142,6 +36276,43 @@ export async function generateStoryboardVideos(workbench) {
       workbench.ui.generationPollingActive = false;
     }
   } catch (error) {
+    const activeTaskId = String(error?.taskId ?? error?.details?.taskId ?? "").trim();
+    if (String(error?.errorCode ?? "") === "generation_target_busy") {
+      if (!activeTaskId) {
+        workbench.ui.videoGenerationResult = previousVideoGenerationResult;
+        restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, selectedStoryboard.id, composerDraft);
+        updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
+          ...generationState,
+          lastSubmission: composerDraft.generationState.lastSubmission ?? null,
+        }));
+        workbench.ui.generationPollingActive = false;
+        workbench.ui.toast = "当前分镜已有视频任务生成中，请等待完成后再试。";
+        renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+        return;
+      }
+      const activeTask = {
+        taskId: activeTaskId,
+        status: "running",
+        workflowStatus: "running",
+        mediaKind: "video",
+        storyboardId: selectedStoryboard.id,
+        targetType: "storyboard",
+        targetId: selectedStoryboard.linkedShotId ?? selectedStoryboard.id,
+        selectionContext: { selectedStoryboardId: selectedStoryboard.id },
+      };
+      workbench.ui.videoGenerationResult = activeTask;
+      updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
+        ...generationState,
+        lastSubmission: activeTask,
+      }));
+      registerTaskCenterTask(workbench, activeTask, activeTask);
+      restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, selectedStoryboard.id, composerDraft);
+      workbench.ui.generationPollingActive = true;
+      workbench.ui.toast = "当前分镜已有视频任务生成中，已恢复草稿并同步现有任务。";
+      renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+      scheduleGenerationPolling(workbench, selectedStoryboard.id, "video", { immediate: true });
+      return;
+    }
     workbench.ui.generationPollingActive = false;
     const failedResult = {
       ...(workbench.ui.videoGenerationResult ?? {}),
@@ -36169,6 +36340,12 @@ export async function generateStoryboardVideos(workbench) {
   } finally {
     workbench.ui.busy = false;
     renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+  }
+  } finally {
+    submissionKeys.delete(submissionKey);
+    if (workbench.root?.querySelector?.(".episode-replica-prompt")) {
+      renderEpisodeWorkbenchPromptDockOnly(workbench);
+    }
   }
 }
 
@@ -36389,7 +36566,9 @@ function replaceAssetConversationHistoryEntries(workbench, assetId, entries, med
   }
   const key = buildAssetConversationHistoryKey(assetId, mediaKind);
   const nextEntries = Array.isArray(entries)
-    ? entries.filter(Boolean).map((entry) => enrichGenerationConversationStyleMetadata(workbench, entry, mediaKind))
+    ? entries
+        .filter((entry) => entry && !isDeletedConversationGeneration(workbench, entry))
+        .map((entry) => enrichGenerationConversationStyleMetadata(workbench, entry, mediaKind))
     : [];
   workbench.ui.assetConversationHistory = {
     ...(workbench.ui.assetConversationHistory ?? {}),
@@ -36427,6 +36606,9 @@ function mergeAssetConversationHistoryEntries(workbench, assetId, entries, media
 }
 
 function appendAssetConversationHistoryEntry(workbench, entry) {
+  if (isDeletedConversationGeneration(workbench, entry)) {
+    return;
+  }
   const mediaKind = entry?.mediaKind === "video" ? "video" : "image";
   const assetId = entry?.selectionContext?.selectedAssetId ?? entry?.assetId ?? null;
   if (!assetId) {
@@ -36647,7 +36829,11 @@ function replaceStoryboardConversationHistoryEntries(workbench, storyboardId, en
   const nextEntries = (Array.isArray(entries) ? entries : [])
     .map((entry) => normalizeStoryboardConversationEntryForTarget(workbench, entry, storyboardId, mediaKind))
     .map((entry) => enrichGenerationConversationStyleMetadata(workbench, entry, mediaKind))
-    .filter((entry) => entry && (mediaKind !== "image" || !isStoryboardGeneratorTaskResult(entry)));
+    .filter((entry) =>
+      entry &&
+      !isDeletedConversationGeneration(workbench, entry) &&
+      (mediaKind !== "image" || !isStoryboardGeneratorTaskResult(entry))
+    );
   workbench.ui.storyboardConversationHistory = {
     ...(workbench.ui.storyboardConversationHistory ?? {}),
     [key]: nextEntries,
@@ -36656,6 +36842,9 @@ function replaceStoryboardConversationHistoryEntries(workbench, storyboardId, en
 }
 
 function appendStoryboardConversationHistoryEntry(workbench, entry) {
+  if (isDeletedConversationGeneration(workbench, entry)) {
+    return;
+  }
   const mediaKind = entry?.mediaKind === "video" ? "video" : "image";
   if (mediaKind === "image" && isStoryboardGeneratorTaskResult(entry)) {
     return;
@@ -36681,6 +36870,46 @@ function resolveGenerationTaskIdForConversation(entry) {
       task?.id ??
       "",
   ).trim();
+}
+
+function resolveGenerationDeletionIdForConversation(entry) {
+  return resolveGenerationTaskIdForConversation(entry) || String(entry?.turnId ?? "").trim();
+}
+
+function isDeletedConversationGeneration(workbench, entryOrId) {
+  const deletionId = typeof entryOrId === "string"
+    ? entryOrId.trim()
+    : resolveGenerationDeletionIdForConversation(entryOrId);
+  return Boolean(deletionId && workbench.deletedConversationGenerationIds?.has(deletionId));
+}
+
+function markConversationGenerationDeleted(workbench, deletionId, storyboardId = null) {
+  const normalizedDeletionId = String(deletionId ?? "").trim();
+  if (!normalizedDeletionId) {
+    return;
+  }
+  const deletedIds = workbench.deletedConversationGenerationIds ?? new Set();
+  deletedIds.add(normalizedDeletionId);
+  workbench.deletedConversationGenerationIds = deletedIds;
+  if (!storyboardId) {
+    return;
+  }
+  updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
+    ...generationState,
+    lastSubmission:
+      resolveGenerationDeletionIdForConversation(generationState.lastSubmission) === normalizedDeletionId
+        ? null
+        : generationState.lastSubmission,
+  }));
+}
+
+function assertConversationTurnDeleted(response) {
+  if (response?.deleted === true) {
+    return;
+  }
+  const error = new Error("服务端未删除对应记录，请刷新后重试。");
+  error.errorCode = "conversation_turn_not_deleted";
+  throw error;
 }
 
 function resolveGenerationTaskResponsePayload(task) {
@@ -36726,7 +36955,7 @@ function removeStoryboardConversationHistoryEntry(workbench, storyboardId, taskI
   }
   const key = buildStoryboardConversationHistoryKey(storyboardId, mediaKind);
   const current = listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
-  const nextEntries = current.filter((item) => resolveGenerationTaskIdForConversation(item) !== String(taskId).trim());
+  const nextEntries = current.filter((item) => resolveGenerationDeletionIdForConversation(item) !== String(taskId).trim());
   workbench.ui.storyboardConversationHistory = {
     ...(workbench.ui.storyboardConversationHistory ?? {}),
     [key]: nextEntries,
@@ -36770,8 +36999,10 @@ async function deleteStoryboardConversationTurn(workbench, storyboardId, taskId,
         taskId,
         mediaKind,
       );
+      assertConversationTurnDeleted(response);
       nextEntries = Array.isArray(response?.entries) ? response.entries : null;
     }
+    markConversationGenerationDeleted(workbench, taskId, storyboardId);
     applyStoryboardConversationHistoryAfterDelete(workbench, storyboardId, taskId, mediaKind, nextEntries);
     workbench.ui.toast = "已删除当前这一次对话。";
     renderEpisodeWorkbenchStageBodyOnly(workbench);
@@ -36825,6 +37056,8 @@ async function deleteAssetGenerationResult(workbench, draft = {}) {
         resultId,
         "image",
       );
+      assertConversationTurnDeleted(response);
+      markConversationGenerationDeleted(workbench, resultId);
       applyAssetConversationHistoryAfterDelete(
         workbench,
         selectedAssetId,
@@ -36833,6 +37066,7 @@ async function deleteAssetGenerationResult(workbench, draft = {}) {
         Array.isArray(response?.entries) ? response.entries : null,
       );
     } else {
+      markConversationGenerationDeleted(workbench, resultId);
       applyAssetConversationHistoryAfterDelete(
         workbench,
         selectedAssetId,
@@ -38992,7 +39226,7 @@ const CANVAS_GENERATION_FAST_POLL_INTERVAL_MS = 15_000;
 const CANVAS_GENERATION_FAST_POLL_WINDOW_MS = 60_000;
 
 function isTaskCenterActiveStatus(status) {
-  return new Set(["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"])
+  return new Set(["queued", "running", "pending", "submitted", "external_submitted", "accepted", "provider_submitted", "processing"])
     .has(String(status ?? "").trim().toLowerCase());
 }
 
@@ -39247,6 +39481,7 @@ async function loadTaskCenterTasksForPolling(workbench, options = {}) {
 async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   const taskId = resolveGenerationTaskIdForConversation(task);
   if (!taskId) return false;
+  if (isDeletedConversationGeneration(workbench, taskId)) return false;
   const version = taskCenterTaskVersion(task);
   if (options.force !== true && workbench.taskCenterAppliedVersions?.get(taskId) === version) {
     return false;
@@ -40309,7 +40544,7 @@ function applyAssetConversationHistoryTaskResult(workbench, task, submission, as
 }
 
 function isGenerationTaskPendingStatus(status) {
-  return new Set(["queued", "running", "pending", "submitted", "accepted", "provider_submitted", "processing"])
+  return new Set(["queued", "running", "pending", "submitted", "external_submitted", "accepted", "provider_submitted", "processing"])
     .has(String(status ?? "").toLowerCase());
 }
 
@@ -40644,10 +40879,15 @@ export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, 
     resolveWorkflowStatus(normalized?.status) === "completed" &&
     !hasGenerationTaskMediaResult(normalized, mediaKind)
   ) {
-    normalized.status = "running";
+    normalized.status = "result_unknown";
+    normalized.failureCode = normalized.failureCode ?? "generation_result_missing";
+    normalized.failure = {
+      ...(normalized.failure ?? {}),
+      displayMessage: normalized.failure?.displayMessage ?? "任务已结束，但没有拿到可用的生成结果，请稍后重试。",
+    };
     normalized.platform = {
       ...(normalized.platform ?? {}),
-      workflowStatus: "running",
+      workflowStatus: "result_unknown",
     };
   }
   workbench.ui[targetKey] = normalized;
@@ -43820,6 +44060,46 @@ function updateStoryboardById(workbench, storyboardId, updater) {
   );
 }
 
+function updateStoryboardDescriptionDraft(workbench, storyboardId, description) {
+  const scopedUpdate = applyStoryboardScopeUpdate(
+    {
+      storyboards: workbench.ui.storyboards ?? [],
+      episodeStoryboardMap: workbench.ui.episodeStoryboardMap ?? {},
+      projectPanelMode: workbench.ui.projectPanelMode ?? "library",
+      selectedEpisodeId: workbench.ui.selectedEpisodeId ?? null,
+    },
+    (storyboard) =>
+      String(storyboard?.id ?? "") === String(storyboardId)
+        ? { ...storyboard, description }
+        : storyboard,
+  );
+  workbench.ui.storyboards = scopedUpdate.storyboards;
+  workbench.ui.episodeStoryboardMap = scopedUpdate.episodeStoryboardMap;
+  if (String(workbench.ui.selectedStoryboardId ?? "") === String(storyboardId)) {
+    workbench.ui.selectedStoryboard = scopedUpdate.activeStoryboards.find(
+      (storyboard) => String(storyboard?.id ?? "") === String(storyboardId),
+    ) ?? workbench.ui.selectedStoryboard;
+  }
+}
+
+function updateStoryboardDescriptionFromInput(workbench, target) {
+  const storyboardId = target?.dataset?.storyboardId ?? "";
+  const counter = target?.closest?.(".episode-replica-shot-card")?.querySelector?.(".count");
+  if (counter) {
+    counter.textContent = `${[...String(target?.value ?? "")].length} / 3000`;
+  }
+  if (!storyboardId) {
+    return;
+  }
+  if (target.dataset.persistedDescription === undefined) {
+    const persistedStoryboard = getActiveStoryboards(workbench).find(
+      (storyboard) => String(storyboard?.id ?? "") === String(storyboardId),
+    );
+    target.dataset.persistedDescription = String(persistedStoryboard?.description ?? "");
+  }
+  updateStoryboardDescriptionDraft(workbench, storyboardId, target.value);
+}
+
 async function ensureStoryboardShot(workbench, storyboardId) {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   if (!storyboard || storyboard.linkedShotId || !workbench.state?.project?.id) {
@@ -44396,11 +44676,12 @@ async function saveStoryboardDescriptionInline(workbench, storyboardId, value) {
 }
 
 async function persistStoryboardCardDescription(workbench, storyboard, description) {
-  await workbench.api.updateShot({
-    shotId: storyboard.linkedShotId,
-    description,
-  });
-  if (typeof workbench.api.saveDraft !== "function" || !workbench.ui.selectedEpisodeId) {
+  const episodeId = storyboard?.episodeId ?? workbench.ui.selectedEpisodeId;
+  if (typeof workbench.api.saveDraft !== "function" || !episodeId) {
+    await workbench.api.updateShot({
+      shotId: storyboard.linkedShotId,
+      description,
+    });
     return { savedVideoDraft: null };
   }
   const payload = {
@@ -44409,13 +44690,84 @@ async function persistStoryboardCardDescription(workbench, storyboard, descripti
     payload: storyboard.videoPromptDraft?.payload ?? {},
   };
   const result = await workbench.api.saveDraft(
-    workbench.ui.selectedEpisodeId,
+    episodeId,
     "storyboard",
     storyboard.linkedShotId,
     payload,
   );
+  let shotSyncError = null;
+  try {
+    await workbench.api.updateShot({
+      shotId: storyboard.linkedShotId,
+      description,
+    });
+  } catch (error) {
+    shotSyncError = error;
+  }
   return {
     savedVideoDraft: result?.draft ?? payload,
+    shotSyncError,
+  };
+}
+
+async function persistStoryboardDescriptionFromCard(workbench, storyboard, target) {
+  const nextDescription = String(target?.value ?? "");
+  const persistedDescription = String(
+    target?.dataset?.persistedDescription ??
+      storyboard?.videoPromptDraft?.prompt ??
+      storyboard?.sceneAnalysis ??
+      storyboard?.plotPreview ??
+      storyboard?.description ??
+      "",
+  );
+  if (nextDescription === persistedDescription) {
+    return { changed: false, savedVideoDraft: null };
+  }
+  const queueKey = String(storyboard?.linkedShotId ?? storyboard?.id ?? "");
+  const saveQueues = workbench.storyboardDescriptionSaveQueues ?? new Map();
+  workbench.storyboardDescriptionSaveQueues = saveQueues;
+  const previousSave = saveQueues.get(queueKey) ?? Promise.resolve();
+  const currentSave = previousSave
+    .catch(() => undefined)
+    .then(() => persistStoryboardCardDescription(workbench, storyboard, nextDescription));
+  saveQueues.set(queueKey, currentSave);
+  try {
+    const result = await currentSave;
+    return {
+      changed: true,
+      savedVideoDraft: result.savedVideoDraft,
+      shotSyncError: result.shotSyncError ?? null,
+    };
+  } finally {
+    if (saveQueues.get(queueKey) === currentSave) {
+      saveQueues.delete(queueKey);
+    }
+  }
+}
+
+function reconcilePersistedStoryboardDescription(currentStoryboard, description, savedVideoDraft) {
+  const hasNewerLocalEdit = String(currentStoryboard?.description ?? "") !== String(description ?? "");
+  return {
+    hasNewerLocalEdit,
+    storyboard: {
+      ...currentStoryboard,
+      ...(hasNewerLocalEdit
+        ? {}
+        : {
+            description,
+            sceneAnalysis: description,
+          }),
+      ...(savedVideoDraft
+        ? {
+            generationDrafts: [
+              ...normalizeEpisodeStoryboardGenerationDrafts(currentStoryboard?.generationDrafts)
+                .filter((draft) => draft.mode !== "video"),
+              savedVideoDraft,
+            ],
+            videoPromptDraft: savedVideoDraft,
+          }
+        : {}),
+    },
   };
 }
 
@@ -45687,6 +46039,40 @@ function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
   workbench.ui.toast = `已开始下载 ${image.fileName || storyboard.uploadedImageName || "分镜图片"}。`;
 }
 
+function downloadStoryboardConversationResult(workbench, storyboard, result, mediaKind = "image") {
+  const isVideo = mediaKind === "video";
+  const fixedMedia = (isVideo ? result?.fixedVideos : result?.fixedImages)?.find((item) =>
+    readPublicGenerationMediaUrl(item?.src, item?.url, item?.previewUrl));
+  const mediaUrl = isVideo
+    ? readPublicGenerationMediaUrl(
+        fixedMedia?.src,
+        fixedMedia?.url,
+        result?.result?.videoUrl,
+        result?.result?.downloadUrl,
+        result?.videoUrl,
+      )
+    : readPublicGenerationMediaUrl(
+        fixedMedia?.url,
+        fixedMedia?.src,
+        fixedMedia?.previewUrl,
+        result?.result?.imageUrl,
+        result?.result?.downloadUrl,
+        result?.imageUrl,
+      );
+  if (!mediaUrl) {
+    return false;
+  }
+  const fallbackName = isVideo ? "storyboard-video" : "storyboard-image";
+  const fileName = fixedMedia?.fileName || fixedMedia?.name || storyboard?.title || fallbackName;
+  triggerAssetDownload(
+    mediaUrl,
+    stripFileExtension(fileName),
+    inferFileExtension(fileName || mediaUrl, isVideo ? "mp4" : "png"),
+  );
+  workbench.ui.toast = `已开始下载 ${fixedMedia?.fileName || (isVideo ? "分镜视频" : "分镜图片")}。`;
+  return true;
+}
+
 function legacyDeleteStoryboardImage(workbench, storyboardId, imageId = "") {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const image = findStoryboardImage(storyboard, imageId);
@@ -46385,6 +46771,14 @@ function resolveEventElement(target) {
     return target.parentElement;
   }
   return null;
+}
+
+function isNativeMediaControlInteraction(eventTarget, event) {
+  if (eventTarget?.closest?.("video[controls], audio[controls]")) {
+    return true;
+  }
+  return (event?.composedPath?.() ?? []).some((candidate) =>
+    candidate?.matches?.("video[controls], audio[controls]"));
 }
 
 function resolveCanvasKeyboardAction(workbench, event, target) {

@@ -25,6 +25,8 @@ import {
   handleWorkbenchActionForTest,
   initProductionWorkbench,
   installWorkbenchToastQueueForTest,
+  isNativeMediaControlInteractionForTest,
+  isCurrentEpisodeComposerGenerationPendingForTest,
   isTaskCenterPollDeadlineExceededForTest,
   mapEpisodeAssetContractsForTest,
   mapEpisodeStoryboardContractForTest,
@@ -33,6 +35,9 @@ import {
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
   persistStoryboardCardDescriptionForTest,
+  persistStoryboardDescriptionFromCardForTest,
+  preserveStoryboardPromptRichTextForTest,
+  reconcilePersistedStoryboardDescriptionForTest,
   sanitizeEpisodeWorkbenchSelection,
   findProjectCoverInput,
   refreshProductionWorkbenchForTest,
@@ -59,6 +64,7 @@ import {
   syncEpisodeStoryboardMapForTest,
   syncEpisodeAssetDescriptionState,
   updatePromptMentionState,
+  updateStoryboardDescriptionFromInputForTest,
   uploadAssetGeneratorRetryImageForTest,
   uploadStoryboardGeneratorReferenceImagesForTest,
   uploadProjectCoverFile,
@@ -286,7 +292,6 @@ describe("production workbench home shell", () => {
     });
 
     assert.deepEqual(calls, [
-      ["shot", { shotId: original.linkedShotId, description: "新视频提示词" }],
       ["draft", {
         episodeId: workbench.ui.selectedEpisodeId,
         targetType: "storyboard",
@@ -297,9 +302,326 @@ describe("production workbench home shell", () => {
           payload: { source: "ai_storyboard_preview" },
         },
       }],
+      ["shot", { shotId: original.linkedShotId, description: "新视频提示词" }],
     ]);
     assert.equal(refreshed.description, "新视频提示词");
     assert.equal(refreshed.videoPromptDraft.prompt, "新视频提示词");
+  });
+
+  it("keeps a saved storyboard edit successful when only the shot mirror sync fails", async () => {
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      storyboardId: "10000000-0000-4000-8000-000000000102",
+      episodeId: "10000000-0000-4000-8000-000000000202",
+      generationDrafts: [{ mode: "video", prompt: "旧提示词", payload: {}, updatedAt: null }],
+    });
+    const mirrorError = new TypeError("Failed to fetch");
+    const workbench = {
+      api: {
+        async saveDraft(_episodeId, _targetType, _targetId, payload) {
+          return { draft: { ...payload, updatedAt: "2026-07-29T07:00:00.000Z" } };
+        },
+        async updateShot() {
+          throw mirrorError;
+        },
+      },
+      ui: { selectedEpisodeId: storyboard.episodeId },
+    };
+
+    const result = await persistStoryboardDescriptionFromCardForTest(
+      workbench,
+      storyboard,
+      { value: "已保存的新提示词", dataset: {} },
+    );
+
+    assert.equal(result.changed, true);
+    assert.equal(result.savedVideoDraft.prompt, "已保存的新提示词");
+    assert.equal(result.shotSyncError, mirrorError);
+  });
+
+  it("still reports a real failure when the authoritative storyboard draft cannot be saved", async () => {
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      storyboardId: "10000000-0000-4000-8000-000000000103",
+      episodeId: "10000000-0000-4000-8000-000000000203",
+      generationDrafts: [{ mode: "video", prompt: "旧提示词", payload: {}, updatedAt: null }],
+    });
+    let shotUpdateCalled = false;
+    const workbench = {
+      api: {
+        async saveDraft() {
+          throw new TypeError("Failed to fetch");
+        },
+        async updateShot() {
+          shotUpdateCalled = true;
+        },
+      },
+      ui: { selectedEpisodeId: storyboard.episodeId },
+    };
+
+    await assert.rejects(
+      () => persistStoryboardCardDescriptionForTest(workbench, storyboard, "未保存的新提示词"),
+      /Failed to fetch/,
+    );
+    assert.equal(shotUpdateCalled, false);
+  });
+
+  it("persists a storyboard blur edit after input already updated the local description", async () => {
+    const original = mapEpisodeStoryboardContractForTest({
+      storyboardId: "10000000-0000-4000-8000-000000000111",
+      episodeId: "10000000-0000-4000-8000-000000000211",
+      indexNo: 1,
+      sceneAnalysis: "旧分镜摘要",
+      generationDrafts: [
+        {
+          mode: "video",
+          prompt: "旧视频提示词",
+          payload: { source: "ai_storyboard_preview" },
+          updatedAt: "2026-06-08T00:00:00.000Z",
+        },
+      ],
+    });
+    const locallyEdited = {
+      ...original,
+      description: "新视频提示词",
+    };
+    const calls = [];
+    const workbench = {
+      api: {
+        async updateShot(payload) {
+          calls.push(["shot", payload]);
+        },
+        async saveDraft(episodeId, targetType, targetId, payload) {
+          calls.push(["draft", { episodeId, targetType, targetId, payload }]);
+          return { draft: payload };
+        },
+      },
+      ui: {
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000211",
+      },
+    };
+
+    const result = await persistStoryboardDescriptionFromCardForTest(
+      workbench,
+      locallyEdited,
+      {
+        value: "新视频提示词",
+        dataset: {},
+      },
+    );
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(calls.map(([kind]) => kind), ["draft", "shot"]);
+  });
+
+  it("prefers a newer persisted storyboard draft over a longer stale local copy", () => {
+    const current = mapEpisodeStoryboardContractForTest({
+      storyboardId: "storyboard-newer-draft",
+      sceneAnalysis: "旧分镜摘要",
+      generationDrafts: [
+        {
+          mode: "video",
+          prompt: "已过期的长提示词\n__STALE_LOCAL_COPY__",
+          payload: {},
+          updatedAt: "2026-07-29T06:20:00.000Z",
+        },
+      ],
+    });
+    const next = mapEpisodeStoryboardContractForTest({
+      storyboardId: "storyboard-newer-draft",
+      sceneAnalysis: "新分镜摘要",
+      generationDrafts: [
+        {
+          mode: "video",
+          prompt: "用户最新保存的短提示词",
+          payload: {},
+          updatedAt: "2026-07-29T06:21:00.000Z",
+        },
+      ],
+    });
+
+    const merged = preserveStoryboardPromptRichTextForTest(current, next);
+
+    assert.equal(merged.description, "用户最新保存的短提示词");
+    assert.equal(merged.videoPromptDraft.prompt, "用户最新保存的短提示词");
+    assert.equal(merged.generationState.videoPrompt, "用户最新保存的短提示词");
+  });
+
+  it("treats an incoming persisted draft as authoritative without evidence that the local draft is newer", () => {
+    const timestampScenarios = [
+      { current: null, next: null },
+      { current: null, next: "2026-07-29T06:21:00.000Z" },
+      { current: "2026-07-29T06:21:00.000Z", next: "2026-07-29T06:21:00.000Z" },
+      { current: "2026-07-29T06:21:00.000Z", next: null },
+    ];
+    for (const timestamps of timestampScenarios) {
+      const current = mapEpisodeStoryboardContractForTest({
+        storyboardId: "storyboard-authoritative-draft",
+        generationDrafts: [{
+          mode: "video",
+          prompt: "已过期但更长的本地提示词\n__STALE_LOCAL_COPY__",
+          payload: { source: "local" },
+          updatedAt: timestamps.current,
+        }],
+      });
+      const next = mapEpisodeStoryboardContractForTest({
+        storyboardId: "storyboard-authoritative-draft",
+        generationDrafts: [{
+          mode: "video",
+          prompt: "服务端最新短提示词",
+          payload: { source: "server" },
+          updatedAt: timestamps.next,
+        }],
+      });
+
+      const merged = preserveStoryboardPromptRichTextForTest(current, next);
+
+      assert.equal(merged.videoPromptDraft.prompt, "服务端最新短提示词");
+      assert.deepEqual(merged.videoPromptDraft.payload, { source: "server" });
+    }
+  });
+
+  it("keeps newer in-progress text when an older save finishes", () => {
+    const savedVideoDraft = {
+      mode: "video",
+      prompt: "第一次修改",
+      payload: {},
+      updatedAt: "2026-07-29T06:21:00.000Z",
+    };
+
+    const result = reconcilePersistedStoryboardDescriptionForTest(
+      {
+        id: "storyboard-edit-revision",
+        description: "第二次仍在输入的修改",
+        sceneAnalysis: "旧分镜摘要",
+        generationDrafts: [],
+        generationState: {},
+      },
+      "第一次修改",
+      savedVideoDraft,
+    );
+
+    assert.equal(result.hasNewerLocalEdit, true);
+    assert.equal(result.storyboard.description, "第二次仍在输入的修改");
+    assert.equal(result.storyboard.sceneAnalysis, "旧分镜摘要");
+    assert.equal(result.storyboard.videoPromptDraft.prompt, "第一次修改");
+  });
+
+  it("does not overwrite the explicit generation composer when saving storyboard text", () => {
+    const savedVideoDraft = {
+      mode: "video",
+      prompt: "分镜卡片的新文本",
+      payload: {},
+      updatedAt: "2026-07-29T06:22:00.000Z",
+    };
+    const generationState = {
+      prompt: "用户在右侧对话框中单独输入的内容",
+      videoPrompt: "用户在右侧对话框中单独输入的内容",
+      lastSubmission: { taskId: "previous-task", status: "failed" },
+    };
+
+    const result = reconcilePersistedStoryboardDescriptionForTest(
+      {
+        id: "storyboard-composer-boundary",
+        description: "分镜卡片的新文本",
+        sceneAnalysis: "旧分镜摘要",
+        generationDrafts: [],
+        generationState,
+      },
+      "分镜卡片的新文本",
+      savedVideoDraft,
+    );
+
+    assert.equal(result.hasNewerLocalEdit, false);
+    assert.equal(result.storyboard.description, "分镜卡片的新文本");
+    assert.equal(result.storyboard.videoPromptDraft.prompt, "分镜卡片的新文本");
+    assert.deepEqual(result.storyboard.generationState, generationState);
+  });
+
+  it("keeps saving a storyboard draft to its original episode after navigation", async () => {
+    let releaseShotUpdate;
+    let markShotUpdateStarted;
+    const shotUpdateStarted = new Promise((resolve) => {
+      markShotUpdateStarted = resolve;
+    });
+    const calls = [];
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      storyboardId: "10000000-0000-4000-8000-000000000121",
+      episodeId: "10000000-0000-4000-8000-000000000221",
+      generationDrafts: [{ mode: "video", prompt: "旧提示词", payload: {}, updatedAt: null }],
+    });
+    const workbench = {
+      api: {
+        async updateShot() {
+          markShotUpdateStarted();
+          await new Promise((resolve) => {
+            releaseShotUpdate = resolve;
+          });
+        },
+        async saveDraft(episodeId) {
+          calls.push(episodeId);
+          return { draft: { mode: "video", prompt: "新提示词", payload: {} } };
+        },
+      },
+      ui: { selectedEpisodeId: storyboard.episodeId },
+    };
+
+    const saving = persistStoryboardDescriptionFromCardForTest(
+      workbench,
+      storyboard,
+      { value: "新提示词", dataset: {} },
+    );
+    await shotUpdateStarted;
+    workbench.ui.selectedEpisodeId = "10000000-0000-4000-8000-000000000222";
+    releaseShotUpdate();
+    await saving;
+
+    assert.deepEqual(calls, [storyboard.episodeId]);
+  });
+
+  it("serializes consecutive saves for the same storyboard", async () => {
+    let releaseFirstUpdate;
+    let markFirstUpdateStarted;
+    const firstUpdateStarted = new Promise((resolve) => {
+      markFirstUpdateStarted = resolve;
+    });
+    const savedPrompts = [];
+    const storyboard = mapEpisodeStoryboardContractForTest({
+      storyboardId: "10000000-0000-4000-8000-000000000131",
+      episodeId: "10000000-0000-4000-8000-000000000231",
+      generationDrafts: [{ mode: "video", prompt: "初始提示词", payload: {}, updatedAt: null }],
+    });
+    const workbench = {
+      api: {
+        async updateShot({ description }) {
+          if (description === "第一次修改") {
+            markFirstUpdateStarted();
+            await new Promise((resolve) => {
+              releaseFirstUpdate = resolve;
+            });
+          }
+        },
+        async saveDraft(_episodeId, _targetType, _targetId, payload) {
+          savedPrompts.push(payload.prompt);
+          return { draft: payload };
+        },
+      },
+      ui: { selectedEpisodeId: storyboard.episodeId },
+    };
+
+    const firstSave = persistStoryboardDescriptionFromCardForTest(
+      workbench,
+      storyboard,
+      { value: "第一次修改", dataset: {} },
+    );
+    await firstUpdateStarted;
+    const secondSave = persistStoryboardDescriptionFromCardForTest(
+      workbench,
+      storyboard,
+      { value: "第二次修改", dataset: {} },
+    );
+    releaseFirstUpdate();
+    await Promise.all([firstSave, secondSave]);
+
+    assert.deepEqual(savedPrompts, ["第一次修改", "第二次修改"]);
   });
 
   it("maps the full persisted storyboard video prompt without truncating it", () => {
@@ -1437,6 +1759,252 @@ describe("episode workbench asset list layout", () => {
     assert.match(source, /textarea,\s*input,\s*button,\s*select,\s*option,\s*label,\s*a,\s*\[contenteditable='true'\]/);
   });
 
+  it("isolates native media controls from delegated workbench actions", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const clickListenerStart = source.indexOf('root.addEventListener("click", (event) =>');
+    const clickListenerEnd = source.indexOf('root.addEventListener("contextmenu", (event) =>', clickListenerStart);
+    const clickListener = source.slice(clickListenerStart, clickListenerEnd);
+
+    const guardIndex = clickListener.indexOf("isNativeMediaControlInteraction(eventTarget, event)");
+    const actionResolutionIndex = clickListener.indexOf('const actionTarget = eventTarget?.closest?.("[data-action]")');
+    assert.ok(guardIndex >= 0 && guardIndex < actionResolutionIndex);
+    assert.equal(isNativeMediaControlInteractionForTest({ closest: () => ({}) }, { composedPath: () => [] }), true);
+    assert.equal(isNativeMediaControlInteractionForTest(
+      { closest: () => null },
+      { composedPath: () => [{ matches: (selector) => selector === "video[controls], audio[controls]" }] },
+    ), true);
+    assert.equal(isNativeMediaControlInteractionForTest(
+      { closest: () => null },
+      { composedPath: () => [{ matches: () => false }] },
+    ), false);
+  });
+
+  it("freezes the video submission target before asynchronous preparation", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const functionStart = source.indexOf("export async function generateStoryboardVideos(workbench)");
+    const functionEnd = source.indexOf("function createGenerationSubmissionSnapshot", functionStart);
+    const functionBlock = source.slice(functionStart, functionEnd);
+
+    const preparationIndex = functionBlock.indexOf("await ensureGenerationReady");
+    const driftGuardIndex = functionBlock.indexOf("workbench.ui.selectedEpisodeId !== submissionEpisodeId");
+    const createTaskIndex = functionBlock.indexOf("await workbench.api.createVideoTask(submissionEpisodeId");
+    assert.ok(preparationIndex >= 0 && preparationIndex < driftGuardIndex && driftGuardIndex < createTaskIndex);
+    assert.match(functionBlock, /submissionKeys\.has\(submissionKey\)/);
+    assert.match(functionBlock, /submissionKeys\.delete\(submissionKey\)/);
+    assert.match(functionBlock, /videoGenerationSelectionVersion/);
+    assert.match(functionBlock, /Number\(workbench\.videoGenerationSelectionVersion \?\? 0\) !== submissionSelectionVersion/);
+    assert.ok(
+      functionBlock.indexOf("renderEpisodeWorkbenchPromptDockOnly(workbench)") < preparationIndex,
+      "the current composer must be disabled before asynchronous preparation",
+    );
+  });
+
+  it("tracks video submission preparation per storyboard", async () => {
+    const episodeId = "episode-submit-lock";
+    const firstStoryboardId = "storyboard-submit-lock-a";
+    const secondStoryboardId = "storyboard-submit-lock-b";
+    const workbench = {
+      ui: {
+        selectedEpisodeId: episodeId,
+        selectedStoryboardId: firstStoryboardId,
+        storyboards: [
+          { ...addStoryboard([])[0], id: firstStoryboardId },
+          { ...addStoryboard([])[0], id: secondStoryboardId },
+        ],
+        episodeStoryboardMap: {},
+        taskCenterTasksById: {},
+      },
+      videoGenerationSubmissionKeys: new Set([`${episodeId}:${firstStoryboardId}:video`]),
+    };
+
+    assert.equal(
+      isCurrentEpisodeComposerGenerationPendingForTest(
+        workbench,
+        "storyboard",
+        "video",
+        { storyboardId: firstStoryboardId },
+      ),
+      true,
+    );
+    assert.equal(
+      isCurrentEpisodeComposerGenerationPendingForTest(
+        workbench,
+        "storyboard",
+        "video",
+        { storyboardId: secondStoryboardId },
+      ),
+      false,
+    );
+
+    workbench.ui.museScopeMode = "storyboard";
+    workbench.ui.museBoardMode = "storyboard";
+    workbench.ui.episodeMediaMode = "video";
+    workbench.ui.videoGenerationMode = "first-frame";
+    for (const actionTarget of [
+      { action: "set-muse-scope-mode", mode: "assets" },
+      { action: "set-muse-board-mode", mode: "operation" },
+      { action: "set-episode-media-mode", mode: "image" },
+      { action: "set-video-generation-mode", mode: "reference-video" },
+    ]) {
+      await handleWorkbenchActionForTest(workbench, { dataset: actionTarget });
+    }
+    assert.equal(workbench.ui.museScopeMode, "storyboard");
+    assert.equal(workbench.ui.museBoardMode, "storyboard");
+    assert.equal(workbench.ui.episodeMediaMode, "video");
+    assert.equal(workbench.ui.videoGenerationMode, "first-frame");
+  });
+
+  it("downloads a storyboard result without submitting a generation task", async () => {
+    const previousDocument = globalThis.document;
+    const videoId = "storyboard-current-video";
+    const taskId = "storyboard-download-task";
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-download",
+      selectedUploadedVideoId: videoId,
+      uploadedVideos: [{
+        id: videoId,
+        src: "https://example.test/storyboard-current.mp4",
+        fileName: "storyboard-current.mp4",
+        status: "ready",
+      }],
+    };
+    const downloads = [];
+    let generationCalls = 0;
+    globalThis.document = {
+      body: { appendChild() {} },
+      createElement(tagName) {
+        const element = {
+          tagName,
+          href: "",
+          download: "",
+          click() {
+            downloads.push({ href: element.href, download: element.download });
+          },
+          remove() {},
+        };
+        return element;
+      },
+    };
+    const workbench = {
+      state: {},
+      api: {
+        async createVideoTask() {
+          generationCalls += 1;
+        },
+        async generateVideos() {
+          generationCalls += 1;
+        },
+      },
+      root: { innerHTML: "", querySelector: () => null },
+      ui: {
+        projectPanelMode: "episode-workbench",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        storyboardConversationHistory: {
+          [`video:${storyboard.id}`]: [{
+            taskId,
+            status: "succeeded",
+            fixedVideos: [{
+              id: "storyboard-historical-video",
+              src: "https://example.test/storyboard-historical.mp4",
+              fileName: "storyboard-historical.mp4",
+            }],
+          }],
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "episode-result-action", resultAction: "download", mediaKind: "video", taskId },
+      });
+    } finally {
+      globalThis.document = previousDocument;
+    }
+
+    assert.deepEqual(downloads, [{
+      href: "https://example.test/storyboard-historical.mp4",
+      download: "storyboard-historical.mp4",
+    }]);
+    assert.equal(generationCalls, 0);
+  });
+
+  it("downloads the matching visible storyboard result before history is persisted", async () => {
+    const previousDocument = globalThis.document;
+    const taskId = "storyboard-visible-download-task";
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-visible-download",
+    };
+    const downloads = [];
+    let generationCalls = 0;
+    globalThis.document = {
+      body: { appendChild() {} },
+      createElement() {
+        const element = {
+          href: "",
+          download: "",
+          click() {
+            downloads.push({ href: element.href, download: element.download });
+          },
+          remove() {},
+        };
+        return element;
+      },
+    };
+    const workbench = {
+      state: {},
+      api: {
+        async createVideoTask() { generationCalls += 1; },
+        async generateVideos() { generationCalls += 1; },
+      },
+      root: { innerHTML: "", querySelector: () => null },
+      ui: {
+        projectPanelMode: "episode-workbench",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-visible-download",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-visible-download": [storyboard] },
+        storyboardConversationHistory: {},
+        videoGenerationResult: {
+          taskId,
+          storyboardId: storyboard.id,
+          status: "succeeded",
+          fixedVideos: [{
+            id: "visible-video",
+            src: "https://example.test/storyboard-visible.mp4",
+            fileName: "storyboard-visible.mp4",
+          }],
+        },
+      },
+    };
+
+    try {
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "episode-result-action", resultAction: "download", mediaKind: "video", taskId },
+      });
+    } finally {
+      globalThis.document = previousDocument;
+    }
+
+    assert.deepEqual(downloads, [{
+      href: "https://example.test/storyboard-visible.mp4",
+      download: "storyboard-visible.mp4",
+    }]);
+    assert.equal(generationCalls, 0);
+  });
+
   it("keeps the video prompt scroll position stable when clicking inside text", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
@@ -1448,6 +2016,81 @@ describe("episode workbench asset list layout", () => {
     assert.match(source, /const scrollTop = Number\(target\.scrollTop \?\? 0\)/);
     assert.match(source, /if \(!hasPromptMentionUiChanged\(beforeMentionUi, workbench\)\)\s*\{[\s\S]*?return;\s*\}/);
     assert.match(source, /textarea\.scrollTop = scrollTop/);
+  });
+
+  it("keeps the storyboard list at the same scroll position after saving inline text", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const helperStart = source.indexOf("function renderPreservingStoryboardGridScroll");
+    const helperEnd = source.indexOf("function syncEpisodeWorkbenchBatchSelectionOnly", helperStart);
+    const helperBlock = helperStart >= 0 && helperEnd > helperStart
+      ? source.slice(helperStart, helperEnd)
+      : "";
+    const saveStart = source.indexOf('root.addEventListener("focusout", async (event) =>');
+    const saveEnd = source.indexOf('root.addEventListener("keyup", (event) =>', saveStart);
+    const saveBlock = source.slice(saveStart, saveEnd);
+
+    assert.match(helperBlock, /\.episode-replica-storyboard-grid/);
+    assert.match(helperBlock, /const previousScrollTop/);
+    assert.match(helperBlock, /scrollContainer\.scrollTop = previousScrollTop/);
+    assert.match(saveBlock, /renderPreservingStoryboardGridScroll\(workbench\)/);
+  });
+
+  it("updates inline storyboard text without changing generation selection", () => {
+    const storyboardA = { id: "storyboard-a", description: "分镜 A", generationState: { videoPrompt: "" } };
+    const storyboardB = { id: "storyboard-b", description: "分镜 B", generationState: { videoPrompt: "" } };
+
+    for (const selectedStoryboardId of [storyboardA.id, storyboardB.id, null, "stale-storyboard-id"]) {
+      const selectedStoryboard = selectedStoryboardId === storyboardA.id
+        ? storyboardA
+        : selectedStoryboardId === storyboardB.id
+          ? storyboardB
+          : null;
+      const workbench = {
+        ui: {
+          projectPanelMode: "episode-workbench",
+          selectedEpisodeId: "episode-inline-edit",
+          selectedStoryboardId,
+          selectedStoryboard,
+          storyboards: [],
+          episodeStoryboardMap: {
+            "episode-inline-edit": [storyboardA, storyboardB],
+          },
+        },
+      };
+      const counter = { textContent: "" };
+      const target = {
+        value: "分镜 B 已修改",
+        dataset: { storyboardId: storyboardB.id },
+        closest(selector) {
+          return selector === ".episode-replica-shot-card"
+            ? { querySelector: () => counter }
+            : null;
+        },
+      };
+
+      updateStoryboardDescriptionFromInputForTest(workbench, target);
+
+      assert.equal(workbench.ui.selectedStoryboardId, selectedStoryboardId);
+      if (selectedStoryboardId === storyboardB.id) {
+        assert.notEqual(workbench.ui.selectedStoryboard, storyboardB);
+        assert.equal(workbench.ui.selectedStoryboard.description, "分镜 B 已修改");
+      } else {
+        assert.equal(workbench.ui.selectedStoryboard, selectedStoryboard);
+      }
+      assert.equal(
+        workbench.ui.episodeStoryboardMap["episode-inline-edit"][1].description,
+        "分镜 B 已修改",
+      );
+      assert.deepEqual(
+        workbench.ui.episodeStoryboardMap["episode-inline-edit"][1].generationState,
+        storyboardB.generationState,
+      );
+      assert.equal(target.dataset.persistedDescription, "分镜 B");
+      assert.equal(counter.textContent, "8 / 3000");
+    }
   });
 
   it("closes episode generation settings locally without rerendering the workbench", () => {
@@ -6746,6 +7389,7 @@ describe("workbench generation payloads and inspectors", () => {
     };
     let resolveCreateVideoTask;
     let resolveCreateVideoTaskCalled;
+    let createVideoTaskCallCount = 0;
     const createVideoTaskPromise = new Promise((resolve) => {
       resolveCreateVideoTask = resolve;
     });
@@ -6755,6 +7399,7 @@ describe("workbench generation payloads and inspectors", () => {
     const workbench = {
       state: {
         project: { id: "project-clear-composer", aspectRatio: "16:9", resolution: "1080p" },
+        assetReview: { readyForGeneration: true },
         shots: [],
         projectDetail: {
           project: { id: "project-clear-composer", projectId: "project-clear-composer", name: "clear" },
@@ -6770,6 +7415,7 @@ describe("workbench generation payloads and inspectors", () => {
       },
       api: {
         async createVideoTask() {
+          createVideoTaskCallCount += 1;
           resolveCreateVideoTaskCalled();
           return createVideoTaskPromise;
         },
@@ -6838,6 +7484,7 @@ describe("workbench generation payloads and inspectors", () => {
     try {
       const generationPromise = generateStoryboardVideos(workbench);
       await createVideoTaskCalledPromise;
+      const duplicateGenerationPromise = generateStoryboardVideos(workbench);
 
       const submittingStoryboard = workbench.ui.episodeStoryboardMap["episode-clear-composer"][0];
       assert.equal(workbench.ui.prompt, "");
@@ -6850,11 +7497,13 @@ describe("workbench generation payloads and inspectors", () => {
         workflowStatus: "queued",
         result: {},
       });
-      await generationPromise;
+      await Promise.all([generationPromise, duplicateGenerationPromise]);
+      await generateStoryboardVideos(workbench);
     } finally {
       globalThis.window = previousWindow;
     }
 
+    assert.equal(createVideoTaskCallCount, 1);
     const updatedStoryboard = workbench.ui.episodeStoryboardMap["episode-clear-composer"][0];
     assert.equal(workbench.ui.prompt, "");
     assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
@@ -6870,6 +7519,129 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.videoGenerationResult?.attachmentItems?.length, 1);
     assert.equal(workbench.ui.videoGenerationResult?.attachmentItems?.[0]?.kind, "audio");
     assert.equal(updatedStoryboard.generationState.lastSubmission?.attachmentItems?.[0]?.url, "/uploads/audio.wav");
+  });
+
+  it("adopts the authoritative active task and restores the draft on a target-busy conflict", async () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-target-busy",
+      linkedShotId: "shot-target-busy",
+      description: "target busy",
+      generationState: {},
+    };
+    const activeTaskId = "active-video-task-from-another-tab";
+    let includeActiveTaskId = true;
+    const workbench = {
+      state: {
+        project: { id: "project-target-busy", aspectRatio: "16:9", resolution: "1080p" },
+        assetReview: { readyForGeneration: true },
+        shots: [],
+        projectDetail: {
+          project: { id: "project-target-busy", projectId: "project-target-busy", name: "busy" },
+          episodes: [{ id: "episode-target-busy", title: "忙碌测试", status: "draft" }],
+          shots: [],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        },
+      },
+      api: {
+        async createVideoTask() {
+          const error = new Error("当前分镜已有视频生成任务进行中，请等待完成后再试。");
+          error.status = 409;
+          error.errorCode = "generation_target_busy";
+          if (includeActiveTaskId) {
+            error.taskId = activeTaskId;
+          }
+          throw error;
+        },
+        async getGenerationTask() {
+          return { taskId: activeTaskId, status: "running", workflowStatus: "running", result: {} };
+        },
+      },
+      ui: {
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "storyboard",
+        museBoardMode: "storyboard",
+        episodeMediaMode: "video",
+        videoGenerationMode: "first-frame",
+        selectedEpisodeId: "episode-target-busy",
+        selectedStoryboardId: storyboard.id,
+        selectedStoryboard: storyboard,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-target-busy": [storyboard] },
+        storyboardConversationHistory: {},
+        taskCenterTasksById: {},
+        prompt: "不能丢失的跨标签页草稿",
+        selectedModelId: "sora-2",
+        episodeWorkbenchAttachments: [],
+        episodeWorkbenchSelectedAttachmentIds: [],
+        generationParameterValues: { size: "1280x720", durationSec: "12" },
+        episodeGenerationConfig: {
+          defaultVideoModelCode: "sora-2",
+          models: [{
+            modelCode: "sora-2",
+            mediaType: "video",
+            supportedModes: ["first-frame", "image_to_video"],
+            parameterSchema: {
+              size: { options: ["1280x720"] },
+              durationSec: { options: ["12"] },
+            },
+          }],
+        },
+        validationMessage: "",
+        toast: "",
+        busy: false,
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+    const previousWindow = globalThis.window;
+    globalThis.window = { setTimeout(callback, delayMs) { return { callback, delayMs }; }, clearTimeout() {} };
+
+    try {
+      await generateStoryboardVideos(workbench);
+
+      const adoptedStoryboard = workbench.ui.episodeStoryboardMap["episode-target-busy"][0];
+      assert.equal(workbench.ui.prompt, "不能丢失的跨标签页草稿");
+      assert.equal(workbench.ui.videoGenerationResult?.taskId, activeTaskId);
+      assert.equal(adoptedStoryboard.generationState.lastSubmission?.taskId, activeTaskId);
+      assert.equal(workbench.ui.taskCenterTasksById[activeTaskId]?.taskId, activeTaskId);
+      assert.equal(workbench.ui.generationPollingActive, true);
+      assert.equal(
+        (workbench.ui.storyboardConversationHistory[`video:${storyboard.id}`] ?? [])
+          .some((entry) => entry.status === "failed"),
+        false,
+      );
+
+      includeActiveTaskId = false;
+      const resetStoryboard = {
+        ...workbench.ui.episodeStoryboardMap["episode-target-busy"][0],
+        generationState: {},
+      };
+      workbench.ui.storyboards = [resetStoryboard];
+      workbench.ui.episodeStoryboardMap["episode-target-busy"] = [resetStoryboard];
+      workbench.ui.selectedStoryboard = resetStoryboard;
+      workbench.ui.videoGenerationResult = null;
+      workbench.ui.taskCenterTasksById = {};
+      workbench.ui.generationPollingActive = false;
+      workbench.ui.prompt = "另一个子账户不能丢失的草稿";
+      await generateStoryboardVideos(workbench);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    const updatedStoryboard = workbench.ui.episodeStoryboardMap["episode-target-busy"][0];
+    assert.equal(workbench.ui.prompt, "另一个子账户不能丢失的草稿");
+    assert.equal(workbench.ui.videoGenerationResult, null);
+    assert.equal(updatedStoryboard.generationState.lastSubmission, null);
+    assert.equal(workbench.ui.taskCenterTasksById[activeTaskId], undefined);
+    assert.equal(workbench.ui.generationPollingActive, false);
+    assert.equal(
+      (workbench.ui.storyboardConversationHistory[`video:${storyboard.id}`] ?? [])
+        .some((entry) => entry.status === "failed"),
+      false,
+    );
   });
 
   it("keeps video submission snapshot aligned with the actual configured payload fields", () => {
@@ -6973,6 +7745,39 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(html, /episode-replica-task-status provider_submitted[^>]*>生成中/);
     assert.doesNotMatch(html, /<article class="episode-replica-result-panel visible">[\s\S]*?<time>/);
     assert.doesNotMatch(html, /class="episode-replica-progress-box"/);
+  });
+
+  it("does not rewrite a completed storyboard task without media back to running", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-completed-without-media",
+      linkedShotId: "shot-completed-without-media",
+      generationState: {},
+    };
+    const workbench = {
+      ui: {
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        storyboardConversationHistory: {},
+        videoGenerationResult: null,
+        museScopeMode: "storyboard",
+      },
+    };
+
+    applyEpisodeGenerationTaskResult(workbench, {
+      taskId: "task-completed-without-media",
+      status: "completed",
+      workflowStatus: "completed",
+      targetType: "storyboard",
+      targetId: storyboard.linkedShotId,
+      result: {},
+    }, storyboard.id, "video", { persistConversation: false });
+
+    assert.equal(workbench.ui.videoGenerationResult.status, "result_unknown");
+    assert.equal(workbench.ui.videoGenerationResult.platform.workflowStatus, "result_unknown");
+    assert.match(workbench.ui.videoGenerationResult.failure.displayMessage, /没有拿到可用的生成结果/);
   });
 
   it("maps storyboard generation stages to compact progress percents", () => {
@@ -20577,6 +21382,124 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /muse-prompt-dock/);
   });
 
+  it("does not mark the current composer as generating for an unrelated active task", () => {
+    const storyboards = addStoryboard([]);
+    const html = renderProductionWorkbench({
+      state: {
+        ...buildProjectState(),
+        shots: [],
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          episodeMediaMode: "video",
+          museScopeMode: "storyboard",
+          selectedEpisodeId: "episode-new",
+          storyboards,
+          episodeStoryboardMap: { "episode-new": storyboards },
+          selectedStoryboard: storyboards[0],
+          selectedStoryboardId: storyboards[0].id,
+          generationPollingActive: true,
+          videoGenerationResult: {
+            taskId: "another-storyboard-running-task",
+            status: "running",
+            mediaKind: "video",
+            storyboardId: "another-storyboard",
+            selectionContext: { selectedStoryboardId: "another-storyboard" },
+          },
+        }),
+      },
+    });
+
+    assert.match(
+      html,
+      /<button class="episode-replica-generate"[^>]*data-action="generate-videos"[\s\S]*?<strong class="episode-replica-generate-label">生成<\/strong>/,
+    );
+    assert.doesNotMatch(html, /episode-replica-generate-label">生成中<\/strong>/);
+  });
+
+  it("marks the current composer as generating while its selected task is pending", () => {
+    const storyboards = addStoryboard([]);
+    for (const status of ["running", "external_submitted"]) {
+      const html = renderProductionWorkbench({
+        state: {
+          ...buildProjectState(),
+          shots: [],
+        },
+        session: { user: { phone: "+86 13800138000" } },
+        ui: {
+          ...buildProjectUi({
+            projectPanelMode: "episode-workbench",
+            projectInteriorSection: "episodes",
+            episodeMediaMode: "video",
+            museScopeMode: "storyboard",
+            selectedEpisodeId: "episode-new",
+            storyboards,
+            episodeStoryboardMap: { "episode-new": storyboards },
+            selectedStoryboard: storyboards[0],
+            selectedStoryboardId: storyboards[0].id,
+            generationPollingActive: true,
+            videoGenerationResult: {
+              taskId: `selected-storyboard-${status}-task`,
+              status,
+              mediaKind: "video",
+              storyboardId: storyboards[0].id,
+              selectionContext: { selectedStoryboardId: storyboards[0].id },
+            },
+          }),
+        },
+      });
+
+      assert.match(html, /<button class="episode-replica-generate"[^>]*data-action="generate-videos"[^>]*disabled/);
+      assert.match(html, /episode-replica-generate-label">生成中<\/strong>/);
+      assert.match(html, /<section class="episode-replica-prompt[^>]*\sinert(?:\s|>)/);
+    }
+  });
+
+  it("blocks the current storyboard from authoritative task-center state even when global polling is false", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-task-center-pending",
+      linkedShotId: "shot-task-center-pending",
+    };
+    const workbench = {
+      ui: buildProjectUi({
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        generationPollingActive: false,
+        videoGenerationResult: null,
+        storyboardConversationHistory: {},
+        taskCenterTasksById: {
+          "task-center-pending": {
+            taskId: "task-center-pending",
+            kind: "video",
+            targetType: "storyboard",
+            targetId: storyboard.linkedShotId,
+            status: "external_submitted",
+          },
+        },
+      }),
+    };
+
+    assert.equal(isCurrentEpisodeComposerGenerationPendingForTest(
+      workbench,
+      "storyboard",
+      "video",
+      { storyboardId: storyboard.id },
+    ), true);
+    workbench.ui.taskCenterTasksById["task-center-pending"].status = "failed";
+    assert.equal(isCurrentEpisodeComposerGenerationPendingForTest(
+      workbench,
+      "storyboard",
+      "video",
+      { storyboardId: storyboard.id },
+    ), false);
+  });
+
   it("deletes real project episodes through the project-scoped endpoint", async () => {
     const episodeId = "10000000-0000-4000-8000-000000000001";
     const projectId = "project-1";
@@ -24944,6 +25867,8 @@ describe("production workbench project tab", () => {
         },
       ],
     };
+    const deletedEntryHtml = renderAssetConversationEntryForPolling(deletedEntry, "character", "image");
+    assert.match(deletedEntryHtml, /data-result-action="delete"[^>]*data-task-id="asset-image-character-1"/);
     const workbench = {
       ui: buildProjectUi({
         projectPanelMode: "episode-workbench",
@@ -25055,6 +25980,8 @@ describe("production workbench project tab", () => {
       },
       fixedImages: [],
     };
+    const failedEntryHtml = renderAssetConversationEntryForPolling(failedEntry, "character", "image");
+    assert.match(failedEntryHtml, /data-result-action="delete"[^>]*data-task-id="asset-conversation-timeout-1"/);
     const workbench = {
       ui: buildProjectUi({
         projectPanelMode: "episode-workbench",
@@ -43363,6 +44290,13 @@ describe("production workbench project tab", () => {
       taskId: "storyboard-video-task-keep",
       promptPreview: "保留这一条。",
     };
+    storyboards[0] = {
+      ...storyboards[0],
+      generationState: {
+        ...(storyboards[0].generationState ?? {}),
+        lastSubmission: deletedEntry,
+      },
+    };
     const workbench = {
       ui: buildProjectUi({
         projectPanelMode: "episode-workbench",
@@ -43447,6 +44381,117 @@ describe("production workbench project tab", () => {
       remainingEntry.taskId,
     );
     assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-video-task-keep");
+    assert.equal(workbench.ui.selectedStoryboard?.generationState?.lastSubmission ?? null, null);
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      ...deletedEntry,
+      status: "failed",
+      workflowStatus: "failed",
+      targetType: "storyboard",
+      targetId: storyboards[0].id,
+      failure: { displayMessage: "删除后的旧任务回调不得恢复结果。" },
+    });
+    assert.equal(workbench.ui.storyboardConversationHistory[`video:${storyboards[0].id}`].length, 1);
+    assert.equal(workbench.ui.videoGenerationResult?.taskId, "storyboard-video-task-keep");
+
+    workbench.api.deleteStoryboardConversationTurn = async () => ({
+      deleted: false,
+      deletedCount: 0,
+      entries: [remainingEntry],
+    });
+    workbench.ui.generationResultDeleteTarget = {
+      scope: "storyboard",
+      mediaKind: "video",
+      storyboardId: storyboards[0].id,
+      taskId: remainingEntry.taskId,
+    };
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-delete-generation-result" },
+    });
+    assert.equal(workbench.ui.storyboardConversationHistory[`video:${storyboards[0].id}`].length, 1);
+    assert.match(workbench.ui.toast, /删除失败/);
+  });
+
+  it("deletes a failed storyboard generation by turn id when the provider task id is missing", async () => {
+    const calls = [];
+    const storyboards = addStoryboard([]).map((storyboard) => ({
+      ...storyboard,
+      id: "storyboard-10000000-0000-4000-8000-000000000778",
+    }));
+    const failedEntry = {
+      storyboardId: storyboards[0].id,
+      mediaKind: "video",
+      turnId: "storyboard-video-failed-turn",
+      taskId: null,
+      status: "failed",
+      failureCode: "provider_submission_failed",
+      failure: { displayMessage: "供应商未返回任务编号。" },
+    };
+    const failedEntryHtml = renderStoryboardGenerationEntryForPolling(
+      storyboards[0],
+      failedEntry,
+      "video",
+    );
+    assert.match(failedEntryHtml, /data-result-action="delete"[^>]*data-task-id="storyboard-video-failed-turn"/);
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000001",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedStoryboardId: storyboards[0].id,
+        storyboards,
+        storyboardConversationHistory: {
+          [`video:${storyboards[0].id}`]: [failedEntry],
+        },
+        videoGenerationResult: failedEntry,
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "10000000-0000-4000-8000-000000000001", title: "真实剧集" }],
+          shots: [],
+        },
+      },
+      api: {
+        async deleteStoryboardConversationTurn(episodeId, storyboardId, turnId, mediaMode) {
+          calls.push({ episodeId, storyboardId, turnId, mediaMode });
+          return { deleted: true, entries: [] };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector !== ".episode-replica-stage-body") return null;
+          return { innerHTML: "" };
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "episode-result-action",
+        resultAction: "delete",
+        mediaKind: "video",
+        taskId: "",
+      },
+    });
+
+    assert.equal(workbench.ui.generationResultDeleteTarget?.taskId, "storyboard-video-failed-turn");
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-delete-generation-result" },
+    });
+
+    assert.deepEqual(calls, [{
+      episodeId: "10000000-0000-4000-8000-000000000001",
+      storyboardId: "10000000-0000-4000-8000-000000000778",
+      turnId: "storyboard-video-failed-turn",
+      mediaMode: "video",
+    }]);
+    assert.deepEqual(workbench.ui.storyboardConversationHistory[`video:${storyboards[0].id}`], []);
+    assert.equal(workbench.ui.videoGenerationResult, null);
   });
 
   it("sets only the storyboard video without changing its content or materials", async () => {

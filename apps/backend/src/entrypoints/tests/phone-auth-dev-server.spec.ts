@@ -181,6 +181,30 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       await db.query(
         `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            response_redacted_json, created_by_user_id, created_at, updated_at
+          )
+          VALUES (
+            $1, NULL, $2, $3,
+            'image-provider', 'episode.image.generate', $4, $4,
+            $4, $4, '{}'::jsonb, 'succeeded',
+            jsonb_build_object('data', jsonb_build_array(jsonb_build_object('b64_json', repeat('A', 6000000)))),
+            $5, '2026-07-14T08:00:17.000Z', '2026-07-14T08:00:18.000Z'
+          )
+        `,
+        [
+          randomUUID(),
+          workflowId,
+          taskId,
+          `task-center-large-success:${taskId}`,
+          userId,
+        ],
+      );
+      await db.query(
+        `
           INSERT INTO tasks (
             id, workflow_id, task_type, status, queue_name, input_snapshot_json,
             target_entity_type, target_entity_id, created_at, updated_at
@@ -211,7 +235,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const response = await fetch(
         `${server.origin}/api/task-center/tasks?page=1&pageSize=20&status=poll&taskIds=${taskId}`,
-        { headers: { cookie } },
+        { headers: { cookie }, signal: AbortSignal.timeout(3000) },
       );
       const envelope = await response.json();
       const batchResponse = await fetch(`${server.origin}/api/generation-tasks/batch`, {
@@ -293,6 +317,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `
           UPDATE ai_generation_task_snapshots
           SET status = 'queued', progress_stage = 'queued', progress_percent = 10,
+              failure_json = '{"failureCode":"stale_provider_failure","displayMessage":"旧失败信息"}'::jsonb,
               completed_at = NULL, updated_at = '2026-07-14T08:00:09.000Z'
           WHERE task_id = $1
         `,
@@ -309,7 +334,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
 
       assert.equal(readOnlyResponse.status, 200);
-      assert.equal(readOnlyEnvelope.data.items[0].status, "queued");
+      assert.equal(readOnlyEnvelope.data.items[0].status, "completed");
+      assert.equal(readOnlyEnvelope.data.items[0].failure, null);
       assert.deepEqual(unchangedSnapshot.rows, [{ status: "queued", progress_stage: "queued" }]);
 
       await db.query(
@@ -321,6 +347,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
               updated_at = '2026-07-14T08:00:20.000Z'
           WHERE task_id = $1
         `,
+        [taskId],
+      );
+      await db.query(
+        "UPDATE tasks SET status = 'failed', updated_at = '2026-07-14T08:00:20.000Z' WHERE id = $1",
         [taskId],
       );
       await db.query(
@@ -456,7 +486,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
             )
             VALUES (
               $1, 'test-provider', 'episode.image.generate', $2, $3,
-              $4, $5, $6::jsonb, 'succeeded', '{}'::jsonb, $7,
+              $4, $5, $6::jsonb, 'succeeded',
+              jsonb_build_object('data', jsonb_build_array(jsonb_build_object('b64_json', repeat('A', 6000000)))), $7,
               '2026-07-16T09:00:00.000Z', '2026-07-16T09:00:18.000Z'
             )
           `,
@@ -486,6 +517,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       const response = await fetch(`${server.origin}/api/task-center/tasks?page=1&pageSize=20`, {
         headers: { cookie: fixture.memberCookie },
+        signal: AbortSignal.timeout(3000),
       });
       const envelope = await response.json();
 
@@ -6252,6 +6284,61 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const createAssetEnvelope = await createAssetResponse.json();
       const assetId = createAssetEnvelope.data.asset.assetId;
 
+      const deleteProjectedFailureResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages/asset-image-projected-failure?mediaMode=image`,
+        {
+          method: "DELETE",
+          headers: { cookie },
+        },
+      );
+      const deleteProjectedFailureEnvelope = await deleteProjectedFailureResponse.json();
+      const replayProjectedFailureResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [{
+              turnId: "asset-image-projected-failure",
+              messageKey: "asset-image-projected-failure:result",
+              messageType: "result",
+              taskId: "asset-image-projected-failure",
+              status: "failed",
+              payload: {
+                taskId: "asset-image-projected-failure",
+                assetId,
+                mediaKind: "image",
+                promptPreview: "迟到的任务投影不得恢复已经删除的失败记录。",
+                failureCode: "provider_submission_failed",
+              },
+            }],
+          }),
+        },
+      );
+      const replayProjectedFailureEnvelope = await replayProjectedFailureResponse.json();
+      const repeatDeleteProjectedFailureResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages/asset-image-projected-failure?mediaMode=image`,
+        {
+          method: "DELETE",
+          headers: { cookie },
+        },
+      );
+      const repeatDeleteProjectedFailureEnvelope = await repeatDeleteProjectedFailureResponse.json();
+
+      assert.equal(deleteProjectedFailureResponse.status, 200);
+      assert.equal(deleteProjectedFailureEnvelope.data.deleted, true);
+      assert.equal(deleteProjectedFailureEnvelope.data.deletedCount, 0);
+      assert.deepEqual(deleteProjectedFailureEnvelope.data.entries, []);
+      assert.equal(replayProjectedFailureResponse.status, 200);
+      assert.deepEqual(replayProjectedFailureEnvelope.data.entries, []);
+      assert.equal(repeatDeleteProjectedFailureResponse.status, 200);
+      assert.equal(repeatDeleteProjectedFailureEnvelope.data.deleted, true);
+      assert.equal(repeatDeleteProjectedFailureEnvelope.data.deletedCount, 0);
+
       const appendConversationResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
         {
@@ -6691,11 +6778,64 @@ describe("phone auth dev server", { concurrency: false }, () => {
                   },
                 },
               },
+              {
+                turnId: "asset-image-turn-with-payload-task-id",
+                messageKey: "asset-image-turn-with-payload-task-id:user_request",
+                messageType: "user_request",
+                status: "failed",
+                payload: {
+                  taskId: "asset-image-payload-task-id",
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "第三条：任务编号仅存在于消息载荷。",
+                  quickReferenceItems: [],
+                  selectionContext: {
+                    assetTab: "character",
+                    selectedAssetId: assetId,
+                    selectedAssetName: "废土主角",
+                  },
+                },
+              },
             ],
           }),
         },
       );
-      await appendConversationResponse.json();
+      const appendConversationEnvelope = await appendConversationResponse.json();
+
+      const deletePayloadTaskConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages/asset-image-payload-task-id?mediaMode=image`,
+        {
+          method: "DELETE",
+          headers: { cookie },
+        },
+      );
+      const deletePayloadTaskConversationEnvelope = await deletePayloadTaskConversationResponse.json();
+      const replayPayloadTaskConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [{
+              turnId: "asset-image-turn-with-payload-task-id",
+              messageKey: "asset-image-turn-with-payload-task-id:user_request",
+              messageType: "user_request",
+              status: "failed",
+              payload: {
+                taskId: "asset-image-payload-task-id",
+                assetId,
+                mediaKind: "image",
+                promptPreview: "轮询不得恢复载荷任务编号已删除的记录。",
+              },
+            }],
+          }),
+        },
+      );
+      const replayPayloadTaskConversationEnvelope = await replayPayloadTaskConversationResponse.json();
 
       const deleteConversationResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages/asset-image-task-1?mediaMode=image`,
@@ -6708,6 +6848,40 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const deleteConversationEnvelope = await deleteConversationResponse.json();
 
+      const replayDeletedConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [
+              {
+                turnId: "asset-image-task-1",
+                messageKey: "asset-image-task-1:result",
+                messageType: "result",
+                taskId: "asset-image-task-1",
+                status: "completed",
+                payload: {
+                  assetId,
+                  mediaKind: "image",
+                  promptPreview: "轮询不得恢复已经删除的第一条记录。",
+                  fixedImages: [{
+                    id: "asset-image-result-1",
+                    label: "角色图片",
+                    url: "https://example.com/generated-result-must-stay-deleted.png",
+                  }],
+                },
+              },
+            ],
+          }),
+        },
+      );
+      const replayDeletedConversationEnvelope = await replayDeletedConversationResponse.json();
+
       const getConversationResponse = await fetch(
         `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image`,
         {
@@ -6716,22 +6890,102 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const getConversationEnvelope = await getConversationResponse.json();
 
+      const getConversationSummaryResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image&includeMessages=0`,
+        {
+          headers: { cookie },
+        },
+      );
+      const getConversationSummaryEnvelope = await getConversationSummaryResponse.json();
+
       assert.equal(createProjectResponse.status, 200);
       assert.equal(createEpisodeResponse.status, 200);
       assert.equal(createAssetResponse.status, 200);
-      assert.equal(appendConversationResponse.status, 200);
+      assert.equal(appendConversationResponse.status, 200, JSON.stringify(appendConversationEnvelope));
+      assert.equal(deletePayloadTaskConversationResponse.status, 200);
+      assert.equal(deletePayloadTaskConversationEnvelope.data.deleted, true);
+      assert.equal(deletePayloadTaskConversationEnvelope.data.deletedCount, 1);
+      assert.equal(deletePayloadTaskConversationEnvelope.data.entries.length, 2);
+      assert.equal(replayPayloadTaskConversationResponse.status, 200);
+      assert.equal(replayPayloadTaskConversationEnvelope.data.entries.length, 2);
       assert.equal(deleteConversationResponse.status, 200);
+      assert.equal(replayDeletedConversationResponse.status, 200);
       assert.equal(getConversationResponse.status, 200);
+      assert.equal(getConversationSummaryResponse.status, 200);
       assert.equal(deleteConversationEnvelope.data.deleted, true);
       assert.equal(deleteConversationEnvelope.data.deletedCount, 2);
       assert.equal(deleteConversationEnvelope.data.entries.length, 1);
       assert.equal(deleteConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
+      assert.equal(replayDeletedConversationEnvelope.data.entries.length, 1);
+      assert.equal(replayDeletedConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
       assert.equal(getConversationEnvelope.data.entries.length, 1);
       assert.equal(getConversationEnvelope.data.entries[0].taskId, "asset-image-task-2");
+      assert.equal(getConversationSummaryEnvelope.data.entries.length, 1);
+      assert.equal(getConversationSummaryEnvelope.data.entries[0].taskId, "asset-image-task-2");
       assert.equal(
         getConversationEnvelope.data.entries[0].promptPreview,
         "第二条：补强眼神和面部风尘细节。",
       );
+
+      const deleteLastConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages/asset-image-task-2?mediaMode=image`,
+        {
+          method: "DELETE",
+          headers: { cookie },
+        },
+      );
+      const deleteLastConversationEnvelope = await deleteLastConversationResponse.json();
+      const replayLastDeletedConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation/messages`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie,
+          },
+          body: JSON.stringify({
+            mediaMode: "image",
+            messages: [{
+              turnId: "asset-image-task-2",
+              messageKey: "asset-image-task-2:result",
+              messageType: "result",
+              taskId: "asset-image-task-2",
+              status: "completed",
+              payload: {
+                assetId,
+                mediaKind: "image",
+                promptPreview: "最后一条删除后也不能被轮询恢复。",
+                fixedImages: [{
+                  id: "asset-image-result-2",
+                  label: "角色图片 2",
+                  url: "https://example.com/last-deleted-result-must-not-return.png",
+                }],
+              },
+            }],
+          }),
+        },
+      );
+      const replayLastDeletedConversationEnvelope = await replayLastDeletedConversationResponse.json();
+      const getEmptyConversationResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image`,
+        { headers: { cookie } },
+      );
+      const getEmptyConversationEnvelope = await getEmptyConversationResponse.json();
+      const getEmptyConversationSummaryResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/assets/${assetId}/conversation?mediaMode=image&includeMessages=0`,
+        { headers: { cookie } },
+      );
+      const getEmptyConversationSummaryEnvelope = await getEmptyConversationSummaryResponse.json();
+
+      assert.equal(deleteLastConversationResponse.status, 200);
+      assert.equal(deleteLastConversationEnvelope.data.deleted, true);
+      assert.equal(deleteLastConversationEnvelope.data.deletedCount, 2);
+      assert.equal(replayLastDeletedConversationResponse.status, 200);
+      assert.equal(replayLastDeletedConversationEnvelope.data.entries.length, 0);
+      assert.equal(getEmptyConversationResponse.status, 200);
+      assert.equal(getEmptyConversationEnvelope.data.entries.length, 0);
+      assert.equal(getEmptyConversationSummaryResponse.status, 200);
+      assert.equal(getEmptyConversationSummaryEnvelope.data.entries.length, 0);
     } finally {
       await server.close();
     }
@@ -9915,6 +10169,69 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const videoTaskEnvelope = await videoTaskResponse.json();
       const videoTaskId = String(videoTaskEnvelope.data?.taskId ?? "");
+      await db.query("UPDATE tasks SET status = 'running' WHERE id = $1", [videoTaskId]);
+      const createSecondMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: ownerCookie,
+        },
+        body: JSON.stringify({
+          teamAccount: `gen_member_2_${idempotencySuffix.slice(0, 8)}`,
+          displayName: "Generation Member Two",
+          projectIds: [createdProject.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const createdSecondMember = await createSecondMemberResponse.json();
+      await db.query("UPDATE team_members SET member_credits = 10000 WHERE id = $1", [
+        createdSecondMember.member.membershipId,
+      ]);
+      const secondMemberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdSecondMember.member.memberLoginAccount,
+        createdSecondMember.temporaryPassword,
+      );
+      const conflictingVideoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": `team-member-generation-video-conflict-${idempotencySuffix}`,
+            cookie: secondMemberCookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "second member must not duplicate the active target",
+            model: "video_mock_1",
+            parameters: { durationSec: 5 },
+          }),
+        },
+      );
+      const conflictingVideoTaskEnvelope = await conflictingVideoTaskResponse.json();
+      const conflictingTaskSideEffects = await db.query<{
+        task_count: number | string;
+        second_member_debit_count: number | string;
+      }>(
+        `
+          SELECT
+            (
+              SELECT count(*)::int
+              FROM tasks candidate
+              WHERE candidate.target_entity_id = $1
+                AND candidate.task_type = (SELECT task_type FROM tasks WHERE id = $2)
+            ) AS task_count,
+            (
+              SELECT count(*)::int
+              FROM credit_ledger_entries entry
+              WHERE entry.team_member_id = $3
+                AND entry.source_type = 'team_member_generation_task'
+            ) AS second_member_debit_count
+        `,
+        [episodeId, videoTaskId, createdSecondMember.member.membershipId],
+      );
       const videoDebit = await db.query<{ amount: number | string }>(
         `
           SELECT amount
@@ -9972,6 +10289,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(imageTaskEnvelope.data.kind, "image");
       assert.equal(videoTaskResponse.status, 200, `video task failed: ${JSON.stringify(videoTaskEnvelope)}`);
       assert.equal(videoTaskEnvelope.data.kind, "video");
+      assert.equal(createSecondMemberResponse.status, 200);
+      assert.equal(conflictingVideoTaskResponse.status, 409);
+      assert.equal(conflictingVideoTaskEnvelope.errorCode, "generation_target_busy");
+      assert.equal(conflictingVideoTaskEnvelope.details.taskId, undefined);
+      assert.equal(Number(conflictingTaskSideEffects.rows[0]?.task_count ?? -1), 1);
+      assert.equal(Number(conflictingTaskSideEffects.rows[0]?.second_member_debit_count ?? -1), 0);
       assert.equal(timeoutResponse.status, 200);
       assert.equal(timeoutEnvelope.data.status, "failed");
       assert.equal(timeoutEnvelope.data.failureCode, "task_timeout");
@@ -10338,6 +10661,47 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const videoTaskEnvelope = await videoTaskResponse.json();
       assert.equal(videoTaskResponse.status, 200, `video task failed: ${JSON.stringify(videoTaskEnvelope)}`);
       const taskId = videoTaskEnvelope.data.taskId;
+      const duplicateVideoTaskResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/generation/video-tasks`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": `seedance-video-task-duplicate-${idempotencySuffix}`,
+            cookie,
+          },
+          body: JSON.stringify({
+            targetType: "episode",
+            targetId: episodeId,
+            motionPrompt: "a different prompt must not be rebound to the active task",
+            model: "seedance-i2v-pro",
+            parameters: {
+              durationSec: 5,
+              resolution: "1080p",
+              aspectRatio: "16:9",
+              firstFrame: {
+                name: "first-frame.png",
+                url: "https://input.example.test/first-frame.png",
+              },
+            },
+          }),
+        },
+      );
+      const duplicateVideoTaskEnvelope = await duplicateVideoTaskResponse.json();
+      const duplicateSideEffects = await db.query<{
+        task_count: number | string;
+        reservation_count: number | string;
+      }>(
+        `
+          SELECT
+            count(DISTINCT task.id)::int AS task_count,
+            count(DISTINCT reservation.id)::int AS reservation_count
+          FROM tasks task
+          LEFT JOIN credit_reservations reservation ON reservation.task_id = task.id
+          WHERE task.target_entity_id = $1
+        `,
+        [episodeId],
+      );
       const providerRequest = await db.query<{
         provider_request_id: string;
         status: string;
@@ -10409,6 +10773,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ),
       );
       assert.equal(videoTaskResponse.status, 200);
+      assert.equal(duplicateVideoTaskResponse.status, 409);
+      assert.equal(duplicateVideoTaskEnvelope.errorCode, "generation_target_busy");
+      assert.equal(duplicateVideoTaskEnvelope.details.taskId, taskId);
+      assert.equal(Number(duplicateSideEffects.rows[0]?.task_count ?? -1), 1);
+      assert.equal(Number(duplicateSideEffects.rows[0]?.reservation_count ?? -1), 1);
       assert.equal(videoTaskEnvelope.data.kind, "video");
       assert.ok(["queued", "running"].includes(videoTaskEnvelope.data.status));
       assert.equal(videoTaskEnvelope.data.result, null);

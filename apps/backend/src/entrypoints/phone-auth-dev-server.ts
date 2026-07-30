@@ -684,6 +684,14 @@ class GenerationMembershipRequiredError extends Error {
   }
 }
 
+class GenerationTargetBusyError extends Error {
+  readonly code = "generation_target_busy";
+
+  constructor(readonly taskId: string | null) {
+    super("当前分镜已有视频生成任务进行中，请等待完成后再试。");
+  }
+}
+
 function actorContextFromAuthenticatedUser(user: AuthenticatedUser): ActorContext {
   return {
     userId: user.id,
@@ -5369,12 +5377,21 @@ async function listTaskCenterTasks(
           snapshot.task_id,
           snapshot.task_mode AS task_type,
           snapshot.media_type AS media_kind,
-          CASE snapshot.status
-            WHEN 'succeeded' THEN 'completed'
+          CASE
+            WHEN task.status = 'succeeded' THEN 'completed'
+            WHEN task.status IN ('failed', 'canceled', 'result_unknown', 'manual_review_required') THEN task.status
+            WHEN snapshot.status = 'succeeded' THEN 'completed'
             ELSE snapshot.status
           END AS status,
-          snapshot.progress_stage,
-          snapshot.progress_percent,
+          CASE
+            WHEN task.status = 'succeeded' THEN 'completed'
+            WHEN task.status IN ('failed', 'canceled', 'result_unknown', 'manual_review_required') THEN task.status
+            ELSE snapshot.progress_stage
+          END AS progress_stage,
+          CASE
+            WHEN task.status IN ('succeeded', 'failed', 'canceled', 'result_unknown', 'manual_review_required') THEN 100
+            ELSE snapshot.progress_percent
+          END AS progress_percent,
           snapshot.project_id,
           project.name AS project_name,
           snapshot.episode_id,
@@ -5385,14 +5402,23 @@ async function listTaskCenterTasks(
           model_config.display_name AS model_name,
           snapshot.request_summary_json - 'prompt' - 'promptPreview' AS request_summary_json,
           snapshot.result_assets_json,
-          snapshot.failure_json,
-          provider_request.response_redacted_json AS provider_response_json,
+          CASE WHEN task.status = 'succeeded' THEN NULL ELSE snapshot.failure_json END AS failure_json,
+          CASE
+            WHEN task.status = 'succeeded' THEN NULL::jsonb
+            ELSE provider_request.response_redacted_json
+          END AS provider_response_json,
           snapshot.submitted_at,
           snapshot.started_at,
-          COALESCE(snapshot.completed_at, snapshot.failed_at) AS returned_at,
-          snapshot.updated_at,
-          snapshot.updated_at::text AS updated_at_cursor
+          CASE
+            WHEN task.status = 'succeeded' THEN COALESCE(snapshot.completed_at, task.updated_at)
+            WHEN task.status IN ('failed', 'canceled', 'result_unknown', 'manual_review_required')
+            THEN COALESCE(snapshot.failed_at, task.updated_at)
+            ELSE COALESCE(snapshot.completed_at, snapshot.failed_at)
+          END AS returned_at,
+          GREATEST(snapshot.updated_at, task.updated_at) AS updated_at,
+          GREATEST(snapshot.updated_at, task.updated_at)::text AS updated_at_cursor
         FROM ai_generation_task_snapshots snapshot
+        JOIN tasks task ON task.id = snapshot.task_id
         LEFT JOIN projects project ON project.id = snapshot.project_id
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
         LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
@@ -5472,7 +5498,10 @@ async function listTaskCenterTasks(
             )
             ELSE NULL::jsonb
           END AS failure_json,
-          request.response_redacted_json AS provider_response_json,
+          CASE
+            WHEN request.status = 'failed' THEN request.response_redacted_json
+            ELSE NULL::jsonb
+          END AS provider_response_json,
           request.created_at AS submitted_at,
           request.external_submission_started_at AS started_at,
           CASE WHEN request.status IN ('succeeded', 'failed') THEN request.updated_at ELSE NULL END AS returned_at,
@@ -5499,9 +5528,9 @@ async function listTaskCenterTasks(
         FROM task_center_items item
         WHERE (
           $3::text IS NULL
-          OR ($3 = 'active' AND item.status IN ('queued', 'running', 'pending', 'submitted', 'processing'))
+          OR ($3 = 'active' AND item.status IN ('queued', 'running', 'pending', 'submitted', 'external_submitted', 'accepted', 'provider_submitted', 'processing'))
           OR ($3 = 'poll' AND (
-            item.status IN ('queued', 'running', 'pending', 'submitted', 'processing')
+            item.status IN ('queued', 'running', 'pending', 'submitted', 'external_submitted', 'accepted', 'provider_submitted', 'processing')
             OR ($6::uuid[] IS NOT NULL AND item.task_id = ANY($6))
           ))
           OR ($3 = 'failed' AND item.status IN ('failed', 'result_unknown', 'manual_review_required'))
@@ -5724,7 +5753,7 @@ async function reconcileTerminalTaskCenterSnapshots(
       FROM tasks task
       WHERE snapshot.task_id = task.id
         AND snapshot.user_id = $1
-        AND snapshot.status IN ('queued', 'running', 'pending', 'submitted', 'accepted', 'provider_submitted', 'processing')
+        AND snapshot.status IN ('queued', 'running', 'pending', 'submitted', 'external_submitted', 'accepted', 'provider_submitted', 'processing')
         AND task.status IN ('succeeded', 'failed', 'canceled', 'result_unknown', 'manual_review_required')
     `,
     [input.userId],
@@ -8187,6 +8216,30 @@ async function createGenerationTask(
       ? requestSnapshot.targetType
       : requestSnapshot.targetType === "canvas" ? "canvas" : "episode";
   const targetEntityId = resolvedSnapshotTargetId;
+  const activeVideoTask = input.kind === "video"
+    ? await queryOne<{ id: string; team_member_id: string | null }>(
+        db,
+        `
+          SELECT task.id, NULLIF(task.input_snapshot_json->>'teamMemberId', '') AS team_member_id
+          FROM tasks task
+          JOIN workflows workflow ON workflow.id = task.workflow_id
+          WHERE workflow.created_by_user_id = $1
+            AND task.task_type = $2
+            AND task.target_entity_type = $3
+            AND task.target_entity_id = $4
+            AND task.status IN ('queued', 'running')
+          ORDER BY task.created_at DESC
+          LIMIT 1
+          FOR UPDATE OF task
+        `,
+        [context.userId, config.taskType, targetEntityType, targetEntityId],
+      )
+    : null;
+  if (activeVideoTask) {
+    const callerTeamMemberId = context.actor.teamMember?.id ?? null;
+    const canReadActiveTask = !callerTeamMemberId || activeVideoTask.team_member_id === callerTeamMemberId;
+    throw new GenerationTargetBusyError(canReadActiveTask ? activeVideoTask.id : null);
+  }
   const timeoutMs = generationTimeoutMsFor(input.kind);
   const timeoutAt = new Date(input.now.getTime() + timeoutMs);
   const workflow = await createWorkflowWithTasks(db, {
@@ -13770,16 +13823,15 @@ async function deleteEpisodeAssetConversationTurnRoute(
     episodeId: input.episodeId,
     assetId: input.assetId,
     mediaMode: input.mediaMode,
+  }) ?? await upsertAssetConversationThread(db, {
+    projectId: context.project.id,
+    episodeId: input.episodeId,
+    assetId: input.assetId,
+    mediaMode: input.mediaMode,
+    createdByUserId: input.authenticated.user.id,
+    latestMessageAt: input.now,
+    now: input.now,
   });
-  if (!thread) {
-    return {
-      deleted: false,
-      deletedCount: 0,
-      thread: null,
-      messages: [],
-      entries: [],
-    };
-  }
 
   const deleted = await deleteAssetConversationTurn(db, {
     threadId: thread.threadId,
@@ -13796,7 +13848,7 @@ async function deleteEpisodeAssetConversationTurnRoute(
     : null;
   const remainingMessages = await sanitizeConversationMessagesForClient(db, deleted.remainingMessages);
   return {
-    deleted: (deleted.deletedCount ?? 0) > 0,
+    deleted: true,
     deletedCount: deleted.deletedCount ?? 0,
     thread: nextThread,
     messages: remainingMessages,
@@ -24702,6 +24754,14 @@ export function createPhoneAuthDevServer(
             }
             if (error instanceof GenerationMembershipRequiredError) {
               return writeJson(response, envelopedError(403, error.code, error.message));
+            }
+            if (error instanceof GenerationTargetBusyError) {
+              return writeJson(response, envelopedError(
+                409,
+                error.code,
+                error.message,
+                error.taskId ? { taskId: error.taskId } : {},
+              ));
             }
             if (error instanceof GenerationModelRequestValidationError || error instanceof GenerationRequestValidationError) {
               return writeJson(response, envelopedError(400, error.code, error.message));

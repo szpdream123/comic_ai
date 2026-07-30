@@ -25,6 +25,16 @@ const EPISODE_ASSET_TAB_IDS = new Set(ASSET_TABS.map((tab) => tab.id));
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 const STORYBOARD_GENERATOR_SOURCE_SURFACE = "storyboard-generator-modal";
 const STORYBOARD_GENERATOR_PROMPT_LEAD = "避免场景过于相似创建一个电影制作板/视觉规划表";
+const GENERATION_PENDING_STATUSES = new Set([
+  "queued",
+  "running",
+  "pending",
+  "submitted",
+  "external_submitted",
+  "accepted",
+  "provider_submitted",
+  "processing",
+]);
 export const EPISODE_VOICE_PAGE_SIZE = 10;
 
 export const EPISODE_WORKBENCH_FALLBACK_ASSET_IDS = [];
@@ -259,6 +269,11 @@ export function renderEpisodeWorkbench({
     storyboardMediaKind,
     storyboardMediaKind === "video" ? videoGenerationResult : imageGenerationResult,
   ).map((entry) => enrichGenerationStyleDisplayMetadata(entry, generationUiState));
+  const currentGenerationPollingActive = Boolean(generationPollingActive) && (
+    scopeMode === "assets"
+      ? assetConversationEntries.some(isPendingGenerationEntry)
+      : storyboardConversationEntries.some(isPendingGenerationEntry)
+  );
   const assetStageTitle = selectedAsset
     ? `${resolveAssetLabel(normalizedActiveAssetTab)}${selectedAsset?.name ?? ""}`
     : "";
@@ -344,7 +359,7 @@ export function renderEpisodeWorkbench({
             videoMode: activeVideoGenerationMode,
             attachments: episodeWorkbenchAttachments,
             selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
-            generationPollingActive,
+            generationPollingActive: currentGenerationPollingActive,
             scopeMode,
           })}
         </section>
@@ -470,6 +485,13 @@ export function renderEpisodeWorkbench({
         : ""}
     </section>
   `;
+}
+
+function isPendingGenerationEntry(entry) {
+  const status = String(
+    entry?.status ?? entry?.workflowStatus ?? entry?.platform?.workflowStatus ?? "",
+  ).trim().toLowerCase();
+  return GENERATION_PENDING_STATUSES.has(status);
 }
 
 function formatEpisodeWorkbenchIdentity(title, id) {
@@ -1286,6 +1308,10 @@ function resolveGenerationTaskId(generationResult) {
   );
 }
 
+function resolveGenerationActionId(generationResult) {
+  return resolveGenerationTaskId(generationResult) || String(generationResult?.turnId ?? "").trim() || null;
+}
+
 function resolveGenerationResolutionLabel(generationResult) {
   return String(
     generationResult?.parameters?.size ??
@@ -1742,7 +1768,8 @@ function renderGeneratedStage(selectedStoryboard, isVideo, generationResult) {
     generationResult?.platform?.tasks?.[0]?.taskId ??
     generationResult?.id ??
     "";
-  const actionTaskAttr = taskId ? ` data-task-id="${escapeAttr(String(taskId))}"` : "";
+  const actionId = taskId || String(generationResult?.turnId ?? "").trim();
+  const actionTaskAttr = actionId ? ` data-task-id="${escapeAttr(String(actionId))}"` : "";
   const workflowStatus = String(
     generationResult?.status ??
       generationResult?.platform?.workflowStatus ??
@@ -2457,7 +2484,7 @@ function resolveGenerationResultFailureMessage(generationResult, statusOverride 
 }
 
 function renderFixedImageResults(generationResult, assetKind = "character") {
-  const taskId = resolveGenerationTaskId(generationResult);
+  const taskId = resolveGenerationActionId(generationResult);
   const images = Array.isArray(generationResult?.fixedImages) ? generationResult.fixedImages : [];
   if (!images.length) {
     return "";
@@ -2490,7 +2517,7 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
 }
 
 function renderFailedFixedImageResult(generationResult, assetKind = "character", failureMessage = "") {
-  const taskId = resolveGenerationTaskId(generationResult);
+  const taskId = resolveGenerationActionId(generationResult);
   const reviewRequired = ["manual_review_required", "result_unknown"].includes(
     String(generationResult?.status ?? generationResult?.platform?.workflowStatus ?? "").toLowerCase(),
   );
@@ -2519,7 +2546,7 @@ function renderFailedFixedImageResult(generationResult, assetKind = "character",
 }
 
 function renderFailedStoryboardGenerationResult(generationResult, isVideo = false, failureMessage = "") {
-  const taskId = resolveGenerationTaskId(generationResult);
+  const taskId = resolveGenerationActionId(generationResult);
   const mediaKind = isVideo ? "video" : "image";
   const actionTaskAttr = taskId ? ` data-task-id="${escapeAttr(String(taskId))}"` : "";
   const fallbackReason = resolveGenerationFailureMessage(
@@ -2797,6 +2824,7 @@ export function renderPromptDock({
   const generateCostLabel = !isVideoMode && selectedImageStyleCredits > 0
     ? `${modelGenerateCost} + ${selectedImageStyleCredits}积分`
     : String(generateCost);
+  const interactionLocked = Boolean(busy || generationPollingActive);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -2805,7 +2833,7 @@ export function renderPromptDock({
         : "分镜：";
 
   return `
-    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}">
+    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionLocked ? 'inert aria-busy="true"' : ""}>
       ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
       ${
@@ -2904,7 +2932,7 @@ export function renderPromptDock({
           action: generateAction,
           cost: generateCost,
           costLabel: generateCostLabel,
-          busy,
+          busy: busy || generationPollingActive,
           label: generationPollingActive ? "生成中" : "生成",
         })}
       </div>
@@ -3173,7 +3201,7 @@ function renderLipSyncDock({
     ? generationUiState.lipSyncAudioItems
     : (attachments ?? []).filter((item) => item?.type === "audio" || item?.kind === "audio"));
   return `
-    <section class="episode-replica-prompt lip-sync-mode">
+    <section class="episode-replica-prompt lip-sync-mode" ${busy || generationPollingActive ? 'inert aria-busy="true"' : ""}>
       <div class="episode-replica-stage-head lip-sync-head">
         <p class="episode-replica-stage-title">配音内容</p>
       </div>
@@ -3191,7 +3219,7 @@ function renderLipSyncDock({
           >${escapeHtml(voiceName || "+ 配音员")}</button>
           ${voiceName ? `<span class="episode-replica-lipsync-voice-chip">${escapeHtml(voiceName)}</span>` : ""}
         </div>
-        <button class="episode-replica-generate" type="button" data-action="generate-videos" ${disabled(busy)}>
+        <button class="episode-replica-generate" type="button" data-action="generate-videos" ${disabled(busy || generationPollingActive)}>
           <span>${escapeHtml(String(lipSyncCost))}</span>
           <strong class="episode-replica-generate-label">${generationPollingActive ? "生成中" : "生成"}</strong>
         </button>

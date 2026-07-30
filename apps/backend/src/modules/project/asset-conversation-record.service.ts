@@ -7,6 +7,9 @@ export type AssetConversationMediaMode = "image" | "video";
 export type AssetConversationMessageType = "user_request" | "task_status" | "result";
 export type AssetConversationStatus = "queued" | "running" | "completed" | "failed" | "canceled";
 
+const conversationTurnDeletedPayloadKey = "__conversationTurnDeleted";
+const conversationTurnDeletedMessageKeyPrefix = "__deleted_turn__:";
+
 export interface AssetConversationThread {
   threadId: string;
   projectId: string;
@@ -271,7 +274,13 @@ export async function upsertAssetConversationMessages(
   }));
   const result = await db.query<AssetConversationMessageRow>(
     `
-      WITH incoming AS (
+      WITH locked_thread AS MATERIALIZED (
+        SELECT id
+        FROM episode_asset_conversation_threads
+        WHERE id = $1
+        FOR UPDATE
+      ),
+      incoming AS (
         SELECT
           (item->>'inputOrder')::int AS input_order,
           (item->>'id')::uuid AS id,
@@ -298,19 +307,32 @@ export async function upsertAssetConversationMessages(
           updated_at
         )
         SELECT
-          id,
+          incoming.id,
           $1,
-          turn_id,
-          message_key,
-          message_type,
-          status,
-          task_id,
-          payload_json,
+          incoming.turn_id,
+          incoming.message_key,
+          incoming.message_type,
+          incoming.status,
+          incoming.task_id,
+          incoming.payload_json,
           $2,
           $3,
           $3
         FROM incoming
-        ORDER BY input_order
+        CROSS JOIN locked_thread
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM episode_asset_conversation_messages deleted_turn
+          WHERE deleted_turn.thread_id = $1
+            AND LEFT(deleted_turn.message_key, length('${conversationTurnDeletedMessageKeyPrefix}')) = '${conversationTurnDeletedMessageKeyPrefix}'
+            AND deleted_turn.payload_json->>'${conversationTurnDeletedPayloadKey}' = 'true'
+            AND deleted_turn.turn_id IN (
+              incoming.turn_id,
+              incoming.task_id,
+              NULLIF(incoming.payload_json->>'taskId', '')
+            )
+        )
+        ORDER BY incoming.input_order
         ON CONFLICT (thread_id, message_key)
         DO UPDATE SET
           turn_id = EXCLUDED.turn_id,
@@ -348,6 +370,10 @@ export async function listAssetConversationMessages(
       SELECT *
       FROM episode_asset_conversation_messages
       WHERE thread_id = $1
+        AND NOT (
+          LEFT(message_key, length('${conversationTurnDeletedMessageKeyPrefix}')) = '${conversationTurnDeletedMessageKeyPrefix}'
+          AND payload_json->>'${conversationTurnDeletedPayloadKey}' = 'true'
+        )
       ORDER BY created_at ASC, id ASC
     `,
     [input.threadId],
@@ -370,6 +396,10 @@ export async function listAssetConversationEntrySummaries(
           COALESCE(NULLIF(turn_id, ''), NULLIF(task_id, ''), message_key) AS turn_key
         FROM episode_asset_conversation_messages
         WHERE thread_id = $1
+          AND NOT (
+            LEFT(message_key, length('${conversationTurnDeletedMessageKeyPrefix}')) = '${conversationTurnDeletedMessageKeyPrefix}'
+            AND payload_json->>'${conversationTurnDeletedPayloadKey}' = 'true'
+          )
       ),
       turn_order AS (
         SELECT
@@ -544,36 +574,107 @@ export async function deleteAssetConversationTurn(
     now: Date;
   },
 ): Promise<{ deletedCount: number; remainingMessages: AssetConversationMessage[] }> {
-  const previousMessages = await listAssetConversationMessages(db, {
-    threadId: input.threadId,
-  });
-
-  await db.query(
+  const deletion = await queryOne<{ deleted_count: number | string }>(
+    db,
     `
-      DELETE FROM episode_asset_conversation_messages
-      WHERE thread_id = $1
-        AND (turn_id = $2 OR task_id = $2)
+      WITH locked_thread AS MATERIALIZED (
+        SELECT id
+        FROM episode_asset_conversation_threads
+        WHERE id = $1
+        FOR UPDATE
+      ),
+      matched_messages AS MATERIALIZED (
+        SELECT
+          message.turn_id,
+          message.task_id,
+          NULLIF(message.payload_json->>'taskId', '') AS payload_task_id
+        FROM episode_asset_conversation_messages message
+        CROSS JOIN locked_thread
+        WHERE message.thread_id = $1
+          AND NOT (
+            LEFT(message.message_key, length('${conversationTurnDeletedMessageKeyPrefix}')) = '${conversationTurnDeletedMessageKeyPrefix}'
+            AND message.payload_json->>'${conversationTurnDeletedPayloadKey}' = 'true'
+          )
+          AND (
+            message.turn_id = $2
+            OR message.task_id = $2
+            OR message.payload_json->>'taskId' = $2
+          )
+      ),
+      matched_identifiers AS MATERIALIZED (
+        SELECT turn_id AS identifier
+        FROM matched_messages
+        UNION
+        SELECT task_id AS identifier
+        FROM matched_messages
+        UNION
+        SELECT payload_task_id AS identifier
+        FROM matched_messages
+      ),
+      deleted_identifiers AS MATERIALIZED (
+        SELECT $2::text AS identifier
+        UNION
+        SELECT identifier
+        FROM matched_identifiers
+        WHERE identifier IS NOT NULL AND identifier <> ''
+      ),
+      deleted_messages AS (
+        DELETE FROM episode_asset_conversation_messages message
+        USING locked_thread
+        WHERE message.thread_id = locked_thread.id
+          AND NOT (
+            LEFT(message.message_key, length('${conversationTurnDeletedMessageKeyPrefix}')) = '${conversationTurnDeletedMessageKeyPrefix}'
+            AND message.payload_json->>'${conversationTurnDeletedPayloadKey}' = 'true'
+          )
+          AND (
+            message.turn_id IN (SELECT identifier FROM deleted_identifiers)
+            OR message.task_id IN (SELECT identifier FROM deleted_identifiers)
+            OR message.payload_json->>'taskId' IN (SELECT identifier FROM deleted_identifiers)
+          )
+        RETURNING message.id
+      ),
+      deletion_markers AS (
+        INSERT INTO episode_asset_conversation_messages (
+          id,
+          thread_id,
+          turn_id,
+          message_key,
+          message_type,
+          status,
+          task_id,
+          payload_json,
+          created_by_user_id,
+          created_at,
+          updated_at
+        )
+        SELECT
+          gen_random_uuid(),
+          $1,
+          identifier,
+          '${conversationTurnDeletedMessageKeyPrefix}' || identifier,
+          'result',
+          'canceled',
+          NULL,
+          jsonb_build_object('${conversationTurnDeletedPayloadKey}', true),
+          NULL,
+          $3,
+          $3
+        FROM deleted_identifiers
+        ON CONFLICT (thread_id, message_key)
+        DO UPDATE SET
+          payload_json = EXCLUDED.payload_json,
+          updated_at = EXCLUDED.updated_at
+        RETURNING id
+      )
+      SELECT (SELECT count(*)::int FROM deleted_messages) AS deleted_count
+      FROM (SELECT count(*) FROM deletion_markers) marker_write
     `,
-    [input.threadId, input.turnIdOrTaskId],
+    [input.threadId, input.turnIdOrTaskId, input.now],
   );
 
   const remainingMessages = await listAssetConversationMessages(db, {
     threadId: input.threadId,
   });
-
-  if (!remainingMessages.length) {
-    await db.query(
-      `
-        DELETE FROM episode_asset_conversation_threads
-        WHERE id = $1
-      `,
-      [input.threadId],
-    );
-    return {
-      deletedCount: Math.max(0, previousMessages.length - remainingMessages.length),
-      remainingMessages,
-    };
-  }
 
   const latestMessageAt = remainingMessages.at(-1)?.createdAt ?? input.now;
   await db.query(
@@ -587,7 +688,7 @@ export async function deleteAssetConversationTurn(
   );
 
   return {
-    deletedCount: Math.max(0, previousMessages.length - remainingMessages.length),
+    deletedCount: Number(deletion?.deleted_count ?? 0),
     remainingMessages,
   };
 }
