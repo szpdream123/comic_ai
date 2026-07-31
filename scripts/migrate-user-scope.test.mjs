@@ -72,7 +72,20 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 46);
+      assert.equal(migrations.rows[0]?.count, 48);
+      const repairIndexMigrations = await client.query(`
+        SELECT migration_name
+        FROM "${schema}"."app_schema_migrations"
+        WHERE migration_name IN (
+          '20260731-failed-image-submission-active-repair-index.sql',
+          '20260731-failed-image-submission-snapshot-repair-index.sql'
+        )
+        ORDER BY migration_name
+      `);
+      assert.deepEqual(repairIndexMigrations.rows.map((row) => row.migration_name), [
+        "20260731-failed-image-submission-active-repair-index.sql",
+        "20260731-failed-image-submission-snapshot-repair-index.sql",
+      ]);
       assert.equal(users.rows[0]?.count, 1);
       const characterLibraryTables = await client.query(
         `SELECT count(*)::int AS count FROM information_schema.tables
@@ -186,12 +199,14 @@ describe("user-centric migration runner", { concurrency: false }, () => {
           WHEN 'user-centric-schema.sql' THEN 'd8b1d9a272896aaa46c3473ebf8161973dfa589c1eb78af687a5b7bbe1cb3a9f'
           WHEN 'model-reference-seed.sql' THEN '3d584b47e1bb425356d77c85076aedf7060cc2e66bd473110b4ae8cf0be975b3'
           WHEN '20260720-enable-project-multi-canvases.sql' THEN '5984810d4b1fd7e6f1aecf6b5413536a28ae7e936794d36dd9581f8db8a25f17'
+          WHEN '20260728-add-bananarouter-models.sql' THEN 'c34889dfd4cae6f8cef5c179dfaddad87bb0384b9d8f5fe10a50054fb26d5a4c'
           ELSE checksum
         END
         WHERE migration_name IN (
           'user-centric-schema.sql',
           'model-reference-seed.sql',
-          '20260720-enable-project-multi-canvases.sql'
+          '20260720-enable-project-multi-canvases.sql',
+          '20260728-add-bananarouter-models.sql'
         )
       `);
       const compatibilityResult = spawnSync(
@@ -207,6 +222,25 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         compatibilityResult.status,
         0,
         compatibilityResult.stderr || compatibilityResult.stdout,
+      );
+      await client.query(`
+        UPDATE "${schema}"."app_schema_migrations"
+        SET checksum = '99a6a8111f77709b887d65cf71df83b9a0ad1c8f6bb7037319ae3b29ac3b433a'
+        WHERE migration_name = '20260728-add-bananarouter-models.sql'
+      `);
+      const crlfCompatibilityResult = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(
+        crlfCompatibilityResult.status,
+        0,
+        crlfCompatibilityResult.stderr || crlfCompatibilityResult.stdout,
       );
 
       await client.query(`

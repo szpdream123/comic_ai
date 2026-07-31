@@ -66,6 +66,13 @@ const nonTransactionalMigrationIndexes = new Map([
 ]);
 const nonTransactionalMigrationNames = new Set(nonTransactionalMigrationIndexes.keys());
 const compatibleChecksumTransitions = new Map([
+  ["20260728-add-bananarouter-models.sql", {
+    recorded: [
+      "c34889dfd4cae6f8cef5c179dfaddad87bb0384b9d8f5fe10a50054fb26d5a4c",
+      "99a6a8111f77709b887d65cf71df83b9a0ad1c8f6bb7037319ae3b29ac3b433a",
+    ],
+    current: "9b555fbef017f23accf2986a7ee1542be091f8b022560aba955828c95566542a",
+  }],
   ["20260725-create-canvas-agent-runtime.sql", {
     recorded: "e8bda0ec7ec8d507b7dc3156406787e346e07029330c2980e8a09cb048f93e4a",
     current: "28ffba53b3940b5d9cf993662b8b3f523c7c8d6876ae21405b420990fc545345",
@@ -116,7 +123,12 @@ try {
 async function loadMigrations() {
   return Promise.all(migrations.map(async ([name, relativePath]) => {
     const sql = await readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
-    return { name, sql, checksum: createHash("sha256").update(sql).digest("hex") };
+    return {
+      name,
+      sql,
+      checksum: createHash("sha256").update(sql.replaceAll("\r\n", "\n")).digest("hex"),
+      legacyChecksum: createHash("sha256").update(sql).digest("hex"),
+    };
   }));
 }
 
@@ -165,11 +177,16 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
 
   for (const migration of loaded) {
     const recorded = applied.get(migration.name);
-    if (recorded && recorded !== migration.checksum && !isCompatibleChecksum(
-      migration.name,
-      recorded,
-      migration.checksum,
-    )) {
+    if (
+      recorded
+      && recorded !== migration.checksum
+      && recorded !== migration.legacyChecksum
+      && !isCompatibleChecksum(
+        migration.name,
+        recorded,
+        migration.checksum,
+      )
+    ) {
       throw new Error(`migration_checksum_mismatch:${migration.name}`);
     }
     if (recorded) {
@@ -281,7 +298,13 @@ function quoteIdentifier(identifier) {
 function isCompatibleChecksum(name, recorded, current) {
   if (mutableSnapshotMigrationNames.has(name)) return true;
   const transition = compatibleChecksumTransitions.get(name);
-  return transition?.recorded === recorded && transition.current === current;
+  const recordedChecksums = Array.isArray(transition?.recorded)
+    ? transition.recorded
+    : [transition?.recorded];
+  const currentChecksums = Array.isArray(transition?.current)
+    ? transition.current
+    : [transition?.current];
+  return recordedChecksums.includes(recorded) && currentChecksums.includes(current);
 }
 
 async function assertExpectedExistingSchema(db) {
