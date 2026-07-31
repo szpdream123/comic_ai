@@ -27,6 +27,7 @@ test("Three.js panorama controller releases renderer, texture, material, geometr
     classList: {
       add(value) { classNames.add(value); },
       remove(value) { classNames.delete(value); },
+      contains(value) { return classNames.has(value); },
     },
     querySelector: () => canvas,
     getBoundingClientRect: () => ({ width: 420, height: 220 }),
@@ -71,6 +72,8 @@ test("Three.js panorama controller releases renderer, texture, material, geometr
   assert.equal(await controller.bind(), true);
   assert.equal(classNames.has("is-three-ready"), true);
   assert.deepEqual(await controller.capture("pano-1"), { type: "image/png" });
+  root.isConnected = false;
+  assert.equal(await controller.capture("pano-1"), null);
   controller.dispose();
   assert.ok(calls.includes("texture"));
   assert.ok(calls.includes("material"));

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { __canvasAgentExecutorTestUtils } from "../canvas-agent-executor.ts";
 import { CanvasAgentPolicyService } from "../canvas-agent-policy.service.ts";
 import { createDefaultCanvasAgentToolRegistry } from "../canvas-agent-tool.registry.ts";
 
@@ -60,6 +61,184 @@ test("media tool uses generation intake and never a provider adapter", async () 
   assert.equal(calls, 1);
   assert.equal(result.status, "waiting_external");
   assert.equal(result.generationTaskId, "generation-1");
+});
+
+test("media tool resolves authorized file grants into reference images", async () => {
+  let request: Record<string, unknown> | undefined;
+  let targetNodeId: string | null | undefined;
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    context: {
+      resolveFileGrant: async (input) => {
+        assert.equal(input.grantId, "grant-1");
+        assert.equal(input.canvasId, "canvas-1");
+        assert.equal(input.conversationId, "conversation-1");
+        return { storageObjectId: "storage-1", purpose: "角色参考" };
+      },
+    },
+    generationIntake: {
+      create: async (input) => {
+        request = input.request;
+        targetNodeId = input.targetNodeId;
+        return { generationTaskId: "generation-1" };
+      },
+    },
+  });
+  await registry.execute("generation.create", {
+    kind: "image",
+    fileGrantIds: ["grant-1"],
+    request: { model: "image-model", prompt: "保持角色外观" },
+  }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-1",
+  });
+  assert.deepEqual((request?.parameters as Record<string, unknown>)?.referenceImages, [{ storageObjectId: "storage-1" }]);
+  assert.equal(targetNodeId, null);
+});
+
+test("media tool reuses the one explicitly referenced Canvas node as its generation target", async () => {
+  let targetNodeId: string | null | undefined;
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    generationIntake: {
+      create: async (input) => {
+        targetNodeId = input.targetNodeId;
+        return { generationTaskId: "generation-targeted" };
+      },
+    },
+  });
+  await registry.execute("generation.create", {
+    kind: "image",
+    request: { model: "image-model", prompt: "重新生成这张图片" },
+  }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-target",
+    referencedNodeIds: ["referenced-image-node"],
+  });
+  assert.equal(targetNodeId, "referenced-image-node");
+});
+
+test("executor persists referenced Canvas media on a generation step before approval", () => {
+  const input = { kind: "image", request: { model: "image-model", prompt: "改成白天" } };
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
+      "generation.create",
+      input,
+      ["referenced-image-node"],
+      ["referenced-file-grant"],
+    ),
+    {
+      ...input,
+      targetNodeId: "referenced-image-node",
+      fileGrantIds: ["referenced-file-grant"],
+    },
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
+      "generation.create",
+      input,
+      ["image-one", "image-two"],
+      [],
+    ),
+    input,
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.fileGrantIdsFromContent({
+      fileGrantIds: ["grant-one"],
+      nodeReferences: [{ fileGrantId: "grant-one" }, { fileGrantId: "grant-two" }],
+    }),
+    ["grant-one", "grant-two"],
+  );
+});
+
+test("executor accepts fenced and prose-wrapped JSON model responses", () => {
+  const expected = {
+    kind: "tool_call",
+    toolId: "canvas.patch",
+    callId: "call-1",
+    input: { expectedRevision: 1, operations: [] },
+  };
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.parseTurn(`\`\`\`json\n${JSON.stringify(expected)}\n\`\`\``),
+    expected,
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.parseTurn(`我会按以下操作执行：${JSON.stringify(expected)} 已准备完成。`),
+    expected,
+  );
+  assert.throws(
+    () => __canvasAgentExecutorTestUtils.parseTurn("我无法按协议执行"),
+    /canvas_agent_model_response_invalid_json/,
+  );
+});
+
+test("media tool requires a target selection when multiple Canvas nodes are explicitly referenced", async () => {
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    generationIntake: { create: async () => ({ generationTaskId: "unexpected" }) },
+  });
+  await assert.rejects(registry.execute("generation.create", {
+    kind: "image",
+    request: { model: "image-model", prompt: "重新生成" },
+  }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-target-required",
+    referencedNodeIds: ["image-one", "image-two"],
+  }), /canvas_agent_generation_target_node_required/);
+});
+
+test("media tool resolves an authorized video grant into sourceVideo", async () => {
+  let request: Record<string, unknown> | undefined;
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    context: {
+      resolveFileGrant: async () => ({
+        storageObjectId: "storage-video",
+        purpose: "动作参考",
+        contentType: "video/mp4",
+      }),
+    },
+    generationIntake: {
+      create: async (input) => {
+        request = input.request;
+        return { generationTaskId: "generation-video" };
+      },
+    },
+  });
+  await registry.execute("generation.create", {
+    kind: "video",
+    fileGrantIds: ["grant-video"],
+    request: { model: "video-model", prompt: "保持参考动作" },
+  }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-video",
+  });
+  assert.deepEqual((request?.parameters as Record<string, unknown>)?.sourceVideo, {
+    storageObjectId: "storage-video",
+  });
+  assert.equal((request?.parameters as Record<string, unknown>)?.referenceImages, undefined);
+});
+
+test("media tool rejects a video grant for image generation", async () => {
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    context: {
+      resolveFileGrant: async () => ({
+        storageObjectId: "storage-video",
+        purpose: "动作参考",
+        contentType: "video/mp4",
+      }),
+    },
+    generationIntake: { create: async () => ({ generationTaskId: "generation-image" }) },
+  });
+  await assert.rejects(registry.execute("generation.create", {
+    kind: "image",
+    fileGrantIds: ["grant-video"],
+    request: { model: "image-model", prompt: "错误的视频参考" },
+  }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-image-video",
+  }), /canvas_agent_file_grant_media_kind_unsupported/);
 });
 
 test("media tool requires an explicit model code", () => {

@@ -9,6 +9,7 @@ import {
   loadCanvasPromptEditorSuggestionsForTest,
   loadCanvasPromptReferenceItems,
   persistCanvasPromptEditorChangeForTest,
+  registerCanvasPromptEditorMentionForTest,
   resolveCanvasPromptMentionQueryForTest,
   updateCanvasPromptMentionStateForTest,
 } from "../src/features/production-workbench/index.js";
@@ -394,7 +395,7 @@ test("Canvas prompt mention only suggests references already added to the curren
   );
 });
 
-test("Canvas prompt mention suggests connected source nodes for image references", async () => {
+test("Canvas prompt mention only shows connected image, video, and audio media", async () => {
   const workbench = createWorkbench();
   const sourceNodeA = {
     id: "image-source",
@@ -406,17 +407,46 @@ test("Canvas prompt mention suggests connected source nodes for image references
     type: "source-image",
     data: { title: "场景图片", mediaKind: "image", previewUrl: "/uploads/scene.png" },
   };
+  const directorVideoNode = {
+    id: "director-video",
+    type: "ai-video",
+    data: {
+      title: "导演台视频",
+      mediaKind: "video",
+      resultVideoUrl: "/uploads/director.mp4",
+      thumbnailUrl: "/uploads/director.jpg",
+    },
+  };
+  const directorTextNode = {
+    id: "director-instructions",
+    type: "ai-director",
+    data: { title: "AI 导演", mediaKind: "text", text: "镜头向前推进" },
+  };
+  const unconnectedVideoNode = {
+    id: "unconnected-video",
+    type: "ai-video",
+    data: { title: "未引入视频", mediaKind: "video", resultVideoUrl: "/uploads/unused.mp4" },
+  };
   workbench.ui.canvasDocument = {
     ...workbench.ui.canvasDocument,
     nodes: workbench.ui.canvasDocument.nodes
       .map((node) => node.id === "source-node" ? { ...node, data: { ...node.data, prompt: "背景改为蓝色@" } } : node)
-      .concat(sourceNodeA, sourceNodeB),
+      .concat(sourceNodeA, sourceNodeB, directorVideoNode, directorTextNode, unconnectedVideoNode),
     edges: [
       { sourceNodeId: "image-source", targetNodeId: "source-node", data: { kind: "image" } },
       { sourceNodeId: "image-source-2", targetNodeId: "source-node", data: { kind: "image" } },
+      { sourceNodeId: "director-video", targetNodeId: "source-node", data: { kind: "video" } },
     ],
   };
   workbench.ui.canvasDocumentsByProject["canvas-1"] = workbench.ui.canvasDocument;
+  const loadedDirectorVideo = (await loadCanvasPromptReferenceItems(workbench)).find(
+    (item) => item.referenceId === "director-video",
+  );
+  assert.equal(loadedDirectorVideo.mediaKind, "video");
+  assert.equal(loadedDirectorVideo.source, "/uploads/director.mp4");
+  assert.equal((await loadCanvasPromptReferenceItems(workbench)).some(
+    (item) => item.referenceId === "director-instructions",
+  ), false);
   workbench.canvasPromptReferenceItemsCache = [
     {
       id: "node:image-source",
@@ -436,10 +466,38 @@ test("Canvas prompt mention suggests connected source nodes for image references
       label: "场景图片",
       previewUrl: "/uploads/scene.png",
     },
+    {
+      id: "node:director-video",
+      group: "node",
+      sourceGroup: "canvas",
+      referenceType: "node",
+      referenceId: "director-video",
+      label: "导演台视频",
+      previewUrl: "/uploads/director.jpg",
+    },
+    {
+      id: "node:director-instructions",
+      group: "node",
+      sourceGroup: "canvas",
+      referenceType: "node",
+      referenceId: "director-instructions",
+      label: "AI 导演",
+    },
+    {
+      id: "node:unconnected-video",
+      group: "video",
+      sourceGroup: "canvas",
+      referenceType: "node",
+      referenceId: "unconnected-video",
+      label: "未引入视频",
+    },
   ];
   workbench.canvasPromptReferenceItemsCacheCanvasId = "canvas-1";
   const structuredSuggestions = await loadCanvasPromptEditorSuggestionsForTest(workbench, "source-node");
-  assert.deepEqual(structuredSuggestions.map((item) => item.label), ["图1", "图2"]);
+  assert.deepEqual(structuredSuggestions.map((item) => item.label), ["图1", "图2", "视频1"]);
+  const directorVideoSuggestion = structuredSuggestions.find((item) => item.referenceId === "director-video");
+  assert.equal(directorVideoSuggestion.assetKind, "video");
+  assert.equal(directorVideoSuggestion.source, "/uploads/director.mp4");
   const target = {
     value: "背景改为蓝色@",
     selectionStart: "背景改为蓝色@".length,
@@ -457,7 +515,7 @@ test("Canvas prompt mention suggests connected source nodes for image references
   };
 
   assert.equal(updateCanvasPromptMentionStateForTest(workbench, target), true);
-  assert.deepEqual(workbench.ui.canvasPromptMention.items.map((item) => item.label), ["图1", "图2"]);
+  assert.deepEqual(workbench.ui.canvasPromptMention.items.map((item) => item.label), ["图1", "图2", "视频1"]);
   assert.equal(workbench.ui.canvasPromptMention.items[0].mentionDisplayToken, "【@图1】");
   assert.equal(workbench.ui.canvasPromptMention.items[0].previewUrl, "/uploads/reference.png");
   assert.equal(workbench.ui.canvasPromptMention.items[1].previewUrl, "/uploads/scene.png");
@@ -505,6 +563,10 @@ test("Canvas prompt mention suggests connected source nodes for image references
     workbench.ui.canvasDocument.nodes.find((item) => item.id === "source-node").data.prompt,
     "连续@node:image-source @node:image-source-2",
   );
+  assert.equal(registerCanvasPromptEditorMentionForTest(workbench, "source-node", directorVideoSuggestion), true);
+  assert.ok(workbench.ui.canvasDocument.edges.some((edge) => (
+    edge.sourceNodeId === "director-video" && edge.targetNodeId === "source-node"
+  )));
   assert.doesNotMatch(
     renderCanvasPromptReferenceThumbnails(node, workbench.ui.canvasDocument, workbench.ui.canvasPromptReferencePreviews),
     /canvas-generation-reference-thumb canvas-prompt-reference-thumb/,

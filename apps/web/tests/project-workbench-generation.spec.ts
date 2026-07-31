@@ -33,6 +33,7 @@ import {
   mapEpisodeStoryboardContractForTest,
   loadSelectedAssetConversationHistory,
   loadCanvasGenerationAssetsForTest,
+  loadStandaloneCanvasProjectForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
   persistCanvasSessionForTest,
@@ -32426,8 +32427,9 @@ describe("production workbench project tab", () => {
     assert.match(html, /节点模板/);
     assert.match(html, /<small>\d+ 个<\/small>/);
     assert.match(html, /data-template-id="template-script"/);
-    assert.match(html, /data-template-id="template-send-image"/);
-    assert.match(html, /data-template-id="template-video-result"/);
+    assert.doesNotMatch(html, /data-template-id="template-send-image"/);
+    assert.doesNotMatch(html, /data-template-id="template-video-result"/);
+    assert.doesNotMatch(html, /data-template-id="template-audio"/);
     assert.match(html, /data-template-id="template-upload"/);
     assert.match(html, /data-tab="director"/);
     assert.doesNotMatch(html, /交付输出/);
@@ -32477,7 +32479,6 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, false);
-    assert.equal(workbench.ui.canvasDocument.viewport.gridVisible, true);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "toggle-canvas-snap" },
@@ -32499,7 +32500,7 @@ describe("production workbench project tab", () => {
           version: 1,
           projectId: "canvas-project-main",
           episodeId: "episode-primary",
-          viewport: { x: -120, y: 48, zoom: 1.35, gridVisible: true },
+          viewport: { x: -120, y: 48, zoom: 1.35 },
           nodes: [],
           edges: [],
         },
@@ -32584,7 +32585,7 @@ describe("production workbench project tab", () => {
           version: 1,
           projectId: "canvas-project-main",
           episodeId: "episode-primary",
-          viewport: { x: -120, y: 48, zoom: 0.35, gridVisible: true },
+          viewport: { x: -120, y: 48, zoom: 0.35 },
           nodes: [
             {
               id: "send-flow",
@@ -33739,11 +33740,12 @@ describe("production workbench project tab", () => {
     assert.match(generatorGroup, /data-template-id="template-ai-director"[\s\S]*?<kbd[^>]*>7<\/kbd>/);
     assert.match(sourceGroup, /来源节点/);
     assert.match(sourceGroup, /data-template-id="template-source-text"[\s\S]*?<kbd[^>]*>Alt\+1<\/kbd>/);
-    assert.match(sourceGroup, /data-template-id="template-ai-markdown"[\s\S]*?<kbd[^>]*>Alt\+5<\/kbd>/);
+    assert.doesNotMatch(menuHtml, /template-ai-markdown|template-markdown|template-ai-animation/);
+    assert.doesNotMatch(menuHtml, /undo-canvas-change|redo-canvas-change|撤销|重做/);
     assert.match(menuHtml, /data-action="add-canvas-template" data-template-id="template-group"/);
   });
 
-  it("creates an AI Markdown node from the Alt+5 Canvas shortcut", async () => {
+  it("does not create an unavailable AI Markdown node from the former Alt+5 Canvas shortcut", async () => {
     const workbench = {
       state: buildProjectState(),
       api: {},
@@ -33770,9 +33772,7 @@ describe("production workbench project tab", () => {
       dataset: { action: "add-canvas-shortcut-source-5" },
     });
 
-    assert.equal(workbench.ui.canvasDocument.nodes.at(-1)?.type, "ai-markdown");
-    assert.equal(workbench.ui.selectedCanvasNodeId, workbench.ui.canvasDocument.nodes.at(-1)?.id);
-    assert.equal(workbench.ui.canvasContextMenu, null);
+    assert.equal(workbench.ui.canvasDocument.nodes.length, 0);
   });
 
   it("renders the percentage zoom menu and line-style toggle without removing canvas actions", () => {
@@ -34049,7 +34049,7 @@ describe("production workbench project tab", () => {
           version: 1,
           projectId: "canvas-project-main",
           episodeId: "episode-primary",
-          viewport: { x: 0, y: 0, zoom: 1, gridVisible: true, snapEnabled: true },
+          viewport: { x: 0, y: 0, zoom: 1, snapEnabled: true },
           nodes: [],
           edges: [],
         },
@@ -34298,6 +34298,8 @@ describe("production workbench project tab", () => {
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "+", ctrlKey: true }), "zoom-canvas-in");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "-", ctrlKey: true }), "zoom-canvas-out");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "0", ctrlKey: true }), "fit-canvas-view");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "z", ctrlKey: true }), "");
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "y", ctrlKey: true }), "");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "f", altKey: true, shiftKey: true }), "arrange-canvas-nodes");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: " ", code: "Space" }), "open-canvas-node-editor");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "2", code: "Digit2" }), "add-canvas-shortcut-generator-2");
@@ -36201,6 +36203,61 @@ describe("production workbench project tab", () => {
     assert.match(referenceBlock, /item\.kind === "video"[\s\S]*?item\.kind === "audio"[\s\S]*?<img/);
   });
 
+  it("renders a connected source-audio node in the video generation references", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasNodeId: "video-target",
+        canvasEditorOpen: true,
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          nodes: [
+            {
+              id: "audio-source",
+              type: "source-audio",
+              position: { x: 80, y: 120 },
+              data: {
+                mediaKind: "audio",
+                fileName: "voice.mp3",
+                audioUrl: "https://example.test/voice.mp3",
+                ports: {
+                  inputs: [],
+                  outputs: [{ id: "out_audio", kind: "audio" }],
+                },
+              },
+            },
+            {
+              id: "video-target",
+              type: "video",
+              position: { x: 520, y: 120 },
+              data: {
+                mediaKind: "video",
+                videoGenerationMode: "reference-video",
+                ports: {
+                  inputs: [{ id: "in_asset", kind: "any", accepts: ["image", "video", "audio"] }],
+                  outputs: [{ id: "out_video", kind: "video" }],
+                },
+              },
+            },
+          ],
+          edges: [
+            { id: "edge-audio", sourceNodeId: "audio-source", sourcePortId: "out_audio", targetNodeId: "video-target", targetPortId: "in_asset", data: { kind: "audio" } },
+          ],
+        },
+      }),
+    });
+    const editorIndex = html.indexOf("canvas-node-editor generation-editor video");
+    const editorHtml = html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
+
+    assert.match(editorHtml, /canvas-generation-reference-media/);
+    assert.match(editorHtml, /<small>音频<\/small>/);
+    assert.match(editorHtml, /音频1/);
+  });
+
   it("turns the current node into an editable text node from the self-written text action", async () => {
     const input = {
       innerHTML: "第一幕开场",
@@ -36423,7 +36480,7 @@ describe("production workbench project tab", () => {
     );
     assert.match(
       css,
-      /\.canvas-node-editor\.generation-editor\.video\s*\{[\s\S]*?min-height:\s*17\.25rem[\s\S]*?\}/,
+      /\.canvas-node-editor\.generation-editor\.video\s*\{[\s\S]*?min-height:\s*20rem[\s\S]*?\}/,
     );
     assert.match(
       css,
@@ -36431,7 +36488,7 @@ describe("production workbench project tab", () => {
     );
     assert.match(
       css,
-      /\.canvas-node-editor\.generation-editor\.video textarea\s*\{[\s\S]*?min-height:\s*5\.8rem[\s\S]*?\}/,
+      /\.canvas-node-editor\.generation-editor\.video textarea\s*\{[\s\S]*?min-height:\s*11rem[\s\S]*?\}/,
     );
   });
 
@@ -38179,6 +38236,135 @@ describe("production workbench project tab", () => {
     await persistCanvasSessionForTest(workbench, "canvas-main", 2);
     assert.equal(sessionSaves.length, 2);
     assert.deepEqual(sessionSaves[1].payload.selectedNodeKeys, ["node-2"]);
+  });
+
+  it("persists Canvas workspace sessions in interaction order", async () => {
+    const sessionSaves = [];
+    let persistedViewport = null;
+    const workbench = {
+      api: {
+        saveCanvasSession(_canvasProjectId, payload) {
+          let resolve;
+          const request = new Promise((done) => { resolve = done; }).then(() => {
+            persistedViewport = payload.viewport;
+            return { session: payload };
+          });
+          sessionSaves.push({ payload, resolve });
+          return request;
+        },
+      },
+      ui: {
+        canvasDocument: { viewport: { x: 0, y: 0, zoom: 1 } },
+        selectedCanvasNodeId: null,
+        canvasSessionUiState: {},
+        canvasServerRevision: 1,
+      },
+    };
+
+    const olderSave = persistCanvasSessionForTest(workbench, "canvas-main", 1);
+    await Promise.resolve();
+    workbench.ui.canvasDocument = { viewport: { x: -291, y: -468, zoom: 0.6 } };
+    const newerSave = persistCanvasSessionForTest(workbench, "canvas-main", 1);
+    await Promise.resolve();
+
+    assert.equal(sessionSaves.length, 1);
+    sessionSaves[0].resolve();
+    await olderSave;
+    await Promise.resolve();
+    assert.equal(sessionSaves.length, 2);
+    sessionSaves[1].resolve();
+    await newerSave;
+    assert.deepEqual(persistedViewport, { x: -291, y: -468, zoom: 0.6 });
+  });
+
+  it("applies the loaded Canvas session viewport to an already mounted graph", async () => {
+    const applied = [];
+    const zoomTrigger = {
+      textContent: "100%",
+      setAttribute(name, value) { this[name] = value; },
+    };
+    const zoomInput = { value: "100" };
+    const workbench = {
+      api: {
+        async getStandaloneCanvas() {
+          return {
+            canvas: {
+              serverRevision: 7,
+              document: {
+                canvasProjectId: "canvas-main",
+                viewport: { x: 0, y: 0, zoom: 0.6, gridVisible: false, snapEnabled: true },
+                nodes: [],
+                edges: [],
+              },
+            },
+          };
+        },
+        async getCanvasSession() {
+          return { session: { viewport: { x: -350, y: 136.5, zoom: 0.7 } } };
+        },
+      },
+      canvasGraph: {
+        zoomTo(zoom) { applied.push(["zoom", zoom]); },
+        translate(x, y) { applied.push(["translate", x, y]); },
+        showGrid() { applied.push(["grid", "show"]); },
+      },
+      newCanvasMount: {
+        shadowRoot: {
+          querySelector(selector) {
+            if (selector === "[data-canvas-zoom-trigger]") return zoomTrigger;
+            if (selector === "[data-canvas-zoom-value-input]") return zoomInput;
+            return null;
+          },
+        },
+      },
+      ui: {
+        canvasDocumentsByProject: {},
+      },
+    };
+
+    assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-main"), true);
+    assert.deepEqual(workbench.ui.canvasDocument.viewport, {
+      x: -350,
+      y: 136.5,
+      zoom: 0.7,
+      gridVisible: false,
+      snapEnabled: true,
+    });
+    assert.deepEqual(applied, [["zoom", 0.7], ["translate", -350, 136.5], ["grid", "show"]]);
+    assert.equal(zoomTrigger.textContent, "70%");
+    assert.equal(zoomTrigger["aria-label"], "画布缩放比例 70%");
+    assert.equal(zoomInput.value, "70");
+  });
+
+  it("loads the Canvas document and user session concurrently", async () => {
+    let documentRequested = false;
+    let sessionRequested = false;
+    let resolveDocument;
+    const workbench = {
+      api: {
+        getStandaloneCanvas() {
+          documentRequested = true;
+          return new Promise((resolve) => { resolveDocument = resolve; });
+        },
+        async getCanvasSession() {
+          sessionRequested = true;
+          return { session: null };
+        },
+      },
+      ui: { canvasDocumentsByProject: {} },
+    };
+
+    const loading = loadStandaloneCanvasProjectForTest(workbench, "canvas-main");
+    await Promise.resolve();
+    assert.equal(documentRequested, true);
+    assert.equal(sessionRequested, true);
+    resolveDocument({
+      canvas: {
+        serverRevision: 1,
+        document: { canvasProjectId: "canvas-main", viewport: {}, nodes: [], edges: [] },
+      },
+    });
+    assert.equal(await loading, true);
   });
 
   it("flushes the current Canvas viewport before the page is hidden", () => {

@@ -2,8 +2,41 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createEmptyTestDb, listTableNames } from "../test-db.ts";
-import { ensureFoundationSchema } from "../dev-db.ts";
+import { ensureFoundationSchema, loadDatabasePoolConfig } from "../dev-db.ts";
 import { applySqlMigration } from "../migrations.ts";
+
+describe("database pool configuration", () => {
+  it("uses bounded defaults when pool settings are absent", () => {
+    assert.deepEqual(loadDatabasePoolConfig({}), {
+      max: 20,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    });
+  });
+
+  it("loads explicitly configured pool settings", () => {
+    assert.deepEqual(
+      loadDatabasePoolConfig({
+        DATABASE_POOL_MAX: "20",
+        DATABASE_POOL_IDLE_TIMEOUT_MS: "60000",
+        DATABASE_POOL_CONNECTION_TIMEOUT_MS: "10000",
+      }),
+      {
+        max: 20,
+        idleTimeoutMillis: 60_000,
+        connectionTimeoutMillis: 10_000,
+      },
+    );
+  });
+
+  it("rejects invalid pool settings with the environment variable name", () => {
+    assert.throws(() => loadDatabasePoolConfig({ DATABASE_POOL_MAX: "0" }), /DATABASE_POOL_MAX/);
+    assert.throws(
+      () => loadDatabasePoolConfig({ DATABASE_POOL_CONNECTION_TIMEOUT_MS: "not-a-number" }),
+      /DATABASE_POOL_CONNECTION_TIMEOUT_MS/,
+    );
+  });
+});
 
 describe("development database schema", { concurrency: false }, () => {
   it("applies the complete migration chain without recreating removed scope tables", async () => {

@@ -1,5 +1,6 @@
 import { renderCanvasSurfaceForHost } from "../production-workbench/project-detail.js";
 import {
+  applyCanvasGraphInteractionMode,
   applyCanvasGraphViewportPreferences,
   clearCanvasGraphEditorOverlay,
   mountCanvasGraphEditorOverlay,
@@ -7,6 +8,7 @@ import {
   refreshCanvasWorkflowGraph,
   refreshCanvasWorkflowNode,
   syncCanvasGraphViewport,
+  syncCanvasZoomControlDisplay,
 } from "../production-workbench/canvas/canvas-x6-graph.js";
 import {
   arrangeCanvasDocumentOnGrid,
@@ -19,6 +21,7 @@ import {
 } from "../production-workbench/canvas/canvas-media-node.js";
 import {
   createCanvasAgentController,
+  resolveCanvasAgentPanelMaxWidth,
   renderNewCanvasLayout,
 } from "./canvas-agent-panel.js";
 import {
@@ -54,7 +57,6 @@ export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-s
 const instances = new WeakMap();
 const canvasAudioWaveformCache = new Map();
 const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
-const CANVAS_AGENT_PANEL_MAX_WIDTH = 720;
 const CANVAS_STYLE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000];
 
 function isCanvasNodeInteractiveTarget(event) {
@@ -315,6 +317,8 @@ function createProductionCanvasAdapter(dependencies = {}) {
             void panoramaViewerController.bind();
             void bindCanvasAudioWaveforms(surface);
             agentController.restoreTimelineScroll(agentTimelineScroll);
+            void agentController.syncPromptEditor();
+            syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
             context.onRender?.({ workbench, graph, surface });
             return;
           }
@@ -335,6 +339,8 @@ function createProductionCanvasAdapter(dependencies = {}) {
         void panoramaViewerController.bind();
         void bindCanvasAudioWaveforms(surface);
         agentController.restoreTimelineScroll(agentTimelineScroll);
+        void agentController.syncPromptEditor();
+        syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
         context.onRender?.({ workbench, graph, surface });
       };
       const renderInteraction = async () => {
@@ -351,6 +357,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
         refreshCanvasWorkflowGraph(workbench);
         void bindCanvasAudioWaveforms(surface);
+        syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
         context.onRender?.({ workbench, graph, surface });
       };
       const renderSelection = async () => {
@@ -363,6 +370,59 @@ function createProductionCanvasAdapter(dependencies = {}) {
         syncCanvasNodeEditor(currentFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
         syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
+        syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
+        context.onRender?.({ workbench, graph, surface });
+      };
+      const renderSidebar = async () => {
+        if (disposed || !graph || typeof document === "undefined") return render();
+        const template = document.createElement("template");
+        template.innerHTML = createMarkup();
+        const currentSidebar = surface.querySelector?.(".canvas-sidebar");
+        const nextSidebar = template.content.querySelector?.(".canvas-sidebar");
+        const currentCanvasPanel = surface.querySelector?.(".canvas-panel");
+        const nextCanvasPanel = template.content.querySelector?.(".canvas-panel");
+        const currentWorkspace = surface.querySelector?.("[data-new-canvas-workspace]");
+        const nextWorkspace = template.content.querySelector?.("[data-new-canvas-workspace]");
+        if (!currentSidebar || !nextSidebar || !currentCanvasPanel || !nextCanvasPanel || !currentWorkspace || !nextWorkspace) return render();
+        currentSidebar.replaceWith(nextSidebar);
+        currentCanvasPanel.setAttribute("data-canvas-sidebar-mode", nextCanvasPanel.getAttribute("data-canvas-sidebar-mode") ?? "nodes");
+        currentCanvasPanel.setAttribute("style", nextCanvasPanel.getAttribute("style") ?? "");
+        currentWorkspace.setAttribute("style", nextWorkspace.getAttribute("style") ?? "");
+        syncCanvasStageOverlays(surface, template.content);
+        const currentZoomTools = surface.querySelector?.(".canvas-zoom-tools");
+        const nextZoomTools = template.content.querySelector?.(".canvas-zoom-tools");
+        if (currentZoomTools && nextZoomTools) currentZoomTools.replaceWith(nextZoomTools);
+        syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
+        context.onRender?.({ workbench, graph, surface });
+      };
+      const renderControls = async () => {
+        if (disposed || !graph || typeof document === "undefined") return render();
+        const template = document.createElement("template");
+        template.innerHTML = createMarkup();
+        syncCanvasStageOverlays(surface, template.content);
+        const currentStage = surface.querySelector?.(".canvas-stage");
+        const nextStage = template.content.querySelector?.(".canvas-stage");
+        if (!currentStage || !nextStage) return render();
+        currentStage.classList.toggle("is-canvas-hand-mode", nextStage.classList.contains("is-canvas-hand-mode"));
+        currentStage.classList.toggle("is-canvas-move-mode", nextStage.classList.contains("is-canvas-move-mode"));
+        for (const selector of [".canvas-zoom-tools", ".canvas-command-tools"]) {
+          const current = currentStage.querySelector?.(selector);
+          const next = nextStage.querySelector?.(selector);
+          if (current && next) current.replaceWith(next);
+        }
+        const currentChromeRail = surface.querySelector?.(".new-canvas-chrome-rail");
+        const nextChromeRail = template.content.querySelector?.(".new-canvas-chrome-rail");
+        if (currentChromeRail && nextChromeRail) currentChromeRail.replaceWith(nextChromeRail);
+        const currentMinimap = surface.querySelector?.("[data-canvas-minimap]");
+        const nextMinimap = template.content.querySelector?.("[data-canvas-minimap]");
+        if (currentMinimap && nextMinimap) currentMinimap.replaceWith(nextMinimap);
+        else if (currentMinimap && !nextMinimap) currentMinimap.remove();
+        else if (!currentMinimap && nextMinimap) {
+          const workspace = surface.querySelector?.("[data-new-canvas-workspace]");
+          const chromeRail = workspace?.querySelector?.(".new-canvas-chrome-rail");
+          workspace?.insertBefore?.(nextMinimap, chromeRail ?? null);
+        }
+        syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
         context.onRender?.({ workbench, graph, surface });
       };
       const renderNode = async (nodeId) => {
@@ -381,6 +441,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
         void panoramaViewerController.bind();
         void bindCanvasAudioWaveforms(surface);
+        syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
         context.onRender?.({ workbench, graph, surface });
       };
       const applyInteractionMode = (target) => {
@@ -398,6 +459,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (sourceWorkbench?.ui && sourceWorkbench.ui !== workbench.ui) {
           sourceWorkbench.ui.canvasDocument = nextDocument;
         }
+        applyCanvasGraphInteractionMode(graph, nextDocument.viewport);
+        const stage = surface.querySelector?.(".canvas-stage");
+        stage?.classList?.toggle?.("is-canvas-hand-mode", interactionMode === "hand");
+        stage?.classList?.toggle?.("is-canvas-move-mode", interactionMode !== "hand");
         return true;
       };
       const applySnapPreference = () => {
@@ -472,6 +537,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         workbench.ui.selectedCanvasNodeId = String(nodeId ?? "").trim() || null;
         workbench.ui.canvasEditorOpen = true;
         workbench.ui.canvasRunPreview = null;
+        agentController.syncPanel();
         if (typeof sourceWorkbench?.onCanvasNodeSelected === "function") {
           sourceWorkbench.onCanvasNodeSelected(nodeId);
         } else {
@@ -578,13 +644,13 @@ function createProductionCanvasAdapter(dependencies = {}) {
               const snapEnabled = workbench.ui.canvasDocument?.viewport?.snapEnabled !== false;
               actionTarget.classList?.toggle?.("active", snapEnabled);
               actionTarget.setAttribute?.("aria-label", snapEnabled ? "关闭网格吸附" : "开启网格吸附");
-              void renderInteraction();
+              void renderControls();
             }
             return;
           }
           if (action === "set-canvas-interaction-mode") {
             applyInteractionMode(actionTarget);
-            void renderInteraction();
+            void renderControls();
           }
           if (action === "seek-canvas-audio") {
             actionTarget.dataset.canvasSeekClientX = String(event.clientX);
@@ -771,7 +837,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           return;
         }
         const panoramaViewer = event.target?.closest?.("[data-panorama-drag-target]");
-        if (panoramaViewer && handleCanvasPanoramaKeydown(event, panoramaViewer, workbench, render)) {
+        if (panoramaViewer && handleCanvasPanoramaKeydown(event, panoramaViewer)) {
           return;
         }
         if (mediaToolsController?.handleKeydown(event, event.target)) {
@@ -809,7 +875,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           canvasAgentResize = {
             pointerId: event.pointerId,
             startX: Number(event.clientX ?? 0),
-            startWidth: Number.isFinite(panelWidth) ? panelWidth : 480,
+            startWidth: Number.isFinite(panelWidth) ? panelWidth : 600,
             handle: agentResizeHandle,
           };
           agentResizeHandle.setPointerCapture?.(event.pointerId);
@@ -818,14 +884,13 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.stopPropagation();
           return;
         }
-        if (isCanvasNodeInteractiveTarget(event)) return;
         const interactionActionTarget = (event.composedPath?.() ?? [])
           .find((candidate) => candidate?.matches?.('[data-action="set-canvas-interaction-mode"]'));
         if (interactionActionTarget) {
           event.preventDefault();
           event.stopPropagation();
           applyInteractionMode(interactionActionTarget);
-          void renderInteraction();
+          void renderControls();
           context.onAction?.(event, {
             action: "set-canvas-interaction-mode",
             actionTarget: interactionActionTarget,
@@ -850,6 +915,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.stopPropagation();
           return;
         }
+        if (isCanvasNodeInteractiveTarget(event)) return;
         if (
           event.button === 0
           && isCanvasX6Event(event)
@@ -891,7 +957,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         if (canvasAgentResize?.pointerId === event.pointerId) {
           const nextWidth = Math.min(
-            CANVAS_AGENT_PANEL_MAX_WIDTH,
+            resolveCanvasAgentPanelMaxWidth(),
             Math.max(
               CANVAS_AGENT_PANEL_MIN_WIDTH,
               Math.round(canvasAgentResize.startWidth + canvasAgentResize.startX - Number(event.clientX ?? 0)),
@@ -962,11 +1028,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         if (panoramaDrag?.pointerId === event.pointerId) {
           panoramaDrag.viewer?.releasePointerCapture?.(event.pointerId);
-          commitCanvasPanoramaView(workbench, panoramaDrag.nodeId, panoramaDrag.nextView);
           panoramaDrag = null;
           event.preventDefault();
           event.stopPropagation();
-          void render();
           return;
         }
         if (canvasNodePointer?.pointerId === event.pointerId) {
@@ -1000,7 +1064,6 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (!panoramaViewer) return;
         const nextView = applyCanvasPanoramaZoom(readCanvasPanoramaView(panoramaViewer), event.deltaY);
         syncCanvasPanoramaViewerPreview(panoramaViewer, nextView);
-        commitCanvasPanoramaView(workbench, String(panoramaViewer.dataset.nodeId ?? ""), nextView);
         event.preventDefault();
         event.stopPropagation();
       };
@@ -1070,6 +1133,8 @@ function createProductionCanvasAdapter(dependencies = {}) {
           if (next.ui) Object.assign(workbench.ui, next.ui, { canvasProjectView: "detail" });
           if (next.nodeOnly === true) return renderNode(next.nodeId);
           if (next.selectionOnly === true) return renderSelection();
+          if (next.sidebarOnly === true) return renderSidebar();
+          if (next.controlsOnly === true) return renderControls();
           if (next.surfaceOnly === true) return render();
           return next.interactionOnly === true ? renderInteraction() : render();
         },
@@ -1277,7 +1342,7 @@ function commitCanvasPanoramaView(workbench, nodeId, view) {
   return true;
 }
 
-function handleCanvasPanoramaKeydown(event, viewer, workbench, render) {
+function handleCanvasPanoramaKeydown(event, viewer) {
   const key = String(event.key ?? "");
   const current = readCanvasPanoramaView(viewer);
   let next = null;
@@ -1292,8 +1357,6 @@ function handleCanvasPanoramaKeydown(event, viewer, workbench, render) {
   event.preventDefault();
   event.stopPropagation();
   syncCanvasPanoramaViewerPreview(viewer, next);
-  commitCanvasPanoramaView(workbench, String(viewer.dataset.nodeId ?? ""), next);
-  void render();
   return true;
 }
 

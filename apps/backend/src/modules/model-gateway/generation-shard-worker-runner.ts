@@ -66,7 +66,7 @@ export function createGenerationShardWorkerRunner(
     throw new Error("generation_worker_process_index_invalid");
   }
 
-  const refreshIntervalMs = Math.max(0, Math.floor(deps.refreshIntervalMs ?? 5_000));
+  const refreshIntervalMs = Math.max(0, Math.floor(deps.refreshIntervalMs ?? 10_000));
   const defaultRateLimitMax = positiveInteger(deps.defaultRateLimitMax ?? 5, "generation_worker_rate_limit_invalid");
   const defaultRateLimitDurationMs = positiveInteger(
     deps.defaultRateLimitDurationMs ?? 1_000,

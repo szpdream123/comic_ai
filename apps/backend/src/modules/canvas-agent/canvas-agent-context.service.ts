@@ -58,7 +58,7 @@ export class CanvasAgentContextService {
         ORDER BY sequence DESC
         LIMIT $3
       `,
-      [input.conversationId, throughSequence, Math.max(1_000, maxMessages + 1)],
+      [input.conversationId, throughSequence, Math.max(1, maxMessages + 1)],
     );
     let messages = result.rows.reverse().map((row) => ({
       role: row.role,
@@ -80,17 +80,52 @@ export class CanvasAgentContextService {
           limit: 100,
         })
       : [];
-    let context = { canvas, summary, memories, mediaPromptPreferences, messages };
+    const activeFileGrants = await this.listFileGrants({
+      canvasId: input.canvasId,
+      conversationId: input.conversationId,
+      actor: input.actor,
+      now: (this.deps.now ?? (() => new Date()))(),
+    });
+    const fileGrants = activeFileGrants.map((grant) => ({
+      id: grant.id,
+      purpose: grant.purpose,
+      expiresAt: grant.expiresAt,
+    }));
+    let context = { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     const serialized = JSON.stringify(context);
     const maxChars = this.deps.maxSerializedChars ?? 400_000;
     if (result.rows.length <= maxMessages && serialized.length <= maxChars) return context;
 
     const retainCount = Math.min(messages.length, Math.max(8, Math.floor(maxMessages / 2)));
-    const compacted = messages.slice(0, Math.max(0, messages.length - retainCount));
     messages = messages.slice(-retainCount);
-    if (compacted.length) {
+    const firstRetainedSequence = messages[0]?.sequence ?? throughSequence + 1;
+    const compactedResult = await this.deps.db.query<{
+      role: "system" | "user" | "assistant" | "tool";
+      content_json: Record<string, unknown>;
+      sequence: number | string;
+      total_count: number | string;
+    }>(
+      `
+        SELECT role, content_json, sequence, COUNT(*) OVER() AS total_count
+        FROM canvas_agent_messages
+        WHERE conversation_id=$1 AND sequence>$2 AND sequence<$3
+        ORDER BY sequence DESC
+        LIMIT 80
+      `,
+      [input.conversationId, throughSequence, firstRetainedSequence],
+    );
+    const compacted = compactedResult.rows.reverse().map((row) => ({
+      role: row.role,
+      content: row.content_json,
+      sequence: Number(row.sequence),
+    }));
+    const compactedCount = Number(compactedResult.rows[0]?.total_count ?? 0);
+    if (compactedCount > 0) {
       const now = (this.deps.now ?? (() => new Date()))();
-      summary = mergeSummary(summary, compacted, input.actor, now);
+      summary = mergeSummary(summary, compacted, input.actor, now, {
+        messageCount: compactedCount,
+        throughSequence: compacted.at(-1)?.sequence ?? throughSequence,
+      });
       await this.deps.db.query(
         `
           UPDATE canvas_agent_conversations
@@ -104,11 +139,11 @@ export class CanvasAgentContextService {
         ],
       );
     }
-    context = { canvas, summary, memories, mediaPromptPreferences, messages };
+    context = { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     return {
       ...context,
       truncated: true,
-      omittedMessageCount: Number(summary.messageCount ?? compacted.length),
+      omittedMessageCount: Number(summary.messageCount ?? compactedCount),
     };
   }
 
@@ -164,14 +199,17 @@ export class CanvasAgentContextService {
     now: Date;
   }) {
     await this.expireFileGrants(input.now);
-    const row = await queryOne<{ storage_object_id: string; purpose: string }>(
+    const row = await queryOne<{ storage_object_id: string; purpose: string; content_type: string }>(
       this.deps.db,
       `
-        SELECT storage_object_id, purpose
-        FROM canvas_agent_file_grants
-        WHERE id=$1 AND canvas_id=$2 AND conversation_id=$3 AND owner_user_id=$4
-          AND actor_team_member_id IS NOT DISTINCT FROM $5
-          AND status='active' AND expires_at>$6 AND revoked_at IS NULL
+        SELECT file_grant.storage_object_id, file_grant.purpose, storage.content_type
+        FROM canvas_agent_file_grants file_grant
+        JOIN storage_objects storage ON storage.id=file_grant.storage_object_id
+        WHERE file_grant.id=$1 AND file_grant.canvas_id=$2 AND file_grant.conversation_id=$3
+          AND file_grant.owner_user_id=$4
+          AND file_grant.actor_team_member_id IS NOT DISTINCT FROM $5
+          AND file_grant.status='active' AND file_grant.expires_at>$6 AND file_grant.revoked_at IS NULL
+          AND storage.status='available' AND storage.deleted_at IS NULL
       `,
       [
         input.grantId, input.canvasId, input.conversationId,
@@ -179,7 +217,7 @@ export class CanvasAgentContextService {
       ],
     );
     if (!row) throw new Error("canvas_agent_file_grant_not_found");
-    return { storageObjectId: row.storage_object_id, purpose: row.purpose };
+    return { storageObjectId: row.storage_object_id, purpose: row.purpose, contentType: row.content_type };
   }
 
   async revokeFileGrant(input: {
@@ -281,6 +319,7 @@ function mergeSummary(
   messages: Array<{ role: string; content: Record<string, unknown>; sequence: number }>,
   actor: CanvasAgentActor,
   now: Date,
+  input: { messageCount?: number; throughSequence?: number } = {},
 ) {
   const previous = Array.isArray(current.items) ? current.items : [];
   const items = [
@@ -293,8 +332,8 @@ function mergeSummary(
   ].slice(-80);
   return {
     version: 1,
-    throughSequence: messages.at(-1)?.sequence ?? Number(current.throughSequence ?? 0),
-    messageCount: Number(current.messageCount ?? 0) + messages.length,
+    throughSequence: input.throughSequence ?? messages.at(-1)?.sequence ?? Number(current.throughSequence ?? 0),
+    messageCount: Number(current.messageCount ?? 0) + (input.messageCount ?? messages.length),
     actorTeamMemberId: actor.actorTeamMemberId ?? null,
     items,
     updatedAt: now.toISOString(),

@@ -23,8 +23,10 @@ export function mountPromptEditor(element, options = {}) {
     const availableSuggestions = typeof options.getSuggestions === "function"
       ? await options.getSuggestions()
       : options.suggestions;
-    return (Array.isArray(availableSuggestions) ? availableSuggestions : [])
+    const suggestions = (Array.isArray(availableSuggestions) ? availableSuggestions : [])
       .map((item) => normalizePromptEditorSuggestion(item));
+    const maximum = Number(options.maxSuggestions ?? 12);
+    return Number.isFinite(maximum) && maximum > 0 ? suggestions.slice(0, maximum) : suggestions;
   };
   let currentMentionSignature = "";
   let destroyed = false;
@@ -38,7 +40,7 @@ export function mountPromptEditor(element, options = {}) {
         return [item.label, item.name, item.description]
           .map((value) => String(value ?? "").toLowerCase())
           .some((value) => value.includes(normalizedQuery));
-      }).slice(0, 12);
+      });
     },
     onSelect(item) {
       return options.onMentionSelect?.(item);
@@ -48,6 +50,7 @@ export function mountPromptEditor(element, options = {}) {
 
   const editor = new Editor({
     element,
+    editable: options.editable !== false,
     content: createPromptEditorDocument(options.prompt, options.mentionReferences),
     extensions: [
       Document,
@@ -433,9 +436,13 @@ function assetKindLabel(kind) {
   return ({
     audio: "\u97f3\u9891",
     character: "\u89d2\u8272",
+    director: "\u5bfc\u6f14",
     image: "\u56fe\u7247",
+    node: "\u8282\u70b9",
     prop: "\u9053\u5177",
     scene: "\u573a\u666f",
+    storyboard: "\u5206\u955c",
+    text: "\u6587\u672c",
     video: "\u89c6\u9891",
   })[kind] ?? "\u7d20\u6750";
 }

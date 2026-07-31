@@ -98,6 +98,35 @@ test("Canvas keeps the selected node editor open after an X6 node drag", () => {
   assert.match(source, /canvasStage && !interactive && Date\.now\(\) < suppressCanvasBlankClickUntil/);
 });
 
+test("Canvas handles panorama drags before generic node control interception", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const pointerDownBlock = source.match(/const onPointerDown = \(event\) => \{[\s\S]*?const onPointerMove/)?.[0] ?? "";
+  const panoramaDragIndex = pointerDownBlock.indexOf('const panoramaViewer = event.target?.closest?.("[data-panorama-drag-target]");');
+  const interactiveGuardIndex = pointerDownBlock.indexOf("if (isCanvasNodeInteractiveTarget(event)) return;");
+
+  assert.ok(panoramaDragIndex >= 0);
+  assert.ok(interactiveGuardIndex > panoramaDragIndex);
+  assert.match(pointerDownBlock, /panoramaViewer\.setPointerCapture\?\.\(event\.pointerId\)/);
+});
+
+test("Canvas panorama observation stays local to the preview", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const pointerUpBlock = source.match(/const onPointerUp = \(event\) => \{[\s\S]*?const onWheel/)?.[0] ?? "";
+  const wheelBlock = source.match(/const onWheel = \(event\) => \{[\s\S]*?const onPanoramaViewChange/)?.[0] ?? "";
+  const keyboardHandler = source.match(/function handleCanvasPanoramaKeydown[\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.doesNotMatch(pointerUpBlock, /commitCanvasPanoramaView|void render\(\)/);
+  assert.doesNotMatch(wheelBlock, /commitCanvasPanoramaView/);
+  assert.doesNotMatch(keyboardHandler, /commitCanvasPanoramaView|void render\(\)/);
+});
+
+test("Canvas panorama interaction never requests browser fullscreen", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const fullscreenBranch = source.match(/if \(action === "toggle-canvas-panorama-fullscreen"\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+
+  assert.doesNotMatch(fullscreenBranch, /requestFullscreen|exitFullscreen/);
+});
+
 test("new Canvas host reports bounded frontend errors and removes telemetry listeners", () => {
   const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
   assert.match(source, /reportCanvasFrontendError/);
@@ -193,7 +222,7 @@ test("Canvas host actions update the mounted surface without redrawing the workb
   assert.match(source, /if \(isCanvasX6InteractionTarget\(eventTarget, event\)\) \{\s*return;\s*\}/);
   assert.match(source, /surfaceOnly: true/);
   assert.match(hostSource, /\.x6-node, \.canvas-x6-special-node/);
-  assert.match(hostSource, /workbench\.onCanvasNodeSelected = \(nodeId\) => \{[\s\S]*?void renderSelection\(\);/);
+  assert.match(hostSource, /workbench\.onCanvasNodeSelected = \(nodeId\) => \{[\s\S]*?agentController\.syncPanel\(\);[\s\S]*?void renderSelection\(\);/);
   assert.match(hostSource, /if \(next\.ui\) Object\.assign\(workbench\.ui, next\.ui, \{ canvasProjectView: "detail" \}\);/);
   assert.doesNotMatch(hostSource, /if \(next\.ui\) workbench\.ui = \{/);
   assert.match(hostSource, /canvasNodeId !== workbench\.ui\.selectedCanvasNodeId[\s\S]*?workbench\.onCanvasNodeSelected\?\.\(canvasNodeId\)/);
@@ -271,10 +300,8 @@ test("Canvas node controls refresh only their target X6 node", () => {
     newCanvasMount: { shadowRoot: { contains: () => true } },
   };
   for (const action of [
-    "toggle-canvas-sidebar",
     "toggle-canvas-add-menu",
     "toggle-canvas-zoom-menu",
-    "set-canvas-sidebar-mode",
     "toggle-canvas-minimap",
     "toggle-canvas-edges",
     "set-canvas-edge-style",
@@ -282,8 +309,17 @@ test("Canvas node controls refresh only their target X6 node", () => {
   ]) {
     assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
       dataset: { action },
-    }), { surfaceOnly: true });
+    }), { controlsOnly: true });
   }
+  for (const action of ["toggle-canvas-sidebar", "set-canvas-sidebar-mode", "set-canvas-asset-media-filter"]) {
+    assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
+      dataset: { action },
+    }), { sidebarOnly: true });
+  }
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
+    dataset: {},
+    matches: (selector) => selector.includes("[data-canvas-asset-search]"),
+  }), { sidebarOnly: true });
   assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
     dataset: { action: "back-to-canvas-projects" },
   }), {});
@@ -293,6 +329,13 @@ test("Canvas node controls refresh only their target X6 node", () => {
   assert.match(nodeRender, /refreshCanvasWorkflowNode\(workbench, normalizedNodeId\)/);
   assert.doesNotMatch(nodeRender, /refreshCanvasWorkflowGraph/);
   assert.match(hostSource, /if \(next\.nodeOnly === true\) return renderNode\(next\.nodeId\)/);
+  assert.match(hostSource, /if \(next\.sidebarOnly === true\) return renderSidebar\(\)/);
+  assert.match(hostSource, /if \(next\.controlsOnly === true\) return renderControls\(\)/);
+  assert.match(hostSource, /if \(action === "set-canvas-interaction-mode"\) \{[\s\S]*?void renderControls\(\);/);
+  assert.doesNotMatch(hostSource, /if \(action === "set-canvas-interaction-mode"\) \{[^}]*void renderInteraction\(\);/);
+  assert.match(hostSource, /currentStage\.classList\.toggle\("is-canvas-hand-mode", nextStage\.classList\.contains\("is-canvas-hand-mode"\)\)/);
+  assert.match(hostSource, /currentStage\.classList\.toggle\("is-canvas-move-mode", nextStage\.classList\.contains\("is-canvas-move-mode"\)\)/);
+  assert.match(hostSource, /currentChromeRail\.replaceWith\(nextChromeRail\)/);
   assert.match(hostSource, /if \(next\.surfaceOnly === true\) return render\(\)/);
   assert.match(hostSource, /event\.__newCanvasHandled = true;[\s\S]*?event\.preventDefault\?\.\(\);[\s\S]*?context\.onAction/);
   assert.match(hostSource, /\.canvas-markdown-fullscreen/);
@@ -608,7 +651,7 @@ test("new-canvas editor exposes a full-height workspace and feature rail", () =>
     canvasProjects: [{ id: "canvas-test", title: "分镜草稿" }],
     canvasAgent: { status: "idle" },
   });
-  assert.match(html, /--canvas-agent-panel-width:480px/);
+  assert.match(html, /--canvas-agent-panel-width:600px/);
   assert.match(html, /data-canvas-agent-resize/);
   assert.doesNotMatch(html, /class="new-canvas-chrome"/);
   assert.doesNotMatch(html, /class="new-canvas-chrome-title"/);
@@ -1137,7 +1180,7 @@ test("AI text generation editor opens above low canvas nodes", () => {
     },
   });
   assert.match(html, /class="canvas-node-editor generation-editor text"/);
-  assert.match(html, /style="left:95px;top:268px;--editor-width:600px"/);
+  assert.match(html, /style="left:12px;top:168px;--editor-width:800px"/);
   assert.match(html, /data-action="run-canvas-node"/);
 });
 
@@ -1219,6 +1262,81 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(workbenchCss, /\.canvas-x6-editor-overlay \.canvas-node-editor\s*\{[\s\S]*?position:\s*relative !important;/);
   assert.match(newCanvasCss, /\.canvas-storyboard-cell-extract::after\s*\{[\s\S]*?content:\s*attr\(data-tooltip\)/);
   assert.doesNotMatch(newCanvasCss, /\.new-canvas-root \.canvas-zoom-tools\s*\{/);
+});
+
+test("canvas startup preserves a pending shadow host across follow-up renders", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const mountLifecycle = source.match(
+    /function prepareNewCanvasMountForRender[\s\S]*?const NEW_CANVAS_NODE_LOCAL_ACTIONS/,
+  )?.[0] ?? "";
+  assert.match(mountLifecycle, /workbench\.newCanvasMount \?\? workbench\.newCanvasPendingHost/);
+  assert.match(mountLifecycle, /mountPending = workbench\.newCanvasPendingHost === preservedHost/);
+
+  const mountStart = source.match(/async function syncNewCanvasMount[\s\S]*?try \{/)?.[0] ?? "";
+  assert.ok(
+    mountStart.indexOf("host.dataset.canvasProjectId") < mountStart.indexOf("workbench.newCanvasPendingHost = host"),
+  );
+});
+
+test("canvas lazy startup reuses the selected document and coalesces settings reads", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const lazyLoad = source.match(/function scheduleLazySurfaceLoad[\s\S]*?async function loadProjectDetailForWorkbench/)?.[0] ?? "";
+  assert.match(lazyLoad, /canvasProjectView !== "detail"[\s\S]*?!isSelectedStandaloneCanvasDocumentLoaded\(workbench\)[\s\S]*?syncCanvasProjectsFromApi/);
+
+  const settingsLoad = source.match(/async function loadCanvasSettingsRecord[\s\S]*?async function loadAppliedCanvasToolbar/)?.[0] ?? "";
+  assert.match(settingsLoad, /currentLoad\?\.canvasProjectId === canvasProjectId[\s\S]*?return currentLoad\.promise/);
+  assert.match(settingsLoad, /canvasSettingsLoadedProjectId === canvasProjectId[\s\S]*?< 1_500/);
+});
+
+test("canvas load completions keep the outer host mounted", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const completionRender = source.match(/function renderAfterCanvasLoad[\s\S]*?function shouldMountNewCanvas/)?.[0] ?? "";
+  assert.match(completionRender, /hasReusableNewCanvasHost\(workbench\)/);
+  assert.match(completionRender, /updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true \}\)/);
+  assert.match(completionRender, /renderWorkbenchChrome\(workbench\)/);
+  assert.doesNotMatch(completionRender, /prepareNewCanvasMountForRender/);
+  const reusableHost = source.match(/function hasReusableNewCanvasHost[\s\S]*?function renderAfterCanvasLoad/)?.[0] ?? "";
+  assert.match(reusableHost, /newCanvasMount \?\? workbench\?\.newCanvasPendingHost/);
+
+  const lazyLoad = source.match(/function scheduleLazySurfaceLoad[\s\S]*?async function loadProjectDetailForWorkbench/)?.[0] ?? "";
+  assert.match(lazyLoad, /renderAfterCanvasLoad\(workbench, renderOptions\)/);
+  const openCanvas = source.match(/if \(action === "open-canvas-project"\)[\s\S]*?if \(action === "create-canvas-project"\)/)?.[0] ?? "";
+  assert.match(openCanvas, /renderAfterCanvasLoad\(workbench\)/);
+  assert.match(openCanvas, /history\?\.pushState[\s\S]*?canvasDetailRouteToken\(workbench\)/);
+  assert.doesNotMatch(openCanvas, /syncCanvasProjectIdInLocation\(projectId\);\s*window\.location\.hash/);
+});
+
+test("canvas host renders the zoom label from the preserved X6 graph", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const mountSync = source.match(/async function syncNewCanvasMount[\s\S]*?async function runNewCanvasHostAction/)?.[0] ?? "";
+  assert.match(
+    mountSync,
+    /onRender\(\{ graph \}\)[\s\S]*?syncCanvasZoomControlDisplay\(host\.shadowRoot, graph\?\.zoom\?\.\(\)\)/,
+  );
+
+  const hostSource = readFileSync(
+    new URL("../src/features/new-canvas/index.js", import.meta.url),
+    "utf8",
+  );
+  const adapterSource = hostSource.match(/function createProductionCanvasAdapter[\s\S]*?export async function mountNewCanvas/)?.[0] ?? "";
+  const renderNotifications = adapterSource.match(/context\.onRender\?\.\(\{ workbench, graph, surface \}\)/g) ?? [];
+  const synchronizedNotifications = adapterSource.match(
+    /syncCanvasZoomControlDisplay\(surface, graph\?\.zoom\?\.\(\)\);\s*context\.onRender\?\.\(\{ workbench, graph, surface \}\)/g,
+  ) ?? [];
+  assert.ok(renderNotifications.length > 0);
+  assert.equal(synchronizedNotifications.length, renderNotifications.length);
 });
 
 test("Canvas Director capture deletion uses the built-in confirmation modal", () => {

@@ -53,7 +53,10 @@ export function createCanvasPanoramaViewerController({
       instances.get(root)?.setView?.(view);
     },
     async capture(nodeId) {
-      const root = [...instances.keys()].find((element) => String(element.dataset.nodeId ?? "") === String(nodeId ?? ""));
+      const root = [...instances.keys()].find((element) =>
+        String(element.dataset.nodeId ?? "") === String(nodeId ?? "")
+        && element.isConnected
+        && element.classList?.contains?.("is-three-ready"));
       return root ? instances.get(root)?.capture?.() ?? null : null;
     },
     dispose() {

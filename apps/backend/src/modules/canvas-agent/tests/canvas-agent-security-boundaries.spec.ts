@@ -397,5 +397,6 @@ function noOpBilling() {
     estimateRound: () => 1,
     reserveRound: async () => ({ kind: "reservation" as const, reservationId: null, amount: 1 }),
     settleRound: async () => ({ consumed: 1, released: 0 }),
+    settleTask: async () => ({ consumed: 1, totalTokens: 1 }),
   } as never;
 }

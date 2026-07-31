@@ -170,14 +170,13 @@ async function claimFairOutboxEventsForDispatch(
   const claimed: OutboxEventRecord[] = [];
   await db.query("BEGIN");
   try {
-    const cursor = await queryOne<{ cursor_key: string }>(db, `
+    await db.query(`
       INSERT INTO outbox_dispatch_fair_cursors (scope_key, main_key, cursor_key, updated_at)
       VALUES ($1, '*', '', $2)
-      ON CONFLICT (scope_key, main_key) DO UPDATE
-      SET updated_at = outbox_dispatch_fair_cursors.updated_at
-      RETURNING cursor_key
+      ON CONFLICT (scope_key, main_key) DO NOTHING
     `, [input.fairnessScope, input.now]);
-    await db.query(
+    const cursor = await queryOne<{ cursor_key: string }>(
+      db,
       `SELECT cursor_key FROM outbox_dispatch_fair_cursors WHERE scope_key = $1 AND main_key = '*' FOR UPDATE`,
       [input.fairnessScope],
     );

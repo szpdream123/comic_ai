@@ -61,6 +61,7 @@ export class CanvasAgentExecutor {
     const maxRounds = boundedExecutionBudget(task.budget.maxRounds, this.deps.maxRounds, 8);
     const maxToolCalls = boundedExecutionBudget(task.budget.maxToolCalls, this.deps.maxToolCalls, 20);
     let toolCalls = 0;
+    let responseFormatRetries = 0;
 
     const resumed = await this.resumeApprovedTool(task, actor);
     if (resumed) return resumed;
@@ -78,6 +79,8 @@ export class CanvasAgentExecutor {
         conversationId: current.conversationId,
         actor,
       }));
+      const referencedNodeIds = latestUserReferencedNodeIds(context);
+      const referencedFileGrantIds = latestUserFileGrantIds(context);
       const modelInput = {
         mode: current.mode,
         context,
@@ -113,48 +116,6 @@ export class CanvasAgentExecutor {
         status: "running",
         now,
       });
-      const reservedAmount = this.deps.billing.estimateRound({
-        pricing: model.pricing,
-        maxTokens: Number(current.budget.maxTokens ?? 0),
-        contextWindow: Number(model.capabilities.contextWindow ?? 0),
-        maxPromptTokens: Number(model.snapshot?.limits?.maxPromptLength ?? 0),
-      });
-      let reservation: Awaited<ReturnType<CanvasAgentBillingService["reserveRound"]>>;
-      try {
-        actor = await this.deps.resolveActor(current);
-        reservation = await this.deps.billing.reserveRound({
-          ownerUserId: current.ownerUserId,
-          actorTeamMemberId: current.actorTeamMemberId,
-          canvasId: current.canvasId,
-          agentTaskId: current.id,
-          workflowId: current.workflowId,
-          workflowTaskId: current.workflowTaskId,
-          stepId: modelStep.id,
-          amount: reservedAmount,
-          now,
-        });
-      } catch (error) {
-        await updateCanvasAgentStep(this.deps.db, {
-          stepId: modelStep.id,
-          status: "failed",
-          errorCode: error instanceof Error ? error.message.slice(0, 120) : "insufficient_credits",
-          now,
-        });
-        return transitionCanvasAgentTask(this.deps.db, {
-          taskId,
-          from: ["running", "queued"],
-          to: "failed",
-          failureCode: "insufficient_credits",
-          now,
-        });
-      }
-      await updateCanvasAgentStep(this.deps.db, {
-        stepId: modelStep.id,
-        status: "running",
-        creditReservationId: reservation.reservationId,
-        now,
-      });
-
       let gatewayResult: TextGatewayChatStreamResult;
       const modelStartedAt = Date.now();
       try {
@@ -208,30 +169,18 @@ export class CanvasAgentExecutor {
           increments: { modelDurationMs: elapsedMs(modelStartedAt) },
           now: (this.deps.now ?? (() => new Date()))(),
         });
-        await this.deps.billing.settleRound({
-          ownerUserId: current.ownerUserId,
-          actorTeamMemberId: current.actorTeamMemberId,
-          canvasId: current.canvasId,
-          agentTaskId: current.id,
-          workflowTaskId: current.workflowTaskId,
-          stepId: modelStep.id,
-          reservationId: reservation.reservationId,
-          reservedAmount,
-          usage: null,
-          pricing: model.pricing,
-          now: (this.deps.now ?? (() => new Date()))(),
-        });
         await updateCanvasAgentStep(this.deps.db, {
           stepId: modelStep.id,
           status: "failed",
           errorCode: error instanceof Error ? error.message.slice(0, 120) : "provider_stream_error",
           now: (this.deps.now ?? (() => new Date()))(),
         });
-        return transitionCanvasAgentTask(this.deps.db, {
+        return this.finishTask({
           taskId,
           from: ["running", "queued"],
           to: "failed",
           failureCode: "provider_stream_error",
+          pricing: model.pricing,
           now: (this.deps.now ?? (() => new Date()))(),
         });
       }
@@ -258,20 +207,6 @@ export class CanvasAgentExecutor {
           increments: { modelDurationMs: elapsedMs(modelStartedAt) },
           now: (this.deps.now ?? (() => new Date()))(),
         });
-        await this.deps.billing.settleRound({
-          ownerUserId: current.ownerUserId,
-          actorTeamMemberId: current.actorTeamMemberId,
-          canvasId: current.canvasId,
-          agentTaskId: current.id,
-          workflowTaskId: current.workflowTaskId,
-          stepId: modelStep.id,
-          reservationId: reservation.reservationId,
-          reservedAmount,
-          usage: null,
-          pricing: model.pricing,
-          providerRequestId: gatewayResult.providerRequestId,
-          now: (this.deps.now ?? (() => new Date()))(),
-        });
         await updateCanvasAgentStep(this.deps.db, {
           stepId: modelStep.id,
           status: "failed",
@@ -279,16 +214,17 @@ export class CanvasAgentExecutor {
           errorCode: error instanceof Error ? error.message.slice(0, 120) : "provider_stream_error",
           now: (this.deps.now ?? (() => new Date()))(),
         });
-        return transitionCanvasAgentTask(this.deps.db, {
+        return this.finishTask({
           taskId,
           from: ["running", "queued"],
           to: "failed",
           failureCode: "provider_stream_error",
+          pricing: model.pricing,
           now: (this.deps.now ?? (() => new Date()))(),
         });
       }
       const usage = readUsage(finalUsage.usage);
-      const taskMetrics = await incrementCanvasAgentMetrics(this.deps.db, {
+      await incrementCanvasAgentMetrics(this.deps.db, {
         taskId,
         increments: {
           modelDurationMs: elapsedMs(modelStartedAt),
@@ -296,20 +232,6 @@ export class CanvasAgentExecutor {
           completionTokens: usage?.completionTokens ?? 0,
           totalTokens: usage?.totalTokens ?? 0,
         },
-        now: (this.deps.now ?? (() => new Date()))(),
-      });
-      await this.deps.billing.settleRound({
-        ownerUserId: current.ownerUserId,
-        actorTeamMemberId: current.actorTeamMemberId,
-        canvasId: current.canvasId,
-        agentTaskId: current.id,
-        workflowTaskId: current.workflowTaskId,
-        stepId: modelStep.id,
-        reservationId: reservation.reservationId,
-        reservedAmount,
-        usage,
-        pricing: model.pricing,
-        providerRequestId: gatewayResult.providerRequestId,
         now: (this.deps.now ?? (() => new Date()))(),
       });
       if (finalUsage.status !== "succeeded") {
@@ -320,11 +242,12 @@ export class CanvasAgentExecutor {
           errorCode: finalUsage.failureCode,
           now: (this.deps.now ?? (() => new Date()))(),
         });
-          return transitionCanvasAgentTask(this.deps.db, {
+        return this.finishTask({
           taskId,
           from: ["running", "queued"],
           to: finalUsage.status === "canceled" ? "canceled" : "failed",
           failureCode: finalUsage.failureCode,
+          pricing: model.pricing,
           now: (this.deps.now ?? (() => new Date()))(),
         });
       }
@@ -343,11 +266,32 @@ export class CanvasAgentExecutor {
           errorCode: failureCode,
           now: (this.deps.now ?? (() => new Date()))(),
         });
-        return transitionCanvasAgentTask(this.deps.db, {
+        if (failureCode === "canvas_agent_model_response_invalid_json" && responseFormatRetries < 1 && round + 1 < maxRounds) {
+          responseFormatRetries += 1;
+          await appendCanvasAgentMessage(this.deps.db, {
+            conversationId: current.conversationId,
+            taskId,
+            role: "system",
+            content: {
+              code: "canvas_agent_response_format_retry",
+              message: "Your previous response was not valid JSON. Return exactly one JSON object matching the protocol, with no markdown or explanatory text.",
+            },
+            now: (this.deps.now ?? (() => new Date()))(),
+          });
+          await appendCanvasAgentEvent(this.deps.db, {
+            taskId,
+            eventType: "model.response_rejected",
+            event: { stepId: modelStep.id, reason: failureCode, retry: responseFormatRetries },
+            now: (this.deps.now ?? (() => new Date()))(),
+          });
+          continue;
+        }
+        return this.finishTask({
           taskId,
           from: ["running", "queued"],
           to: "failed",
           failureCode,
+          pricing: model.pricing,
           now: (this.deps.now ?? (() => new Date()))(),
         });
       }
@@ -400,28 +344,25 @@ export class CanvasAgentExecutor {
           content: { message: turn.message, citations },
           now: (this.deps.now ?? (() => new Date()))(),
         });
-        return transitionCanvasAgentTask(this.deps.db, {
+        return this.finishTask({
           taskId,
           from: ["running", "queued"],
           to: "succeeded",
           event: {
             message: turn.message,
             citationIds: citations.map((citation) => citation.id),
-            tokenUsage: {
-              promptTokens: readNumber(taskMetrics.promptTokens),
-              completionTokens: readNumber(taskMetrics.completionTokens),
-              totalTokens: readNumber(taskMetrics.totalTokens),
-            },
           },
+          pricing: model.pricing,
           now: (this.deps.now ?? (() => new Date()))(),
         });
       }
       if (++toolCalls > maxToolCalls) {
-        return transitionCanvasAgentTask(this.deps.db, {
+        return this.finishTask({
           taskId,
           from: ["running", "queued"],
           to: "failed",
           failureCode: "tool_budget_exceeded",
+          pricing: model.pricing,
           now: (this.deps.now ?? (() => new Date()))(),
         });
       }
@@ -442,6 +383,12 @@ export class CanvasAgentExecutor {
         });
         continue;
       }
+      validatedToolInput = bindReferencedGenerationInput(
+        tool.id,
+        validatedToolInput,
+        referencedNodeIds,
+        referencedFileGrantIds,
+      );
       let toolStep: Awaited<ReturnType<typeof createCanvasAgentStep>>;
       try {
         toolStep = await createCanvasAgentStep(this.deps.db, {
@@ -538,6 +485,7 @@ export class CanvasAgentExecutor {
           agentStepId: toolStep.id,
           actor: executionActor,
           callId: turn.callId,
+          referencedNodeIds,
         });
       } catch (error) {
         await this.recordToolFailure({
@@ -580,12 +528,77 @@ export class CanvasAgentExecutor {
         });
       }
     }
-    return transitionCanvasAgentTask(this.deps.db, {
+    return this.finishTask({
       taskId,
       from: ["running", "queued"],
       to: "failed",
       failureCode: "model_round_budget_exceeded",
+      pricing: model.pricing,
       now: (this.deps.now ?? (() => new Date()))(),
+    });
+  }
+
+  private async finishTask(input: {
+    taskId: string;
+    from: CanvasAgentTaskRecord["status"][];
+    to: "succeeded" | "failed" | "canceled";
+    failureCode?: string | null;
+    event?: Record<string, unknown>;
+    pricing: Record<string, unknown>;
+    now: Date;
+  }) {
+    const task = await findCanvasAgentTask(this.deps.db, input.taskId);
+    if (!task) throw new Error("canvas_agent_task_not_found");
+    const usage = {
+      promptTokens: readNumber(task.metrics.promptTokens),
+      completionTokens: readNumber(task.metrics.completionTokens),
+      cachedTokens: readNumber(task.metrics.cachedTokens),
+      totalTokens: readNumber(task.metrics.totalTokens),
+    };
+    let consumedCredits = 0;
+    try {
+      const settlement = await this.deps.billing.settleTask({
+        ownerUserId: task.ownerUserId,
+        actorTeamMemberId: task.actorTeamMemberId,
+        canvasId: task.canvasId,
+        agentTaskId: task.id,
+        workflowId: task.workflowId,
+        workflowTaskId: task.workflowTaskId,
+        usage,
+        pricing: input.pricing,
+        now: input.now,
+      });
+      consumedCredits = settlement.consumed;
+    } catch (error) {
+      if (!isInsufficientCreditsError(error)) throw error;
+      return transitionCanvasAgentTask(this.deps.db, {
+        taskId: input.taskId,
+        from: input.from,
+        to: "failed",
+        failureCode: "insufficient_credits",
+        event: {
+          ...input.event,
+          status: "failed",
+          failureCode: "insufficient_credits",
+          tokenUsage: usage,
+          creditUsage: { consumedCredits: 0, status: "insufficient_credits", scope: "task" },
+        },
+        now: input.now,
+      });
+    }
+    return transitionCanvasAgentTask(this.deps.db, {
+      taskId: input.taskId,
+      from: input.from,
+      to: input.to,
+      failureCode: input.failureCode,
+      event: {
+        ...input.event,
+        status: input.to,
+        failureCode: input.failureCode ?? null,
+        tokenUsage: usage,
+        creditUsage: { consumedCredits, status: "consumed", scope: "task" },
+      },
+      now: input.now,
     });
   }
 
@@ -636,11 +649,12 @@ export class CanvasAgentExecutor {
         outputSummary: policy.reason,
         now,
       });
-      return transitionCanvasAgentTask(this.deps.db, {
+      return this.finishTask({
         taskId: task.id,
         from: ["running", "queued"],
         to: "failed",
         failureCode: "policy_denied",
+        pricing: readModelSnapshot(task.modelConfigSnapshot).pricing,
         now,
       });
     }
@@ -661,6 +675,7 @@ export class CanvasAgentExecutor {
     const toolStartedAt = Date.now();
     let result: Awaited<ReturnType<CanvasAgentToolRegistry["execute"]>>;
     try {
+      const referencedNodeIds = await loadLatestUserReferencedNodeIds(this.deps.db, task.conversationId);
       result = await this.deps.tools.execute(tool.id, executionInput, {
         canvasId: task.canvasId,
         conversationId: task.conversationId,
@@ -668,6 +683,7 @@ export class CanvasAgentExecutor {
         agentStepId: step.id,
         actor: executionActor,
         callId: step.callId ?? step.id,
+        referencedNodeIds,
       });
     } catch (error) {
       await this.recordToolFailure({
@@ -777,7 +793,90 @@ export class CanvasAgentExecutor {
   }
 }
 
-const canvasAgentToolCallInstruction = "In B or C mode, when the latest user request asks to change the canvas, emit the required tool_call instead of a final response that asks for confirmation or promises a future tool call. The runtime presents approval controls after the tool_call. Only return final after tools succeed or when the requested change cannot be performed. In Plan or Expert mode, do not perform side effects.";
+const canvasAgentToolCallInstruction = "In B or C mode, when the latest user request asks to change the canvas, emit the required tool_call instead of a final response that asks for confirmation or promises a future tool call. The runtime presents approval controls after the tool_call. Only return final after tools succeed or when the requested change cannot be performed. When the latest user message contains fileGrantIds from @-referenced canvas nodes, pass those same IDs to generation.create when generating image or video references. The tool maps image grants to referenceImages and a video grant to sourceVideo. When generating or regenerating a single @-referenced media node, pass that exact node ID as generation.create.targetNodeId so the result replaces that node; omit targetNodeId only when no target node was explicitly referenced and a new node is intended. In Plan or Expert mode, do not perform side effects.";
+
+function latestUserReferencedNodeIds(context: unknown) {
+  if (!context || typeof context !== "object") return [];
+  const messages = (context as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) return [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "user") continue;
+    return referencedNodeIdsFromContent((message as { content?: unknown }).content);
+  }
+  return [];
+}
+
+function latestUserFileGrantIds(context: unknown) {
+  if (!context || typeof context !== "object") return [];
+  const messages = (context as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) return [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || (message as { role?: unknown }).role !== "user") continue;
+    return fileGrantIdsFromContent((message as { content?: unknown }).content);
+  }
+  return [];
+}
+
+async function loadLatestUserReferencedNodeIds(db: SqlDatabase, conversationId: string) {
+  const result = await db.query<{ content_json: Record<string, unknown> }>(
+    "SELECT content_json FROM canvas_agent_messages WHERE conversation_id=$1 AND role='user' ORDER BY sequence DESC LIMIT 1",
+    [conversationId],
+  );
+  return referencedNodeIdsFromContent(result.rows[0]?.content_json);
+}
+
+function referencedNodeIdsFromContent(content: unknown) {
+  if (!content || typeof content !== "object") return [];
+  const references = (content as { nodeReferences?: unknown }).nodeReferences;
+  if (!Array.isArray(references)) return [];
+  return [...new Set(references
+    .map((reference) => reference && typeof reference === "object" ? String((reference as { nodeId?: unknown }).nodeId ?? "").trim() : "")
+    .filter(Boolean))];
+}
+
+function fileGrantIdsFromContent(content: unknown) {
+  if (!content || typeof content !== "object") return [];
+  const directGrantIds = Array.isArray((content as { fileGrantIds?: unknown }).fileGrantIds)
+    ? (content as { fileGrantIds: unknown[] }).fileGrantIds
+    : [];
+  const references = Array.isArray((content as { nodeReferences?: unknown }).nodeReferences)
+    ? (content as { nodeReferences: unknown[] }).nodeReferences
+    : [];
+  return [...new Set([
+    ...directGrantIds.map((grantId) => String(grantId ?? "").trim()),
+    ...references.map((reference) => reference && typeof reference === "object"
+      ? String((reference as { fileGrantId?: unknown }).fileGrantId ?? "").trim()
+      : ""),
+  ].filter(Boolean))];
+}
+
+function bindReferencedGenerationInput(
+  toolId: string,
+  input: Record<string, unknown>,
+  referencedNodeIds: string[],
+  referencedFileGrantIds: string[],
+) {
+  if (toolId !== "generation.create") return input;
+  let boundInput = input;
+  const targetNodeIds = [...new Set(referencedNodeIds.map((nodeId) => nodeId.trim()).filter(Boolean))];
+  if (!String(input.targetNodeId ?? "").trim() && targetNodeIds.length === 1) {
+    boundInput = { ...boundInput, targetNodeId: targetNodeIds[0] };
+  }
+  const existingFileGrantIds = Array.isArray(input.fileGrantIds) ? input.fileGrantIds : [];
+  const fileGrantIds = [...new Set(referencedFileGrantIds.map((grantId) => grantId.trim()).filter(Boolean))];
+  if (!existingFileGrantIds.length && fileGrantIds.length) {
+    boundInput = { ...boundInput, fileGrantIds };
+  }
+  return boundInput;
+}
+
+export const __canvasAgentExecutorTestUtils = {
+  bindReferencedGenerationInput,
+  fileGrantIdsFromContent,
+  parseTurn,
+};
 
 function readModelSnapshot(value: Record<string, unknown>): CanvasAgentModelSnapshot {
   const snapshot = value as Partial<CanvasAgentModelSnapshot>;
@@ -790,12 +889,7 @@ function readModelSnapshot(value: Record<string, unknown>): CanvasAgentModelSnap
 function parseTurn(value: string):
   | { kind: "final"; message: string; citations: string[] }
   | { kind: "tool_call"; toolId: string; callId: string; input: Record<string, unknown> } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("canvas_agent_model_response_invalid_json");
-  }
+  const parsed = parseAgentJsonObject(value);
   if (!parsed || typeof parsed !== "object") throw new Error("canvas_agent_model_response_invalid");
   const record = parsed as Record<string, unknown>;
   if (record.kind === "final" && typeof record.message === "string") {
@@ -814,6 +908,47 @@ function parseTurn(value: string):
     return { kind: "tool_call", toolId: record.toolId, callId: record.callId, input: record.input as Record<string, unknown> };
   }
   throw new Error("canvas_agent_model_response_protocol_invalid");
+}
+
+function parseAgentJsonObject(value: string): unknown {
+  const trimmed = String(value ?? "").trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim() ?? "";
+  const candidates = [trimmed, fenced, extractFirstJsonObject(trimmed)].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next safe representation before treating the response as invalid.
+    }
+  }
+  throw new Error("canvas_agent_model_response_invalid_json");
+}
+
+function extractFirstJsonObject(value: string) {
+  const start = value.indexOf("{");
+  if (start < 0) return "";
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return value.slice(start, index + 1);
+    }
+  }
+  return "";
 }
 
 function readUsage(value: Record<string, unknown> | null): { promptTokens: number; completionTokens: number; cachedTokens: number; totalTokens: number } | null {
@@ -866,6 +1001,14 @@ function readFailureCode(error: unknown, fallback: string) {
     : error instanceof Error ? error.message : String(error ?? "");
   const normalized = value.trim().replace(/[^a-zA-Z0-9_.-]+/g, "_").slice(0, 120);
   return normalized || fallback;
+}
+
+function isInsufficientCreditsError(error: unknown) {
+  const coded = error && typeof error === "object" && "code" in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  const message = error instanceof Error ? error.message : "";
+  return coded === "insufficient_credits" || message === "insufficient_credits";
 }
 
 function readValidationErrors(error: unknown) {

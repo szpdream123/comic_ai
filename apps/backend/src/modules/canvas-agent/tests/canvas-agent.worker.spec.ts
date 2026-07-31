@@ -115,6 +115,29 @@ test("worker cycle repairs expired leases before processing queued tasks", async
   assert.deepEqual(result, { inspected: 1, repaired: 2, processed: [] });
 });
 
+test("worker maintenance does not scan or process queued tasks", async () => {
+  const calls: string[] = [];
+  const worker = createWorker({
+    repairExpiredLeases: async () => {
+      calls.push("repair");
+      return { inspected: 1, repaired: 1 };
+    },
+    resumeCompletedGenerations: async () => {
+      calls.push("resume-generation");
+      return { inspected: 1, resumed: 1 };
+    },
+    listQueuedTaskIds: async () => {
+      calls.push("list");
+      return [agentTaskId];
+    },
+  });
+
+  const result = await worker.runMaintenanceOnce(2);
+
+  assert.deepEqual(calls, ["repair", "resume-generation"]);
+  assert.deepEqual(result, { inspected: 1, repaired: 2 });
+});
+
 test("worker skips a task while another worker owns the conversation lock", async () => {
   let executed = false;
   const worker = createWorker({
@@ -126,6 +149,50 @@ test("worker skips a task while another worker owns the conversation lock", asyn
   });
   assert.equal((await worker.processTask(agentTaskId)).status, "skipped");
   assert.equal(executed, false);
+});
+
+test("worker serializes direct and BullMQ-triggered task execution", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const worker = createWorker({
+    execute: async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return agentTask("succeeded");
+    },
+  });
+
+  await Promise.all([worker.processTask(agentTaskId), worker.processTask(agentTaskId)]);
+
+  assert.equal(maxActive, 1);
+});
+
+test("worker executes different conversations concurrently", async () => {
+  const secondTaskId = "10000000-0000-4000-8000-000000000002";
+  let active = 0;
+  let maxActive = 0;
+  const worker = createWorker({
+    findTask: async (_db, taskId) => ({
+      ...agentTask("running"),
+      id: taskId,
+      conversationId: taskId === secondTaskId
+        ? "70000000-0000-4000-8000-000000000002"
+        : "70000000-0000-4000-8000-000000000001",
+    }),
+    execute: async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return agentTask("succeeded");
+    },
+  });
+
+  await Promise.all([worker.processTask(agentTaskId), worker.processTask(secondTaskId)]);
+
+  assert.equal(maxActive, 2);
 });
 
 function createWorker(overrides: {

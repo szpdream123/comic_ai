@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { applySqlMigration, loadSqlMigrations } from "../migrations.ts";
-import { createMigratedTestDb } from "../test-db.ts";
+import { createEmptyTestDb, createMigratedTestDb } from "../test-db.ts";
 
 describe("20260722 generation migrations", { concurrency: false }, () => {
   it("registers the BananaRouter model migration", async () => {
@@ -187,6 +187,62 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       .map((migration) => migration.name)
       .filter((name) => name.startsWith("202608"));
     assert.deepEqual(promptManagementRegistered, promptManagementFiles);
+  });
+
+  it("adds Canvas Agent queue and external-wait indexes", async () => {
+    const db = await createEmptyTestDb();
+    try {
+      await db.query(`
+        CREATE TABLE canvas_agent_tasks (
+          id uuid PRIMARY KEY,
+          status text NOT NULL,
+          lease_owner text NULL,
+          current_step_id uuid NULL,
+          conversation_id uuid NOT NULL,
+          created_at timestamptz NOT NULL,
+          updated_at timestamptz NOT NULL
+        )
+      `);
+      await applySqlMigration(db, process.cwd(), "20260822-canvas-agent-worker-indexes.sql");
+      const indexes = await db.query<{ indexname: string }>(`
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname IN (
+            'canvas_agent_tasks_queue_idx',
+            'canvas_agent_tasks_waiting_external_idx'
+          )
+        ORDER BY indexname
+      `);
+      assert.deepEqual(indexes.rows.map((row) => row.indexname), [
+        "canvas_agent_tasks_queue_idx",
+        "canvas_agent_tasks_waiting_external_idx",
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("adds a durable shard assignment to Canvas Agent conversations", async () => {
+    const db = await createEmptyTestDb();
+    try {
+      await db.query(`
+        CREATE TABLE canvas_agent_conversations (
+          id uuid PRIMARY KEY,
+          updated_at timestamptz NOT NULL
+        );
+        INSERT INTO canvas_agent_conversations (id, updated_at)
+        VALUES ('10000000-0000-4000-8000-000000000001', now());
+      `);
+      await applySqlMigration(db, process.cwd(), "20260823-canvas-agent-queue-shards.sql");
+      const result = await db.query<{ shard_id: number }>(
+        "SELECT shard_id FROM canvas_agent_conversations",
+      );
+      assert.equal(Number.isInteger(Number(result.rows[0]?.shard_id)), true);
+      assert.equal(Number(result.rows[0]?.shard_id) >= 0 && Number(result.rows[0]?.shard_id) < 16, true);
+    } finally {
+      await db.close();
+    }
   });
 
   it("creates the stable team asset storage association without guessing historical URLs", async () => {

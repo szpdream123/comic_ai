@@ -2060,7 +2060,10 @@ function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
 
 function isCanvasAgentLedgerEntry(sourceType, reason, metadata = {}) {
   return sourceType === "canvas_agent_text_round"
-    || (sourceType === "credit_reservation_allocation" && Boolean(metadata.agentStepId ?? metadata.agent_step_id))
+    || sourceType === "canvas_agent_text_task"
+    || (sourceType === "credit_reservation_allocation" && Boolean(
+      metadata.agentStepId ?? metadata.agent_step_id ?? metadata.agentTaskId ?? metadata.agent_task_id,
+    ))
     || reason === "canvas agent text round"
     || reason === "canvas agent text round unused reservation"
     || reason === "canvas agent text round interrupted before provider start"
@@ -8755,7 +8758,6 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   const zoomMenuOpen = ui.canvasZoomMenuOpen === true;
   const canvasEdgeStyle = ui.canvasEdgeStyle === "orthogonal" ? "orthogonal" : "curve";
   const canvasEdgesHidden = ui.canvasEdgesHidden === true;
-  const canvasGridVisible = viewport.gridVisible !== false;
   const canvasSnapEnabled = viewport.snapEnabled !== false;
   const viewportStyle = canvasViewportStyle(viewport);
   const gridStyle = canvasGridStyle(viewport);
@@ -8839,7 +8841,8 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     : !assetSidebarMode
     ? filterCanvasSidebarNodeItems(rawSidebarItems, canvasNodeFilter, canvasNodeSearch)
     : rawSidebarItems;
-  const nodeTemplates = resolveCanvasNodeTemplates(ui.episodeGenerationConfig);
+  const nodeTemplates = resolveCanvasNodeTemplates(ui.episodeGenerationConfig)
+    .filter((template) => template.visible !== false);
   const selectedNode =
     nodes.find((node) => node.id === ui.selectedCanvasNodeId) ??
     null;
@@ -9007,7 +9010,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           <span${!assetSidebarMode ? ' data-canvas-node-count' : ""}>${assetSidebarMode ? `共 ${sidebarMode === "history" ? sidebarItems.length : (sidebarMode === "assets" ? `${sidebarAssets.length} / ${allSidebarAssets.length}` : sidebarItems.length)} ${sidebarMode === "history" ? "条记录" : "项"}` : `显示 ${sidebarItems.length} / ${nodes.length} 节点`}</span>
         </footer>
       </aside>
-      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} ${canvasGridVisible ? "is-canvas-grid-visible" : ""} ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
+      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} is-canvas-grid-visible ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
         <button class="canvas-detail-back" type="button" data-action="back-to-canvas-projects" aria-label="返回画布项目列表">
           ${renderCanvasIcon("collapse")}<span>项目</span>
         </button>
@@ -9337,8 +9340,6 @@ function renderCanvasProjectMenu(project = {}, canDelete = true) {
 const CANVAS_TOOLBAR_TOOLS = Object.freeze({
   select: { label: "选择", icon: "cursor", action: "set-canvas-tool", attrs: 'data-canvas-tool="select"' },
   connect: { label: "连接", icon: "link", action: "set-canvas-tool", attrs: 'data-canvas-tool="connect"' },
-  undo: { label: "撤销", icon: "undo", action: "undo-canvas-change" },
-  redo: { label: "重做", icon: "redo", action: "redo-canvas-change" },
   copy: { label: "复制节点", icon: "copy", action: "copy-canvas-selection" },
   paste: { label: "粘贴节点", icon: "clipboard", action: "paste-canvas-selection" },
   group: { label: "节点分组", icon: "group", action: "group-canvas-selection" },
@@ -9346,7 +9347,6 @@ const CANVAS_TOOLBAR_TOOLS = Object.freeze({
 });
 
 const DEFAULT_CANVAS_TOOLBAR_ZONES = Object.freeze([
-  Object.freeze(["undo", "redo"]),
   Object.freeze(["copy", "paste", "group"]),
 ]);
 
@@ -9818,7 +9818,7 @@ function renderLiblibDirectorNode(node, { selected = false } = {}) {
   const style = canvasNodePositionStyle(node, { width: 500, height: 340 });
   return `<article class="canvas-lib-node canvas-special-media-node canvas-director-node ${selected ? "selected" : ""}"
     data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-director" style="${escapeAttr(style)}">
-    <header class="canvas-lib-node-title">${renderCanvasIcon("ai-director")}<strong>${escapeHtml(node?.data?.title ?? "AI 导演")}</strong></header>
+    <header class="canvas-lib-node-title">${renderCanvasIcon("ai-director")}<strong>${escapeHtml(["", "AI 导演", "AI导演"].includes(String(node?.data?.title ?? "").trim()) ? "导演台" : node.data.title)}</strong></header>
     <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
     <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
     ${renderCanvasDirectorNodeBody(node)}
@@ -9848,7 +9848,7 @@ function renderLiblibPanoramaNode(node, { selected = false } = {}) {
   const style = canvasNodePositionStyle(node, { width: 420, height: 438 });
   return `<article class="canvas-lib-node canvas-special-media-node canvas-panorama-node ${selected ? "selected" : ""}"
     data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-panorama" style="${escapeAttr(style)}">
-    <header class="canvas-lib-node-title">${renderCanvasIcon("image")}<strong>${escapeHtml(node?.data?.title ?? "AI 全景")}</strong></header>
+    <header class="canvas-lib-node-title">${renderCanvasIcon("image")}<strong>${escapeHtml(["", "AI 全景", "AI全景"].includes(String(node?.data?.title ?? "").trim()) ? "全景预览" : node.data.title)}</strong></header>
     <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
     <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
     ${renderCanvasPanoramaNodeBody(node)}
@@ -9859,7 +9859,7 @@ function renderLiblibStoryboardNode(node, { selected = false } = {}) {
   const style = canvasNodePositionStyle(node, { width: 420, height: 356 });
   return `<article class="canvas-lib-node canvas-special-media-node canvas-storyboard-node ${selected ? "selected" : ""}"
     data-action="select-canvas-node" data-canvas-node-id="${escapeAttr(node?.id ?? "")}" data-node-id="${escapeAttr(node?.id ?? "")}" data-node-kind="ai-storyboard" style="${escapeAttr(style)}">
-    <header class="canvas-lib-node-title">${renderCanvasIcon("story")}<strong>${escapeHtml(node?.data?.title ?? "AI 分镜")}</strong></header>
+    <header class="canvas-lib-node-title">${renderCanvasIcon("story")}<strong>${escapeHtml(["", "AI 分镜", "AI分镜"].includes(String(node?.data?.title ?? "").trim()) ? "图片切分" : node.data.title)}</strong></header>
     <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
     <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
     ${renderCanvasStoryboardNodeBody(node)}
@@ -10207,14 +10207,14 @@ function resolveCanvasUploadReferences(document, targetNodeId) {
 }
 
 function resolveCanvasReferencesForNode(node, document = {}) {
-  const direct = resolveCanvasReferenceMedia(node);
+  const direct = resolveCanvasReferenceMedia(node, document);
   if (direct.url) {
     return [direct];
   }
   return [];
 }
 
-function resolveCanvasReferenceMedia(node) {
+function resolveCanvasReferenceMedia(node, document = {}) {
   if (!node) {
     return { id: "", name: "", url: "", kind: "image" };
   }
@@ -10233,6 +10233,14 @@ function resolveCanvasReferenceMedia(node) {
       name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考视频"),
       url: resolveCanvasGenerationNodeMediaUrl(node, "video"),
       kind: "video",
+    };
+  }
+  if (node.type === "audio" || node.data?.mediaKind === "audio") {
+    return {
+      id: String(node.id ?? ""),
+      name: String(node.data?.fileName ?? node.data?.name ?? node.data?.title ?? "参考音频"),
+      url: resolveCanvasGenerationNodeMediaUrl(node, "audio", { assets: document?.assets }),
+      kind: "audio",
     };
   }
   if (node.type === "image" || node.data?.mediaKind === "image") {
@@ -10964,7 +10972,7 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
       ? "audio/*"
       : mediaKind === "image" ? "image/*" : "";
   return `
-    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "text" ? "文本生成设置" : mediaKind === "video" ? "视频生成设置" : mediaKind === "audio" ? "音频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
+    <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "text" ? "文本生成设置" : mediaKind === "video" ? "视频生成设置" : mediaKind === "audio" ? "音频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 828, editorHeight: 320 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 800, editorHeight: 320 }))}">
       ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
       ${mediaKind === "audio" ? renderCanvasAudioModeTabs(audioMode, node?.id ?? "") : ""}
       <div class="canvas-editor-reference-row">
@@ -11324,13 +11332,11 @@ const CANVAS_CONTEXT_SHORTCUTS = new Map([
   ["ai-video", "3"],
   ["ai-audio", "4"],
   ["ai-panorama", "5"],
-  ["ai-animation", "6"],
   ["ai-director", "7"],
   ["source-text", "Alt+1"],
   ["source-image", "Alt+2"],
   ["source-video", "Alt+3"],
   ["source-audio", "Alt+4"],
-  ["ai-markdown", "Alt+5"],
 ]);
 
 function renderCanvasContextMenuTemplateItems(items = [], { showShortcuts = false } = {}) {
@@ -11352,8 +11358,9 @@ function renderCanvasContextMenu(menu = {}, options = {}) {
   const menuWidth = 244;
   const compatibleTemplateIds = new Set(Array.isArray(menu.compatibleTemplateIds) ? menu.compatibleTemplateIds : []);
   const items = resolveCanvasNodeTemplates(options.episodeGenerationConfig)
+    .filter((template) => template.visible !== false)
     .filter((item) => !isNodeMenu && (!isConnectionMenu || compatibleTemplateIds.has(item.id)));
-  const blankMenuContentHeight = 32 + (3 * 50) + (2 * 30) + (items.length * 50) + (7 * 10);
+  const blankMenuContentHeight = 32 + 50 + (2 * 30) + (items.length * 50) + (7 * 10);
   const menuHeight = isNodeMenu
     ? 300 + (menu.characterCaptureEligible ? 44 : 0) + (menu.mediaCopyEligible ? 44 : 0) + (menu.grouped ? 44 : 0)
     : isConnectionMenu ? 360 : Math.min(680, blankMenuContentHeight);
@@ -11404,8 +11411,6 @@ function renderCanvasContextMenu(menu = {}, options = {}) {
       ` : ""}
       ${!isNodeMenu && !isConnectionMenu ? `
         <button type="button" role="menuitem" data-action="paste-canvas-selection"><span aria-hidden="true">${renderCanvasIcon("clipboard")}</span>粘贴</button>
-        <button type="button" role="menuitem" data-action="undo-canvas-change"><span aria-hidden="true">${renderCanvasIcon("undo")}</span>撤销</button>
-        <button type="button" role="menuitem" data-action="redo-canvas-change"><span aria-hidden="true">${renderCanvasIcon("redo")}</span>重做</button>
         <section class="canvas-context-menu-group" data-canvas-node-group="generator" role="group" aria-label="生成节点">
           <strong>生成节点</strong>
           ${renderCanvasContextMenuTemplateItems(items.filter((item) => CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type)), { showShortcuts: true })}
