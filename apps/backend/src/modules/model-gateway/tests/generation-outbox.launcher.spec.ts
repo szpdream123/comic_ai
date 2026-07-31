@@ -47,6 +47,10 @@ describe("generation queue launchers", () => {
 
     const launcherScript = readFileSync(launcherPath, "utf8");
     assert.match(launcherScript, /failStaleGenerationTasksBeforeProviderSubmission/);
+    assert.match(launcherScript, /repairFailedGptImageSubmissions/);
+    assert.match(launcherScript, /"failed_image_submission_repair"/);
+    assert.match(launcherScript, /failedImageSubmissionRepairBatchLimit = 100/);
+    assert.match(launcherScript, /limit:\s*Math\.min\(config\.outbox\.dispatchBatchSize, failedImageSubmissionRepairBatchLimit\)/);
     assert.match(launcherScript, /repairExpiredGenerationSubmitLeases/);
     assert.match(launcherScript, /repairQueuedGenerationTaskOutbox/);
     assert.match(launcherScript, /repairRunningSeedancePollJobs/);

@@ -40,6 +40,8 @@ const migrations = [
   ["20260730-canvas-media-derivations.sql", "packages/db/migrations/20260730-canvas-media-derivations.sql"],
   ["20260730-z-unify-prompt-storage.sql", "packages/db/migrations/20260730-z-unify-prompt-storage.sql"],
   ["20260731-canvas-generation-batch-billing.sql", "packages/db/migrations/20260731-canvas-generation-batch-billing.sql"],
+  ["20260731-failed-image-submission-active-repair-index.sql", "packages/db/migrations/20260731-failed-image-submission-active-repair-index.sql"],
+  ["20260731-failed-image-submission-snapshot-repair-index.sql", "packages/db/migrations/20260731-failed-image-submission-snapshot-repair-index.sql"],
   ["20260731-z-canvas-agent-model-compatibility-probes.sql", "packages/db/migrations/20260731-z-canvas-agent-model-compatibility-probes.sql"],
   ["20260802-canvas-settings.sql", "packages/db/migrations/20260802-canvas-settings.sql"],
   ["20260803-canvas-agent-conversation-pins.sql", "packages/db/migrations/20260803-canvas-agent-conversation-pins.sql"],
@@ -57,6 +59,11 @@ const migrations = [
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
+const nonTransactionalMigrationIndexes = new Map([
+  ["20260731-failed-image-submission-active-repair-index.sql", "tasks_failed_image_submission_active_repair_idx"],
+  ["20260731-failed-image-submission-snapshot-repair-index.sql", "generation_snapshots_failed_image_submission_repair_idx"],
+]);
+const nonTransactionalMigrationNames = new Set(nonTransactionalMigrationIndexes.keys());
 const compatibleChecksumTransitions = new Map([
   ["20260725-create-canvas-agent-runtime.sql", {
     recorded: "e8bda0ec7ec8d507b7dc3156406787e346e07029330c2980e8a09cb048f93e4a",
@@ -185,7 +192,28 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
       continue;
     }
 
-    if (apply) {
+    if (!apply && nonTransactionalMigrationNames.has(migration.name)) {
+      if (!/^CREATE INDEX CONCURRENTLY IF NOT EXISTS\s+/i.test(migration.sql.trim())) {
+        throw new Error(`invalid_non_transactional_migration:${migration.name}`);
+      }
+      console.log(`dry-run checked ${migration.name}`);
+    } else if (apply && nonTransactionalMigrationNames.has(migration.name)) {
+      const indexName = nonTransactionalMigrationIndexes.get(migration.name);
+      if (!indexName) throw new Error(`non_transactional_index_missing:${migration.name}`);
+      await db.query("SET statement_timeout = '15min'");
+      try {
+        await removeInvalidConcurrentIndex(db, indexName);
+        await db.query(migration.sql);
+        await assertIndexValid(db, indexName);
+      } finally {
+        await db.query("RESET statement_timeout").catch(() => undefined);
+      }
+      await db.query(
+        "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
+        [migration.name, migration.checksum],
+      );
+      console.log(`applied ${migration.name}`);
+    } else if (apply) {
       await db.query("BEGIN");
       try {
         await db.query("SET LOCAL statement_timeout = '15min'");
@@ -209,6 +237,44 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
       console.log(`dry-run ok ${migration.name}`);
     }
   }
+}
+
+async function removeInvalidConcurrentIndex(db, indexName) {
+  const result = await db.query(
+    `
+      SELECT index_record.indisvalid AS is_valid
+      FROM pg_index index_record
+      JOIN pg_class relation ON relation.oid = index_record.indexrelid
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = current_schema()
+        AND relation.relname = $1
+    `,
+    [indexName],
+  );
+  if (result.rows[0]?.is_valid === false) {
+    await db.query(`DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdentifier(indexName)}`);
+  }
+}
+
+async function assertIndexValid(db, indexName) {
+  const result = await db.query(
+    `
+      SELECT index_record.indisvalid AS is_valid
+      FROM pg_index index_record
+      JOIN pg_class relation ON relation.oid = index_record.indexrelid
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = current_schema()
+        AND relation.relname = $1
+    `,
+    [indexName],
+  );
+  if (result.rows[0]?.is_valid !== true) {
+    throw new Error(`concurrent_index_invalid:${indexName}`);
+  }
+}
+
+function quoteIdentifier(identifier) {
+  return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 function isCompatibleChecksum(name, recorded, current) {

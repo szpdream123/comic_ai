@@ -314,6 +314,7 @@ describe("generation BullMQ publisher", () => {
     );
 
     assert.equal(job.jobId, "generation.task.created__task-requeue-1__submit__ops-requeue-1");
+    assert.equal(job.data.dispatchToken, "ops-requeue-1");
   });
 
   it("writes an exhausted job snapshot to the dead-letter queue", async () => {

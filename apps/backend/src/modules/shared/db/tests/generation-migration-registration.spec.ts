@@ -1,15 +1,74 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { applySqlMigration, loadSqlMigrations } from "../migrations.ts";
-import { createMigratedTestDb } from "../test-db.ts";
+import { createEmptyTestDb, createMigratedTestDb } from "../test-db.ts";
 
 describe("20260722 generation migrations", { concurrency: false }, () => {
   it("registers the BananaRouter model migration", async () => {
     const names = (await loadSqlMigrations()).map((migration) => migration.name);
     assert.ok(names.includes("20260728-add-bananarouter-models.sql"));
+  });
+
+  it("registers failed image submission repair indexes in application and production migrations", async () => {
+    const names = (await loadSqlMigrations()).map((migration) => migration.name);
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    for (const name of [
+      "20260731-failed-image-submission-active-repair-index.sql",
+      "20260731-failed-image-submission-snapshot-repair-index.sql",
+    ]) {
+      assert.ok(names.includes(name));
+      assert.match(productionMigrationScript, new RegExp(name.replaceAll(".", "\\.")));
+    }
+    assert.match(productionMigrationScript, /nonTransactionalMigrationNames/);
+  });
+
+  it("applies failed image submission repair indexes idempotently", async () => {
+    const db = await createEmptyTestDb();
+    try {
+      await db.query(`
+        CREATE TABLE tasks (
+          id uuid PRIMARY KEY,
+          task_type text NOT NULL,
+          status text NOT NULL,
+          input_snapshot_json jsonb NOT NULL,
+          updated_at timestamptz NOT NULL
+        );
+        CREATE TABLE ai_generation_task_snapshots (
+          task_id uuid NOT NULL,
+          status text NOT NULL,
+          updated_at timestamptz NOT NULL
+        );
+      `);
+      for (const name of [
+        "20260731-failed-image-submission-active-repair-index.sql",
+        "20260731-failed-image-submission-snapshot-repair-index.sql",
+      ]) {
+        await applySqlMigration(db, process.cwd(), name);
+        await applySqlMigration(db, process.cwd(), name);
+      }
+      const indexes = await db.query<{ indexname: string }>(`
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = ANY($1::text[])
+        ORDER BY indexname
+      `, [[
+        "generation_snapshots_failed_image_submission_repair_idx",
+        "tasks_failed_image_submission_active_repair_idx",
+      ]]);
+      assert.deepEqual(indexes.rows.map((row) => row.indexname), [
+        "generation_snapshots_failed_image_submission_repair_idx",
+        "tasks_failed_image_submission_active_repair_idx",
+      ]);
+    } finally {
+      await db.close();
+    }
   });
 
   it("seeds the four disabled BananaRouter models with dedicated adapter contracts", async () => {
@@ -596,8 +655,10 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         "generation_stage_successors_orphan_idx",
         "provider_webhook_inbox_pending_idx",
         "ai_generation_task_snapshots_user_updated_task_idx",
+        "tasks_failed_image_submission_active_repair_idx",
+        "generation_snapshots_failed_image_submission_repair_idx",
       ]]);
-      assert.equal(indexes.rows.length, 7);
+      assert.equal(indexes.rows.length, 9);
 
       const constraints = await db.query<{ conname: string }>(`
         SELECT conname

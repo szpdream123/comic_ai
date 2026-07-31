@@ -435,6 +435,73 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     );
   });
 
+  it("uses the recovery dispatch token for a fresh sharded submit assignment", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000039";
+    const event = {
+      ...generationOutboxEvent("90000000-0000-0000-0000-000000000039", taskId),
+      payload: {
+        ...generationOutboxEvent("90000000-0000-0000-0000-000000000039", taskId).payload,
+        dispatchToken: "cumob-429-repair-3",
+        retrySequence: 3,
+      },
+    };
+    let reservedInput: Record<string, unknown> | undefined;
+
+    const result = await dispatchClaimedGenerationOutboxEvents({
+      async query() {
+        return { rows: [{ input_snapshot_json: {} }] };
+      },
+    } as never, {
+      now: new Date("2026-06-03T00:00:00.000Z"),
+      events: [event],
+      config: loadGenerationQueueConfig({
+        GENERATION_QUEUE_SHARDING_ENABLED: "true",
+      }),
+      publisher: { async add() {} },
+      shardStore: {
+        async reserve(_db, input) {
+          reservedInput = input as unknown as Record<string, unknown>;
+          return {
+            assignmentKey: input.assignmentKey,
+            taskId: input.taskId,
+            mediaType: input.mediaType,
+            stage: input.stage,
+            routeKey: input.routeKey,
+            routeCode: "rrepair",
+            shardId: "70000000-0000-4000-8000-000000000009",
+            shardNo: 0,
+            queueName: "generation-image-submit-rrepair-000",
+            capacity: 600,
+            rateLimitMax: 5,
+            rateLimitDurationMs: 1000,
+            admittedCount: 1,
+            shardState: "accepting" as const,
+            assignmentStatus: "publishing" as const,
+            redisJobId: input.redisJobId,
+          };
+        },
+        async markPublished() {
+          return null;
+        },
+      },
+    }, {
+      async publish() {},
+      async markProcessed(_db, input) {
+        return generationOutboxEvent(input.outboxEventId, taskId);
+      },
+    });
+
+    assert.deepEqual(result.failedEventIds, []);
+    assert.equal(
+      reservedInput?.assignmentKey,
+      `generation.task.created:${taskId}:submit:cumob-429-repair-3`,
+    );
+    assert.equal(
+      reservedInput?.redisJobId,
+      `generation.task.created__${taskId}__submit__cumob-429-repair-3`,
+    );
+  });
+
   it("finishes the outbox event when the worker releases its assignment before publish acknowledgement", async () => {
     const taskId = "50000000-0000-4000-8000-000000000033";
     const event = {

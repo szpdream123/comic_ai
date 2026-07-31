@@ -40,6 +40,12 @@ const CANVAS_MEDIA_DERIVATIONS_RELATIVE_PATH = ["packages", "db", "migrations", 
 const UNIFIED_PROMPT_STORAGE_RELATIVE_PATH = ["packages", "db", "migrations", "20260730-z-unify-prompt-storage.sql"];
 const PROMPT_COVER_STORAGE_RELATIVE_PATH = ["packages", "db", "migrations", "20260730-zz-prompt-cover-storage.sql"];
 const CANVAS_GENERATION_BATCH_BILLING_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-canvas-generation-batch-billing.sql"];
+const FAILED_IMAGE_SUBMISSION_ACTIVE_REPAIR_INDEX_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-failed-image-submission-active-repair-index.sql"];
+const FAILED_IMAGE_SUBMISSION_SNAPSHOT_REPAIR_INDEX_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-failed-image-submission-snapshot-repair-index.sql"];
+const CONCURRENT_MIGRATION_INDEX_NAMES = new Map([
+  ["20260731-failed-image-submission-active-repair-index.sql", "tasks_failed_image_submission_active_repair_idx"],
+  ["20260731-failed-image-submission-snapshot-repair-index.sql", "generation_snapshots_failed_image_submission_repair_idx"],
+]);
 const CANVAS_AGENT_MODEL_PROBES_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-z-canvas-agent-model-compatibility-probes.sql"];
 const PROMPT_RATINGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260801-z-create-prompt-ratings.sql"];
 const PROMPT_RATING_SCORE_RELATIVE_PATH = ["packages", "db", "migrations", "20260801-zz-store-prompt-rating-score.sql"];
@@ -287,6 +293,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       sql: await readFile(join(rootDir, ...CANVAS_GENERATION_BATCH_BILLING_RELATIVE_PATH), "utf8"),
     },
     {
+      name: "20260731-failed-image-submission-active-repair-index.sql",
+      sql: await readFile(join(rootDir, ...FAILED_IMAGE_SUBMISSION_ACTIVE_REPAIR_INDEX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260731-failed-image-submission-snapshot-repair-index.sql",
+      sql: await readFile(join(rootDir, ...FAILED_IMAGE_SUBMISSION_SNAPSHOT_REPAIR_INDEX_RELATIVE_PATH), "utf8"),
+    },
+    {
       name: "20260731-z-canvas-agent-model-compatibility-probes.sql",
       sql: await readFile(join(rootDir, ...CANVAS_AGENT_MODEL_PROBES_RELATIVE_PATH), "utf8"),
     },
@@ -403,7 +417,7 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
 export async function applySqlMigrations(db: SqlDatabase, rootDir = process.cwd(), options = {}) {
   const migrations = await loadSqlMigrations(rootDir, options);
   for (const migration of migrations) {
-    await executeMigration(db, migration.sql);
+    await executeMigration(db, migration.sql, migration.name);
   }
 }
 
@@ -418,15 +432,59 @@ export async function applySqlMigration(
     throw new Error(`unknown_current_schema_migration:${migrationName}`);
   }
   const sql = migration.sql;
-  await executeMigration(db, sql);
+  await executeMigration(db, sql, migration.name);
 }
 
-async function executeMigration(db: SqlDatabase, migration: string) {
+async function executeMigration(db: SqlDatabase, migration: string, migrationName: string) {
+  const concurrentIndexName = CONCURRENT_MIGRATION_INDEX_NAMES.get(migrationName);
+  if (concurrentIndexName) {
+    await removeInvalidConcurrentIndex(db, concurrentIndexName);
+  }
   const exec = (db as { exec?: (sql: string) => Promise<unknown> }).exec;
   if (typeof exec === "function") {
     await exec.call(db, migration);
-    return;
+  } else {
+    await db.query(migration);
   }
+  if (concurrentIndexName) {
+    await assertConcurrentIndexValid(db, concurrentIndexName);
+  }
+}
 
-  await db.query(migration);
+async function removeInvalidConcurrentIndex(db: SqlDatabase, indexName: string) {
+  const result = await db.query<{ is_valid: boolean }>(
+    `
+      SELECT index_record.indisvalid AS is_valid
+      FROM pg_index index_record
+      JOIN pg_class relation ON relation.oid = index_record.indexrelid
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = current_schema()
+        AND relation.relname = $1
+    `,
+    [indexName],
+  );
+  if (result.rows[0]?.is_valid === false) {
+    await db.query(`DROP INDEX CONCURRENTLY IF EXISTS ${quoteIdentifier(indexName)}`);
+  }
+}
+
+async function assertConcurrentIndexValid(db: SqlDatabase, indexName: string) {
+  const result = await db.query<{ is_valid: boolean }>(
+    `
+      SELECT index_record.indisvalid AS is_valid
+      FROM pg_index index_record
+      JOIN pg_class relation ON relation.oid = index_record.indexrelid
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = current_schema()
+        AND relation.relname = $1
+    `,
+    [indexName],
+  );
+  if (result.rows[0]?.is_valid !== true) {
+    throw new Error(`concurrent_index_invalid:${indexName}`);
+  }
+}
+
+function quoteIdentifier(identifier: string) {
+  return `"${identifier.replaceAll('"', '""')}"`;
 }

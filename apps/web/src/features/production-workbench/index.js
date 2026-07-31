@@ -18425,10 +18425,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     await runAction(workbench, "正在重命名剧集...", async () => {
-      await workbench.api.updateEpisode({
-        episodeId,
-        title: nextName,
-      });
+      const projectId = resolveActiveProjectId(workbench);
+      if (projectId && typeof workbench.api.updateProjectEpisode === "function") {
+        await workbench.api.updateProjectEpisode(projectId, episodeId, { title: nextName });
+      } else {
+        await workbench.api.updateEpisode({ projectId, episodeId, title: nextName });
+      }
       if (workbench.ui.selectedProjectCardId) {
         await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
       }

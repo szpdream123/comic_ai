@@ -964,10 +964,12 @@ async function enqueueImageSubmitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    dispatchToken?: string;
   }>,
   retryAfterMs: number,
 ) {
   const retrySequence = nextRetrySequence(input.job.data);
+  const dispatchToken = input.job.data.dispatchToken?.trim();
   await input.publisher.add(
     input.config.queues.submitImage,
     "generation.image.submit.retry",
@@ -979,14 +981,22 @@ async function enqueueImageSubmitRetryJob(
       providerExecutor: input.job.data.providerExecutor,
       outboxEventId: input.job.data.outboxEventId,
       retrySequence,
+      ...(dispatchToken ? { dispatchToken } : {}),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      jobId: buildGenerationBullMQJobId(
-        "generation.image.submit.retry",
-        input.job.data.taskId,
-        retrySequence,
-      ),
+      jobId: dispatchToken
+        ? buildGenerationBullMQJobId(
+            "generation.image.submit.retry",
+            input.job.data.taskId,
+            dispatchToken,
+            retrySequence,
+          )
+        : buildGenerationBullMQJobId(
+            "generation.image.submit.retry",
+            input.job.data.taskId,
+            retrySequence,
+          ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
       ...generationPriorityJobOptions(input.job.data),
       attempts: input.config.retry.submit.attempts,

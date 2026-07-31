@@ -508,6 +508,56 @@ describe("persistent credit ledger and reservation", () => {
     }
   });
 
+  it("locks the credit wallet before settling reserved credit lots", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedAccount(db);
+      await grantCredits(db, {
+        userId: ids.user,
+        amount: 100,
+        sourceType: "payment_order",
+        sourceId: ids.paymentOrder,
+        reason: "充值套餐增加积分",
+        now: now(),
+      });
+      const reserved = await reserveCredits(db, {
+        userId: ids.user,
+        amount: 30,
+        sourceType: "workflow_task",
+        sourceId: ids.task,
+        reason: "分镜生成预占积分",
+        now: now(),
+      });
+      const lockOrder: string[] = [];
+      const recordingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+          if (/FROM users[\s\S]*FOR UPDATE/.test(sql)) {
+            lockOrder.push("wallet");
+          }
+          if (/FOR UPDATE OF allocation, lot/.test(sql)) {
+            lockOrder.push("lots");
+          }
+          return db.query<T>(sql, params);
+        },
+      };
+
+      await settleReservationAllocation(recordingDb, {
+        reservationId: reserved.reservation.id,
+        allocationKey: "release-after-provider-failure",
+        amount: 30,
+        outcome: "released",
+        taskId: ids.task,
+        attemptId: ids.attempt,
+        now: now(),
+      });
+
+      assert.deepEqual(lockOrder, ["wallet", "lots"]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("only grants a paid private prompt skill fee after generation success", async () => {
     const db = await createMigratedTestDb();
 

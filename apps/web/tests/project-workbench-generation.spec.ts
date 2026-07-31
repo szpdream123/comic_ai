@@ -21882,6 +21882,86 @@ describe("production workbench project tab", () => {
     ), false);
   });
 
+  it("renames real project episodes through the project-scoped endpoint", async () => {
+    const episodeId = "10000000-0000-4000-8000-000000000001";
+    const projectId = "project-1";
+    const updateCalls = [];
+    let legacyUpdateCalled = false;
+    const baseState = buildProjectState();
+    const workbench = {
+      state: {
+        ...baseState,
+        project: {
+          ...baseState.project,
+          id: projectId,
+        },
+        projectDetail: {
+          project: { id: projectId, name: "try" },
+          episodes: [
+            {
+              id: episodeId,
+              title: "旧剧集名",
+              status: "draft",
+              storyboardCount: 0,
+            },
+          ],
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      api: {
+        async updateProjectEpisode(requestProjectId, requestEpisodeId, input) {
+          updateCalls.push({ projectId: requestProjectId, episodeId: requestEpisodeId, input });
+          return { episode: { id: episodeId, title: input.title } };
+        },
+        async updateEpisode() {
+          legacyUpdateCalled = true;
+          throw new Error("legacy update should not be called for project episodes");
+        },
+        async getProjectDetailV2(requestProjectId) {
+          assert.equal(requestProjectId, projectId);
+          return {
+            project: { id: projectId, name: "try" },
+            episodes: [
+              {
+                id: episodeId,
+                title: "新剧集名",
+                status: "draft",
+                storyboardCount: 0,
+              },
+            ],
+            shots: [],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: projectId,
+        renameEpisodeId: episodeId,
+        renameEpisodeName: "新剧集名",
+      }),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-rename-episode-card" },
+    });
+
+    assert.deepEqual(updateCalls, [{ projectId, episodeId, input: { title: "新剧集名" } }]);
+    assert.equal(legacyUpdateCalled, false);
+    assert.equal(workbench.state.projectDetail.episodes[0]?.title, "新剧集名");
+    assert.equal(workbench.ui.renameEpisodeId, null);
+    assert.equal(workbench.ui.renameEpisodeName, "");
+    assert.equal(workbench.ui.toast, "操作已完成。");
+  });
+
   it("deletes real project episodes through the project-scoped endpoint", async () => {
     const episodeId = "10000000-0000-4000-8000-000000000001";
     const projectId = "project-1";

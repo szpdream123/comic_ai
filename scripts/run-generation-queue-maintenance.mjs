@@ -21,6 +21,7 @@ const [
   { createStorageAdapterFromEnv },
   { reconcileCanvasMediaDerivations },
   { findGenerationArtifactHandoff },
+  { repairFailedGptImageSubmissions },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
@@ -38,9 +39,11 @@ const [
     import("../apps/backend/src/modules/storage/storage-adapter.factory.ts"),
     import("../apps/backend/src/modules/project/canvas-media-derivation.service.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-artifact-handoff.service.ts"),
+    import("../apps/backend/src/modules/model-gateway/gpt-image.worker.ts"),
   ]);
 
 const config = loadGenerationQueueConfig(process.env);
+const failedImageSubmissionRepairBatchLimit = 100;
 const db = await createDevDb();
 const publisher = createBullMQGenerationPublisher(config);
 const assignmentInspector = createBullMQGenerationQueueAssignmentInspector(config);
@@ -83,6 +86,13 @@ try {
           now,
           limit: config.outbox.dispatchBatchSize,
         }),
+    );
+    const failedImageSubmissionRepair = await runMaintenanceStep(
+      "failed_image_submission_repair",
+      () => repairFailedGptImageSubmissions(db, {
+        now,
+        limit: Math.min(config.outbox.dispatchBatchSize, failedImageSubmissionRepairBatchLimit),
+      }),
     );
     const leaseRepair = await runMaintenanceStep(
       "expired_submit_lease_repair",
@@ -175,6 +185,15 @@ try {
 
     if (preSubmissionFailure?.failedTaskIds.length) {
       console.info(`[generation-maintenance] failedPreSubmissionTasks=${preSubmissionFailure.failedTaskIds.length}`);
+    }
+    if (failedImageSubmissionRepair && (
+      failedImageSubmissionRepair.repairedTaskIds.length
+      || failedImageSubmissionRepair.requeuedTaskIds.length
+      || failedImageSubmissionRepair.failedTaskIds.length
+    )) {
+      console.info(
+        `[generation-maintenance] repairedFailedImageSubmissions=${failedImageSubmissionRepair.repairedTaskIds.length} requeuedRateLimitedImageSubmissions=${failedImageSubmissionRepair.requeuedTaskIds.length} failedImageSubmissionRepairs=${failedImageSubmissionRepair.failedTaskIds.length}`,
+      );
     }
     if (leaseRepair && (leaseRepair.repairedTaskIds.length || leaseRepair.resultUnknownTaskIds.length)) {
       console.info(
