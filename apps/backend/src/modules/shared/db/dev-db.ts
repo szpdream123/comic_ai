@@ -9,6 +9,14 @@ export interface DevDatabase extends SqlDatabase {
   close(): Promise<void>;
 }
 
+export function loadDatabasePoolConfig(env: NodeJS.ProcessEnv) {
+  return {
+    max: readConfiguredInteger(env, "DATABASE_POOL_MAX", 20, 1, 200),
+    idleTimeoutMillis: readConfiguredInteger(env, "DATABASE_POOL_IDLE_TIMEOUT_MS", 30_000, 0, 600_000),
+    connectionTimeoutMillis: readConfiguredInteger(env, "DATABASE_POOL_CONNECTION_TIMEOUT_MS", 5_000, 0, 60_000),
+  };
+}
+
 export async function createDevDb(): Promise<DevDatabase> {
   const connectionString = process.env.DATABASE_URL?.trim();
   if (!connectionString) {
@@ -17,6 +25,7 @@ export async function createDevDb(): Promise<DevDatabase> {
 
   const pool = new Pool({
     connectionString,
+    ...loadDatabasePoolConfig(process.env),
   });
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || undefined;
 
@@ -33,6 +42,26 @@ export async function createDevDb(): Promise<DevDatabase> {
       `PostgreSQL database initialization failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+function readConfiguredInteger(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  defaultValue: number,
+  minimum: number,
+  maximum: number,
+) {
+  const rawValue = env[key];
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+
+  const normalizedValue = rawValue.trim();
+  const value = Number(normalizedValue);
+  if (!/^\d+$/.test(normalizedValue) || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${key} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return value;
 }
 
 interface TransactionState {

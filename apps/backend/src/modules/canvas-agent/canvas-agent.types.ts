@@ -122,6 +122,7 @@ export interface CanvasAgentGenerationIntake {
     actorTeamMemberId: string | null;
     idempotencyKey: string;
     kind: "image" | "video" | "audio";
+    targetNodeId?: string | null;
     request: Record<string, unknown>;
   }): Promise<{ generationTaskId: string; workflowId?: string }>;
 }

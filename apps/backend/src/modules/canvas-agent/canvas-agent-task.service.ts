@@ -7,6 +7,8 @@ import {
   createWorkflowWithTasks,
 } from "../workflow-task/workflow-task.service.ts";
 import { sanitizeCanvasAgentValue } from "./canvas-agent-sensitive-data.ts";
+import { canvasAgentShardQueueName, loadCanvasAgentShardConfig } from "./canvas-agent-shard.config.ts";
+import { assignCanvasAgentConversationShard } from "./canvas-agent-shard.service.ts";
 import type {
   CanvasAgentActor,
   CanvasAgentEventRecord,
@@ -204,7 +206,6 @@ export async function listCanvasAgentConversations(
         SELECT task.id, task.status
         FROM canvas_agent_tasks task
         WHERE task.conversation_id = conversation.id
-          AND task.status NOT IN ('succeeded','failed','canceled','result_unknown','manual_review_required')
         ORDER BY task.updated_at DESC, task.id DESC
         LIMIT 1
       ) active_task ON TRUE
@@ -362,10 +363,10 @@ export async function createCanvasAgentTask(
   const agentTaskId = randomUUID();
   await db.query("BEGIN");
   try {
-    const conversation = await queryOne<{ id: string }>(
+    const conversation = await queryOne<{ id: string; shard_id: number | string | null }>(
       db,
       `
-        SELECT id
+        SELECT id, shard_id
         FROM canvas_agent_conversations
         WHERE id = $1 AND canvas_id = $2 AND owner_user_id = $3
           AND actor_team_member_id IS NOT DISTINCT FROM $4
@@ -382,6 +383,18 @@ export async function createCanvasAgentTask(
     if (!conversation) {
       throw new Error("canvas_agent_conversation_not_found");
     }
+    const shardConfig = loadCanvasAgentShardConfig(process.env);
+    const shardId = conversation.shard_id === null
+      ? await assignCanvasAgentConversationShard(db, {
+        conversationId: input.conversationId,
+        config: shardConfig,
+        now: input.now,
+      })
+      : Number(conversation.shard_id);
+    const queueName = canvasAgentShardQueueName(shardConfig.baseQueueName, shardId, shardConfig.enabled);
+    if (input.queueName !== undefined && input.queueName !== queueName) {
+      throw new Error("canvas_agent_queue_name_shard_mismatch");
+    }
 
     const workflow = await createWorkflowWithTasks(db, {
       userId: input.actor.ownerUserId,
@@ -397,7 +410,7 @@ export async function createCanvasAgentTask(
       },
       tasks: [{
         taskType: "canvas_agent.execute",
-        queueName: input.queueName ?? "canvas-agent",
+        queueName,
         targetEntityType: "canvas_agent_task",
         targetEntityId: agentTaskId,
         inputSnapshot: {

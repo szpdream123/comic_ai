@@ -22,7 +22,7 @@ import type { CanvasAgentTaskRecord } from "./canvas-agent.types.ts";
 
 const defaultLeaseMs = 60_000;
 const defaultHeartbeatIntervalMs = 15_000;
-const defaultPollIntervalMs = 1_000;
+const defaultPollIntervalMs = 10_000;
 
 export interface CanvasAgentWorkerProcessResult {
   taskId: string;
@@ -65,6 +65,7 @@ export interface CanvasAgentWorkerDependencies {
  * provider calls, media generation and billing remain behind the executor.
  */
 export class CanvasAgentWorker {
+  private readonly processingTails = new Map<string, Promise<void>>();
   private readonly now: () => Date;
   private readonly leaseMs: number;
   private readonly heartbeatIntervalMs: number;
@@ -101,6 +102,22 @@ export class CanvasAgentWorker {
   }
 
   async processTask(taskId: string): Promise<CanvasAgentWorkerProcessResult> {
+    const current = await this.findTask(this.deps.db, taskId);
+    if (!current?.conversationId) return { taskId, status: "skipped" };
+    const conversationId = current.conversationId;
+    const previous = this.processingTails.get(conversationId) ?? Promise.resolve();
+    const result = previous.then(() => this.processTaskSerially(taskId));
+    const tail = result.then(() => undefined, () => undefined);
+    this.processingTails.set(conversationId, tail);
+    void tail.then(() => {
+      if (this.processingTails.get(conversationId) === tail) {
+        this.processingTails.delete(conversationId);
+      }
+    });
+    return result;
+  }
+
+  private async processTaskSerially(taskId: string): Promise<CanvasAgentWorkerProcessResult> {
     const current = await this.findTask(this.deps.db, taskId);
     if (current?.status === "cancel_requested") {
       return this.cancelUnclaimedTask(current);
@@ -161,8 +178,15 @@ export class CanvasAgentWorker {
   }
 
   async runOnce(limit = 10): Promise<CanvasAgentWorkerCycleResult> {
-    const repairedResult = await this.repair.repairExpiredLeases(limit);
-    const resumed = await this.repair.resumeCompletedGenerations?.(limit);
+    const maintenance = await this.runMaintenanceOnce(limit);
+    const processed = await this.runQueuedOnce(limit);
+    return {
+      ...maintenance,
+      processed,
+    };
+  }
+
+  async runQueuedOnce(limit = 10): Promise<CanvasAgentWorkerProcessResult[]> {
     const taskIds = this.deps.listQueuedTaskIds
       ? await this.deps.listQueuedTaskIds(Math.min(Math.max(limit, 1), 100))
       : await this.readQueuedTaskIds(Math.min(Math.max(limit, 1), 100));
@@ -170,10 +194,15 @@ export class CanvasAgentWorker {
     for (const taskId of taskIds) {
       processed.push(await this.processTask(taskId));
     }
+    return processed;
+  }
+
+  async runMaintenanceOnce(limit = 10): Promise<Omit<CanvasAgentWorkerCycleResult, "processed">> {
+    const repairedResult = await this.repair.repairExpiredLeases(limit);
+    const resumed = await this.repair.resumeCompletedGenerations?.(limit);
     return {
       repaired: repairedResult.repaired + (resumed?.resumed ?? 0),
       inspected: repairedResult.inspected,
-      processed,
     };
   }
 

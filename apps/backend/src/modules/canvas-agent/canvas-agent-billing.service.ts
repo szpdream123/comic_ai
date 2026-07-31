@@ -21,6 +21,124 @@ const CANVAS_AGENT_BILLING_MODE = "token";
 export class CanvasAgentBillingService {
   constructor(private readonly db: SqlDatabase) {}
 
+  async settleTask(input: {
+    ownerUserId: string;
+    actorTeamMemberId?: string | null;
+    canvasId: string;
+    agentTaskId: string;
+    workflowId?: string | null;
+    workflowTaskId?: string | null;
+    usage: CanvasAgentTextUsage;
+    pricing: Record<string, unknown>;
+    now: Date;
+  }) {
+    const totalTokens = positiveNumber(input.usage.totalTokens);
+    const amount = totalTokens > 0
+      ? Math.max(1, Math.ceil((totalTokens * canvasAgentTokenRate(input.pricing)) / 1_000_000))
+      : 0;
+    if (amount <= 0) {
+      return { consumed: 0, totalTokens: 0 };
+    }
+    const metadata = {
+      canvasId: input.canvasId,
+      agentTaskId: input.agentTaskId,
+      billingEvent: "actual_usage",
+      usage: input.usage,
+      actorTeamMemberId: input.actorTeamMemberId ?? null,
+    };
+    if (!input.actorTeamMemberId) {
+      const reservation = await reserveCredits(this.db, {
+        userId: input.ownerUserId,
+        amount,
+        sourceType: "canvas_agent_text_task",
+        sourceId: input.agentTaskId,
+        reason: CANVAS_AGENT_CREDIT_REASON,
+        canvasProjectId: input.canvasId,
+        workflowId: input.workflowId ?? null,
+        taskId: input.workflowTaskId ?? null,
+        metadata,
+        createdByUserId: input.ownerUserId,
+        now: input.now,
+      });
+      await settleReservationAllocation(this.db, {
+        reservationId: reservation.reservation.id,
+        allocationKey: `${input.agentTaskId}:consume`,
+        amount,
+        outcome: "consumed",
+        taskId: input.workflowTaskId ?? null,
+        metadata,
+        now: input.now,
+      });
+      return { consumed: amount, totalTokens: input.usage.totalTokens };
+    }
+
+    await this.db.query("BEGIN");
+    try {
+      const existing = await queryOne<{ amount: number | string }>(
+        this.db,
+        `
+          SELECT amount
+          FROM credit_ledger_entries
+          WHERE user_id = $1 AND team_member_id = $2
+            AND source_type = 'canvas_agent_text_task' AND source_id = $3
+            AND entry_type = 'transfer_out'
+          LIMIT 1
+        `,
+        [input.ownerUserId, input.actorTeamMemberId, input.agentTaskId],
+      );
+      if (existing) {
+        if (Number(existing.amount) !== amount) {
+          throw new Error("canvas_agent_credit_settlement_conflict");
+        }
+        await this.db.query("COMMIT");
+        return { consumed: amount, totalTokens: input.usage.totalTokens };
+      }
+
+      const member = await queryOne<{ member_credits: number | string }>(
+        this.db,
+        `
+          SELECT member_credits
+          FROM team_members
+          WHERE id = $1 AND user_id = $2 AND status = 'active' AND deleted_at IS NULL
+          FOR UPDATE
+        `,
+        [input.actorTeamMemberId, input.ownerUserId],
+      );
+      if (!member || Number(member.member_credits) < amount) throw new Error("insufficient_credits");
+
+      const updatedMember = await queryOne<{ member_credits: number | string }>(
+        this.db,
+        `
+          UPDATE team_members
+          SET member_credits = member_credits - $2::integer, updated_at = $3
+          WHERE id = $1 AND user_id = $4 AND status = 'active' AND deleted_at IS NULL
+          RETURNING member_credits
+        `,
+        [input.actorTeamMemberId, amount, input.now, input.ownerUserId],
+      );
+      if (!updatedMember) throw new Error("insufficient_credits");
+      await this.db.query(
+        `
+          INSERT INTO credit_ledger_entries (
+            id,user_id,team_member_id,entry_type,amount,available_delta,reserved_delta,
+            consumed_delta,balance_after,source_type,source_id,reason,metadata_json,
+            created_by_user_id,created_at
+          ) VALUES ($1,$2,$3,'transfer_out',$4::integer,-($4::integer),0,0,$5,'canvas_agent_text_task',$6,$7,$8::jsonb,$2,$9)
+        `,
+        [
+          randomUUID(), input.ownerUserId, input.actorTeamMemberId, amount,
+          Number(updatedMember.member_credits), input.agentTaskId, CANVAS_AGENT_CREDIT_REASON,
+          JSON.stringify(metadata), input.now,
+        ],
+      );
+      await this.db.query("COMMIT");
+      return { consumed: amount, totalTokens: input.usage.totalTokens };
+    } catch (error) {
+      await this.db.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  }
+
   estimateRound(input: {
     pricing: Record<string, unknown>;
     maxTokens?: number;
@@ -211,6 +329,7 @@ export class CanvasAgentBillingService {
       + positiveNumber(usage.completionTokens)
       + positiveNumber(usage.cachedTokens);
     const totalTokens = reportedComponents || positiveNumber(usage.totalTokens);
+    if (totalTokens <= 0) return 0;
     const tokenCost = Math.ceil((totalTokens * canvasAgentTokenRate(pricing)) / 1_000_000);
     return Math.max(1, tokenCost);
   }

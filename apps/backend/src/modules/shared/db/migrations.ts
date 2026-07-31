@@ -73,6 +73,8 @@ const TEAM_ASSETS_TAGS_RELATIVE_PATH = ["packages", "db", "migrations", "2026081
 const TEAM_ASSETS_FOLDERS_RELATIVE_PATH = ["packages", "db", "migrations", "20260819-team-assets-folders.sql"];
 const CUMOB_TEXT_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "20260820-add-cumob-text-models.sql"];
 const SCRIPT_OUTPUT_RULES_RELATIVE_PATH = ["packages", "db", "migrations", "20260821-append-script-output-rules.sql"];
+const CANVAS_AGENT_WORKER_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260822-canvas-agent-worker-indexes.sql"];
+const CANVAS_AGENT_QUEUE_SHARDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260823-canvas-agent-queue-shards.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
 const GENERATION_DUE_POLL_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-due-poll.sql"];
@@ -407,6 +409,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260821-append-script-output-rules.sql",
       sql: await readFile(join(rootDir, ...SCRIPT_OUTPUT_RULES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260822-canvas-agent-worker-indexes.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_WORKER_INDEXES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260823-canvas-agent-queue-shards.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_QUEUE_SHARDS_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

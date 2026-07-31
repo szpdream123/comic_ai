@@ -238,7 +238,7 @@ export function loadGenerationQueueConfig(
       ),
       dispatchIntervalMs: parsePositiveInteger(
         env.GENERATION_OUTBOX_DISPATCH_INTERVAL_MS,
-        1000,
+        10_000,
         60_000,
       ),
       retryDelayMs: parsePositiveInteger(

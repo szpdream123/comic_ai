@@ -28,6 +28,7 @@ export interface CanvasAgentToolExecutionContext {
   agentStepId: string;
   actor: CanvasAgentActor;
   callId: string;
+  referencedNodeIds?: string[];
 }
 
 export interface CanvasAgentToolResult {
@@ -506,13 +507,15 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   });
   registry.register({
     id: "generation.create",
-    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass the model directly for one-off generation; do not change Canvas provider defaults merely to run this tool.",
+    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass fileGrantIds to use files explicitly authorized in the current conversation as image or video references; never invent grant IDs. When the user explicitly references a Canvas node to regenerate, pass it as targetNodeId so the result updates that node. Do not change Canvas provider defaults merely to run this tool.",
     effect: "media_generation",
     requiredCapability: "canvas:run",
     inputSchema: {
       type: "object",
       properties: {
         kind: { type: "string", enum: ["image", "video", "audio"] },
+        fileGrantIds: { type: "array", items: { type: "string", minLength: 1 } },
+        targetNodeId: { type: "string", minLength: 1 },
         request: {
           type: "object",
           properties: {
@@ -530,6 +533,58 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
       additionalProperties: false,
     },
     execute: async (input, context) => {
+      const fileGrantIds = Array.isArray(input.fileGrantIds)
+        ? [...new Set(input.fileGrantIds.map((value) => String(value ?? "").trim()).filter(Boolean))].slice(0, 8)
+        : [];
+      if (fileGrantIds.length && input.kind === "audio") throw new Error("canvas_agent_file_grant_media_kind_unsupported");
+      if (fileGrantIds.length && !deps.context) throw new Error("canvas_agent_file_grant_unavailable");
+      const grantedFiles: Array<{ storageObjectId: string; contentType: string }> = [];
+      for (const grantId of fileGrantIds) {
+        const grant = await deps.context!.resolveFileGrant({
+          grantId,
+          canvasId: context.canvasId,
+          conversationId: context.conversationId,
+          actor: context.actor,
+          now: deps.now?.() ?? new Date(),
+        });
+        grantedFiles.push({
+          storageObjectId: grant.storageObjectId,
+          contentType: String(grant.contentType ?? "").trim().toLowerCase(),
+        });
+      }
+      const request = { ...(input.request as Record<string, unknown>) };
+      if (grantedFiles.length) {
+        const parameters = request.parameters && typeof request.parameters === "object" && !Array.isArray(request.parameters)
+          ? request.parameters as Record<string, unknown>
+          : {};
+        const videoReferences = grantedFiles.filter((file) => file.contentType.startsWith("video/"));
+        const unsupportedReferences = grantedFiles.filter((file) => file.contentType.startsWith("audio/"));
+        if (unsupportedReferences.length || (input.kind === "image" && videoReferences.length)) {
+          throw new Error("canvas_agent_file_grant_media_kind_unsupported");
+        }
+        if (videoReferences.length > 1) throw new Error("canvas_agent_video_reference_limit_exceeded");
+        const imageReferences = grantedFiles.filter((file) => !file.contentType.startsWith("video/") && !file.contentType.startsWith("audio/"));
+        const existingReferences = Array.isArray(parameters.referenceImages) ? parameters.referenceImages : [];
+        request.parameters = {
+          ...parameters,
+          ...(imageReferences.length ? {
+            referenceImages: [
+              ...existingReferences,
+              ...imageReferences.map(({ storageObjectId }) => ({ storageObjectId })),
+            ],
+          } : {}),
+          ...(videoReferences.length ? {
+            sourceVideo: { storageObjectId: videoReferences[0].storageObjectId },
+          } : {}),
+        };
+      }
+      const referencedNodeIds = context.referencedNodeIds ?? [];
+      if (!input.targetNodeId && referencedNodeIds.length > 1) {
+        throw new Error("canvas_agent_generation_target_node_required");
+      }
+      const targetNodeId = String(
+        input.targetNodeId ?? (referencedNodeIds.length === 1 ? referencedNodeIds[0] : ""),
+      ).trim() || null;
       const created = await deps.generationIntake.create({
         canvasId: context.canvasId,
         conversationId: context.conversationId,
@@ -539,7 +594,8 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
         actorTeamMemberId: context.actor.actorTeamMemberId ?? null,
         idempotencyKey: `canvas-agent:${context.agentTaskId}:${context.callId}`,
         kind: input.kind as "image" | "video" | "audio",
-        request: input.request as Record<string, unknown>,
+        targetNodeId,
+        request,
       });
       return {
         status: "waiting_external",

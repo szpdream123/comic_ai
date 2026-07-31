@@ -116,6 +116,7 @@ export function createCanvasAgentWorkerRuntime(input: {
     readCanvas,
     patchCanvas,
     generationIntake,
+    now,
     context,
     knowledge,
     promptPreferences,
@@ -480,6 +481,7 @@ async function upsertCanvasAgentGenerationNode(
   },
 ) {
   const actorScope = canvasAgentGenerationActorScope(input);
+  const targetNodeId = readString(input.targetNodeId);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const canvas = await findCanvasByCanvasProjectId(db, {
       canvasProjectId: input.canvasId,
@@ -489,17 +491,21 @@ async function upsertCanvasAgentGenerationNode(
     const existingIndex = canvas.document.nodes.findIndex((node) => node.id === input.nodeKey);
     const existingNode = existingIndex >= 0 ? canvas.document.nodes[existingIndex] : null;
     if (readString(existingNode?.data?.taskId) === input.taskId) return existingNode;
+    if (targetNodeId && !existingNode) throw new Error("canvas_agent_generation_target_node_not_found");
 
     const spec = CANVAS_AGENT_GENERATION_NODE[input.kind];
+    if (targetNodeId && existingNode && !isCanvasAgentGenerationTargetCompatible(existingNode.type, input.kind)) {
+      throw new Error("canvas_agent_generation_target_kind_mismatch");
+    }
     const node: CanvasDocument["nodes"][number] = {
       id: input.nodeKey,
-      type: spec.type,
+      type: existingNode?.type ?? spec.type,
       position: existingNode?.position ?? resolveCanvasAgentGenerationNodePosition(canvas.document, spec.size),
       size: existingNode?.size ?? spec.size,
       zIndex: existingNode?.zIndex ?? nextCanvasAgentGenerationNodeZIndex(canvas.document),
       data: {
         ...(existingNode?.data ?? {}),
-        title: spec.title,
+        title: readString(existingNode?.data?.title) || spec.title,
         status: "queued",
         mediaKind: input.kind,
         modelCode: input.modelCode,
@@ -556,12 +562,20 @@ function canvasAgentGenerationActorScope(input: Pick<CanvasAgentGenerationInput,
 }
 
 function resolveCanvasAgentGenerationTargets(
-  input: Pick<CanvasAgentGenerationInput, "canvasId" | "kind" | "agentStepId">,
+  input: Pick<CanvasAgentGenerationInput, "canvasId" | "kind" | "agentStepId" | "targetNodeId">,
 ) {
+  const targetNodeId = readString(input.targetNodeId);
   return {
     scopeTargetId: input.canvasId,
-    nodeKey: `canvas-agent-${input.kind}-${input.agentStepId}`,
+    nodeKey: targetNodeId || `canvas-agent-${input.kind}-${input.agentStepId}`,
   };
+}
+
+function isCanvasAgentGenerationTargetCompatible(nodeType: string, kind: CanvasAgentGenerationInput["kind"]) {
+  const type = nodeType.trim().toLowerCase();
+  if (kind === "image") return ["send", "image", "ai-image", "source-image"].includes(type);
+  if (kind === "video") return ["video", "ai-video", "source-video"].includes(type);
+  return ["audio", "ai-audio", "source-audio"].includes(type);
 }
 
 function resolveCanvasAgentGenerationNodePosition(document: CanvasDocument, size: { width: number; height: number }) {

@@ -63,11 +63,10 @@ export function renderCanvasPanoramaNodeBody(node = {}, options = {}) {
     fov: data?.panoramaFov ?? data?.panoFov,
   });
   const status = String(options?.status ?? data?.status ?? (imageUrl ? "ready" : "empty")).toLowerCase();
-  const fullscreen = options?.fullscreen === true || data?.panoFullscreen === true || data?.panoramaFullscreen === true;
   const disabled = !imageUrl;
   const preview = renderPanoramaPreview({ data, imageUrl, label, mode, nodeId, status, view });
 
-  return `<section class="canvas-panorama-node-body is-${mode}${fullscreen ? " is-fullscreen" : ""}" data-canvas-panorama-body data-node-id="${escapeAttr(nodeId)}" data-panorama-mode="${mode}" aria-label="${escapeAttr(label)}">
+  return `<section class="canvas-panorama-node-body is-${mode}" data-canvas-panorama-body data-node-id="${escapeAttr(nodeId)}" data-panorama-mode="${mode}" aria-label="${escapeAttr(label)}">
     <div class="canvas-panorama-mode-switch" role="group" aria-label="全景预览模式">
       <button type="button" data-action="set-canvas-panorama-mode" data-node-id="${escapeAttr(nodeId)}" data-panorama-mode="image" aria-pressed="${mode === "image"}">图片</button>
       <button type="button" data-action="set-canvas-panorama-mode" data-node-id="${escapeAttr(nodeId)}" data-panorama-mode="3d" aria-pressed="${mode === "3d"}">3D</button>
@@ -76,7 +75,6 @@ export function renderCanvasPanoramaNodeBody(node = {}, options = {}) {
     <div class="canvas-panorama-actions" role="toolbar" aria-label="全景工具">
       <button type="button" data-action="pick-canvas-panorama-file" data-node-id="${escapeAttr(nodeId)}" aria-label="上传全景图" title="上传全景图"><span aria-hidden="true">+</span></button>
       <button type="button" data-action="capture-canvas-panorama-view" data-node-id="${escapeAttr(nodeId)}" data-panorama-yaw="${view.yaw}" data-panorama-pitch="${view.pitch}" data-panorama-fov="${view.fov}" aria-label="截取当前全景视角" title="截取当前全景视角"${disabledAttr(disabled)}><span aria-hidden="true">▣</span></button>
-      <button type="button" data-action="toggle-canvas-panorama-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="${fullscreen ? "退出全屏" : "全屏查看"}" title="${fullscreen ? "退出全屏" : "全屏查看"}" aria-pressed="${fullscreen}"${disabledAttr(disabled)}><span aria-hidden="true">${fullscreen ? "↙" : "↗"}</span></button>
     </div>
     <input type="file" accept="image/*" data-canvas-upload-input data-canvas-panorama-input data-node-id="${escapeAttr(nodeId)}" tabindex="-1" aria-hidden="true" hidden />
   </section>`;

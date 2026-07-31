@@ -1,5 +1,6 @@
 export * from "./admin-backed-text-model.resolver.ts";
 export * from "./canvas-agent-billing.service.ts";
+export * from "./canvas-agent-bullmq.publisher.ts";
 export * from "./canvas-agent-checkpoint.service.ts";
 export * from "./canvas-agent-context.service.ts";
 export * from "./canvas-agent-executor.ts";
@@ -9,6 +10,8 @@ export * from "./canvas-agent-outbox.service.ts";
 export * from "./canvas-agent-policy.service.ts";
 export * from "./canvas-agent-repair.service.ts";
 export * from "./canvas-agent-runtime-config.service.ts";
+export * from "./canvas-agent-shard.config.ts";
+export * from "./canvas-agent-shard.service.ts";
 export * from "./canvas-agent-runtime.factory.ts";
 export * from "./canvas-agent-task.service.ts";
 export * from "./canvas-agent-tool.registry.ts";

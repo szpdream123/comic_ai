@@ -1,5 +1,5 @@
 export const CANVAS_NODE_SIZES = {
-  script: { width: 300, height: 300 },
+  script: { width: 500, height: 420 },
   send: { width: 360, height: 170 },
   image: { width: 330, height: 160 },
   video: { width: 360, height: 170 },

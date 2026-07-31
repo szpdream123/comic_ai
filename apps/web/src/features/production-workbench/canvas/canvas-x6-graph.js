@@ -654,10 +654,17 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
   if (specialType === "generic") return renderCanvasGenericX6Node(node);
   const type = specialType;
   const storyboardCut = Boolean(resolveCanvasStoryboardCutReference(node));
-  const title = node?.data?.title ?? ({
+  const configuredTitle = String(node?.data?.title ?? "").trim();
+  const replacementTitle = type === "ai-storyboard"
+    ? "图片切分"
+    : type === "ai-director" ? "导演台"
+      : type === "ai-panorama" ? "全景预览" : "";
+  const title = replacementTitle && ["", "AI 分镜", "AI分镜", "AI 导演", "AI导演", "AI 全景", "AI全景"].includes(configuredTitle)
+    ? replacementTitle
+    : configuredTitle || ({
     "ai-animation": "AI 动画",
-    "ai-storyboard": "AI 分镜",
-    "ai-director": "AI 导演",
+    "ai-storyboard": "图片切分",
+    "ai-director": "导演台",
     upload: "上传",
     video: "视频",
     "ai-video": "AI 视频",
@@ -667,7 +674,7 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
     "ai-audio": "AI 音频",
     "source-audio": "音频源",
     group: "节点分组",
-    "ai-panorama": "AI 全景",
+    "ai-panorama": "全景预览",
   })[type];
   const body = type === "ai-animation"
     ? renderCanvasAnimationNodeBody(node)
@@ -734,22 +741,32 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
   const actionLabel = mediaUrl ? changeUploadLabel : emptyUploadLabel;
   const status = String(data.status ?? "empty").toLowerCase();
   const uploading = status === "uploading";
-  const emptyUploadAttrs = mediaUrl || uploading
+  const generationTaskId = String(data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? "").trim();
+  const generationFailed = ["failed", "canceled", "cancelled", "manual_review_required", "result_unknown"].includes(status);
+  const generationCompleted = ["completed", "succeeded", "success", "ready"].includes(status) && Boolean(mediaUrl);
+  const agentGenerating = data.source === "canvas_agent"
+    && !generationFailed
+    && !generationCompleted
+    && (generationTaskId.length > 0 || ["queued", "running", "processing"].includes(status));
+  const emptyUploadAttrs = mediaUrl || uploading || agentGenerating
     ? ""
     : ` data-action="pick-canvas-upload-file" data-node-id="${escapeCanvasX6Html(nodeId)}" role="button" tabindex="0"`;
   const uploadingMask = uploading
     ? `<div class="canvas-x6-source-uploading-mask" role="status" aria-live="polite"><span class="canvas-x6-source-uploading-spinner" aria-hidden="true"></span><strong>${mediaKind === "video" ? "视频正在上传中" : "素材正在上传中"}</strong><small>请稍候</small></div>`
     : "";
+  const generationMask = agentGenerating
+    ? `<div class="canvas-x6-source-generation-mask" role="status" aria-live="polite" aria-label="${mediaLabel}正在生成"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>${mediaLabel}正在生成中</strong><small>请稍候</small></div>`
+    : "";
   const preview = mediaUrl
     ? mediaKind === "video"
-      ? `<video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline controls></video>${uploadingMask}`
+      ? `<video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline controls></video>${uploadingMask}${generationMask}`
       : mediaKind === "audio"
-        ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}`
-        : `<img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy"${storyboardCut ? ' draggable="false"' : ""} />${uploadingMask}`
-    : `${uploadingMask}<strong>${emptyUploadLabel}</strong><small>点击选择${mixedUpload ? "素材" : mediaLabel}文件</small>`;
-  return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading ? " aria-busy=\"true\"" : ""}>
+        ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}${generationMask}`
+        : `<img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy"${storyboardCut ? ' draggable="false"' : ""} />${uploadingMask}${generationMask}`
+    : `${uploadingMask}${generationMask}<strong>${agentGenerating ? `${mediaLabel}正在生成中` : emptyUploadLabel}</strong><small>${agentGenerating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
+  return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${agentGenerating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || agentGenerating ? " aria-busy=\"true\"" : ""}>
     <div class="canvas-x6-source-media-preview"${emptyUploadAttrs}>${preview}</div>
-    <button class="canvas-x6-source-upload-action" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="${actionLabel}" title="${actionLabel}"${uploading ? " disabled aria-disabled=\"true\"" : ""}>${actionLabel}</button>
+    <button class="canvas-x6-source-upload-action" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="${actionLabel}" title="${actionLabel}"${uploading || agentGenerating ? " disabled aria-disabled=\"true\"" : ""}>${actionLabel}</button>
     <input type="file" accept="${accept}" data-canvas-upload-input data-node-id="${escapeCanvasX6Html(nodeId)}" tabindex="-1" aria-hidden="true" hidden />
   </section>`;
 }
@@ -760,13 +777,17 @@ function renderCanvasGenericX6Node(node = {}) {
   if (["send", "ai-image"].includes(type)) {
     return renderCanvasImageGenerationX6Node(node);
   }
+  if (type === "script") {
+    return renderCanvasScriptWorkflowX6Node(node);
+  }
   const title = String(data.title ?? data.name ?? canvasGenericNodeLabel(type) ?? "节点");
   const status = String(data.status ?? "idle");
   const normalizedStatus = status.trim().toLowerCase();
   const sourceTextNode = ["script", "source-text"].includes(type);
-  const sourceText = sourceTextNode
-    ? String(data.text ?? "").trim()
+  const sourceTextValue = sourceTextNode
+    ? String(data.text ?? "")
     : "";
+  const sourceText = sourceTextValue.trim();
   const summary = String(
     sourceText || (
       data.summary
@@ -779,13 +800,19 @@ function renderCanvasGenericX6Node(node = {}) {
   const inputCount = Array.isArray(data.ports?.inputs) ? data.ports.inputs.length : 0;
   const outputCount = Array.isArray(data.ports?.outputs) ? data.ports.outputs.length : 0;
   const markdownNode = ["markdown", "ai-markdown"].includes(type);
-  const scriptSourceActions = sourceTextNode
+  const sourceTextActions = sourceTextNode
     ? `<div class="canvas-x6-source-text-actions" role="group" aria-label="文本源操作">
-        <button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">选择剧本</button>
+        ${type === "script" ? `<button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">选择剧本</button>` : ""}
         <button type="button" data-action="duplicate-canvas-node" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">复制</button>
         <button class="danger" type="button" data-action="delete-canvas-node" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">删除</button>
       </div>`
     : "";
+  const sourceTextContent = type === "source-text"
+    ? `<textarea class="canvas-x6-source-text-input" data-canvas-text-input data-canvas-source-text-input data-node-id="${escapeCanvasX6Html(node?.id ?? "")}" aria-label="文本内容" placeholder="请输入文本">${escapeCanvasX6Html(sourceTextValue)}</textarea>`
+    : `<p${markdownNode ? ' class="canvas-x6-text-output" data-canvas-text-output tabindex="0" aria-live="polite" aria-atomic="false"' : sourceTextNode ? ' class="canvas-x6-source-text-output" data-canvas-text-output data-canvas-source-text-output tabindex="0"' : ""}>${escapeCanvasX6Html(summary || "选择节点后配置内容")}</p>`;
+  const genericNodeTypeLabel = sourceTextNode
+    ? ""
+    : `<span>${escapeCanvasX6Html(canvasGenericNodeLabel(type))}</span>`;
   const realtimeText = ["ai-text", "ai-markdown"].includes(type)
     && ["running", "processing"].includes(normalizedStatus);
   const generationState = realtimeText ? "" : renderCanvasX6GenerationState(node, normalizedStatus);
@@ -795,12 +822,58 @@ function renderCanvasGenericX6Node(node = {}) {
   return `<article class="canvas-x6-special-node is-generic is-${escapeCanvasX6Html(type || "node")}" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">
     <header><strong>${escapeCanvasX6Html(title)}</strong><small>${escapeCanvasX6Html(statusLabel)}</small></header>
     <div class="canvas-x6-generic-body${generationState ? " has-generation-state" : ""}">
-      <span>${escapeCanvasX6Html(canvasGenericNodeLabel(type))}</span>
-      <p${markdownNode ? ' class="canvas-x6-text-output" data-canvas-text-output tabindex="0" aria-live="polite" aria-atomic="false"' : sourceTextNode ? ' class="canvas-x6-source-text-output" data-canvas-text-output data-canvas-source-text-output tabindex="0"' : ""}>${escapeCanvasX6Html(summary || "选择节点后配置内容")}</p>
-      ${scriptSourceActions}
+      ${genericNodeTypeLabel}
+      ${sourceTextContent}
+      ${sourceTextActions}
       ${generationState}
     </div>
     <footer><span>${inputCount} 个输入</span><span>${outputCount} 个输出</span></footer>
+  </article>`;
+}
+
+function renderCanvasScriptWorkflowX6Node(node = {}) {
+  const data = node?.data ?? {};
+  const nodeId = String(node?.id ?? "");
+  const mode = ["library", "manual", "novel"].includes(String(data.sourceMode ?? ""))
+    ? String(data.sourceMode)
+    : "library";
+  const scriptText = String(data.text ?? "");
+  const novelText = String(data.novelText ?? "");
+  const workflowNodes = Array.isArray(data.workflowNodes) ? data.workflowNodes : [];
+  const count = (kind) => workflowNodes.filter((item) => String(item?.kind ?? item) === kind).length;
+  const hasText = scriptText.trim().length > 0;
+  const hasScript = hasText || count("script") > 0;
+  const sourceContent = mode === "library"
+    ? `<div class="canvas-script-source-library">
+        <p>${escapeCanvasX6Html(hasText ? scriptText : "从项目剧本库选择章节后，可继续生成资产和分镜。")}</p>
+        <button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeCanvasX6Html(nodeId)}">选择剧本</button>
+      </div>`
+    : mode === "manual"
+      ? `<textarea class="canvas-script-source-input" data-canvas-text-input data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="手写剧本" placeholder="输入剧本、对白和镜头描述">${escapeCanvasX6Html(scriptText)}</textarea>`
+      : `<div class="canvas-script-novel-source">
+          <textarea class="canvas-script-source-input" data-canvas-text-input data-canvas-script-novel-input data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="小说或故事梗概" placeholder="输入小说片段、故事梗概或人物设定">${escapeCanvasX6Html(novelText)}</textarea>
+          <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="script" data-node-id="${escapeCanvasX6Html(nodeId)}"${novelText.trim() ? "" : " disabled aria-disabled=\"true\""}>生成剧本</button>
+        </div>`;
+  return `<article class="canvas-x6-special-node is-generic is-script-workflow" data-node-id="${escapeCanvasX6Html(nodeId)}">
+    <header><strong>剧本工作流</strong><small>${escapeCanvasX6Html(hasScript ? "剧本已就绪" : mode === "novel" && novelText.trim() ? "待生成剧本" : "待输入")}</small></header>
+    <div class="canvas-script-workflow-body">
+      <div class="canvas-script-source-mode" role="group" aria-label="剧本来源">
+        <button type="button" data-action="set-canvas-script-source-mode" data-script-source-mode="library" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-pressed="${mode === "library"}">选择剧本</button>
+        <button type="button" data-action="set-canvas-script-source-mode" data-script-source-mode="manual" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-pressed="${mode === "manual"}">自己填写</button>
+        <button type="button" data-action="set-canvas-script-source-mode" data-script-source-mode="novel" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-pressed="${mode === "novel"}">小说生成</button>
+      </div>
+      ${sourceContent}
+      <div class="canvas-script-workflow-steps" aria-label="剧本制作链路">
+        <span class="is-ready">剧本</span><i></i><span${count("asset") ? ' class="is-ready"' : ""}>资产 ${count("asset")}</span><i></i><span${count("storyboard") ? ' class="is-ready"' : ""}>分镜 ${count("storyboard")}</span><i></i><span${count("image") || count("video") ? ' class="is-ready"' : ""}>成片</span>
+      </div>
+      <div class="canvas-script-workflow-actions" role="group" aria-label="剧本工作流操作">
+        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="assets" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>角色/场景/道具</button>
+        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="storyboard" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>生成分镜词</button>
+        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="image" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>生图 ${count("image")}</button>
+        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="video" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>生视频 ${count("video")}</button>
+      </div>
+    </div>
+    <footer><span>文本输出</span><span>${count("asset")} 资产技能 / ${count("image")} 图 / ${count("video")} 视频</span></footer>
   </article>`;
 }
 
@@ -1181,6 +1254,14 @@ export function applyCanvasGraphGrouping(graph, canvasDocument) {
   for (const node of x6Nodes) {
     const cell = graph.getCellById(node.id);
     if (!cell) continue;
+    const position = cell.getPosition?.() ?? {};
+    if (Number(position.x) !== Number(node.x) || Number(position.y) !== Number(node.y)) {
+      cell.setPosition?.(Number(node.x), Number(node.y), options);
+    }
+    const size = cell.getSize?.() ?? {};
+    if (Number(size.width) !== Number(node.width) || Number(size.height) !== Number(node.height)) {
+      cell.setSize?.(Number(node.width), Number(node.height), options);
+    }
     const expectedParentId = expectedParentByChild.get(String(node.id)) ?? null;
     const currentParent = cell.getParent?.() ?? null;
     const currentParentId = String(currentParent?.id ?? cell.getParentId?.() ?? "") || null;
@@ -1264,9 +1345,6 @@ export function applyCanvasGraphInteractionMode(graph, viewport = {}) {
   if (!interactions.selecting.enabled) {
     selection?.clean?.();
     graph.unselectAll?.();
-    for (const edge of graph.getEdges?.() ?? []) edge.removeTools?.();
-    const disconnectButton = graph.__comicAiCanvasMount?.querySelector?.("[data-canvas-edge-disconnect]");
-    if (disconnectButton) disconnectButton.hidden = true;
   }
   graph.setRubberbandModifiers?.(interactions.selecting.modifiers);
   graph.enablePanning?.();
@@ -1342,7 +1420,7 @@ function createGraph(X6, mount, workbench, size = {}) {
     background: { color: "transparent" },
     grid: {
       size: 1,
-      visible: viewport.gridVisible !== false,
+      visible: true,
       type: "dot",
       args: { color: "rgba(129, 146, 152, 0.18)", thickness: 1 },
     },
@@ -1446,10 +1524,10 @@ function wireGraphSync(graph, workbench, mount) {
       : options);
     if (pendingPositionNodeIds?.length && typeof workbench.persistCanvasNodePositions === "function") {
       const ids = new Set(pendingPositionNodeIds.map((id) => String(id)));
-      const positions = (graph.getNodes?.() ?? [])
+      const positions = (document?.nodes ?? [])
         .filter((node) => ids.has(String(node?.id ?? "")))
         .map((node) => {
-          const position = node.getPosition?.() ?? {};
+          const position = node.position ?? {};
           return { nodeKey: String(node.id), x: Number(position.x), y: Number(position.y) };
         })
         .filter((position) => Number.isFinite(position.x) && Number.isFinite(position.y));
@@ -1541,23 +1619,10 @@ function wireGraphSync(graph, workbench, mount) {
     if (!event?.options?.ui && !event?.options?.selection) syncMovedNodeEditor(event);
     if (event?.options?.selection) {
       selectionMovePending = true;
-      refreshCanvasConnectedEdgeMotion(
-        graph,
-        canvasGraphCellAndDescendantIds(canvasSelectedGraphCells(graph)),
-      );
-      scheduleSelectionPresentation();
     }
   });
-  graph.on("node:move", (event = {}) => {
-    const { node } = event;
-    const draggedNodeIds = canvasGraphCellAndDescendantIds([
-      ...canvasSelectedGraphCells(graph),
-      node,
-    ]);
+  graph.on("node:move", () => {
     mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
-    updateStoryboardReturnTarget(event);
-    refreshCanvasConnectedEdgeMotion(graph, draggedNodeIds);
-    positionCanvasSelectionActionToolbar(graph, mount);
   });
   graph.on("node:moved", (event) => {
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
@@ -1668,11 +1733,6 @@ function wireGraphSync(graph, workbench, mount) {
   selectionPlugin?.on?.("box:mousemove", ({ e } = {}) => {
     if (!isCanvasSelectionTranslationEvent(e)) return;
     mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
-    refreshCanvasConnectedEdgeMotion(
-      graph,
-      canvasGraphCellAndDescendantIds(canvasSelectedGraphCells(graph)),
-    );
-    scheduleSelectionPresentation();
   });
   selectionPlugin?.on?.("box:mouseup", () => {
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
@@ -1778,8 +1838,7 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
     hideTimer = globalThis.setTimeout?.(hide, 100);
   };
   const show = ({ edge, edgeElement } = {}) => {
-    const interactionMode = workbench?.ui?.canvasDocument?.viewport?.interactionMode;
-    if (!edge || interactionMode === "hand" || workbench?.ui?.canvasEdgesHidden === true) {
+    if (!edge || workbench?.ui?.canvasEdgesHidden === true) {
       hide();
       return;
     }
@@ -1998,7 +2057,6 @@ export function applyCanvasGraphEdgeVisibility(graph, visible = true) {
 export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   if (!graph) return false;
   const snapEnabled = viewport.snapEnabled !== false;
-  const gridVisible = viewport.gridVisible !== false;
   if (graph.options?.snapline) graph.options.snapline.enabled = snapEnabled;
   graph.setGridSize?.(1);
   if (graph.options?.connecting) {
@@ -2007,8 +2065,7 @@ export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   const snapline = graph.getPlugin?.("snapline");
   if (snapEnabled) snapline?.enable?.();
   else snapline?.disable?.();
-  if (gridVisible) graph.showGrid?.();
-  else graph.hideGrid?.();
+  graph.showGrid?.();
   return true;
 }
 
@@ -2220,14 +2277,6 @@ export function refreshCanvasSelectionActionToolbar(graph, workbench, mount = gr
   currentBackdrop?.remove?.();
   if (!state.visible) return false;
 
-  if (state.mode !== "group") {
-    const backdrop = document.createElement("div");
-    backdrop.className = "canvas-selection-action-backdrop";
-    backdrop.dataset.canvasSelectionActionBackdrop = "true";
-    backdrop.setAttribute("aria-hidden", "true");
-    mount.insertBefore(backdrop, mount.firstChild);
-  }
-
   const toolbar = document.createElement("div");
   toolbar.className = `canvas-selection-action-toolbar is-${state.mode}`;
   toolbar.dataset.canvasSelectionActionToolbar = "true";
@@ -2360,6 +2409,15 @@ export function resolveCanvasGroupMountBounds(graph, mount, groupId = "") {
 }
 
 export function resolveCanvasSelectionMountBounds(graph, mount, cells = []) {
+  const selectionElement = mount?.querySelector?.(".x6-widget-selection-inner");
+  if (Number(selectionElement?.offsetWidth) > 0 && Number(selectionElement?.offsetHeight) > 0) {
+    return {
+      left: Number(selectionElement.offsetLeft ?? 0),
+      top: Number(selectionElement.offsetTop ?? 0),
+      width: Number(selectionElement.offsetWidth ?? 0),
+      height: Number(selectionElement.offsetHeight ?? 0),
+    };
+  }
   const boxes = cells.map((cell) => (
     graph.findViewByCell?.(cell)?.getBBox?.({ useCellGeometry: true })
     ?? cell.getBBox?.()
@@ -2389,15 +2447,6 @@ export function resolveCanvasSelectionMountBounds(graph, mount, cells = []) {
         height: Number(clientRect.height ?? 0) * scaleY,
       };
     }
-  }
-  const selectionElement = mount?.querySelector?.(".x6-widget-selection-inner");
-  if (Number(selectionElement?.offsetWidth) > 0 && Number(selectionElement?.offsetHeight) > 0) {
-    return {
-      left: Number(selectionElement.offsetLeft ?? 0),
-      top: Number(selectionElement.offsetTop ?? 0),
-      width: Number(selectionElement.offsetWidth ?? 0),
-      height: Number(selectionElement.offsetHeight ?? 0),
-    };
   }
   if (!boxes.length) return null;
   return {
@@ -2602,8 +2651,11 @@ function syncCanvasGraphDocument(graph, workbench, options = {}) {
       },
     }, { overwrite: true, silent: true });
   }
-  const graphData = readCanvasWorkflowGraphData(graph);
   const previousDocument = workbench.ui.canvasDocument;
+  const graphData = preserveCanvasGroupChildOffsets(
+    readCanvasWorkflowGraphData(graph),
+    previousDocument,
+  );
   const storedInteractionMode = graph.__comicAiCanvasInteractionMode;
   const interactionMode = ["hand", "classic"].includes(storedInteractionMode)
     ? storedInteractionMode
@@ -2620,6 +2672,7 @@ function syncCanvasGraphDocument(graph, workbench, options = {}) {
       interactionMode,
     },
   };
+  applyCanvasGraphGrouping(graph, nextDocument);
   if (typeof workbench.updateCanvasDocument === "function") {
     workbench.updateCanvasDocument(nextDocument, options);
   } else {
@@ -2627,6 +2680,28 @@ function syncCanvasGraphDocument(graph, workbench, options = {}) {
   }
   graph.__comicAiCanvasDocument = nextDocument;
   return nextDocument;
+}
+
+export function preserveCanvasGroupChildOffsets(graphData = {}, previousDocument = {}) {
+  const nextGraphData = structuredCloneSafe(graphData);
+  const previousNodes = new Map((previousDocument?.nodes ?? []).map((node) => [String(node?.id ?? ""), node]));
+  const groupOffsets = new Map();
+  for (const node of nextGraphData.nodes ?? []) {
+    const previousNode = previousNodes.get(String(node?.id ?? ""));
+    if (previousNode?.type !== "group") continue;
+    const deltaX = Number(node?.x ?? previousNode.position?.x ?? 0) - Number(previousNode.position?.x ?? 0);
+    const deltaY = Number(node?.y ?? previousNode.position?.y ?? 0) - Number(previousNode.position?.y ?? 0);
+    if (deltaX || deltaY) groupOffsets.set(String(node.id), { deltaX, deltaY });
+  }
+  if (!groupOffsets.size) return nextGraphData;
+  for (const node of nextGraphData.nodes ?? []) {
+    const offset = groupOffsets.get(String(node?.parent ?? ""));
+    const previousNode = previousNodes.get(String(node?.id ?? ""));
+    if (!offset || !previousNode || previousNode.type === "group") continue;
+    node.x = Number(previousNode.position?.x ?? 0) + offset.deltaX;
+    node.y = Number(previousNode.position?.y ?? 0) + offset.deltaY;
+  }
+  return nextGraphData;
 }
 
 export function selectCanvasNodeFromGraph(workbench, nodeId) {

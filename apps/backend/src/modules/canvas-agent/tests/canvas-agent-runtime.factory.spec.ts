@@ -82,6 +82,15 @@ describe("Canvas Agent runtime composition", () => {
       scopeTargetId: "9c310821-dbb1-46f3-866e-09240007ef31",
       nodeKey: "canvas-agent-image-step-1",
     });
+    assert.deepEqual(__canvasAgentRuntimeTestUtils.resolveCanvasAgentGenerationTargets({
+      canvasId: "9c310821-dbb1-46f3-866e-09240007ef31",
+      kind: "image",
+      agentStepId: "step-2",
+      targetNodeId: "referenced-image-node",
+    }), {
+      scopeTargetId: "9c310821-dbb1-46f3-866e-09240007ef31",
+      nodeKey: "referenced-image-node",
+    });
   });
 
   it("registers a supervised worker launcher for development and production", () => {
@@ -98,7 +107,11 @@ describe("Canvas Agent runtime composition", () => {
     assert.match(launcher, /createCanvasAgentWorkerRuntime/);
     assert.match(launcher, /loadCanvasAgentRuntimeConfiguration/);
     assert.match(launcher, /webSearchModelCode: runtimeConfiguration\.webSearchModelCode/);
-    assert.match(launcher, /runUntilStopped/);
+    assert.match(launcher, /new Worker\(/);
+    assert.match(launcher, /CanvasAgentOutboxService/);
+    assert.match(launcher, /runMaintenanceOnce/);
+    assert.match(launcher, /runQueuedOnce/);
+    assert.doesNotMatch(launcher, /runUntilStopped/);
     assert.match(launcher, /createDevDb/);
   });
 

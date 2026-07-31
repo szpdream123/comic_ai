@@ -27,6 +27,7 @@ import {
   resolveCanvasSelectionActionState,
   resolveCanvasSelectionMountBounds,
   resolveCanvasSelectionToolbarTop,
+  preserveCanvasGroupChildOffsets,
   selectCanvasGraphNodeExclusively,
   selectedCanvasWorkflowNodeIds,
 } from "../src/features/production-workbench/canvas/canvas-x6-graph.js";
@@ -89,6 +90,24 @@ describe("canvas grouping", () => {
     assert.deepEqual(movedByState.nodes.find((node) => node.id === "node-b").position, { x: 565, y: 150 });
   });
 
+  it("preserves child offsets when an embedded group moves", () => {
+    const grouped = groupCanvasNodes(createGroupingDocument(), ["node-a", "node-b"]).document;
+    const graphData = canvasDocumentToX6Data(grouped);
+    const group = graphData.nodes.find((node) => node.data.canvasNode.type === "group");
+    group.x += 240;
+    group.y += 180;
+
+    const positioned = preserveCanvasGroupChildOffsets(graphData, grouped);
+    assert.deepEqual(
+      positioned.nodes.find((node) => node.id === "node-a").x,
+      grouped.nodes.find((node) => node.id === "node-a").position.x + 240,
+    );
+    assert.deepEqual(
+      positioned.nodes.find((node) => node.id === "node-b").y,
+      grouped.nodes.find((node) => node.id === "node-b").position.y + 180,
+    );
+  });
+
   it("keeps grouped nodes inside the parent for restored and patched coordinates", () => {
     const grouped = groupCanvasNodes(createGroupingDocument(), ["node-a", "node-b"]).document;
     const group = grouped.nodes.find((node) => node.type === "group");
@@ -113,6 +132,14 @@ describe("canvas grouping", () => {
       roundTrip.nodes.map((node) => node.position),
       constrained.map((node) => node.position),
     );
+
+    const graph = createMockGraph(canvasDocumentToX6Data(grouped));
+    const child = graph.getCellById("node-a");
+    child.setPosition(group.position.x - 500, group.position.y - 500);
+    applyCanvasGraphGrouping(graph, { ...grouped, nodes: escaped });
+    const constrainedChild = child.getPosition();
+    assert.ok(constrainedChild.x >= group.position.x);
+    assert.ok(constrainedChild.y >= group.position.y);
   });
 
   it("ungroups by either a child or group selection without changing absolute positions", () => {
@@ -344,7 +371,7 @@ describe("canvas grouping", () => {
       clientWidth: 1000,
       clientHeight: 600,
       getBoundingClientRect: () => ({ left: 50, top: 50, width: 500, height: 300 }),
-      querySelector: () => ({ offsetLeft: 10, offsetTop: 20, offsetWidth: 30, offsetHeight: 40 }),
+      querySelector: () => null,
     };
     let convertedBounds = null;
     const graph = {
@@ -361,6 +388,15 @@ describe("canvas grouping", () => {
       height: 200,
     });
     assert.deepEqual(convertedBounds, { x: 392, y: 492, width: 136, height: 96 });
+
+    assert.deepEqual(resolveCanvasSelectionMountBounds({}, {
+      querySelector: () => ({ offsetLeft: 10, offsetTop: 20, offsetWidth: 30, offsetHeight: 40 }),
+    }), {
+      left: 10,
+      top: 20,
+      width: 30,
+      height: 40,
+    });
   });
 });
 
@@ -397,6 +433,8 @@ function createMockCell(node) {
     children: [],
     getPosition() { return { ...this.position }; },
     getSize() { return { ...this.size }; },
+    setPosition(x, y) { this.position = { x, y }; },
+    setSize(width, height) { this.size = { width, height }; },
     getData() { return this.data; },
     getParent() { return this.parent; },
     getParentId() { return this.parent?.id ?? null; },

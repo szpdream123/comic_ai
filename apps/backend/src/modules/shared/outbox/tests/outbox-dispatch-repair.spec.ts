@@ -7,6 +7,38 @@ import type { SqlDatabase } from "../../db/sql.ts";
 import { claimOutboxEventsForDispatch } from "../outbox-dispatch-repair.service.ts";
 
 describe("persistent outbox dispatch repair", () => {
+  it("does not update the fair cursor when an empty dispatch cycle reuses it", async () => {
+    const statements: string[] = [];
+    const db: SqlDatabase = {
+      async query<T>(sql: string) {
+        statements.push(sql);
+        if (sql.includes("SELECT cursor_key FROM outbox_dispatch_fair_cursors")) {
+          return { rows: [{ cursor_key: "" }] as T[] };
+        }
+        return { rows: [] as T[] };
+      },
+    };
+    const input = {
+      now: new Date("2026-05-09T10:00:00.000Z"),
+      limit: 50,
+      eventTypes: ["generation.task.created"],
+      fairnessScope: "generation-empty-test",
+      membershipQuantum: 2,
+    };
+
+    assert.deepEqual(await claimOutboxEventsForDispatch(db, input), []);
+    assert.deepEqual(await claimOutboxEventsForDispatch(db, input), []);
+
+    const cursorInitializers = statements.filter((sql) => (
+      sql.includes("INSERT INTO outbox_dispatch_fair_cursors")
+    ));
+    assert.equal(cursorInitializers.length, 2);
+    assert.equal(cursorInitializers.every((sql) => sql.includes("DO NOTHING")), true);
+    assert.equal(statements.some((sql) => (
+      sql.includes("SET updated_at = outbox_dispatch_fair_cursors.updated_at")
+    )), false);
+  });
+
   it("claims available pending, failed, and stale processing events in a bounded batch", async () => {
     const db = await createMigratedTestDb();
 

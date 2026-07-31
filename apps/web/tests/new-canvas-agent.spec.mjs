@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   collapseAgentGenerationMessages,
@@ -53,6 +54,141 @@ test("Canvas Agent timeline shows failure codes instead of stale policy reasons"
   assert.doesNotMatch(html, />b_mode_effect</);
 });
 
+test("Canvas Agent timeline shows a step identifier only once", () => {
+  const stepId = "step-unique";
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      events: [{ id: "step-finished", sequence: 1, eventType: "step.succeeded", event: { stepId } }],
+    },
+  });
+
+  assert.equal((html.match(new RegExp(stepId, "g")) ?? []).length, 1);
+});
+
+test("Canvas Agent condenses active task events into one thinking indicator", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      taskId: "task-thinking",
+      status: "running",
+      events: [
+        { id: "task-created", sequence: 1, eventType: "task.created", event: {} },
+        { id: "task-started", sequence: 2, eventType: "task.started", event: {} },
+        { id: "step-running", sequence: 3, eventType: "step.running", event: { stepId: "step-1", toolId: "canvas.patch" } },
+      ],
+    },
+  });
+
+  assert.match(html, /class="canvas-agent-thinking"/);
+  assert.match(html, /正在执行 canvas\.patch/);
+  assert.doesNotMatch(html, /data-event-status="task\.created"|data-event-status="task\.started"|data-event-status="step\.running"/);
+});
+
+test("Canvas Agent keeps the external generation status after an interjection", () => {
+  const agent = { status: "running", events: [] };
+  reduceCanvasAgentEvents(agent, [
+    { id: "generation-waiting", sequence: 1, eventType: "task.waiting_external", event: {} },
+    { id: "interjected", sequence: 2, eventType: "task.interjected", event: {} },
+  ]);
+  assert.equal(agent.status, "waiting_external");
+  const html = renderCanvasAgentPanel({
+    canvasAgent: { taskId: "task-waiting", ...agent },
+  });
+  assert.match(html, /正在等待生成结果/);
+  assert.doesNotMatch(html, /正在处理补充要求/);
+});
+
+test("Canvas Agent shows only a failure state for a failed current task", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      taskId: "task-failed",
+      status: "failed",
+      messages: [{ role: "tool", text: "canvas.read 已执行" }],
+      events: [
+        { id: "task-created", sequence: 1, eventType: "task.created", event: {} },
+        { id: "task-started", sequence: 2, eventType: "task.started", event: {} },
+        { id: "step-failed", sequence: 3, eventType: "step.failed", event: { stepId: "step-1", errorCode: "canvas_agent_model_response_invalid_json" } },
+        { id: "task-failed", sequence: 4, eventType: "task.failed", event: { failureCode: "canvas_agent_model_response_invalid_json" } },
+      ],
+    },
+  });
+
+  assert.match(html, /class="canvas-agent-task-failed"[^>]*><i[^>]*><\/i><span><strong>失败<\/strong><small>任务执行失败（canvas_agent_model_response_invalid_json）<\/small><\/span>/);
+  assert.doesNotMatch(html, /canvas\.read 已执行|data-event-status="task\.created"/);
+});
+
+test("Canvas Agent shows a readable reason when a generation task fails", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      taskId: "task-provider-failed",
+      status: "failed",
+      events: [{
+        id: "provider-failed",
+        sequence: 1,
+        eventType: "task.failed",
+        event: { failureCode: "provider_failed" },
+      }],
+    },
+  });
+  assert.match(html, /图片模型服务暂时不可用（provider_failed）/);
+});
+
+test("Canvas Agent prefers the detailed failed step reason over a task-level provider error", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      taskId: "task-insufficient-balance",
+      status: "failed",
+      events: [
+        {
+          id: "model-failed",
+          sequence: 1,
+          eventType: "step.failed",
+          event: { errorCode: "402 Insufficient Balance" },
+        },
+        {
+          id: "task-failed",
+          sequence: 2,
+          eventType: "task.failed",
+          event: { failureCode: "provider_stream_error" },
+        },
+      ],
+    },
+  });
+  assert.match(html, /模型服务余额不足（402 Insufficient Balance）/);
+  assert.doesNotMatch(html, /模型服务响应中断（provider_stream_error）/);
+});
+
+test("Canvas Agent calls an interjection a user addition", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      messages: [{ role: "user", interjection: true, text: "补充要求" }],
+    },
+  });
+  assert.match(html, /<strong>用户追加<\/strong>/);
+  assert.doesNotMatch(html, /用户插话/);
+});
+
+test("Canvas Agent empty timeline fills the space above the pinned composer", () => {
+  const html = renderCanvasAgentPanel({ canvasAgent: { conversationId: "conversation-empty" } });
+  assert.match(html, /class="canvas-agent-panel[^\"]*has-conversation[^\"]*timeline-empty"/);
+  assert.match(html, /class="canvas-agent-timeline is-empty"/);
+  assert.match(html, /canvas-agent-empty[\s\S]*?canvas-agent-composer/);
+  assert.match(html, /你好！我是灵曦AI的媒体创作工作流 Agent，可以帮你生成剧本、图片、视频内容。/);
+  assert.match(html, /有需求请告诉我哦~！我来帮你实现。/);
+  assert.doesNotMatch(html, /等待指令/);
+});
+
+test("Canvas Agent keeps the timeline scrollable above the pinned composer", () => {
+  const css = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  assert.match(
+    css,
+    /\.canvas-agent-panel\.has-conversation\s*\{\s*grid-template-rows:\s*auto minmax\(0, 1fr\) auto auto auto;/,
+  );
+  assert.match(
+    css,
+    /\.canvas-agent-panel\.timeline-empty\.has-conversation\s*\{\s*grid-template-rows:\s*auto minmax\(0, 1fr\) auto auto auto;/,
+  );
+});
+
 test("Canvas Agent completion displays actual token usage", () => {
   const html = renderCanvasAgentPanel({
     canvasAgent: {
@@ -63,16 +199,18 @@ test("Canvas Agent completion displays actual token usage", () => {
         event: {
           message: "画布任务已完成",
           tokenUsage: { promptTokens: 1_200, completionTokens: 345, totalTokens: 1_545 },
+          creditUsage: { consumedCredits: 10, status: "consumed", scope: "task" },
         },
       }],
     },
   });
 
   assert.match(html, /实际 Token 1,545/);
+  assert.match(html, /实际扣除 10 积分/);
   assert.doesNotMatch(html, /输入 1,200|输出 345/);
 });
 
-test("Canvas Agent panel exposes conversation modes, composer, and task controls", () => {
+test("Canvas Agent panel exposes conversation modes and a running stop action", () => {
   const ui = {
     canvasAgent: {
       mode: "expert",
@@ -96,14 +234,57 @@ test("Canvas Agent panel exposes conversation modes, composer, and task controls
   assert.match(html, /修改画布等有副作用的操作会先请求你的批准/);
   assert.match(html, /role="listbox"/);
   assert.doesNotMatch(html, /role="tablist"/);
-  assert.match(html, /data-agent-action="pause"/);
-  assert.match(html, /data-agent-action="replan"/);
-  assert.match(html, /data-agent-action="stop"/);
-  assert.match(html, /data-agent-action="interject"/);
+  assert.match(html, /class="canvas-agent-send-button is-running"/);
+  assert.match(html, /data-agent-action="send"[^>]+aria-label="停止 Agent 任务"/);
+  assert.doesNotMatch(html, /class="canvas-agent-task-controls"|class="canvas-agent-interject"/);
   assert.match(html, /<select[^>]+data-agent-field="modelCode"[^>]+disabled/);
   assert.match(html, /aria-label="文本模型"/);
   assert.match(html, /暂无可用文本模型/);
   assert.doesNotMatch(html, /<input[^>]+data-agent-field="modelCode"/);
+});
+
+test("Canvas Agent stops from the composer and sends Enter as an interjection while running", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-running",
+      canvasAgent: {
+        conversationId: "conversation-running",
+        taskId: "task-running",
+        status: "running",
+        modelCode: "agent-text-1",
+        modelsStatus: "ready",
+        models: [{ modelCode: "agent-text-1", modelLabel: "Agent" }],
+        promptDraft: "请补充一个结尾",
+      },
+    },
+    api: {
+      async controlCanvasAgentTask(canvasId, taskId, action, input) {
+        calls.push({ canvasId, taskId, action, input });
+        return { result: { status: action === "stop" ? "cancel_requested" : "running" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  assert.equal(calls[0].action, "stop");
+
+  workbench.ui.canvasAgent.status = "running";
+  workbench.ui.canvasAgent.promptDraft = "请补充一个结尾";
+  await controller.handleKeydown(
+    { key: "Enter", shiftKey: false, preventDefault() {} },
+    { dataset: { agentField: "promptDraft" } },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(calls[1].action, "interject");
+  assert.deepEqual(calls[1].input, { message: { text: "请补充一个结尾" } });
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "");
+  controller.dispose();
 });
 
 test("Canvas Agent mode menu opens upward and applies the selected mode", async () => {
@@ -189,9 +370,9 @@ test("Canvas Agent closes without rerendering the workspace or resetting the han
   controller.dispose();
 });
 
-test("Canvas Agent timeline follows new messages unless the user scrolled up", () => {
+test("Canvas Agent timeline follows the latest task data through completion", () => {
   const previousDocument = globalThis.document;
-  const runSync = (scrollTop) => {
+  const runSync = ({ scrollTop, taskId = "", status = "idle" }) => {
     const currentTimeline = { scrollTop, scrollHeight: 500, clientHeight: 100 };
     const nextTimeline = { scrollTop: 0, scrollHeight: 700, clientHeight: 100 };
     let nextPanel = null;
@@ -215,7 +396,7 @@ test("Canvas Agent timeline follows new messages unless the user scrolled up", (
     };
     const controller = createCanvasAgentController({
       surface: { querySelector: () => currentPanel },
-      workbench: { ui: { canvasAgent: {} }, api: {} },
+      workbench: { ui: { canvasAgent: { taskId, status } }, api: {} },
     });
     controller.syncPanel();
     controller.dispose();
@@ -224,23 +405,24 @@ test("Canvas Agent timeline follows new messages unless the user scrolled up", (
   };
 
   try {
-    assert.equal(runSync(400), 600);
-    assert.equal(runSync(160), 160);
+    assert.equal(runSync({ scrollTop: 160, taskId: "task-running", status: "running" }), 600);
+    assert.equal(runSync({ scrollTop: 160, taskId: "task-completed", status: "succeeded" }), 600);
+    assert.equal(runSync({ scrollTop: 160 }), 160);
   } finally {
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
   }
 });
 
-test("Canvas Agent keeps the latest message visible across an external canvas rerender", () => {
-  let timeline = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+test("Canvas Agent keeps the latest task event visible across an external canvas rerender", () => {
+  let timeline = { scrollTop: 160, scrollHeight: 500, clientHeight: 100 };
   const controller = createCanvasAgentController({
     surface: {
       querySelector(selector) {
         return selector === ".canvas-agent-timeline" ? timeline : null;
       },
     },
-    workbench: { ui: { canvasAgent: {} }, api: {} },
+    workbench: { ui: { canvasAgent: { taskId: "task-running", status: "running" } }, api: {} },
   });
 
   const state = controller.captureTimelineScroll();
@@ -281,8 +463,21 @@ test("Canvas Agent approval identifies the controlled effect and originating too
   });
   const html = renderCanvasAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
   assert.match(html, /data-approval-effect="config_write"/);
+  assert.match(html, /data-agent-tool-id="provider\.config\.apply"/);
   assert.match(html, /provider\.config\.apply/);
+  assert.doesNotMatch(html, /<code>provider\.config\.apply<\/code>/);
   assert.match(html, /确认执行/);
+});
+
+test("Canvas Agent approval hides internal policy codes from the visible summary", () => {
+  const events = [{
+    sequence: 1,
+    eventType: "approval.requested",
+    event: { approvalId: "approval-internal", effect: "media_generation", reason: "b_mode_effect" },
+  }];
+  const html = renderCanvasAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
+  assert.doesNotMatch(html, />b_mode_effect</);
+  assert.match(html, /该操作需要你的确认后才能继续。/);
 });
 
 test("Canvas Agent controller reuses creator-api aliases for conversation, messages, polling, and controls", async () => {
@@ -556,7 +751,7 @@ test("Canvas Agent restores message history and manages archived conversations",
       canvasAgent: {
         conversationId: "conversation-1",
         conversations: [
-          { id: "conversation-1", title: "当前会话", status: "active" },
+          { id: "conversation-1", title: "当前会话", status: "active", taskId: "task-completed", taskStatus: "succeeded" },
           { id: "conversation-2", title: "历史会话", status: "archived" },
         ],
       },
@@ -587,6 +782,20 @@ test("Canvas Agent restores message history and manages archived conversations",
             : [{ id: "message-3", sequence: 1, role: "tool", content: { toolId: "canvas.read" } }],
         };
       },
+      async listCanvasAgentEvents(canvasId, taskId, input) {
+        calls.push(["events", canvasId, taskId, input]);
+        return {
+          events: [{
+            id: "task-completed-event",
+            sequence: 9,
+            eventType: "task.succeeded",
+            event: {
+              tokenUsage: { promptTokens: 58_258, completionTokens: 1_987, totalTokens: 60_245 },
+              creditUsage: { consumedCredits: 362, status: "consumed", scope: "task" },
+            },
+          }],
+        };
+      },
       async updateCanvasAgentConversation(canvasId, input) {
         calls.push(["update", canvasId, input]);
         return { conversation: { id: input.conversationId, status: input.status } };
@@ -609,7 +818,8 @@ test("Canvas Agent restores message history and manages archived conversations",
     ["assistant", "构图分析完成"],
   ]);
   const historyHtml = renderCanvasAgentPanel(workbench.ui);
-  assert.match(historyHtml, /<strong>Agent<\/strong><\/span>\s*<p>构图分析完成<\/p>/);
+  assert.match(historyHtml, /<strong>灵曦<\/strong><\/span>\s*<p>构图分析完成<\/p>/);
+  assert.doesNotMatch(historyHtml, /实际 Token 60,245|实际扣除 362 积分/);
   assert.match(historyHtml, /href="https:\/\/docs\.example\.test\/composition"/);
   assert.match(historyHtml, /rel="noopener noreferrer"/);
   workbench.ui.canvasAgent.historyOpen = true;
@@ -668,10 +878,11 @@ test("Canvas Agent edits and persists the current conversation title", async () 
   });
 
   const initialHtml = renderCanvasAgentPanel(workbench.ui);
-  assert.match(initialHtml, /class="canvas-agent-panel[^"]*has-conversation"/);
+  assert.match(initialHtml, /\bhas-conversation\b/);
   assert.match(initialHtml, /data-agent-conversation-title[^>]*>当前会话<\/strong>/);
   assert.doesNotMatch(initialHtml, /CANVAS AGENT|智能协作/);
-  assert.match(initialHtml, /class="canvas-agent-model canvas-agent-model-top"/);
+  assert.match(initialHtml, /class="canvas-agent-model-picker"[\s\S]*?data-agent-field="modelCode"[\s\S]*?canvas-agent-context-usage[\s\S]*?data-agent-action="send"/);
+  assert.doesNotMatch(initialHtml, /canvas-agent-model-top|>模型<\/span>/);
   assert.doesNotMatch(initialHtml, /data-agent-field="conversationId"|data-agent-action="toggle-pin-conversation"/);
 
   const titleTarget = { closest: (selector) => selector === "[data-agent-conversation-title]" ? {} : null };
@@ -1041,7 +1252,7 @@ test("Canvas Agent grants and revokes the selected persisted canvas file", async
       selectedCanvasProjectId: "canvas-file",
       selectedCanvasNodeId: "node-file",
       canvasDocument: {
-        nodes: [{ id: "node-file", type: "source-image", data: { title: "角色参考", storageObjectId: "storage-1" } }],
+        nodes: [{ id: "node-file", type: "source-image", data: { title: "角色参考", asset: { latestVersion: { storageObjectId: "storage-1" } } } }],
       },
       canvasAgent: { conversationId: "conversation-file", conversations: [{ id: "conversation-file", title: "文件会话" }] },
     },
@@ -1063,8 +1274,9 @@ test("Canvas Agent grants and revokes the selected persisted canvas file", async
   const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
   await controller.loadFileGrants();
   const html = renderCanvasAgentPanel(workbench.ui);
-  assert.match(html, /data-agent-action="grant-selected-file"/);
-  assert.match(html, /data-agent-action="revoke-file-grant" data-grant-id="grant-1"/);
+  assert.doesNotMatch(html, /class="canvas-agent-file-grants"/);
+  assert.doesNotMatch(html, /data-agent-action="grant-selected-file"/);
+  assert.doesNotMatch(html, /data-agent-action="revoke-file-grant"/);
   await controller.handleAction({ dataset: { agentAction: "grant-selected-file" } });
   assert.deepEqual(calls[1], ["create-grant", "canvas-file", "conversation-file", {
     storageObjectId: "storage-1",
@@ -1074,6 +1286,295 @@ test("Canvas Agent grants and revokes the selected persisted canvas file", async
   await controller.handleAction({ dataset: { agentAction: "revoke-file-grant", grantId: "grant-1" } });
   assert.ok(calls.some((call) => call[0] === "revoke-grant" && call[3] === "grant-1"));
   controller.dispose();
+});
+
+test("Canvas Agent reuses the video-node prompt editor for inline @ node references", async () => {
+  const mounted = [];
+  const promptInput = {
+    addEventListener() {},
+    setAttribute() {},
+  };
+  const editorHost = {
+    dataset: {},
+    isConnected: true,
+    ownerDocument: { querySelector: () => null },
+    querySelector(selector) {
+      return selector === "[data-tiptap-prompt-editor]" ? promptInput : null;
+    },
+  };
+  const surface = {
+    querySelector(selector) {
+      return selector === "[data-agent-prompt-editor]" ? editorHost : null;
+    },
+  };
+  const workbench = {
+    ui: {
+      canvasDocument: {
+        nodes: [
+          { id: "node-text", type: "ai-text", data: { title: "故事梗概" } },
+          { id: "node-image", type: "ai-image", data: { title: "角色图", storageObjectId: "storage-image" } },
+          { id: "node-video", type: "ai-video", data: { title: "动作视频", storageObjectId: "storage-video", thumbnailUrl: "https://media.example.test/poster.jpg" } },
+        ],
+      },
+      canvasAgent: {
+        promptDraft: "继续生成",
+        promptNodeReferences: [{ nodeId: "node-image", title: "角色图", storageObjectId: "storage-image", mediaKind: "image" }],
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface,
+    workbench,
+    loadPromptEditorModule: async () => ({
+      mountPromptEditor(_element, options) {
+        mounted.push(options);
+        return { captureState: () => null, destroy() {} };
+      },
+    }),
+  });
+  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-prompt-surface episode-prompt-editor-host" data-agent-prompt-editor/);
+  await controller.syncPromptEditor();
+  assert.equal(mounted.length, 1);
+  assert.equal(mounted[0].prompt, "【@角色图】 继续生成");
+  const suggestions = await mounted[0].getSuggestions();
+  assert.equal(suggestions.length, 3);
+  assert.equal(suggestions[0].assetKind, "text");
+  assert.equal(suggestions[0].label, "故事梗概");
+  assert.equal(suggestions[2].assetKind, "video");
+  assert.equal(suggestions[2].preview, "https://media.example.test/poster.jpg");
+  assert.match(suggestions[2].source, /\/api\/storage\/objects\/storage-video\/content\?proxy=1/);
+  mounted[0].onMentionSelect(suggestions[2]);
+  mounted[0].onMentionsChange([suggestions[1], suggestions[2]]);
+  mounted[0].onChange({ prompt: "【@角色图】 【@动作视频】 继续生成" });
+  assert.deepEqual(workbench.ui.canvasAgent.promptNodeReferences.map((item) => item.nodeId), ["node-image", "node-video"]);
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "【@角色图】 【@动作视频】 继续生成");
+  controller.dispose();
+});
+
+test("Canvas Agent turns @ node references into conversation file grants on send", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-send-mention",
+      canvasDocument: { nodes: [{ id: "node-reference", data: { title: "角色参考", storageObjectId: "storage-reference" } }] },
+      canvasAgent: {
+        conversationId: "conversation-send-mention",
+        promptDraft: "使用引入节点生成视频",
+        promptNodeReferences: [{ nodeId: "node-reference", title: "角色参考", storageObjectId: "storage-reference" }],
+        modelCode: "agent-model",
+        modelsStatus: "ready",
+        models: [{ modelCode: "agent-model", modelLabel: "Agent" }],
+      },
+    },
+    api: {
+      async listCanvasAgentFileGrants() { return { grants: [] }; },
+      async createCanvasAgentFileGrant(canvasId, conversationId, input) {
+        calls.push(["grant", canvasId, conversationId, input]);
+        return { grant: { id: "grant-reference" } };
+      },
+      async sendCanvasAgentMessage(canvasId, conversationId, input) {
+        calls.push(["message", canvasId, conversationId, input]);
+        return { task: { id: "task-reference", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  assert.deepEqual(calls[0], ["grant", "canvas-send-mention", "conversation-send-mention", {
+    storageObjectId: "storage-reference",
+    purpose: "Canvas Agent reference: 角色参考",
+    expiresInSeconds: 3600,
+  }]);
+  assert.deepEqual(calls[1][3].message.fileGrantIds, ["grant-reference"]);
+  assert.deepEqual(calls[1][3].message.nodeReferences, [{
+    nodeId: "node-reference",
+    title: "角色参考",
+    mediaKind: "image",
+    fileGrantId: "grant-reference",
+  }]);
+  controller.dispose();
+});
+
+test("Canvas Agent sends video node references with their media kind and grant mapping", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-video-reference",
+      canvasAgent: {
+        conversationId: "conversation-video-reference",
+        promptDraft: "参考这个视频生成新视频",
+        promptNodeReferences: [{
+          nodeId: "node-video",
+          title: "动作参考",
+          storageObjectId: "storage-video",
+          mediaKind: "video",
+        }],
+        modelCode: "agent-model",
+        modelsStatus: "ready",
+        models: [{ modelCode: "agent-model", modelLabel: "Agent" }],
+      },
+    },
+    api: {
+      async listCanvasAgentFileGrants() { return { grants: [] }; },
+      async createCanvasAgentFileGrant() { return { grant: { id: "grant-video" } }; },
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        calls.push(input);
+        return { task: { id: "task-video-reference", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  assert.deepEqual(calls[0].message.nodeReferences, [{
+    nodeId: "node-video",
+    title: "动作参考",
+    mediaKind: "video",
+    fileGrantId: "grant-video",
+  }]);
+  controller.dispose();
+});
+
+test("Canvas Agent sends non-file node references without creating file grants", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-text-reference",
+      canvasAgent: {
+        conversationId: "conversation-text-reference",
+        promptDraft: "【@故事梗概】 根据这个节点继续",
+        promptNodeReferences: [{ nodeId: "node-text", title: "故事梗概", mediaKind: "text" }],
+        modelCode: "agent-model",
+        modelsStatus: "ready",
+        models: [{ modelCode: "agent-model", modelLabel: "Agent" }],
+      },
+    },
+    api: {
+      async listCanvasAgentFileGrants() { return { grants: [] }; },
+      async createCanvasAgentFileGrant() { calls.push("unexpected-grant"); },
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        calls.push(input);
+        return { task: { id: "task-text-reference", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  assert.equal(calls.includes("unexpected-grant"), false);
+  assert.deepEqual(calls[0].message.nodeReferences, [{
+    nodeId: "node-text",
+    title: "故事梗概",
+    mediaKind: "text",
+  }]);
+  assert.deepEqual(calls[0].message.fileGrantIds, []);
+  controller.dispose();
+});
+
+test("Canvas Agent keeps @ node references when the user interjects from the prompt", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-interject-reference",
+      canvasDocument: {
+        nodes: [{
+          id: "node-image",
+          type: "ai-image",
+          data: { title: "蓝色森林", storageObjectId: "storage-image" },
+        }],
+      },
+      canvasAgent: {
+        conversationId: "conversation-interject-reference",
+        taskId: "task-interject-reference",
+        status: "running",
+        promptDraft: "【@蓝色森林】 再将这个节点删除",
+        promptNodeReferences: [{
+          nodeId: "node-image",
+          title: "蓝色森林",
+          mediaKind: "image",
+          storageObjectId: "storage-image",
+        }],
+        fileGrants: [{ id: "grant-image", storageObjectId: "storage-image", status: "active" }],
+      },
+    },
+    api: {
+      async controlCanvasAgentTask(canvasId, taskId, action, input) {
+        calls.push({ canvasId, taskId, action, input });
+        return { result: { status: "running" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+  await controller.handleAction({ dataset: { agentAction: "interject-prompt" } });
+  assert.deepEqual(calls, [{
+    canvasId: "canvas-interject-reference",
+    taskId: "task-interject-reference",
+    action: "interject",
+    input: {
+      message: {
+        text: "【@蓝色森林】 再将这个节点删除",
+        fileGrantIds: ["grant-image"],
+        nodeReferences: [{
+          nodeId: "node-image",
+          title: "蓝色森林",
+          mediaKind: "image",
+          fileGrantId: "grant-image",
+        }],
+      },
+    },
+  }]);
+  assert.deepEqual(workbench.ui.canvasAgent.messages[0].nodeReferences, [{
+    nodeId: "node-image",
+    title: "蓝色森林",
+    mediaKind: "image",
+    fileGrantId: "grant-image",
+  }]);
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "");
+  assert.deepEqual(workbench.ui.canvasAgent.promptNodeReferences, []);
+  controller.dispose();
+});
+
+test("Canvas Agent renders sent @ references as node placeholders in user messages", () => {
+  const html = renderCanvasAgentPanel({
+    canvasDocument: {
+      nodes: [{
+        id: "node-image",
+        type: "ai-image",
+        data: { title: "森林参考", storageObjectId: "storage-image" },
+      }],
+    },
+    canvasAgent: {
+      messages: [{
+        id: "message-reference",
+        role: "user",
+        text: "使用【@森林参考】生成图片",
+        nodeReferences: [{ nodeId: "node-image", title: "森林参考", mediaKind: "image" }],
+      }],
+    },
+  });
+  assert.match(html, /class="episode-prompt-editor-mention canvas-agent-message-node-reference"/);
+  assert.match(html, /data-node-id="node-image"/);
+  assert.match(html, /episode-prompt-editor-mention-label">森林参考/);
+  assert.doesNotMatch(html, /使用【@森林参考】生成图片/);
+});
+
+test("Canvas Agent preserves node references when normalizing message history", () => {
+  const message = normalizeAgentMessage({
+    id: "history-reference",
+    role: "user",
+    content: {
+      text: "查看【@故事梗概】",
+      nodeReferences: [{ nodeId: "node-text", title: "故事梗概", mediaKind: "text" }],
+    },
+  });
+  assert.deepEqual(message.nodeReferences, [{
+    nodeId: "node-text",
+    title: "故事梗概",
+    mediaKind: "text",
+    fileGrantId: "",
+  }]);
 });
 
 test("Canvas Agent exposes task center, canvas memory, and estimated context usage", () => {

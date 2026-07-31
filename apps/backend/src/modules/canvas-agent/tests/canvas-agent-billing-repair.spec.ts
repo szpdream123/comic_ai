@@ -16,6 +16,51 @@ import type { CanvasAgentActor } from "../canvas-agent.types.ts";
 const startedAt = new Date("2026-07-26T09:00:00.000Z");
 const repairedAt = new Date("2026-07-26T09:05:00.000Z");
 
+test("owner task charges aggregated actual token usage once", async () => {
+  const db = await createMigratedTestDb();
+  try {
+    const fixture = await createRunningModelRound(db, null);
+    await grantCredits(db, {
+      userId: fixture.ownerUserId,
+      amount: 1_000,
+      sourceType: "test_credit_seed",
+      sourceId: randomUUID(),
+      reason: "Canvas Agent task billing test",
+      now: startedAt,
+    });
+    const billing = new CanvasAgentBillingService(db);
+    const input = {
+      ownerUserId: fixture.ownerUserId,
+      canvasId: fixture.canvasId,
+      agentTaskId: fixture.task.id,
+      workflowId: fixture.task.workflowId,
+      workflowTaskId: fixture.task.workflowTaskId,
+      usage: { promptTokens: 58_258, completionTokens: 1_987, cachedTokens: 0, totalTokens: 60_245 },
+      pricing: { tokenCreditsPerMillion: 6_000, billingMode: "token" },
+      now: repairedAt,
+    };
+
+    assert.deepEqual(await billing.settleTask(input), { consumed: 362, totalTokens: 60_245 });
+    assert.deepEqual(await billing.settleTask(input), { consumed: 362, totalTokens: 60_245 });
+
+    const user = await db.query<{ credit_balance_cached: number | string }>(
+      "SELECT credit_balance_cached FROM users WHERE id=$1",
+      [fixture.ownerUserId],
+    );
+    const reservations = await db.query<{ count: number | string; consumed: number | string }>(`
+      SELECT count(*) AS count, COALESCE(sum(amount_consumed),0) AS consumed
+      FROM credit_reservations
+      WHERE user_id=$1 AND source_type='canvas_agent_text_task' AND source_id=$2
+    `, [fixture.ownerUserId, fixture.task.id]);
+    assert.equal(Number(user.rows[0]?.credit_balance_cached), 638);
+    assert.deepEqual(reservations.rows.map((row) => ({ count: Number(row.count), consumed: Number(row.consumed) })), [
+      { count: 1, consumed: 362 },
+    ]);
+  } finally {
+    await db.close();
+  }
+});
+
 test("owner round settles the reservation from actual token usage", async () => {
   const db = await createMigratedTestDb();
   try {

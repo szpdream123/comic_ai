@@ -56,6 +56,7 @@ const migrations = [
   ["20260810-canvas-agent-knowledge-boundary-tables.sql", "packages/db/migrations/20260810-canvas-agent-knowledge-boundary-tables.sql"],
   ["20260810-z-canvas-agent-step-input-json.sql", "packages/db/migrations/20260810-z-canvas-agent-step-input-json.sql"],
   ["20260812-canvas-agent-step-skip.sql", "packages/db/migrations/20260812-canvas-agent-step-skip.sql"],
+  ["20260822-canvas-agent-worker-indexes.sql", "packages/db/migrations/20260822-canvas-agent-worker-indexes.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);

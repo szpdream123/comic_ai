@@ -69,7 +69,7 @@ test("new Canvas panorama body exposes image and interactive 3D actions", () => 
   assert.match(html, /data-panorama-yaw="12" data-panorama-pitch="-3" data-panorama-fov="70"/);
   assert.match(html, /data-action="zoom-canvas-panorama"/);
   assert.match(html, /data-action="capture-canvas-panorama-view"/);
-  assert.match(html, /data-action="toggle-canvas-panorama-fullscreen"/);
+  assert.doesNotMatch(html, /toggle-canvas-panorama-fullscreen|requestFullscreen/);
   assert.match(html, /src="\/api\/storage\/pano\?a=1&amp;b=2"/);
   assert.doesNotMatch(html, /场景 <一>/);
 

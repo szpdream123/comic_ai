@@ -4,6 +4,7 @@ export interface CanvasAgentWakeupPublisher {
   publish(input: {
     taskId: string;
     eventKey: string;
+    shardId: number;
     payload: Record<string, unknown>;
   }): Promise<void>;
 }
@@ -12,6 +13,7 @@ interface OutboxRow {
   id: string;
   task_id: string;
   event_key: string;
+  shard_id: number | string | null;
   payload_json: Record<string, unknown>;
 }
 
@@ -34,6 +36,7 @@ export class CanvasAgentOutboxService {
         await this.deps.publisher.publish({
           taskId: row.task_id,
           eventKey: row.event_key,
+          shardId: readShardId(row.shard_id),
           payload: row.payload_json ?? {},
         });
         await this.deps.db.query(
@@ -85,18 +88,21 @@ export class CanvasAgentOutboxService {
     const result = await this.deps.db.query<OutboxRow>(
       `
         WITH candidates AS (
-          SELECT id FROM canvas_agent_outbox
-          WHERE status='pending' AND available_at <= $1
-          ORDER BY created_at ASC
+          SELECT outbox.id, conversation.shard_id
+          FROM canvas_agent_outbox outbox
+          JOIN canvas_agent_tasks task ON task.id = outbox.task_id
+          JOIN canvas_agent_conversations conversation ON conversation.id = task.conversation_id
+          WHERE outbox.status='pending' AND outbox.available_at <= $1
+          ORDER BY outbox.created_at ASC
           LIMIT $2
-          FOR UPDATE SKIP LOCKED
+          FOR UPDATE OF outbox SKIP LOCKED
         )
         UPDATE canvas_agent_outbox outbox
         SET status='dispatching', locked_by=$3, locked_at=$1,
             attempt_count=attempt_count+1, updated_at=$1
         FROM candidates
         WHERE outbox.id=candidates.id
-        RETURNING outbox.id, outbox.task_id, outbox.event_key, outbox.payload_json
+        RETURNING outbox.id, outbox.task_id, outbox.event_key, outbox.payload_json, candidates.shard_id
       `,
       [now, limit, this.deps.workerId],
     );
@@ -107,6 +113,14 @@ export class CanvasAgentOutboxService {
 function retryDelayMs(row: OutboxRow) {
   const seed = row.id.charCodeAt(0) || 1;
   return 1_000 + (seed % 10) * 100;
+}
+
+function readShardId(value: number | string | null) {
+  const shardId = Number(value);
+  if (value === null || !Number.isSafeInteger(shardId) || shardId < 0) {
+    throw new Error("canvas_agent_outbox_shard_id_invalid");
+  }
+  return shardId;
 }
 
 function redactError(error: unknown) {

@@ -292,6 +292,7 @@ describe("Canvas Agent knowledge and external boundaries", { concurrency: false 
           estimateRound: () => 1,
           reserveRound: async () => ({ kind: "reservation" as const, reservationId: null, amount: 1 }),
           settleRound: async () => ({ consumed: 1, released: 0 }),
+          settleTask: async () => ({ consumed: 1, totalTokens: 1 }),
         } as never,
         resolveActor: async () => {
           providerAuthorizationCount += 1;
@@ -356,6 +357,7 @@ describe("Canvas Agent knowledge and external boundaries", { concurrency: false 
           estimateRound: () => 1,
           reserveRound: async () => ({ kind: "reservation" as const, reservationId: null, amount: 1 }),
           settleRound: async () => ({ consumed: 1, released: 0 }),
+          settleTask: async () => ({ consumed: 1, totalTokens: 1 }),
         } as never,
         resolveActor: async () => actor,
         now: () => new Date("2026-07-25T10:06:01Z"),

@@ -584,9 +584,9 @@ test("credit ledger labels current and historical Canvas Agent charges in Chines
           amount: 20,
           availableDelta: -20,
           balanceAfter: 2016,
-          sourceType: "canvas_agent_text_round",
-          reason: "Canvas Agent text round",
-          metadata: { agentStepId: "agent-step-1" },
+          sourceType: "canvas_agent_text_task",
+          reason: "画布协作Agent操作消耗",
+          metadata: { agentTaskId: "agent-task-1", billingEvent: "actual_usage" },
           createdAt: "2026-07-30T09:22:00.000Z",
         },
         {

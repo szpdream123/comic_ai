@@ -4,6 +4,10 @@ import {
   resolveCanvasNodePlacement,
   updateCanvasNodeData,
 } from "../production-workbench/canvas/canvas-state.js";
+import {
+  resolveCanvasMediaNodeSource,
+  resolveCanvasMediaStableIdentity,
+} from "../production-workbench/canvas/canvas-media-node.js";
 import { renderNewCanvasChromeRail } from "./canvas-chrome.js";
 
 const AGENT_MODES = [
@@ -20,6 +24,10 @@ const TERMINAL_STATUSES = new Set([
   "result_unknown",
   "manual_review_required",
 ]);
+const LEGACY_CANVAS_AGENT_PANEL_WIDTH = 480;
+const DEFAULT_CANVAS_AGENT_PANEL_WIDTH = 600;
+const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
+const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260729-4";
 
 const AGENT_HEADER_ICON_PATHS = {
   new: '<path d="M12 5v14M5 12h14" />',
@@ -32,6 +40,12 @@ const AGENT_HEADER_ICON_PATHS = {
 
 function renderAgentHeaderIcon(name) {
   return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${AGENT_HEADER_ICON_PATHS[name] ?? AGENT_HEADER_ICON_PATHS.history}</svg>`;
+}
+
+function renderAgentComposerActionIcon(running = false) {
+  return running
+    ? '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" /></svg>'
+    : '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20V4" /><path d="m5 11 7-7 7 7" /></svg>';
 }
 
 export function ensureCanvasAgentState(ui = {}) {
@@ -47,6 +61,8 @@ export function ensureCanvasAgentState(ui = {}) {
     modelsStatus: "idle",
     modelsError: "",
     promptDraft: "",
+    promptMention: null,
+    promptNodeReferences: [],
     interjectionDraft: "",
     status: "idle",
     events: [],
@@ -65,7 +81,7 @@ export function ensureCanvasAgentState(ui = {}) {
     memoryDraftValue: "",
     panelView: "timeline",
     panelOpen: true,
-    panelWidth: 480,
+    panelWidth: DEFAULT_CANVAS_AGENT_PANEL_WIDTH,
     historyOpen: false,
     modeMenuOpen: false,
     titleEditing: false,
@@ -82,6 +98,9 @@ export function ensureCanvasAgentState(ui = {}) {
     polling: false,
     ...previous,
     mode,
+    ...(Number(previous.panelWidth) === LEGACY_CANVAS_AGENT_PANEL_WIDTH
+      ? { panelWidth: DEFAULT_CANVAS_AGENT_PANEL_WIDTH }
+      : {}),
   });
   ui.canvasAgent = previous;
   return previous;
@@ -93,14 +112,15 @@ export function renderCanvasAgentPanel(ui = {}) {
   const pendingApproval = findPendingApproval(agent.events, agent.skippedStepIds);
   const approvalPresentation = pendingApproval ? resolveAgentApprovalPresentation(agent.events, pendingApproval) : null;
   const active = Boolean(agent.taskId) && !TERMINAL_STATUSES.has(agent.status);
-  const paused = agent.status === "paused";
   const busy = Boolean(agent.busyAction);
   const models = Array.isArray(agent.models) ? agent.models : [];
   const selectedConversation = (agent.conversations ?? []).find((conversation) => conversation.id === agent.conversationId);
   const conversationArchived = selectedConversation?.status === "archived";
   const modelSelectDisabled = busy || agent.modelsStatus !== "ready" || !models.length;
   const selectedMode = AGENT_MODES.find((mode) => mode.id === agent.mode) ?? AGENT_MODES[0];
-  const selectedFile = resolveSelectedAgentFileReference(ui);
+  const timelineEmpty = !active
+    && !collapseAgentTimelineEvents(agent.events).length
+    && !collapseAgentGenerationMessages(agent.messages).length;
   agent.panelView = "timeline";
   const panelView = "timeline";
   const conversationTitle = selectedConversation?.title || "新会话";
@@ -108,7 +128,7 @@ export function renderCanvasAgentPanel(ui = {}) {
     ? `<input class="canvas-agent-title-input" type="text" data-agent-field="conversationTitle" value="${escapeAttr(agent.titleDraft || conversationTitle)}" maxlength="10" aria-label="当前会话名称" />`
     : `<strong class="canvas-agent-title" data-agent-conversation-title title="双击修改会话名称">${escapeHtml(conversationTitle)}</strong>`;
   return `
-    <aside class="canvas-agent-panel ${agent.historyOpen ? "history-open" : panelView === "timeline" ? "" : "has-special-view"}${agent.conversationId ? " has-conversation" : ""}" data-canvas-agent-panel aria-label="Canvas Agent">
+    <aside class="canvas-agent-panel ${agent.historyOpen ? "history-open" : panelView === "timeline" ? "" : "has-special-view"}${agent.conversationId ? " has-conversation" : ""}${timelineEmpty ? " timeline-empty" : ""}" data-canvas-agent-panel aria-label="Canvas Agent">
       <div class="canvas-agent-resize-handle" data-canvas-agent-resize role="separator" aria-orientation="vertical" aria-label="调整 Agent 面板宽度"></div>
       <header class="canvas-agent-head">
         ${titleMarkup}
@@ -122,44 +142,20 @@ export function renderCanvasAgentPanel(ui = {}) {
       ${agent.historyOpen ? renderAgentHistoryPopover(agent) : ""}
 
       ${agent.historyOpen ? "" : (panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : `
-      <label class="canvas-agent-model canvas-agent-model-top">
-        <span>模型</span>
-        <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="文本模型">
-          ${models.length
-            ? models.map((model) => `<option value="${escapeAttr(model.modelCode)}" ${model.modelCode === agent.modelCode ? "selected" : ""}>${escapeHtml(model.modelLabel || model.modelCode)}</option>`).join("")
-            : `<option value="">${agent.modelsStatus === "loading" ? "正在加载模型" : "暂无可用文本模型"}</option>`}
-        </select>
-        ${agent.modelsError ? `<small>${escapeHtml(agent.modelsError)}</small>` : ""}
-      </label>
-
-      ${agent.conversationId ? renderAgentFileGrants(agent, selectedFile, busy) : ""}
-
-      <section class="canvas-agent-timeline" aria-label="Agent 事件" aria-live="polite">
-        ${renderAgentTimeline(agent, ui.canvasDocument)}
+      <section class="canvas-agent-timeline${timelineEmpty ? " is-empty" : ""}" aria-label="Agent 事件" aria-live="polite">
+        ${renderAgentTimeline(agent, ui.canvasDocument, active)}
       </section>
 
       ${approvalPresentation ? renderAgentApprovalCard(approvalPresentation, busy) : ""}
 
-      ${active ? `
-        <div class="canvas-agent-task-controls" aria-label="Agent 任务控制">
-          ${paused
-            ? '<button type="button" data-agent-action="resume">继续</button>'
-            : '<button type="button" data-agent-action="pause">暂停</button>'}
-          <button type="button" data-agent-action="replan">重规划</button>
-          ${renderAgentSkipStepButton(agent, busy)}
-          <button type="button" class="danger" data-agent-action="stop">停止</button>
-        </div>
-        <div class="canvas-agent-interject">
-          <input type="text" data-agent-field="interjectionDraft" value="${escapeAttr(agent.interjectionDraft)}" placeholder="补充要求或修正方向" />
-          <button type="button" data-agent-action="interject" ${busy ? "disabled" : ""}>插话</button>
-        </div>
-      ` : ""}
       ${agent.taskId ? `<div class="canvas-agent-rewind-control">
         <button type="button" data-agent-action="rewind" ${busy ? "disabled" : ""} title="恢复最近一次 Agent 检查点">回退最近检查点</button>
       </div>` : ""}
 
       <footer class="canvas-agent-composer">
-        <textarea data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
+        <div class="canvas-agent-prompt-surface episode-prompt-editor-host" data-agent-prompt-editor>
+          <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
+        </div>
         <div class="canvas-agent-composer-footer">
           <div class="canvas-agent-composer-left">
             <div class="canvas-agent-mode-picker">
@@ -177,8 +173,16 @@ export function renderCanvasAgentPanel(ui = {}) {
             <span class="canvas-agent-status ${escapeAttr(agent.status)}">${escapeHtml(agentStatusLabel(agent))}</span>
           </div>
           <span class="canvas-agent-composer-actions">
+            <label class="canvas-agent-model-picker">
+              <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="文本模型">
+                ${models.length
+                  ? models.map((model) => `<option value="${escapeAttr(model.modelCode)}" ${model.modelCode === agent.modelCode ? "selected" : ""}>${escapeHtml(model.modelLabel || model.modelCode)}</option>`).join("")
+                  : `<option value="">${agent.modelsStatus === "loading" ? "正在加载模型" : "暂无可用文本模型"}</option>`}
+              </select>
+              ${agent.modelsError ? `<small>${escapeHtml(agent.modelsError)}</small>` : ""}
+            </label>
             ${renderAgentContextUsage(agent)}
-            <button type="button" data-agent-action="send" ${busy || modelSelectDisabled || conversationArchived ? "disabled" : ""}>发送</button>
+            <button type="button" class="canvas-agent-send-button${active ? " is-running" : ""}" data-agent-action="send" aria-label="${active ? "停止 Agent 任务" : "发送 Agent 指令"}" title="${active ? "停止 Agent 任务" : "发送 Agent 指令"}" aria-busy="${active}" ${busy || conversationArchived || (!active && modelSelectDisabled) ? "disabled" : ""}>${renderAgentComposerActionIcon(active)}</button>
           </span>
         </div>
         ${agent.error ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.error)}</p>` : ""}
@@ -228,9 +232,17 @@ function renderCanvasAgentReopenButton() {
   return `<button type="button" class="canvas-agent-reopen" data-agent-action="open-agent-panel" aria-label="展开 Agent 面板" title="展开 Agent 面板">${renderAgentHeaderIcon("open")}</button>`;
 }
 
+export function resolveCanvasAgentPanelMaxWidth() {
+  const viewportWidth = Number(globalThis.window?.innerWidth);
+  const width = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : DEFAULT_CANVAS_AGENT_PANEL_WIDTH * 2;
+  return Math.max(CANVAS_AGENT_PANEL_MIN_WIDTH, Math.floor(width / 2));
+}
+
 function resolveCanvasAgentPanelWidth(ui = {}) {
   const width = Number(ui.canvasAgent?.panelWidth);
-  return Number.isFinite(width) ? Math.min(720, Math.max(300, Math.round(width))) : 480;
+  return Number.isFinite(width)
+    ? Math.min(resolveCanvasAgentPanelMaxWidth(), Math.max(CANVAS_AGENT_PANEL_MIN_WIDTH, Math.round(width)))
+    : Math.min(resolveCanvasAgentPanelMaxWidth(), DEFAULT_CANVAS_AGENT_PANEL_WIDTH);
 }
 
 export function reduceCanvasAgentEvents(agent, incoming = []) {
@@ -312,27 +324,134 @@ function centerAgentCanvasNode(graph, cell, surface, canvasDocument, nodeId) {
   settleRenderedCenter();
 }
 
-export function createCanvasAgentController({ surface, workbench, renderPanel, renderLayout, pollIntervalMs = 1500 }) {
+export function createCanvasAgentController({
+  surface,
+  workbench,
+  renderPanel,
+  renderLayout,
+  pollIntervalMs = 1500,
+  loadPromptEditorModule = () => import(PROMPT_EDITOR_MODULE_URL),
+}) {
   const ui = workbench.ui ?? (workbench.ui = {});
   const agent = ensureCanvasAgentState(ui);
+  let promptEditorMount = null;
+  let promptEditorMountToken = null;
+  let submitPromptFromEditor = () => false;
+  const shouldFollowLatestTimeline = () => Boolean(agent.taskId);
   const captureTimelineScroll = () => captureAgentTimelineScroll(
     surface.querySelector?.(".canvas-agent-timeline"),
   );
   const restoreTimelineScroll = (state) => restoreAgentTimelineScroll(
     surface.querySelector?.(".canvas-agent-timeline"),
     state,
+    shouldFollowLatestTimeline(),
   );
+  const disposePromptEditor = () => {
+    promptEditorMountToken = null;
+    try {
+      promptEditorMount?.handle?.destroy?.();
+    } catch {
+      // The fallback textarea remains available if the rich editor cannot unmount cleanly.
+    }
+    promptEditorMount = null;
+  };
+  const syncPromptEditor = async (options = {}) => {
+    const editorHost = surface.querySelector?.("[data-agent-prompt-editor]") ?? null;
+    if (!editorHost?.dataset || !editorHost?.ownerDocument || typeof editorHost.querySelector !== "function") {
+      disposePromptEditor();
+      return false;
+    }
+    if (promptEditorMount?.element === editorHost) return true;
+    disposePromptEditor();
+    const token = Symbol("canvas-agent-prompt-editor");
+    promptEditorMountToken = token;
+    editorHost.dataset.promptEditorStatus = "loading";
+    try {
+      const module = await loadPromptEditorModule();
+      if (promptEditorMountToken !== token || !editorHost.isConnected) return false;
+      const references = Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [];
+      const handle = module.mountPromptEditor(editorHost, {
+        ariaLabel: "Agent 指令，输入 @ 引入画布节点",
+        editable: !agent.busyAction && !isSelectedAgentConversationArchived(agent),
+        id: "canvas-agent-prompt-input",
+        mentionReferences: references.map(buildAgentPromptEditorReference),
+        maxSuggestions: Number.MAX_SAFE_INTEGER,
+        placeholder: isSelectedAgentConversationArchived(agent)
+          ? "恢复会话后继续发送"
+          : "描述要分析、规划或修改的画布内容，输入 @ 引入节点",
+        prompt: mergeAgentPromptReferenceTokens(agent.promptDraft, references),
+        restoreState: options.restoreState ?? null,
+        getSuggestions: () => listCanvasAgentNodeReferences(workbench.ui).map(buildAgentPromptEditorReference),
+        onMentionSelect(item) {
+          const reference = listCanvasAgentNodeReferences(workbench.ui)
+            .find((candidate) => candidate.nodeId === String(item.referenceId ?? item.assetId ?? item.id ?? ""));
+          if (!reference) return item;
+          agent.promptNodeReferences = [
+            ...(Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [])
+              .filter((candidate) => candidate.nodeId !== reference.nodeId),
+            reference,
+          ];
+          return buildAgentPromptEditorReference(reference);
+        },
+        onMentionsChange(mentions) {
+          const referenceByNodeId = new Map(
+            listCanvasAgentNodeReferences(workbench.ui).map((reference) => [reference.nodeId, reference]),
+          );
+          const seenNodeIds = new Set();
+          agent.promptNodeReferences = (Array.isArray(mentions) ? mentions : [])
+            .map((mention) => referenceByNodeId.get(String(mention.referenceId ?? mention.assetId ?? mention.id ?? "")))
+            .filter((reference) => reference && !seenNodeIds.has(reference.nodeId) && seenNodeIds.add(reference.nodeId));
+        },
+        onChange({ prompt }) {
+          agent.promptDraft = String(prompt ?? "");
+        },
+      });
+      const input = editorHost.querySelector?.("[data-tiptap-prompt-editor]");
+      input?.setAttribute?.("data-agent-prompt-input", "");
+      input?.addEventListener?.("keydown", (event) => {
+        if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+        const mentionMenu = editorHost.ownerDocument?.querySelector?.(".episode-prompt-editor-menu:not([hidden])");
+        if (mentionMenu) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        submitPromptFromEditor();
+      }, { capture: true });
+      editorHost.dataset.promptEditorStatus = "ready";
+      promptEditorMount = { element: editorHost, handle };
+      return true;
+    } catch (error) {
+      if (promptEditorMountToken !== token) return false;
+      editorHost.dataset.promptEditorStatus = "fallback";
+      console.error("[new-canvas] Agent prompt editor mount failed", error);
+      return false;
+    }
+  };
   const syncPanel = () => {
     const current = surface.querySelector?.("[data-canvas-agent-panel]");
     if (!current || typeof document === "undefined") return false;
     const timelineScroll = captureAgentTimelineScroll(current.querySelector?.(".canvas-agent-timeline"));
+    const promptInputState = promptEditorMount?.handle?.captureState?.() ?? null;
+    disposePromptEditor();
     const template = document.createElement("template");
     template.innerHTML = renderCanvasAgentPanel(ui);
     const next = template.content.firstElementChild;
     if (!next) return false;
     current.replaceWith(next);
     renderPanel?.(next);
-    restoreAgentTimelineScroll(next.querySelector?.(".canvas-agent-timeline"), timelineScroll);
+    restoreAgentTimelineScroll(
+      next.querySelector?.(".canvas-agent-timeline"),
+      timelineScroll,
+      shouldFollowLatestTimeline(),
+    );
+    void syncPromptEditor({ restoreState: promptInputState });
+    return true;
+  };
+  const syncPromptMentionMenu = () => {
+    const input = surface.querySelector?.('[data-agent-field="promptDraft"]');
+    const currentMenu = surface.querySelector?.(".canvas-agent-mention-menu");
+    currentMenu?.remove?.();
+    if (!input || !agent.promptMention?.open || typeof input.insertAdjacentHTML !== "function") return false;
+    input.insertAdjacentHTML("afterend", renderAgentPromptMentionMenu(agent, ui));
     return true;
   };
   const syncPanelVisibility = () => {
@@ -589,7 +708,15 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
       if (conversation?.taskId) {
         agent.taskId = String(conversation.taskId);
         agent.status = String(conversation.taskStatus ?? "queued");
-        schedulePoll(0);
+        if (typeof workbench.api?.listCanvasAgentEvents === "function") {
+          try {
+            const payload = await workbench.api.listCanvasAgentEvents(canvasId, agent.taskId, { after: 0, limit: 1000 });
+            reduceCanvasAgentEvents(agent, Array.isArray(payload?.events) ? payload.events : []);
+          } catch {
+            // Conversation messages remain usable if the task event endpoint is temporarily unavailable.
+          }
+        }
+        if (!TERMINAL_STATUSES.has(agent.status)) schedulePoll(0);
       }
       agent.messagesStatus = "ready";
       await loadFileGrants(conversationId);
@@ -625,6 +752,47 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
     }
     syncPanel();
     return agent.fileGrants;
+  };
+
+  const prepareAgentMessageNodeReferences = async (canvasId, conversationId) => {
+    const references = Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [];
+    const fileGrantIds = [];
+    const grantIdByNodeId = new Map();
+    for (const reference of references.filter((item) => item.storageObjectId)) {
+      const existing = (Array.isArray(agent.fileGrants) ? agent.fileGrants : [])
+        .find((grant) => grant.storageObjectId === reference.storageObjectId && grant.status === "active");
+      if (existing?.id) {
+        fileGrantIds.push(existing.id);
+        grantIdByNodeId.set(reference.nodeId, existing.id);
+        continue;
+      }
+      if (typeof workbench.api?.createCanvasAgentFileGrant !== "function") {
+        throw new Error("canvas_agent_file_grant_unavailable");
+      }
+      const payload = await workbench.api.createCanvasAgentFileGrant(canvasId, conversationId, {
+        storageObjectId: reference.storageObjectId,
+        purpose: `Canvas Agent reference: ${reference.title}`,
+        expiresInSeconds: 3_600,
+      });
+      const grantId = String(payload?.grant?.id ?? "").trim();
+      if (grantId) {
+        fileGrantIds.push(grantId);
+        grantIdByNodeId.set(reference.nodeId, grantId);
+      }
+    }
+    if (fileGrantIds.length) await loadFileGrants(conversationId);
+    return {
+      references,
+      fileGrantIds,
+      messageNodeReferences: references.map((reference) => ({
+        nodeId: reference.nodeId,
+        title: reference.title,
+        mediaKind: reference.mediaKind || (reference.storageObjectId ? "image" : "node"),
+        ...(grantIdByNodeId.get(reference.nodeId)
+          ? { fileGrantId: grantIdByNodeId.get(reference.nodeId) }
+          : {}),
+      })),
+    };
   };
 
   const loadMemories = async (conversationId = agent.conversationId) => {
@@ -781,8 +949,9 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
     return payload;
   };
 
-  return {
+  const controller = {
     syncPanel,
+    syncPromptEditor,
     captureTimelineScroll,
     restoreTimelineScroll,
     loadModels,
@@ -791,6 +960,14 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
     loadMemories,
     loadTaskCenter,
     handleClick(target) {
+      if (
+        agent.promptMention?.open
+        && !target?.closest?.(".canvas-agent-mention-menu, [data-agent-field=\"promptDraft\"]")
+      ) {
+        agent.promptMention = null;
+        syncPromptMentionMenu();
+        return true;
+      }
       if (!agent.modeMenuOpen || target?.closest?.(".canvas-agent-mode-picker")) return false;
       agent.modeMenuOpen = false;
       syncPanel();
@@ -810,6 +987,11 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
         return true;
       }
       agent[field] = value;
+      if (field === "promptDraft") {
+        const activeQuery = resolveAgentPromptMentionQuery(value, target.selectionStart);
+        agent.promptMention = activeQuery ? { ...(agent.promptMention ?? {}), ...activeQuery, open: true } : null;
+        syncPromptMentionMenu();
+      }
       return true;
     },
     handleBlur(target) {
@@ -831,6 +1013,12 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
         queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-mode-menu"]')?.focus?.());
         return true;
       }
+      if (event.key === "Escape" && agent.promptMention?.open && target?.dataset?.agentField === "promptDraft") {
+        event.preventDefault();
+        agent.promptMention = null;
+        syncPromptMentionMenu();
+        return true;
+      }
       if (target?.dataset?.agentField === "conversationTitle") {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -847,7 +1035,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
       }
       if (target?.dataset?.agentField !== "promptDraft" || event.key !== "Enter" || event.shiftKey) return false;
       event.preventDefault();
-      void this.handleAction({ dataset: { agentAction: "send" } });
+      void this.handleAction({ dataset: { agentAction: agent.taskId && !TERMINAL_STATUSES.has(agent.status) ? "interject-prompt" : "send" } });
       return true;
     },
     handleDoubleClick(target) {
@@ -883,6 +1071,38 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
         agent.modeMenuOpen = false;
         syncPanel();
         queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-mode-menu"]')?.focus?.());
+        return true;
+      }
+      if (action === "select-agent-node-mention") {
+        const nodeId = String(target.dataset.nodeId ?? "");
+        const reference = listCanvasAgentFileReferences(workbench.ui).find((item) => item.nodeId === nodeId);
+        const mention = agent.promptMention;
+        if (!reference || !mention?.open) return true;
+        const before = agent.promptDraft.slice(0, Number(mention.start));
+        const after = agent.promptDraft.slice(Number(mention.end));
+        const prefix = before && !/\s$/u.test(before) ? " " : "";
+        const suffix = after && !/^\s/u.test(after) ? " " : "";
+        agent.promptDraft = `${before}${prefix}${suffix}${after}`;
+        agent.promptNodeReferences = [
+          ...(Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : []).filter((item) => item.nodeId !== nodeId),
+          reference,
+        ];
+        agent.promptMention = null;
+        syncPanel();
+        queueMicrotask(() => {
+          const input = surface.querySelector?.('[data-agent-field="promptDraft"]');
+          input?.focus?.();
+          const caret = before.length + prefix.length + suffix.length;
+          input?.setSelectionRange?.(caret, caret);
+        });
+        return true;
+      }
+      if (action === "remove-agent-node-reference") {
+        const nodeId = String(target.dataset.nodeId ?? "");
+        agent.promptNodeReferences = (Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [])
+          .filter((reference) => reference.nodeId !== nodeId);
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-field="promptDraft"]')?.focus?.());
         return true;
       }
       if (action === "open-agent-history") {
@@ -1214,6 +1434,10 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
         return true;
       }
       if (action === "send") {
+        if (agent.taskId && !TERMINAL_STATUSES.has(agent.status)) {
+          await run("stop", () => control("stop"));
+          return true;
+        }
         await run(action, async () => {
           const text = String(agent.promptDraft ?? "").trim();
           const modelCode = String(agent.modelCode ?? "").trim();
@@ -1226,10 +1450,20 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
           }
           const conversationId = await ensureConversation();
           const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const { references, fileGrantIds, messageNodeReferences } = await prepareAgentMessageNodeReferences(
+            canvasId,
+            conversationId,
+          );
           const payload = await workbench.api.sendCanvasAgentMessage(canvasId, conversationId, {
             modelCode,
             mode: agent.mode,
-            message: { text },
+            message: {
+              text,
+              ...(references.length ? {
+                nodeReferences: messageNodeReferences,
+                fileGrantIds,
+              } : {}),
+            },
           });
           const task = payload?.task ?? payload;
           const taskId = String(task?.id ?? task?.taskId ?? "");
@@ -1239,9 +1473,17 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
           agent.events = [];
           agent.skippedStepIds = [];
           agent.sequence = 0;
-          agent.messages = [...agent.messages, { role: "user", text, taskId, createdAt: new Date().toISOString() }].slice(-200);
+          agent.messages = [...agent.messages, {
+            role: "user",
+            text,
+            taskId,
+            createdAt: new Date().toISOString(),
+            nodeReferences: messageNodeReferences,
+          }].slice(-200);
           syncCurrentAgentTaskItem(agent, { goal: text, conversationId });
           agent.promptDraft = "";
+          agent.promptMention = null;
+          agent.promptNodeReferences = [];
           schedulePoll(0);
         });
         return true;
@@ -1254,13 +1496,34 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
         await run(action, () => control("replan", { reason: agent.interjectionDraft || "user_requested" }));
         return true;
       }
-      if (action === "interject") {
+      if (action === "interject" || action === "interject-prompt") {
         await run(action, async () => {
-          const text = String(agent.interjectionDraft ?? "").trim();
+          const fromPrompt = action === "interject-prompt";
+          const text = String(fromPrompt ? agent.promptDraft : agent.interjectionDraft ?? "").trim();
           if (!text) throw new Error("请输入插话内容。");
-          await control("interject", { message: { text } });
-          agent.messages = [...agent.messages, { role: "user", text, interjection: true }].slice(-20);
-          agent.interjectionDraft = "";
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const { references, fileGrantIds, messageNodeReferences } = await prepareAgentMessageNodeReferences(
+            canvasId,
+            agent.conversationId,
+          );
+          await control("interject", {
+            message: {
+              text,
+              ...(references.length ? { nodeReferences: messageNodeReferences, fileGrantIds } : {}),
+            },
+          });
+          agent.messages = [...agent.messages, {
+            role: "user",
+            text,
+            interjection: true,
+            nodeReferences: messageNodeReferences,
+          }].slice(-20);
+          if (fromPrompt) {
+            agent.promptDraft = "";
+            agent.promptMention = null;
+            agent.promptNodeReferences = [];
+          }
+          else agent.interjectionDraft = "";
         });
         return true;
       }
@@ -1294,10 +1557,51 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, r
     dispose() {
       disposed = true;
       stopPolling();
+      disposePromptEditor();
       for (const timer of canvasRefreshRetryTimers) clearTimeout(timer);
       canvasRefreshRetryTimers.clear();
     },
   };
+  submitPromptFromEditor = () => {
+    void controller.handleAction({
+      dataset: {
+        agentAction: agent.taskId && !TERMINAL_STATUSES.has(agent.status) ? "interject-prompt" : "send",
+      },
+    });
+    return true;
+  };
+  if (typeof document !== "undefined") queueMicrotask(() => void syncPromptEditor());
+  return controller;
+}
+
+function buildAgentPromptEditorReference(reference = {}) {
+  const mediaKind = String(reference.mediaKind ?? (reference.storageObjectId ? "image" : "node")).trim().toLowerCase();
+  return {
+    id: String(reference.nodeId ?? ""),
+    assetId: String(reference.nodeId ?? ""),
+    assetKind: mediaKind,
+    description: `${mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片"}节点`,
+    label: String(reference.title ?? "画布节点"),
+    name: String(reference.title ?? "画布节点"),
+    preview: mediaKind === "video"
+      ? String(reference.posterUrl ?? "")
+      : String(reference.previewUrl ?? ""),
+    referenceId: String(reference.nodeId ?? ""),
+    source: mediaKind === "video" ? String(reference.previewUrl ?? "") : "",
+  };
+}
+
+function mergeAgentPromptReferenceTokens(prompt, references = []) {
+  let value = String(prompt ?? "");
+  const missingTokens = references
+    .map((reference) => `【@${String(reference.title ?? "画布节点").trim()}】`)
+    .filter((token) => !value.includes(token));
+  if (!missingTokens.length) return value;
+  return `${missingTokens.join(" ")}${value ? ` ${value}` : ""}`;
+}
+
+function isSelectedAgentConversationArchived(agent = {}) {
+  return Boolean((agent.conversations ?? []).find((conversation) => conversation.id === agent.conversationId)?.archivedAt);
 }
 
 const ACTIVE_AGENT_TASK_STATUSES = new Set([
@@ -1732,7 +2036,7 @@ function renderAgentFileGrants(agent, selectedFile, busy) {
   return `<section class="canvas-agent-file-grants" aria-label="会话文件授权">
     <header>
       <span><strong>会话文件</strong><small>${grants.length}</small></span>
-      <button type="button" data-agent-action="grant-selected-file" ${busy || !canGrant ? "disabled" : ""} title="授权当前选中节点的已存储文件">授权所选</button>
+      <button type="button" data-agent-action="grant-selected-file" ${busy || !canGrant ? "disabled" : ""} title="授权后可在 Agent 请求中用作图像或视频参考">授权所选</button>
     </header>
     ${grants.length ? `<ul>${grants.map((grant) => `<li>
       <span><strong>${escapeHtml(grant.purpose || "画布文件")}</strong><small>${escapeHtml(formatAgentGrantExpiry(grant.expiresAt))}</small></span>
@@ -1741,19 +2045,165 @@ function renderAgentFileGrants(agent, selectedFile, busy) {
   </section>`;
 }
 
+function renderAgentPromptMentionMenu(agent, ui) {
+  const mention = agent.promptMention;
+  if (!mention?.open) return "";
+  const query = String(mention.query ?? "").trim().toLocaleLowerCase();
+  const items = listCanvasAgentFileReferences(ui)
+    .filter((item) => !query || [item.title, item.mediaKind, item.nodeId].some((value) => String(value ?? "").toLocaleLowerCase().includes(query)))
+    .slice(0, 12);
+  const content = items.length
+    ? items.map((item) => `<button type="button" class="canvas-agent-mention-option" data-agent-action="select-agent-node-mention" data-node-id="${escapeAttr(item.nodeId)}">
+        <span class="canvas-agent-mention-thumb">${renderAgentMentionPreview(item)}</span>
+        <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.mediaKind || "节点")}</small></span>
+      </button>`).join("")
+    : `<p class="canvas-agent-mention-status">${query ? "没有匹配的已存储节点" : "暂无可引用的已存储节点"}</p>`;
+  return `<div class="canvas-agent-mention-menu" role="listbox" aria-label="可引用节点">${content}</div>`;
+}
+
+function renderAgentPromptReferenceChips(agent) {
+  const references = Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [];
+  if (!references.length) return "";
+  return `<div class="canvas-agent-reference-chips" aria-label="已引入节点">
+    ${references.map((reference) => `<span class="canvas-agent-reference-chip">
+      <span class="canvas-agent-reference-thumb">${renderAgentMentionPreview(reference)}</span>
+      <strong>${escapeHtml(reference.title || "画布节点")}</strong>
+      <button type="button" data-agent-action="remove-agent-node-reference" data-node-id="${escapeAttr(reference.nodeId)}" aria-label="移除 ${escapeAttr(reference.title || "画布节点")}" title="移除引用">×</button>
+    </span>`).join("")}
+  </div>`;
+}
+
+function renderAgentMentionPreview(item = {}) {
+  const mediaKind = String(item.mediaKind ?? "").trim().toLowerCase();
+  if (mediaKind === "video") {
+    return item.previewUrl
+      ? `<video src="${escapeAttr(item.previewUrl)}"${item.posterUrl ? ` poster="${escapeAttr(item.posterUrl)}"` : ""} muted playsinline preload="metadata" aria-hidden="true"></video>`
+      : '<b aria-hidden="true">VID</b>';
+  }
+  return item.previewUrl ? `<img src="${escapeAttr(item.previewUrl)}" alt="" />` : "@";
+}
+
+function listCanvasAgentFileReferences(ui = {}) {
+  return (Array.isArray(ui.canvasDocument?.nodes) ? ui.canvasDocument.nodes : [])
+    .map((node) => {
+      const file = resolveCanvasNodeFileReference(ui, node);
+      if (!file) return null;
+      const data = node.data && typeof node.data === "object" ? node.data : {};
+      const rawMediaKind = String(data.mediaKind ?? node.type ?? "").trim().toLowerCase();
+      const mediaKind = rawMediaKind.includes("video")
+        ? "video"
+        : rawMediaKind.includes("audio") ? "audio" : "image";
+      const assets = [ui.canvasAssets, ui.canvasAssetProjectAssets, ui.canvasLibraryAssets]
+        .flatMap((items) => Array.isArray(items) ? items : []);
+      return {
+        ...file,
+        nodeId: String(node.id ?? ""),
+        mediaKind,
+        previewUrl: String(
+          resolveCanvasMediaNodeSource(node, mediaKind, { assets })
+          || `/api/storage/objects/${encodeURIComponent(file.storageObjectId)}/content?proxy=1`,
+        ).trim(),
+        posterUrl: mediaKind === "video"
+          ? String(data.thumbnailUrl ?? data.posterUrl ?? "").trim()
+          : "",
+      };
+    })
+    .filter(Boolean);
+}
+
+function listCanvasAgentNodeReferences(ui = {}) {
+  return (Array.isArray(ui.canvasDocument?.nodes) ? ui.canvasDocument.nodes : [])
+    .map((node) => {
+      const data = node?.data && typeof node.data === "object" ? node.data : {};
+      const file = resolveCanvasNodeFileReference(ui, node);
+      const rawKind = String(data.mediaKind ?? node?.type ?? "node").trim().toLowerCase();
+      const mediaKind = rawKind.includes("video")
+        ? "video"
+        : rawKind.includes("audio")
+          ? "audio"
+          : rawKind.includes("image")
+            ? "image"
+            : rawKind.includes("text") || rawKind.includes("markdown")
+              ? "text"
+              : rawKind.includes("director")
+                ? "director"
+                : rawKind.includes("storyboard") ? "storyboard" : "node";
+      const assets = [ui.canvasAssets, ui.canvasAssetProjectAssets, ui.canvasLibraryAssets]
+        .flatMap((items) => Array.isArray(items) ? items : []);
+      const previewUrl = ["image", "video", "audio"].includes(mediaKind)
+        ? String(
+            resolveCanvasMediaNodeSource(node, mediaKind, { assets })
+            || (file?.storageObjectId
+              ? `/api/storage/objects/${encodeURIComponent(file.storageObjectId)}/content?proxy=1`
+              : ""),
+          ).trim()
+        : "";
+      return {
+        ...(file ?? {}),
+        nodeId: String(node?.id ?? ""),
+        title: String(data.title ?? data.label ?? data.name ?? node?.title ?? node?.type ?? "画布节点").trim().slice(0, 120),
+        mediaKind,
+        previewUrl,
+        posterUrl: mediaKind === "video"
+          ? String(data.thumbnailUrl ?? data.posterUrl ?? "").trim()
+          : "",
+      };
+    })
+    .filter((reference) => reference.nodeId);
+}
+
+function resolveAgentPromptMentionQuery(value, selectionStart) {
+  const text = String(value ?? "");
+  const cursor = Math.max(0, Math.min(text.length, Number(selectionStart ?? text.length)));
+  const triggerStart = text.lastIndexOf("@", cursor - 1);
+  if (triggerStart < 0) return null;
+  const query = text.slice(triggerStart + 1, cursor);
+  if (/[@\s:]/u.test(query)) return null;
+  return { start: triggerStart, end: cursor, query };
+}
+
+function resolveCanvasNodeFileReference(ui, node) {
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  const assets = [ui.canvasAssets, ui.canvasAssetProjectAssets, ui.canvasLibraryAssets]
+    .flatMap((items) => Array.isArray(items) ? items : []);
+  const stableIdentity = resolveCanvasMediaStableIdentity(data, assets);
+  const referencedAsset = assets.find((asset) => {
+    const nodeAssetIds = [data.assetId, data.assetVersionId, data.asset?.id, data.asset?.assetId, data.asset?.assetVersionId]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+    const assetIds = [asset?.id, asset?.assetId, asset?.assetVersionId, asset?.latestVersion?.id, asset?.latestVersion?.assetVersionId]
+      .map((value) => String(value ?? "").trim());
+    return nodeAssetIds.some((id) => assetIds.includes(id));
+  });
+  const storageObjectId = [
+    data.storageObjectId,
+    data.storage_object_id,
+    data.sourceStorageObjectId,
+    data.resultStorageObjectId,
+    data.mediaStorageObjectId,
+    data.file?.storageObjectId,
+    data.asset?.storageObjectId,
+    data.asset?.latestVersion?.storageObjectId,
+    data.latestVersion?.storageObjectId,
+    data.artifact?.storageObjectId,
+    data.storage?.storageObjectId,
+    data.result?.storageObjectId,
+    stableIdentity.storageObjectId,
+    referencedAsset?.storageObjectId,
+    referencedAsset?.latestVersion?.storageObjectId,
+  ].map((value) => String(value ?? "").trim()).find(Boolean) ?? "";
+  return storageObjectId ? {
+    storageObjectId,
+    title: String(data.title ?? data.name ?? node?.title ?? node?.type ?? "画布文件").trim().slice(0, 120),
+  } : null;
+}
+
 function resolveSelectedAgentFileReference(ui = {}) {
   const nodeId = String(ui.selectedCanvasNodeId ?? "");
   const node = (Array.isArray(ui.canvasDocument?.nodes) ? ui.canvasDocument.nodes : [])
     .find((item) => String(item?.id ?? "") === nodeId);
   if (!node) return null;
-  const data = node.data && typeof node.data === "object" ? node.data : {};
-  const storageObjectId = String(
-    data.storageObjectId ?? data.file?.storageObjectId ?? data.asset?.storageObjectId ?? data.result?.storageObjectId ?? "",
-  ).trim();
-  return storageObjectId ? {
-    storageObjectId,
-    title: String(data.title ?? data.name ?? node.title ?? node.type ?? "画布文件").trim().slice(0, 120),
-  } : null;
+  return resolveCanvasNodeFileReference(ui, node);
 }
 
 function normalizeAgentFileGrant(grant = {}) {
@@ -1779,18 +2229,19 @@ function captureAgentTimelineScroll(timeline) {
   };
 }
 
-function restoreAgentTimelineScroll(timeline, state) {
+function restoreAgentTimelineScroll(timeline, state, forceStickToBottom = false) {
   if (!timeline) return;
+  const stickToBottom = forceStickToBottom || state?.stickToBottom;
   const apply = () => {
     const scrollHeight = Number(timeline.scrollHeight) || 0;
     const clientHeight = Number(timeline.clientHeight) || 0;
     const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
-    timeline.scrollTop = state?.stickToBottom
+    timeline.scrollTop = stickToBottom
       ? maxScrollTop
       : Math.min(Math.max(0, Number(state?.scrollTop) || 0), maxScrollTop);
   };
   apply();
-  if (state?.stickToBottom && typeof requestAnimationFrame === "function") {
+  if (stickToBottom && typeof requestAnimationFrame === "function") {
     requestAnimationFrame(apply);
   }
 }
@@ -1823,45 +2274,112 @@ export function collapseAgentTimelineEvents(events = []) {
     .sort((left, right) => Number(left?.sequence ?? 0) - Number(right?.sequence ?? 0));
 }
 
-function renderAgentTimeline(agent, canvasDocument = null) {
+function renderAgentTimeline(agent, canvasDocument = null, active = false) {
   const timelineEvents = collapseAgentTimelineEvents(agent.events).slice(-30);
-  const timelineMessages = collapseAgentGenerationMessages(agent.messages);
+  const timelineMessages = collapseAgentGenerationMessages(agent.messages)
+    .filter((message) => message.role !== "tool" || message.media || message.generationTaskId);
+  const taskFailed = Boolean(agent.taskId) && ["failed", "result_unknown", "manual_review_required"].includes(agent.status);
   const entries = [
     ...timelineMessages.map((message, index) => ({
       id: `message-${message.id || index}`,
       messageId: String(message.id ?? ""),
-      type: message.interjection ? "用户插话" : agentMessageLabel(message.role),
+      role: message.role,
+      type: message.interjection ? "用户追加" : agentMessageLabel(message.role),
       summary: message.text,
+      nodeReferences: message.nodeReferences,
       status: "message",
       kind: message.role === "assistant" ? "answer" : "message",
       citations: normalizeAgentCitations(message.citations),
       media: message.media ?? null,
       canvasNodeId: resolveAgentMediaCanvasNodeId(canvasDocument, message, message.media),
     })),
-    ...timelineEvents.map((event) => ({
+    ...(active ? [{
+      id: "agent-thinking",
+      status: "working",
+      summary: resolveAgentActivityMessage(timelineEvents),
+      activity: true,
+    }] : taskFailed ? [{
+      id: "agent-failed",
+      status: "failed",
+      summary: resolveAgentTaskFailure(timelineEvents),
+      failure: true,
+    }] : agent.taskId ? [] : timelineEvents.map((event) => ({
       id: event.id ?? `event-${event.sequence}`,
       type: agentEventLabel(event.eventType),
       summary: agentEventSummary(event),
       status: event.eventType,
       kind: agentEventKind(event),
       metadata: agentEventMetadata(event),
-    })),
+    }))),
   ].slice(-40);
   if (!entries.length) {
-    return '<div class="canvas-agent-empty"><strong>等待指令</strong><span>选择模式并发送消息后，这里会显示服务端任务事件。</span></div>';
+    return '<div class="canvas-agent-empty"><p>你好！我是灵曦AI的媒体创作工作流 Agent，可以帮你生成剧本、图片、视频内容。<br />有需求请告诉我哦~！我来帮你实现。</p></div>';
   }
-  return entries.map((entry) => `
-    <article class="canvas-agent-event" data-event-status="${escapeAttr(entry.status)}" data-event-kind="${escapeAttr(entry.kind)}">
+  return entries.map((entry) => entry.activity
+    ? `<div class="canvas-agent-thinking" role="status"><i aria-hidden="true"></i><span>${escapeHtml(entry.summary)}</span></div>`
+    : entry.failure
+      ? `<div class="canvas-agent-task-failed" role="status"><i aria-hidden="true"></i><span><strong>失败</strong><small>${escapeHtml(entry.summary || "任务执行失败，请稍后重试。")}</small></span></div>`
+    : `
+    <article class="canvas-agent-event" data-event-status="${escapeAttr(entry.status)}" data-event-kind="${escapeAttr(entry.kind)}" data-event-role="${escapeAttr(entry.role ?? "")}">
       <i aria-hidden="true"></i>
       <div>
         <span class="canvas-agent-event-title"><strong>${escapeHtml(entry.type)}</strong>${entry.kind && !["message", "answer"].includes(entry.kind) ? `<em>${escapeHtml(agentEventKindLabel(entry.kind))}</em>` : ""}</span>
-        ${entry.summary ? `<p>${escapeHtml(entry.summary)}</p>` : ""}
+        ${entry.summary ? `<p>${renderAgentMessageSummary(entry, canvasDocument)}</p>` : ""}
         ${entry.media ? renderAgentMedia(entry.media, entry.messageId, entry.canvasNodeId) : ""}
         ${entry.metadata?.length ? `<div class="canvas-agent-event-meta">${entry.metadata.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
         ${entry.citations?.length ? `<ol class="canvas-agent-citations" aria-label="引用来源">${entry.citations.map((citation) => renderAgentCitation(citation)).join("")}</ol>` : ""}
       </div>
     </article>
   `).join("");
+}
+
+function resolveAgentActivityMessage(events = []) {
+  const latest = [...events].reverse().find((entry) => entry?.eventType !== "task.interjected") ?? events.at(-1);
+  const event = latest?.event && typeof latest.event === "object" ? latest.event : {};
+  const eventType = String(latest?.eventType ?? "");
+  if (eventType === "task.created") return "正在准备任务";
+  if (eventType === "task.started") return "正在思考中";
+  if (eventType === "task.interjected") return "正在处理补充要求";
+  if (eventType === "task.replanned") return "正在调整执行计划";
+  if (eventType === "task.waiting_external" || eventType === "step.waiting_external") return "正在等待生成结果";
+  if (eventType === "step.waiting_approval" || eventType === "approval.requested") return "正在等待你的确认";
+  if (eventType === "step.created") {
+    return event.toolId ? `正在准备 ${event.toolId}` : "正在准备工具";
+  }
+  if (eventType === "step.running") {
+    return event.toolId ? `正在执行 ${event.toolId}` : "正在执行工具";
+  }
+  if (eventType === "step.succeeded") return event.toolId ? `正在完成 ${event.toolId}` : "正在整理结果";
+  return "正在思考中";
+}
+
+function resolveAgentTaskFailure(events = []) {
+  const reversed = [...events].reverse();
+  const failed = reversed.find((record) => {
+    const event = record?.event && typeof record.event === "object" ? record.event : {};
+    return String(record?.eventType ?? "") === "step.failed" && String(event.errorCode ?? "").trim();
+  }) ?? reversed.find((record) => {
+    const event = record?.event && typeof record.event === "object" ? record.event : {};
+    const eventType = String(record?.eventType ?? "");
+    return eventType === "task.failed"
+      || eventType === "step.failed"
+      || (eventType === "generation.completed_wakeup" && String(event.status ?? "").toLowerCase() === "failed");
+  });
+  const event = failed?.event && typeof failed.event === "object" ? failed.event : {};
+  const message = String(event.message ?? "").trim();
+  if (isHumanReadableAgentText(message)) return message;
+  const code = String(event.errorCode ?? event.failureCode ?? "").trim();
+  const labels = {
+    "402 Insufficient Balance": "模型服务余额不足",
+    provider_failed: "图片模型服务暂时不可用",
+    provider_stream_error: "模型服务响应中断",
+    canvas_agent_tool_input_invalid: "Agent 提交的工具参数无效",
+    canvas_agent_generation_model_required: "未选择可用的图片生成模型",
+    canvas_agent_generation_target_node_not_found: "引用的画布节点已不存在",
+    canvas_agent_generation_target_kind_mismatch: "引用节点类型与生成类型不匹配",
+  };
+  const detail = labels[code] ?? "任务执行失败";
+  return code ? `${detail}（${code}）` : `${detail}，请稍后重试。`;
 }
 
 export function normalizeAgentMessage(message = {}) {
@@ -1879,11 +2397,71 @@ export function normalizeAgentMessage(message = {}) {
     sequence: Number(message.sequence ?? 0),
     role,
     text,
+    nodeReferences: normalizeAgentNodeReferences(content.nodeReferences ?? message.nodeReferences),
     interjection: Boolean(message.interjection),
     citations: normalizeAgentCitations(content.citations),
     generationTaskId: String(content.generationTaskId ?? output.generationTaskId ?? ""),
     canvasNodeId: String(content.canvasNodeId ?? output.canvasNodeId ?? ""),
   };
+}
+
+function normalizeAgentNodeReferences(value) {
+  return (Array.isArray(value) ? value : []).map((reference) => ({
+    nodeId: String(reference?.nodeId ?? ""),
+    title: String(reference?.title ?? "画布节点"),
+    mediaKind: String(reference?.mediaKind ?? "node"),
+    fileGrantId: String(reference?.fileGrantId ?? ""),
+  })).filter((reference) => reference.nodeId);
+}
+
+function renderAgentMessageSummary(entry, canvasDocument) {
+  const text = String(entry?.summary ?? "");
+  const references = normalizeAgentNodeReferences(entry?.nodeReferences);
+  if (entry?.role !== "user" || !references.length) return escapeHtml(text);
+  const referencesByTitle = new Map();
+  for (const reference of references) {
+    const title = reference.title.trim();
+    referencesByTitle.set(title, [...(referencesByTitle.get(title) ?? []), reference]);
+  }
+  let cursor = 0;
+  let html = "";
+  for (const match of text.matchAll(/【@([^】]+)】/gu)) {
+    const index = Number(match.index ?? 0);
+    html += escapeHtml(text.slice(cursor, index));
+    const title = String(match[1] ?? "").trim();
+    const reference = referencesByTitle.get(title)?.shift();
+    html += reference
+      ? renderAgentMessageNodeReference(reference, canvasDocument)
+      : escapeHtml(match[0]);
+    cursor = index + match[0].length;
+  }
+  return html + escapeHtml(text.slice(cursor));
+}
+
+function renderAgentMessageNodeReference(reference, canvasDocument) {
+  const node = (Array.isArray(canvasDocument?.nodes) ? canvasDocument.nodes : [])
+    .find((candidate) => String(candidate?.id ?? "") === reference.nodeId);
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  const rawKind = String(reference.mediaKind ?? data.mediaKind ?? node?.type ?? "node").toLowerCase();
+  const mediaKind = rawKind.includes("video")
+    ? "video"
+    : rawKind.includes("audio")
+      ? "audio"
+      : rawKind.includes("image") ? "image" : rawKind;
+  const source = ["image", "video", "audio"].includes(mediaKind)
+    ? resolveCanvasMediaNodeSource(node ?? { data }, mediaKind)
+    : "";
+  const poster = mediaKind === "video" ? String(data.thumbnailUrl ?? data.posterUrl ?? "").trim() : "";
+  const thumb = mediaKind === "video" && source
+    ? (poster
+        ? `<img src="${escapeAttr(poster)}" alt="" draggable="false" />`
+        : `<video src="${escapeAttr(source)}" muted playsinline preload="metadata" aria-hidden="true"></video>`)
+    : mediaKind === "image" && source
+      ? `<img src="${escapeAttr(source)}" alt="" draggable="false" />`
+      : `<span class="episode-prompt-editor-mention-fallback" aria-hidden="true">${escapeHtml(reference.title.slice(0, 1) || "@")}</span>`;
+  return `<span class="episode-prompt-editor-mention canvas-agent-message-node-reference" data-node-id="${escapeAttr(reference.nodeId)}" aria-label="引用节点${escapeAttr(reference.title)}" title="节点：${escapeAttr(reference.title)}">
+    ${thumb}<span class="episode-prompt-editor-mention-label">${escapeHtml(reference.title)}</span>
+  </span>`;
 }
 
 export function collapseAgentGenerationMessages(messages = []) {
@@ -2035,7 +2613,7 @@ function renderAgentCitation(citation) {
 }
 
 function agentMessageLabel(role) {
-  return { system: "系统", user: "用户", assistant: "Agent", tool: "工具" }[role] ?? "Agent";
+  return { system: "系统", user: "用户", assistant: "灵曦", tool: "工具" }[role] ?? "灵曦";
 }
 
 function findPendingApproval(events = [], skippedStepIds = []) {
@@ -2080,12 +2658,12 @@ export function resolveAgentApprovalPresentation(events = [], approvalEvent = nu
 }
 
 function renderAgentApprovalCard(approval, busy) {
-  return `<section class="canvas-agent-approval" data-approval-effect="${escapeAttr(approval.effect)}" aria-label="${escapeAttr(`${approval.label}待确认`)}">
+  const summary = isHumanReadableAgentText(approval.summary) ? approval.summary : "该操作需要你的确认后才能继续。";
+  return `<section class="canvas-agent-approval" data-approval-effect="${escapeAttr(approval.effect)}"${approval.toolId ? ` data-agent-tool-id="${escapeAttr(approval.toolId)}"` : ""} aria-label="${escapeAttr(`${approval.label}待确认`)}">
     <div class="canvas-agent-approval-head">
       <span class="canvas-agent-approval-badge">待确认 · ${escapeHtml(approval.label)}</span>
-      ${approval.toolId ? `<code>${escapeHtml(approval.toolId)}</code>` : ""}
     </div>
-    ${approval.summary ? `<p>${escapeHtml(approval.summary)}</p>` : ""}
+    <p>${escapeHtml(summary)}</p>
     <small>${escapeHtml(approval.detail)}</small>
     <div class="canvas-agent-approval-actions">
       <button type="button" class="danger" data-agent-action="reject" data-approval-id="${escapeAttr(approval.approvalId)}" ${busy ? "disabled" : ""}>拒绝</button>
@@ -2094,8 +2672,14 @@ function renderAgentApprovalCard(approval, busy) {
   </section>`;
 }
 
+function isHumanReadableAgentText(value) {
+  const text = String(value ?? "").trim();
+  return Boolean(text) && !/^[a-z][a-z0-9_.:-]*(?:_[a-z0-9_.:-]+)*$/i.test(text);
+}
+
 function statusFromEvent(event) {
   const type = String(event?.eventType ?? "");
+  if (type === "task.interjected") return "";
   if (type === "approval.requested") return "waiting_approval";
   if (type === "approval.approved" || type === "task.resumed" || type === "task.replanned") return "queued";
   if (type === "approval.rejected") return "canceled";
@@ -2118,7 +2702,7 @@ function agentStatusLabel(agent) {
 
 function agentEventLabel(type) {
   const labels = {
-    "task.created": "任务创建", "task.started": "开始执行", "task.succeeded": "Agent 回复",
+    "task.created": "任务创建", "task.started": "开始执行", "task.succeeded": "灵曦回复",
     "task.failed": "执行失败", "task.paused": "任务暂停", "task.resumed": "继续执行",
     "task.stop_requested": "请求停止", "task.replanned": "重新规划", "task.interjected": "已接收插话",
     "step.created": "准备工具", "step.running": "工具执行中", "step.succeeded": "工具完成",
@@ -2160,12 +2744,14 @@ function agentEventMetadata(record) {
   const promptTokens = normalizeAgentTokenCount(tokenUsage.promptTokens);
   const completionTokens = normalizeAgentTokenCount(tokenUsage.completionTokens);
   const totalTokens = normalizeAgentTokenCount(tokenUsage.totalTokens) || promptTokens + completionTokens;
+  const creditUsage = event.creditUsage && typeof event.creditUsage === "object" ? event.creditUsage : {};
+  const consumedCredits = normalizeAgentTokenCount(creditUsage.consumedCredits);
   const values = [
     totalTokens ? `实际 Token ${formatAgentTokenCount(totalTokens)}` : "",
+    consumedCredits ? `实际扣除 ${formatAgentTokenCount(consumedCredits)} 积分` : "",
     event.toolId ? `工具 ${event.toolId}` : "",
     event.decision ? `决策 ${event.decision}` : "",
     event.errorCode || event.failureCode ? `错误 ${event.errorCode ?? event.failureCode}` : "",
-    event.stepId ? `步骤 ${event.stepId}` : "",
     event.providerRequestId ? `请求 ${event.providerRequestId}` : "",
     event.generationTaskId ? `媒体任务 ${event.generationTaskId}` : "",
   ].filter(Boolean);
@@ -2187,6 +2773,11 @@ function agentEventSummary(record) {
   const failureCode = eventType.endsWith(".failed") || eventType.endsWith(".rejected")
     ? event.errorCode ?? event.failureCode
     : null;
+  if (["approval.requested", "policy.decided"].includes(eventType)) {
+    const detail = event.message ?? event.reason;
+    if (isHumanReadableAgentText(detail)) return String(detail);
+    return eventType === "approval.requested" ? "等待你的确认" : "正在确认执行方式";
+  }
   return String(
     failureCode ?? event.message ?? event.reason ?? event.toolId ?? event.effect ?? event.status ?? event.errorCode ?? event.failureCode ??
     (event.stepId ? `步骤 ${event.stepId}` : "状态已更新"),
