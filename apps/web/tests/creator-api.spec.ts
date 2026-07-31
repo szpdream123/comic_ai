@@ -1248,6 +1248,32 @@ test("deleteShotMedia targets explicit shot media resource when assetVersionId i
   assert.equal(calls[0].options.credentials, "include");
 });
 
+test("deleteFileResource treats an already missing resource as a recoverable result", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: false,
+      status: 404,
+      text: async () => JSON.stringify({
+        errorCode: "resource_not_found",
+        message: "资源不存在或已被删除。",
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const result = await creatorApi.deleteFileResource("episode/1", "file/1", {
+    assetVersionId: "asset-version-1",
+    storageObjectId: "file/1",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/episodes/episode%2F1/file-resources/file%2F1");
+  assert.equal(calls[0].options.method, "DELETE");
+  assert.deepEqual(result, { deleted: false, missing: true });
+});
+
 test("deleteShotMedia treats missing shot media as a recoverable result", async () => {
   globalThis.fetch = async () => ({
     ok: false,

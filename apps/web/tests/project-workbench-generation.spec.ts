@@ -52,6 +52,7 @@ import {
   resolveCanvasGraphFitNodes,
   resolveCanvasCenteringDelta,
   resolveCanvasRevisionConflictForTest,
+  saveEpisodeAssetDescriptionForTest,
   saveProjectCanvasNowForTest,
   scheduleProjectCanvasSaveForTest,
   stopCanvasLiveSubscriptionForTest,
@@ -62,6 +63,7 @@ import {
   syncTeamMemberCreateDraftFromDomForTest,
   syncCanvasProjectsFromApiForTest,
   syncEpisodeStoryboardMapForTest,
+  syncEpisodeWorkbenchAssetStageStateDomForTest,
   syncEpisodeAssetDescriptionState,
   updatePromptMentionState,
   updateStoryboardDescriptionFromInputForTest,
@@ -2168,7 +2170,7 @@ describe("episode workbench asset list layout", () => {
       enterWorkbenchBlock.indexOf('runLazyWorkbenchTask(workbench, "episode workbench history hydration"'),
     );
 
-    assert.match(enterWorkbenchBlock, /resetEpisodeWorkbenchAssets\(workbench\)/);
+    assert.match(enterWorkbenchBlock, /resetEpisodeWorkbenchAssets\(workbench, \{ preserveSelection: true \}\)/);
     assert.match(enterWorkbenchBlock, /requestedScopeMode === "storyboard"[\s\S]*?loadEpisodeStoryboardsForWorkbench/);
     assert.match(enterWorkbenchBlock, /requestedScopeMode === "assets"[\s\S]*?ensureEpisodeWorkbenchAssetsHydrated\(workbench\)/);
     assert.match(lazyHydrationBlock, /ensureEpisodeWorkbenchAssetsHydrated\(workbench\)/);
@@ -3368,6 +3370,61 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.state.projectDetail.assetsByType.character[0].latestVersion.metadata.description, "新角色文案");
     assert.equal(workbench.ui.assetPromptDraft.selectionContext.selectedAssetDescription, "新角色文案");
     assert.equal(workbench.ui.assetPromptDraft.quickReferenceItems[0].promptPreview, "新角色文案");
+  });
+
+  it("shows a success toast after an episode asset description is persisted", async () => {
+    const assetId = "a71c2367-d9fd-42ec-a2df-78b30c72f753";
+    const calls = [];
+    const workbench = {
+      state: {
+        project: { id: "project-1", aspectRatio: "9:16" },
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "10000000-0000-4000-8000-000000000001", title: "真实剧集" }],
+          assetsByType: { character: [], scene: [], prop: [] },
+          shots: [],
+        },
+      },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000001",
+        museScopeMode: "assets",
+        projectAssetTab: "scene",
+        selectedEpisodeAssetId: assetId,
+        selectedEpisodeCardId: assetId,
+        importedAssets: {
+          character: [],
+          scene: [{ id: assetId, assetId, name: "东京湾", description: "旧描述" }],
+          prop: [],
+          other: { image: [], video: [], audio: [] },
+        },
+      },
+      api: {
+        async updateEpisodeAsset(episodeId, targetAssetId, payload) {
+          calls.push({ episodeId, targetAssetId, payload });
+          return { asset: { assetId: targetAssetId, ...payload } };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+    };
+    installWorkbenchToastQueueForTest(workbench);
+
+    await saveEpisodeAssetDescriptionForTest(workbench, "scene", assetId, "新场景描述");
+
+    assert.deepEqual(calls, [{
+      episodeId: "10000000-0000-4000-8000-000000000001",
+      targetAssetId: assetId,
+      payload: { description: "新场景描述" },
+    }]);
+    assert.equal(workbench.ui.toast, "修改成功");
   });
 
   it("quick references the selected storyboard text and media before falling back to assets", () => {
@@ -16860,6 +16917,250 @@ describe("production workbench project tab", () => {
     assert.ok(requestOrder.indexOf("asset-library") > 1);
   });
 
+  it("restores the persisted asset selection and its conversation when reopening the workbench", async () => {
+    const episodeId = "episode-asset-refresh-selection";
+    const conversationCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [{ id: episodeId, title: "刷新选中项", status: "draft" }],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        projectAssetTab: "scene",
+        selectedEpisodeId: episodeId,
+        selectedEpisodeAssetId: "scene-refresh-2",
+        selectedEpisodeCardId: "scene-refresh-2",
+        episodeWorkbenchContextLoadedEpisodeId: null,
+        episodeWorkbenchAssetsLoadedEpisodeId: null,
+      }),
+      api: {
+        async getEpisodeWorkbench() {
+          return {
+            project: { projectId: "project-1" },
+            episode: { projectId: "project-1" },
+          };
+        },
+        async listEpisodeAssets() {
+          return {
+            items: [
+              { id: "scene-refresh-1", assetType: "scene", name: "场景一" },
+              { id: "scene-refresh-2", assetType: "scene", name: "场景二" },
+            ],
+          };
+        },
+        async getAssetConversationHistory(_episodeId, assetId, mediaKind) {
+          conversationCalls.push({ assetId, mediaKind });
+          return {
+            entries: assetId === "scene-refresh-2"
+              ? [{ taskId: "scene-refresh-history", status: "completed", fixedImages: [{ id: "image-1", url: "/image-1.png" }] }]
+              : [],
+          };
+        },
+        async listGenerationConfig() {
+          return { models: [] };
+        },
+        async getAssetLibrary() {
+          return { assets: [] };
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(workbench.ui.selectedEpisodeAssetId, "scene-refresh-2");
+    assert.equal(workbench.ui.selectedEpisodeCardId, "scene-refresh-2");
+    assert.deepEqual(conversationCalls, [{ assetId: "scene-refresh-2", mediaKind: "image" }]);
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "scene-refresh-history");
+  });
+
+  it("shares an in-flight asset hydration when the workbench is restored twice", async () => {
+    const episodeId = "episode-asset-refresh-race";
+    let resolveAssets;
+    const pendingAssets = new Promise((resolve) => {
+      resolveAssets = resolve;
+    });
+    let assetCalls = 0;
+    const conversationCalls = [];
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [{ id: episodeId, title: "刷新竞态", status: "draft" }],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        projectAssetTab: "scene",
+        selectedEpisodeId: episodeId,
+        selectedEpisodeAssetId: "scene-race-2",
+        selectedEpisodeCardId: "scene-race-2",
+        episodeWorkbenchContextLoadedEpisodeId: null,
+        episodeWorkbenchAssetsLoadedEpisodeId: null,
+      }),
+      api: {
+        async getEpisodeWorkbench() {
+          return {
+            project: { projectId: "project-1" },
+            episode: { projectId: "project-1" },
+          };
+        },
+        async listEpisodeAssets() {
+          assetCalls += 1;
+          return pendingAssets;
+        },
+        async getAssetConversationHistory(_episodeId, assetId, mediaKind) {
+          conversationCalls.push({ assetId, mediaKind });
+          return {
+            entries: [{ taskId: "scene-race-history", status: "completed", fixedImages: [{ id: "image-race", url: "/image-race.png" }] }],
+          };
+        },
+        async listGenerationConfig() {
+          return { models: [] };
+        },
+        async getAssetLibrary() {
+          return { assets: [] };
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    const firstEnter = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId },
+    });
+    await Promise.resolve();
+    const secondEnter = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-episode-workbench", episodeId },
+    });
+    resolveAssets({
+      items: [
+        { id: "scene-race-1", assetType: "scene", name: "场景一" },
+        { id: "scene-race-2", assetType: "scene", name: "场景二" },
+      ],
+    });
+    await Promise.all([firstEnter, secondEnter]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(assetCalls, 1);
+    assert.equal(workbench.ui.selectedEpisodeAssetId, "scene-race-2");
+    assert.deepEqual(conversationCalls, [{ assetId: "scene-race-2", mediaKind: "image" }]);
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "scene-race-history");
+  });
+
+  it("waits for an in-flight asset conversation before completing duplicate refresh hydration", async () => {
+    let resolveConversation;
+    const pendingConversation = new Promise((resolve) => {
+      resolveConversation = resolve;
+    });
+    let conversationCalls = 0;
+    const workbench = {
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          ...buildProjectState().projectDetail,
+          episodes: [{ id: "episode-conversation-refresh-race", title: "会话刷新竞态", status: "draft" }],
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-conversation-refresh-race",
+        selectedEpisodeAssetId: "scene-conversation-refresh-race",
+        selectedEpisodeCardId: "scene-conversation-refresh-race",
+      }),
+      api: {
+        async getAssetConversationHistory() {
+          conversationCalls += 1;
+          return pendingConversation;
+        },
+      },
+    };
+
+    const firstLoad = loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" });
+    await Promise.resolve();
+    let duplicateLoadSettled = false;
+    const duplicateLoad = loadSelectedAssetConversationHistory(workbench, { mediaKind: "image" }).then((entries) => {
+      duplicateLoadSettled = true;
+      return entries;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(duplicateLoadSettled, false);
+    assert.equal(conversationCalls, 1);
+
+    resolveConversation({
+      entries: [
+        {
+          taskId: "scene-conversation-refresh-history",
+          status: "completed",
+          fixedImages: [{ id: "image-race", url: "/image-race.png" }],
+        },
+      ],
+    });
+    await Promise.all([firstLoad, duplicateLoad]);
+
+    assert.equal(duplicateLoadSettled, true);
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "scene-conversation-refresh-history");
+  });
+
+  it("keeps the asset stage visibility classes in sync after partial history hydration", () => {
+    const classes = new Set(["asset-scope", "empty-composer"]);
+    const center = {
+      classList: {
+        toggle(name, enabled) {
+          if (enabled) {
+            classes.add(name);
+          } else {
+            classes.delete(name);
+          }
+        },
+      },
+    };
+    let hasConversationEntry = true;
+    const stageBody = {
+      closest() {
+        return center;
+      },
+      querySelector() {
+        return hasConversationEntry ? {} : null;
+      },
+    };
+    const workbench = { ui: { museScopeMode: "assets" } };
+
+    syncEpisodeWorkbenchAssetStageStateDomForTest(workbench, stageBody);
+    assert.equal(classes.has("empty-composer"), false);
+    assert.equal(classes.has("has-generated-stage"), true);
+
+    hasConversationEntry = false;
+    syncEpisodeWorkbenchAssetStageStateDomForTest(workbench, stageBody);
+    assert.equal(classes.has("empty-composer"), true);
+    assert.equal(classes.has("has-generated-stage"), false);
+  });
+
   it("reloads same-episode assets instead of reusing project assets from shared state", async () => {
     const episodeId = "episode-asset-isolation";
     const assetCalls = [];
@@ -25827,7 +26128,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.toast, "已设为场景固定图。");
   });
 
-  it("deletes only the selected asset conversation result through the backend route", async () => {
+  it("deletes the current asset conversation result when its persisted selection context is stale", async () => {
     const calls = [];
     const remainingEntry = {
       taskId: "asset-image-character-2",
@@ -25855,7 +26156,7 @@ describe("production workbench project tab", () => {
       quickReferenceItems: [],
       selectionContext: {
         assetTab: "character",
-        selectedAssetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+        selectedAssetId: "stale-asset-selection-id",
         selectedAssetName: "废土主角",
       },
       fixedImages: [
@@ -25904,7 +26205,7 @@ describe("production workbench project tab", () => {
       api: {
         async deleteFileResource(episodeId, fileId, payload) {
           calls.push({ type: "file", episodeId, fileId, payload });
-          return { deleted: true };
+          return { deleted: false, missing: true };
         },
         async deleteAssetConversationTurn(episodeId, assetId, taskId, mediaMode) {
           calls.push({ type: "conversation", episodeId, assetId, taskId, mediaMode });
@@ -25920,6 +26221,7 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
     };
 
+    installWorkbenchToastQueueForTest(workbench);
     await handleWorkbenchActionForTest(workbench, {
       dataset: {
         action: "episode-fixed-result-action",
@@ -25965,6 +26267,10 @@ describe("production workbench project tab", () => {
       [remainingEntry],
     );
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-character-2");
+    assert.doesNotMatch(workbench.root.innerHTML, /generated-character-1\.png/);
+    assert.equal(workbench.ui.toastQueue.at(-1)?.message, "已删除当前结果。");
+    assert.equal(workbench.ui.toastQueue.at(-1)?.persistent, false);
+    assert.match(workbench.root.innerHTML, /已删除当前结果。/);
   });
 
   it("deletes a failed asset conversation result by turn id when no task id exists", async () => {
@@ -25976,7 +26282,7 @@ describe("production workbench project tab", () => {
       failureCode: "batch_image_task_failed",
       failure: { displayMessage: "request_timeout" },
       selectionContext: {
-        selectedAssetId: "a71c2367-d9fd-42ec-a2df-78b30c72f753",
+        selectedAssetId: "stale-asset-selection-id",
       },
       fixedImages: [],
     };

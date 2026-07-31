@@ -8611,8 +8611,24 @@ function renderEpisodeWorkbenchSelectionOnly(workbench) {
   syncEpisodeWorkbenchSelectedStoryboardDom(workbench);
   syncEpisodeWorkbenchStageTitleDom(workbench);
   renderEpisodeWorkbenchStageBodyOnly(workbench);
+  syncEpisodeWorkbenchAssetStageStateDomForTest(workbench, stageBody);
   renderEpisodeWorkbenchPromptDockOnly(workbench, { preserveControls: true });
   return true;
+}
+
+export function syncEpisodeWorkbenchAssetStageStateDomForTest(workbench, stageBody) {
+  if ((workbench?.ui?.museScopeMode ?? "storyboard") !== "assets" || !stageBody) {
+    return;
+  }
+  const center = stageBody.closest?.(".episode-replica-center.asset-scope");
+  if (!center?.classList) {
+    return;
+  }
+  const hasConversationEntries = Boolean(
+    stageBody.querySelector?.(".episode-replica-asset-conversation-entry"),
+  );
+  center.classList.toggle("has-generated-stage", hasConversationEntries);
+  center.classList.toggle("empty-composer", !hasConversationEntries);
 }
 
 function renderEpisodeWorkbenchHydratedSurfacesOnly(workbench) {
@@ -15036,10 +15052,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         mediaKind: "image",
         taskId: resultId,
         selectedAssetId:
-        imageResult?.selectionContext?.selectedAssetId ??
-        workbench.ui.selectedEpisodeAssetId ??
-        workbench.ui.selectedEpisodeCardId ??
-        null,
+          workbench.ui.selectedEpisodeAssetId ??
+          workbench.ui.selectedEpisodeCardId ??
+          imageResult?.selectionContext?.selectedAssetId ??
+          null,
       };
       render(workbench);
       return;
@@ -25446,6 +25462,10 @@ export function persistStoryboardCardDescriptionForTest(workbench, storyboard, d
   return persistStoryboardCardDescription(workbench, storyboard, description);
 }
 
+export function saveEpisodeAssetDescriptionForTest(workbench, assetKind, assetId, value) {
+  return saveEpisodeAssetDescription(workbench, assetKind, assetId, value);
+}
+
 export function isNativeMediaControlInteractionForTest(eventTarget, event) {
   return isNativeMediaControlInteraction(eventTarget, event);
 }
@@ -29224,8 +29244,11 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     ? loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId)
     : null;
   workbench.ui.episodeWorkbenchError = "";
-  if (workbench.ui.episodeWorkbenchContextLoadedEpisodeId !== resolvedEpisodeId) {
-    resetEpisodeWorkbenchAssets(workbench);
+  if (
+    workbench.ui.episodeWorkbenchContextLoadedEpisodeId !== resolvedEpisodeId &&
+    workbench.ui.episodeWorkbenchAssetsRequestEpisodeId !== resolvedEpisodeId
+  ) {
+    resetEpisodeWorkbenchAssets(workbench, { preserveSelection: true });
   }
 
   if (!resolvedEpisodeId) {
@@ -29430,7 +29453,9 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   });
 }
 
-function resetEpisodeWorkbenchAssets(workbench) {
+function resetEpisodeWorkbenchAssets(workbench, options = {}) {
+  const selectedEpisodeCardId = workbench.ui.selectedEpisodeCardId ?? null;
+  const selectedEpisodeAssetId = workbench.ui.selectedEpisodeAssetId ?? null;
   workbench.ui.importedAssets = {
     ...(workbench.ui.importedAssets ?? {}),
     character: [],
@@ -29447,6 +29472,10 @@ function resetEpisodeWorkbenchAssets(workbench) {
   workbench.ui.selectedEpisodeAssetIds = [];
   workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId = null;
   workbench.ui.episodeWorkbenchAssetsRequestEpisodeId = null;
+  if (options.preserveSelection === true) {
+    workbench.ui.selectedEpisodeCardId = selectedEpisodeCardId;
+    workbench.ui.selectedEpisodeAssetId = selectedEpisodeAssetId;
+  }
 }
 
 function removeEpisodeAssetFromImportedAssets(workbench, assetId) {
@@ -29564,17 +29593,25 @@ async function ensureEpisodeWorkbenchAssetsHydrated(workbench, options = {}) {
   ) {
     return workbench.ui.importedAssets;
   }
-  if (!force && workbench.ui.episodeWorkbenchAssetsRequestEpisodeId === episodeId) {
-    return workbench.ui.importedAssets;
+  if (
+    !force &&
+    workbench.ui.episodeWorkbenchAssetsRequestEpisodeId === episodeId &&
+    workbench.episodeWorkbenchAssetsRequestPromise
+  ) {
+    return workbench.episodeWorkbenchAssetsRequestPromise;
   }
 
   workbench.ui.episodeWorkbenchAssetsRequestEpisodeId = episodeId;
-  try {
-    const assets = await loadEpisodeAssetsForWorkbench(workbench, episodeId);
+  const requestPromise = loadEpisodeAssetsForWorkbench(workbench, episodeId).then((assets) => {
     workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId = episodeId;
     return assets;
+  });
+  workbench.episodeWorkbenchAssetsRequestPromise = requestPromise;
+  try {
+    return await requestPromise;
   } finally {
-    if (workbench.ui.episodeWorkbenchAssetsRequestEpisodeId === episodeId) {
+    if (workbench.episodeWorkbenchAssetsRequestPromise === requestPromise) {
+      workbench.episodeWorkbenchAssetsRequestPromise = null;
       workbench.ui.episodeWorkbenchAssetsRequestEpisodeId = null;
     }
   }
@@ -37022,9 +37059,9 @@ async function deleteAssetGenerationResult(workbench, draft = {}) {
   const firstImage = Array.isArray(imageResult?.fixedImages) ? imageResult.fixedImages[0] : null;
   const selectedAssetId =
     draft.selectedAssetId ??
-    imageResult?.selectionContext?.selectedAssetId ??
     workbench.ui.selectedEpisodeAssetId ??
     workbench.ui.selectedEpisodeCardId ??
+    imageResult?.selectionContext?.selectedAssetId ??
     null;
   const resultId =
     String(imageResult?.taskId ?? "").trim() ||
@@ -37074,8 +37111,10 @@ async function deleteAssetGenerationResult(workbench, draft = {}) {
         "image",
       );
     }
+    workbench.ui.busy = false;
     workbench.ui.toast = "已删除当前结果。";
   } catch (error) {
+    workbench.ui.busy = false;
     workbench.ui.toast = `删除失败：${friendlyError(error)}`;
   } finally {
     workbench.ui.busy = false;
@@ -37506,6 +37545,19 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
+  const pendingRequest = !force
+    ? workbench.storyboardConversationHistoryRequestPromises?.[historyKey]
+    : null;
+  if (pendingRequest) {
+    try {
+      await pendingRequest;
+    } catch {
+      // The original caller applies the existing fallback path for this request.
+    }
+    syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
+    await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
+    return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
+  }
   if (workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
@@ -37519,16 +37571,22 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   }
+  let activeRequestPromise = null;
   try {
     workbench.ui.storyboardConversationHistoryPendingKeys = {
       ...(workbench.ui.storyboardConversationHistoryPendingKeys ?? {}),
       [historyKey]: true,
     };
-    const response = await workbench.api.getStoryboardConversationHistory(
+    activeRequestPromise = workbench.api.getStoryboardConversationHistory(
       workbench.ui.selectedEpisodeId,
       resolveStoryboardConversationApiId(workbench, storyboardId),
       mediaKind,
     );
+    workbench.storyboardConversationHistoryRequestPromises = {
+      ...(workbench.storyboardConversationHistoryRequestPromises ?? {}),
+      [historyKey]: activeRequestPromise,
+    };
+    const response = await activeRequestPromise;
     const entries = Array.isArray(response?.entries) ? response.entries : [];
     replaceStoryboardConversationHistoryEntries(workbench, storyboardId, entries, mediaKind);
     workbench.ui.storyboardConversationHistoryLoadedKeys = {
@@ -37543,7 +37601,16 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   } finally {
-    if (workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
+    const currentRequest = workbench.storyboardConversationHistoryRequestPromises?.[historyKey] ?? null;
+    const shouldClearRequest = activeRequestPromise
+      ? currentRequest === activeRequestPromise
+      : currentRequest === null;
+    if (shouldClearRequest) {
+      const nextRequests = { ...(workbench.storyboardConversationHistoryRequestPromises ?? {}) };
+      delete nextRequests[historyKey];
+      workbench.storyboardConversationHistoryRequestPromises = nextRequests;
+    }
+    if (shouldClearRequest && workbench.ui.storyboardConversationHistoryPendingKeys?.[historyKey]) {
       const nextPending = { ...(workbench.ui.storyboardConversationHistoryPendingKeys ?? {}) };
       delete nextPending[historyKey];
       workbench.ui.storyboardConversationHistoryPendingKeys = nextPending;
@@ -37769,6 +37836,19 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
+  const pendingRequest = !force
+    ? workbench.assetConversationHistoryRequestPromises?.[historyKey]
+    : null;
+  if (pendingRequest) {
+    try {
+      await pendingRequest;
+    } catch {
+      // The original caller applies the existing fallback path for this request.
+    }
+    syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
+    await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  }
   if (workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
@@ -37782,16 +37862,22 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   }
+  let activeRequestPromise = null;
   try {
     workbench.ui.assetConversationHistoryPendingKeys = {
       ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}),
       [historyKey]: true,
     };
-    const response = await workbench.api.getAssetConversationHistory(
+    activeRequestPromise = workbench.api.getAssetConversationHistory(
       workbench.ui.selectedEpisodeId,
       assetId,
       mediaKind,
     );
+    workbench.assetConversationHistoryRequestPromises = {
+      ...(workbench.assetConversationHistoryRequestPromises ?? {}),
+      [historyKey]: activeRequestPromise,
+    };
+    const response = await activeRequestPromise;
     const entries = Array.isArray(response?.entries) ? response.entries : [];
     const localEntry = resolvePreferredAssetConversationLocalEntry(workbench, assetId, mediaKind);
     replaceAssetConversationHistoryEntries(
@@ -37815,7 +37901,16 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   } finally {
-    if (workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
+    const currentRequest = workbench.assetConversationHistoryRequestPromises?.[historyKey] ?? null;
+    const shouldClearRequest = activeRequestPromise
+      ? currentRequest === activeRequestPromise
+      : currentRequest === null;
+    if (shouldClearRequest) {
+      const nextRequests = { ...(workbench.assetConversationHistoryRequestPromises ?? {}) };
+      delete nextRequests[historyKey];
+      workbench.assetConversationHistoryRequestPromises = nextRequests;
+    }
+    if (shouldClearRequest && workbench.ui.assetConversationHistoryPendingKeys?.[historyKey]) {
       const nextPending = { ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}) };
       delete nextPending[historyKey];
       workbench.ui.assetConversationHistoryPendingKeys = nextPending;
@@ -43199,6 +43294,12 @@ function syncSelectedEpisodeAssetForCurrentTab(workbench) {
     assetTab === "other"
       ? workbench.ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
       : workbench.ui.importedAssets?.[assetTab] ?? [];
+  if (
+    assetEntries.length === 0 &&
+    workbench.ui.episodeWorkbenchAssetsLoadedEpisodeId !== workbench.ui.selectedEpisodeId
+  ) {
+    return workbench.ui.selectedEpisodeCardId ?? workbench.ui.selectedEpisodeAssetId ?? null;
+  }
   const selectedId =
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeCardId)?.id ??
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeAssetId)?.id ??
@@ -44612,6 +44713,7 @@ async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value)
   }
 
   syncEpisodeAssetDescriptionState(workbench, assetKind, assetId, description);
+  workbench.ui.toast = "修改成功";
 
   if (
     isRealEpisodeWorkbench(workbench) &&

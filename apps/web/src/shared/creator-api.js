@@ -2832,7 +2832,12 @@ export const creatorApi = {
     return deleteJson(
       `/api/episodes/${encodeURIComponent(episodeId)}/file-resources/${encodeURIComponent(fileId)}`,
       input,
-    );
+    ).catch((error) => {
+      if (error?.status === 404 && error?.errorCode === "resource_not_found") {
+        return { deleted: false, missing: true };
+      }
+      throw error;
+    });
   },
 
   createEpisodeExportTask(episodeId, input, options = {}) {
