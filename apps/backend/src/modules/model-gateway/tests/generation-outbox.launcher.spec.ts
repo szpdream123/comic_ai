@@ -22,6 +22,10 @@ describe("generation queue launchers", () => {
     assert.match(launcherScript, /dispatchIntervalMs/);
     assert.match(launcherScript, /generationOutboxDispatcherHeartbeatKey/);
     assert.match(launcherScript, /writeDispatcherHeartbeat/);
+    assert.match(launcherScript, /connectTimeout:\s*2_000/);
+    assert.match(launcherScript, /commandTimeout:\s*5_000/);
+    assert.match(launcherScript, /maxRetriesPerRequest:\s*1/);
+    assert.match(launcherScript, /enableOfflineQueue:\s*false/);
     assert.match(launcherScript, /Dispatcher stalled/);
     assert.match(launcherScript, /Math\.max\(120_000, heartbeatTtlMs \* 2\)/);
     assert.match(launcherScript, /process\.exit\(1\)/);

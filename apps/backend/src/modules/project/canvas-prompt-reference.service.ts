@@ -126,6 +126,7 @@ export interface CanvasPromptDramaExecutionBinding {
     referenceId: string;
     storageObjectId: string | null;
     assetVersionId: string | null;
+    url?: string | null;
   }>;
 }
 
@@ -145,12 +146,14 @@ export function applyCanvasPromptDramaBindings(
       storageObjectId: item.storageObjectId,
       url: `/api/storage/objects/${encodeURIComponent(item.storageObjectId!)}/content`,
     }])).values()];
+  const directReferences = [...new Map(references
+    .filter((item) => !item.assetVersionId && !item.storageObjectId && item.url)
+    .map((item) => [item.url!, { url: item.url }])).values()];
+  const referenceImages = [...arrayList(parameters.referenceImages), ...storageReferences, ...directReferences];
   return {
     ...parameters,
     ...(referenceAssetVersionIds.length ? { referenceAssetVersionIds } : {}),
-    ...(storageReferences.length
-      ? { referenceImages: [...arrayList(parameters.referenceImages), ...storageReferences] }
-      : {}),
+    ...(referenceImages.length ? { referenceImages } : {}),
   };
 }
 
@@ -392,6 +395,8 @@ async function resolveReference(
   if (reference.type === "drama") {
     const character = await resolveCanvasCharacterReference(db, scope, reference);
     if (character) return character;
+    const libraryAsset = await resolveLibraryAssetReference(db, scope, reference);
+    if (libraryAsset) return libraryAsset;
     return resolveTeamAssetReference(db, scope, reference);
   }
   if (reference.type === "voice") {
@@ -649,6 +654,80 @@ async function resolveTeamAssetReference(
         contentHash,
       },
     } : {}),
+  };
+}
+
+async function resolveLibraryAssetReference(
+  db: SqlDatabase,
+  scope: CanvasActorScope,
+  reference: { token: string; type: "drama"; id: string; version: string | null },
+): Promise<ResolvedReferenceValue | null> {
+  const row = await queryOne<{
+    id: string;
+    scope: "official" | "team";
+    name: string;
+    description: string | null;
+    category: string;
+    updated_at: Date | string;
+    version_id: string;
+    version_number: number | string;
+    preview_url: string | null;
+    storage_object_key: string;
+    metadata_json: Record<string, unknown> | string;
+    version_created_at: Date | string;
+  }>(db, `
+    SELECT asset.id,asset.scope,asset.name,asset.description,asset.category,asset.updated_at,
+           version.id AS version_id,version.version_number,version.preview_url,
+           version.storage_object_key,version.metadata_json,version.created_at AS version_created_at
+    FROM library_assets asset
+    JOIN LATERAL (
+      SELECT item.id,item.version_number,item.preview_url,item.storage_object_key,item.metadata_json,item.created_at
+      FROM library_asset_versions item
+      WHERE item.library_asset_id=asset.id
+        AND ($3::text IS NULL OR item.id::text=$3 OR item.version_number::text=$3)
+      ORDER BY item.version_number DESC,item.created_at DESC,item.id DESC
+      LIMIT 1
+    ) version ON TRUE
+    WHERE asset.id=$1 AND asset.status='active'
+      AND asset.category IN ('character','scene','prop')
+      AND (asset.scope='official' OR (asset.scope='team' AND asset.owner_user_id=$2))
+    LIMIT 1
+  `, [reference.id, scope.ownerUserId, reference.version]);
+  if (!row) return null;
+  const metadata = parseRecord(row.metadata_json);
+  const value = readString(row.description)
+    || readString(metadata.prompt)
+    || readString(metadata.description)
+    || `[drama:${row.category}:${row.name}]`;
+  const contentHash = hash(stableJson({
+    id: row.id,
+    scope: row.scope,
+    name: row.name,
+    description: row.description,
+    category: row.category,
+    versionId: row.version_id,
+    versionNumber: Number(row.version_number),
+    previewUrl: row.preview_url,
+    storageObjectKey: row.storage_object_key,
+    metadata,
+  }));
+  const previewUrl = readString(row.preview_url);
+  const directReferenceUrl = previewUrl && /^(?:https?:|data:)/iu.test(previewUrl) ? previewUrl : null;
+  return {
+    value,
+    snapshot: snapshotRecord(reference, row.version_id, Number(row.version_number), contentHash),
+    executionBinding: {
+      kind: "drama" as const,
+      characterId: row.id,
+      selector: String(row.version_number),
+      contentHash,
+      references: directReferenceUrl ? [{
+        referenceId: row.version_id,
+        storageObjectId: null,
+        assetVersionId: null,
+        url: directReferenceUrl,
+      }] : [],
+    },
   };
 }
 

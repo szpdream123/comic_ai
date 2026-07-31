@@ -132,6 +132,9 @@ test("Canvas media fragments expose waveform, seek, frame capture, and fullscree
   const videoNode = { id: "video-1", type: "ai-video", data: { label: "预览", videoUrl: "/video.mp4", thumbnailUrl: "/poster.png", videoFullscreen: true } };
   const video = renderCanvasVideoNodeBody(videoNode);
   assert.match(video, /data-action="capture-canvas-video-frame"/);
+  assert.match(video, /data-action="toggle-canvas-video-play"/);
+  assert.match(video, /draggable="false"/);
+  assert.doesNotMatch(video, /data-canvas-video-player[^>]*\bcontrols\b/);
   assert.match(video, /data-action="toggle-canvas-video-fullscreen"/);
   assert.doesNotMatch(video, /data-canvas-video-fullscreen-player/);
   assert.match(renderCanvasMediaNodeBody(videoNode), /data-canvas-video-body/);
@@ -146,6 +149,18 @@ test("Canvas video fullscreen state and rendering reject unsafe media URLs", () 
   assert.equal(resolveCanvasMediaUrl("data:video/mp4;base64,AA", "video"), "");
   assert.equal(resolveCanvasMediaUrl("data:text/html;base64,AA", "video"), "");
   assert.equal(resolveCanvasMediaUrl("tauri://asset/file.mp4", "video"), "");
+});
+
+test("Canvas video nodes expose a direct URL fallback when storage proxy is the primary source", () => {
+  const html = renderCanvasVideoNodeBody({
+    id: "video-fallback",
+    type: "ai-video",
+    data: {
+      storageObjectId: "storage-video-1",
+      videoUrl: "https://example.test/video.mp4",
+    },
+  });
+  assert.match(html, /data-canvas-video-fallback-src="https:\/\/example\.test\/video\.mp4"/);
 });
 
 test("Canvas media sources prefer stable storage identity and resolve asset versions from the loaded catalog", () => {
@@ -207,6 +222,14 @@ test("Canvas media toolbar actions find the requested X6 media body and controls
   assert.equal(stopped, 2);
   assert.equal(control.dataset.canvasMediaPointerGuard, "true");
   assert.equal(bindCanvasMediaControlPointerGuards({ querySelectorAll: () => [control] }), 1);
+});
+
+test("Canvas media pointer guards leave inline video surfaces draggable", () => {
+  let selector = "";
+  bindCanvasMediaControlPointerGuards({ querySelectorAll: (value) => { selector = value; return []; } });
+  assert.doesNotMatch(selector, /data-canvas-video-body\] video/);
+  assert.match(selector, /data-canvas-video-body\] button/);
+  assert.match(selector, /data-canvas-video-fullscreen\] video/);
 });
 
 test("Canvas page video overlay has explicit close and native fullscreen controls", () => {
@@ -284,6 +307,8 @@ test("Canvas host media actions use node-id lookup, Blob capture, and page overl
 
   assert.match(source, /resolveCanvasMediaActionBody\(target, \{[\s\S]*?mediaKind: "audio"[\s\S]*?nodeId/);
   assert.match(source, /resolveCanvasMediaActionBody\(target, \{[\s\S]*?mediaKind: "video"[\s\S]*?nodeId/);
+  assert.match(source, /action === "toggle-canvas-video-play"/);
+  assert.match(source, /canvasVideoPlaybackBound/);
   assert.match(source, /workbench\.ui\.canvasVideoFullscreen = current\?\.open/);
   assert.match(source, /request-canvas-video-native-fullscreen/);
   assert.match(source, /const frame = await captureCanvasVideoFrame\(video\)/);

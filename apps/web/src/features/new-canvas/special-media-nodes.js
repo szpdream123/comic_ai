@@ -165,7 +165,7 @@ export function normalizeCanvasStoryboardCells(input = {}, options = {}) {
       const bottom = grid.rowBoundaries[row + 1];
       const override = normalizeStoryboardOverride(overrides[index]);
       const isExtracted = Boolean(extracted[index]);
-      const empty = isExtracted && !override;
+      const empty = isExtracted;
       cells.push({
         id: `storyboard-cell-${row + 1}-${column + 1}`,
         index,
@@ -230,9 +230,10 @@ export function renderCanvasStoryboardNodeBody(node = {}, options = {}) {
   const grid = normalizeCanvasStoryboardGrid(data, options);
   const cells = normalizeCanvasStoryboardCells(data, { ...options, imageUrl });
   const editing = options?.editing === true || data?.storyboardEditing === true || data?.editing === true;
+  const preparing = options?.preparing === true || data?.storyboardPreparing === true;
   const error = String(options?.error ?? data?.error ?? "").trim();
 
-  return `<section class="canvas-storyboard-node-body is-${grid.mode}${editing ? " is-editing" : ""}" data-canvas-storyboard-body data-node-id="${escapeAttr(nodeId)}" data-storyboard-grid-mode="${grid.mode}" aria-label="${escapeAttr(label)}">
+  return `<section class="canvas-storyboard-node-body is-${grid.mode}${editing ? " is-editing" : ""}${preparing ? " is-preparing" : ""}" data-canvas-storyboard-body data-node-id="${escapeAttr(nodeId)}" data-storyboard-grid-mode="${grid.mode}" aria-label="${escapeAttr(label)}" aria-busy="${preparing}">
     <div class="canvas-storyboard-controls">
       <div class="canvas-storyboard-mode-switch" role="group" aria-label="分镜网格模式">
         <button type="button" data-action="set-canvas-storyboard-grid-mode" data-node-id="${escapeAttr(nodeId)}" data-storyboard-grid-mode="uniform" aria-pressed="${grid.mode === "uniform"}">均分</button>
@@ -244,8 +245,25 @@ export function renderCanvasStoryboardNodeBody(node = {}, options = {}) {
     ${imageUrl ? renderStoryboardGrid({ cells, grid, imageUrl, nodeId }) : `<div class="canvas-storyboard-empty" role="status"><span>无图像</span><button type="button" data-action="pick-canvas-storyboard-image" data-node-id="${escapeAttr(nodeId)}">添加图片</button></div>`}
     <output class="canvas-storyboard-count" aria-label="分镜格数量">${grid.cellCount}</output>
     ${error ? `<p class="canvas-storyboard-error" role="alert">${escapeHtml(error)}</p>` : ""}
+    ${preparing ? `<div class="canvas-storyboard-preparing-mask canvas-image-generation-mask" role="status"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在准备分镜图片中</strong></div>` : ""}
     <input type="file" accept="image/*" data-canvas-upload-input data-canvas-storyboard-input data-node-id="${escapeAttr(nodeId)}" tabindex="-1" aria-hidden="true" hidden />
   </section>`;
+}
+
+export function syncCanvasStoryboardGridAspectRatio(root) {
+  const grid = root?.querySelector?.(".canvas-storyboard-grid");
+  const sourceImage = grid?.querySelector?.(".canvas-storyboard-cell-source");
+  if (!grid || !sourceImage) return false;
+  const apply = () => {
+    const width = Number(sourceImage.naturalWidth);
+    const height = Number(sourceImage.naturalHeight);
+    if (!(width > 0 && height > 0)) return false;
+    grid.style?.setProperty?.("--canvas-storyboard-source-aspect", `${width} / ${height}`);
+    grid.dataset.storyboardSourceAspect = `${width}:${height}`;
+    return true;
+  };
+  if (!apply()) sourceImage.addEventListener?.("load", apply, { once: true });
+  return true;
 }
 
 function renderStoryboardGridEditor({ grid, nodeId }) {
@@ -324,12 +342,12 @@ function renderStoryboardCell(cell, sourceUrl, nodeId) {
   const actionLabel = cell.empty ? `选择${cell.label}并添加图片` : `选择${cell.label}`;
   return `<div class="${classes}" role="gridcell" aria-rowindex="${cell.row + 1}" aria-colindex="${cell.column + 1}" aria-selected="${cell.selected}" data-storyboard-cell-index="${cell.index}" data-storyboard-row="${cell.row}" data-storyboard-column="${cell.column}" data-storyboard-empty="${cell.empty}" style="${style}">
     <button class="canvas-storyboard-cell-select" type="button" data-action="select-canvas-storyboard-cell" data-node-id="${escapeAttr(nodeId)}" data-storyboard-cell-index="${cell.index}" aria-label="${escapeAttr(actionLabel)}">${preview}</button>
-    ${cell.draggable ? `<button class="canvas-storyboard-cell-extract" type="button" draggable="true" data-action="extract-canvas-storyboard-cell" data-storyboard-drag-source data-node-id="${escapeAttr(nodeId)}" data-storyboard-cell-index="${cell.index}" aria-label="拖出${escapeAttr(cell.label)}为图片" title="拖出为图片" style="touch-action:none"><span aria-hidden="true">↗</span></button>` : ""}
+    ${cell.draggable ? `<button class="canvas-storyboard-cell-extract" type="button" data-action="extract-canvas-storyboard-cell" data-storyboard-drag-source data-node-id="${escapeAttr(nodeId)}" data-storyboard-cell-index="${cell.index}" aria-label="拖动剪切${escapeAttr(cell.label)}图片" data-tooltip="拖动剪切图片" style="touch-action:none"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg></button>` : ""}
   </div>`;
 }
 
 function renderStoryboardCellPreview(cell, sourceUrl) {
-  if (cell.empty) return `<span class="canvas-storyboard-cell-empty" aria-hidden="true">+</span>`;
+  if (cell.empty) return `<span class="canvas-storyboard-cell-return-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 14-5-5 5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></span>`;
   if (cell.override?.url) {
     const overrideLabel = cell.override.label ? `${cell.label}：${cell.override.label}` : cell.label;
     return `<img class="canvas-storyboard-cell-fill" src="${escapeAttr(cell.override.url)}" alt="${escapeAttr(overrideLabel)}" draggable="false" loading="lazy" />`;

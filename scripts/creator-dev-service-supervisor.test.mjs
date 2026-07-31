@@ -164,6 +164,33 @@ describe("creator dev service supervisor", () => {
     assert.equal(timers.length, 2);
     assert.equal(children.length, 3);
   });
+
+  it("requests graceful shutdown over IPC before forcing a child", () => {
+    const messages = [];
+    const child = fakeChild("generation-worker");
+    child.connected = true;
+    child.send = (message, callback) => {
+      messages.push(message);
+      callback?.(null);
+    };
+    child.disconnect = () => { child.connected = false; };
+    const supervisor = createCreatorDevServiceSupervisor({
+      now: () => 0,
+      spawnProcess() { return child; },
+      setTimeout: () => ({ cleared: false }),
+      clearTimeout() {},
+      onFatalExit() {},
+    });
+
+    supervisor.start("generation-worker", []);
+    supervisor.stop("SIGTERM");
+
+    assert.deepEqual(messages, [{ type: "creator-dev-stop", signal: "SIGTERM" }]);
+    assert.equal(child.killed, false);
+    assert.equal(child.connected, false);
+    supervisor.forceStop("SIGTERM");
+    assert.equal(child.killed, true);
+  });
 });
 
 function fakeChild(name) {

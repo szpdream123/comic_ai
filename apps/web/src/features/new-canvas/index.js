@@ -1,9 +1,11 @@
 import { renderCanvasSurfaceForHost } from "../production-workbench/project-detail.js";
 import {
+  applyCanvasGraphViewportPreferences,
   clearCanvasGraphEditorOverlay,
   mountCanvasGraphEditorOverlay,
   mountCanvasWorkflowIfPresent,
   refreshCanvasWorkflowGraph,
+  refreshCanvasWorkflowNode,
   syncCanvasGraphViewport,
 } from "../production-workbench/canvas/canvas-x6-graph.js";
 import {
@@ -51,6 +53,27 @@ export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
 export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-storyboard-cell";
 const instances = new WeakMap();
 const canvasAudioWaveformCache = new Map();
+const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
+const CANVAS_AGENT_PANEL_MAX_WIDTH = 720;
+const CANVAS_STYLE_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 8_000];
+
+function isCanvasNodeInteractiveTarget(event) {
+  const path = event.composedPath?.() ?? [];
+  if (
+    path.some((candidate) => candidate?.classList?.contains?.("canvas-node-editor"))
+    || event.target?.closest?.(".canvas-node-editor")
+  ) {
+    return true;
+  }
+  const nodeIndex = path.findIndex((candidate) => candidate?.classList?.contains?.("canvas-x6-special-node"));
+  if (nodeIndex >= 0) {
+    return path.slice(0, nodeIndex).some((candidate) =>
+      candidate?.matches?.("button, input, textarea, select, a, [role='application']"));
+  }
+  const node = event.target?.closest?.(".canvas-x6-special-node");
+  const interactive = event.target?.closest?.("button, input, textarea, select, a, [role='application']");
+  return Boolean(node && interactive && node.contains?.(interactive));
+}
 
 export function createCanvasStoryboardCellDragPayload(nodeId, cellIndex) {
   const normalizedNodeId = String(nodeId ?? "").trim();
@@ -104,14 +127,85 @@ function normalizeStyleHrefs(styleHrefs) {
 
 function appendStyles(shadowRoot, styleHrefs) {
   const fragment = document.createDocumentFragment();
+  const criticalStyle = document.createElement("style");
+  criticalStyle.dataset.newCanvasCriticalStyle = "true";
+  criticalStyle.textContent = `
+    :host { display: block; min-height: 100%; background: #08111b; }
+    .new-canvas-root { visibility: hidden !important; }
+    [data-new-canvas-style-gate] { display: grid; grid-template-columns: 4rem minmax(0, 1fr) minmax(12rem, 18rem); gap: .75rem; min-height: calc(100dvh - 6rem); padding: .75rem; box-sizing: border-box; }
+    [data-new-canvas-style-gate] > span { min-width: 0; border: 1px solid rgba(255, 255, 255, .06); border-radius: 6px; background: rgba(255, 255, 255, .035); }
+  `;
+  const loadingGate = document.createElement("div");
+  loadingGate.dataset.newCanvasStyleGate = "true";
+  loadingGate.setAttribute("role", "status");
+  loadingGate.setAttribute("aria-label", "正在加载画布");
+  loadingGate.innerHTML = "<span></span><span></span><span></span>";
+  fragment.append(criticalStyle);
+  fragment.append(loadingGate);
+  const links = [];
+  const pendingLinks = new Set();
+  const retryTimers = new Set();
+  let disposed = false;
+  const revealWhenReady = () => {
+    if (!disposed && pendingLinks.size === 0) {
+      criticalStyle.remove();
+      loadingGate.remove();
+    }
+  };
+  const retryHref = (href, attempt) => {
+    try {
+      const url = new URL(href, document.baseURI);
+      url.searchParams.set("new-canvas-style-retry", String(attempt));
+      return url.toString();
+    } catch {
+      return `${href}${href.includes("?") ? "&" : "?"}new-canvas-style-retry=${attempt}`;
+    }
+  };
   for (const href of normalizeStyleHrefs(styleHrefs)) {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = href;
     link.dataset.newCanvasStyle = "true";
+    pendingLinks.add(link);
+    let retryAttempt = 0;
+    const loaded = () => {
+      pendingLinks.delete(link);
+      revealWhenReady();
+    };
+    const retry = () => {
+      if (disposed) {
+        return;
+      }
+      retryAttempt += 1;
+      const delayIndex = Math.min(retryAttempt - 1, CANVAS_STYLE_RETRY_DELAYS_MS.length - 1);
+      const timer = setTimeout(() => {
+        retryTimers.delete(timer);
+        if (!disposed) {
+          link.href = retryHref(href, retryAttempt);
+        }
+      }, CANVAS_STYLE_RETRY_DELAYS_MS[delayIndex]);
+      retryTimers.add(timer);
+    };
+    link.addEventListener("load", loaded);
+    link.addEventListener("error", retry);
+    links.push({ link, loaded, retry });
     fragment.append(link);
   }
   shadowRoot.append(fragment);
+  revealWhenReady();
+  return () => {
+    disposed = true;
+    for (const timer of retryTimers) {
+      clearTimeout(timer);
+    }
+    retryTimers.clear();
+    for (const { link, loaded, retry } of links) {
+      link.removeEventListener("load", loaded);
+      link.removeEventListener("error", retry);
+    }
+    criticalStyle.remove();
+    loadingGate.remove();
+  };
 }
 
 function createSurface(shadowRoot) {
@@ -164,7 +258,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
       let disposed = false;
       let graph = null;
       let renderToken = 0;
-      const agentController = createCanvasAgentController({ surface, workbench });
+      const agentController = createCanvasAgentController({ surface, workbench, renderLayout: () => render() });
       const configLibraryController = createCanvasConfigLibraryController({ surface, workbench });
       const directorDeskOverlay = createDirectorDeskOverlay({ surface, workbench });
       const minimapController = createCanvasMinimapController({ surface, workbench });
@@ -172,6 +266,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
       const panoramaViewerController = createCanvasPanoramaViewerController({ surface });
       let mediaToolsController = null;
       let panoramaDrag = null;
+      let canvasAgentResize = null;
+      let storyboardCellPointer = null;
+      let suppressStoryboardExtractClickUntil = 0;
       let canvasNodePointer = null;
       let suppressCanvasBlankClickUntil = 0;
       workbench.onDirectorDeskOpen = (node) => directorDeskOverlay.open(node);
@@ -180,6 +277,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
       workbench.onDirectorDeskNotify = (message, tone) => {
         context.onDirectorDeskNotify?.({ message, tone }, { workbench, surface });
       };
+      workbench.onCanvasStoryboardImageReturn = (input) => (
+        context.onCanvasStoryboardImageReturn?.(input, { workbench, surface }) === true
+      );
       const createMarkup = () => renderNewCanvasLayout(
         renderer({
           state: workbench.state,
@@ -188,11 +288,13 @@ function createProductionCanvasAdapter(dependencies = {}) {
           api: workbench.api,
         }),
         workbench.ui,
-        `${renderCanvasMediaToolsShell(workbench.ui)}${renderCanvasConfigLibraryShell(workbench.ui)}${renderCanvasCharacterLibraryShell(workbench.ui)}${renderCanvasMinimap(workbench.ui)}`,
+        `${renderCanvasMediaToolsShell(workbench.ui)}${renderCanvasConfigLibraryShell(workbench.ui)}${renderCanvasCharacterLibraryShell(workbench.ui)}`,
+        renderCanvasMinimap(workbench.ui),
       );
       const render = async () => {
         if (disposed) return;
         const token = ++renderToken;
+        const agentTimelineScroll = agentController.captureTimelineScroll();
         const markup = createMarkup();
         const currentGraphMount = graph
           ? surface.querySelector?.("[data-canvas-x6-mount]")
@@ -212,6 +314,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
             minimapController.bind(graph);
             void panoramaViewerController.bind();
             void bindCanvasAudioWaveforms(surface);
+            agentController.restoreTimelineScroll(agentTimelineScroll);
             context.onRender?.({ workbench, graph, surface });
             return;
           }
@@ -231,6 +334,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         minimapController.bind(graph);
         void panoramaViewerController.bind();
         void bindCanvasAudioWaveforms(surface);
+        agentController.restoreTimelineScroll(agentTimelineScroll);
         context.onRender?.({ workbench, graph, surface });
       };
       const renderInteraction = async () => {
@@ -259,6 +363,24 @@ function createProductionCanvasAdapter(dependencies = {}) {
         syncCanvasNodeEditor(currentFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
         syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
+        context.onRender?.({ workbench, graph, surface });
+      };
+      const renderNode = async (nodeId) => {
+        const normalizedNodeId = String(nodeId ?? "").trim();
+        if (disposed || !graph || !normalizedNodeId || typeof document === "undefined") return render();
+        if (!refreshCanvasWorkflowNode(workbench, normalizedNodeId)) return render();
+        const template = document.createElement("template");
+        template.innerHTML = createMarkup();
+        const currentFlow = surface.querySelector?.(".canvas-flow");
+        const nextFlow = template.content.querySelector?.(".canvas-flow");
+        if (!currentFlow || !nextFlow) return render();
+        syncCanvasNodeEditor(currentFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
+        syncCanvasStageOverlays(surface, template.content);
+        syncCanvasSidebarNodeItem(surface, template.content, normalizedNodeId);
+        syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
+        syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
+        void panoramaViewerController.bind();
+        void bindCanvasAudioWaveforms(surface);
         context.onRender?.({ workbench, graph, surface });
       };
       const applyInteractionMode = (target) => {
@@ -293,6 +415,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (sourceWorkbench?.ui && sourceWorkbench.ui !== workbench.ui) {
           sourceWorkbench.ui.canvasDocument = nextDocument;
         }
+        applyCanvasGraphViewportPreferences(graph, nextDocument.viewport);
         return true;
       };
       const applyCanvasArrangement = () => {
@@ -349,7 +472,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
         workbench.ui.selectedCanvasNodeId = String(nodeId ?? "").trim() || null;
         workbench.ui.canvasEditorOpen = true;
         workbench.ui.canvasRunPreview = null;
-        void renderSelection();
+        if (typeof sourceWorkbench?.onCanvasNodeSelected === "function") {
+          sourceWorkbench.onCanvasNodeSelected(nodeId);
+        } else {
+          void renderSelection();
+        }
       };
       workbench.refreshCanvasSurface = render;
       sourceWorkbench && (sourceWorkbench.captureCanvasPanoramaRendererView = (nodeId) => panoramaViewerController.capture(nodeId));
@@ -366,6 +493,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
         ).trim();
         return nodeId === "__comic-ai-canvas-editor-overlay__" ? "" : nodeId;
       };
+      const canvasEventPathTarget = (event, selector) => (event.composedPath?.() ?? [])
+        .find((candidate) => candidate?.matches?.(selector))
+        ?? event.target?.closest?.(selector);
       const isCanvasX6Event = (event) => (event.composedPath?.() ?? []).some((candidate) =>
         candidate?.hasAttribute?.("data-canvas-x6-mount"));
       const onCanvasCellClick = (event) => {
@@ -386,6 +516,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
       };
       const onClick = (event) => {
+        if (agentController.handleClick(event.target)) {
+          event.stopPropagation();
+          return;
+        }
         const minimapActionTarget = event.target?.closest?.("[data-minimap-action]");
         if (minimapActionTarget) {
           event.stopPropagation();
@@ -407,12 +541,14 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         const characterActionTarget = event.target?.closest?.("[data-character-action]");
         if (characterActionTarget) {
+          event.preventDefault?.();
           event.stopPropagation();
           void characterLibraryController.handleAction(characterActionTarget);
           return;
         }
         const agentActionTarget = event.target?.closest?.("[data-agent-action]");
         if (agentActionTarget) {
+          event.preventDefault?.();
           event.stopPropagation();
           void agentController.handleAction(agentActionTarget);
           return;
@@ -422,12 +558,21 @@ function createProductionCanvasAdapter(dependencies = {}) {
           ?? event.target?.closest?.("[data-action]");
         const action = actionTarget?.dataset?.action;
         if (action) {
+          if (action === "extract-canvas-storyboard-cell" && Date.now() < suppressStoryboardExtractClickUntil) {
+            suppressStoryboardExtractClickUntil = 0;
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            return;
+          }
+          if (action === "pick-canvas-upload-file") return;
           if (action === "arrange-canvas-nodes") {
+            event.preventDefault?.();
             event.stopPropagation();
             applyCanvasArrangement();
             return;
           }
           if (action === "toggle-canvas-snap") {
+            event.preventDefault?.();
             event.stopPropagation();
             if (applySnapPreference()) {
               const snapEnabled = workbench.ui.canvasDocument?.viewport?.snapEnabled !== false;
@@ -443,9 +588,12 @@ function createProductionCanvasAdapter(dependencies = {}) {
           }
           if (action === "seek-canvas-audio") {
             actionTarget.dataset.canvasSeekClientX = String(event.clientX);
-          }
-          context.onAction?.(event, { action, actionTarget, workbench, surface });
-          return;
+        }
+        event.__newCanvasHandled = true;
+        event.preventDefault?.();
+        event.stopPropagation();
+        context.onAction?.(event, { action, actionTarget, workbench, surface });
+        return;
         }
         const canvasCardTarget = event.target?.closest?.(".canvas-x6-special-node[data-node-id]");
         const canvasNodeId = String(
@@ -479,6 +627,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
       };
       const onDoubleClick = (event) => {
         if (event.__canvasDirectorHandled === true) return;
+        if (agentController.handleDoubleClick(event.target)) {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          return;
+        }
         const nodeId = canvasX6NodeIdFromEvent(event);
         const node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === nodeId);
         if (node?.type === "ai-director") {
@@ -494,7 +647,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         void context.onCanvasBlankDoubleClick?.({ position }, { workbench, surface });
       };
       const onDragStart = (event) => {
-        const storyboardCell = event.target?.closest?.("[data-storyboard-drag-source][data-node-id][data-storyboard-cell-index]");
+        const storyboardCell = canvasEventPathTarget(
+          event,
+          "[data-storyboard-drag-source][data-node-id][data-storyboard-cell-index]",
+        );
         const storyboardPayload = createCanvasStoryboardCellDragPayload(
           storyboardCell?.dataset?.nodeId,
           storyboardCell?.dataset?.storyboardCellIndex,
@@ -505,7 +661,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.dataTransfer.setData("text/plain", storyboardPayload);
           return;
         }
-        const asset = event.target?.closest?.("[data-canvas-asset-drag][data-asset-id]");
+        const asset = canvasEventPathTarget(event, "[data-canvas-asset-drag][data-asset-id]");
         const assetId = String(asset?.dataset?.assetId ?? "").trim();
         if (!assetId || !event.dataTransfer) return;
         event.dataTransfer.effectAllowed = "copy";
@@ -513,7 +669,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         event.dataTransfer.setData("text/plain", assetId);
       };
       const onDragOver = (event) => {
-        const stage = event.target?.closest?.(".canvas-stage");
+        const stage = canvasEventPathTarget(event, ".canvas-stage");
         const storyboardDrag = hasCanvasStoryboardCellDragType(event.dataTransfer);
         const externalDrag = hasCanvasExternalTransfer(event.dataTransfer);
         if (!stage || (!hasCanvasAssetDragType(event.dataTransfer) && !storyboardDrag && !externalDrag)) return;
@@ -524,7 +680,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           : externalDrag ? "is-canvas-external-drop-target" : "is-canvas-asset-drop-target");
       };
       const onDragLeave = (event) => {
-        const stage = event.target?.closest?.(".canvas-stage");
+        const stage = canvasEventPathTarget(event, ".canvas-stage");
         if (stage && !stage.contains?.(event.relatedTarget)) {
           stage.classList.remove("is-canvas-asset-drop-target");
           stage.classList.remove("is-canvas-storyboard-drop-target");
@@ -532,7 +688,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
       };
       const onDrop = (event) => {
-        const stage = event.target?.closest?.(".canvas-stage");
+        const stage = canvasEventPathTarget(event, ".canvas-stage");
         const storyboardCell = parseCanvasStoryboardCellDragPayload(
           event.dataTransfer?.getData?.(CANVAS_STORYBOARD_CELL_DRAG_TYPE),
         );
@@ -580,6 +736,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         configLibraryController.handleInput(event.target);
         characterLibraryController.handleInput(event.target);
         context.onInput?.(event, { target: event.target, workbench, surface });
+        event.stopPropagation();
+      };
+      const onBlur = (event) => {
+        agentController.handleBlur(event.target);
       };
       const onChange = (event) => {
         mediaToolsController?.handleInput(event.target);
@@ -587,6 +747,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         configLibraryController.handleInput(event.target);
         characterLibraryController.handleInput(event.target);
         context.onChange?.(event, { target: event.target, workbench, surface });
+        event.stopPropagation();
       };
       const onKeydown = (event) => {
         const zoomValueInput = event.target?.closest?.("[data-canvas-zoom-value-input]");
@@ -622,6 +783,42 @@ function createProductionCanvasAdapter(dependencies = {}) {
         agentController.handleKeydown(event, event.target);
       };
       const onPointerDown = (event) => {
+        const storyboardCell = canvasEventPathTarget(
+          event,
+          "[data-storyboard-drag-source][data-node-id][data-storyboard-cell-index]",
+        );
+        const storyboardPayload = parseCanvasStoryboardCellDragPayload(createCanvasStoryboardCellDragPayload(
+          storyboardCell?.dataset?.nodeId,
+          storyboardCell?.dataset?.storyboardCellIndex,
+        ));
+        if (storyboardCell && storyboardPayload && event.button === 0) {
+          storyboardCellPointer = {
+            ...storyboardPayload,
+            pointerId: event.pointerId,
+            startX: Number(event.clientX ?? 0),
+            startY: Number(event.clientY ?? 0),
+            dragging: false,
+            source: storyboardCell,
+          };
+          storyboardCell.setPointerCapture?.(event.pointerId);
+          return;
+        }
+        const agentResizeHandle = event.target?.closest?.("[data-canvas-agent-resize]");
+        if (agentResizeHandle && event.button === 0) {
+          const panelWidth = Number(workbench.ui.canvasAgent?.panelWidth);
+          canvasAgentResize = {
+            pointerId: event.pointerId,
+            startX: Number(event.clientX ?? 0),
+            startWidth: Number.isFinite(panelWidth) ? panelWidth : 480,
+            handle: agentResizeHandle,
+          };
+          agentResizeHandle.setPointerCapture?.(event.pointerId);
+          surface.querySelector?.(".new-canvas-layout")?.classList?.add?.("is-agent-resizing");
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (isCanvasNodeInteractiveTarget(event)) return;
         const interactionActionTarget = (event.composedPath?.() ?? [])
           .find((candidate) => candidate?.matches?.('[data-action="set-canvas-interaction-mode"]'));
         if (interactionActionTarget) {
@@ -672,6 +869,40 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
       };
       const onPointerMove = (event) => {
+        if (storyboardCellPointer?.pointerId === event.pointerId) {
+          const distance = Math.hypot(
+            Number(event.clientX ?? 0) - storyboardCellPointer.startX,
+            Number(event.clientY ?? 0) - storyboardCellPointer.startY,
+          );
+          if (distance > 4) storyboardCellPointer.dragging = true;
+          if (storyboardCellPointer.dragging) {
+            const stage = surface.querySelector?.(".canvas-stage");
+            const rect = stage?.getBoundingClientRect?.() ?? {};
+            const insideStage = Number(event.clientX ?? 0) >= Number(rect.left ?? Infinity)
+              && Number(event.clientX ?? 0) <= Number(rect.right ?? -Infinity)
+              && Number(event.clientY ?? 0) >= Number(rect.top ?? Infinity)
+              && Number(event.clientY ?? 0) <= Number(rect.bottom ?? -Infinity);
+            stage?.classList?.toggle?.("is-canvas-storyboard-drop-target", insideStage);
+            storyboardCellPointer.source?.classList?.add?.("is-dragging");
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          return;
+        }
+        if (canvasAgentResize?.pointerId === event.pointerId) {
+          const nextWidth = Math.min(
+            CANVAS_AGENT_PANEL_MAX_WIDTH,
+            Math.max(
+              CANVAS_AGENT_PANEL_MIN_WIDTH,
+              Math.round(canvasAgentResize.startWidth + canvasAgentResize.startX - Number(event.clientX ?? 0)),
+            ),
+          );
+          workbench.ui.canvasAgent.panelWidth = nextWidth;
+          surface.querySelector?.(".new-canvas-layout")?.style?.setProperty?.("--canvas-agent-panel-width", `${nextWidth}px`);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (panoramaDrag?.pointerId === event.pointerId) {
           panoramaDrag.nextView = applyCanvasPanoramaDrag(panoramaDrag.view, {
             deltaX: event.clientX - panoramaDrag.startX,
@@ -688,6 +919,47 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
       };
       const onPointerUp = (event) => {
+        if (storyboardCellPointer?.pointerId === event.pointerId) {
+          const pointer = storyboardCellPointer;
+          storyboardCellPointer = null;
+          pointer.source?.releasePointerCapture?.(event.pointerId);
+          pointer.source?.classList?.remove?.("is-dragging");
+          const stage = surface.querySelector?.(".canvas-stage");
+          stage?.classList?.remove?.("is-canvas-storyboard-drop-target");
+          if (pointer.dragging) {
+            suppressStoryboardExtractClickUntil = Date.now() + 500;
+            const rect = stage?.getBoundingClientRect?.() ?? {};
+            const insideStage = event.type !== "pointercancel"
+              && Number(event.clientX ?? 0) >= Number(rect.left ?? Infinity)
+              && Number(event.clientX ?? 0) <= Number(rect.right ?? -Infinity)
+              && Number(event.clientY ?? 0) >= Number(rect.top ?? Infinity)
+              && Number(event.clientY ?? 0) <= Number(rect.bottom ?? -Infinity);
+            if (insideStage) {
+              const position = canvasDropPosition(
+                stage,
+                event.clientX,
+                event.clientY,
+                workbench.ui.canvasDocument?.viewport,
+              );
+              void context.onCanvasStoryboardCellDrop?.({
+                nodeId: pointer.nodeId,
+                cellIndex: pointer.cellIndex,
+                position,
+              }, { workbench, surface });
+            }
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          return;
+        }
+        if (canvasAgentResize?.pointerId === event.pointerId) {
+          canvasAgentResize.handle?.releasePointerCapture?.(event.pointerId);
+          canvasAgentResize = null;
+          surface.querySelector?.(".new-canvas-layout")?.classList?.remove?.("is-agent-resizing");
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (panoramaDrag?.pointerId === event.pointerId) {
           panoramaDrag.viewer?.releasePointerCapture?.(event.pointerId);
           commitCanvasPanoramaView(workbench, panoramaDrag.nodeId, panoramaDrag.nextView);
@@ -720,6 +992,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
       };
       const onWheel = (event) => {
+        if (event.target?.closest?.("input, textarea, select, [contenteditable='true'], [role='textbox'], .canvas-prompt-mention-menu")) {
+          event.stopPropagation();
+          return;
+        }
         const panoramaViewer = event.target?.closest?.("[data-panorama-drag-target]");
         if (!panoramaViewer) return;
         const nextView = applyCanvasPanoramaZoom(readCanvasPanoramaView(panoramaViewer), event.deltaY);
@@ -754,22 +1030,23 @@ function createProductionCanvasAdapter(dependencies = {}) {
           activeElement.scrollIntoView({ block: "center", inline: "nearest" });
         }
       };
-      surface.addEventListener("click", onClick);
+      surface.addEventListener("click", onClick, true);
       surface.addEventListener("click", onCanvasCellClick, true);
       surface.addEventListener("dblclick", onDoubleClick, true);
       surface.addEventListener("input", onInput);
+      surface.addEventListener("blur", onBlur, true);
       surface.addEventListener("change", onChange);
       surface.addEventListener("keydown", onKeydown);
       surface.addEventListener("pointerdown", onPointerDown, true);
       surface.addEventListener("pointermove", onPointerMove);
       surface.addEventListener("pointerup", onPointerUp, true);
       surface.addEventListener("pointercancel", onPointerUp);
-      surface.addEventListener("wheel", onWheel, { passive: false });
+      surface.addEventListener("wheel", onWheel, { passive: false, capture: true });
       surface.addEventListener("canvas-panorama-view-change", onPanoramaViewChange);
-      surface.addEventListener("dragstart", onDragStart);
-      surface.addEventListener("dragover", onDragOver);
-      surface.addEventListener("dragleave", onDragLeave);
-      surface.addEventListener("drop", onDrop);
+      surface.addEventListener("dragstart", onDragStart, true);
+      surface.addEventListener("dragover", onDragOver, true);
+      surface.addEventListener("dragleave", onDragLeave, true);
+      surface.addEventListener("drop", onDrop, true);
       surface.addEventListener("paste", onPaste);
       telemetryWindow?.addEventListener?.("error", onWindowError);
       telemetryWindow?.addEventListener?.("unhandledrejection", onUnhandledRejection);
@@ -790,29 +1067,32 @@ function createProductionCanvasAdapter(dependencies = {}) {
           if (next.state) workbench.state = next.state;
           if (next.session) workbench.session = next.session;
           if (next.api) workbench.api = next.api;
-          if (next.ui) workbench.ui = { ...workbench.ui, ...next.ui, canvasProjectView: "detail" };
+          if (next.ui) Object.assign(workbench.ui, next.ui, { canvasProjectView: "detail" });
+          if (next.nodeOnly === true) return renderNode(next.nodeId);
           if (next.selectionOnly === true) return renderSelection();
+          if (next.surfaceOnly === true) return render();
           return next.interactionOnly === true ? renderInteraction() : render();
         },
         dispose() {
           disposed = true;
           renderToken += 1;
-          surface.removeEventListener("click", onClick);
+          surface.removeEventListener("click", onClick, true);
           surface.removeEventListener("click", onCanvasCellClick, true);
           surface.removeEventListener("dblclick", onDoubleClick, true);
           surface.removeEventListener("input", onInput);
+          surface.removeEventListener("blur", onBlur, true);
           surface.removeEventListener("change", onChange);
           surface.removeEventListener("keydown", onKeydown);
           surface.removeEventListener("pointerdown", onPointerDown, true);
           surface.removeEventListener("pointermove", onPointerMove);
           surface.removeEventListener("pointerup", onPointerUp, true);
           surface.removeEventListener("pointercancel", onPointerUp);
-          surface.removeEventListener("wheel", onWheel);
+          surface.removeEventListener("wheel", onWheel, true);
           surface.removeEventListener("canvas-panorama-view-change", onPanoramaViewChange);
-          surface.removeEventListener("dragstart", onDragStart);
-          surface.removeEventListener("dragover", onDragOver);
-          surface.removeEventListener("dragleave", onDragLeave);
-          surface.removeEventListener("drop", onDrop);
+          surface.removeEventListener("dragstart", onDragStart, true);
+          surface.removeEventListener("dragover", onDragOver, true);
+          surface.removeEventListener("dragleave", onDragLeave, true);
+          surface.removeEventListener("drop", onDrop, true);
           surface.removeEventListener("paste", onPaste);
           telemetryWindow?.removeEventListener?.("error", onWindowError);
           telemetryWindow?.removeEventListener?.("unhandledrejection", onUnhandledRejection);
@@ -860,6 +1140,16 @@ function syncCanvasSelectionClasses(surface, nextRoot, selector) {
   }
 }
 
+function syncCanvasSidebarNodeItem(surface, nextRoot, nodeId) {
+  const escapedNodeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(String(nodeId ?? ""))
+    : String(nodeId ?? "").replace(/"/g, '\\"');
+  const selector = `.canvas-sidebar [data-action="select-canvas-node"][data-node-id="${escapedNodeId}"]`;
+  const current = surface.querySelector?.(selector);
+  const next = nextRoot.querySelector?.(selector);
+  if (current && next) current.replaceWith(next);
+}
+
 export function resolveCanvasGraphNodeAtClientPoint(graph, clientX, clientY) {
   const point = graph?.clientToLocal?.(Number(clientX ?? 0), Number(clientY ?? 0));
   if (!point || !graph?.getNodes) return "";
@@ -897,9 +1187,22 @@ function syncCanvasStageOverlays(surface, nextRoot) {
     ".canvas-add-menu",
     ".canvas-context-menu",
     ".canvas-script-picker",
-    "#canvas-prompt-reference-picker",
+    '[data-selection-picker-id="canvas-prompt-reference-picker"]',
+    ".canvas-markdown-fullscreen",
+    "[data-canvas-video-fullscreen]",
+    ".canvas-inline-toast",
     ".canvas-revision-conflict-backdrop",
   ]) {
+    if (selector === '[data-selection-picker-id="canvas-prompt-reference-picker"]') {
+      const currentPicker = currentStage.querySelector?.(selector);
+      const nextPicker = nextStage.querySelector?.(selector);
+      const currentModal = currentPicker?.querySelector?.(".selection-picker-modal");
+      const nextModal = nextPicker?.querySelector?.(".selection-picker-modal");
+      if (currentPicker && nextPicker && currentModal && nextModal) {
+        currentModal.replaceChildren(...nextModal.childNodes);
+        continue;
+      }
+    }
     currentStage.querySelectorAll?.(`:scope > ${selector}`).forEach((element) => element.remove());
     nextStage.querySelectorAll?.(`:scope > ${selector}`).forEach((element) => currentStage.append(element));
   }
@@ -1080,7 +1383,7 @@ export async function mountNewCanvas(target, options = {}) {
     throw new Error("new_canvas_shadow_root_unavailable");
   }
   shadowRoot.replaceChildren();
-  appendStyles(shadowRoot, options.styleHrefs);
+  const disposeStyles = appendStyles(shadowRoot, options.styleHrefs);
   const surface = createSurface(shadowRoot);
   surface.innerHTML = `<div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布"><span class="new-canvas-loading-skeleton__rail"></span><span class="new-canvas-loading-skeleton__stage"></span><span class="new-canvas-loading-skeleton__panel"></span></div>`;
   host.dataset.newCanvasMounted = "pending";
@@ -1098,6 +1401,7 @@ export async function mountNewCanvas(target, options = {}) {
       shadowRoot,
       adapter,
       adapterHandle,
+      disposeStyles,
       async update(next = {}) {
         return adapterHandle?.update?.(next);
       },
@@ -1110,6 +1414,7 @@ export async function mountNewCanvas(target, options = {}) {
     return instance;
   } catch (error) {
     host.dataset.newCanvasMounted = "failed";
+    disposeStyles();
     adapterHandle?.dispose?.();
     shadowRoot.replaceChildren();
     throw error;
@@ -1123,6 +1428,7 @@ export async function unmountNewCanvas(target) {
     return false;
   }
   instances.delete(host);
+  instance.disposeStyles?.();
   await instance.adapterHandle?.dispose?.();
   if (instance.shadowRoot?.host === host) {
     instance.shadowRoot.replaceChildren();

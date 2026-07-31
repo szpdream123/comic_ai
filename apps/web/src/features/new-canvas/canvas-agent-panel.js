@@ -4,13 +4,13 @@ import {
   resolveCanvasNodePlacement,
   updateCanvasNodeData,
 } from "../production-workbench/canvas/canvas-state.js";
-import { renderNewCanvasChrome, renderNewCanvasChromeRail } from "./canvas-chrome.js";
+import { renderNewCanvasChromeRail } from "./canvas-chrome.js";
 
 const AGENT_MODES = [
-  { id: "b", label: "B", title: "先确认后执行" },
-  { id: "c", label: "C", title: "按策略连续执行" },
-  { id: "plan", label: "Plan", title: "只生成执行计划" },
-  { id: "expert", label: "Expert", title: "只读专家分析" },
+  { id: "b", label: "审核批准", description: "读取和分析自动进行，修改画布等有副作用的操作会先请求你的批准。" },
+  { id: "c", label: "自动执行", description: "按照管理员策略自动执行，高风险操作仍可能需要你的批准。" },
+  { id: "plan", label: "计划模式", description: "只生成执行计划，不修改画布或执行有副作用的操作。" },
+  { id: "expert", label: "分析模式", description: "只进行只读分析，不修改画布或执行其他操作。" },
 ];
 
 const TERMINAL_STATUSES = new Set([
@@ -20,6 +20,19 @@ const TERMINAL_STATUSES = new Set([
   "result_unknown",
   "manual_review_required",
 ]);
+
+const AGENT_HEADER_ICON_PATHS = {
+  new: '<path d="M12 5v14M5 12h14" />',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /><path d="M12 7v5l3 2" />',
+  close: '<path d="M5 12h14" /><path d="m13 6 6 6-6 6" />',
+  open: '<path d="M19 12H5" /><path d="m11 6-6 6 6 6" />',
+  trash: '<path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="m9 7 1-3h4l1 3" /><path d="M6 7l1 14h10l1-14" />',
+  pin: '<path d="m15 4 5 5-3 1-4 4v4l-2 2-2-2v-4l-4-4-3-1 5-5z" /><path d="M12 20v2" />',
+};
+
+function renderAgentHeaderIcon(name) {
+  return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${AGENT_HEADER_ICON_PATHS[name] ?? AGENT_HEADER_ICON_PATHS.history}</svg>`;
+}
 
 export function ensureCanvasAgentState(ui = {}) {
   const previous = ui.canvasAgent && typeof ui.canvasAgent === "object" ? ui.canvasAgent : {};
@@ -51,6 +64,12 @@ export function ensureCanvasAgentState(ui = {}) {
     memoryDraftCategory: "general",
     memoryDraftValue: "",
     panelView: "timeline",
+    panelOpen: true,
+    panelWidth: 480,
+    historyOpen: false,
+    modeMenuOpen: false,
+    titleEditing: false,
+    titleDraft: "",
     taskFilter: "active",
     taskItems: [],
     taskCenterStatus: "idle",
@@ -70,6 +89,7 @@ export function ensureCanvasAgentState(ui = {}) {
 
 export function renderCanvasAgentPanel(ui = {}) {
   const agent = ensureCanvasAgentState(ui);
+  if (agent.panelOpen === false) return "";
   const pendingApproval = findPendingApproval(agent.events, agent.skippedStepIds);
   const approvalPresentation = pendingApproval ? resolveAgentApprovalPresentation(agent.events, pendingApproval) : null;
   const active = Boolean(agent.taskId) && !TERMINAL_STATUSES.has(agent.status);
@@ -79,53 +99,35 @@ export function renderCanvasAgentPanel(ui = {}) {
   const selectedConversation = (agent.conversations ?? []).find((conversation) => conversation.id === agent.conversationId);
   const conversationArchived = selectedConversation?.status === "archived";
   const modelSelectDisabled = busy || agent.modelsStatus !== "ready" || !models.length;
+  const selectedMode = AGENT_MODES.find((mode) => mode.id === agent.mode) ?? AGENT_MODES[0];
   const selectedFile = resolveSelectedAgentFileReference(ui);
-  const panelView = ["timeline", "tasks", "memory"].includes(agent.panelView) ? agent.panelView : "timeline";
-  const activeTaskCount = countActiveAgentTasks(agent);
+  agent.panelView = "timeline";
+  const panelView = "timeline";
+  const conversationTitle = selectedConversation?.title || "新会话";
+  const titleMarkup = agent.titleEditing
+    ? `<input class="canvas-agent-title-input" type="text" data-agent-field="conversationTitle" value="${escapeAttr(agent.titleDraft || conversationTitle)}" maxlength="10" aria-label="当前会话名称" />`
+    : `<strong class="canvas-agent-title" data-agent-conversation-title title="双击修改会话名称">${escapeHtml(conversationTitle)}</strong>`;
   return `
-    <aside class="canvas-agent-panel ${panelView === "timeline" ? "" : "has-special-view"}" data-canvas-agent-panel aria-label="Canvas Agent">
+    <aside class="canvas-agent-panel ${agent.historyOpen ? "history-open" : panelView === "timeline" ? "" : "has-special-view"}${agent.conversationId ? " has-conversation" : ""}" data-canvas-agent-panel aria-label="Canvas Agent">
+      <div class="canvas-agent-resize-handle" data-canvas-agent-resize role="separator" aria-orientation="vertical" aria-label="调整 Agent 面板宽度"></div>
       <header class="canvas-agent-head">
-        <div>
-          <span>CANVAS AGENT</span>
-          <strong>智能协作</strong>
-        </div>
+        ${titleMarkup}
         <div class="canvas-agent-head-actions">
-          <button type="button" class="canvas-agent-head-tool ${panelView === "tasks" ? "active" : ""}" data-agent-action="open-task-center" aria-label="任务中心${activeTaskCount ? `，${activeTaskCount} 个进行中` : ""}" title="任务中心" aria-pressed="${panelView === "tasks"}">任务${activeTaskCount ? `<b>${activeTaskCount}</b>` : ""}</button>
-          <button type="button" class="canvas-agent-head-tool ${panelView === "memory" ? "active" : ""}" data-agent-action="open-memory" aria-label="画布记忆" title="画布记忆" aria-pressed="${panelView === "memory"}">记忆</button>
-          <button type="button" data-agent-action="new-conversation" ${busy ? "disabled" : ""}>新会话</button>
+          <button type="button" class="canvas-agent-icon-button" data-agent-action="new-conversation" aria-label="新建对话" title="新建对话">${renderAgentHeaderIcon("new")}</button>
+          <button type="button" class="canvas-agent-icon-button ${agent.historyOpen ? "active" : ""}" data-agent-action="open-agent-history" aria-label="历史对话" title="历史对话" aria-expanded="${agent.historyOpen}">${renderAgentHeaderIcon("history")}</button>
+          <button type="button" class="canvas-agent-icon-button" data-agent-action="close-agent-panel" aria-label="关闭 Agent 面板" title="关闭">${renderAgentHeaderIcon("close")}</button>
         </div>
       </header>
 
-      ${panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : `
-      ${agent.conversations?.length ? `
-        <label class="canvas-agent-conversation">
-          <span>会话</span>
-          <select data-agent-field="conversationId" ${busy ? "disabled" : ""}>
-            ${agent.conversations.map((conversation) => `<option value="${escapeAttr(conversation.id)}" ${conversation.id === agent.conversationId ? "selected" : ""}>${conversation.pinned ? "★ " : ""}${escapeHtml(conversation.title || "未命名会话")}${conversation.status === "archived" ? "（已归档）" : ""}</option>`).join("")}
-          </select>
-          <span>
-            ${conversationArchived
-              ? `<button type="button" data-agent-action="restore-conversation" ${busy ? "disabled" : ""}>恢复</button>`
-              : `<button type="button" data-agent-action="archive-conversation" ${busy ? "disabled" : ""}>归档</button>`}
-            <button type="button" class="danger" data-agent-action="delete-conversation" ${busy ? "disabled" : ""}>删除</button>
-            <button type="button" data-agent-action="toggle-pin-conversation" ${busy ? "disabled" : ""}>${selectedConversation?.pinned ? "取消置顶" : "置顶"}</button>
-            <button type="button" data-agent-action="rename-conversation" ${busy ? "disabled" : ""}>重命名</button>
-          </span>
-        </label>
-      ` : ""}
+      ${agent.historyOpen ? renderAgentHistoryPopover(agent) : ""}
 
-      <div class="canvas-agent-mode" role="tablist" aria-label="Agent 模式">
-        ${AGENT_MODES.map((mode) => `
-          <button type="button" role="tab" aria-selected="${agent.mode === mode.id}" class="${agent.mode === mode.id ? "active" : ""}" data-agent-action="set-mode" data-agent-mode="${mode.id}" title="${mode.title}">${mode.label}</button>
-        `).join("")}
-      </div>
-
-      <label class="canvas-agent-model">
-        <span>模型代码</span>
-        <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="Agent 模型">
+      ${agent.historyOpen ? "" : (panelView === "tasks" ? renderAgentTaskCenter(agent, busy) : panelView === "memory" ? renderAgentMemoryPanel(agent, busy) : `
+      <label class="canvas-agent-model canvas-agent-model-top">
+        <span>模型</span>
+        <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="文本模型">
           ${models.length
             ? models.map((model) => `<option value="${escapeAttr(model.modelCode)}" ${model.modelCode === agent.modelCode ? "selected" : ""}>${escapeHtml(model.modelLabel || model.modelCode)}</option>`).join("")
-            : `<option value="">${agent.modelsStatus === "loading" ? "正在加载模型" : "暂无可用 Agent 模型"}</option>`}
+            : `<option value="">${agent.modelsStatus === "loading" ? "正在加载模型" : "暂无可用文本模型"}</option>`}
         </select>
         ${agent.modelsError ? `<small>${escapeHtml(agent.modelsError)}</small>` : ""}
       </label>
@@ -133,7 +135,7 @@ export function renderCanvasAgentPanel(ui = {}) {
       ${agent.conversationId ? renderAgentFileGrants(agent, selectedFile, busy) : ""}
 
       <section class="canvas-agent-timeline" aria-label="Agent 事件" aria-live="polite">
-        ${renderAgentTimeline(agent)}
+        ${renderAgentTimeline(agent, ui.canvasDocument)}
       </section>
 
       ${approvalPresentation ? renderAgentApprovalCard(approvalPresentation, busy) : ""}
@@ -158,8 +160,22 @@ export function renderCanvasAgentPanel(ui = {}) {
 
       <footer class="canvas-agent-composer">
         <textarea data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
-        <div>
-          <span class="canvas-agent-status ${escapeAttr(agent.status)}">${escapeHtml(agentStatusLabel(agent))}</span>
+        <div class="canvas-agent-composer-footer">
+          <div class="canvas-agent-composer-left">
+            <div class="canvas-agent-mode-picker">
+              ${agent.modeMenuOpen ? `<div class="canvas-agent-mode-menu" role="listbox" aria-label="Agent 模式">
+                ${AGENT_MODES.map((mode) => `<button type="button" role="option" aria-selected="${agent.mode === mode.id}" class="canvas-agent-mode-option ${agent.mode === mode.id ? "active" : ""}" data-agent-action="set-mode" data-agent-mode="${mode.id}">
+                  <span><strong>${escapeHtml(mode.label)}</strong><small>${escapeHtml(mode.description)}</small></span>
+                  ${agent.mode === mode.id ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>' : ""}
+                </button>`).join("")}
+              </div>` : ""}
+              <button type="button" class="canvas-agent-mode-trigger ${agent.modeMenuOpen ? "active" : ""}" data-agent-action="toggle-mode-menu" aria-haspopup="listbox" aria-expanded="${agent.modeMenuOpen}" title="选择 Agent 模式">
+                <span>${escapeHtml(selectedMode.label)}</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 14 5-5 5 5" /></svg>
+              </button>
+            </div>
+            <span class="canvas-agent-status ${escapeAttr(agent.status)}">${escapeHtml(agentStatusLabel(agent))}</span>
+          </div>
           <span class="canvas-agent-composer-actions">
             ${renderAgentContextUsage(agent)}
             <button type="button" data-agent-action="send" ${busy || modelSelectDisabled || conversationArchived ? "disabled" : ""}>发送</button>
@@ -167,25 +183,54 @@ export function renderCanvasAgentPanel(ui = {}) {
         </div>
         ${agent.error ? `<p class="canvas-agent-error" role="alert">${escapeHtml(agent.error)}</p>` : ""}
       </footer>
-      `}
+      `)}
     </aside>
   `;
 }
 
-export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "") {
-  const sidebarWidth = ui.canvasSidebarCollapsed === true
+function renderAgentHistoryPopover(agent) {
+  const conversations = Array.isArray(agent.conversations) ? agent.conversations : [];
+  return `<section class="canvas-agent-history" aria-label="历史对话">
+    <header><strong>历史对话</strong><span>${conversations.length} 条</span></header>
+    <div class="canvas-agent-history-list">
+      ${conversations.length
+        ? conversations.map((conversation) => `<div class="canvas-agent-history-row">
+         <button type="button" class="canvas-agent-history-item ${String(conversation.id) === String(agent.conversationId) ? "active" : ""}" data-agent-action="select-agent-conversation" data-conversation-id="${escapeAttr(conversation.id)}">
+           <strong>${escapeHtml(conversation.title || "未命名会话")}</strong>
+           <small>${escapeHtml(conversation.status === "archived" ? "已归档" : "最近使用")}</small>
+         </button>
+          <button type="button" class="canvas-agent-history-status" data-agent-action="${conversation.status === "archived" ? "restore-conversation" : "archive-conversation"}" data-conversation-id="${escapeAttr(conversation.id)}">${conversation.status === "archived" ? "恢复" : "归档"}</button>
+         <button type="button" class="canvas-agent-history-delete danger" data-agent-action="delete-conversation" data-conversation-id="${escapeAttr(conversation.id)}" aria-label="删除会话 ${escapeAttr(conversation.title || "未命名会话")}" title="删除会话">${renderAgentHeaderIcon("trash")}</button>
+        </div>`).join("")
+        : `<p>暂无历史对话</p>`}
+    </div>
+  </section>`;
+}
+
+export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "", minimapMarkup = "") {
+  const agentPanelClosed = ui.canvasAgent?.panelOpen === false;
+  const agentPanelWidth = resolveCanvasAgentPanelWidth(ui);
+  const sidebarWidth = ui.canvasSidebarCollapsed !== false
     ? 0
     : ["assets", "history"].includes(ui.canvasSidebarMode)
       ? Math.max(264, (Math.min(6, Math.max(2, Number(ui.canvasAssetLayoutColumns ?? 3) || 3)) * 118))
       : 264;
   return `
-    <div class="new-canvas-layout">
-      ${renderNewCanvasChrome(ui)}
-      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${renderNewCanvasChromeRail(ui)}</div>
+    <div class="new-canvas-layout ${agentPanelClosed ? "is-agent-collapsed" : ""}" style="--canvas-agent-panel-width:${agentPanelWidth}px">
+      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
       ${renderCanvasAgentPanel(ui)}
       ${auxiliaryMarkup}
     </div>
   `;
+}
+
+function renderCanvasAgentReopenButton() {
+  return `<button type="button" class="canvas-agent-reopen" data-agent-action="open-agent-panel" aria-label="展开 Agent 面板" title="展开 Agent 面板">${renderAgentHeaderIcon("open")}</button>`;
+}
+
+function resolveCanvasAgentPanelWidth(ui = {}) {
+  const width = Number(ui.canvasAgent?.panelWidth);
+  return Number.isFinite(width) ? Math.min(720, Math.max(300, Math.round(width))) : 480;
 }
 
 export function reduceCanvasAgentEvents(agent, incoming = []) {
@@ -209,18 +254,108 @@ export function reduceCanvasAgentEvents(agent, incoming = []) {
   return agent;
 }
 
-export function createCanvasAgentController({ surface, workbench, renderPanel, pollIntervalMs = 1500 }) {
+function centerAgentCanvasNode(graph, cell, surface, canvasDocument, nodeId) {
+  const centerRenderedNode = () => {
+    const graphMount = surface?.querySelector?.("[data-canvas-x6-mount]");
+    const nodeElement = [...(graphMount?.querySelectorAll?.(".x6-node") ?? [])]
+      .find((element) => String(element?.getAttribute?.("data-cell-id") ?? "") === String(nodeId ?? ""));
+    const graphRect = graphMount?.getBoundingClientRect?.();
+    const nodeRect = nodeElement?.getBoundingClientRect?.();
+    const renderedBounds = [
+      graphRect?.left, graphRect?.top, graphRect?.right, graphRect?.bottom,
+      nodeRect?.left, nodeRect?.top, nodeRect?.right, nodeRect?.bottom,
+    ].map(Number);
+    if (
+      !renderedBounds.every(Number.isFinite)
+      || Number(graphRect.right) <= Number(graphRect.left)
+      || Number(graphRect.bottom) <= Number(graphRect.top)
+      || Number(nodeRect.right) <= Number(nodeRect.left)
+      || Number(nodeRect.bottom) <= Number(nodeRect.top)
+      || typeof graph?.translate !== "function"
+    ) return false;
+    const deltaX = (Number(graphRect.left) + Number(graphRect.right) - Number(nodeRect.left) - Number(nodeRect.right)) / 2;
+    const deltaY = (Number(graphRect.top) + Number(graphRect.bottom) - Number(nodeRect.top) - Number(nodeRect.bottom)) / 2;
+    if (Math.abs(deltaX) >= 0.5 || Math.abs(deltaY) >= 0.5) {
+      const translation = graph.translate() ?? {};
+      graph.translate(
+        Number(translation.tx ?? 0) + deltaX,
+        Number(translation.ty ?? 0) + deltaY,
+      );
+    }
+    return true;
+  };
+  const settleRenderedCenter = () => {
+    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis);
+    if (requestFrame) {
+      let remainingFrames = 3;
+      const settleCenter = () => requestFrame(() => {
+        centerRenderedNode();
+        remainingFrames -= 1;
+        if (remainingFrames > 0) settleCenter();
+      });
+      settleCenter();
+    }
+  };
+  if (centerRenderedNode()) {
+    settleRenderedCenter();
+    return;
+  }
+  const canvasNode = canvasDocument?.nodes?.find?.((node) => String(node?.id ?? "") === String(nodeId ?? ""));
+  const cellSize = cell?.getSize?.() ?? {};
+  const x = Number(canvasNode?.position?.x);
+  const y = Number(canvasNode?.position?.y);
+  const width = Number(canvasNode?.size?.width ?? cellSize.width);
+  const height = Number(canvasNode?.size?.height ?? cellSize.height);
+  if ([x, y, width, height].every(Number.isFinite) && typeof graph?.centerPoint === "function") {
+    graph.centerPoint(x + (width / 2), y + (height / 2));
+  } else graph?.centerCell?.(cell);
+  settleRenderedCenter();
+}
+
+export function createCanvasAgentController({ surface, workbench, renderPanel, renderLayout, pollIntervalMs = 1500 }) {
   const ui = workbench.ui ?? (workbench.ui = {});
   const agent = ensureCanvasAgentState(ui);
+  const captureTimelineScroll = () => captureAgentTimelineScroll(
+    surface.querySelector?.(".canvas-agent-timeline"),
+  );
+  const restoreTimelineScroll = (state) => restoreAgentTimelineScroll(
+    surface.querySelector?.(".canvas-agent-timeline"),
+    state,
+  );
   const syncPanel = () => {
     const current = surface.querySelector?.("[data-canvas-agent-panel]");
     if (!current || typeof document === "undefined") return false;
+    const timelineScroll = captureAgentTimelineScroll(current.querySelector?.(".canvas-agent-timeline"));
     const template = document.createElement("template");
     template.innerHTML = renderCanvasAgentPanel(ui);
     const next = template.content.firstElementChild;
     if (!next) return false;
     current.replaceWith(next);
     renderPanel?.(next);
+    restoreAgentTimelineScroll(next.querySelector?.(".canvas-agent-timeline"), timelineScroll);
+    return true;
+  };
+  const syncPanelVisibility = () => {
+    const layout = surface.querySelector?.(".new-canvas-layout");
+    const workspace = surface.querySelector?.("[data-new-canvas-workspace]");
+    if (!layout || !workspace) return false;
+    const panelOpen = agent.panelOpen !== false;
+    layout.classList?.toggle?.("is-agent-collapsed", !panelOpen);
+    const currentPanel = surface.querySelector?.("[data-canvas-agent-panel]");
+    const reopenButton = surface.querySelector?.(".canvas-agent-reopen");
+    if (panelOpen) {
+      reopenButton?.remove?.();
+      if (!currentPanel) {
+        if (typeof workspace.insertAdjacentHTML !== "function") return false;
+        workspace.insertAdjacentHTML("afterend", renderCanvasAgentPanel(ui));
+      }
+    } else {
+      currentPanel?.remove?.();
+      if (!reopenButton) {
+        if (typeof workspace.insertAdjacentHTML !== "function") return false;
+        workspace.insertAdjacentHTML("beforeend", renderCanvasAgentReopenButton());
+      }
+    }
     return true;
   };
   let pollTimer = null;
@@ -229,6 +364,68 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
   let streamInFlight = false;
   let realtimeGeneration = 0;
   let disposed = false;
+  const refreshedCanvasEventKeys = new Set();
+  const canvasRefreshRetryTimers = new Set();
+  const canvasRefreshRetryDelaysMs = [250, 750, 1_500, 3_000, 5_000, 5_000];
+
+  const canvasDocumentHasGenerationResult = (generationTaskId) => {
+    const nodes = workbench.ui?.canvasDocument?.nodes;
+    if (!Array.isArray(nodes)) return false;
+    return nodes.some((node) => {
+      const data = node?.data ?? {};
+      const taskId = String(data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? "").trim();
+      if (taskId !== generationTaskId) return false;
+      const status = String(data.status ?? "").trim().toLowerCase();
+      return ["completed", "succeeded"].includes(status) && Boolean(
+        String(data.storageObjectId ?? data.resultStorageObjectId ?? "").trim()
+        || String(data.imageUrl ?? data.resultUrl ?? data.url ?? data.previewUrl ?? "").trim(),
+      );
+    });
+  };
+
+  const retryCanvasRefreshAfterGeneration = (generationTaskId, attempt = 0) => {
+    if (disposed || canvasDocumentHasGenerationResult(generationTaskId)) return;
+    if (attempt >= canvasRefreshRetryDelaysMs.length) return;
+    const timer = setTimeout(async () => {
+      canvasRefreshRetryTimers.delete(timer);
+      if (disposed || canvasDocumentHasGenerationResult(generationTaskId)) return;
+      try {
+        await Promise.resolve(workbench.refreshCanvasAfterAgentPatch());
+      } catch {
+        // A later retry can recover from a transient canvas head failure.
+      }
+      retryCanvasRefreshAfterGeneration(generationTaskId, attempt + 1);
+    }, canvasRefreshRetryDelaysMs[attempt]);
+    canvasRefreshRetryTimers.add(timer);
+  };
+
+  const refreshCanvasAfterAgentMutation = (incoming = []) => {
+    if (typeof workbench.refreshCanvasAfterAgentPatch !== "function") return;
+    for (const event of Array.isArray(incoming) ? incoming : []) {
+      const eventType = String(event?.eventType ?? "");
+      const stepId = String(event?.event?.stepId ?? "");
+      const generationTaskId = String(event?.event?.generationTaskId ?? "");
+      let refreshKey = "";
+      if (eventType === "step.succeeded" && stepId) {
+        const created = (agent.events ?? []).find((candidate) =>
+          candidate?.eventType === "step.created"
+          && String(candidate?.event?.stepId ?? "") === stepId
+          && String(candidate?.event?.toolId ?? "") === "canvas.patch",
+        );
+        if (created) refreshKey = `canvas.patch:${stepId}`;
+      } else if (eventType === "task.waiting_external" && generationTaskId) {
+        refreshKey = `generation.queued:${generationTaskId}`;
+      } else if (eventType === "generation.completed_wakeup" && generationTaskId) {
+        refreshKey = `generation.completed:${generationTaskId}`;
+      }
+      if (!refreshKey || refreshedCanvasEventKeys.has(refreshKey)) continue;
+      refreshedCanvasEventKeys.add(refreshKey);
+      void Promise.resolve(workbench.refreshCanvasAfterAgentPatch()).catch(() => undefined);
+      if (eventType === "generation.completed_wakeup" && generationTaskId) {
+        retryCanvasRefreshAfterGeneration(generationTaskId);
+      }
+    }
+  };
 
   const stopPolling = () => {
     realtimeGeneration += 1;
@@ -270,6 +467,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
         const event = message?.data;
         if (!event || typeof event !== "object" || !event.eventType) continue;
         reduceCanvasAgentEvents(agent, [event]);
+        refreshCanvasAfterAgentMutation([event]);
         agent.error = "";
         syncPanel();
         if (TERMINAL_STATUSES.has(agent.status)) {
@@ -303,6 +501,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
       const events = Array.isArray(payload?.events) ? payload.events : [];
       if (events.length) {
         reduceCanvasAgentEvents(agent, events);
+        refreshCanvasAfterAgentMutation(events);
         agent.error = "";
         if (TERMINAL_STATUSES.has(agent.status)) await refreshConversationMessages(agent.conversationId);
         syncPanel();
@@ -327,6 +526,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
   };
 
   const hydrateMediaMessages = async () => {
+    agent.messages = collapseAgentGenerationMessages(agent.messages);
     const taskIds = [...new Set((agent.messages ?? []).map((message) => message.generationTaskId).filter(Boolean))];
     if (!taskIds.length) return agent.messages;
     let items = [];
@@ -341,10 +541,14 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
       return agent.messages;
     }
     const byTaskId = new Map(items.map((task) => [String(task?.taskId ?? task?.id ?? ""), normalizeAgentMediaTask(task)]));
-    agent.messages = agent.messages.map((message) => ({
-      ...message,
-      media: byTaskId.get(message.generationTaskId) ?? message.media ?? null,
-    }));
+    agent.messages = agent.messages.map((message) => {
+      const media = byTaskId.get(message.generationTaskId) ?? message.media ?? null;
+      return {
+        ...message,
+        media,
+        canvasNodeId: resolveAgentMediaCanvasNodeId(workbench.ui?.canvasDocument, message, media),
+      };
+    });
     return agent.messages;
   };
 
@@ -461,7 +665,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
     if (!canvasId || typeof workbench.api?.listCanvasAgentModels !== "function") {
       agent.models = [];
       agent.modelsStatus = "unavailable";
-      agent.modelsError = "Agent 模型列表暂不可用";
+      agent.modelsError = "文本模型列表暂不可用";
       syncPanel();
       return [];
     }
@@ -476,7 +680,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
       if (!agent.models.some((model) => model.modelCode === agent.modelCode)) {
         agent.modelCode = agent.models[0]?.modelCode ?? "";
       }
-      if (!agent.models.length) agent.modelsError = "管理员尚未配置可用 Agent 模型";
+      if (!agent.models.length) agent.modelsError = "管理员尚未配置可用文本模型";
     } catch (error) {
       agent.models = [];
       agent.modelsStatus = "unavailable";
@@ -579,13 +783,25 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
 
   return {
     syncPanel,
+    captureTimelineScroll,
+    restoreTimelineScroll,
     loadModels,
     loadMessages,
     loadFileGrants,
     loadMemories,
     loadTaskCenter,
+    handleClick(target) {
+      if (!agent.modeMenuOpen || target?.closest?.(".canvas-agent-mode-picker")) return false;
+      agent.modeMenuOpen = false;
+      syncPanel();
+      return true;
+    },
     handleInput(target) {
       const field = String(target?.dataset?.agentField ?? "");
+      if (field === "conversationTitle") {
+        agent.titleDraft = Array.from(String(target.value ?? "")).slice(0, 10).join("");
+        return true;
+      }
       if (!field || !Object.hasOwn(agent, field)) return false;
       const value = String(target.value ?? "");
       if (field === "conversationId" && value !== agent.conversationId) {
@@ -596,19 +812,101 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
       agent[field] = value;
       return true;
     },
+    handleBlur(target) {
+      if (target?.dataset?.agentField !== "conversationTitle" || !agent.titleEditing || agent.busyAction) {
+        return false;
+      }
+      const savePromise = this.handleAction({ dataset: { agentAction: "save-conversation-title" } });
+      const trackedSave = savePromise.finally(() => {
+        if (agent.titleSavePromise === trackedSave) agent.titleSavePromise = null;
+      });
+      agent.titleSavePromise = trackedSave;
+      return true;
+    },
     handleKeydown(event, target) {
+      if (event.key === "Escape" && agent.modeMenuOpen) {
+        event.preventDefault();
+        agent.modeMenuOpen = false;
+        syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-mode-menu"]')?.focus?.());
+        return true;
+      }
+      if (target?.dataset?.agentField === "conversationTitle") {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void this.handleAction({ dataset: { agentAction: "save-conversation-title" } });
+          return true;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          agent.titleEditing = false;
+          syncPanel();
+          return true;
+        }
+        return false;
+      }
       if (target?.dataset?.agentField !== "promptDraft" || event.key !== "Enter" || event.shiftKey) return false;
       event.preventDefault();
       void this.handleAction({ dataset: { agentAction: "send" } });
       return true;
     },
+    handleDoubleClick(target) {
+      if (!target?.closest?.("[data-agent-conversation-title]") || !agent.conversationId) return false;
+      const conversation = (agent.conversations ?? []).find((item) => item.id === agent.conversationId);
+      agent.titleDraft = normalizeConversationTitle(conversation?.title ?? "新会话");
+      agent.titleEditing = true;
+      syncPanel();
+      queueMicrotask(() => {
+        const input = surface.querySelector?.('[data-agent-field="conversationTitle"]');
+        input?.focus?.();
+        input?.select?.();
+      });
+      return true;
+    },
     async handleAction(target) {
       const action = String(target?.dataset?.agentAction ?? "");
       if (!action) return false;
+      if (action !== "save-conversation-title" && agent.titleSavePromise) {
+        await agent.titleSavePromise;
+      }
+      if (action === "toggle-mode-menu") {
+        agent.modeMenuOpen = !agent.modeMenuOpen;
+        syncPanel();
+        if (agent.modeMenuOpen) {
+          queueMicrotask(() => surface.querySelector?.('[data-agent-action="set-mode"][aria-selected="true"]')?.focus?.());
+        }
+        return true;
+      }
       if (action === "set-mode") {
         const mode = String(target.dataset.agentMode ?? "b");
         agent.mode = AGENT_MODES.some((item) => item.id === mode) ? mode : "b";
+        agent.modeMenuOpen = false;
         syncPanel();
+        queueMicrotask(() => surface.querySelector?.('[data-agent-action="toggle-mode-menu"]')?.focus?.());
+        return true;
+      }
+      if (action === "open-agent-history") {
+        agent.historyOpen = !agent.historyOpen;
+        if (agent.historyOpen) await loadConversations();
+        syncPanel();
+        return true;
+      }
+      if (action === "select-agent-conversation") {
+        const conversationId = String(target.dataset.conversationId ?? "");
+        if (!conversationId) return true;
+        agent.historyOpen = false;
+        agent.conversationId = conversationId;
+        await loadMessages(conversationId);
+        syncPanel();
+        return true;
+      }
+      if (action === "close-agent-panel" || action === "open-agent-panel") {
+        agent.panelOpen = action === "open-agent-panel";
+        agent.historyOpen = false;
+        if (!syncPanelVisibility()) {
+          if (typeof renderLayout === "function") await renderLayout();
+          else syncPanel();
+        }
         return true;
       }
       if (action === "open-task-center" || action === "open-memory") {
@@ -750,17 +1048,18 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
         const messageId = String(target.dataset.messageId ?? "");
         const message = (agent.messages ?? []).find((item) => item.id === messageId);
         if (!message) return true;
-        if (action === "locate-agent-canvas-node" || message.canvasNodeId) {
-          const nodeId = String(message.canvasNodeId ?? "");
-          if (!nodeId) return true;
+        const locatedNodeId = resolveAgentMediaCanvasNodeId(workbench.ui?.canvasDocument, message, message.media);
+        if (locatedNodeId) {
+          const nodeId = locatedNodeId;
+          message.canvasNodeId = nodeId;
           workbench.ui.selectedCanvasNodeId = nodeId;
           workbench.ui.canvasEditorOpen = true;
+          workbench.onCanvasNodeSelected?.(nodeId);
           const cell = workbench.canvasGraph?.getCellById?.(nodeId);
           if (cell) {
             workbench.canvasGraph.select?.(cell);
-            workbench.canvasGraph.centerCell?.(cell);
+            centerAgentCanvasNode(workbench.canvasGraph, cell, surface, workbench.ui?.canvasDocument, nodeId);
           }
-          await workbench.refreshCanvasSurface?.();
           return true;
         }
         const media = message.media;
@@ -796,10 +1095,34 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
       }
       if (action === "new-conversation") {
         stopPolling();
-        Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], sequence: 0, error: "", panelView: "timeline" });
+        Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], sequence: 0, error: "", panelView: "timeline", panelOpen: true, historyOpen: false, titleEditing: false, titleDraft: "" });
         await run(action, async () => {
           const conversationId = await ensureConversation();
           agent.conversations = [{ id: conversationId, title: "画布协作", status: "active" }, ...(agent.conversations ?? []).filter((item) => item.id !== conversationId)];
+        });
+        return true;
+      }
+      if (action === "save-conversation-title") {
+        await run(action, async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const conversationId = agent.conversationId;
+          const conversation = (agent.conversations ?? []).find((item) => item.id === conversationId);
+          if (!canvasId || !conversation) throw new Error("canvas_agent_conversation_missing");
+          const title = normalizeConversationTitle(agent.titleDraft || conversation.title);
+          if (typeof workbench.api?.updateCanvasAgentConversation === "function") {
+            const payload = await workbench.api.updateCanvasAgentConversation(canvasId, {
+              conversationId,
+              title,
+            });
+            const updated = payload?.conversation ?? { title };
+            agent.conversations = (agent.conversations ?? []).map((item) => item.id === conversationId ? { ...item, ...updated } : item);
+          } else {
+            agent.conversations = (agent.conversations ?? []).map((item) => item.id === conversationId ? { ...item, title } : item);
+          }
+          if (agent.conversationId === conversationId) {
+            agent.titleDraft = title;
+            agent.titleEditing = false;
+          }
         });
         return true;
       }
@@ -834,32 +1157,36 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
         });
         return true;
       }
-      if (action === "archive-conversation" || action === "restore-conversation") {
-        await run(action, async () => {
-          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
-          if (!canvasId || !agent.conversationId) throw new Error("canvas_agent_conversation_missing");
-          const status = action === "archive-conversation" ? "archived" : "active";
-          const payload = await workbench.api.updateCanvasAgentConversation(canvasId, {
-            conversationId: agent.conversationId,
-            status,
-          });
-          const updated = payload?.conversation ?? { id: agent.conversationId, status };
-          agent.conversations = (agent.conversations ?? []).map((conversation) =>
-            conversation.id === agent.conversationId ? { ...conversation, ...updated } : conversation,
-          );
-        });
+     if (action === "archive-conversation" || action === "restore-conversation") {
+       await run(action, async () => {
+         const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          const conversationId = String(target.dataset.conversationId ?? agent.conversationId);
+          if (!canvasId || !conversationId) throw new Error("canvas_agent_conversation_missing");
+         const status = action === "archive-conversation" ? "archived" : "active";
+         const payload = await workbench.api.updateCanvasAgentConversation(canvasId, {
+            conversationId,
+           status,
+         });
+          const updated = payload?.conversation ?? { id: conversationId, status };
+         agent.conversations = (agent.conversations ?? []).map((conversation) =>
+            conversation.id === conversationId ? { ...conversation, ...updated } : conversation,
+         );
+       });
         return true;
       }
       if (action === "delete-conversation") {
         await run(action, async () => {
           const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
-          const deletedId = agent.conversationId;
+          const deletedId = String(target.dataset.conversationId ?? agent.conversationId);
           if (!canvasId || !deletedId) throw new Error("canvas_agent_conversation_missing");
-          stopPolling();
+          const deletingCurrentConversation = deletedId === agent.conversationId;
+          if (deletingCurrentConversation) stopPolling();
           await workbench.api.deleteCanvasAgentConversation(canvasId, deletedId);
           agent.conversations = (agent.conversations ?? []).filter((conversation) => conversation.id !== deletedId);
-          agent.conversationId = String(agent.conversations[0]?.id ?? "");
-          await loadMessages(agent.conversationId);
+          if (deletingCurrentConversation) {
+            agent.conversationId = String(agent.conversations[0]?.id ?? "");
+            await loadMessages(agent.conversationId);
+          }
         });
         return true;
       }
@@ -895,7 +1222,7 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
             agent.modelsStatus !== "ready"
             || !agent.models.some((model) => model.modelCode === modelCode)
           ) {
-            throw new Error("管理员尚未配置可用 Agent 模型。");
+            throw new Error("管理员尚未配置可用文本模型。");
           }
           const conversationId = await ensureConversation();
           const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
@@ -967,6 +1294,8 @@ export function createCanvasAgentController({ surface, workbench, renderPanel, p
     dispose() {
       disposed = true;
       stopPolling();
+      for (const timer of canvasRefreshRetryTimers) clearTimeout(timer);
+      canvasRefreshRetryTimers.clear();
     },
   };
 }
@@ -1437,6 +1766,35 @@ function normalizeAgentFileGrant(grant = {}) {
   };
 }
 
+const AGENT_TIMELINE_BOTTOM_THRESHOLD = 32;
+
+function captureAgentTimelineScroll(timeline) {
+  if (!timeline) return { stickToBottom: true, scrollTop: 0 };
+  const scrollTop = Number(timeline.scrollTop) || 0;
+  const scrollHeight = Number(timeline.scrollHeight) || 0;
+  const clientHeight = Number(timeline.clientHeight) || 0;
+  return {
+    stickToBottom: scrollHeight - clientHeight - scrollTop <= AGENT_TIMELINE_BOTTOM_THRESHOLD,
+    scrollTop,
+  };
+}
+
+function restoreAgentTimelineScroll(timeline, state) {
+  if (!timeline) return;
+  const apply = () => {
+    const scrollHeight = Number(timeline.scrollHeight) || 0;
+    const clientHeight = Number(timeline.clientHeight) || 0;
+    const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+    timeline.scrollTop = state?.stickToBottom
+      ? maxScrollTop
+      : Math.min(Math.max(0, Number(state?.scrollTop) || 0), maxScrollTop);
+  };
+  apply();
+  if (state?.stickToBottom && typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(apply);
+  }
+}
+
 function formatAgentGrantExpiry(value) {
   const timestamp = Date.parse(String(value ?? ""));
   if (!Number.isFinite(timestamp)) return "有效期未知";
@@ -1444,9 +1802,32 @@ function formatAgentGrantExpiry(value) {
   return minutes > 60 ? `${Math.ceil(minutes / 60)} 小时后到期` : `${minutes} 分钟后到期`;
 }
 
-function renderAgentTimeline(agent) {
+export function collapseAgentTimelineEvents(events = []) {
+  const standalone = [];
+  const steps = new Map();
+  for (const record of Array.isArray(events) ? events : []) {
+    const event = record?.event && typeof record.event === "object" ? record.event : {};
+    const stepId = String(event.stepId ?? "");
+    if (!stepId) {
+      standalone.push(record);
+      continue;
+    }
+    const previous = steps.get(stepId);
+    steps.set(stepId, {
+      ...(previous ?? {}),
+      ...record,
+      event: { ...(previous?.event ?? {}), ...event },
+    });
+  }
+  return [...standalone, ...steps.values()]
+    .sort((left, right) => Number(left?.sequence ?? 0) - Number(right?.sequence ?? 0));
+}
+
+function renderAgentTimeline(agent, canvasDocument = null) {
+  const timelineEvents = collapseAgentTimelineEvents(agent.events).slice(-30);
+  const timelineMessages = collapseAgentGenerationMessages(agent.messages);
   const entries = [
-    ...(Array.isArray(agent.messages) ? agent.messages : []).map((message, index) => ({
+    ...timelineMessages.map((message, index) => ({
       id: `message-${message.id || index}`,
       messageId: String(message.id ?? ""),
       type: message.interjection ? "用户插话" : agentMessageLabel(message.role),
@@ -1455,9 +1836,9 @@ function renderAgentTimeline(agent) {
       kind: message.role === "assistant" ? "answer" : "message",
       citations: normalizeAgentCitations(message.citations),
       media: message.media ?? null,
-      canvasNodeId: String(message.canvasNodeId ?? ""),
+      canvasNodeId: resolveAgentMediaCanvasNodeId(canvasDocument, message, message.media),
     })),
-    ...(Array.isArray(agent.events) ? agent.events : []).slice(-30).map((event) => ({
+    ...timelineEvents.map((event) => ({
       id: event.id ?? `event-${event.sequence}`,
       type: agentEventLabel(event.eventType),
       summary: agentEventSummary(event),
@@ -1505,6 +1886,33 @@ export function normalizeAgentMessage(message = {}) {
   };
 }
 
+export function collapseAgentGenerationMessages(messages = []) {
+  const collapsed = [];
+  const indexByTaskId = new Map();
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const generationTaskId = String(message?.generationTaskId ?? "");
+    if (message?.role !== "tool" || !generationTaskId) {
+      collapsed.push(message);
+      continue;
+    }
+    const previousIndex = indexByTaskId.get(generationTaskId);
+    if (previousIndex === undefined) {
+      indexByTaskId.set(generationTaskId, collapsed.length);
+      collapsed.push(message);
+      continue;
+    }
+    const previous = collapsed[previousIndex];
+    collapsed[previousIndex] = {
+      ...previous,
+      ...message,
+      id: previous.id || message.id,
+      text: previous.text || message.text,
+      canvasNodeId: message.canvasNodeId || previous.canvasNodeId || "",
+    };
+  }
+  return collapsed;
+}
+
 export function normalizeAgentMediaTask(task = {}) {
   const result = task.result && typeof task.result === "object" ? task.result : {};
   const audioItem = Array.isArray(task.generatedAudioItems) ? task.generatedAudioItems[0] : null;
@@ -1527,7 +1935,28 @@ export function normalizeAgentMediaTask(task = {}) {
     storageObjectId: String(result.storageObjectId ?? ""),
     assetId: String(result.assetId ?? ""),
     assetVersionId: String(result.assetVersionId ?? ""),
+    canvasNodeId: String(
+      task.canvasNodeId ?? result.canvasNodeId ??
+      (String(task.targetType ?? "") === "canvas" ? task.targetId : "") ?? "",
+    ),
   };
+}
+
+function resolveAgentMediaCanvasNodeId(document, message = {}, media = null) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const explicitIds = [message.canvasNodeId, media?.canvasNodeId]
+    .map((value) => String(value ?? ""))
+    .filter(Boolean);
+  const explicitNode = nodes.find((node) => explicitIds.includes(String(node?.id ?? "")));
+  if (explicitNode) return String(explicitNode.id);
+  const generationTaskId = String(media?.taskId ?? message.generationTaskId ?? "");
+  if (!generationTaskId) return "";
+  const taskNode = nodes.find((node) => [
+    node?.data?.generationTaskId,
+    node?.data?.lastTaskId,
+    node?.data?.taskId,
+  ].some((value) => String(value ?? "") === generationTaskId));
+  return String(taskNode?.id ?? "");
 }
 
 function renderAgentMedia(media, messageIndex, canvasNodeId) {
@@ -1694,6 +2123,7 @@ function agentEventLabel(type) {
     "task.stop_requested": "请求停止", "task.replanned": "重新规划", "task.interjected": "已接收插话",
     "step.created": "准备工具", "step.running": "工具执行中", "step.succeeded": "工具完成",
     "step.failed": "工具失败", "step.waiting_approval": "等待工具审批", "step.waiting_external": "等待外部任务",
+    "tool.input_rejected": "工具参数无效", "tool.duplicate_rejected": "重复工具调用",
     "policy.decided": "策略检查", "conversation.deleted": "会话已删除",
     "approval.requested": "等待审批", "approval.approved": "审批通过", "approval.rejected": "审批拒绝",
     "step.created": "步骤创建", "step.running": "步骤执行", "step.succeeded": "步骤完成",
@@ -1726,9 +2156,15 @@ function agentEventKindLabel(kind) {
 
 function agentEventMetadata(record) {
   const event = record?.event ?? {};
+  const tokenUsage = event.tokenUsage && typeof event.tokenUsage === "object" ? event.tokenUsage : {};
+  const promptTokens = normalizeAgentTokenCount(tokenUsage.promptTokens);
+  const completionTokens = normalizeAgentTokenCount(tokenUsage.completionTokens);
+  const totalTokens = normalizeAgentTokenCount(tokenUsage.totalTokens) || promptTokens + completionTokens;
   const values = [
+    totalTokens ? `实际 Token ${formatAgentTokenCount(totalTokens)}` : "",
     event.toolId ? `工具 ${event.toolId}` : "",
     event.decision ? `决策 ${event.decision}` : "",
+    event.errorCode || event.failureCode ? `错误 ${event.errorCode ?? event.failureCode}` : "",
     event.stepId ? `步骤 ${event.stepId}` : "",
     event.providerRequestId ? `请求 ${event.providerRequestId}` : "",
     event.generationTaskId ? `媒体任务 ${event.generationTaskId}` : "",
@@ -1736,10 +2172,23 @@ function agentEventMetadata(record) {
   return [...new Set(values)].slice(0, 4);
 }
 
+function normalizeAgentTokenCount(value) {
+  const count = Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0;
+}
+
+function formatAgentTokenCount(value) {
+  return normalizeAgentTokenCount(value).toLocaleString("zh-CN");
+}
+
 function agentEventSummary(record) {
   const event = record?.event ?? {};
+  const eventType = String(record?.eventType ?? "");
+  const failureCode = eventType.endsWith(".failed") || eventType.endsWith(".rejected")
+    ? event.errorCode ?? event.failureCode
+    : null;
   return String(
-    event.message ?? event.reason ?? event.toolId ?? event.effect ?? event.status ?? event.errorCode ??
+    failureCode ?? event.message ?? event.reason ?? event.toolId ?? event.effect ?? event.status ?? event.errorCode ?? event.failureCode ??
     (event.stepId ? `步骤 ${event.stepId}` : "状态已更新"),
   );
 }
@@ -1756,6 +2205,11 @@ function friendlyAgentError(error) {
     canvas_agent_memory_too_large: "记忆内容超过 16 KB 限制。",
   };
   return labels[message] ?? message;
+}
+
+function normalizeConversationTitle(value) {
+  const title = Array.from(String(value ?? "").trim()).slice(0, 10).join("");
+  return title || "新会话";
 }
 
 function normalizeAgentModel(model = {}) {

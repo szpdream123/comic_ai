@@ -48,6 +48,7 @@ export interface GenerationShardWorkerRunnerDeps {
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
   closeWorkersOnDiscoveryFailure?: boolean;
+  onRefreshError?(error: unknown): void;
 }
 
 /**
@@ -151,7 +152,7 @@ export function createGenerationShardWorkerRunner(
       await refresh();
       if (!closed && refreshIntervalMs > 0 && !timer) {
         timer = timers.setInterval(() => {
-          void refresh().catch(() => undefined);
+          void refresh().catch((error) => deps.onRefreshError?.(error));
         }, refreshIntervalMs);
       }
     },

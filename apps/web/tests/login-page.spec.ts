@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 describe("app login modal shell", () => {
-  it("renders the production workbench before waiting for the session", async () => {
+  it("loads the production workbench module while deferring its first render until the session resolves", async () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
     assert.match(js, /const productionWorkbenchPromise = root\s*\? import\(/);
     assert.match(js, /session: activeSession/);
     assert.match(js, /api: createAnonymousApi\(creatorApi\)/);
+    assert.match(js, /deferInitialRender: true/);
     assert.match(js, /const sessionPromise = creatorApi\.getSession\(\)/);
     assert.match(js, /await sessionPromise\.then\(async \(session\)/);
     assert.match(js, /updateSession\?\.\(session, creatorApi\)/);
@@ -18,6 +19,8 @@ describe("app login modal shell", () => {
       "utf8",
     );
     assert.match(workbenchJs, /workbench\.updateSession = async \(nextSession/);
+    assert.match(workbenchJs, /if \(!deferInitialRender\) \{[\s\S]*?await refresh\(workbench\);[\s\S]*?scheduleLazySurfaceLoad\(workbench\);[\s\S]*?\}/);
+    assert.match(workbenchJs, /if \(deferInitialRender\) syncAnnouncementUnreadState\(workbench\)/);
     assert.match(js, /resolvePublicSeoContentForSession\(session\)/);
     assert.match(js, /resolvePublicSeoContentForSession\(activeSession\)/);
     assert.match(

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   renderSelectionPickerModal,
   syncSelectionPickerSelection,
+  syncSelectionPickerTab,
 } from "../src/features/production-workbench/selection-picker-modal.js";
 
 describe("selection picker modal", () => {
@@ -58,6 +59,32 @@ describe("selection picker modal", () => {
     assert.match(html, /selection-picker-confirm[^>]*disabled/);
   });
 
+  it("filters a source category before applying its content tab", () => {
+    const html = renderSelectionPickerModal({
+      show: true,
+      id: "material-picker",
+      title: "选择素材引用",
+      sourceTabs: [
+        { id: "official", label: "官方素材库" },
+        { id: "team", label: "团队素材库" },
+      ],
+      activeSource: "team",
+      sourceAction: "set-material-source",
+      tabs: [{ id: "character", label: "人物", count: 1 }],
+      activeTab: "character",
+      items: [
+        { id: "official-character", sourceGroup: "official", group: "character", label: "官方人物" },
+        { id: "team-character", sourceGroup: "team", group: "character", label: "团队人物" },
+      ],
+    });
+
+    assert.match(html, /selection-picker-modal has-source-tabs/);
+    assert.match(html, /data-action="set-material-source"/);
+    assert.match(html, /data-picker-source="team"/);
+    assert.match(html, /团队人物/);
+    assert.doesNotMatch(html, /官方人物/);
+  });
+
   it("updates selection in place without rebuilding the modal", () => {
     const first = createPickerItem("first");
     const second = createPickerItem("second");
@@ -86,6 +113,42 @@ describe("selection picker modal", () => {
     assert.equal(confirm.disabled, false);
     assert.equal(secondaryConfirm.disabled, true);
   });
+
+  it("switches tabs and list content in place", () => {
+    const officialTab = createPickerTab("official");
+    const personalTab = createPickerTab("personal");
+    const content = { innerHTML: "", scrollTop: 120 };
+    const confirm = { disabled: false };
+    const layer = {
+      dataset: { selectionPickerId: "shared-picker" },
+      querySelectorAll(selector) {
+        return selector === "[data-picker-tab]" ? [officialTab, personalTab] : [];
+      },
+      querySelector(selector) {
+        if (selector === ".selection-picker-content") return content;
+        if (selector === ".selection-picker-confirm") return confirm;
+        return null;
+      },
+    };
+    const root = { querySelectorAll() { return [layer]; } };
+
+    assert.equal(syncSelectionPickerTab(root, {
+      pickerId: "shared-picker",
+      activeTab: "personal",
+      items: [
+        { id: "official-1", group: "official", label: "官方资产" },
+        { id: "personal-1", group: "personal", label: "个人资产" },
+      ],
+      selectAction: "select-asset",
+    }), true);
+    assert.equal(officialTab.selected, false);
+    assert.equal(personalTab.selected, true);
+    assert.match(content.innerHTML, /个人资产/);
+    assert.doesNotMatch(content.innerHTML, /官方资产/);
+    assert.match(content.innerHTML, /data-action="select-asset"/);
+    assert.equal(content.scrollTop, 0);
+    assert.equal(confirm.disabled, true);
+  });
 });
 
 function createPickerItem(id) {
@@ -102,4 +165,20 @@ function createPickerItem(id) {
     },
   };
   return item;
+}
+
+function createPickerTab(id) {
+  const tab = {
+    dataset: { pickerTab: id },
+    selected: false,
+    setAttribute(name, value) {
+      if (name === "aria-selected") this.selected = value === "true";
+    },
+  };
+  tab.classList = {
+    toggle(_name, selected) {
+      tab.selected = selected;
+    },
+  };
+  return tab;
 }

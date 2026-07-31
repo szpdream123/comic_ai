@@ -32,6 +32,7 @@ import {
 
 export interface MountDirectorDeskOptions {
   instanceId?: string;
+  entryMode?: "standalone" | "canvas";
   onClose?: () => void;
   onRequireLogin?: () => void | Promise<void>;
   onAuthorizeCreate?: (options?: { interactive?: boolean }) => boolean | Promise<boolean>;
@@ -64,6 +65,7 @@ function scopeDirectorDeskStyles(css: string) {
 
 export function mountDirectorDesk(container: HTMLElement, options: MountDirectorDeskOptions = {}) {
   unmountDirectorDesk(container);
+  container.dataset.directorDeskEntryMode = options.entryMode ?? "standalone";
 
   const shadowRoot = container.shadowRoot ?? container.attachShadow({ mode: "open" });
   shadowRoot.replaceChildren();
@@ -94,6 +96,7 @@ ${objectMotionTransportStyles}
     <React.StrictMode>
       <App
         initialInstanceId={options.instanceId}
+        entryMode={options.entryMode ?? "standalone"}
         onClose={options.onClose}
         onRequireLogin={options.onRequireLogin}
         onAuthorizeCreate={options.onAuthorizeCreate}
@@ -147,6 +150,7 @@ export function unmountDirectorDesk(container: HTMLElement) {
   releaseDirectorDeskGpuResources(mounted.shadowRoot);
   mounted.shadowRoot.replaceChildren();
   mountedDirectorDesks.delete(container);
+  delete container.dataset.directorDeskEntryMode;
   clearDirectorDeskNotificationHandler();
   clearDirectorDeskPanoramaUploadHandler();
   clearDirectorDeskCaptureHandler();

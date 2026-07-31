@@ -325,6 +325,24 @@ it("returns to the director desk home from the editor close action", async () =>
   expect(onClose).not.toHaveBeenCalled();
 });
 
+it("opens the persisted scoped scene and returns to the host when opened from Canvas", async () => {
+  const user = userEvent.setup();
+  const onClose = vi.fn();
+
+  render(<App initialInstanceId="desk_1" entryMode="canvas" onClose={onClose} />);
+
+  await screen.findByTestId("mock-director-canvas");
+  expect(vi.mocked(fetch).mock.calls.some(([input]) => (
+    new URL(typeof input === "string" ? input : input.toString(), window.location.origin).pathname
+      === "/api/director-desks/desk_1/scene"
+  ))).toBe(true);
+
+  await user.click(screen.getByRole("button", { name: "关闭" }));
+
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("heading", { name: "导演台" })).not.toBeInTheDocument();
+});
+
 it("opens the operation manual and closes it when clicking outside the dialog", async () => {
   const user = userEvent.setup();
   render(<App initialInstanceId="desk_1" />);

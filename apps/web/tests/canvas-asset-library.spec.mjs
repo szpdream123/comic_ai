@@ -28,6 +28,7 @@ test("Canvas generation history maps artifacts into reusable Canvas assets", () 
 
   assert.deepEqual(assets, [{
     id: "artifact-1",
+    source: "outputs",
     runId: "run-1",
     artifactId: "artifact-1",
     storageObjectId: "storage-1",
@@ -38,6 +39,7 @@ test("Canvas generation history maps artifacts into reusable Canvas assets", () 
     meta: "image · image-model",
     status: "已选",
     createdAt: "2026-07-25T08:00:00.000Z",
+    tags: [],
     url: "https://example.test/thumb.png",
     previewUrl: "https://example.test/thumb.png",
   }]);
@@ -51,6 +53,7 @@ test("Canvas assets preserve storage references when inserted as source nodes", 
     kind: "video",
     title: "镜头 01",
     url: "https://example.test/video.mp4",
+    posterUrl: "https://example.test/video-poster.jpg",
   }), {
     source: "canvas_artifact",
     status: "ready",
@@ -63,7 +66,48 @@ test("Canvas assets preserve storage references when inserted as source nodes", 
     assetVersionId: null,
     url: "https://example.test/video.mp4",
     previewUrl: "https://example.test/video.mp4",
+    posterUrl: "https://example.test/video-poster.jpg",
   });
+});
+
+test("Canvas video outputs keep the playable media URL instead of using the thumbnail as an image", () => {
+  const assets = canvasAssetsFromGenerationHistory({
+    items: [{
+      id: "run-video-1",
+      nodeKey: "video-1",
+      mediaKind: "video",
+      artifacts: [{
+        id: "artifact-video-1",
+        artifact_kind: "video",
+        storage_object_id: "storage-video-1",
+        url: "https://example.test/video.mp4",
+        thumbnail_url: "https://example.test/video-poster.jpg",
+      }],
+    }],
+  });
+
+  assert.equal(assets[0].kind, "video");
+  assert.equal(assets[0].url, "https://example.test/video.mp4");
+  assert.equal(assets[0].posterUrl, "https://example.test/video-poster.jpg");
+});
+
+test("Canvas video outputs accept source and download URLs when the provider omits url", () => {
+  const assets = canvasAssetsFromGenerationHistory({
+    items: [{
+      id: "run-video-2",
+      mediaKind: "video",
+      artifacts: [{
+        id: "artifact-video-2",
+        artifact_kind: "video",
+        storage_object_id: "storage-video-2",
+        sourceUrl: "https://example.test/video-source.mp4",
+        thumbnailUrl: "https://example.test/video-poster.jpg",
+      }],
+    }],
+  });
+
+  assert.equal(assets[0].url, "https://example.test/video-source.mp4");
+  assert.equal(assets[0].posterUrl, "https://example.test/video-poster.jpg");
 });
 
 test("Canvas asset sidebar items preserve stable transfer ids and progress state", () => {

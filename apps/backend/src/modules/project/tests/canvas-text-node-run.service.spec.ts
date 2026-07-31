@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import type { TextChatGatewayLike } from "../../ai-storyboard/ai-storyboard-preview.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { createPromptMarketplaceService } from "../../prompt-marketplace/prompt-marketplace.service.ts";
 import { saveCanvasByCanvasProjectId } from "../creator-canvas-record.service.ts";
 import {
   CANVAS_TEXT_NODE_INPUT_MAX_LENGTH,
@@ -101,6 +102,131 @@ describe("canvas text node run service", { concurrency: false }, () => {
       assert.equal(result.result.format, "markdown");
       assert.match(gateway.calls[0]?.prompt ?? "", /Markdown/);
       assert.equal(result.artifact.metadata.format, "markdown");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("resolves one node-local prompt skill and runs paid-skill billing hooks once", async () => {
+    const db = await createMigratedTestDb();
+    const gateway = new StubGateway("技能生成结果");
+    try {
+      const canvas = await seedCanvas(db);
+      const created = await createPromptMarketplaceService({ db }).createItem({
+        userId,
+        title: "悬疑改写",
+        category: "script",
+        content: "加强悬疑节奏，并保留关键人物关系。",
+        priceCredits: 0,
+        publish: true,
+        now: new Date("2026-07-26T03:10:00.000Z"),
+      });
+      const skillId = created.item.id;
+      const textNode = canvas.document.nodes.find((node) => node.id === "ai-text-1");
+      textNode!.data = { ...(textNode!.data ?? {}), promptSkillIds: { script: skillId } };
+      const first = await runCanvasTextNode(db, {
+        canvas,
+        nodeKey: "ai-text-1",
+        idempotencyKey: "skill-run-1",
+        body: { prompt: "改写开场" },
+        userId,
+        gateway,
+        now: new Date("2026-07-26T03:11:00.000Z"),
+      });
+      const replayed = await runCanvasTextNode(db, {
+        canvas,
+        nodeKey: "ai-text-1",
+        idempotencyKey: "skill-run-1",
+        body: { prompt: "改写开场" },
+        userId,
+        gateway,
+        now: new Date("2026-07-26T03:12:00.000Z"),
+      });
+
+      assert.equal(first.status, "succeeded");
+      assert.equal(replayed.replayed, true);
+      assert.equal(gateway.calls.length, 1);
+      assert.match(gateway.calls[0]?.prompt ?? "", /^加强悬疑节奏，并保留关键人物关系。/);
+      assert.match(gateway.calls[0]?.prompt ?? "", /加强悬疑节奏/);
+      const stored = await db.query<{ input_snapshot_json: Record<string, unknown> }>(
+        "SELECT input_snapshot_json FROM creator_canvas_node_runs WHERE id = $1",
+        [first.runId],
+      );
+      const promptSkill = stored.rows[0]?.input_snapshot_json.promptSkill as Record<string, unknown>;
+      assert.equal(promptSkill.id, skillId);
+      assert.equal(typeof promptSkill.contentHash, "string");
+      assert.equal(Object.hasOwn(promptSkill, "content"), false);
+      const usage = await db.query<{ usage_count: number }>("SELECT usage_count::int AS usage_count FROM prompts WHERE id = $1", [skillId]);
+      assert.equal(usage.rows[0]?.usage_count, 1);
+      const paid = await createPromptMarketplaceService({ db }).createItem({
+        userId,
+        title: "付费改写",
+        category: "script",
+        content: "使用付费创作规则。",
+        priceCredits: 8,
+        publish: true,
+        now: new Date("2026-07-26T03:20:00.000Z"),
+      });
+      await assert.rejects(
+        runCanvasTextNode(db, {
+          canvas,
+          nodeKey: "ai-text-1",
+          idempotencyKey: "invalid-skill",
+          body: { prompt: "改写", skill: { id: paid.item.id, category: "unknown" } },
+          userId,
+          gateway,
+          now: new Date(),
+        }),
+        (error: unknown) => error instanceof CanvasTextNodeRunError
+          && error.code === "canvas_text_prompt_skills_invalid",
+      );
+      await assert.rejects(
+        runCanvasTextNode(db, {
+          canvas,
+          nodeKey: "ai-text-1",
+          idempotencyKey: "multiple-skills",
+          body: { prompt: "改写", skills: { script: skillId, shot: paid.item.id } },
+          userId,
+          gateway,
+          now: new Date(),
+        }),
+        (error: unknown) => error instanceof CanvasTextNodeRunError
+          && error.code === "canvas_text_prompt_skills_invalid",
+      );
+      const billingCalls: string[] = [];
+      const paidRun = await runCanvasTextNode(db, {
+        canvas,
+        nodeKey: "ai-text-1",
+        idempotencyKey: "paid-skill",
+        body: { prompt: "改写", skill: { id: paid.item.id, category: "script" } },
+        userId,
+        gateway,
+        billing: {
+          modelCreditCost: 2,
+          async reserve({ skill }) {
+            billingCalls.push(`reserve:${skill?.id}`);
+            return {
+              amount: 10,
+              modelCreditCost: 2,
+              skillCreditCost: 8,
+              mode: "reservation",
+              reservationId: "reservation-1",
+              allocationKey: "canvas-text-result",
+            };
+          },
+          async consume() { billingCalls.push("consume"); },
+          async release() { billingCalls.push("release"); },
+          async grantSkillAuthor({ skill }) { billingCalls.push(`grant:${skill.id}`); },
+        },
+        now: new Date(),
+      });
+      assert.equal(paidRun.result.credit?.consumed, 10);
+      assert.deepEqual(billingCalls, [`reserve:${paid.item.id}`, "consume", `grant:${paid.item.id}`]);
+      assert.equal(gateway.calls.length, 2);
+      const paidUsage = await db.query<{ usage_count: number }>("SELECT usage_count::int AS usage_count FROM prompts WHERE id = $1", [paid.item.id]);
+      assert.equal(paidUsage.rows[0]?.usage_count, 1);
+      const runs = await db.query<{ count: number }>("SELECT count(*)::int AS count FROM creator_canvas_node_runs");
+      assert.equal(runs.rows[0]?.count, 2);
     } finally {
       await db.close();
     }

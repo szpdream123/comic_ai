@@ -1,10 +1,10 @@
 export const CANVAS_NODE_SIZES = {
-  script: { width: 330, height: 160 },
+  script: { width: 300, height: 300 },
   send: { width: 360, height: 170 },
   image: { width: 330, height: 160 },
   video: { width: 360, height: 170 },
   audio: { width: 390, height: 220 },
-  upload: { width: 360, height: 220 },
+  upload: { width: 300, height: 300 },
   director: { width: 500, height: 340 },
   output: { width: 460, height: 280 },
   markdown: { width: 360, height: 220 },
@@ -19,10 +19,10 @@ export const CANVAS_NODE_SIZES = {
   "ai-markdown": { width: 360, height: 220 },
   "ai-storyboard": { width: 420, height: 356 },
   "ai-director": { width: 500, height: 340 },
-  "source-text": { width: 340, height: 200 },
-  "source-image": { width: 360, height: 220 },
-  "source-video": { width: 360, height: 220 },
-  "source-audio": { width: 390, height: 220 },
+  "source-text": { width: 300, height: 300 },
+  "source-image": { width: 300, height: 300 },
+  "source-video": { width: 300, height: 300 },
+  "source-audio": { width: 300, height: 300 },
 };
 
 export function createDefaultCanvasDocument(input = {}) {

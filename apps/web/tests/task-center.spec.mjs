@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  applyTaskCenterTaskProjectionForTest,
   registerTaskCenterTaskForTest,
   resolveTaskCenterPollDelayForTest,
   runTaskCenterPollingForTest,
@@ -58,6 +59,40 @@ function createTaskCenterActionRoot() {
 }
 
 describe("production workbench task center", () => {
+  it("projects live task status and failures into loaded canvas history", async () => {
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        canvasGenerationHistoryItems: [{
+          id: "canvas-run-1",
+          taskId: "canvas-task-1",
+          status: "queued",
+          updatedAt: "2026-07-29T05:00:00.000Z",
+        }],
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "canvas-task-1",
+      status: "failed",
+      progressPercent: 64,
+      progressStage: "provider_processing",
+      failureCode: "content_policy_violation",
+      failure: { displayMessage: "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。" },
+      updatedAt: "2026-07-29T05:02:00.000Z",
+    });
+
+    assert.deepEqual(workbench.ui.canvasGenerationHistoryItems[0], {
+      id: "canvas-run-1",
+      taskId: "canvas-task-1",
+      status: "failed",
+      progressPercent: 64,
+      progressStage: "provider_processing",
+      failure: { displayMessage: "参考图或提示词不符合内容安全策略，请调整素材或提示词后重试。" },
+      updatedAt: "2026-07-29T05:02:00.000Z",
+    });
+  });
+
   it("shows storage retry and manual storage review states instead of generation progress", () => {
     const html = renderProjectDetail({
       state: {},
@@ -180,6 +215,30 @@ describe("production workbench task center", () => {
 
     assert.equal(dom.attributes.get("aria-label"), "任务中心");
     assert.equal(dom.getBadge(), null);
+  });
+
+  it("keeps a known running task running when canvas polling registers its id again", () => {
+    const workbench = {
+      root: createRoot(),
+      ui: {
+        taskCenterTasksById: {},
+        taskCenterTaskOrder: [],
+      },
+    };
+
+    registerTaskCenterTaskForTest(workbench, {
+      taskId: "canvas-video-running-task",
+      status: "running",
+      kind: "video",
+      updatedAt: "2026-07-29T06:53:56.000Z",
+    });
+    registerTaskCenterTaskForTest(workbench, "canvas-video-running-task", {
+      kind: "video",
+      targetType: "canvas_node",
+      targetId: "canvas-video-node",
+    });
+
+    assert.equal(workbench.ui.taskCenterTasksById["canvas-video-running-task"].status, "running");
   });
 
   it("reapplies a known failure when a stale project image target registers", () => {

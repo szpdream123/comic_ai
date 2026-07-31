@@ -144,17 +144,17 @@ export function clearDirectorDeskCaptureHandler(handler?: DirectorDeskCaptureHan
   }
 }
 
-export function postDirectorDeskVideoToHost(blob: Blob, fileName: string) {
-  if (!videoHandler || !blob || blob.size <= 0) return false;
+export async function postDirectorDeskVideoToHost(blob: Blob, fileName: string) {
+  const handler = videoHandler;
+  if (!handler || !blob || blob.size <= 0) return false;
   const file = new File([blob], fileName || "director-desk-reference-video.webm", {
     type: blob.type || "video/webm",
   });
   try {
-    void Promise.resolve(videoHandler(file)).catch((error) => {
-      console.error("[director-desk] host video handler failed", error);
-    });
+    await handler(file);
   } catch (error) {
     console.error("[director-desk] host video handler failed", error);
+    throw error;
   }
   return true;
 }

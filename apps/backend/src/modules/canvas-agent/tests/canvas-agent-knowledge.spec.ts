@@ -256,12 +256,14 @@ describe("Canvas Agent knowledge and external boundaries", { concurrency: false 
         now: new Date("2026-07-25T10:05:01Z"),
       });
       let providerAuthorizationCount = 0;
+      let providerRequest: Record<string, unknown> | undefined;
       const providerExecutor = new CanvasAgentExecutor({
         db,
         textGateway: {
           chat: {
             completions: {
-              async create() {
+              async create(request: Record<string, unknown>) {
+                providerRequest = request;
                 return {
                   providerRequestId: null as never,
                   stream: (async function* () {
@@ -270,7 +272,12 @@ describe("Canvas Agent knowledge and external boundaries", { concurrency: false 
                   abort() {},
                   completed: Promise.resolve({
                     status: "succeeded" as const,
-                    usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
+                    usage: {
+                      input_tokens: 9,
+                      output_tokens: 4,
+                      cache_read_input_tokens: 3,
+                      total_tokens: 13,
+                    },
                     usageSource: "provider" as const,
                   }),
                 };
@@ -294,6 +301,7 @@ describe("Canvas Agent knowledge and external boundaries", { concurrency: false 
       });
       const providerResult = await providerExecutor.execute(providerTask.id);
       assert.equal(providerResult?.status, "succeeded");
+      assert.equal(Object.hasOwn(providerRequest ?? {}, "max_tokens"), false);
       assert.equal(providerAuthorizationCount, 3);
       const providerMetrics = await db.query<{ metrics_json: Record<string, number> }>(
         "SELECT metrics_json FROM canvas_agent_tasks WHERE id=$1",
@@ -302,7 +310,67 @@ describe("Canvas Agent knowledge and external boundaries", { concurrency: false 
       assert.equal(providerMetrics.rows[0]?.metrics_json.modelRoundCount, 1);
       assert.equal(providerMetrics.rows[0]?.metrics_json.promptTokens, 9);
       assert.equal(providerMetrics.rows[0]?.metrics_json.completionTokens, 4);
-      assert.equal(providerMetrics.rows[0]?.metrics_json.totalTokens, 13);
+      assert.equal(providerMetrics.rows[0]?.metrics_json.totalTokens, 16);
+      const completionEvent = await db.query<{ event_json: Record<string, unknown> }>(
+        "SELECT event_json FROM canvas_agent_events WHERE task_id=$1 AND event_type='task.succeeded' LIMIT 1",
+        [providerTask.id],
+      );
+      assert.deepEqual(completionEvent.rows[0]?.event_json.tokenUsage, {
+        promptTokens: 9,
+        completionTokens: 4,
+        totalTokens: 16,
+      });
+
+      const invalidResponseTask = await createCanvasAgentTask(db, {
+        canvasId, conversationId, actor, mode: "b", modelCode: "agent-test",
+        modelConfigSnapshot: task.modelConfigSnapshot,
+        baseRevision: 1, userMessage: { text: "return invalid JSON" },
+        now: new Date("2026-07-25T10:06:00Z"),
+      });
+      const invalidResponseExecutor = new CanvasAgentExecutor({
+        db,
+        textGateway: {
+          chat: {
+            completions: {
+              async create() {
+                return {
+                  providerRequestId: null as never,
+                  stream: (async function* () {
+                    yield { choices: [{ delta: { content: "" } }] };
+                  })(),
+                  abort() {},
+                  completed: Promise.resolve({
+                    status: "succeeded" as const,
+                    usage: { prompt_tokens: 9, completion_tokens: 2_048, total_tokens: 2_057 },
+                    usageSource: "provider" as const,
+                  }),
+                };
+              },
+            },
+          },
+        } as never,
+        context,
+        policy: new CanvasAgentPolicyService(),
+        tools: new CanvasAgentToolRegistry(),
+        billing: {
+          estimateRound: () => 1,
+          reserveRound: async () => ({ kind: "reservation" as const, reservationId: null, amount: 1 }),
+          settleRound: async () => ({ consumed: 1, released: 0 }),
+        } as never,
+        resolveActor: async () => actor,
+        now: () => new Date("2026-07-25T10:06:01Z"),
+      });
+      const invalidResponseResult = await invalidResponseExecutor.execute(invalidResponseTask.id);
+      assert.equal(invalidResponseResult?.status, "failed");
+      assert.equal(invalidResponseResult?.failureCode, "canvas_agent_model_response_invalid_json");
+      const invalidResponseStep = await db.query<{ status: string; error_code: string | null }>(
+        "SELECT status,error_code FROM canvas_agent_steps WHERE task_id=$1 ORDER BY step_no DESC LIMIT 1",
+        [invalidResponseTask.id],
+      );
+      assert.deepEqual(invalidResponseStep.rows[0], {
+        status: "failed",
+        error_code: "canvas_agent_model_response_invalid_json",
+      });
     } finally {
       await db.close();
     }

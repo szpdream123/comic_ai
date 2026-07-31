@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -9,6 +11,18 @@ import {
 } from "../canvas-live-collaboration.service.ts";
 
 describe("canvas live collaboration hub", () => {
+  it("uses remote-safe Redis timeouts and redacted error summaries", () => {
+    const source = readFileSync(
+      join(process.cwd(), "apps/backend/src/modules/project/canvas-live-collaboration.service.ts"),
+      "utf8",
+    );
+    assert.match(source, /connectTimeout:\s*2_000/);
+    assert.match(source, /commandTimeout:\s*5_000/);
+    assert.match(source, /retryStrategy/);
+    assert.match(source, /<redacted>/);
+    assert.match(source, /safeErrorSummary/);
+  });
+
   it("broadcasts real presence and revision events only within the authorized canvas channel", () => {
     const hub = createCanvasLiveCollaborationHub({ now: () => "2026-07-20T00:00:00.000Z" });
     const first: CanvasLiveEvent[] = [];

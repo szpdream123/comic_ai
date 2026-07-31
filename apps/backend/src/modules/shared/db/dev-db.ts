@@ -38,6 +38,7 @@ export async function createDevDb(): Promise<DevDatabase> {
 interface TransactionState {
   client: PoolClient | PooledDevDatabaseClient | null;
   clientPromise: Promise<PoolClient | PooledDevDatabaseClient>;
+  released: boolean;
 }
 
 interface DatabaseExecutionContext {
@@ -69,32 +70,30 @@ export function createPostgresDatabase(pool: Pool, schemaName?: string): DevData
         const transactionClient = await existingTransaction.clientPromise;
         try {
           const result = await transactionClient.query(sql, params);
-          if (command === "commit" || command === "rollback") {
-            transactionClient.release();
-            context.transactionState = null;
-          }
           return {
             rows: result.rows as T[],
           };
-        } catch (error) {
+        } finally {
           if (command === "commit" || command === "rollback") {
-            transactionClient.release();
-            context.transactionState = null;
+            if (context.transactionState === existingTransaction) {
+              context.transactionState = null;
+            }
+            releaseTransactionClient(existingTransaction);
           }
-          throw error;
         }
       }
 
       if (command === "begin") {
         const transactionState: TransactionState = {
           client: null,
+          released: false,
           clientPromise: pool.connect().then(async (client) => {
+            transactionState.client = client;
             try {
               await setSearchPathIfNeeded(client, schemaName);
-              transactionState.client = client;
               return client;
             } catch (error) {
-              client.release();
+              releaseTransactionClient(transactionState);
               throw error;
             }
           }),
@@ -107,8 +106,10 @@ export function createPostgresDatabase(pool: Pool, schemaName?: string): DevData
             rows: result.rows as T[],
           };
         } catch (error) {
-          transactionState.client?.release();
-          context.transactionState = null;
+          releaseTransactionClient(transactionState);
+          if (context.transactionState === transactionState) {
+            context.transactionState = null;
+          }
           throw error;
         }
       }
@@ -153,8 +154,16 @@ async function releaseTransactionState(context: DatabaseExecutionContext) {
   } catch {
     // The transaction may already have been closed by the caller.
   } finally {
-    transactionClient.release();
+    releaseTransactionClient(transactionState);
   }
+}
+
+function releaseTransactionClient(transactionState: TransactionState) {
+  if (transactionState.released || !transactionState.client) {
+    return;
+  }
+  transactionState.released = true;
+  transactionState.client.release();
 }
 
 export function createPooledDevDatabaseForTests(pool: PooledDevDatabasePool): DevDatabase {

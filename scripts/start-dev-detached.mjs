@@ -1,6 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
+
+import {
+  configuredPort,
+  findListenerPid,
+  isProjectProcess,
+  loadDotEnvFile,
+  readWindowsProcess,
+} from "./creator-dev-process-utils.mjs";
 
 const runtime = findNodeRuntime(18);
 const runDir = join(process.cwd(), ".local", "run");
@@ -9,6 +17,12 @@ const pidFile = join(runDir, "creator-dev-stack.pid");
 const startLockFile = join(runDir, "creator-dev-stack.start.lock");
 const outLog = join(logDir, "creator-dev-stack.out.log");
 const errLog = join(logDir, "creator-dev-stack.err.log");
+const projectRoot = process.cwd();
+const stackEntrypoint = join(projectRoot, "scripts", "run-creator-dev-stack.mjs");
+const stopRequestFile = join(runDir, "creator-dev-stack.stop");
+
+loadDotEnvFile(join(projectRoot, ".env"), { override: true });
+const port = configuredPort();
 
 mkdirSync(runDir, { recursive: true });
 mkdirSync(logDir, { recursive: true });
@@ -17,7 +31,8 @@ const releaseStartLock = acquireStartLock(startLockFile);
 process.once("exit", releaseStartLock);
 
 const existingPid = readPidFile(pidFile);
-if (existingPid && isProcessAlive(existingPid)) {
+const existingProcess = existingPid ? readWindowsProcess(existingPid) : null;
+if (existingProcess && isProjectProcess(existingProcess, projectRoot, "run-creator-dev-stack.mjs")) {
   console.log(`creator-dev stack already running (pid=${existingPid})`);
   process.exit(0);
 }
@@ -26,15 +41,26 @@ if (existingPid) {
   rmSync(pidFile, { force: true });
 }
 
-const listenerPid = findListenerPid(Number(process.env.PORT ?? "4310"));
+const listenerPid = findListenerPid(port);
 if (listenerPid) {
+  const listenerProcess = readWindowsProcess(listenerPid);
+  if (!isProjectProcess(listenerProcess, projectRoot, "phone-auth-dev-server")) {
+    console.error(`Port ${port} is occupied by a process outside this project (pid=${listenerPid}).`);
+    process.exit(1);
+  }
   terminateProcessTree(listenerPid);
-  await waitForPortRelease(Number(process.env.PORT ?? "4310"), 10_000);
+  await waitForPortRelease(port, 10_000);
 }
 
+rmSync(stopRequestFile, { force: true });
+rotateLog(outLog, 5 * 1024 * 1024);
+rotateLog(errLog, 5 * 1024 * 1024);
 const outFd = openSync(outLog, "a");
 const errFd = openSync(errLog, "a");
-const child = spawnDetached(runtime, ["scripts/run-creator-dev-stack.mjs"], outFd, errFd);
+const sessionStartedAt = new Date().toISOString();
+writeSync(outFd, `\n[creator-dev] ===== session ${sessionStartedAt} =====\n`);
+writeSync(errFd, `\n[creator-dev] ===== session ${sessionStartedAt} =====\n`);
+const child = spawnDetached(runtime, [stackEntrypoint], outFd, errFd);
 
 writeFileSync(pidFile, `${child.pid}\n`, "utf8");
 releaseStartLock();
@@ -93,24 +119,6 @@ function isProcessAlive(pid) {
   return result.status === 0 && result.stdout.includes(String(pid));
 }
 
-function findListenerPid(port) {
-  const result = spawnSync(
-    "cmd.exe",
-    ["/c", "netstat", "-ano", "-p", "tcp"],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) return null;
-
-  for (const line of result.stdout.split(/\r?\n/)) {
-    if (!line.includes(`:${port}`) || !line.includes("LISTENING")) continue;
-    const parts = line.trim().split(/\s+/);
-    const pid = Number(parts.at(-1));
-    if (Number.isInteger(pid) && pid > 0) return pid;
-  }
-
-  return null;
-}
-
 function terminateProcessTree(pid) {
   const result = spawnSync(
     "cmd.exe",
@@ -122,6 +130,13 @@ function terminateProcessTree(pid) {
   } else {
     console.log(`Stopped existing listener pid=${pid}`);
   }
+}
+
+function rotateLog(path, maxBytes) {
+  if (!existsSync(path) || statSync(path).size < maxBytes) return;
+  const previous = `${path}.previous`;
+  rmSync(previous, { force: true });
+  renameSync(path, previous);
 }
 
 function waitForPortRelease(port, timeoutMs) {

@@ -118,6 +118,19 @@ test("character library loads official and team character assets inside the same
   await controller.handleAction({ dataset: { characterAction: "library-detail-close" } });
 
   state.scope = "team";
+  state.characters = [{
+    id: "library-character:team:team-1",
+    name: "团队角色",
+    libraryScope: "team",
+    libraryAsset: { folder: "未分类" },
+    primaryVisualUrl: "/team-character.png",
+    avatarUrl: "/team-character.png",
+  }];
+  state.libraryFolders = [];
+  state.libraryEntitlement = { hasTeamAssetLibrary: true };
+  const teamHtml = renderCanvasCharacterLibraryShell(workbench.ui);
+  assert.match(teamHtml, /data-character-category="all">全部/);
+  assert.match(teamHtml, /data-character-action="library-folder" data-character-folder="">全部/);
   state.characters = [];
   state.libraryEntitlement = { hasTeamAssetLibrary: false };
   assert.match(renderCanvasCharacterLibraryShell(workbench.ui), /团队资产库为专业版会员权益/);
@@ -131,9 +144,10 @@ test("canvas library switches team asset categories and reloads the selected cat
     api: {
       async getLibraryAssets(input) {
         calls.push(input);
+        const assetCategory = input.category ?? "character";
         return {
-          folders: [input.category === "scene" ? "国内仿真人-现代都市" : "未分类"],
-          assets: [{ id: `${input.category}-1`, category: input.category, name: `${input.category}资产`, folder: input.category === "scene" ? "国内仿真人-现代都市" : "未分类" }],
+          folders: [assetCategory === "scene" ? "国内仿真人-现代都市" : "未分类"],
+          assets: [{ id: `${assetCategory}-1`, category: assetCategory, name: `${assetCategory}资产`, folder: assetCategory === "scene" ? "国内仿真人-现代都市" : "未分类" }],
         };
       },
     },
@@ -142,15 +156,17 @@ test("canvas library switches team asset categories and reloads the selected cat
 
   await controller.handleAction({ dataset: { characterAction: "scope", characterScope: "team" } });
   await controller.handleAction({ dataset: { characterAction: "library-category", characterCategory: "scene" } });
+  await controller.handleAction({ dataset: { characterAction: "library-category", characterCategory: "all" } });
 
   const state = ensureCanvasCharacterLibraryState(workbench.ui);
   assert.deepEqual(calls, [
     { scope: "team", category: "character" },
     { scope: "team", category: "scene" },
+    { scope: "team" },
   ]);
-  assert.equal(state.libraryCategory, "scene");
-  assert.equal(state.characters[0].libraryAsset.category, "scene");
-  assert.equal(state.libraryFolders[0], "国内仿真人-现代都市");
+  assert.equal(state.libraryCategory, "all");
+  assert.equal(state.characters[0].libraryAsset.category, "character");
+  assert.equal(state.libraryFolders[0], "未分类");
 });
 
 test("character controller uses workbench api for revisioned CRUD, scope copy, capture, delete restore, and node focus contracts", async () => {
@@ -238,6 +254,49 @@ test("character controller uses workbench api for revisioned CRUD, scope copy, c
   assert.ok(calls.some((call) => call[0] === "restore-nodes" && call[1][0] === "image-1"));
   controller.dispose();
   assert.equal(workbench.onCharacterCapture, undefined);
+});
+
+test("character capture hydrates an AI image reference from its generation task", async () => {
+  const storageObjectId = "10000000-0000-7000-8000-000000000123";
+  const taskId = "20000000-0000-4000-8000-000000000456";
+  const previewUrl = `https://example.test/generated-${taskId}.png`;
+  const calls = [];
+  const node = {
+    id: "ai-image-1",
+    type: "ai-image",
+    data: {
+      title: "AI 图片",
+      prompt: "角色设定图",
+      generationTaskId: taskId,
+      previewUrl,
+    },
+  };
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-1",
+      selectedCanvasNodeId: node.id,
+      canvasDocument: { nodes: [node] },
+    },
+    api: {
+      async listCanvasCharacters() { return { characters: [] }; },
+      async getGenerationTask(requestedTaskId) {
+        calls.push(["get-generation-task", requestedTaskId]);
+        return { taskId, result: { storageObjectId, imageUrl: previewUrl } };
+      },
+    },
+  };
+  const controller = createCanvasCharacterLibraryController({ surface: { querySelector: () => null }, workbench });
+
+  assert.equal(workbench.onCharacterCapture(node), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const state = ensureCanvasCharacterLibraryState(workbench.ui);
+  assert.deepEqual(calls, [["get-generation-task", taskId]]);
+  assert.equal(state.draft.references.length, 1);
+  assert.equal(state.draft.references[0]?.storageObjectId, storageObjectId);
+  assert.match(renderCanvasCharacterLibraryShell(workbench.ui), /1 张参考图/);
+  assert.match(renderCanvasCharacterLibraryShell(workbench.ui), new RegExp(`generated-${taskId}\\.png`));
+  controller.dispose();
 });
 
 test("character library styles wrap asset cards and keep details in a bounded modal", async () => {

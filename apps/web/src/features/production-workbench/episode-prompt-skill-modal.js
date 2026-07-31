@@ -30,7 +30,6 @@ export function renderEpisodePromptSkillControl({ skills = [], selectedByCategor
       >
         <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
         <small>${formatSkillCredits(total)}</small>
-        <span class="single-episode-look-trigger__icon" aria-hidden="true">⌄</span>
       </button>
     </section>
   `;

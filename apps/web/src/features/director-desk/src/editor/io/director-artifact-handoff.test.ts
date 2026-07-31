@@ -87,10 +87,10 @@ it("hands screenshot and reference video bridge outputs back as Canvas Artifacts
     fileName: "shot.png",
   }]);
   await Promise.all(handoffs);
-  expect(postDirectorDeskVideoToHost(
+  await expect(postDirectorDeskVideoToHost(
     new Blob(["video"], { type: "video/webm" }),
     "reference.webm",
-  )).toBe(true);
+  )).resolves.toBe(true);
   await Promise.all(handoffs);
 
   expect(calls.map(({ kind }) => kind)).toEqual([

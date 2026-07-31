@@ -5,6 +5,10 @@ import type { CanvasActorScope } from "../identity/canvas-actor-scope.service.ts
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
+  createPromptMarketplaceService,
+  PromptMarketplaceError,
+} from "../prompt-marketplace/prompt-marketplace.service.ts";
+import {
   completeCanvasTextNodeRun,
   createCanvasNodeRun,
   failCanvasTextNodeRun,
@@ -14,6 +18,54 @@ import {
 
 export const CANVAS_TEXT_NODE_INPUT_MAX_LENGTH = 50_000;
 export const CANVAS_TEXT_NODE_OUTPUT_MAX_LENGTH = 50_000;
+const CANVAS_TEXT_SKILL_CATEGORIES = [
+  "script",
+  "shot",
+  "prop_extract",
+  "character_extract",
+  "scene_extract",
+  "image_style",
+  "storyboard",
+  "other",
+] as const;
+type CanvasTextSkillCategory = (typeof CANVAS_TEXT_SKILL_CATEGORIES)[number];
+
+export interface CanvasTextPromptSkill {
+  id: string;
+  category: string;
+  title: string;
+  content: string;
+  priceCredits: number;
+  official: boolean;
+  ownerUserId: string | null;
+}
+
+export interface CanvasTextBillingReceipt {
+  amount: number;
+  modelCreditCost: number;
+  skillCreditCost: number;
+  mode: "reservation" | "team_member" | "batch_reservation";
+  reservationId?: string | null;
+  allocationKey?: string | null;
+  sourceId?: string | null;
+}
+
+export interface CanvasTextNodeBilling {
+  modelCreditCost: number;
+  reserve(input: {
+    runId: string;
+    skill: CanvasTextPromptSkill | null;
+    now: Date;
+  }): Promise<CanvasTextBillingReceipt | null>;
+  consume(input: { runId: string; receipt: CanvasTextBillingReceipt; now: Date }): Promise<void>;
+  release(input: {
+    runId: string;
+    receipt: CanvasTextBillingReceipt;
+    failureCode: string;
+    now: Date;
+  }): Promise<void>;
+  grantSkillAuthor(input: { runId: string; skill: CanvasTextPromptSkill; now: Date }): Promise<void>;
+}
 
 export class CanvasTextNodeRunError extends Error {
   constructor(
@@ -52,6 +104,7 @@ export async function runCanvasTextNode(
     userId: string;
     actorScope?: CanvasActorScope;
     gateway: TextChatGatewayLike;
+    billing?: CanvasTextNodeBilling;
     now: Date;
   },
 ) {
@@ -90,11 +143,13 @@ export async function runCanvasTextNode(
   if (modelCode.length > 100) {
     throw new CanvasTextNodeRunError("canvas_text_model_invalid", 400, "AI text model code is invalid");
   }
+  const promptSkill = readCanvasTextPromptSkill(input.body, node);
   const requestHash = sha256(JSON.stringify({
     format,
     modelCode,
     text: source.text,
     upstreamNodeIds: source.upstreamNodeIds,
+    promptSkill,
   }));
   const storedIdempotencyKey = input.actorScope?.principalKey
     ? `${input.actorScope.principalKey}:${input.idempotencyKey}`
@@ -115,27 +170,74 @@ export async function runCanvasTextNode(
     return serializeStoredRun(existing, input.canvas.canvasProjectId, true);
   }
 
-  const run = await createCanvasNodeRun(db, {
-    canvasProjectId: input.canvas.canvasProjectId,
-    nodeKey: input.nodeKey,
-    idempotencyKey: input.idempotencyKey,
-    status: "running",
-    mediaKind: "text",
-    modelCode,
-    targetType: "canvas",
-    targetId: input.nodeKey,
-    inputSnapshot: {
-      requestHash,
-      format,
-      sourceText: source.text,
-      upstreamNodeIds: source.upstreamNodeIds,
+  let resolvedSkill: CanvasTextPromptSkill | null = null;
+  let skillTransactionOpen = false;
+  let run: Awaited<ReturnType<typeof createCanvasNodeRun>>;
+  try {
+    if (promptSkill) {
+      await db.query("BEGIN");
+      skillTransactionOpen = true;
+      const marketplace = createPromptMarketplaceService({ db });
+      resolvedSkill = await marketplace.resolveWorkflowPromptSkill({
+        userId: input.userId,
+        itemId: promptSkill.id,
+        category: promptSkill.category,
+        now: input.now,
+      });
+      const skillText = buildCanvasTextSkillInstructions(resolvedSkill);
+      const combinedInput = [skillText, source.text].filter(Boolean).join("\n\n");
+      if (combinedInput.length > CANVAS_TEXT_NODE_INPUT_MAX_LENGTH) {
+        throw new CanvasTextNodeRunError(
+          "canvas_text_input_too_long",
+          400,
+          `AI text input cannot exceed ${CANVAS_TEXT_NODE_INPUT_MAX_LENGTH} characters`,
+          { maxLength: CANVAS_TEXT_NODE_INPUT_MAX_LENGTH },
+        );
+      }
+    }
+    run = await createCanvasNodeRun(db, {
       canvasProjectId: input.canvas.canvasProjectId,
       nodeKey: input.nodeKey,
-    },
-    userId: input.userId,
-    actorScope: input.actorScope,
-    now: input.now,
-  });
+      idempotencyKey: input.idempotencyKey,
+      status: "running",
+      mediaKind: "text",
+      modelCode,
+      targetType: "canvas",
+      targetId: input.nodeKey,
+      inputSnapshot: {
+        requestHash,
+        format,
+        sourceText: source.text,
+        upstreamNodeIds: source.upstreamNodeIds,
+        ...(resolvedSkill ? { promptSkill: {
+          id: resolvedSkill.id,
+          category: resolvedSkill.category,
+          title: resolvedSkill.title,
+          priceCredits: resolvedSkill.priceCredits,
+          official: resolvedSkill.official,
+          ownerUserId: resolvedSkill.ownerUserId,
+          contentHash: sha256(resolvedSkill.content),
+        } } : {}),
+        canvasProjectId: input.canvas.canvasProjectId,
+        nodeKey: input.nodeKey,
+      },
+      userId: input.userId,
+      actorScope: input.actorScope,
+      now: input.now,
+    });
+    if (skillTransactionOpen) {
+      await db.query(run.reused ? "ROLLBACK" : "COMMIT");
+      skillTransactionOpen = false;
+    }
+  } catch (error) {
+    if (skillTransactionOpen) {
+      await db.query("ROLLBACK").catch(() => undefined);
+    }
+    if (error instanceof PromptMarketplaceError) {
+      throw new CanvasTextNodeRunError(error.code, error.status, error.message);
+    }
+    throw error;
+  }
   if (run.reused) {
     const raced = await findStoredCanvasTextRun(db, {
       canvasProjectId: input.canvas.canvasProjectId,
@@ -159,10 +261,15 @@ export async function runCanvasTextNode(
     return serializeStoredRun(raced, input.canvas.canvasProjectId, true);
   }
 
+  let billingReceipt: CanvasTextBillingReceipt | null = null;
+  let billingConsumed = false;
   try {
+    billingReceipt = input.billing
+      ? await input.billing.reserve({ runId: run.id, skill: resolvedSkill, now: input.now })
+      : null;
     const rawResult = String(await input.gateway.completeJson({
       model: modelCode,
-      prompt: buildCanvasTextPrompt(source.text, format),
+      prompt: buildCanvasTextPrompt(source.text, format, resolvedSkill),
       createdByUserId: input.userId,
       responseFormat: "text",
       maxTokens: 8_192,
@@ -183,7 +290,25 @@ export async function runCanvasTextNode(
         "AI text model returned an empty response",
       );
     }
-    const outputSnapshot = { text: resultText, format, modelCode };
+    if (billingReceipt && input.billing) {
+      await input.billing.consume({ runId: run.id, receipt: billingReceipt, now: input.now });
+      billingConsumed = true;
+    }
+    const outputSnapshot = {
+      text: resultText,
+      format,
+      modelCode,
+      ...(resolvedSkill ? { promptSkill: {
+        id: resolvedSkill.id,
+        category: resolvedSkill.category,
+        title: resolvedSkill.title,
+      } } : {}),
+      ...(billingReceipt ? { credit: {
+        consumed: billingReceipt.amount,
+        modelCreditCost: billingReceipt.modelCreditCost,
+        skillCreditCost: billingReceipt.skillCreditCost,
+      } } : {}),
+    };
     const completed = await completeCanvasTextNodeRun(db, {
       runId: run.id,
       canvasProjectId: input.canvas.canvasProjectId,
@@ -193,6 +318,9 @@ export async function runCanvasTextNode(
       userId: input.userId,
       now: input.now,
     });
+    if (resolvedSkill && input.billing) {
+      await input.billing.grantSkillAuthor({ runId: run.id, skill: resolvedSkill, now: input.now });
+    }
     return {
       canvasProjectId: input.canvas.canvasProjectId,
       nodeKey: input.nodeKey,
@@ -206,6 +334,7 @@ export async function runCanvasTextNode(
         artifactKind: "text",
         metadata: outputSnapshot,
       },
+      creditReservationId: billingReceipt?.reservationId ?? null,
       replayed: false,
     };
   } catch (error) {
@@ -222,6 +351,14 @@ export async function runCanvasTextNode(
       },
       now: input.now,
     });
+    if (billingReceipt && input.billing && !billingConsumed) {
+      await input.billing.release({
+        runId: run.id,
+        receipt: billingReceipt,
+        failureCode,
+        now: input.now,
+      });
+    }
     if (error instanceof CanvasTextNodeRunError) {
       throw new CanvasTextNodeRunError(error.code, error.status, error.message, {
         ...error.details,
@@ -288,14 +425,73 @@ function collectCanvasTextInput(
   return { text: sections.join("\n\n"), upstreamNodeIds };
 }
 
-function buildCanvasTextPrompt(sourceText: string, format: "text" | "markdown") {
+function buildCanvasTextPrompt(
+  sourceText: string,
+  format: "text" | "markdown",
+  skill: CanvasTextPromptSkill | null = null,
+) {
   return [
+    buildCanvasTextSkillInstructions(skill),
     format === "markdown"
       ? "根据输入生成或改写 Markdown 文档。直接返回 Markdown 正文，不要使用包裹全文的代码围栏。"
       : "根据输入生成或改写文本。直接返回最终正文，不要解释生成过程。",
     "不要声称已经生成、上传或保存任何图片、视频、音频或文件。",
     sourceText,
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
+}
+
+function buildCanvasTextSkillInstructions(skill: CanvasTextPromptSkill | null) {
+  return skill?.content ?? "";
+}
+
+function readCanvasTextPromptSkill(body: Record<string, unknown>, node: CanvasNode) {
+  if (Object.prototype.hasOwnProperty.call(body, "skill")) {
+    return normalizeCanvasTextPromptSkill(body.skill);
+  }
+  const directId = readTrimmedString(node.data?.promptSkillId);
+  const directCategory = readTrimmedString(node.data?.promptSkillCategory);
+  if (directId || directCategory) {
+    return normalizeCanvasTextPromptSkill({ id: directId, category: directCategory });
+  }
+  const raw = Object.prototype.hasOwnProperty.call(body, "skills") ? body.skills : node.data?.promptSkillIds;
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new CanvasTextNodeRunError("canvas_text_prompt_skills_invalid", 400, "AI text prompt skills are invalid");
+  }
+  const record = raw as Record<string, unknown>;
+  const allowed = new Set<string>(CANVAS_TEXT_SKILL_CATEGORIES);
+  if (Object.keys(record).some((key) => !allowed.has(key))) {
+    throw new CanvasTextNodeRunError("canvas_text_prompt_skills_invalid", 400, "AI text prompt skill category is invalid");
+  }
+  let selection: { id: string; category: CanvasTextSkillCategory } | null = null;
+  for (const category of CANVAS_TEXT_SKILL_CATEGORIES) {
+    const value = record[category];
+    if (value == null || value === "") continue;
+    if (selection || typeof value !== "string" || !isUuid(value.trim())) {
+      throw new CanvasTextNodeRunError("canvas_text_prompt_skills_invalid", 400, "AI text prompt skill id is invalid");
+    }
+    selection = { id: value.trim(), category };
+  }
+  return selection;
+}
+
+function normalizeCanvasTextPromptSkill(value: unknown) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new CanvasTextNodeRunError("canvas_text_prompt_skills_invalid", 400, "AI text prompt skill is invalid");
+  }
+  const record = value as Record<string, unknown>;
+  const id = readTrimmedString(record.id);
+  const category = readTrimmedString(record.category);
+  if (!id && !category) return null;
+  if (!isUuid(id) || !CANVAS_TEXT_SKILL_CATEGORIES.includes(category as CanvasTextSkillCategory)) {
+    throw new CanvasTextNodeRunError("canvas_text_prompt_skills_invalid", 400, "AI text prompt skill is invalid");
+  }
+  return { id, category: category as CanvasTextSkillCategory };
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 async function findStoredCanvasTextRun(

@@ -19,9 +19,9 @@ export function mountPromptEditor(element, options = {}) {
     throw new Error("prompt_editor_mount_missing");
   }
 
-  const getAvailableSuggestions = () => {
+  const getAvailableSuggestions = async () => {
     const availableSuggestions = typeof options.getSuggestions === "function"
-      ? options.getSuggestions()
+      ? await options.getSuggestions()
       : options.suggestions;
     return (Array.isArray(availableSuggestions) ? availableSuggestions : [])
       .map((item) => normalizePromptEditorSuggestion(item));
@@ -29,9 +29,9 @@ export function mountPromptEditor(element, options = {}) {
   let currentMentionSignature = "";
   let destroyed = false;
   const AssetMention = createAssetMentionExtension({
-    getSuggestions(query) {
+    async getSuggestions(query) {
       const normalizedQuery = String(query ?? "").trim().toLowerCase();
-      return getAvailableSuggestions().filter((item) => {
+      return (await getAvailableSuggestions()).filter((item) => {
         if (!normalizedQuery) {
           return true;
         }
@@ -168,6 +168,7 @@ function createAssetMentionExtension({ getSuggestions, onSelect, menuContainer }
         description: attribute("data-description", "description"),
         preview: attribute("data-preview", "preview"),
         referenceId: attribute("data-reference-id", "referenceId"),
+        source: attribute("data-source", "source"),
       };
     },
   }).configure({
@@ -181,8 +182,11 @@ function createAssetMentionExtension({ getSuggestions, onSelect, menuContainer }
       const label = String(node.attrs.label ?? node.attrs.id ?? "\u7d20\u6750");
       const preview = String(node.attrs.preview ?? "").trim();
       const kind = String(node.attrs.assetKind ?? "character");
+      const source = String(node.attrs.source ?? "").trim();
       const thumb = preview
         ? ["img", { alt: "", draggable: "false", src: preview }]
+        : kind === "video" && source
+          ? ["video", { "aria-hidden": "true", draggable: "false", muted: "true", playsinline: "true", preload: "metadata", src: source }]
         : ["span", { "aria-hidden": "true", class: "episode-prompt-editor-mention-fallback" }, mentionFallbackGlyph(kind, label)];
       return [
         "span",
@@ -340,6 +344,13 @@ function createMentionOption(documentRef, item, { active, index, onSelect }) {
     image.alt = "";
     image.src = item.preview;
     thumb.append(image);
+  } else if (item.assetKind === "video" && item.source) {
+    const video = documentRef.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = item.source;
+    thumb.append(video);
   } else {
     thumb.textContent = mentionFallbackGlyph(item.assetKind, item.label);
   }
@@ -387,17 +398,27 @@ function installTextareaCompatibility(editor) {
   Object.defineProperties(editorElement, {
     selectionEnd: {
       configurable: true,
-      get: () => editor.state.selection.to,
+      get: () => promptEditorSelectionTextOffset(editor, editor.state.selection.to),
     },
     selectionStart: {
       configurable: true,
-      get: () => editor.state.selection.from,
+      get: () => promptEditorSelectionTextOffset(editor, editor.state.selection.from),
     },
     value: {
       configurable: true,
       get: () => serializePromptEditorDocument(editor.getJSON()),
     },
   });
+}
+
+function promptEditorSelectionTextOffset(editor, position) {
+  const safePosition = Math.max(0, Math.min(editor.state.doc.content.size, Number(position ?? 0)));
+  return editor.state.doc.textBetween(0, safePosition, "\n", (node) => {
+    if (node.type.name !== "assetMention") {
+      return "";
+    }
+    return `\u3010@${node.attrs.label ?? node.attrs.id ?? "\u7d20\u6750"}\u3011`;
+  }).length;
 }
 
 function attribute(name, key, defaultValue = "") {

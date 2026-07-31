@@ -1,4 +1,5 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { CANVAS_AGENT_CREDIT_REASON } from "./canvas-agent-billing.service.ts";
 import { settleReservationAllocationInTransaction } from "../credit-billing/credit-ledger.service.ts";
 import { refundTeamMemberGenerationCreditsInTransaction } from "../credit-billing/team-member-generation-credit.service.ts";
 import {
@@ -344,7 +345,7 @@ async function releaseInterruptedModelRounds(
         teamMemberId: input.actorTeamMemberId,
         amount: Number(step.member_amount),
         sourceId: step.member_source_id,
-        reason: "Canvas Agent text round interrupted before provider start",
+        reason: CANVAS_AGENT_CREDIT_REASON,
         metadata: {
           canvasAgentTaskId: input.taskId,
           agentStepId: step.id,

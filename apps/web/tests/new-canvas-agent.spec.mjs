@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  collapseAgentGenerationMessages,
+  collapseAgentTimelineEvents,
   createCanvasAgentController,
   ensureCanvasAgentState,
   normalizeAgentMediaTask,
@@ -12,10 +14,69 @@ import {
   resolveAgentApprovalPresentation,
 } from "../src/features/new-canvas/canvas-agent-panel.js";
 
+test("Canvas Agent timeline collapses lifecycle events by step", () => {
+  const events = [
+    { id: "task-started", sequence: 1, eventType: "task.started", event: {} },
+    { id: "patch-created", sequence: 2, eventType: "step.created", event: { stepId: "patch-1", toolId: "canvas.patch" } },
+    { id: "patch-policy", sequence: 3, eventType: "policy.decided", event: { stepId: "patch-1", decision: "require_approval" } },
+    { id: "patch-running-1", sequence: 4, eventType: "step.running", event: { stepId: "patch-1" } },
+    { id: "patch-running-2", sequence: 5, eventType: "step.running", event: { stepId: "patch-1" } },
+    { id: "patch-succeeded", sequence: 6, eventType: "step.succeeded", event: { stepId: "patch-1" } },
+    { id: "model-created", sequence: 7, eventType: "step.created", event: { stepId: "model-1", kind: "model" } },
+    { id: "model-running-1", sequence: 8, eventType: "step.running", event: { stepId: "model-1" } },
+    { id: "model-running-2", sequence: 9, eventType: "step.running", event: { stepId: "model-1" } },
+  ];
+
+  const collapsed = collapseAgentTimelineEvents(events);
+  assert.deepEqual(collapsed.map((event) => event.eventType), ["task.started", "step.succeeded", "step.running"]);
+  assert.equal(collapsed[1].event.toolId, "canvas.patch");
+  assert.equal(collapsed[1].event.decision, "require_approval");
+
+  const html = renderCanvasAgentPanel({ canvasAgent: { events } });
+  assert.equal((html.match(/data-event-status="step\.succeeded"/g) ?? []).length, 1);
+  assert.equal((html.match(/data-event-status="step\.running"/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /data-event-status="step\.created"|data-event-status="policy\.decided"/);
+  assert.match(html, /工具 canvas\.patch/);
+});
+
+test("Canvas Agent timeline shows failure codes instead of stale policy reasons", () => {
+  const events = [
+    { id: "generation-created", sequence: 1, eventType: "step.created", event: { stepId: "generation-1", toolId: "generation.create" } },
+    { id: "generation-policy", sequence: 2, eventType: "policy.decided", event: { stepId: "generation-1", decision: "require_approval", reason: "b_mode_effect" } },
+    { id: "generation-failed", sequence: 3, eventType: "step.failed", event: { stepId: "generation-1", errorCode: "canvas_agent_generation_model_required" } },
+    { id: "task-failed", sequence: 4, eventType: "task.failed", event: { status: "failed", failureCode: "canvas_agent_duplicate_side_effect" } },
+  ];
+
+  const html = renderCanvasAgentPanel({ canvasAgent: { events } });
+  assert.match(html, /canvas_agent_generation_model_required/);
+  assert.match(html, /canvas_agent_duplicate_side_effect/);
+  assert.doesNotMatch(html, />b_mode_effect</);
+});
+
+test("Canvas Agent completion displays actual token usage", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      events: [{
+        id: "task-completed",
+        sequence: 1,
+        eventType: "task.succeeded",
+        event: {
+          message: "画布任务已完成",
+          tokenUsage: { promptTokens: 1_200, completionTokens: 345, totalTokens: 1_545 },
+        },
+      }],
+    },
+  });
+
+  assert.match(html, /实际 Token 1,545/);
+  assert.doesNotMatch(html, /输入 1,200|输出 345/);
+});
+
 test("Canvas Agent panel exposes conversation modes, composer, and task controls", () => {
   const ui = {
     canvasAgent: {
       mode: "expert",
+      modeMenuOpen: true,
       modelCode: "agent-text-1",
       taskId: "task-1",
       status: "running",
@@ -23,16 +84,171 @@ test("Canvas Agent panel exposes conversation modes, composer, and task controls
     },
   };
   const html = renderCanvasAgentPanel(ui);
+  assert.match(html, /data-agent-action="toggle-mode-menu"/);
   assert.match(html, /data-agent-mode="b"/);
   assert.match(html, /data-agent-mode="c"/);
   assert.match(html, /data-agent-mode="plan"/);
   assert.match(html, /data-agent-mode="expert"/);
+  assert.match(html, /审核批准/);
+  assert.match(html, /自动执行/);
+  assert.match(html, /计划模式/);
+  assert.match(html, /分析模式/);
+  assert.match(html, /修改画布等有副作用的操作会先请求你的批准/);
+  assert.match(html, /role="listbox"/);
+  assert.doesNotMatch(html, /role="tablist"/);
   assert.match(html, /data-agent-action="pause"/);
   assert.match(html, /data-agent-action="replan"/);
   assert.match(html, /data-agent-action="stop"/);
   assert.match(html, /data-agent-action="interject"/);
   assert.match(html, /<select[^>]+data-agent-field="modelCode"[^>]+disabled/);
+  assert.match(html, /aria-label="文本模型"/);
+  assert.match(html, /暂无可用文本模型/);
   assert.doesNotMatch(html, /<input[^>]+data-agent-field="modelCode"/);
+});
+
+test("Canvas Agent mode menu opens upward and applies the selected mode", async () => {
+  const workbench = { ui: { canvasAgent: { mode: "b" } }, api: {} };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "toggle-mode-menu" } });
+  assert.equal(workbench.ui.canvasAgent.modeMenuOpen, true);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-mode-menu"/);
+
+  await controller.handleAction({ dataset: { agentAction: "set-mode", agentMode: "c" } });
+  assert.equal(workbench.ui.canvasAgent.mode, "c");
+  assert.equal(workbench.ui.canvasAgent.modeMenuOpen, false);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-mode-trigger [^"]*"[^>]*>[\s\S]*自动执行/);
+  controller.dispose();
+});
+
+test("Canvas Agent mode menu closes when clicking outside the picker", async () => {
+  const workbench = { ui: { canvasAgent: { mode: "b" } }, api: {} };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "toggle-mode-menu" } });
+  assert.equal(workbench.ui.canvasAgent.modeMenuOpen, true);
+  assert.equal(controller.handleClick({ closest: () => null }), true);
+  assert.equal(workbench.ui.canvasAgent.modeMenuOpen, false);
+  controller.dispose();
+});
+
+test("Canvas Agent closes without rerendering the workspace or resetting the hand tool", async () => {
+  let renderLayoutCalls = 0;
+  let panelRemoved = false;
+  let reopenMarkup = "";
+  const layout = {
+    classList: {
+      toggle(name, enabled) {
+        assert.equal(name, "is-agent-collapsed");
+        assert.equal(enabled, true);
+      },
+    },
+  };
+  const workspace = {
+    insertAdjacentHTML(position, markup) {
+      assert.equal(position, "beforeend");
+      reopenMarkup = markup;
+    },
+  };
+  const panel = { remove() { panelRemoved = true; } };
+  const workbench = {
+    ui: {
+      canvasDocument: { viewport: { interactionMode: "hand" } },
+      canvasAgent: { panelOpen: true },
+    },
+    api: {},
+  };
+  const controller = createCanvasAgentController({
+    surface: {
+      querySelector(selector) {
+        if (selector === ".new-canvas-layout") return layout;
+        if (selector === "[data-new-canvas-workspace]") return workspace;
+        if (selector === "[data-canvas-agent-panel]") return panel;
+        return null;
+      },
+    },
+    workbench,
+    renderLayout() {
+      renderLayoutCalls += 1;
+      workbench.ui.canvasDocument.viewport.interactionMode = "default";
+    },
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "close-agent-panel" } });
+
+  assert.equal(panelRemoved, true);
+  assert.match(reopenMarkup, /data-agent-action="open-agent-panel"/);
+  assert.equal(renderLayoutCalls, 0);
+  assert.equal(workbench.ui.canvasDocument.viewport.interactionMode, "hand");
+  controller.dispose();
+});
+
+test("Canvas Agent timeline follows new messages unless the user scrolled up", () => {
+  const previousDocument = globalThis.document;
+  const runSync = (scrollTop) => {
+    const currentTimeline = { scrollTop, scrollHeight: 500, clientHeight: 100 };
+    const nextTimeline = { scrollTop: 0, scrollHeight: 700, clientHeight: 100 };
+    let nextPanel = null;
+    const currentPanel = {
+      querySelector(selector) {
+        return selector === ".canvas-agent-timeline" ? currentTimeline : null;
+      },
+      replaceWith(panel) {
+        nextPanel = panel;
+      },
+    };
+    const renderedPanel = {
+      querySelector(selector) {
+        return selector === ".canvas-agent-timeline" ? nextTimeline : null;
+      },
+    };
+    globalThis.document = {
+      createElement() {
+        return { content: { firstElementChild: renderedPanel } };
+      },
+    };
+    const controller = createCanvasAgentController({
+      surface: { querySelector: () => currentPanel },
+      workbench: { ui: { canvasAgent: {} }, api: {} },
+    });
+    controller.syncPanel();
+    controller.dispose();
+    assert.equal(nextPanel, renderedPanel);
+    return nextTimeline.scrollTop;
+  };
+
+  try {
+    assert.equal(runSync(400), 600);
+    assert.equal(runSync(160), 160);
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});
+
+test("Canvas Agent keeps the latest message visible across an external canvas rerender", () => {
+  let timeline = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+  const controller = createCanvasAgentController({
+    surface: {
+      querySelector(selector) {
+        return selector === ".canvas-agent-timeline" ? timeline : null;
+      },
+    },
+    workbench: { ui: { canvasAgent: {} }, api: {} },
+  });
+
+  const state = controller.captureTimelineScroll();
+  timeline = { scrollTop: 0, scrollHeight: 900, clientHeight: 100 };
+  controller.restoreTimelineScroll(state);
+
+  assert.equal(timeline.scrollTop, 800);
+  controller.dispose();
 });
 
 test("Canvas Agent event reducer deduplicates sequences and exposes pending approval", () => {
@@ -177,6 +393,161 @@ test("Canvas Agent controller consumes live SSE and stops reconnecting after a t
   controller.dispose();
 });
 
+test("Canvas Agent refreshes the canvas as soon as canvas.patch succeeds", async () => {
+  const refreshes = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-live",
+      canvasAgent: {
+        mode: "b",
+        modelCode: "agent-text-1",
+        models: [{ modelCode: "agent-text-1", modelLabel: "Agent Text 1" }],
+        modelsStatus: "ready",
+        promptDraft: "连接节点",
+      },
+    },
+    refreshCanvasAfterAgentPatch() {
+      refreshes.push("canvas.patch");
+    },
+    api: {
+      async createCanvasAgentConversation() {
+        return { conversation: { id: "conversation-live" } };
+      },
+      async sendCanvasAgentMessage() {
+        return { task: { id: "task-live", status: "queued" } };
+      },
+      async *streamCanvasAgentEvents() {
+        yield { data: { id: "event-1", sequence: 1, eventType: "step.created", event: { stepId: "patch-1", toolId: "canvas.patch" } } };
+        yield { data: { id: "event-2", sequence: 2, eventType: "step.succeeded", event: { stepId: "patch-1" } } };
+        yield { data: { id: "event-3", sequence: 3, eventType: "task.succeeded", event: {} } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 1,
+  });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  for (let index = 0; index < 20 && !refreshes.length; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.deepEqual(refreshes, ["canvas.patch"]);
+  controller.dispose();
+});
+
+test("Canvas Agent refreshes the canvas when media generation starts and completes", async () => {
+  const refreshes = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-live",
+      canvasAgent: {
+        mode: "c",
+        modelCode: "agent-text-1",
+        models: [{ modelCode: "agent-text-1", modelLabel: "Agent Text 1" }],
+        modelsStatus: "ready",
+        promptDraft: "生成一张图片",
+      },
+    },
+    refreshCanvasAfterAgentPatch() {
+      refreshes.push("refresh");
+    },
+    api: {
+      async createCanvasAgentConversation() {
+        return { conversation: { id: "conversation-live" } };
+      },
+      async sendCanvasAgentMessage() {
+        return { task: { id: "task-live", status: "queued" } };
+      },
+      async *streamCanvasAgentEvents() {
+        yield { data: { id: "event-1", sequence: 1, eventType: "step.created", event: { stepId: "generation-step", toolId: "generation.create" } } };
+        yield { data: { id: "event-2", sequence: 2, eventType: "task.waiting_external", event: { stepId: "generation-step", generationTaskId: "generation-1" } } };
+        yield { data: { id: "event-3", sequence: 3, eventType: "generation.completed_wakeup", event: { generationTaskId: "generation-1", status: "succeeded" } } };
+        yield { data: { id: "event-4", sequence: 4, eventType: "task.succeeded", event: {} } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 1,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  for (let index = 0; index < 20 && refreshes.length < 2; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+
+  assert.equal(refreshes.length, 2);
+  controller.dispose();
+});
+
+test("Canvas Agent retries the completion refresh until generated media reaches the canvas", async () => {
+  let refreshCount = 0;
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-live",
+      canvasDocument: {
+        nodes: [{
+          id: "agent-image",
+          type: "ai-image",
+          data: { status: "running", taskId: "generation-1" },
+        }],
+      },
+      canvasAgent: {
+        mode: "c",
+        modelCode: "agent-text-1",
+        models: [{ modelCode: "agent-text-1", modelLabel: "Agent Text 1" }],
+        modelsStatus: "ready",
+        promptDraft: "生成一张图片",
+      },
+    },
+    refreshCanvasAfterAgentPatch() {
+      refreshCount += 1;
+      if (refreshCount < 3) return;
+      workbench.ui.canvasDocument = {
+        nodes: [{
+          id: "agent-image",
+          type: "ai-image",
+          data: {
+            status: "completed",
+            taskId: "generation-1",
+            storageObjectId: "storage-1",
+            resultUrl: "/generated/tree.png",
+          },
+        }],
+      };
+    },
+    api: {
+      async createCanvasAgentConversation() {
+        return { conversation: { id: "conversation-live" } };
+      },
+      async sendCanvasAgentMessage() {
+        return { task: { id: "task-live", status: "queued" } };
+      },
+      async *streamCanvasAgentEvents() {
+        yield { data: { id: "event-1", sequence: 1, eventType: "task.waiting_external", event: { stepId: "generation-step", generationTaskId: "generation-1" } } };
+        yield { data: { id: "event-2", sequence: 2, eventType: "generation.completed_wakeup", event: { generationTaskId: "generation-1", status: "succeeded" } } };
+        yield { data: { id: "event-3", sequence: 3, eventType: "task.succeeded", event: {} } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 1,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  for (let index = 0; index < 80 && !workbench.ui.canvasDocument.nodes[0].data.resultUrl; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(refreshCount, 3);
+  assert.equal(workbench.ui.canvasDocument.nodes[0].data.resultUrl, "/generated/tree.png");
+  controller.dispose();
+});
+
 test("Canvas Agent restores message history and manages archived conversations", async () => {
   const calls = [];
   const workbench = {
@@ -241,10 +612,23 @@ test("Canvas Agent restores message history and manages archived conversations",
   assert.match(historyHtml, /<strong>Agent<\/strong><\/span>\s*<p>构图分析完成<\/p>/);
   assert.match(historyHtml, /href="https:\/\/docs\.example\.test\/composition"/);
   assert.match(historyHtml, /rel="noopener noreferrer"/);
+  workbench.ui.canvasAgent.historyOpen = true;
+  const historyListHtml = renderCanvasAgentPanel(workbench.ui);
+  assert.match(historyListHtml, /data-agent-action="archive-conversation" data-conversation-id="conversation-1">归档/);
+  assert.match(historyListHtml, /data-agent-action="restore-conversation" data-conversation-id="conversation-2">恢复/);
+  await controller.handleAction({
+    dataset: { agentAction: "restore-conversation", conversationId: "conversation-2" },
+  });
+  assert.deepEqual(calls.filter((call) => call[0] === "update").map((call) => call[2]), [
+    { conversationId: "conversation-2", status: "active" },
+  ]);
+  workbench.ui.canvasAgent.historyOpen = false;
 
   await controller.handleAction({ dataset: { agentAction: "archive-conversation" } });
   assert.equal(workbench.ui.canvasAgent.conversations[0].status, "archived");
-  assert.match(renderCanvasAgentPanel(workbench.ui), /data-agent-action="restore-conversation"/);
+  workbench.ui.canvasAgent.historyOpen = true;
+  assert.match(renderCanvasAgentPanel(workbench.ui), /data-agent-action="restore-conversation" data-conversation-id="conversation-1">恢复/);
+  workbench.ui.canvasAgent.historyOpen = false;
   await controller.handleAction({ dataset: { agentAction: "restore-conversation" } });
   assert.equal(workbench.ui.canvasAgent.conversations[0].status, "active");
 
@@ -256,8 +640,101 @@ test("Canvas Agent restores message history and manages archived conversations",
   await controller.handleAction({ dataset: { agentAction: "delete-conversation" } });
   assert.equal(workbench.ui.canvasAgent.conversationId, "conversation-1");
   assert.equal(workbench.ui.canvasAgent.conversations.length, 1);
-  assert.deepEqual(calls.filter((call) => call[0] === "update").map((call) => call[2].status), ["archived", "active"]);
+  assert.deepEqual(calls.filter((call) => call[0] === "update").map((call) => call[2].status), ["active", "archived", "active"]);
   assert.ok(calls.some((call) => call[0] === "delete" && call[2] === "conversation-2"));
+  controller.dispose();
+});
+
+test("Canvas Agent edits and persists the current conversation title", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-title",
+      canvasAgent: {
+        conversationId: "conversation-title",
+        conversations: [{ id: "conversation-title", title: "当前会话" }],
+      },
+    },
+    api: {
+      async updateCanvasAgentConversation(canvasId, input) {
+        calls.push([canvasId, input]);
+        return { conversation: { id: input.conversationId, title: input.title } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+  });
+
+  const initialHtml = renderCanvasAgentPanel(workbench.ui);
+  assert.match(initialHtml, /class="canvas-agent-panel[^"]*has-conversation"/);
+  assert.match(initialHtml, /data-agent-conversation-title[^>]*>当前会话<\/strong>/);
+  assert.doesNotMatch(initialHtml, /CANVAS AGENT|智能协作/);
+  assert.match(initialHtml, /class="canvas-agent-model canvas-agent-model-top"/);
+  assert.doesNotMatch(initialHtml, /data-agent-field="conversationId"|data-agent-action="toggle-pin-conversation"/);
+
+  const titleTarget = { closest: (selector) => selector === "[data-agent-conversation-title]" ? {} : null };
+  assert.equal(controller.handleDoubleClick(titleTarget), true);
+  assert.equal(workbench.ui.canvasAgent.titleEditing, true);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /data-agent-field="conversationTitle"[^>]+maxlength="10"/);
+
+  assert.equal(controller.handleInput({
+    dataset: { agentField: "conversationTitle" },
+    value: "超长会话名称一二三四五六七八九",
+  }), true);
+  assert.equal(workbench.ui.canvasAgent.titleDraft, "超长会话名称一二三四");
+  assert.equal(controller.handleBlur({ dataset: { agentField: "conversationTitle" } }), true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls, [["canvas-title", {
+    conversationId: "conversation-title",
+    title: "超长会话名称一二三四",
+  }]]);
+  assert.equal(workbench.ui.canvasAgent.conversations[0].title, "超长会话名称一二三四");
+  assert.equal(workbench.ui.canvasAgent.titleEditing, false);
+  controller.dispose();
+});
+
+test("Canvas Agent history view shows only the list and deletes a selected row", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-history",
+      canvasAgent: {
+        conversationId: "conversation-current",
+        historyOpen: true,
+        conversations: [
+          { id: "conversation-current", title: "当前会话", status: "active" },
+          { id: "conversation-old", title: "历史会话", status: "archived" },
+        ],
+        messages: [{ role: "assistant", text: "不应显示" }],
+      },
+    },
+    api: {
+      async deleteCanvasAgentConversation(canvasId, conversationId) {
+        calls.push([canvasId, conversationId]);
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+  });
+
+  const historyHtml = renderCanvasAgentPanel(workbench.ui);
+  assert.match(historyHtml, /class="canvas-agent-panel[^"]*history-open[^"]*"/);
+  assert.match(historyHtml, /class="canvas-agent-history"/);
+  assert.match(historyHtml, /class="canvas-agent-history-delete danger"[^>]+data-conversation-id="conversation-old"[^>]*>.*<svg/);
+  assert.doesNotMatch(historyHtml, /data-agent-field="conversationId"/);
+  assert.doesNotMatch(historyHtml, /data-agent-field="promptDraft"/);
+  assert.doesNotMatch(historyHtml, /不应显示/);
+
+  await controller.handleAction({
+    dataset: { agentAction: "delete-conversation", conversationId: "conversation-old" },
+  });
+  assert.deepEqual(calls, [["canvas-history", "conversation-old"]]);
+  assert.equal(workbench.ui.canvasAgent.conversationId, "conversation-current");
+  assert.deepEqual(workbench.ui.canvasAgent.conversations.map((item) => item.id), ["conversation-current"]);
   controller.dispose();
 });
 
@@ -338,6 +815,224 @@ test("Canvas Agent renders generation media and adds the stable result to the ca
   controller.dispose();
 });
 
+test("Canvas Agent locates a grouped media node at its absolute canvas center", async () => {
+  const calls = [];
+  const cell = {
+    getSize() { return { width: 240, height: 160 }; },
+  };
+  const graph = {
+    getCellById(nodeId) {
+      calls.push(["get-cell", nodeId]);
+      return cell;
+    },
+    select(selectedCell) {
+      calls.push(["select", selectedCell]);
+    },
+    centerPoint(x, y) {
+      calls.push(["center-point", x, y]);
+    },
+    centerCell(selectedCell) {
+      calls.push(["center-cell", selectedCell]);
+    },
+  };
+  const message = {
+    id: "message-grouped-media",
+    role: "tool",
+    canvasNodeId: "node-grouped-media",
+    media: { kind: "image", status: "completed", url: "/api/storage/grouped-media" },
+  };
+  const workbench = {
+    canvasGraph: graph,
+    ui: {
+      canvasDocument: {
+        nodes: [
+          { id: "group-1", type: "group", position: { x: 1_200, y: 700 }, size: { width: 900, height: 600 } },
+          { id: "node-grouped-media", type: "source-image", parentGroupId: "group-1", position: { x: 1_640, y: 920 }, size: { width: 240, height: 160 } },
+        ],
+      },
+      canvasAgent: { messages: [message] },
+    },
+    onCanvasNodeSelected(nodeId) {
+      calls.push(["selection-only", nodeId]);
+    },
+    async refreshCanvasSurface() {
+      throw new Error("locating a node must not rerender the Agent panel");
+    },
+    api: {},
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+
+  await controller.handleAction({ dataset: { agentAction: "locate-agent-canvas-node", messageId: message.id } });
+
+  assert.deepEqual(calls, [
+    ["selection-only", "node-grouped-media"],
+    ["get-cell", "node-grouped-media"],
+    ["select", cell],
+    ["center-point", 1_760, 1_000],
+  ]);
+  assert.equal(workbench.ui.selectedCanvasNodeId, "node-grouped-media");
+  assert.equal(workbench.ui.canvasEditorOpen, true);
+  controller.dispose();
+});
+
+test("Canvas Agent centers a located node using its rendered canvas bounds", async () => {
+  const calls = [];
+  const cell = { getSize() { return { width: 240, height: 160 }; } };
+  let translation = { tx: 30, ty: 40 };
+  const graph = {
+    getCellById() { return cell; },
+    select() {},
+    translate(x, y) {
+      if (arguments.length === 0) return translation;
+      translation = { tx: x, ty: y };
+      calls.push(["translate", x, y]);
+    },
+    centerPoint(x, y) {
+      calls.push(["center-point", x, y]);
+    },
+  };
+  const nodeElement = {
+    getAttribute(name) { return name === "data-cell-id" ? "node-media" : null; },
+    getBoundingClientRect() { return { left: 110, top: 90, right: 210, bottom: 190 }; },
+  };
+  const graphMount = {
+    querySelectorAll() { return [nodeElement]; },
+    getBoundingClientRect() { return { left: 10, top: 40, right: 1_010, bottom: 640 }; },
+  };
+  const surface = {
+    querySelector(selector) {
+      return selector === "[data-canvas-x6-mount]" ? graphMount : null;
+    },
+  };
+  const message = {
+    id: "message-media",
+    role: "tool",
+    canvasNodeId: "node-media",
+    media: { kind: "image", status: "completed", url: "/api/storage/media" },
+  };
+  const workbench = {
+    canvasGraph: graph,
+    ui: {
+      canvasDocument: {
+        nodes: [{ id: "node-media", position: { x: 1_640, y: 920 }, size: { width: 240, height: 160 } }],
+      },
+      canvasAgent: { messages: [message] },
+    },
+    async refreshCanvasSurface() { throw new Error("locating a node must not rerender the Agent panel"); },
+    api: {},
+  };
+  const controller = createCanvasAgentController({ surface, workbench });
+
+  await controller.handleAction({ dataset: { agentAction: "locate-agent-canvas-node", messageId: message.id } });
+
+  assert.deepEqual(calls, [["translate", 380, 240]]);
+  controller.dispose();
+});
+
+test("Canvas Agent re-centers a located node after the graph viewport finishes resizing", async () => {
+  const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const frames = [];
+  globalThis.requestAnimationFrame = (callback) => {
+    frames.push(callback);
+    return frames.length;
+  };
+  try {
+    let translation = { tx: 0, ty: 0 };
+    let graphRect = { left: 0, top: 0, right: 400, bottom: 300 };
+    let nodeRect = { left: 50, top: 50, right: 150, bottom: 150 };
+    const graph = {
+      getCellById() { return {}; },
+      select() {},
+      translate(x, y) {
+        if (arguments.length === 0) return translation;
+        const deltaX = x - translation.tx;
+        const deltaY = y - translation.ty;
+        translation = { tx: x, ty: y };
+        nodeRect = {
+          left: nodeRect.left + deltaX,
+          top: nodeRect.top + deltaY,
+          right: nodeRect.right + deltaX,
+          bottom: nodeRect.bottom + deltaY,
+        };
+      },
+    };
+    const nodeElement = {
+      getAttribute(name) { return name === "data-cell-id" ? "node-media" : null; },
+      getBoundingClientRect() { return nodeRect; },
+    };
+    const graphMount = {
+      querySelectorAll() { return [nodeElement]; },
+      getBoundingClientRect() { return graphRect; },
+    };
+    const workbench = {
+      canvasGraph: graph,
+      ui: {
+        canvasDocument: { nodes: [{ id: "node-media" }] },
+        canvasAgent: { messages: [{ id: "message-media", canvasNodeId: "node-media" }] },
+      },
+      async refreshCanvasSurface() { throw new Error("locating a node must not rerender the Agent panel"); },
+      api: {},
+    };
+    const controller = createCanvasAgentController({
+      surface: { querySelector: () => graphMount },
+      workbench,
+    });
+
+    await controller.handleAction({ dataset: { agentAction: "locate-agent-canvas-node", messageId: "message-media" } });
+    graphRect = { left: 0, top: 0, right: 1_000, bottom: 600 };
+    while (frames.length) frames.shift()();
+
+    assert.deepEqual(translation, { tx: 400, ty: 200 });
+    assert.equal((nodeRect.left + nodeRect.right) / 2, 500);
+    assert.equal((nodeRect.top + nodeRect.bottom) / 2, 300);
+    controller.dispose();
+  } finally {
+    globalThis.requestAnimationFrame = previousRequestAnimationFrame;
+  }
+});
+
+test("Canvas Agent merges generation submission and completion into one media card", () => {
+  const media = normalizeAgentMediaTask({
+    taskId: "task-media-1",
+    kind: "image",
+    status: "completed",
+    targetType: "canvas",
+    targetId: "canvas-agent-image-step-1",
+    result: { imageUrl: "/api/storage/preview-1" },
+  });
+  const messages = [
+    normalizeAgentMessage({
+      id: "message-submit",
+      sequence: 6,
+      role: "tool",
+      content: { toolId: "generation.create", output: { generationTaskId: "task-media-1" } },
+    }),
+    normalizeAgentMessage({
+      id: "message-complete",
+      sequence: 7,
+      role: "tool",
+      content: { generationTaskId: "task-media-1", status: "succeeded" },
+    }),
+  ].map((message) => ({ ...message, media, canvasNodeId: media.canvasNodeId }));
+
+  assert.equal(collapseAgentGenerationMessages(messages).length, 1);
+  const html = renderCanvasAgentPanel({
+    canvasDocument: { nodes: [{ id: "canvas-agent-image-step-1", data: { generationTaskId: "task-media-1" } }] },
+    canvasAgent: { messages },
+  });
+  assert.equal((html.match(/class="canvas-agent-media"/g) ?? []).length, 1);
+  assert.match(html, /generation\.create 已执行/);
+  assert.match(html, /data-agent-action="locate-agent-canvas-node"/);
+  assert.doesNotMatch(html, /data-agent-action="add-media-to-canvas"/);
+
+  const missingNodeHtml = renderCanvasAgentPanel({
+    canvasDocument: { nodes: [] },
+    canvasAgent: { messages },
+  });
+  assert.match(missingNodeHtml, /data-agent-action="add-media-to-canvas"/);
+  assert.doesNotMatch(missingNodeHtml, /data-agent-action="locate-agent-canvas-node"/);
+});
+
 
 test("Canvas Agent grants and revokes the selected persisted canvas file", async () => {
   const calls = [];
@@ -405,16 +1100,16 @@ test("Canvas Agent exposes task center, canvas memory, and estimated context usa
   assert.ok(usage.estimatedTokens > 1_200);
 
   const html = renderCanvasAgentPanel(ui);
-  assert.match(html, /data-agent-action="open-task-center"/);
-  assert.match(html, /data-agent-action="open-memory"/);
+  assert.doesNotMatch(html, /data-agent-action="open-task-center"/);
+  assert.doesNotMatch(html, /data-agent-action="open-memory"/);
   assert.match(html, /class="canvas-agent-context-usage normal"/);
   assert.match(html, /aria-label="上下文占用约 \d+%"/);
 
   ui.canvasAgent.panelView = "memory";
   const memoryHtml = renderCanvasAgentPanel(ui);
-  assert.match(memoryHtml, /aria-label="画布记忆"/);
-  assert.match(memoryHtml, /data-agent-action="refresh-agent-memories"/);
-  assert.doesNotMatch(memoryHtml, /data-agent-action="send"/);
+  assert.doesNotMatch(memoryHtml, /aria-label="画布记忆"/);
+  assert.doesNotMatch(memoryHtml, /data-agent-action="refresh-agent-memories"/);
+  assert.match(memoryHtml, /data-agent-action="send"/);
 });
 
 test("Canvas Agent memory panel reads real records and supports filter, edit, toggle, and delete", async () => {
@@ -470,15 +1165,16 @@ test("Canvas Agent memory panel reads real records and supports filter, edit, to
   assert.equal(workbench.ui.canvasAgent.memoryRecords.length, 2);
 
   let html = renderCanvasAgentPanel(workbench.ui);
-  assert.match(html, /preference\.visual_style/);
-  assert.match(html, /Agent 任务/);
-  assert.match(html, /data-agent-action="edit-agent-memory" data-memory-id="memory-1"/);
-  assert.match(html, /data-agent-action="toggle-agent-memory" data-memory-id="memory-2"[^>]*>启用/);
+  assert.doesNotMatch(html, /preference\.visual_style/);
+  assert.doesNotMatch(html, /Agent 任务/);
+  assert.doesNotMatch(html, /data-agent-action="edit-agent-memory"/);
+  assert.doesNotMatch(html, /data-agent-action="toggle-agent-memory"/);
+  assert.match(html, /data-agent-action="send"/);
 
   controller.handleInput({ dataset: { agentField: "memoryCategoryFilter" }, value: "fact" });
   html = renderCanvasAgentPanel(workbench.ui);
   assert.doesNotMatch(html, /preference\.visual_style/);
-  assert.match(html, /fact\.hero_name/);
+  assert.doesNotMatch(html, /fact\.hero_name/);
 
   await controller.handleAction({ dataset: { agentAction: "edit-agent-memory", memoryId: "memory-1" } });
   controller.handleInput({ dataset: { agentField: "memoryDraftKey" }, value: "preference.art_style" });
@@ -581,9 +1277,9 @@ test("Canvas Agent task center aggregates existing conversation events and uses 
   assert.equal(agent.memoryEvents.length, 1);
   agent.panelView = "tasks";
   const taskHtml = renderCanvasAgentPanel(workbench.ui);
-  assert.match(taskHtml, /aria-label="Agent 任务中心"/);
-  assert.match(taskHtml, /规划三段镜头/);
-  assert.match(taskHtml, /data-agent-action="skip-step"[^>]+data-step-id="step-memory"/);
+  assert.doesNotMatch(taskHtml, /aria-label="Agent 任务中心"/);
+  assert.doesNotMatch(taskHtml, /规划三段镜头/);
+  assert.doesNotMatch(taskHtml, /data-agent-action="skip-step"[^>]+data-step-id="step-memory"/);
 
   await controller.handleAction({
     dataset: { agentAction: "skip-step", taskId: "task-active", stepId: "step-memory" },

@@ -211,4 +211,40 @@ describe("generation shard worker runner", () => {
     assert.equal(closed, 1);
     await runner.close();
   });
+
+  it("keeps active workers and reports periodic discovery failures", async () => {
+    const timers: Array<() => void> = [];
+    const closed: string[] = [];
+    const errors: string[] = [];
+    let failDiscovery = false;
+    const runner = createGenerationShardWorkerRunner({
+      maxQueuesPerProcess: 1,
+      refreshIntervalMs: 10,
+      setInterval(run) {
+        timers.push(run);
+        return timers.length as unknown as ReturnType<typeof setInterval>;
+      },
+      clearInterval() {},
+      async discover() {
+        if (failDiscovery) throw new Error("redis_temporarily_unavailable");
+        return [{ queueName: "queue-a", mediaType: "image", stage: "submit", routeCode: "route", shardNo: 0 }];
+      },
+      createWorker(spec) {
+        return { async close() { closed.push(spec.queueName); } };
+      },
+      onRefreshError(error) {
+        errors.push(error instanceof Error ? error.message : String(error));
+      },
+    });
+
+    await runner.start();
+    failDiscovery = true;
+    timers[0]();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(runner.activeQueueNames(), ["queue-a"]);
+    assert.deepEqual(closed, []);
+    assert.deepEqual(errors, ["redis_temporarily_unavailable"]);
+    await runner.close();
+  });
 });

@@ -227,7 +227,7 @@ export async function createSignedReadUrl(
   object: StorageObjectRecord;
 }> {
   const object = await findStorageObject(db, input.storageObjectId);
-  if (!object) {
+  if (!object || object.status === "deleted" || object.deletedAt) {
     throw new StorageAccessError("storage_object_not_found");
   }
 

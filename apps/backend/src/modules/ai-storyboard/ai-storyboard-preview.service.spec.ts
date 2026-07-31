@@ -156,6 +156,75 @@ describe("ai storyboard preview service", () => {
     assert.equal(events.at(-1)?.preview.displayTables.script.rows[0]?.scriptContent, "这是现成剧本。");
   });
 
+  it("runs only the selected script skill with the selected text model", async () => {
+    const gateway = new FakeTextGateway(["改编后的剧本。"]);
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000020",
+      scriptText: "小说原文。",
+      modelCode: "selected-text-model",
+      selectedStages: ["script"],
+      packages: { skillPrompt: "转剧本提示词" },
+    });
+
+    assert.equal(gateway.calls.length, 1);
+    assert.equal(gateway.calls[0]?.model, "selected-text-model");
+    assert.match(gateway.calls[0]?.prompt ?? "", /转剧本提示词/);
+    assert.equal(result.scriptText, "改编后的剧本。");
+    assert.equal(result.displayTables.storyboards.rows.length, 0);
+  });
+
+  it("runs only the selected shot skill against the input script", async () => {
+    const gateway = new FakeTextGateway([
+      JSON.stringify({ storyboards: [{ shotNo: 1, plot: "只生成分镜", imagePrompt: "画面", videoPrompt: "镜头" }] }),
+    ]);
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events = [];
+
+    for await (const event of service.generatePreviewStream({
+      projectId: "40000000-0000-4000-8000-000000000021",
+      scriptText: "现成剧本。",
+      modelCode: "selected-text-model",
+      selectedStages: ["shot"],
+      packages: {},
+      templates: { shotPrompt: "分镜技能 {{script_text}}" },
+    })) {
+      events.push(event);
+    }
+
+    assert.equal(gateway.calls.length, 1);
+    assert.equal(gateway.calls[0]?.model, "selected-text-model");
+    assert.match(gateway.calls[0]?.prompt ?? "", /分镜技能 现成剧本。/);
+    assert.deepEqual(events.filter((event) => event.type === "asset_prompt").map((event) => event.stage), ["shot"]);
+    assert.equal(events.some((event) => event.type === "script_start"), false);
+  });
+
+  it("feeds the selected script result into each later selected skill", async () => {
+    const gateway = new FakeTextGateway([
+      "链路生成的剧本。",
+      JSON.stringify({ scenes: [{ sceneName: "新场景" }] }),
+      JSON.stringify({ storyboards: [{ shotNo: 1, plot: "新分镜" }] }),
+    ]);
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000022",
+      scriptText: "小说原文。",
+      modelCode: "selected-text-model",
+      selectedStages: ["script", "scene", "shot"],
+      packages: { skillPrompt: "转剧本技能" },
+      templates: { scenePrompt: "场景技能", shotPrompt: "分镜技能" },
+    });
+
+    assert.equal(gateway.calls.length, 3);
+    assert.deepEqual(gateway.calls.map((call) => call.model), ["selected-text-model", "selected-text-model", "selected-text-model"]);
+    assert.match(gateway.calls[1]?.prompt ?? "", /链路生成的剧本。/);
+    assert.match(gateway.calls[2]?.prompt ?? "", /链路生成的剧本。/);
+    assert.doesNotMatch(gateway.calls[1]?.prompt ?? "", /小说原文。/);
+    assert.doesNotMatch(gateway.calls[2]?.prompt ?? "", /小说原文。/);
+  });
+
   it("repairs loose json from scene character and prop stages instead of failing the preview", async () => {
     const gateway = new FakeTextGateway([
       "```markdown\n任小野把小草托付给闵婶子。\n```",

@@ -81,6 +81,10 @@ function resolveDirectorDeskRecordKey(record) {
   return String(record?.id ?? record?.deskKey ?? "").trim();
 }
 
+function canvasDirectorDeskName(node) {
+  return `画布导演台 · ${String(node?.id ?? "").trim()}`.slice(0, 100);
+}
+
 function selectDeterministicDirectorDesk(records = []) {
   return [...records]
     .filter((record) => resolveDirectorDeskRecordKey(record))
@@ -93,7 +97,9 @@ function selectDeterministicDirectorDesk(records = []) {
 
 export async function ensureDirectorDeskNodeBinding(workbench, node) {
   const existingDeskKey = normalizeDeskKey(node);
-  if (existingDeskKey) return { node, directorDeskKey: existingDeskKey, created: false };
+  if (existingDeskKey && isTeamMemberSession(workbench?.session)) {
+    return { node, directorDeskKey: existingDeskKey, created: false };
+  }
   if (typeof workbench?.api?.listDirectorDesks !== "function") {
     throw new Error("canvas_director_list_api_unavailable");
   }
@@ -111,13 +117,20 @@ export async function ensureDirectorDeskNodeBinding(workbench, node) {
   const desks = Array.isArray(listPayload?.desks)
     ? listPayload.desks
     : Array.isArray(listPayload?.data?.desks) ? listPayload.data.desks : [];
+  const dedicatedDeskName = canvasDirectorDeskName(node);
+  const existingDesk = desks.find((record) => resolveDirectorDeskRecordKey(record) === existingDeskKey);
+  if (existingDeskKey && String(existingDesk?.name ?? "").trim() === dedicatedDeskName) {
+    return { node, directorDeskKey: existingDeskKey, created: false };
+  }
   const occupiedDeskKeys = new Set(document.nodes
     .filter((item) => item?.id !== nodeId && item?.type === "ai-director")
     .map(normalizeDeskKey)
     .filter(Boolean));
-  let desk = selectDeterministicDirectorDesk(
-    desks.filter((record) => !occupiedDeskKeys.has(resolveDirectorDeskRecordKey(record))),
-  );
+  let desk = isTeamMemberSession(workbench.session)
+    ? selectDeterministicDirectorDesk(
+        desks.filter((record) => !occupiedDeskKeys.has(resolveDirectorDeskRecordKey(record))),
+      )
+    : desks.find((record) => String(record?.name ?? "").trim() === dedicatedDeskName) ?? null;
   let created = false;
   if (!desk) {
     if (isTeamMemberSession(workbench.session)) {
@@ -127,7 +140,7 @@ export async function ensureDirectorDeskNodeBinding(workbench, node) {
       throw new Error("canvas_director_create_api_unavailable");
     }
     const payload = await workbench.api.createDirectorDesk({
-      name: `${String(node?.data?.title ?? "AI 导演").trim() || "AI 导演"} 导演台`,
+      name: dedicatedDeskName,
     });
     desk = payload?.desk ?? payload?.data?.desk ?? payload;
     created = true;
@@ -301,8 +314,13 @@ export function createDirectorDeskOverlay({ surface, workbench }) {
   };
 
   const appendVideoCapture = async (file) => {
-    await appendFile(file, { media: "reference-video", directorArtifactKind: "video" });
-    notify("已回写导演台参考视频", "success");
+    try {
+      await appendFile(file, { media: "reference-video", directorArtifactKind: "video" });
+      notify("已回写导演台参考视频", "success");
+    } catch (error) {
+      notify("导演台参考视频回写失败，请稍后重试");
+      throw error;
+    }
   };
 
   const open = async (node) => {
@@ -323,60 +341,12 @@ export function createDirectorDeskOverlay({ surface, workbench }) {
     host.dataset.canvasDirectorDeskOverlay = "true";
     host.style.cssText = "position:fixed;inset:0;z-index:1000;background:#101211;min-width:0;min-height:0;";
     surface.append(host);
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.textContent = "关闭导演台";
-    closeButton.setAttribute("aria-label", "关闭导演台");
-    closeButton.style.cssText = "position:absolute;top:12px;right:16px;z-index:1001;padding:7px 12px;border:1px solid rgba(255,255,255,.25);border-radius:6px;background:#151918;color:#fff;cursor:pointer;";
-    closeButton.addEventListener("click", close);
-    host.append(closeButton);
-    const syncButton = document.createElement("button");
-    syncButton.type = "button";
-    syncButton.textContent = "同步当前帧";
-    syncButton.setAttribute("aria-label", "同步当前帧到画布节点");
-    syncButton.style.cssText = "position:absolute;top:12px;right:136px;z-index:1001;padding:7px 12px;border:1px solid rgba(255,255,255,.25);border-radius:6px;background:#151918;color:#fff;cursor:pointer;";
-    syncButton.addEventListener("click", async () => {
-      if (typeof module?.captureDirectorDeskFrame !== "function") {
-        notify("当前导演台尚未准备好，请稍后重试");
-        return;
-      }
-      syncButton.disabled = true;
-      try {
-        await waitForCaptureReady();
-      } catch (error) {
-        notify(error?.message === "Viewport capture handler is not registered"
-          ? "当前导演台尚未准备好，请稍后重试"
-          : "当前帧同步失败，请稍后重试");
-      } finally {
-        syncButton.disabled = false;
-      }
-    });
-    host.append(syncButton);
-    const exportVideoButton = document.createElement("button");
-    exportVideoButton.type = "button";
-    exportVideoButton.textContent = "导出参考视频";
-    exportVideoButton.setAttribute("aria-label", "导出参考视频到画布节点");
-    exportVideoButton.style.cssText = "position:absolute;top:12px;right:250px;z-index:1001;padding:7px 12px;border:1px solid rgba(255,255,255,.25);border-radius:6px;background:#151918;color:#fff;cursor:pointer;";
-    exportVideoButton.addEventListener("click", async () => {
-      if (typeof module?.exportDirectorDeskReferenceVideo !== "function") {
-        notify("当前导演台不支持参考视频导出");
-        return;
-      }
-      exportVideoButton.disabled = true;
-      try {
-        await waitForVideoExportReady();
-      } catch (error) {
-        notify(error?.message || "参考视频导出失败，请稍后重试");
-      } finally {
-        exportVideoButton.disabled = false;
-      }
-    });
-    host.append(exportVideoButton);
     try {
       module = await loadDirectorDeskModule();
       if (disposed || !host?.isConnected) return false;
       module.mountDirectorDesk(host, {
         instanceId: binding.directorDeskKey,
+        entryMode: "canvas",
         initialScreen: "editor",
         theme: resolveTheme(workbench),
         authenticated: true,
@@ -395,11 +365,6 @@ export function createDirectorDeskOverlay({ surface, workbench }) {
       return false;
     }
   };
-
-  const onKeydown = (event) => {
-    if (event.key === "Escape" && host) close();
-  };
-  surface.addEventListener("keydown", onKeydown);
 
   return {
     open,
@@ -442,7 +407,6 @@ export function createDirectorDeskOverlay({ surface, workbench }) {
     close,
     dispose() {
       disposed = true;
-      surface.removeEventListener("keydown", onKeydown);
       close();
     },
   };

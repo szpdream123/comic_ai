@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { findCanvasByCanvasProjectId } from "../../project/creator-canvas-record.service.ts";
 import { __canvasAgentRuntimeTestUtils } from "../canvas-agent-runtime.factory.ts";
 import {
   loadCanvasAgentRuntimeConfiguration,
@@ -26,15 +27,61 @@ describe("Canvas Agent runtime composition", () => {
     const patched = __canvasAgentRuntimeTestUtils.applyCanvasPatch(document, [
       { op: "replace", path: "/nodes/0/data/text", value: "after" },
       { op: "add", path: "/nodes/-", value: { id: "node-2", type: "image" } },
+      {
+        type: "addEdge",
+        edge: {
+          id: "edge-1",
+          kind: "execution",
+          sourceNodeId: "node-1",
+          sourcePortId: "out_text",
+          targetNodeId: "node-2",
+          targetPortId: "in_asset",
+          data: {},
+        },
+      },
     ]);
 
     assert.equal(document.nodes.length, 1);
     assert.equal((patched.nodes as Array<Record<string, unknown>>).length, 2);
+    assert.equal((patched.edges as Array<Record<string, unknown>>)[0]?.id, "edge-1");
     assert.equal((((patched.nodes as Array<Record<string, unknown>>)[0]?.data) as Record<string, unknown>).text, "after");
     assert.throws(
       () => __canvasAgentRuntimeTestUtils.applyCanvasPatch(document, [{ op: "copy", path: "/nodes" }]),
       /canvas_agent_patch_operation_invalid/,
     );
+  });
+
+  it("resolves Canvas patch array entries by stable node and edge ids", () => {
+    const document = {
+      nodes: [
+        { id: "canvas-group-23", type: "group" },
+        { id: "node-1", type: "text", data: { text: "before" } },
+      ],
+      edges: [{ id: "edge-1", sourceNodeId: "canvas-group-23", targetNodeId: "node-1" }],
+    };
+
+    const patched = __canvasAgentRuntimeTestUtils.applyCanvasPatch(document, [
+      { op: "replace", path: "/nodes/node-1/data/text", value: "after" },
+      { op: "remove", path: "/nodes/canvas-group-23" },
+      { op: "remove", path: "/edges/edge-1" },
+    ]);
+
+    assert.deepEqual((patched.nodes as Array<Record<string, unknown>>).map((node) => node.id), ["node-1"]);
+    assert.equal((((patched.nodes as Array<Record<string, unknown>>)[0]?.data) as Record<string, unknown>).text, "after");
+    assert.deepEqual(patched.edges, []);
+  });
+
+  it("keeps Canvas node keys separate from UUID generation scope targets", () => {
+    const targets = __canvasAgentRuntimeTestUtils.resolveCanvasAgentGenerationTargets({
+      canvasId: "9c310821-dbb1-46f3-866e-09240007ef31",
+      kind: "image",
+      agentStepId: "step-1",
+    });
+
+    assert.deepEqual(targets, {
+      scopeTargetId: "9c310821-dbb1-46f3-866e-09240007ef31",
+      nodeKey: "canvas-agent-image-step-1",
+    });
   });
 
   it("registers a supervised worker launcher for development and production", () => {
@@ -96,6 +143,47 @@ describe("Canvas Agent runtime composition", () => {
     assert.equal(loaded.maxRounds, 6);
     assert.equal(loaded.defaultModelCode, "loaded-default");
     assert.equal(loaded.policy.allowAutomaticCanvasWrites, false);
+  });
+
+  it("creates an idempotent running Canvas node for Agent media generation", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedActorFixture(db);
+    const stepId = randomUUID();
+    const taskId = randomUUID();
+    const input = {
+      canvasId: fixture.canvasId,
+      conversationId: randomUUID(),
+      agentTaskId: randomUUID(),
+      agentStepId: stepId,
+      ownerUserId: fixture.userId,
+      actorTeamMemberId: fixture.memberId,
+      idempotencyKey: `canvas-agent:${stepId}`,
+      kind: "image" as const,
+      request: { model: "image-model", prompt: "一座雨夜城市" },
+      taskId,
+      nodeKey: `canvas-agent-image-${stepId}`,
+      modelCode: "image-model",
+      prompt: "一座雨夜城市",
+      now: new Date("2026-07-30T08:00:00.000Z"),
+    };
+    try {
+      await __canvasAgentRuntimeTestUtils.upsertCanvasAgentGenerationNode(db, input);
+      await __canvasAgentRuntimeTestUtils.upsertCanvasAgentGenerationNode(db, input);
+      const canvas = await findCanvasByCanvasProjectId(db, {
+        canvasProjectId: fixture.canvasId,
+        userId: fixture.userId,
+      });
+      const node = canvas?.document.nodes.find((item) => item.id === input.nodeKey);
+
+      assert.equal(canvas?.serverRevision, 2);
+      assert.equal(node?.type, "ai-image");
+      assert.equal(node?.data?.status, "queued");
+      assert.equal(node?.data?.taskId, taskId);
+      assert.equal(node?.data?.generationStage, "task_created");
+      assert.equal(node?.data?.source, "canvas_agent");
+    } finally {
+      await db.close();
+    }
   });
 
   it("revokes an owner runtime actor when the owner account is disabled", async () => {

@@ -1,11 +1,13 @@
 ﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
 import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
+import { renderCanvasTextSkillModal } from "./canvas-text-skill-modal.js";
 import { renderExportPanel } from "./export-panel.js";
 import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
+  EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
   renderEpisodePromptSkillControl,
   renderEpisodePromptSkillModal,
@@ -41,6 +43,7 @@ import {
 } from "./canvas/canvas-markdown-node.js";
 import { resolveCanvasNodeToolbarTools } from "./canvas/canvas-node-toolbar.js";
 import { createDefaultCanvasDocument, isLegacyStarterCanvasDocument } from "./canvas/canvas-default-document.js";
+import { parseCanvasPromptReferences } from "./canvas/canvas-prompt-reference.js";
 import {
   buildCanvasSidebarItems,
   resolveCanvasModelOptions,
@@ -1223,7 +1226,7 @@ export function renderProjectDetail(context = {}) {
 }
 
 function renderGlobalOverlays(ui = {}, session = {}) {
-  return `
+  return `<div data-workbench-global-overlays style="display:contents">
     ${renderScriptConversionSkillModal(ui)}
     ${renderEpisodePromptSkillModal({
       show: ui.episodePromptSkillModalOpen === true && ui.isSingleEpisodeModalOpen === true,
@@ -1234,6 +1237,15 @@ function renderGlobalOverlays(ui = {}, session = {}) {
       draftSelections: ui.episodePromptSkillDraftIds,
       loading: ui.episodePromptSkillLoading,
     })}
+    ${renderCanvasTextSkillModal({
+      show: ui.canvasTextSkillModalOpen === true && ui.canvasProjectView === "detail",
+      sourceTab: ui.canvasTextSkillSourceTab,
+      activeCategory: ui.canvasTextSkillCategory ?? ui.canvasTextSkillDraftCategory,
+      officialSkills: ui.canvasTextOfficialSkills,
+      privateSkills: ui.canvasTextPrivateSkills,
+      draftSkillId: ui.canvasTextSkillDraftId,
+      loading: ui.canvasTextSkillsLoading,
+    })}
     ${renderStoryboardPromptSkillModal(ui)}
     ${renderTaskCenterDrawer(ui)}
     ${renderCreditLedgerDrawer(ui)}
@@ -1242,7 +1254,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderAnnouncementPanel(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
-  `;
+  </div>`;
 }
 
 function countActiveTaskCenterTasks(ui = {}) {
@@ -1846,7 +1858,7 @@ function normalizeCreditLedgerEntry(row = {}) {
   const description = failure
     ? `失败：${failure}`
     : [eventLabel, model, content, duration ? `耗时 ${duration}` : ""].filter(Boolean).join(" · ") || "系统账本记录";
-  const title = translateCreditLedgerReason(reason, metadata) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
+  const title = translateCreditLedgerReason(reason, metadata, sourceType) || [source, eventLabel].filter(Boolean).join(" · ") || creditType.label;
   const teamCreditType = normalizeTeamMemberCreditLedgerType(sourceType, creditType);
   return {
     label: teamCreditType.label,
@@ -1978,11 +1990,15 @@ function creditLedgerModelLabel(metadata = {}) {
   return `模型 ${code}`;
 }
 
-function translateCreditLedgerReason(reason, metadata = {}) {
+function translateCreditLedgerReason(reason, metadata = {}, sourceType = "") {
   const normalized = String(reason ?? "").trim().toLowerCase();
+  const normalizedSourceType = String(sourceType ?? "").trim().toLowerCase();
   const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
   const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
   const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
+  if (isCanvasAgentLedgerEntry(normalizedSourceType, normalized, metadata)) {
+    return "画布协作Agent操作消耗";
+  }
   if (!normalized) {
     return "";
   }
@@ -2015,6 +2031,10 @@ function translateCreditLedgerReason(reason, metadata = {}) {
 
 function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
   const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
+  const reason = String(row.reason ?? "").trim().toLowerCase();
+  if (isCanvasAgentLedgerEntry(sourceType, reason, metadata)) {
+    return "画布协作Agent操作消耗";
+  }
   if (sourceType === "team_member_credit_allocation") {
     return "主账号分配积分";
   }
@@ -2036,6 +2056,15 @@ function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
     return explicit;
   }
   return fallback || "积分变动";
+}
+
+function isCanvasAgentLedgerEntry(sourceType, reason, metadata = {}) {
+  return sourceType === "canvas_agent_text_round"
+    || (sourceType === "credit_reservation_allocation" && Boolean(metadata.agentStepId ?? metadata.agent_step_id))
+    || reason === "canvas agent text round"
+    || reason === "canvas agent text round unused reservation"
+    || reason === "canvas agent text round interrupted before provider start"
+    || reason === "画布协作agent操作消耗";
 }
 
 function resolveCreditLedgerAccountLabel(row = {}, metadata = {}) {
@@ -3522,8 +3551,9 @@ function renderEpisodeHubMenu(episode) {
 
 function renderSingleEpisodeModal(ui, state = {}) {
   const aiStoryboardActionLabel = resolveSingleEpisodeAiActionLabel(ui);
-  const aiScriptStoryboardActionLabel = resolveSingleEpisodeStoryboardActionLabel(ui);
   const isCheckingAiStoryboard = Boolean(ui.singleEpisodeAiChecking);
+  const selectedSkillCount = resolveSelectedEpisodePromptSkills(ui).length;
+  const selectedTextModelCode = resolveSingleEpisodeTextModelCode(ui);
   const scriptPicker = resolveSingleEpisodeScriptPicker(state, ui);
   const scriptInput = truncateScriptTextByCharacters(ui.singleEpisodeScript, 5000);
   return `
@@ -3553,6 +3583,7 @@ function renderSingleEpisodeModal(ui, state = {}) {
         <div class="single-episode-toolbar single-episode-toolbar-replica">
           <div class="single-episode-toolbar-left">
             <div class="single-episode-look-controls single-episode-skill-controls">
+              ${renderSingleEpisodeTextModelControl(ui)}
               ${renderEpisodePromptSkillControl({
                 skills: resolveEpisodePromptSkillItems(ui),
                 selectedByCategory: ui.selectedEpisodePromptSkillIds,
@@ -3562,11 +3593,52 @@ function renderSingleEpisodeModal(ui, state = {}) {
           </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>创建空白章节</button>
-            <button class="primary-action single-episode-ai-action compact" type="button" data-action="confirm-single-episode-storyboard" ${isCheckingAiStoryboard ? "disabled" : ""}>${escapeHtml(aiScriptStoryboardActionLabel)}</button>
-            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
+            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard || !selectedSkillCount || !selectedTextModelCode ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
           </div>
         </div>
       </div>
+    </section>
+  `;
+}
+
+function renderSingleEpisodeTextModelControl(ui = {}) {
+  const models = resolveSingleEpisodeTextModels(ui);
+  const selectedModelCode = resolveSingleEpisodeTextModelCode(ui);
+  const selectedModel = models.find((model) => model.modelCode === selectedModelCode) ?? models[0];
+  const isOpen = ui.singleEpisodeLookPanel === "text-model";
+  return `
+    <section class="single-episode-look-select single-episode-text-model-control ${isOpen ? "open" : ""}" aria-label="文本模型">
+      <div class="single-episode-look-label"><span>文本模型</span></div>
+      <button
+        class="single-episode-look-trigger single-episode-text-model-trigger"
+        type="button"
+        data-action="toggle-single-episode-text-model-menu"
+        aria-haspopup="listbox"
+        aria-expanded="${isOpen ? "true" : "false"}"
+      >
+        <span title="${escapeAttr(selectedModel?.modelLabel ?? "后台未配置文本模型")}">${escapeHtml(selectedModel?.modelLabel ?? "后台未配置文本模型")}</span>
+        <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon(isOpen ? "up" : "down")}</span>
+      </button>
+      ${isOpen ? `
+        <div class="single-episode-look-dropdown single-episode-text-model-dropdown" role="listbox" aria-label="选择文本模型">
+          ${models.map((model) => {
+            const credits = resolveConfiguredModelCredits(model.raw);
+            return `
+              <button
+                class="single-episode-text-model-option ${model.modelCode === selectedModelCode ? "active" : ""}"
+                type="button"
+                role="option"
+                aria-selected="${model.modelCode === selectedModelCode ? "true" : "false"}"
+                data-action="select-single-episode-text-model"
+                data-model-code="${escapeAttr(model.modelCode)}"
+              >
+                <strong>${escapeHtml(model.modelLabel)}</strong>
+                <small>${credits ? `${escapeHtml(credits)}积分/次` : "免费"}</small>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      ` : ""}
     </section>
   `;
 }
@@ -3926,15 +3998,38 @@ function renderSingleEpisodeScriptEpisodeItem(episode = {}, picker = {}) {
 }
 
 function resolveSingleEpisodeAiActionLabel(ui = {}) {
-  const modelCredits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-script");
-  if (!modelCredits) {
+  const modelCredits = Number(resolveSingleEpisodeModelCreditsByCode(ui, resolveSingleEpisodeTextModelCode(ui))) || 0;
+  const selectedSkills = resolveSelectedEpisodePromptSkills(ui);
+  const selectedSkillCount = selectedSkills.length;
+  if (!modelCredits || !selectedSkillCount) {
     return "AI 小说分镜";
   }
-  const skillCredits = sumEpisodePromptSkillCredits(
-    resolveEpisodePromptSkillItems(ui),
-    ui.selectedEpisodePromptSkillIds,
-  );
-  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits, skillCredits)}`;
+  const skillCredits = selectedSkills.reduce((sum, skill) => sum + Math.max(0, Number(skill.priceCredits) || 0), 0);
+  return `AI 小说分镜 ${formatModelAndSkillCredits(modelCredits * selectedSkillCount, skillCredits)}`;
+}
+
+function resolveSelectedEpisodePromptSkills(ui = {}) {
+  const selectedIds = new Set(Object.values(ui.selectedEpisodePromptSkillIds ?? {}).map(String).filter(Boolean));
+  return resolveEpisodePromptSkillItems(ui).filter((skill) => selectedIds.has(String(skill.id)));
+}
+
+function resolveSingleEpisodeTextModels(ui = {}) {
+  const models = resolveCanvasModelOptions(ui.episodeGenerationConfig ?? {}, "text");
+  if (models.length) {
+    return models;
+  }
+  const fallbackCode = String(ui.singleEpisodeTextModelCode ?? "deepseek-script").trim() || "deepseek-script";
+  return [{ modelCode: fallbackCode, modelLabel: fallbackCode, raw: {} }];
+}
+
+export function resolveSingleEpisodeTextModelCode(ui = {}) {
+  const models = resolveSingleEpisodeTextModels(ui);
+  const requestedCode = String(ui.singleEpisodeTextModelCode ?? "").trim();
+  const defaultCode = String(ui.episodeGenerationConfig?.defaultTextModelCode ?? "").trim();
+  return models.find((model) => model.modelCode === requestedCode)?.modelCode
+    ?? models.find((model) => model.modelCode === defaultCode)?.modelCode
+    ?? models[0]?.modelCode
+    ?? "";
 }
 
 function resolveSingleEpisodeStoryboardActionLabel(ui = {}) {
@@ -4816,24 +4911,27 @@ function renderScriptConversionSkillControl(ui = {}) {
   const summary = selectedSkill?.title
     || (ui.scriptConversionSkillLoading ? "正在加载技能" : "请选择技能");
   return `
-    <div class="script-conversion-skill-control">
-      <section class="single-episode-look-select" aria-label="小说转剧本技能">
-        <div class="single-episode-look-label">
-          <span>小说转剧本技能</span>
-          <i aria-hidden="true">?</i>
-        </div>
-        <button
-          class="single-episode-look-trigger"
-          type="button"
-          data-action="open-script-conversion-skill-modal"
-          aria-haspopup="dialog"
-          aria-expanded="${ui.scriptConversionSkillModalOpen ? "true" : "false"}"
-        >
-          <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
-          ${selectedSkill ? `<small>${formatScriptConversionSkillPrice(selectedSkill.priceCredits)}</small>` : ""}
-          <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span>
-        </button>
-      </section>
+    <div class="script-manual-look-control-row">
+      ${renderSingleEpisodeTextModelControl(ui)}
+      <div class="script-conversion-skill-control">
+        <section class="single-episode-look-select" aria-label="小说转剧本技能">
+          <div class="single-episode-look-label">
+            <span>小说转剧本技能</span>
+            <i aria-hidden="true">?</i>
+          </div>
+          <button
+            class="single-episode-look-trigger"
+            type="button"
+            data-action="open-script-conversion-skill-modal"
+            aria-haspopup="dialog"
+            aria-expanded="${ui.scriptConversionSkillModalOpen ? "true" : "false"}"
+          >
+            <span title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
+            ${selectedSkill ? `<small>${formatScriptConversionSkillPrice(selectedSkill.priceCredits)}</small>` : ""}
+            <span class="single-episode-look-trigger__icon" aria-hidden="true">${renderUiChevronIcon("down")}</span>
+          </button>
+        </section>
+      </div>
     </div>
   `;
 }
@@ -5033,7 +5131,7 @@ function resolveScriptModalSubmitLabel(ui = {}) {
   if (ui.scriptModalMode !== "manual") {
     return fallback;
   }
-  const modelCredits = resolveSingleEpisodeModelCreditsByCode(ui, "deepseek-noval");
+  const modelCredits = resolveSingleEpisodeModelCreditsByCode(ui, resolveSingleEpisodeTextModelCode(ui));
   if (!modelCredits) {
     return fallback;
   }
@@ -8660,6 +8758,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   const canvasGridVisible = viewport.gridVisible !== false;
   const canvasSnapEnabled = viewport.snapEnabled !== false;
   const viewportStyle = canvasViewportStyle(viewport);
+  const gridStyle = canvasGridStyle(viewport);
   const sidebarMode = ["assets", "history"].includes(ui.canvasSidebarMode)
     ? ui.canvasSidebarMode
     : "nodes";
@@ -8670,7 +8769,8 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     ? ui.canvasAssetMediaFilter
     : "all";
   const canvasAssetLayoutColumns = Math.min(6, Math.max(2, Number(ui.canvasAssetLayoutColumns ?? 3) || 3));
-  const canvasPanelStyle = ui.canvasSidebarCollapsed === true
+  const sidebarCollapsed = ui.canvasSidebarCollapsed !== false;
+  const canvasPanelStyle = sidebarCollapsed
     ? "grid-template-columns:minmax(0, 1fr)"
     : assetSidebarMode
       ? `--canvas-asset-columns:${canvasAssetLayoutColumns};--canvas-sidebar-width:${Math.max(264, canvasAssetLayoutColumns * 118)}px`
@@ -8739,7 +8839,6 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
     : !assetSidebarMode
     ? filterCanvasSidebarNodeItems(rawSidebarItems, canvasNodeFilter, canvasNodeSearch)
     : rawSidebarItems;
-  const sidebarCollapsed = ui.canvasSidebarCollapsed === true;
   const nodeTemplates = resolveCanvasNodeTemplates(ui.episodeGenerationConfig);
   const selectedNode =
     nodes.find((node) => node.id === ui.selectedCanvasNodeId) ??
@@ -8905,15 +9004,13 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           </section>` : ""}
         </div>
         <footer class="canvas-sidebar-footer">
-          <button class="canvas-collapse" type="button" data-action="toggle-canvas-sidebar" aria-label="收起侧栏" aria-expanded="true" aria-controls="canvas-sidebar-panel">${renderCanvasIcon("collapse")}</button>
           <span${!assetSidebarMode ? ' data-canvas-node-count' : ""}>${assetSidebarMode ? `共 ${sidebarMode === "history" ? sidebarItems.length : (sidebarMode === "assets" ? `${sidebarAssets.length} / ${allSidebarAssets.length}` : sidebarItems.length)} ${sidebarMode === "history" ? "条记录" : "项"}` : `显示 ${sidebarItems.length} / ${nodes.length} 节点`}</span>
         </footer>
       </aside>
-      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} ${canvasGridVisible ? "is-canvas-grid-visible" : ""} ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布">
+      <main class="canvas-stage ${viewport.interactionMode === "hand" ? "is-canvas-hand-mode" : "is-canvas-move-mode"} ${canvasGridVisible ? "is-canvas-grid-visible" : ""} ${canvasEdgesHidden ? "is-canvas-edges-hidden" : ""}" aria-label="自由生成画布" style="${escapeAttr(gridStyle)}">
         <button class="canvas-detail-back" type="button" data-action="back-to-canvas-projects" aria-label="返回画布项目列表">
           ${renderCanvasIcon("collapse")}<span>项目</span>
         </button>
-        ${sidebarCollapsed ? `<button class="canvas-detail-back" style="left:6.25rem" type="button" data-action="toggle-canvas-sidebar" aria-label="展开侧栏" aria-expanded="false" aria-controls="canvas-sidebar-panel">${renderCanvasIcon("collapse")}<span>侧栏</span></button>` : ""}
         <div class="canvas-x6-mount" data-canvas-x6-mount aria-label="可拖拽连线画布"></div>
         <div class="canvas-flow" aria-label="AI 节点工作流" style="${escapeAttr(viewportStyle)}">
           ${renderLiblibCanvasEdges(visibleCanvasDocument, { edgeStyle: canvasEdgeStyle })}
@@ -8926,7 +9023,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           })).join("")}
           ${nodes.length === 0 ? renderCanvasEmptyQuickStart(nodeTemplates) : ""}
           ${selectedNode && !selectedNodeGenerating ? renderCanvasNodeToolbar(selectedNode) : ""}
-          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, modelMenuHtml: selectedCanvasModelMenu, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel }) : ""}
+          ${selectedNode && ui.canvasEditorOpen === true && !selectedNodeGenerating ? renderLiblibCanvasEditor(selectedNode, { modelOptionHtml: selectedModelOptionHtml, modelMenuHtml: selectedCanvasModelMenu, parameterControlHtml: selectedCanvasModelControls, canvasDocument, selectedModel: selectedCanvasModel, promptReferencePreviews: ui.canvasPromptReferencePreviews }) : ""}
         </div>
 
         ${addMenuOpen ? `
@@ -8963,24 +9060,25 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           <button type="button" class="canvas-view-tool ${canvasSnapEnabled ? "active" : ""}" data-action="toggle-canvas-snap" data-viewport-patch="toggle-snap" aria-label="${canvasSnapEnabled ? "关闭网格吸附" : "开启网格吸附"}" title="网格吸附">${renderCanvasIcon("magnet")}</button>
           <button type="button" class="${canvasEdgeStyle === "orthogonal" ? "active" : ""}" data-action="set-canvas-edge-style" data-edge-style="${canvasEdgeStyle === "orthogonal" ? "curve" : "orthogonal"}" aria-label="${canvasEdgeStyle === "orthogonal" ? "切换为曲线连线" : "切换为直角连线"}" title="${canvasEdgeStyle === "orthogonal" ? "连线类型：直角 → 曲线" : "连线类型：曲线 → 直角"}">${renderCanvasIcon("edge")}</button>
           <div class="canvas-zoom-menu-shell">
-            <button type="button" class="canvas-zoom-trigger ${zoomMenuOpen ? "active" : ""}" data-action="toggle-canvas-zoom-menu" data-canvas-zoom-trigger aria-label="画布缩放比例 ${zoomPercent}%" aria-haspopup="menu" aria-expanded="${zoomMenuOpen}" aria-controls="canvas-zoom-menu">${zoomPercent}%</button>
+            <button type="button" class="canvas-zoom-trigger ${zoomMenuOpen ? "active" : ""}" data-action="toggle-canvas-zoom-menu" data-canvas-zoom-trigger aria-label="画布缩放比例 ${zoomPercent}%" title="画布缩放" aria-haspopup="menu" aria-expanded="${zoomMenuOpen}" aria-controls="canvas-zoom-menu">${zoomPercent}%</button>
             ${zoomMenuOpen ? `
               <div class="canvas-zoom-menu" id="canvas-zoom-menu" role="menu" aria-label="画布缩放">
                 <label class="canvas-zoom-menu-value" aria-label="当前缩放比例">
                   <input type="number" min="10" max="800" step="1" value="${zoomPercent}" data-canvas-zoom-value-input />
                   <span>%</span>
                 </label>
-                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-in"><span>放大</span><kbd>Ctrl +</kbd></button>
-                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-out"><span>缩小</span><kbd>Ctrl -</kbd></button>
-                <button type="button" role="menuitem" data-action="fit-canvas-view"><span>适合屏幕</span><kbd>Ctrl 0</kbd></button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-in" title="放大画布"><span>放大</span><kbd>Ctrl +</kbd></button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-out" title="缩小画布"><span>缩小</span><kbd>Ctrl -</kbd></button>
+                <button type="button" role="menuitem" data-action="fit-canvas-view" title="适合屏幕"><span>适合屏幕</span><kbd>Ctrl 0</kbd></button>
                 <div class="canvas-zoom-menu-separator" role="separator"></div>
-                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="50">缩放至50%</button>
-                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="100">缩放至100%</button>
-                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="800">缩放至800%</button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="50" title="缩放至50%">缩放至50%</button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="100" title="缩放至100%">缩放至100%</button>
+                <button type="button" role="menuitem" data-action="set-canvas-viewport" data-viewport-patch="zoom-value" data-viewport-value="800" title="缩放至800%">缩放至800%</button>
               </div>
             ` : ""}
           </div>
         </div>
+        ${renderInlineStatusToast(ui, "canvas-inline-toast")}
         ${renderCanvasPromptReferencePicker(ui)}
         ${revisionConflict}
       </main>
@@ -8999,7 +9097,7 @@ function renderCanvasRevisionConflict(conflict) {
           <span class="canvas-revision-conflict-mark" aria-hidden="true">!</span>
           <div>
             <h2 id="canvas-revision-conflict-title">画布版本发生冲突</h2>
-            <p id="canvas-revision-conflict-description">其他位置已保存新版本。请比较摘要，并明确选择继续使用的版本。</p>
+            <p id="canvas-revision-conflict-description">当前画布已被修改，请确认是否保存到最新版本。</p>
           </div>
         </header>
         <div class="canvas-revision-conflict-compare" aria-label="版本摘要">
@@ -9055,7 +9153,8 @@ export function renderCanvasSurfaceForHost(context = {}) {
   const session = context?.session && typeof context.session === "object"
     ? context.session
     : { user: { phone: "" } };
-  return renderToolsPanel({ ...ui, session, canvasProjectView: "detail" }, state, session);
+  return `${renderToolsPanel({ ...ui, session, canvasProjectView: "detail" }, state, session)}
+    ${renderCanvasDirectorCaptureDeleteModal(ui.canvasDirectorCaptureDeleteTarget)}`;
 }
 
 export function renderCanvasProjectGallery(ui = {}) {
@@ -9238,7 +9337,6 @@ function renderCanvasProjectMenu(project = {}, canDelete = true) {
 const CANVAS_TOOLBAR_TOOLS = Object.freeze({
   select: { label: "选择", icon: "cursor", action: "set-canvas-tool", attrs: 'data-canvas-tool="select"' },
   connect: { label: "连接", icon: "link", action: "set-canvas-tool", attrs: 'data-canvas-tool="connect"' },
-  comment: { label: "评论", icon: "comment", action: "add-canvas-node", attrs: 'data-node-kind="comment"' },
   undo: { label: "撤销", icon: "undo", action: "undo-canvas-change" },
   redo: { label: "重做", icon: "redo", action: "redo-canvas-change" },
   copy: { label: "复制节点", icon: "copy", action: "copy-canvas-selection" },
@@ -9412,12 +9510,26 @@ function renderCanvasAssetTagEditor(asset, { source, editorKey, activeEditorKey 
   </div>`;
 }
 
+function renderCanvasMediaPreview(kind, url, { poster = "", alt = "" } = {}) {
+  const normalizedKind = String(kind ?? "").trim().toLowerCase();
+  const safeUrl = String(url ?? "").trim();
+  if (!safeUrl) return "";
+  if (normalizedKind === "video") {
+    const safePoster = String(poster ?? "").trim();
+    return `<video src="${escapeAttr(safeUrl)}"${safePoster && safePoster !== safeUrl ? ` poster="${escapeAttr(safePoster)}"` : ""} muted playsinline preload="metadata" aria-label="${escapeAttr(alt || "视频预览")}"></video>`;
+  }
+  if (normalizedKind === "audio") {
+    return `<audio src="${escapeAttr(safeUrl)}" controls preload="metadata" aria-label="${escapeAttr(alt || "音频预览")}"></audio>`;
+  }
+  return `<img src="${escapeAttr(safeUrl)}" alt="${escapeAttr(alt)}" loading="lazy" />`;
+}
+
   function renderCanvasLibraryAssetItem(asset, { canDelete = false, deleteAction = "delete-canvas-global-asset", canEditDetails = false, canReplaceMedia = false, detailDraft = null, canEditTags = false, canMoveToFolder = false, canSaveToGlobal = false, canUseAsStyleReference = false, styleReferenceBusy = false, tagEditAction = "edit-canvas-library-asset-tags", tagSource = "", tagEditorKey = "", activeTagEditorKey = "" } = {}) {
   const title = String(asset?.title ?? "未命名资产");
   const preview = String(asset?.url ?? asset?.previewUrl ?? "").trim();
   return `<div class="canvas-library-asset-item" data-canvas-asset-drag="true" data-asset-id="${escapeAttr(asset?.id ?? "")}" draggable="true">
     <button class="canvas-element-item asset" type="button" data-action="add-canvas-library-asset" data-library-asset-id="${escapeAttr(asset?.id ?? "")}">
-      <span class="canvas-element-icon" aria-hidden="true">${preview ? `<img src="${escapeAttr(preview)}" alt="" loading="lazy" />` : renderCanvasIcon(asset?.kind ?? "image")}</span>
+      <span class="canvas-element-icon" aria-hidden="true">${preview ? renderCanvasMediaPreview(asset?.kind, preview, { poster: asset?.posterUrl, alt: title }) : renderCanvasIcon(asset?.kind ?? "image")}</span>
       <span class="canvas-element-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(asset?.meta ?? "资产")}</small></span>
       ${Array.isArray(asset?.tags) && asset.tags.length ? `<span class="canvas-library-asset-tags">${asset.tags.map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}</span>` : ""}
       <i>${escapeHtml(asset?.status ?? "可用")}</i>
@@ -9440,7 +9552,7 @@ function renderCanvasSidebarItem(item, active = false, { tagEditorKey = "", acti
     : `data-node-id="${escapeAttr(item.id)}" data-node-kind="${escapeAttr(item.kind)}"`;
   const itemButton = `
     <button class="canvas-element-item ${escapeAttr(item.kind)} ${item.type === "asset" ? "asset" : ""} ${active ? "active" : ""}" type="button" data-action="${action}" ${dataAttrs}${item.type === "asset" ? ' draggable="true" data-canvas-asset-drag="true"' : ""}>
-      <span class="canvas-element-icon" aria-hidden="true">${item.url ? `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />` : renderCanvasIcon(item.kind)}</span>
+      <span class="canvas-element-icon" aria-hidden="true">${item.url ? renderCanvasMediaPreview(item.kind, item.url, { poster: item.posterUrl, alt: item.title }) : renderCanvasIcon(item.kind)}</span>
       <span class="canvas-element-copy">
         <strong>${escapeHtml(item.title)}</strong>
         <small>${escapeHtml(item.meta)}</small>
@@ -9537,7 +9649,7 @@ function renderCanvasHistoryRecord(run, options = {}) {
   const nodeId = String(options.node?.id ?? run?.nodeKey ?? "");
   const prompt = resolveCanvasHistorySnapshotText(run?.inputSnapshot, ["prompt", "text", "content"]);
   const output = resolveCanvasHistorySnapshotText(run?.outputSnapshot, ["text", "output", "content", "transcript", "result"]);
-  const failure = resolveCanvasHistorySnapshotText(run?.failure, ["message", "error", "failureCode", "reason"]);
+  const failure = taskCenterFailureMessage(run);
   const artifacts = Array.isArray(run?.artifacts) ? run.artifacts : [];
   const expanded = options.expanded === true;
   const title = String(options.node?.data?.title ?? run?.nodeKey ?? "生成记录");
@@ -9545,9 +9657,22 @@ function renderCanvasHistoryRecord(run, options = {}) {
   const status = canvasHistoryStatusLabel(run?.status);
   const preview = artifacts.slice(0, 4).map((rawArtifact) => {
     const artifact = rawArtifact && typeof rawArtifact === "object" ? rawArtifact : {};
-    const url = String(artifact.thumbnailUrl ?? artifact.thumbnail_url ?? artifact.url ?? "").trim();
-    return url
-      ? `<img src="${escapeAttr(url)}" alt="" loading="lazy" />`
+    const metadata = artifact.metadata && typeof artifact.metadata === "object"
+      ? artifact.metadata
+      : artifact.metadata_json && typeof artifact.metadata_json === "object" ? artifact.metadata_json : {};
+    const kind = String(artifact.artifactKind ?? artifact.artifact_kind ?? run?.mediaKind ?? "image").trim().toLowerCase();
+    const url = String(
+      kind === "video"
+        ? artifact.url ?? artifact.videoUrl ?? artifact.video_url ?? metadata.videoUrl ?? metadata.video_url ?? artifact.thumbnailUrl ?? artifact.thumbnail_url ?? metadata.previewUrl ?? ""
+        : artifact.thumbnailUrl ?? artifact.thumbnail_url ?? artifact.url ?? metadata.previewUrl ?? "",
+    ).trim();
+    const poster = String(artifact.thumbnailUrl ?? artifact.thumbnail_url ?? metadata.previewUrl ?? "").trim();
+    const fallbackStorageUrl = artifact.storageObjectId || artifact.storage_object_id
+      ? `/api/storage/objects/${encodeURIComponent(artifact.storageObjectId ?? artifact.storage_object_id)}/content?proxy=1`
+      : "";
+    const resolvedUrl = url || fallbackStorageUrl;
+    return resolvedUrl
+      ? renderCanvasMediaPreview(kind, resolvedUrl, { poster, alt: canvasHistoryMediaLabel(kind) })
       : `<span aria-hidden="true">${renderCanvasIcon(run?.mediaKind ?? "image")}</span>`;
   }).join("");
   return `<article class="canvas-history-record ${expanded ? "expanded" : ""}" data-canvas-history-record data-run-id="${escapeAttr(runId)}">
@@ -9789,6 +9914,16 @@ function renderLiblibUploadNode(node, { selected = false, canvasAssets = [] } = 
     ? node.data.title
     : node?.type === "source-video" ? "视频源" : node?.type === "source-audio" ? "音频源" : node?.type === "source-image" ? "图片源" : "上传";
   const mediaKind = node?.data?.mediaKind === "video" ? "video" : node?.data?.mediaKind === "audio" ? "audio" : "image";
+  const isSourceNode = ["source-image", "source-video", "source-audio"].includes(node?.type);
+  const mediaLabel = mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片";
+  const uploadAccept = node?.type === "source-video"
+    ? "video/*"
+    : node?.type === "source-audio"
+      ? "audio/*"
+      : node?.type === "source-image"
+        ? "image/*"
+        : "image/*,video/*,audio/*";
+  const uploadLabel = isSourceNode ? `上传${mediaLabel}素材` : "上传图片、视频或音频";
   const mediaUrl = resolveCanvasMediaNodeSource(node, mediaKind, { assets: canvasAssets });
   const fileName = node?.data?.fileName ?? node?.data?.name ?? "";
   const status = node?.data?.status ?? "empty";
@@ -9800,13 +9935,15 @@ function renderLiblibUploadNode(node, { selected = false, canvasAssets = [] } = 
       data-canvas-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-id="${escapeAttr(node?.id ?? "")}"
       data-node-kind="upload"
+      data-canvas-node-role="${isSourceNode ? "source" : "upload"}"
       style="${escapeAttr(style)}"
     >
       <header class="canvas-lib-node-title">
         ${renderCanvasIcon("upload")}
         <strong>${escapeHtml(title)}</strong>
+        ${isSourceNode ? '<small class="canvas-node-role-label">来源节点</small>' : ""}
       </header>
-      <button class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}">
+      <button class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${uploadLabel}" title="${uploadLabel}">
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
         ${mediaUrl ? `
           <span class="canvas-upload-preview" ${mediaKind === "video" ? `data-canvas-video-body data-node-id="${escapeAttr(node?.id ?? "")}"` : mediaKind === "audio" ? `data-canvas-audio-body data-node-id="${escapeAttr(node?.id ?? "")}"` : ""}>
@@ -9822,9 +9959,9 @@ function renderLiblibUploadNode(node, { selected = false, canvasAssets = [] } = 
           </span>
         ` : `
           <span class="canvas-upload-empty-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
-          <span class="canvas-upload-empty-text">上传图片、视频或音频</span>
+          <span class="canvas-upload-empty-text">${uploadLabel}</span>
         `}
-        <input class="canvas-upload-file-input" type="file" accept="image/*,video/*,audio/*" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
+        <input class="canvas-upload-file-input" type="file" accept="${uploadAccept}" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
       </button>
     </article>
   `;
@@ -9856,6 +9993,7 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
       <header class="canvas-lib-node-title">
         ${renderCanvasIcon(mediaKind)}
         <strong>${title}</strong>
+        <small class="canvas-node-role-label">生成节点</small>
       </header>
       <div class="canvas-generation-preview">
         <span class="canvas-node-connect left" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="in" data-port-id="${escapeAttr(firstCanvasPortId(node, "inputs"))}" aria-hidden="true">+</span>
@@ -9876,8 +10014,7 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
 
 function isCanvasNodeGenerating(node, generatingNodeId) {
   const status = String(node?.data?.status ?? "").trim().toLowerCase();
-  return String(node?.id ?? "") === String(generatingNodeId ?? "") &&
-    ["queued", "running", "processing"].includes(status);
+  return ["queued", "running", "processing"].includes(status);
 }
 
 function renderCanvasGenerationFailure(node, mediaKind) {
@@ -10051,11 +10188,22 @@ function resolveCanvasGenerationNodeMediaUrl(node, mediaKind, options = {}) {
 function resolveCanvasUploadReferences(document, targetNodeId) {
   const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  const mediaCounts = { image: 0, video: 0, audio: 0 };
   return (Array.isArray(document?.edges) ? document.edges : [])
     .filter((edge) => edge.targetNodeId === targetNodeId)
     .flatMap((edge) => resolveCanvasReferencesForNode(nodeMap.get(edge.sourceNodeId), document))
     .filter((item, index, items) => item.url && items.findIndex((candidate) => candidate.url === item.url) === index)
-    .filter((item) => item.url);
+    .filter((item) => item.url)
+    .map((item) => {
+      const mediaKind = ["image", "video", "audio"].includes(item.kind) ? item.kind : "image";
+      mediaCounts[mediaKind] += 1;
+      return {
+        ...item,
+        referenceLabel: mediaKind === "video"
+          ? `视频${mediaCounts.video}`
+          : mediaKind === "audio" ? `音频${mediaCounts.audio}` : `图${mediaCounts.image}`,
+      };
+    });
 }
 
 function resolveCanvasReferencesForNode(node, document = {}) {
@@ -10111,12 +10259,13 @@ function renderCanvasGenerationReferences(references = []) {
   return `
     <div class="canvas-generation-references" aria-label="连接的参考素材">
       ${references.map((item) => `
-        <span class="canvas-generation-reference-thumb is-${escapeAttr(item.kind ?? "image")}" title="${escapeAttr(item.name)}">
+        <span class="canvas-generation-reference-thumb is-${escapeAttr(item.kind ?? "image")}" title="${escapeAttr(`${item.referenceLabel ?? ""}${item.referenceLabel ? "：" : ""}${item.name}`)}" aria-label="${escapeAttr(`${item.referenceLabel ?? ""}${item.referenceLabel ? "：" : ""}${item.name}`)}">
           ${item.kind === "video"
             ? `<video src="${escapeAttr(item.url)}" muted playsinline preload="metadata"></video>`
             : item.kind === "audio"
               ? `<span class="canvas-generation-reference-media">${renderCanvasIcon("audio")}<small>音频</small></span>`
               : `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />`}
+          ${item.referenceLabel ? `<small class="canvas-generation-reference-label">${escapeHtml(item.referenceLabel)}</small>` : ""}
         </span>
       `).join("")}
     </div>
@@ -10396,11 +10545,11 @@ function canvasPortAnchor(node, direction) {
   };
 }
 
-function renderLiblibCanvasEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
-  if (node?.type === "upload" || node?.type === "script" || node?.type === "director" || (node?.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node?.type !== "ai-storyboard")) {
+function renderLiblibCanvasEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, promptReferencePreviews = {} } = {}) {
+  if (["upload", "script", "director", "ai-director", "markdown", "group", "source-image", "source-video", "source-audio"].includes(node?.type) || (node?.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node?.type !== "ai-storyboard")) {
     return "";
   }
-  return renderLiblibGenerationEditor(node, { modelOptionHtml, modelMenuHtml, parameterControlHtml, canvasDocument, selectedModel });
+  return renderLiblibGenerationEditor(node, { modelOptionHtml, modelMenuHtml, parameterControlHtml, canvasDocument, selectedModel, promptReferencePreviews });
 }
 
 function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
@@ -10786,7 +10935,7 @@ function renderCanvasParameterMenu(field, label, openMenu, options, title = "", 
   });
 }
 
-function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null } = {}) {
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, promptReferencePreviews = {} } = {}) {
   const mediaKind = isCanvasGenerativeTextNode(node)
     ? "text"
     : node?.type === "ai-animation"
@@ -10803,31 +10952,43 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
       : mediaKind === "text"
         ? node?.type === "ai-markdown" ? "描述需要生成的 Markdown 文档结构和内容" : "描述需要生成或改写的文本"
       : "请输入您的生图要求";
-  const cost = resolveCanvasGenerationCost(selectedModel, mediaKind, resolveCanvasNodeParameterValues(node));
+  const skillCredits = Math.max(0, Math.round(Number(node?.data?.promptSkillPriceCredits) || 0));
+  const cost = resolveCanvasGenerationCost(selectedModel, mediaKind, resolveCanvasNodeParameterValues(node)) + skillCredits;
   const connectedTextFragments = resolveConnectedCanvasTextFragments(canvasDocument, node?.id);
-  const connectedUploadReferences = mediaKind === "image" || mediaKind === "video"
+  const connectedUploadReferences = mediaKind === "image" || mediaKind === "video" || mediaKind === "audio"
     ? resolveCanvasUploadReferences(canvasDocument, node?.id)
     : [];
+  const referenceUploadAccept = mediaKind === "video"
+    ? "image/*,video/*,audio/*"
+    : mediaKind === "audio"
+      ? "audio/*"
+      : mediaKind === "image" ? "image/*" : "";
   return `
     <aside class="canvas-node-editor generation-editor ${mediaKind}" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${mediaKind === "text" ? "文本生成设置" : mediaKind === "video" ? "视频生成设置" : mediaKind === "audio" ? "音频生成设置" : "图片生成设置"}" style="${escapeAttr(canvasEditorPositionStyle(node, mediaKind === "video" ? { nodeWidth: 420, nodeHeight: 378, editorWidth: 608 } : { nodeWidth: 420, nodeHeight: 378, editorWidth: 600 }))}">
       ${mediaKind === "video" ? renderCanvasVideoModeTabs(videoMode, node?.id ?? "") : ""}
       ${mediaKind === "audio" ? renderCanvasAudioModeTabs(audioMode, node?.id ?? "") : ""}
       <div class="canvas-editor-reference-row">
-        <button class="canvas-editor-upload" type="button" data-action="open-canvas-prompt-reference-picker" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="添加参考素材">+</button>
-        <button class="canvas-editor-upload" type="button" data-action="open-canvas-prompt-reference-picker" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="选择提示词引用" title="选择提示词引用">@</button>
+        ${referenceUploadAccept ? `<button class="canvas-editor-upload" type="button" data-action="pick-canvas-generation-reference-file" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="添加参考素材" title="添加参考素材">+</button>
+        <input type="file" accept="${escapeAttr(referenceUploadAccept)}" data-canvas-generation-reference-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" hidden />` : ""}
+        <button class="canvas-editor-upload" type="button" data-action="open-canvas-prompt-reference-picker" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="选择素材引用" title="选择素材引用">@</button>
+        ${renderCanvasPromptReferenceThumbnails(node, canvasDocument, promptReferencePreviews)}
         ${renderCanvasConnectedTextReference(connectedTextFragments)}
         ${renderCanvasGenerationReferences(connectedUploadReferences)}
       </div>
-      <textarea
-        aria-label="提示词"
-        data-canvas-prompt-input
-        data-node-id="${escapeAttr(node?.id ?? "")}"
-        placeholder="${escapeAttr(placeholder)}"
-      >${escapeHtml(node?.data?.prompt ?? "")}</textarea>
+      <div class="canvas-prompt-editor-host" data-canvas-prompt-editor data-node-id="${escapeAttr(node?.id ?? "")}">
+        <textarea
+          id="canvas-prompt-input-${escapeAttr(node?.id ?? "")}"
+          aria-label="提示词"
+          data-canvas-prompt-input
+          data-node-id="${escapeAttr(node?.id ?? "")}"
+          placeholder="${escapeAttr(placeholder)}"
+        >${escapeHtml(renderCanvasPromptDisplayValue(node?.data?.prompt ?? "", canvasDocument, promptReferencePreviews, node?.id))}</textarea>
+      </div>
       ${node?.type === "ai-animation" ? renderCanvasAnimationControls(node) : ""}
       ${mediaKind === "audio" ? renderCanvasAudioOptions(node, audioMode) : ""}
       <footer class="canvas-editor-controls">
         ${modelMenuHtml || `<select aria-label="模型" data-canvas-model-select data-node-id="${escapeAttr(node?.id ?? "")}">${modelOptionHtml}</select>`}
+        ${renderCanvasGenerationSkillTrigger(node)}
         ${parameterControlHtml}
         ${renderGenerationSubmitButton({
           action: "run-canvas-node",
@@ -10840,6 +11001,88 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
   `;
 }
 
+export function renderCanvasGenerationSkillTrigger(node = {}) {
+  const selectedSkillId = String(node?.data?.promptSkillId ?? "").trim()
+    || Object.values(node?.data?.promptSkillIds ?? {}).map(String).find(Boolean)
+    || "";
+  const selectedSkillTitle = String(node?.data?.promptSkillTitle ?? "").trim();
+  return `<button
+    class="canvas-editor-skill-trigger ${selectedSkillId ? "active" : ""}"
+    type="button"
+    data-action="open-canvas-text-skill-modal"
+    data-node-id="${escapeAttr(node?.id ?? "")}"
+    aria-haspopup="dialog"
+    aria-label="${escapeAttr(selectedSkillTitle ? `当前技能：${selectedSkillTitle}` : "选择生成技能")}"
+    title="${escapeAttr(selectedSkillTitle || "选择生成技能")}"
+  >${renderCanvasIcon("sparkles")}<span>技能</span>${selectedSkillId ? `<small>1</small>` : ""}</button>`;
+}
+
+export function renderCanvasPromptDisplayValue(prompt, canvasDocument = {}, previewByToken = {}, targetNodeId = "") {
+  let displayValue = String(prompt ?? "");
+  const nodeById = new Map((Array.isArray(canvasDocument?.nodes) ? canvasDocument.nodes : [])
+    .map((node) => [String(node?.id ?? ""), node]));
+  const mediaCounts = { image: 0, video: 0, audio: 0 };
+  const connectedDisplays = new Map((Array.isArray(canvasDocument?.edges) ? canvasDocument.edges : [])
+    .filter((edge) => String(edge?.targetNodeId ?? "") === String(targetNodeId ?? ""))
+    .flatMap((edge) => {
+      const sourceNodeId = String(edge?.sourceNodeId ?? "");
+      const sourceNode = nodeById.get(sourceNodeId);
+      const mediaKind = String(edge?.data?.kind ?? sourceNode?.data?.mediaKind ?? "").toLowerCase();
+      if (!sourceNodeId || !["image", "video", "audio"].includes(mediaKind)) return [];
+      mediaCounts[mediaKind] += 1;
+      const label = mediaKind === "video"
+        ? `视频${mediaCounts.video}`
+        : mediaKind === "audio" ? `音频${mediaCounts.audio}` : `图${mediaCounts.image}`;
+      return [[`@node:${sourceNodeId}`, `【@${label}】`]];
+    }));
+  const references = [...new Map(
+    parseCanvasPromptReferences(displayValue).map((reference) => [reference.token, reference]),
+  ).values()].sort((left, right) => right.token.length - left.token.length);
+  for (const reference of references) {
+    const collection = canvasDocument?.promptReferenceCatalog?.[reference.type];
+    const baseRecord = collection && typeof collection === "object" ? collection[reference.id] : null;
+    const record = reference.version && baseRecord?.versions && typeof baseRecord.versions === "object"
+      ? baseRecord.versions[reference.version]
+      : baseRecord;
+    const label = String(
+      previewByToken?.[reference.token]?.label ?? record?.label ?? baseRecord?.label ?? "",
+    ).trim();
+    const displayToken = connectedDisplays.get(reference.token)
+      ?? String(previewByToken?.[reference.token]?.displayToken ?? "").trim();
+    if (displayToken || label) displayValue = displayValue.split(reference.token).join(displayToken || `@${label}`);
+  }
+  return displayValue;
+}
+
+export function renderCanvasPromptReferenceThumbnails(node, canvasDocument = {}, previewByToken = {}) {
+  const connectedNodeIds = new Set((Array.isArray(canvasDocument?.edges) ? canvasDocument.edges : [])
+    .filter((edge) => String(edge?.targetNodeId ?? "") === String(node?.id ?? ""))
+    .map((edge) => String(edge?.sourceNodeId ?? "")));
+  const references = parseCanvasPromptReferences(node?.data?.prompt ?? "")
+    .filter((reference) => reference.type !== "node" || !connectedNodeIds.has(String(reference.id ?? "")));
+  const uniqueReferences = [...new Map(references.map((reference) => [reference.token, reference])).values()];
+  return `<div class="canvas-prompt-reference-thumbs" data-canvas-prompt-reference-thumbs aria-label="素材引用">
+    ${uniqueReferences.map((reference) => {
+      const collection = canvasDocument?.promptReferenceCatalog?.[reference.type];
+      const baseRecord = collection && typeof collection === "object" ? collection[reference.id] : null;
+      const record = reference.version && baseRecord?.versions && typeof baseRecord.versions === "object"
+        ? baseRecord.versions[reference.version]
+        : baseRecord;
+      const preview = previewByToken?.[reference.token] ?? {};
+      const label = String(preview.label ?? record?.label ?? baseRecord?.label ?? reference.id ?? "引用");
+      const previewUrls = Array.isArray(preview.previewUrls) ? preview.previewUrls.filter(Boolean) : [];
+      const previewUrl = String(preview.previewUrl ?? previewUrls[0] ?? "");
+      const count = Math.max(previewUrls.length, Number(preview.count ?? 0));
+      return `<span class="canvas-generation-reference-thumb canvas-prompt-reference-thumb" title="${escapeAttr(label)}">
+        ${previewUrl
+          ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" />`
+          : `<span class="canvas-prompt-reference-fallback" aria-hidden="true">${escapeHtml(label.slice(0, 2) || "@")}</span>`}
+        ${count > 1 ? `<small class="canvas-prompt-reference-count">${count}</small>` : ""}
+      </span>`;
+    }).join("")}
+  </div>`;
+}
+
 function renderCanvasPromptReferencePicker(ui) {
   const picker = ui.canvasPromptReferencePicker;
   if (!picker?.open) return "";
@@ -10848,16 +11091,24 @@ function renderCanvasPromptReferencePicker(ui) {
     ["character", "人物"], ["scene", "场景"], ["prop", "道具"],
     ["node", "节点"], ["asset", "产物"], ["model", "模型"],
   ];
+  const sources = [
+    ["official", "官方素材库"], ["team", "团队素材库"], ["canvas", "当前画布"],
+  ];
+  const activeSource = sources.some(([id]) => id === picker.activeSource) ? picker.activeSource : "official";
+  const sourceItems = items.filter((item) => item.sourceGroup === activeSource);
   const selected = items.find((item) => String(item.id) === String(picker.selectedId));
   return renderSelectionPickerModal({
     show: true,
     id: "canvas-prompt-reference-picker",
-    title: "选择提示词引用",
-    tabs: groups.map(([id, label]) => ({ id, label, count: items.filter((item) => item.group === id).length })),
+    title: "选择素材引用",
+    sourceTabs: sources.map(([id, label]) => ({ id, label })),
+    activeSource,
+    sourceAction: "set-canvas-prompt-reference-source",
+    tabs: groups.map(([id, label]) => ({ id, label, count: sourceItems.filter((item) => item.group === id).length })),
     activeTab: picker.activeTab ?? "character",
     items,
     selectedId: picker.selectedId ?? "",
-    emptyLabel: picker.loading ? "正在加载引用..." : picker.error || "当前分类暂无可用引用",
+    emptyLabel: picker.loading ? "正在加载素材..." : picker.error || "当前分类暂无可用素材",
     closeAction: "close-canvas-prompt-reference-picker",
     tabAction: "set-canvas-prompt-reference-tab",
     selectAction: "select-canvas-prompt-reference",
@@ -11335,6 +11586,15 @@ function canvasViewportStyle(viewport = {}) {
   return `--canvas-pan-x:${x}px;--canvas-pan-y:${y}px;--canvas-zoom:${zoom};--canvas-toolbar-scale:${toolbarScale}`;
 }
 
+function canvasGridStyle(viewport = {}) {
+  const x = Number(viewport.x ?? 0);
+  const y = Number(viewport.y ?? 0);
+  const zoom = Number(viewport.zoom ?? 1);
+  const gridSize = Math.max(6, Math.round(20 * zoom * 100) / 100);
+  const majorGridSize = Math.round(gridSize * 5 * 100) / 100;
+  return `--canvas-grid-size:${gridSize}px;--canvas-grid-major-size:${majorGridSize}px;--canvas-grid-x:${x}px;--canvas-grid-y:${y}px`;
+}
+
 function renderCanvasInspectorMetrics({ inputCount = 0, outputCount = 0, selectedNode = null } = {}) {
   if (selectedNode?.type === "script") {
     return `
@@ -11440,6 +11700,7 @@ function renderCanvasIcon(icon) {
     role: '<rect x="5" y="5" width="14" height="14" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" />',
     redo: '<path d="M17 7h3v-3" /><path d="M20 7a8 8 0 1 0 1 7" />',
     search: '<circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4 4" />',
+    sparkles: '<path d="m12 3 1.3 3.7L17 8l-3.7 1.3L12 13l-1.3-3.7L7 8l3.7-1.3L12 3Z" /><path d="m18 13 .8 2.2L21 16l-2.2.8L18 19l-.8-2.2L15 16l2.2-.8L18 13Z" /><path d="m6 14 .7 1.8 1.8.7-1.8.7L6 19l-.7-1.8-1.8-.7 1.8-.7L6 14Z" />',
     share: '<circle cx="6.5" cy="12" r="2" /><circle cx="17.5" cy="7" r="2" /><circle cx="17.5" cy="17" r="2" /><path d="m8.3 11.2 7.4-3.4M8.3 12.8l7.4 3.4" />',
     sort: '<path d="M8 7h9M8 12h6M8 17h3" /><path d="m5 8-2 2 2 2" />',
     send: '<path d="M12 19V5" /><path d="m5 12 7-7 7 7" />',
@@ -12208,6 +12469,31 @@ function renderCanvasProjectDeleteModal({ show, projectName }) {
         <div class="delete-project-actions">
           <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-canvas-project-modal">取消</button>
           <button class="delete-confirm-button" type="button" data-action="confirm-delete-canvas-project">确定</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCanvasDirectorCaptureDeleteModal(target) {
+  if (!target) {
+    return "";
+  }
+  const mediaLabel = target.mediaKind === "video" ? "视频" : "图片";
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除导演台${mediaLabel}">
+      <div class="delete-project-modal canvas-director-capture-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">×</div>
+          <div>
+            <h2>确认删除</h2>
+            <p>删除后将从当前导演台节点中移除，确定删除这个${mediaLabel}吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-canvas-director-capture-delete-modal" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-canvas-director-capture-delete-modal">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-canvas-director-capture-delete">确定删除</button>
         </div>
       </div>
     </section>

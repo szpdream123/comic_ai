@@ -23,7 +23,7 @@ export async function fetchCanvasAssetBlob(input = {}) {
   if (typeof fetchImpl !== "function") throw transferError("canvas_asset_fetch_unavailable");
 
   const response = await fetchImpl(
-    resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`),
+    resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?download=1`),
     {
       credentials: "include",
       cache: "no-store",
@@ -99,4 +99,3 @@ export async function copyCanvasAsset(input = {}) {
   await clipboard.write([new ClipboardItemCtor({ [result.contentType]: result.blob })]);
   return result;
 }
-

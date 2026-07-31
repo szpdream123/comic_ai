@@ -1,7 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdirSync } from "node:fs";
-import net from "node:net";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
@@ -9,35 +7,23 @@ import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervi
 const runtime = findNodeRuntime(18);
 const envFilePath = join(process.cwd(), ".env");
 const logDir = join(process.cwd(), ".local", "logs");
+const runDir = join(process.cwd(), ".local", "run");
+const stopRequestFile = join(runDir, "creator-dev-stack.stop");
 
 loadDotEnvFile(envFilePath, { override: true });
 mkdirSync(logDir, { recursive: true });
+mkdirSync(runDir, { recursive: true });
+rmSync(stopRequestFile, { force: true });
 
 process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED ??= "true";
 process.env.BULLMQ_WORKERS_ENABLED ??= "true";
 process.env.GENERATION_QUEUE_REQUIRED ??= "true";
 
-const redisUrl = new URL(process.env.REDIS_URL?.trim() || "redis://127.0.0.1:6379/0");
-const redisHost = redisUrl.hostname || "127.0.0.1";
-const redisPort = Number(redisUrl.port || 6379);
 const generationQueueEnabled = isEnabled(process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED) ||
   isEnabled(process.env.BULLMQ_WORKERS_ENABLED);
 
-if (generationQueueEnabled) {
-  const redisReady = await canConnect(redisHost, redisPort, 1500);
-  if (!redisReady) {
-    console.error("");
-    console.error("[creator-dev] Redis is required for generation queues but is not reachable.");
-    console.error(`[creator-dev] Expected Redis at ${redisHost}:${redisPort} from REDIS_URL.`);
-    console.error("[creator-dev] Start Redis first, then run this command again.");
-    console.error("[creator-dev] If you only need the local HTTP site, run: npm run dev:http-only");
-    console.error("[creator-dev] Without Redis, generation tasks stay at: 等待模型接收.");
-    console.error("");
-    process.exit(1);
-  }
-}
-
 let stopping = false;
+let stopRequestPoll = null;
 const supervisor = createCreatorDevServiceSupervisor({
   now: () => Date.now(),
   setTimeout,
@@ -51,7 +37,7 @@ const supervisor = createCreatorDevServiceSupervisor({
         CREATOR_DEV_STACK_MANAGED: "true",
       },
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     pipeWithPrefix(child.stdout, name);
     pipeWithPrefix(child.stderr, name);
@@ -67,14 +53,12 @@ const supervisor = createCreatorDevServiceSupervisor({
     console.error(
       `[creator-dev] ${name} restart limit reached after ${attempts} attempts (code=${code ?? "null"} signal=${signal ?? "null"}); stopping the dev stack.`,
     );
-    stopping = true;
-    supervisor.stop("SIGTERM");
+    requestStackStop("restart-limit", "SIGTERM");
     process.exitCode = 1;
   },
   onFatalExit(name, code, signal) {
     console.error(`[creator-dev] ${name} exited unexpectedly with code=${code ?? "null"} signal=${signal ?? "null"}`);
-    stopping = true;
-    supervisor.stop("SIGTERM");
+    requestStackStop(`fatal:${name}`, "SIGTERM");
     process.exitCode = code ?? 1;
   },
 });
@@ -104,10 +88,24 @@ if (generationQueueEnabled) {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
-    stopping = true;
-    console.info(`[creator-dev] Received ${signal}, stopping dev stack...`);
-    supervisor.stop(signal);
+    requestStackStop(signal, signal);
   });
+}
+
+stopRequestPoll = setInterval(() => {
+  if (!existsSync(stopRequestFile)) return;
+  rmSync(stopRequestFile, { force: true });
+  requestStackStop("background-stop-request", "SIGTERM");
+}, 250);
+
+function requestStackStop(reason, signal) {
+  if (stopping) return;
+  stopping = true;
+  if (stopRequestPoll) clearInterval(stopRequestPoll);
+  console.info(`[creator-dev] Received ${reason}, stopping dev stack...`);
+  supervisor.stop(signal);
+  const forceStopTimer = setTimeout(() => supervisor.forceStop(signal), 10_000);
+  forceStopTimer.unref?.();
 }
 
 function pipeWithPrefix(stream, name) {
@@ -119,28 +117,9 @@ function pipeWithPrefix(stream, name) {
     buffer = lines.pop() ?? "";
     for (const line of lines) {
       if (line.trim()) {
-        console.log(`[${name}] ${line}`);
+        console.log(`[${new Date().toISOString()}] [${name}] ${line}`);
       }
     }
-  });
-}
-
-function canConnect(host, port, timeoutMs) {
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ host, port });
-    const timer = setTimeout(() => {
-      socket.destroy();
-      resolve(false);
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.end();
-      resolve(true);
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
   });
 }
 

@@ -31,12 +31,16 @@ const runtime = createCanvasAgentWorkerRuntime({
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => {
-    if (!abortController.signal.aborted) {
-      console.info(`[canvas-agent] Received ${signal}, draining current cycle...`);
-      abortController.abort();
-    }
-  });
+  process.once(signal, () => requestStop(signal));
+}
+process.on("message", (message) => {
+  if (message?.type === "creator-dev-stop") requestStop(message.signal ?? "SIGTERM");
+});
+
+function requestStop(signal) {
+  if (abortController.signal.aborted) return;
+  console.info(`[canvas-agent] Received ${signal}, draining current cycle...`);
+  abortController.abort();
 }
 
 console.info(`[canvas-agent] Worker started. workerId=${workerId} batch=${batchSize} pollIntervalMs=${pollIntervalMs}`);

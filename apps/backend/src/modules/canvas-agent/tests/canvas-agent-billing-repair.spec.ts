@@ -16,6 +16,116 @@ import type { CanvasAgentActor } from "../canvas-agent.types.ts";
 const startedAt = new Date("2026-07-26T09:00:00.000Z");
 const repairedAt = new Date("2026-07-26T09:05:00.000Z");
 
+test("owner round settles the reservation from actual token usage", async () => {
+  const db = await createMigratedTestDb();
+  try {
+    const fixture = await createRunningModelRound(db, null);
+    await grantCredits(db, {
+      userId: fixture.ownerUserId,
+      amount: 100,
+      sourceType: "test_credit_seed",
+      sourceId: randomUUID(),
+      reason: "Canvas Agent actual usage test",
+      now: startedAt,
+    });
+    const billing = new CanvasAgentBillingService(db);
+    const pricing = { canvasAgentTokenCreditsPerMillion: 1_000_000 };
+    assert.equal(billing.estimateRound({ pricing, maxTokens: 2, contextWindow: 100 }), 100);
+    assert.equal(billing.estimateRound({ pricing, maxTokens: 2, maxPromptTokens: 100 }), 102);
+    assert.equal(billing.estimateRound({ pricing: { ...pricing, baseCredits: 999 }, contextWindow: 100 }), 100);
+    assert.throws(
+      () => billing.estimateRound({ pricing: { baseCredits: 999 }, contextWindow: 100 }),
+      /canvas_agent_token_price_missing/,
+    );
+    assert.throws(
+      () => billing.estimateRound({ pricing: { ...pricing, canvasAgentBillingMode: "fixed" }, contextWindow: 100 }),
+      /canvas_agent_token_billing_mode_invalid/,
+    );
+    const reservation = await billing.reserveRound({
+      ownerUserId: fixture.ownerUserId,
+      canvasId: fixture.canvasId,
+      agentTaskId: fixture.task.id,
+      workflowId: fixture.task.workflowId,
+      workflowTaskId: fixture.task.workflowTaskId,
+      stepId: fixture.stepId,
+      amount: 10,
+      now: startedAt,
+    });
+
+    const settled = await billing.settleRound({
+      ownerUserId: fixture.ownerUserId,
+      canvasId: fixture.canvasId,
+      agentTaskId: fixture.task.id,
+      workflowTaskId: fixture.task.workflowTaskId,
+      stepId: fixture.stepId,
+      reservationId: reservation.reservationId,
+      reservedAmount: 10,
+      usage: { promptTokens: 2, completionTokens: 3, cachedTokens: 4, totalTokens: 5 },
+      pricing,
+      now: repairedAt,
+    });
+
+    const user = await db.query<{ credit_balance_cached: number | string }>(
+      "SELECT credit_balance_cached FROM users WHERE id=$1",
+      [fixture.ownerUserId],
+    );
+    const ledger = await db.query<{ reason: string }>(`
+      SELECT reason FROM credit_ledger_entries
+      WHERE user_id=$1 AND source_type='canvas_agent_text_round'
+      LIMIT 1
+    `, [fixture.ownerUserId]);
+    assert.deepEqual(settled, { consumed: 9, released: 1 });
+    assert.equal(Number(user.rows[0]?.credit_balance_cached), 91);
+    assert.equal(ledger.rows[0]?.reason, "画布协作Agent操作消耗");
+  } finally {
+    await db.close();
+  }
+});
+
+test("member round refunds the difference between reserved and actual token usage", async () => {
+  const db = await createMigratedTestDb();
+  const memberId = randomUUID();
+  try {
+    const fixture = await createRunningModelRound(db, memberId);
+    const billing = new CanvasAgentBillingService(db);
+    const pricing = { canvasAgentTokenCreditsPerMillion: 1_000_000 };
+    const reservation = await billing.reserveRound({
+      ownerUserId: fixture.ownerUserId,
+      actorTeamMemberId: memberId,
+      canvasId: fixture.canvasId,
+      agentTaskId: fixture.task.id,
+      workflowId: fixture.task.workflowId,
+      workflowTaskId: fixture.task.workflowTaskId,
+      stepId: fixture.stepId,
+      amount: 10,
+      now: startedAt,
+    });
+
+    const settled = await billing.settleRound({
+      ownerUserId: fixture.ownerUserId,
+      actorTeamMemberId: memberId,
+      canvasId: fixture.canvasId,
+      agentTaskId: fixture.task.id,
+      workflowTaskId: fixture.task.workflowTaskId,
+      stepId: fixture.stepId,
+      reservationId: reservation.reservationId,
+      reservedAmount: 10,
+      usage: { promptTokens: 2, completionTokens: 3, totalTokens: 5 },
+      pricing,
+      now: repairedAt,
+    });
+
+    const member = await db.query<{ member_credits: number | string }>(
+      "SELECT member_credits FROM team_members WHERE id=$1",
+      [memberId],
+    );
+    assert.deepEqual(settled, { consumed: 5, released: 5 });
+    assert.equal(Number(member.rows[0]?.member_credits), 95);
+  } finally {
+    await db.close();
+  }
+});
+
 test("member round reservation is idempotent after a crash before step writeback", async () => {
   const db = await createMigratedTestDb();
   const ownerUserId = randomUUID();

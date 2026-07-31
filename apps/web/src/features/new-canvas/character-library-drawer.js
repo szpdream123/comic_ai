@@ -6,6 +6,7 @@ const LIBRARY_CATEGORIES = [
   { id: "prop", label: "道具" },
   { id: "voice", label: "音色" },
 ];
+const TEAM_LIBRARY_CATEGORIES = [{ id: "all", label: "全部" }, ...LIBRARY_CATEGORIES];
 
 export function ensureCanvasCharacterLibraryState(ui = {}) {
   const state = ui.canvasCharacterLibrary && typeof ui.canvasCharacterLibrary === "object"
@@ -49,7 +50,6 @@ export function renderCanvasCharacterLibraryShell(ui = {}) {
   const selectedNode = findSelectedImageNode(ui);
   return `
     <div class="canvas-character-library-shell" data-character-library-shell>
-      <button class="canvas-character-library-launch" type="button" data-character-action="open" aria-label="角色库" title="角色库">角色</button>
       ${state.open ? renderCharacterLibrary(state, selectedNode) : ""}
     </div>
   `;
@@ -104,7 +104,9 @@ export function createCanvasCharacterLibraryController({ surface, workbench }) {
     sync();
     try {
       if (isLibraryCharacterScope(state.scope)) {
-        const payload = await workbench.api.getLibraryAssets({ scope: state.scope, category: state.libraryCategory });
+        const input = { scope: state.scope };
+        if (state.libraryCategory !== "all") input.category = state.libraryCategory;
+        const payload = await workbench.api.getLibraryAssets(input);
         state.libraryEntitlement = payload?.entitlement ?? payload?.body?.entitlement ?? null;
         state.characters = readLibraryCharacterList(payload, state.scope);
         state.libraryFolders = Array.isArray(payload?.folders)
@@ -137,6 +139,27 @@ export function createCanvasCharacterLibraryController({ surface, workbench }) {
     }
   };
 
+  const hydrateCaptureReference = async (node) => {
+    const taskId = firstString(node?.data?.generationTaskId, node?.data?.lastTaskId, node?.data?.taskId);
+    if (!taskId || state.draft.references.length || typeof workbench.api?.getGenerationTask !== "function") return false;
+    try {
+      const payload = await workbench.api.getGenerationTask(taskId);
+      if (disposed || String(state.captureNode?.id ?? "") !== String(node?.id ?? "")) return false;
+      const reference = referenceFromGenerationTask(node, payload, 0);
+      if (!reference || state.draft.references.length) return false;
+      state.draft = {
+        ...state.draft,
+        references: [reference],
+        primaryReferenceId: reference.id,
+        avatarReferenceId: reference.id,
+      };
+      sync();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const openCapture = (node = findSelectedImageNode(workbench.ui)) => {
     if (!isImageNode(node)) return false;
     state.open = true;
@@ -146,6 +169,7 @@ export function createCanvasCharacterLibraryController({ surface, workbench }) {
     state.editingCharacterId = "";
     state.draft = draftFromNode(node, state.scope);
     sync();
+    void hydrateCaptureReference(node);
     void run("load", load);
     return true;
   };
@@ -204,7 +228,7 @@ export function createCanvasCharacterLibraryController({ surface, workbench }) {
       if (action === "library-category") {
         if (!isLibraryCharacterScope(state.scope)) return true;
         const category = String(target.dataset.characterCategory ?? "");
-        if (!LIBRARY_CATEGORIES.some((item) => item.id === category)) return true;
+        if (!libraryCategoriesForScope(state.scope).some((item) => item.id === category)) return true;
         state.libraryCategory = category;
         state.libraryFolder = "";
         state.libraryPage = 1;
@@ -454,6 +478,7 @@ function renderCharacterLibrary(state, selectedNode) {
   const visibleCharacters = filterCharacters(state.characters, state.query)
     .filter((character) => !state.libraryFolder || libraryCharacterFolder(character) === state.libraryFolder);
   const libraryScope = isLibraryCharacterScope(state.scope);
+  const libraryCategories = libraryCategoriesForScope(state.scope);
   const libraryFolders = libraryScope ? state.libraryFolders : [];
   const pageSize = Math.max(1, Math.trunc(number(state.libraryPageSize, 12)));
   const totalPages = Math.max(1, Math.ceil(visibleCharacters.length / pageSize));
@@ -487,7 +512,7 @@ function renderCharacterLibrary(state, selectedNode) {
           </div>
         </div>
         ${libraryScope ? `<div class="canvas-character-library-categories" role="tablist" aria-label="资产分类">
-          ${LIBRARY_CATEGORIES.map((category) => `<button type="button" role="tab" aria-selected="${state.libraryCategory === category.id}" class="${state.libraryCategory === category.id ? "active" : ""}" data-character-action="library-category" data-character-category="${category.id}">${category.label}</button>`).join("")}
+          ${libraryCategories.map((category) => `<button type="button" role="tab" aria-selected="${state.libraryCategory === category.id}" class="${state.libraryCategory === category.id ? "active" : ""}" data-character-action="library-category" data-character-category="${category.id}">${category.label}</button>`).join("")}
         </div>
         <div class="canvas-character-library-folders" role="tablist" aria-label="资产文件夹">
           <button type="button" role="tab" aria-selected="${!state.libraryFolder}" class="${!state.libraryFolder ? "active" : ""}" data-character-action="library-folder" data-character-folder="">全部</button>
@@ -743,7 +768,13 @@ function referenceFromNode(node, position) {
   const data = node.data && typeof node.data === "object" ? node.data : {};
   const artifact = data.artifact && typeof data.artifact === "object" ? data.artifact : {};
   const storage = data.storage && typeof data.storage === "object" ? data.storage : {};
-  const storageObjectId = firstString(data.storageObjectId, artifact.storageObjectId, storage.storageObjectId);
+  const previewUrl = nodeImageUrl(node);
+  const storageObjectId = firstString(
+    data.storageObjectId,
+    artifact.storageObjectId,
+    storage.storageObjectId,
+    storageObjectIdFromPreviewUrl(previewUrl),
+  );
   const assetId = firstString(data.assetId, artifact.assetId);
   const assetVersionId = firstString(data.assetVersionId, artifact.assetVersionId);
   if (!storageObjectId && !assetId && !assetVersionId) return null;
@@ -766,8 +797,39 @@ function referenceFromNode(node, position) {
       prompt: firstString(data.prompt),
       mediaKind: firstString(data.mediaKind),
     }),
-    previewUrl: nodeImageUrl(node),
+    previewUrl,
   };
+}
+
+function referenceFromGenerationTask(node, payload, position) {
+  const body = payload?.data && typeof payload.data === "object" ? payload.data : payload;
+  const task = body?.task && typeof body.task === "object" ? body.task : body;
+  const result = task?.result && typeof task.result === "object" ? task.result : {};
+  const candidates = [
+    result,
+    ...(Array.isArray(task?.resultAssets) ? task.resultAssets : []),
+    ...(Array.isArray(task?.fixedImages) ? task.fixedImages : []),
+    ...(Array.isArray(task?.generatedOutputItems) ? task.generatedOutputItems : []),
+  ].filter((item) => item && typeof item === "object");
+  const media = candidates.find((item) => firstString(item.storageObjectId, item.assetId, item.assetVersionId));
+  if (!media) return null;
+  return referenceFromNode({
+    ...node,
+    data: {
+      ...(node?.data ?? {}),
+      storageObjectId: firstString(media.storageObjectId),
+      assetId: firstString(media.assetId),
+      assetVersionId: firstString(media.assetVersionId),
+      previewUrl: firstString(
+        nodeImageUrl(node),
+        media.imageUrl,
+        media.previewUrl,
+        media.sourceUrl,
+        media.downloadUrl,
+        media.url,
+      ),
+    },
+  }, position);
 }
 
 function sameReference(left, right) {
@@ -857,10 +919,27 @@ function characterSourceNodeId(character) { return String(characterReferences(ch
 function findSelectedImageNode(ui = {}) { return ui.canvasDocument?.nodes?.find?.((node) => node.id === ui.selectedCanvasNodeId && isImageNode(node)) ?? null; }
 function isImageNode(node) { return Boolean(node && IMAGE_NODE_TYPES.has(String(node.type))); }
 function nodeImageUrl(node) { return String(node?.data?.url ?? node?.data?.previewUrl ?? node?.data?.sourceUrl ?? node?.data?.downloadUrl ?? ""); }
+function storageObjectIdFromPreviewUrl(value) {
+  const baseOrigin = globalThis.location?.origin ?? "http://canvas.local";
+  try {
+    const url = new URL(String(value ?? ""), baseOrigin);
+    if (url.origin !== baseOrigin) return "";
+    const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    for (let index = 0; index <= parts.length - 5; index += 1) {
+      if (parts[index] !== "api" || parts[index + 1] !== "storage" || parts[index + 2] !== "objects" || parts[index + 4] !== "content") continue;
+      const storageObjectId = parts[index + 3];
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(storageObjectId) ? storageObjectId : "";
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
 function selectedCanvasId(workbench) { return String(workbench.ui?.selectedCanvasProjectId ?? ""); }
 function requireCanvasId(workbench) { const id = selectedCanvasId(workbench); if (!id) throw new Error("请先打开画布"); return id; }
 function requireApi(workbench, method) { if (typeof workbench.api?.[method] !== "function") throw new Error("角色库接口暂不可用"); }
 function isLibraryCharacterScope(scope) { return LIBRARY_CHARACTER_SCOPES.has(String(scope ?? "")); }
+function libraryCategoriesForScope(scope) { return scope === "team" ? TEAM_LIBRARY_CATEGORIES : LIBRARY_CATEGORIES; }
 function normalizeCharacterScope(scope) {
   const normalized = String(scope ?? "");
   return normalized === "official" || normalized === "team" ? normalized : "canvas";

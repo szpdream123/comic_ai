@@ -544,6 +544,18 @@ function putJson(url, body) {
   });
 }
 
+function putJsonKeepalive(url, body) {
+  return fetchJson(url, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+    keepalive: true,
+  }).then((result) => {
+    clearReadRequestCaches();
+    return result;
+  });
+}
+
 function deleteJson(url, body) {
   return fetchJson(url, {
     method: "DELETE",
@@ -1161,6 +1173,10 @@ export const creatorApi = {
     return this.saveStandaloneCanvas(canvasProjectId, input);
   },
 
+  saveCanvasNodePositions(canvasProjectId, input) {
+    return patchJson(`/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/positions`, input);
+  },
+
   listToolPresets() {
     return fetchJsonWithTtl("/api/creator/tool-presets?includeArchived=true", {
       cacheKey: "GET /api/creator/tool-presets?includeArchived=true",
@@ -1250,7 +1266,7 @@ export const creatorApi = {
   },
 
   saveCanvasSession(canvasProjectId, input = {}) {
-    return putJson(`/api/canvas/${encodeURIComponent(canvasProjectId)}/session`, input);
+    return putJsonKeepalive(`/api/canvas/${encodeURIComponent(canvasProjectId)}/session`, input);
   },
 
   listCanvasRevisions(canvasProjectId, input = {}) {
@@ -1281,6 +1297,17 @@ export const creatorApi = {
       input,
       {
         action: "canvas.node.run",
+        idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  },
+
+  runCanvasTextNodeStream(canvasProjectId, nodeKey, input, options = {}) {
+    return postJsonSse(
+      `/api/canvas/${encodeURIComponent(canvasProjectId)}/nodes/${encodeURIComponent(nodeKey)}/run?stream=1`,
+      input,
+      {
         idempotencyKey: options.idempotencyKey,
         signal: options.signal,
       },

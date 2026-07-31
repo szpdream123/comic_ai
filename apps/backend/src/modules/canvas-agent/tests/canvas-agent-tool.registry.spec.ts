@@ -48,7 +48,7 @@ test("media tool uses generation intake and never a provider adapter", async () 
   });
   const result = await registry.execute("generation.create", {
     kind: "image",
-    request: { prompt: "a tree" },
+    request: { model: "image-model", prompt: "a tree" },
   }, {
     canvasId: "canvas-1",
     conversationId: "conversation-1",
@@ -60,6 +60,21 @@ test("media tool uses generation intake and never a provider adapter", async () 
   assert.equal(calls, 1);
   assert.equal(result.status, "waiting_external");
   assert.equal(result.generationTaskId, "generation-1");
+});
+
+test("media tool requires an explicit model code", () => {
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    generationIntake: { create: async () => ({ generationTaskId: "generation-1" }) },
+  });
+  assert.throws(
+    () => registry.validate("generation.create", {
+      kind: "image",
+      request: { prompt: "a tree" },
+    }),
+    /canvas_agent_tool_input_invalid/,
+  );
 });
 
 test("registry exposes actor-scoped history, asset, and preset tools when platform services are supplied", async () => {

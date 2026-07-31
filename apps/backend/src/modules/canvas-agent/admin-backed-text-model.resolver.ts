@@ -20,7 +20,10 @@ export interface ResolvedCanvasAgentTextModel extends TextModelResolution {
 export class AdminBackedTextModelResolver implements TextModelResolver {
   constructor(
     private readonly db: SqlDatabase,
-    private readonly options: { allowFailedCompatibilityProbe?: boolean } = {},
+    private readonly options: {
+      allowFailedCompatibilityProbe?: boolean;
+      requireAgentCompatibility?: boolean;
+    } = {},
   ) {}
 
   async resolve(modelCode: string): Promise<ResolvedCanvasAgentTextModel> {
@@ -28,10 +31,13 @@ export class AdminBackedTextModelResolver implements TextModelResolver {
     if (!model) {
       throw new TextModelGatewayError("model_not_configured");
     }
-    if (!this.options.allowFailedCompatibilityProbe && await hasFailedCanvasAgentCompatibilityProbe(this.db, model.id)) {
-      throw new TextModelGatewayError("model_disabled");
+    assertTextModelEligible(model);
+    if (this.options.requireAgentCompatibility !== false && model.taskModes.includes("text.canvas_agent")) {
+      if (!this.options.allowFailedCompatibilityProbe && await hasFailedCanvasAgentCompatibilityProbe(this.db, model.id)) {
+        throw new TextModelGatewayError("model_disabled");
+      }
+      assertAgentEligible(model);
     }
-    assertAgentEligible(model);
 
     const apiKey = readString(model.providerConfig.apiKey);
     const baseURL = readString(model.providerConfig.baseURL);
@@ -71,12 +77,22 @@ export class AdminBackedTextModelResolver implements TextModelResolver {
       apiKey,
       apiKeyEnv: "admin_secret_values",
       enabled: true,
+      providerProtocol: model.providerProtocol,
       providerConfigRevisionId,
       credentialVersionRef,
       snapshot,
       pricing: model.pricing,
       capabilities: model.capabilities,
     };
+  }
+}
+
+function assertTextModelEligible(model: AiModelConfigRecord) {
+  if (model.mediaType !== "text") {
+    throw new TextModelGatewayError("model_not_configured");
+  }
+  if (!["openai_compatible_chat", "cumob_chat"].includes(model.providerProtocol) || model.invocationMode !== "stream") {
+    throw new TextModelGatewayError("model_not_configured");
   }
 }
 
@@ -91,25 +107,29 @@ export async function listAvailableCanvasAgentModels(db: SqlDatabase) {
     SELECT model_code,display_name,capabilities_json,pricing_json,status
     FROM ai_model_configs
     WHERE status='active' AND media_type='text'
-      AND provider_protocol='openai_compatible_chat' AND invocation_mode='stream'
-      AND task_modes_json ? 'text.canvas_agent'
-      AND ui_config_json->>'agentEligible'='true'
-      AND capabilities_json->>'stream'='true'
+      AND provider_protocol IN ('openai_compatible_chat','cumob_chat') AND invocation_mode='stream'
       AND (
-        (capabilities_json->>'toolCalling'='true' AND capabilities_json->>'jsonSchema'='true')
-        OR capabilities_json->>'structuredJsonPrompt'='true'
+        NOT task_modes_json ? 'text.canvas_agent'
+        OR (
+          ui_config_json->>'agentEligible'='true'
+          AND capabilities_json->>'stream'='true'
+          AND (
+            (capabilities_json->>'toolCalling'='true' AND capabilities_json->>'jsonSchema'='true')
+            OR capabilities_json->>'structuredJsonPrompt'='true'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM canvas_agent_model_compatibility_probes probe
+            WHERE probe.model_config_id = ai_model_configs.id
+              AND probe.status = 'failed'
+          )
+          AND CASE
+            WHEN capabilities_json->>'contextWindow' ~ '^[0-9]+([.][0-9]+)?$'
+            THEN (capabilities_json->>'contextWindow')::numeric
+            ELSE 0
+          END > 0
+        )
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM canvas_agent_model_compatibility_probes probe
-        WHERE probe.model_config_id = ai_model_configs.id
-          AND probe.status = 'failed'
-      )
-      AND CASE
-        WHEN capabilities_json->>'contextWindow' ~ '^[0-9]+([.][0-9]+)?$'
-        THEN (capabilities_json->>'contextWindow')::numeric
-        ELSE 0
-      END > 0
     ORDER BY sort_order ASC,updated_at DESC,model_code ASC
   `);
   return result.rows.map((row) => ({
@@ -135,7 +155,7 @@ function assertAgentEligible(model: AiModelConfigRecord) {
   if (model.mediaType !== "text" || !model.taskModes.includes("text.canvas_agent")) {
     throw new TextModelGatewayError("model_not_configured");
   }
-  if (model.providerProtocol !== "openai_compatible_chat" || model.invocationMode !== "stream") {
+  if (!["openai_compatible_chat", "cumob_chat"].includes(model.providerProtocol) || model.invocationMode !== "stream") {
     throw new TextModelGatewayError("model_not_configured");
   }
   if (model.uiConfig.agentEligible !== true) {

@@ -6,11 +6,14 @@ export function renderSelectionPickerModal({
   title = "选择内容",
   tabs = [],
   activeTab = "",
+  sourceTabs = [],
+  activeSource = "",
   items = [],
   selectedId = "",
   emptyLabel = "暂无可选内容",
   closeAction = "close-selection-picker",
   tabAction = "set-selection-picker-tab",
+  sourceAction = "set-selection-picker-source",
   selectAction = "select-selection-picker-item",
   confirmAction = "confirm-selection-picker",
   confirmLabel = "确认",
@@ -25,13 +28,18 @@ export function renderSelectionPickerModal({
   const safeActiveTab = safeTabs.some((tab) => tab.id === activeTab)
     ? activeTab
     : String(safeTabs[0]?.id ?? "");
+  const safeSourceTabs = Array.isArray(sourceTabs) ? sourceTabs.filter((tab) => tab?.id && tab?.label) : [];
+  const safeActiveSource = safeSourceTabs.some((tab) => tab.id === activeSource)
+    ? activeSource
+    : String(safeSourceTabs[0]?.id ?? "");
   const visibleItems = (Array.isArray(items) ? items : [])
-    .filter((item) => !safeActiveTab || item?.group === safeActiveTab);
+    .filter((item) => (!safeActiveSource || item?.sourceGroup === safeActiveSource)
+      && (!safeActiveTab || item?.group === safeActiveTab));
   const titleId = `${id}-title`;
   return `
     <section class="selection-picker-layer" data-selection-picker-id="${escapeAttr(id)}">
       <button class="selection-picker-scrim" type="button" data-action="${escapeAttr(closeAction)}" aria-label="关闭${escapeAttr(title)}"></button>
-      <div class="selection-picker-modal" role="dialog" aria-modal="true" aria-labelledby="${escapeAttr(titleId)}">
+      <div class="selection-picker-modal ${safeSourceTabs.length ? "has-source-tabs" : ""}" role="dialog" aria-modal="true" aria-labelledby="${escapeAttr(titleId)}">
         <header class="selection-picker-header">
           <div>
             <span>SELECT</span>
@@ -39,6 +47,20 @@ export function renderSelectionPickerModal({
           </div>
           <button class="selection-picker-close" type="button" data-action="${escapeAttr(closeAction)}" aria-label="关闭" title="关闭">×</button>
         </header>
+        ${safeSourceTabs.length ? `
+          <nav class="selection-picker-source-tabs" role="tablist" aria-label="${escapeAttr(title)}来源">
+            ${safeSourceTabs.map((tab) => `
+              <button
+                class="${tab.id === safeActiveSource ? "active" : ""}"
+                type="button"
+                role="tab"
+                aria-selected="${tab.id === safeActiveSource ? "true" : "false"}"
+                data-action="${escapeAttr(sourceAction)}"
+                data-picker-source="${escapeAttr(tab.id)}"
+              >${escapeHtml(tab.label)}</button>
+            `).join("")}
+          </nav>
+        ` : ""}
         ${safeTabs.length ? `
           <nav class="selection-picker-tabs" role="tablist" aria-label="${escapeAttr(title)}分类">
             ${safeTabs.map((tab) => `
@@ -97,6 +119,36 @@ export function syncSelectionPickerSelection(root, {
   if (secondaryConfirm) {
     secondaryConfirm.disabled = !selectedId || secondaryConfirmDisabled;
   }
+  return true;
+}
+
+export function syncSelectionPickerTab(root, {
+  pickerId = "",
+  activeTab = "",
+  items = [],
+  selectedId = "",
+  selectAction = "select-selection-picker-item",
+  emptyLabel = "暂无可选内容",
+} = {}) {
+  const layers = [...(root?.querySelectorAll?.("[data-selection-picker-id]") ?? [])];
+  const layer = layers.find((item) => String(item?.dataset?.selectionPickerId ?? "") === String(pickerId));
+  const content = layer?.querySelector?.(".selection-picker-content");
+  if (!layer || !content) return false;
+  for (const tab of layer.querySelectorAll?.("[data-picker-tab]") ?? []) {
+    const active = String(tab?.dataset?.pickerTab ?? "") === String(activeTab);
+    tab.classList?.toggle?.("active", active);
+    tab.setAttribute?.("aria-selected", active ? "true" : "false");
+  }
+  const visibleItems = (Array.isArray(items) ? items : [])
+    .filter((item) => !activeTab || item?.group === activeTab);
+  content.innerHTML = visibleItems.length
+    ? visibleItems.map((item) => renderSelectionPickerItem(item, {
+        selected: String(item.id) === String(selectedId),
+        selectAction,
+      })).join("")
+    : renderSelectionPickerEmpty(emptyLabel);
+  content.scrollTop = 0;
+  syncSelectionPickerSelection(root, { pickerId, selectedId });
   return true;
 }
 

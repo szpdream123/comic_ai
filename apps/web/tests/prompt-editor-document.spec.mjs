@@ -97,8 +97,24 @@ test("prompt editor never treats audio or video sources as image thumbnails", ()
 
   assert.equal(audio.preview, "");
   assert.equal(video.preview, "/uploads/video-1-poster.jpg");
+  assert.equal(video.source, "/uploads/video-1.mp4");
   assert.equal(resolvePromptEditorMentionPreview({ kind: "video", preview: "data:video/mp4;base64,AAAA" }), "");
   assert.equal(resolvePromptEditorMentionPreview({ kind: "audio", preview: "data:image/png;base64,AAAA" }), "data:image/png;base64,AAAA");
+});
+
+test("prompt editor preserves a video source for inline video thumbnails", () => {
+  const document = createPromptEditorDocument("参考【@视频1】", [{
+    id: "mention-ref:video:video-1",
+    assetId: "video-1",
+    kind: "video",
+    name: "视频1",
+    source: "/uploads/video-1.mp4",
+  }]);
+  const [mention] = collectPromptEditorMentions(document);
+
+  assert.equal(mention.preview, "");
+  assert.equal(mention.source, "/uploads/video-1.mp4");
+  assert.equal(serializePromptEditorDocument(document), "参考【@视频1】");
 });
 
 test("prompt dock uses media placeholders instead of broken image thumbnails", () => {
@@ -171,6 +187,9 @@ test("prompt editor opens mentions at any cursor position and portals the menu o
 
   assert.match(source, /allowedPrefixes:\s*null/);
   assert.match(source, /typeof options\.getSuggestions === "function"/);
+  assert.match(source, /const getAvailableSuggestions = async \(\) =>/);
+  assert.match(source, /await options\.getSuggestions\(\)/);
+  assert.match(source, /async getSuggestions\(query\)/);
   assert.match(source, /menuContainer:\s*element\.ownerDocument\.documentElement/);
   assert.match(source, /container:\s*menuContainer/);
   assert.match(source, /strategy:\s*"fixed"/);
@@ -181,6 +200,8 @@ test("prompt editor opens mentions at any cursor position and portals the menu o
   assert.match(source, /transaction\.setMeta\("promptEditorSkipMentionChange", true\)/);
   assert.match(source, /if \(!transaction\.getMeta\("promptEditorSkipMentionChange"\)\)/);
   assert.match(source, /editor\.view\.dispatch\(transaction\)/);
+  assert.match(source, /promptEditorSelectionTextOffset\(editor, editor\.state\.selection\.from\)/);
+  assert.match(source, /textBetween\(0, safePosition, "\\n"/);
   assert.match(source, /nextProps\.mount\(menu, \{\s*onPosition/s);
   assert.match(source, /onMentionsChange\?\.\(collectPromptEditorMentions\(currentEditor\.getJSON\(\)\), \{ initial: true \}\)/);
   assert.match(source, /onMentionsChange\?\.\(collectPromptEditorMentions\(currentEditor\.getJSON\(\)\), \{ initial: false \}\)/);

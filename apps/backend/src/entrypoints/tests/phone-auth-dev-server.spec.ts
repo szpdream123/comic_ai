@@ -19,6 +19,7 @@ import {
 } from "../../modules/identity/team-account-credentials.service.ts";
 import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
+import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
@@ -4943,7 +4944,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
   it("generates an AI storyboard preview from selected workflow skills", async () => {
     const db = await createMigratedTestDb();
-    await seedPreviewScriptModelConfig(db, 0);
+    await seedPreviewScriptModelConfig(db, 5);
     const skillId = "78787878-7878-4787-8787-787878787878";
     const sceneSkillId = "79797979-7979-4797-8797-797979797979";
     const sceneSkillAuthorId = "79797979-7979-4797-8797-797979797970";
@@ -5046,8 +5047,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(createResponse.status, 200);
       assert.equal(previewResponse.status, 200);
-      assert.equal(textChatGateway.calls.length, 5);
-      assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
+      assert.equal(textChatGateway.calls.length, 2);
+      assert.deepEqual(textChatGateway.calls.map((call) => call.model), ["preview-script-model", "preview-script-model"]);
       assert.equal(
         textChatGateway.calls[0]?.prompt,
         "请把小说改编为节奏紧凑、可以直接拍摄的分场剧本。\n\n任小野把小草托付给闵婶子。",
@@ -5057,9 +5058,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [["script", skillId], ["scene_extract", sceneSkillId]],
       );
       assert.equal(previewEnvelope.data.selectedPackages, null);
-      assert.equal(previewEnvelope.data.modelCreditCost, 0);
+      assert.equal(previewEnvelope.data.modelCreditCost, 10);
+      assert.equal(previewEnvelope.data.modelRunCount, 2);
       assert.equal(previewEnvelope.data.skillCreditCost, 10);
-      assert.equal(previewEnvelope.data.creditCost, 10);
+      assert.equal(previewEnvelope.data.creditCost, 20);
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /场景抽取专用/);
       const balanceAfter = await db.query<{ balance: number | string }>(
         "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
@@ -5067,7 +5069,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       assert.equal(
         Number(balanceBefore.rows[0]?.balance ?? 0) - Number(balanceAfter.rows[0]?.balance ?? 0),
-        10,
+        20,
       );
       const authorBalance = await db.query<{ balance: number | string }>(
         "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
@@ -5082,15 +5084,84 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(authorEarnings.rows.length, 1);
       assert.equal(Number(authorEarnings.rows[0]?.amount ?? 0), 3);
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /任小野把小草托付给闵婶子/);
-      assert.match(textChatGateway.calls[2]?.prompt ?? "", /任小野把小草托付给闵婶子/);
-      assert.match(textChatGateway.calls[3]?.prompt ?? "", /任小野把小草托付给闵婶子/);
-      assert.match(textChatGateway.calls[4]?.prompt ?? "", /任小野把小草托付给闵婶子/);
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.script.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.scenes.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.characters.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.props.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
     } finally {
+      await server.close();
+    }
+  });
+
+  it("resolves a DB-configured cumob_chat text.script model for AI storyboard preview", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    const originalCreateChatCompletionStream = CumobTextAdapter.prototype.createChatCompletionStream;
+    const adapterCalls: Array<{ request: { model: string } }> = [];
+    const modelCode = "cumob-preview-script-model";
+    const scriptSkillId = "80808080-8080-4080-8080-808080808080";
+    await db.query(
+      `UPDATE ai_model_configs
+       SET model_code = $1,
+           display_name = 'Cumob preview script model',
+           provider_name = 'cumob',
+           provider_model = 'gpt-5.6-sol',
+           provider_protocol = 'cumob_chat',
+           provider_config_json = '{"baseURL":"https://api.cumob.com","requestPath":"/v1/chat/completions","apiKey":"test-cumob-key","requestFormat":"cumob_chat"}'::jsonb,
+           updated_at = NOW()
+       WHERE model_code = 'preview-script-model'`,
+      [modelCode],
+    );
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES ($1, 'script', 'Cumob script skill', '', $2, 'enabled', true, true, 0, NOW())`,
+      [scriptSkillId, "Convert the novel excerpt into a storyboard-ready script."],
+    );
+    CumobTextAdapter.prototype.createChatCompletionStream = async function createChatCompletionStream(input) {
+      adapterCalls.push(input);
+      return (async function* () {
+        yield {
+          id: "fake-cumob-storyboard-stream",
+          choices: [{
+            delta: { content: JSON.stringify({ scriptText: "Ren Xiaoye entrusted Xiaocao to Aunt Min." }) },
+            finish_reason: "stop",
+          }],
+        };
+      })();
+    };
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138240");
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "cumob-model-resolution");
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-cumob-model-resolution",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "Ren Xiaoye entrusted Xiaocao to Aunt Min.",
+            skills: { script: scriptSkillId },
+            modelCode,
+          }),
+        },
+      );
+      const previewText = await previewResponse.text();
+
+      assert.equal(previewResponse.status, 200, previewText);
+      assert.equal(adapterCalls.length, 1);
+      assert.equal(adapterCalls[0]?.request.model, "gpt-5.6-sol");
+      assert.equal(adapterCalls[0]?.request.max_tokens, undefined);
+    } finally {
+      CumobTextAdapter.prototype.createChatCompletionStream = originalCreateChatCompletionStream;
       await server.close();
     }
   });
@@ -5619,20 +5690,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(previewResponse.status, 200);
       assert.equal(creatorLedgerResponse.status, 200);
       assert.ok(previewEnvelope.data);
-      assert.equal(previewEnvelope.data.creditBalance, 480);
-      assert.equal(previewEnvelope.data.displayCreditBalance, 480);
+      assert.equal(previewEnvelope.data.creditBalance, 400);
+      assert.equal(previewEnvelope.data.displayCreditBalance, 400);
+      assert.equal(previewEnvelope.data.modelRunCount, 5);
+      assert.equal(previewEnvelope.data.modelCreditCost, 100);
       assert.ok(
         creatorLedgerEnvelope.data.some((entry: { sourceType?: string; reason?: string; amount?: number | string }) =>
           entry.sourceType === "episode_generation_task"
           && entry.reason === "script generation"
-          && Number(entry.amount) === 20,
+          && Number(entry.amount) === 100,
         ),
       );
       assert.ok(
         ledgerEntries.rows.some((entry) =>
             entry.source_type === "episode_generation_task" &&
             entry.reason === "script generation" &&
-            Number(entry.amount) === 20 &&
+            Number(entry.amount) === 100 &&
             String(entry.metadata_json?.modelCode ?? "").includes("script"),
           ),
       );
@@ -5908,6 +5981,98 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.match(text, /递出饭食/);
       assert.doesNotMatch(text, /^event:/m);
     } finally {
+      await server.close();
+    }
+  });
+
+  it("flushes the first AI storyboard SSE delta before completion", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    const scriptSkillId = "81818181-8181-4181-8181-818181818181";
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES ($1, 'script', 'SSE timing script skill', '', $2, 'enabled', true, true, 0, NOW())`,
+      [scriptSkillId, "Convert the novel excerpt into a storyboard-ready script."],
+    );
+    let releaseFirstScriptGate!: () => void;
+    const firstScriptGate = new Promise<void>((resolve) => {
+      releaseFirstScriptGate = resolve;
+    });
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      ['{"scriptText":"Ren Xiaoye entrusted ', 'Xiaocao to Aunt Min."}'],
+    ]);
+    const streamJson = textChatGateway.streamJson.bind(textChatGateway);
+    textChatGateway.streamJson = async function* gatedStreamJson(input) {
+      let chunkIndex = 0;
+      for await (const chunk of streamJson(input)) {
+        yield chunk;
+        if (chunkIndex === 0) {
+          await firstScriptGate;
+        }
+        chunkIndex += 1;
+      }
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138241");
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "sse-first-delta");
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "text/event-stream",
+            "idempotency-key": "http-ai-storyboard-sse-first-delta",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "Ren Xiaoye entrusted Xiaocao to Aunt Min.",
+            skills: { script: scriptSkillId },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      assert.equal(response.headers.get("x-accel-buffering"), "no");
+      assert.ok(response.body);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const readChunk = async () => {
+        let timeoutId!: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("timed out waiting for the first SSE delta")), 2_000);
+        });
+        try {
+          return await Promise.race([reader.read(), timeout]);
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      };
+      let text = "";
+      while (!text.includes('"type":"script_delta"')) {
+        const chunk = await readChunk();
+        assert.equal(chunk.done, false, text);
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      assert.doesNotMatch(text, /"type":"complete"/);
+
+      releaseFirstScriptGate();
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      text += decoder.decode();
+      assert.match(text, /"type":"complete"/);
+    } finally {
+      releaseFirstScriptGate();
       await server.close();
     }
   });
@@ -12994,6 +13159,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       new URL("../../../../../scripts/run-phone-auth-dev-server.mjs", import.meta.url),
       "utf8",
     );
+    const devServerScript = await readFile(
+      new URL("../phone-auth-dev-server.ts", import.meta.url),
+      "utf8",
+    );
     const productionLauncherScript = await readFile(
       new URL("../../../../../scripts/run-phone-auth-production.mjs", import.meta.url),
       "utf8",
@@ -13012,6 +13181,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(launcherScript, /listenWithRetry\(server, port\)/);
     assert.match(launcherScript, /EADDRINUSE/);
     assert.match(launcherScript, /process\.env\.PORT/);
+    assert.match(launcherScript, /await server\.close\(\)/);
+    assert.match(launcherScript, /Phone auth dev server stopped/);
+    assert.match(launcherScript, /process\.exit\(0\)/);
+    assert.match(devServerScript, /httpServer\.closeIdleConnections\(\)/);
+    assert.match(devServerScript, /httpServer\.closeAllConnections\(\)/);
     assert.match(packageJson, /--import tsx/);
     assert.match(launcherScript, /--import|--loader/);
     assert.match(launcherScript, /resolveTsxRuntimeArgs\(runtime\)/);

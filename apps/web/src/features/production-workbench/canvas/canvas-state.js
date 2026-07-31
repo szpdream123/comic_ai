@@ -80,7 +80,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_video", kind: "video", label: "视频" }],
   },
   audio: {
-    inputs: [{ id: "in_text", kind: "text", label: "文本" }],
+    inputs: [{ id: "in_text", kind: "text", accepts: ["text", "audio"], label: "文本/音频" }],
     outputs: [{ id: "out_audio", kind: "audio", label: "音频" }],
   },
   upload: {
@@ -117,7 +117,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_video", kind: "video", label: "视频" }],
   },
   "ai-audio": {
-    inputs: [{ id: "in_text", kind: "text", label: "文本" }],
+    inputs: [{ id: "in_text", kind: "text", accepts: ["text", "audio"], label: "文本/音频" }],
     outputs: [{ id: "out_audio", kind: "audio", label: "音频" }],
   },
   "ai-animation": {
@@ -129,7 +129,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_image", kind: "image", label: "全景图" }],
   },
   "ai-markdown": {
-    inputs: [{ id: "in_text", kind: "text", label: "文本" }],
+    inputs: [{ id: "in_text", kind: "text", accepts: ["text", "image"], label: "文本/图片" }],
     outputs: [{ id: "out_text", kind: "text", label: "Markdown" }],
   },
   "ai-storyboard": {
@@ -233,10 +233,10 @@ const CANVAS_NODE_TEMPLATES = [
     id: "template-script",
     group: "节点",
     type: "script",
-    title: "文本",
-    description: "添加文本输入节点",
+    title: "剧本源",
+    description: "添加剧本输入节点",
     defaultData: {
-      title: "文本",
+      title: "剧本源",
       text: "",
       source: "manual",
     },
@@ -294,14 +294,6 @@ const CANVAS_NODE_TEMPLATES = [
     title: "Markdown",
     description: "添加结构化说明节点",
     defaultData: { title: "Markdown", text: "", textHtml: "", source: "manual" },
-  },
-  {
-    id: "template-comment",
-    group: "文档",
-    type: "comment",
-    title: "评论",
-    description: "添加画布批注",
-    defaultData: { title: "评论", text: "", source: "manual" },
   },
   {
     id: "template-group",
@@ -496,7 +488,9 @@ export function resolveCanvasNodePlacement(document, input = {}) {
   const step = Math.max(24, numberOr(input.step, 48));
   const nodes = safeArray(document?.nodes).filter((node) => !node?.data?.hiddenByCharacterId);
   const isFree = (position) => nodes.every((node) => {
-    const nodeSize = node?.size ?? CANVAS_NODE_SIZES[normalizeNodeType(node?.type)] ?? CANVAS_NODE_SIZES.output;
+    const nodeType = normalizeNodeType(node?.type);
+    const canonicalSize = CANVAS_NODE_SIZES[nodeType] ?? CANVAS_NODE_SIZES.output;
+    const nodeSize = ["script", "source-text"].includes(nodeType) ? canonicalSize : node?.size ?? canonicalSize;
     const left = numberOr(node?.position?.x, 0);
     const top = numberOr(node?.position?.y, 0);
     const right = left + Math.max(1, numberOr(nodeSize?.width, CANVAS_NODE_SIZES.output.width));
@@ -535,6 +529,7 @@ export function buildCanvasSidebarItems(document, options = {}) {
         ...(asset.artifactId ? { artifactId: String(asset.artifactId) } : {}),
         ...(asset.storageObjectId ? { storageObjectId: String(asset.storageObjectId) } : {}),
         ...(asset.assetVersionId ? { assetVersionId: String(asset.assetVersionId) } : {}),
+        ...(asset.posterUrl ? { posterUrl: String(asset.posterUrl) } : {}),
         ...(Array.isArray(asset.tags) ? { tags: asset.tags } : {}),
         type: "asset",
         kind: String(asset.kind ?? asset.category ?? asset.type ?? "asset"),
@@ -626,6 +621,212 @@ export function canvasUploadNodeAcceptsMedia(nodeType, mediaKind) {
   return false;
 }
 
+const CANVAS_ARRANGEMENT_STAGE = Object.freeze({
+  script: 0,
+  "source-text": 0,
+  "source-image": 0,
+  "source-video": 0,
+  "source-audio": 0,
+  upload: 0,
+  text: 0,
+  director: 1,
+  "ai-text": 1,
+  markdown: 1,
+  "ai-markdown": 1,
+  comment: 1,
+  "ai-director": 1,
+  send: 2,
+  "ai-image": 2,
+  "ai-video": 2,
+  "ai-audio": 2,
+  "ai-animation": 2,
+  "ai-panorama": 2,
+  "ai-storyboard": 2,
+  image: 3,
+  video: 3,
+  audio: 3,
+  output: 3,
+});
+
+function canvasArrangementFunctionalStage(node, nodeById, membership) {
+  if (node?.type !== "group") return CANVAS_ARRANGEMENT_STAGE[String(node?.type ?? "")] ?? 1;
+  const childStages = safeArray(membership.groupChildren.get(String(node?.id ?? "")))
+    .map((childId) => nodeById.get(String(childId)))
+    .filter(Boolean)
+    .map((child) => CANVAS_ARRANGEMENT_STAGE[String(child.type ?? "")] ?? 1);
+  return childStages.length ? Math.min(...childStages) : 1;
+}
+
+function canvasArrangementComponents(itemIds, undirected, connectedIds, compareIds) {
+  const components = [];
+  const visited = new Set();
+  for (const startId of [...itemIds].filter((id) => connectedIds.has(id)).sort(compareIds)) {
+    if (visited.has(startId)) continue;
+    const component = [];
+    const queue = [startId];
+    visited.add(startId);
+    while (queue.length) {
+      const id = queue.shift();
+      component.push(id);
+      for (const neighborId of undirected.get(id) ?? []) {
+        if (!visited.has(neighborId)) {
+          visited.add(neighborId);
+          queue.push(neighborId);
+        }
+      }
+    }
+    component.sort(compareIds);
+    components.push(component);
+  }
+  components.sort((left, right) => compareIds(left[0], right[0]));
+  const orphanIds = [...itemIds].filter((id) => !connectedIds.has(id)).sort(compareIds);
+  if (orphanIds.length) components.push(orphanIds);
+  return components;
+}
+
+function orderCanvasArrangementLayers(componentIds, layerById, incoming, outgoing, compareIds) {
+  const layers = new Map();
+  for (const id of componentIds) {
+    const layer = layerById.get(id) ?? 0;
+    const ids = layers.get(layer) ?? [];
+    ids.push(id);
+    layers.set(layer, ids);
+  }
+  for (const ids of layers.values()) ids.sort(compareIds);
+  const sortedLayers = [...layers.keys()].sort((left, right) => left - right);
+  const indexById = () => new Map(sortedLayers.flatMap((layer) => layers.get(layer)).map((id, index) => [id, index]));
+  const sortLayer = (layer, neighbors) => {
+    const indexes = indexById();
+    layers.get(layer).sort((leftId, rightId) => {
+      const barycenter = (id) => {
+        const values = [...(neighbors.get(id) ?? [])]
+          .map((neighborId) => indexes.get(neighborId))
+          .filter(Number.isFinite);
+        return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : Number.POSITIVE_INFINITY;
+      };
+      return barycenter(leftId) - barycenter(rightId) || compareIds(leftId, rightId);
+    });
+  };
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const layer of sortedLayers.slice(1)) sortLayer(layer, incoming);
+    for (const layer of [...sortedLayers].reverse().slice(1)) sortLayer(layer, outgoing);
+  }
+  return layers;
+}
+
+function buildCanvasArrangementPositions(topLevelNodes, nodes, edges, membership, options = {}) {
+  const gridSize = options.gridSize;
+  const columnGap = options.columnGap;
+  const rowGap = options.rowGap;
+  const componentGap = options.componentGap;
+  const snap = (value) => Math.round(value / gridSize) * gridSize;
+  const nodeById = new Map(nodes.map((node) => [String(node?.id ?? ""), node]));
+  const itemById = new Map(topLevelNodes.map((node) => [String(node.id), {
+    id: String(node.id),
+    x: Number(node.position?.x ?? 0) || 0,
+    y: Number(node.position?.y ?? 0) || 0,
+    width: Math.max(1, Number(node.size?.width ?? 360) || 360),
+    height: Math.max(1, Number(node.size?.height ?? 220) || 220),
+    stage: canvasArrangementFunctionalStage(node, nodeById, membership),
+  }]));
+  const itemIds = [...itemById.keys()];
+  const rootId = (nodeId) => membership.childParent.get(String(nodeId ?? "")) ?? String(nodeId ?? "");
+  const outgoing = new Map(itemIds.map((id) => [id, new Set()]));
+  const incoming = new Map(itemIds.map((id) => [id, new Set()]));
+  const undirected = new Map(itemIds.map((id) => [id, new Set()]));
+  const indegree = new Map(itemIds.map((id) => [id, 0]));
+  const connectedIds = new Set();
+  for (const edge of edges) {
+    const sourceId = rootId(edge?.sourceNodeId);
+    const targetId = rootId(edge?.targetNodeId);
+    if (!itemById.has(sourceId) || !itemById.has(targetId) || sourceId === targetId) continue;
+    connectedIds.add(sourceId);
+    connectedIds.add(targetId);
+    undirected.get(sourceId).add(targetId);
+    undirected.get(targetId).add(sourceId);
+    if (outgoing.get(sourceId).has(targetId)) continue;
+    outgoing.get(sourceId).add(targetId);
+    incoming.get(targetId).add(sourceId);
+    indegree.set(targetId, indegree.get(targetId) + 1);
+  }
+  const compareIds = (leftId, rightId) => {
+    const left = itemById.get(leftId);
+    const right = itemById.get(rightId);
+    return left.y - right.y || left.x - right.x || left.id.localeCompare(right.id);
+  };
+  const queue = itemIds
+    .filter((id) => connectedIds.has(id) && indegree.get(id) === 0)
+    .sort(compareIds);
+  const layerById = new Map(queue.map((id) => [id, itemById.get(id).stage]));
+  const visited = new Set();
+  while (queue.length) {
+    const id = queue.shift();
+    visited.add(id);
+    for (const targetId of outgoing.get(id)) {
+      layerById.set(targetId, Math.max(
+        itemById.get(targetId).stage,
+        layerById.get(targetId) ?? 0,
+        (layerById.get(id) ?? 0) + 1,
+      ));
+      indegree.set(targetId, indegree.get(targetId) - 1);
+      if (indegree.get(targetId) === 0) {
+        queue.push(targetId);
+        queue.sort(compareIds);
+      }
+    }
+  }
+  const minX = Math.min(...topLevelNodes.map((node) => Number(node.position?.x ?? 0) || 0));
+  const estimatedColumnWidth = Math.max(...[...itemById.values()].map((item) => item.width)) + columnGap;
+  for (const id of itemIds) {
+    if (visited.has(id)) continue;
+    const item = itemById.get(id);
+    const positionLayer = Math.max(0, Math.round((item.x - minX) / Math.max(gridSize, estimatedColumnWidth)));
+    layerById.set(id, connectedIds.has(id) ? Math.max(item.stage, positionLayer) : item.stage);
+  }
+
+  const components = canvasArrangementComponents(itemIds, undirected, connectedIds, compareIds);
+  const orderedLayersByComponent = components.map((component) => (
+    orderCanvasArrangementLayers(component, layerById, incoming, outgoing, compareIds)
+  ));
+  const columnWidthByLayer = new Map();
+  for (const item of itemById.values()) {
+    const layer = layerById.get(item.id) ?? item.stage;
+    columnWidthByLayer.set(layer, Math.max(columnWidthByLayer.get(layer) ?? 0, item.width));
+  }
+  const sortedLayers = [...columnWidthByLayer.keys()].sort((left, right) => left - right);
+  const columnXByLayer = new Map();
+  let columnX = snap(minX);
+  let previousLayer = sortedLayers[0] ?? 0;
+  for (const layer of sortedLayers) {
+    if (layer !== sortedLayers[0]) columnX += Math.max(0, layer - previousLayer - 1) * gridSize;
+    columnXByLayer.set(layer, snap(columnX));
+    columnX = snap(columnX + columnWidthByLayer.get(layer) + columnGap);
+    previousLayer = layer;
+  }
+
+  const positions = new Map();
+  const startY = snap(Math.min(...topLevelNodes.map((node) => Number(node.position?.y ?? 0) || 0)));
+  let nextComponentY = startY;
+  components.forEach((component, componentIndex) => {
+    const originalTop = snap(Math.min(...component.map((id) => itemById.get(id).y)));
+    const componentY = componentIndex === 0
+      ? startY
+      : snap(Math.max(nextComponentY, Math.min(originalTop, nextComponentY + componentGap)));
+    let componentBottom = componentY;
+    for (const [layer, ids] of orderedLayersByComponent[componentIndex]) {
+      let rowY = componentY;
+      for (const id of ids) {
+        const item = itemById.get(id);
+        positions.set(id, { x: columnXByLayer.get(layer), y: snap(rowY) });
+        rowY = snap(rowY + item.height + rowGap);
+        componentBottom = Math.max(componentBottom, rowY - rowGap);
+      }
+    }
+    nextComponentY = snap(componentBottom + componentGap);
+  });
+  return positions;
+}
+
 export function arrangeCanvasDocumentOnGrid(document, options = {}) {
   const nodes = safeArray(document?.nodes);
   const visibleNodes = nodes.filter((node) => !node?.data?.hiddenByCharacterId);
@@ -633,80 +834,21 @@ export function arrangeCanvasDocumentOnGrid(document, options = {}) {
   const gridSize = Math.max(8, Number(options.gridSize ?? 40) || 40);
   const columnGap = Math.max(gridSize, Number(options.columnGap ?? 120) || 120);
   const rowGap = Math.max(gridSize, Number(options.rowGap ?? 80) || 80);
+  const componentGap = Math.max(rowGap, Number(options.componentGap ?? 160) || 160);
   const membership = resolveCanvasGroupMembership(nodes);
   const topLevelNodes = visibleNodes.filter((node) => !membership.childParent.has(String(node?.id ?? "")));
   if (!topLevelNodes.length) return document;
+  const positions = buildCanvasArrangementPositions(
+    topLevelNodes,
+    nodes,
+    safeArray(document?.edges),
+    membership,
+    { gridSize, columnGap, rowGap, componentGap },
+  );
   const itemById = new Map(topLevelNodes.map((node) => [String(node.id), {
-    id: String(node.id),
     x: Number(node.position?.x ?? 0) || 0,
     y: Number(node.position?.y ?? 0) || 0,
-    width: Math.max(1, Number(node.size?.width ?? 360) || 360),
-    height: Math.max(1, Number(node.size?.height ?? 220) || 220),
   }]));
-  const rootId = (nodeId) => membership.childParent.get(String(nodeId ?? "")) ?? String(nodeId ?? "");
-  const adjacency = new Map([...itemById.keys()].map((id) => [id, new Set()]));
-  const indegree = new Map([...itemById.keys()].map((id) => [id, 0]));
-  const connectedIds = new Set();
-  for (const edge of safeArray(document?.edges)) {
-    const sourceId = rootId(edge?.sourceNodeId);
-    const targetId = rootId(edge?.targetNodeId);
-    if (!itemById.has(sourceId) || !itemById.has(targetId) || sourceId === targetId) continue;
-    connectedIds.add(sourceId);
-    connectedIds.add(targetId);
-    if (adjacency.get(sourceId).has(targetId)) continue;
-    adjacency.get(sourceId).add(targetId);
-    indegree.set(targetId, indegree.get(targetId) + 1);
-  }
-  const byOriginalPosition = (leftId, rightId) => {
-    const left = itemById.get(leftId);
-    const right = itemById.get(rightId);
-    return left.y - right.y || left.x - right.x || left.id.localeCompare(right.id);
-  };
-  const queue = [...itemById.keys()]
-    .filter((id) => connectedIds.has(id) && indegree.get(id) === 0)
-    .sort(byOriginalPosition);
-  const layerById = new Map(queue.map((id) => [id, 0]));
-  const visited = new Set();
-  while (queue.length) {
-    const id = queue.shift();
-    visited.add(id);
-    for (const targetId of adjacency.get(id)) {
-      layerById.set(targetId, Math.max(layerById.get(targetId) ?? 0, (layerById.get(id) ?? 0) + 1));
-      indegree.set(targetId, indegree.get(targetId) - 1);
-      if (indegree.get(targetId) === 0) {
-        queue.push(targetId);
-        queue.sort(byOriginalPosition);
-      }
-    }
-  }
-  const minX = Math.min(...topLevelNodes.map((node) => Number(node.position?.x ?? 0) || 0));
-  const estimatedColumnWidth = Math.max(...[...itemById.values()].map((item) => item.width)) + columnGap;
-  for (const id of itemById.keys()) {
-    if (visited.has(id)) continue;
-    const item = itemById.get(id);
-    layerById.set(id, Math.max(0, Math.round((item.x - minX) / Math.max(gridSize, estimatedColumnWidth))));
-  }
-  const columns = new Map();
-  for (const id of itemById.keys()) {
-    const layer = layerById.get(id) ?? 0;
-    const items = columns.get(layer) ?? [];
-    items.push(itemById.get(id));
-    columns.set(layer, items);
-  }
-  const snap = (value) => Math.round(value / gridSize) * gridSize;
-  const positions = new Map();
-  let columnX = snap(minX);
-  const startY = snap(Math.min(...topLevelNodes.map((node) => Number(node.position?.y ?? 0) || 0)));
-  for (const layer of [...columns.keys()].sort((left, right) => left - right)) {
-    const items = columns.get(layer).sort((left, right) => left.y - right.y || left.x - right.x || left.id.localeCompare(right.id));
-    const columnWidth = Math.max(...items.map((item) => item.width));
-    let rowY = startY;
-    for (const item of items) {
-      positions.set(item.id, { x: columnX, y: snap(rowY) });
-      rowY = snap(rowY + item.height + rowGap);
-    }
-    columnX = snap(columnX + columnWidth + columnGap);
-  }
   const groupDeltas = new Map([...positions].map(([id, position]) => {
     const item = itemById.get(id);
     return [id, { x: position.x - item.x, y: position.y - item.y }];
@@ -867,6 +1009,16 @@ function normalizeCanvasTargetPortForConnection(targetNode, targetPort, sourcePo
       kind: sourcePort.kind,
     };
   }
+  if (
+    targetPort.direction === "in" &&
+    ["audio", "ai-audio"].includes(targetNode?.type) &&
+    sourcePort.kind === "audio"
+  ) {
+    return {
+      ...targetPort,
+      kind: "audio",
+    };
+  }
   return targetPort;
 }
 
@@ -902,6 +1054,93 @@ export function removeCanvasNode(document, nodeId) {
       .filter((edge) => edge.sourceNodeId !== normalizedNodeId && edge.targetNodeId !== normalizedNodeId)
       .map((edge) => clone(edge)),
   });
+}
+
+function resolveStoryboardCutCellIndex(imageNode, storyboardNode) {
+  const storedCellIndex = imageNode?.data?.storyboardCellIndex;
+  if (
+    storedCellIndex !== undefined
+    && storedCellIndex !== null
+    && storedCellIndex !== ""
+    && Number.isInteger(Number(storedCellIndex))
+    && Number(storedCellIndex) >= 0
+  ) return Number(storedCellIndex);
+
+  const titleMatch = String(imageNode?.data?.title ?? "").match(/分镜\s*(\d+)\s*-\s*(\d+)/);
+  if (!titleMatch) return -1;
+  const row = Number(titleMatch[1]) - 1;
+  const column = Number(titleMatch[2]) - 1;
+  const customColumnPositions = Array.isArray(storyboardNode?.data?.storyboardColPositions)
+    ? storyboardNode.data.storyboardColPositions.filter((value) => Number.isFinite(Number(value)))
+    : [];
+  const configuredColumns = Number(
+    storyboardNode?.data?.storyboardCols
+    ?? storyboardNode?.data?.columns
+    ?? storyboardNode?.data?.cols,
+  );
+  const columns = storyboardNode?.data?.storyboardGridMode === "custom" && customColumnPositions.length
+    ? customColumnPositions.length + 1
+    : Number.isInteger(configuredColumns) && configuredColumns > 0 ? configuredColumns : 3;
+  return row >= 0 && column >= 0 && column < columns ? row * columns + column : -1;
+}
+
+export function restoreCanvasStoryboardCutImage(document, imageNodeId) {
+  const normalizedImageNodeId = String(imageNodeId ?? "").trim();
+  const imageNode = safeArray(document?.nodes)
+    .find((node) => String(node?.id ?? "") === normalizedImageNodeId);
+  const storyboardNodeId = String(imageNode?.data?.parentNodeId ?? "").trim();
+  const storyboardNode = safeArray(document?.nodes)
+    .find((node) => String(node?.id ?? "") === storyboardNodeId && node?.type === "ai-storyboard");
+  const cellIndex = resolveStoryboardCutCellIndex(imageNode, storyboardNode);
+  if (
+    imageNode?.type !== "source-image"
+    || imageNode?.data?.source !== "canvas_derivation"
+    || !storyboardNode
+    || !Number.isInteger(cellIndex)
+    || cellIndex < 0
+  ) {
+    return { ok: false, document };
+  }
+
+  const extracted = Array.isArray(storyboardNode.data?.storyboardExtracted)
+    ? [...storyboardNode.data.storyboardExtracted]
+    : [];
+  if (extracted[cellIndex] !== true) return { ok: false, document };
+  extracted[cellIndex] = false;
+
+  const imageUrl = String(
+    imageNode.data?.url
+    ?? imageNode.data?.previewUrl
+    ?? imageNode.data?.imageUrl
+    ?? imageNode.data?.thumbnailUrl
+    ?? "",
+  ).trim();
+  const overrides = Array.isArray(storyboardNode.data?.storyboardOverrides)
+    ? [...storyboardNode.data.storyboardOverrides]
+    : [];
+  if (imageUrl) {
+    overrides[cellIndex] = {
+      url: imageUrl,
+      label: String(imageNode.data?.title ?? imageNode.data?.fileName ?? ""),
+    };
+  }
+
+  const disconnectedEdgeCount = safeArray(document?.edges).filter((edge) => (
+    String(edge?.sourceNodeId ?? "") === normalizedImageNodeId
+    || String(edge?.targetNodeId ?? "") === normalizedImageNodeId
+  )).length;
+  const restoredDocument = updateCanvasNodeData(document, storyboardNodeId, {
+    storyboardExtracted: extracted,
+    ...(imageUrl ? { storyboardOverrides: overrides } : {}),
+    storyboardSelectedCell: cellIndex,
+  });
+  return {
+    ok: true,
+    document: removeCanvasNode(restoredDocument, normalizedImageNodeId),
+    storyboardNodeId,
+    cellIndex,
+    disconnectedEdgeCount,
+  };
 }
 
 export function resolveCanvasModelOptions(generationConfig, mediaKind = "image") {
@@ -959,7 +1198,11 @@ export function buildCanvasRunPreview(document, nodeId) {
   if (!modelCode && !plainTextTranscription) {
     return { ok: false, reason: "canvas_run_model_required" };
   }
-  const combinedPrompt = combineCanvasPrompt(prompt, upstreamTextFragmentList);
+  const combinedPrompt = replaceConnectedMediaPromptReferences(
+    combineCanvasPrompt(prompt, upstreamTextFragmentList),
+    document,
+    nodeId,
+  );
   if (!combinedPrompt && !upstreamNodeIdList.length) {
     return { ok: false, reason: "canvas_run_input_required" };
   }
@@ -1017,6 +1260,30 @@ export function buildCanvasRunPreview(document, nodeId) {
   };
 }
 
+function replaceConnectedMediaPromptReferences(prompt, document, targetNodeId) {
+  const nodeById = new Map(safeArray(document?.nodes).map((item) => [String(item?.id ?? ""), item]));
+  const mediaCounts = { image: 0, video: 0, audio: 0 };
+  const replacements = safeArray(document?.edges)
+    .filter((edge) => String(edge?.targetNodeId ?? "") === String(targetNodeId ?? ""))
+    .flatMap((edge) => {
+      const sourceNodeId = String(edge?.sourceNodeId ?? "");
+      const sourceNode = nodeById.get(sourceNodeId);
+      const mediaKind = String(edge?.data?.kind ?? sourceNode?.data?.mediaKind ?? "").toLowerCase();
+      if (!sourceNodeId || !["image", "video", "audio"].includes(mediaKind)) return [];
+      mediaCounts[mediaKind] += 1;
+      const label = mediaKind === "video"
+        ? `视频${mediaCounts.video}`
+        : mediaKind === "audio" ? `音频${mediaCounts.audio}` : `图${mediaCounts.image}`;
+      return [{ token: `@node:${sourceNodeId}`, display: `【@${label}】` }];
+    })
+    .sort((left, right) => right.token.length - left.token.length);
+  let value = String(prompt ?? "");
+  for (const replacement of replacements) {
+    value = value.split(replacement.token).join(replacement.display);
+  }
+  return value;
+}
+
 export function applyCanvasRunResult(document, preview, task = null) {
   if (!preview?.ok) {
     return touchCanvasDocument(clone(document));
@@ -1040,9 +1307,7 @@ export function applyCanvasRunResult(document, preview, task = null) {
   ).trim();
   const resultStatus = task ? taskStatus : "preview";
   const animationArtifactPatch = resolveCanvasAnimationArtifactPatch(task, mediaUrl);
-  const mediaArtifactPatch = resultKind === "video" || resultKind === "audio"
-    ? resolveCanvasMediaArtifactPatch(task)
-    : {};
+  const mediaArtifactPatch = resultKind === "text" ? {} : resolveCanvasMediaArtifactPatch(task);
   return touchCanvasDocument({
     ...clone(document),
     nodes: safeArray(document?.nodes).map((node) => {

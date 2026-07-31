@@ -18,9 +18,10 @@ test("Canvas node catalog includes every canonical first-version node type", () 
   const canonicalTypes = [
     "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama",
     "ai-markdown", "ai-storyboard", "ai-director", "source-text", "source-image",
-    "source-video", "source-audio", "comment", "group",
+    "source-video", "source-audio", "group",
   ];
   assert.deepEqual(canonicalTypes.filter((type) => !templates.some((template) => template.type === type)), []);
+  assert.equal(templates.some((template) => template.type === "comment"), false);
   for (const type of canonicalTypes) {
     const document = addCanvasNode(createDefaultCanvasDocument(), { type, id: `${type}-1` });
     assert.equal(document.nodes[0].type, type);
