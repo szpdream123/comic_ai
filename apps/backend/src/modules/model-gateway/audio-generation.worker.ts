@@ -383,7 +383,7 @@ export async function fetchAudioGenerationArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown"]);
+  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
   if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
@@ -447,7 +447,7 @@ export async function finalizeAudioGenerationArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown"]);
+  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
   if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
   const providerResponse = parseRecord(row.provider_response_redacted_json);
   const artifact = parseStoredAudioArtifact(providerResponse.artifact);

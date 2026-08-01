@@ -9905,7 +9905,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "set-video-generation-mode",
   ]);
   const videoSubmissionPreparationKey = `${workbench.ui.selectedEpisodeId ?? ""}:${workbench.ui.selectedStoryboardId ?? ""}:video`;
-  if (!action || (workbench.ui.busy && !allowWhileBusy.has(action))) {
+  const canSubmitStoryboardGeneratorWhileBusy = action === "submit-asset-generator"
+    && workbench.ui.assetGeneratorTarget === "storyboard";
+  if (!action || (workbench.ui.busy && !allowWhileBusy.has(action) && !canSubmitStoryboardGeneratorWhileBusy)) {
     return;
   }
   if (
@@ -19809,6 +19811,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "close-asset-generator-modal") {
+    if (
+      workbench.ui.assetGeneratorTarget === "storyboard"
+      && workbench.ui.assetGeneratorSubmitting === true
+    ) {
+      workbench.ui.toast = "生成任务正在提交，请稍候。";
+      render(workbench);
+      return;
+    }
     stopProjectAssetGenerationPolling(workbench);
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.assetGeneratorTarget = null;
@@ -19939,6 +19949,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const nextName = String(workbench.ui.assetGeneratorName ?? "").trim();
     const prompt = String(workbench.ui.assetGeneratorPrompt ?? "").trim();
     if (assetGeneratorTarget === "storyboard") {
+      if (workbench.ui.assetGeneratorSubmitting === true) {
+        return;
+      }
       if (!prompt && !String(workbench.ui.assetGeneratorStoryboardPrompt ?? "").trim()) {
         workbench.ui.toast = "请输入提示词。";
         render(workbench);
@@ -19950,6 +19963,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.ui.assetGeneratorSubmitting = false;
         workbench.ui.toast = "故事板生成任务已提交。";
       }, {
+        globalBusy: false,
         onError() {
           workbench.ui.assetGeneratorSubmitting = false;
         },
@@ -26797,7 +26811,8 @@ async function runAction(workbench, message, action, options = {}) {
   const successToast = Object.prototype.hasOwnProperty.call(options, "successToast")
     ? options.successToast
     : "操作已完成。";
-  workbench.ui.busy = true;
+  const manageGlobalBusy = options.globalBusy !== false;
+  if (manageGlobalBusy) workbench.ui.busy = true;
   workbench.ui.toast = message;
   const renderState = typeof options.renderState === "function" ? options.renderState : render;
   renderState(workbench);
@@ -26814,7 +26829,7 @@ async function runAction(workbench, message, action, options = {}) {
     }
     workbench.ui.toast = `操作失败：${friendlyError(error)}`;
   } finally {
-    workbench.ui.busy = false;
+    if (manageGlobalBusy) workbench.ui.busy = false;
     renderState(workbench);
   }
 }

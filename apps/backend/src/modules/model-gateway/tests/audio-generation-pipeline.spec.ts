@@ -24,6 +24,18 @@ function baseProcessors(overrides: Record<string, unknown> = {}) {
 }
 
 describe("audio generation pipeline", () => {
+  it("allows queue-error manual-review audio artifacts to resume fetch and finalize", async () => {
+    const source = await readFile(new URL("../audio-generation.worker.ts", import.meta.url), "utf8");
+    assert.match(
+      source,
+      /fetchAudioGenerationArtifactJob[\s\S]*?findAudioTask\(db, input\.taskId, \["running", "result_unknown", "manual_review_required"\]\)/,
+    );
+    assert.match(
+      source,
+      /finalizeAudioGenerationArtifactJob[\s\S]*?findAudioTask\(db, input\.taskId, \["running", "result_unknown", "manual_review_required"\]\)/,
+    );
+  });
+
   it("preserves ambiguous provider submissions for manual review instead of releasing credits", () => {
     assert.equal(__audioGenerationWorkerTestUtils.shouldPreserveAudioSubmissionAsResultUnknown("result_unknown"), true);
     assert.equal(__audioGenerationWorkerTestUtils.shouldPreserveAudioSubmissionAsResultUnknown("failed"), false);

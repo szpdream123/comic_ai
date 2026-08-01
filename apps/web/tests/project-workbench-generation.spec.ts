@@ -22220,7 +22220,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult.taskId, "storyboard-image-task-1");
   });
 
-  it("submits the storyboard generator modal through image generation and restores the video composer", async () => {
+  it("submits the storyboard generator modal while another workbench action is busy", async () => {
     const episodeId = "10000000-0000-4000-8000-000000000001";
     const storyboard = {
       ...addStoryboard([])[0],
@@ -22255,6 +22255,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
+        busy: true,
         projectPanelMode: "episode-workbench",
         museScopeMode: "storyboard",
         episodeMediaMode: "video",
@@ -22386,6 +22387,66 @@ describe("production workbench project tab", () => {
     const completedOverview = renderStoryboardGeneratorTaskOverview(workbench.ui);
     assert.match(completedOverview, /已完成/);
     assert.match(completedOverview, /storyboard-modal-completed\.png/);
+  });
+
+  it("keeps non-storyboard asset generation blocked while another workbench action is busy", async () => {
+    let createCalls = 0;
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createImageGenerationTask() {
+          createCalls += 1;
+          return { taskId: "unexpected-team-generation" };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "library",
+        busy: true,
+        assetGeneratorTarget: "team",
+        assetGeneratorModal: "scene",
+        assetGeneratorName: "不应提交的场景",
+        assetGeneratorPrompt: "另一个操作繁忙时不应提交。",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+      }),
+      root: { innerHTML: "", querySelector: () => null },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    assert.equal(createCalls, 0);
+    assert.equal(workbench.ui.busy, true);
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+    assert.match(html, /data-action="submit-asset-generator"[^>]*disabled/);
+  });
+
+  it("keeps the storyboard generator open while its submission is still in flight", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      ui: buildProjectUi({
+        assetGeneratorTarget: "storyboard",
+        assetGeneratorModal: "storyboard",
+        assetGeneratorSubmitting: true,
+      }),
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "close-asset-generator-modal" },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorModal, "storyboard");
+    assert.equal(workbench.ui.assetGeneratorSubmitting, true);
+    assert.match(workbench.ui.toast, /正在提交/);
   });
 
   it("renders the completed storyboard image inside the generator task overview", () => {

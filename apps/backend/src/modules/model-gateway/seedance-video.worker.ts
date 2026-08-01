@@ -2758,7 +2758,7 @@ async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
           t.status = 'running'
           OR (
             t.status = 'manual_review_required'
-            AND t.failure_code = 'provider_output_persist_failed'
+            AND t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
           )
         )
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'

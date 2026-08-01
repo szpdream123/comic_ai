@@ -635,8 +635,12 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
       || artifactStage === "fetch"
       || artifactStage === "persist"
       || /^generation-(image|video|audio)-(fetch|persist)-/.test(queueName);
+    const sourceAssignmentKey = typeof job?.data?.queueAssignmentKey === "string"
+      ? job.data.queueAssignmentKey.trim()
+      : "";
     await runWithDatabaseContext(() => failGenerationTaskAfterQueueError(db, {
       taskId,
+      ...(sourceAssignmentKey ? { sourceAssignmentKey } : {}),
       failureCode: artifactQueueFailure
         ? "provider_output_storage_failed"
         : "generation_queue_error",

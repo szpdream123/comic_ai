@@ -7113,7 +7113,8 @@ function renderAssetGeneratorModal(ui) {
               action: "submit-asset-generator",
               credits: generatorCredits,
               costLabel: generatorCostLabel,
-              isSubmitting: ui.assetGeneratorSubmitting === true,
+              isSubmitting: ui.assetGeneratorSubmitting === true
+                || (ui.busy === true && !isStoryboardGenerator),
               referenceInputId: isStoryboardGenerator
                 ? "asset-generator-storyboard-reference-input"
                 : "asset-generator-reference-input",

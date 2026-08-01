@@ -9,6 +9,7 @@ import {
   generationQueueShardCapacity,
   generationQueueShardRateLimitDurationMs,
   generationQueueShardRateLimitMax,
+  hasRecoverableGenerationQueueSuccessor,
   hasReleasedGenerationQueueStageAssignment,
   listGenerationQueueShards,
   markGenerationQueueStagePublished,
@@ -217,6 +218,122 @@ describe("generation queue shard store", { concurrency: false }, () => {
         assignGenerationQueueStage(db, input),
         /generation_queue_assignment_already_released/,
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not treat a database-only downstream reservation as proof that Redis accepted it", async () => {
+    const db = await createShardTestDb();
+    const task = "50000000-0000-4000-8000-000000000006";
+    const sourceAssignmentKey = `generation.worker:submit:generation.task.created__${task}__submit`;
+    try {
+      await reserveGenerationQueueStageForPublish(db, {
+        assignmentKey: sourceAssignmentKey,
+        taskId: task,
+        mediaType: "image",
+        stage: "submit",
+        routeKey: "provider-timeout|executor|account",
+        redisJobId: `generation.task.created__${task}__submit`,
+        now: new Date("2026-08-01T07:57:39.000Z"),
+      });
+      await reserveGenerationQueueStageForPublish(db, {
+        assignmentKey: `generation.worker:fetch:generation.image.finalize__${task}`,
+        taskId: task,
+        mediaType: "image",
+        stage: "fetch",
+        routeKey: "provider-timeout|executor|account",
+        redisJobId: `generation.image.finalize__${task}`,
+        now: new Date("2026-08-01T08:00:44.000Z"),
+      });
+
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: task,
+        sourceAssignmentKey,
+      }), false);
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: "50000000-0000-4000-8000-000000000007",
+        sourceAssignmentKey: "generation.worker:submit:missing-successor",
+      }), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recognizes every durable downstream stage after an ambiguous Redis acknowledgement", async () => {
+    const db = await createShardTestDb();
+    const submitTask = "50000000-0000-4000-8000-000000000007";
+    const pollTask = "50000000-0000-4000-8000-000000000008";
+    const fetchTask = "50000000-0000-4000-8000-000000000009";
+    const invalidTask = "50000000-0000-4000-8000-000000000010";
+    const failedTask = "50000000-0000-4000-8000-000000000011";
+    try {
+      const reserve = (
+        taskId: string,
+        stage: "submit" | "poll" | "fetch" | "persist",
+        suffix: string,
+        now: Date,
+      ) => reserveGenerationQueueStageForPublish(db, {
+        assignmentKey: `generation.worker:${stage}:${taskId}:${suffix}`,
+        taskId,
+        mediaType: "image",
+        stage,
+        routeKey: "provider-ambiguous|executor|account",
+        redisJobId: `generation.image.${stage}__${taskId}__${suffix}`,
+        now,
+      });
+
+      const submit = await reserve(submitTask, "submit", "source", new Date("2026-08-01T08:00:00.000Z"));
+      const admittedSuccessor = await reserve(submitTask, "poll", "successor", new Date("2026-08-01T08:00:01.000Z"));
+      await markGenerationQueueStagePublished(db, {
+        assignmentKey: admittedSuccessor.assignmentKey,
+        redisJobId: admittedSuccessor.redisJobId!,
+        now: new Date("2026-08-01T08:00:02.000Z"),
+      });
+      const poll = await reserve(pollTask, "poll", "source", new Date("2026-08-01T08:01:00.000Z"));
+      const completedSuccessor = await reserve(pollTask, "poll", "successor", new Date("2026-08-01T08:01:01.000Z"));
+      await releaseGenerationQueueStage(db, {
+        assignmentKey: completedSuccessor.assignmentKey,
+        reason: "completed",
+        now: new Date("2026-08-01T08:01:02.000Z"),
+      });
+      const fetch = await reserve(fetchTask, "fetch", "source", new Date("2026-08-01T08:02:00.000Z"));
+      const publishingSuccessor = await reserve(fetchTask, "persist", "successor", new Date("2026-08-01T08:02:01.000Z"));
+      await markGenerationQueueStagePublished(db, {
+        assignmentKey: publishingSuccessor.assignmentKey,
+        redisJobId: publishingSuccessor.redisJobId!,
+        now: new Date("2026-08-01T08:02:02.000Z"),
+      });
+      const invalidFetch = await reserve(invalidTask, "fetch", "source", new Date("2026-08-01T08:03:00.000Z"));
+      await reserve(invalidTask, "poll", "not-a-successor", new Date("2026-08-01T08:03:01.000Z"));
+      const failedSource = await reserve(failedTask, "submit", "source", new Date("2026-08-01T08:04:00.000Z"));
+      const failedSuccessor = await reserve(failedTask, "fetch", "successor", new Date("2026-08-01T08:04:01.000Z"));
+      await releaseGenerationQueueStage(db, {
+        assignmentKey: failedSuccessor.assignmentKey,
+        reason: "failed",
+        now: new Date("2026-08-01T08:04:02.000Z"),
+      });
+
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: submitTask,
+        sourceAssignmentKey: submit.assignmentKey,
+      }), true);
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: pollTask,
+        sourceAssignmentKey: poll.assignmentKey,
+      }), true);
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: fetchTask,
+        sourceAssignmentKey: fetch.assignmentKey,
+      }), true);
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: invalidTask,
+        sourceAssignmentKey: invalidFetch.assignmentKey,
+      }), false);
+      assert.equal(await hasRecoverableGenerationQueueSuccessor(db, {
+        taskId: failedTask,
+        sourceAssignmentKey: failedSource.assignmentKey,
+      }), false);
     } finally {
       await db.close();
     }
