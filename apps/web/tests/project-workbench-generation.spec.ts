@@ -53322,6 +53322,35 @@ describe("asset import modal", () => {
     assert.match(createPromptBlock, /min-height:\s*15rem/);
   });
 
+  it("keeps storyboard generator scrolling inside the prompt editor", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    const storyboardFormBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardPromptBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s+\.asset-generator-prompt\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardShellBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s+\.asset-generator-prompt-shell\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardEditorBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s+\.asset-generator-prompt-editor-host\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(storyboardFormBlock, /grid-template-rows:\s*auto auto minmax\(0,\s*1fr\)/);
+    assert.match(storyboardFormBlock, /height:\s*min\(62rem,\s*calc\(100dvh - 6rem\)\)/);
+    assert.match(storyboardFormBlock, /overflow:\s*hidden/);
+    assert.match(storyboardPromptBlock, /min-height:\s*0/);
+    assert.match(storyboardShellBlock, /box-sizing:\s*border-box/);
+    assert.match(storyboardShellBlock, /height:\s*100%/);
+    assert.match(storyboardEditorBlock, /height:\s*100%/);
+    assert.match(storyboardEditorBlock, /max-height:\s*none/);
+  });
+
   it("renders a real local upload intake and in-modal review state", () => {
     const state = {
       project: {
