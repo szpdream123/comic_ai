@@ -518,6 +518,8 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "gpt-image-2-cn",
           providerExecutor: "gpt-image-2",
           outboxEventId: "outbox-1",
+          retrySequence: 3,
+          dispatchToken: "cumob-429-repair-3",
         },
       },
       config: loadGenerationQueueConfig({
@@ -554,10 +556,11 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "gpt-image-2-cn",
       providerExecutor: "gpt-image-2",
       outboxEventId: "outbox-1",
-      retrySequence: 1,
+      retrySequence: 4,
+      dispatchToken: "cumob-429-repair-3",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.image.submit.retry__task-image-1__1",
+      jobId: "generation.image.submit.retry__task-image-1__cumob-429-repair-3__4",
       delay: 3000,
       attempts: 3,
       backoff: { type: "exponential", delay: 5000 },

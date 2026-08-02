@@ -174,9 +174,10 @@ describe("provider request text lifecycle", () => {
         status: string;
         failure_code: string | null;
         response_redacted_json: Record<string, unknown> | null;
+        task_center_diagnostics_json: Record<string, unknown> | null;
       }>(
         `
-          SELECT status, failure_code, response_redacted_json
+          SELECT status, failure_code, response_redacted_json, task_center_diagnostics_json
           FROM provider_requests
           WHERE request_key = $1
           LIMIT 1
@@ -210,6 +211,21 @@ describe("provider request text lifecycle", () => {
           responseBodyPreview: '{"error":{"message":"[provider] upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
         },
       });
+      assert.deepEqual(stored.rows[0]?.task_center_diagnostics_json, {
+        diagnostics: {
+          httpStatus: 503,
+          statusText: "Service Unavailable",
+          contentType: "application/json",
+          requestId: "req_gateway_503",
+          responseBodyPreview: '{"error":{"message":"[provider] upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
+        },
+        providerMessage: "模型服务繁忙或暂时不可用，请稍后重试。",
+        displayMessage: "模型服务繁忙或暂时不可用，请稍后重试。",
+        providerErrorCode: "temporarily_unavailable",
+        errorCode: "model_service_unavailable",
+        failureCode: "image_provider_503",
+        providerRawResponse: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable","details":"complete provider response"}}',
+      });
     } finally {
       await db.close();
     }
@@ -236,7 +252,6 @@ describe("provider request text lifecycle", () => {
         }),
         now: new Date("2026-06-01T10:02:00.000Z"),
       });
-
       const storedRaw = completed.redactedResponse?.providerRawResponse as {
         data?: Array<Record<string, unknown>>;
         oversized_note?: string;
@@ -295,8 +310,15 @@ describe("provider request text lifecycle", () => {
     assert.ok(JSON.stringify(compacted).length < 70_000);
     assert.match(JSON.stringify(compacted), /omittedEntries/);
     const oversizedKey = compactProviderAuditValue({ ["K".repeat(1_000_000)]: "value" });
-    assert.ok(JSON.stringify(oversizedKey).length <= 65_536);
+    assert.ok(Buffer.byteLength(JSON.stringify(oversizedKey), "utf8") <= 65_536);
     assert.match(JSON.stringify(oversizedKey), /oversized_audit_value/);
+    const multibyte = compactProviderAuditValue({
+      first: "中".repeat(16_000),
+      second: "中".repeat(16_000),
+      third: "中".repeat(16_000),
+      fourth: "中".repeat(16_000),
+    });
+    assert.ok(Buffer.byteLength(JSON.stringify(multibyte), "utf8") <= 65_536);
 
     const db = await createMigratedTestDb();
     try {

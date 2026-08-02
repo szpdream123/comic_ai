@@ -433,6 +433,94 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("keeps a queue failure in manual review when its credits require manual settlement", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      await seedGenerationTaskReservationAndSnapshot(db);
+
+      assert.equal(await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000105",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列异常，结果可能已经存在。",
+        creditOutcome: "manual_review_required",
+        now: new Date("2026-08-01T08:00:49.000Z"),
+      }), true);
+
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000105'",
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE id = '51000000-0000-4000-8000-000000000105'",
+      );
+      const snapshot = await db.query<{ status: string; credit_status: string }>(
+        "SELECT status, credit_status FROM ai_generation_task_snapshots WHERE task_id = '50000000-0000-4000-8000-000000000105'",
+      );
+      assert.deepEqual(task.rows[0], {
+        status: "manual_review_required",
+        failure_code: "generation_queue_error",
+      });
+      assert.deepEqual(attempt.rows[0], {
+        status: "manual_review_required",
+        failure_code: "generation_queue_error",
+      });
+      assert.deepEqual(snapshot.rows[0], {
+        status: "manual_review_required",
+        credit_status: "manual_review_required",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not fail an exhausted stage when a durable downstream assignment already exists", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      const source = await reserveGenerationQueueStageForPublish(db, {
+        assignmentKey: "generation.worker:submit:queue-timeout-source",
+        taskId: "50000000-0000-4000-8000-000000000105",
+        mediaType: "image",
+        stage: "submit",
+        routeKey: "queue-timeout-route",
+        redisJobId: "queue-timeout-source",
+        now: new Date("2026-08-01T08:00:00.000Z"),
+      });
+      const successor = await reserveGenerationQueueStageForPublish(db, {
+        assignmentKey: "generation.worker:fetch:queue-timeout-successor",
+        taskId: "50000000-0000-4000-8000-000000000105",
+        mediaType: "image",
+        stage: "fetch",
+        routeKey: "queue-timeout-route",
+        redisJobId: "queue-timeout-successor",
+        now: new Date("2026-08-01T08:00:01.000Z"),
+      });
+      await markGenerationQueueStagePublished(db, {
+        assignmentKey: successor.assignmentKey,
+        redisJobId: successor.redisJobId!,
+        now: new Date("2026-08-01T08:00:01.500Z"),
+      });
+
+      assert.equal(await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000105",
+        sourceAssignmentKey: source.assignmentKey,
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列异常，结果可能已经存在。",
+        creditOutcome: "manual_review_required",
+        now: new Date("2026-08-01T08:00:02.000Z"),
+      }), false);
+
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000105'",
+      );
+      assert.deepEqual(task.rows[0], { status: "running", failure_code: null });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("resumes polling instead of failing an accepted video after its submit lease expires", async () => {
     const db = await createMigratedTestDb();
     const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
@@ -1000,6 +1088,249 @@ describe("generation Redis dispatch repair", () => {
         "50000000-0000-4000-8000-000000000104",
       ]);
       assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recovers a provider-succeeded task that was failed by an ambiguous queue acknowledgement", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'generation_queue_error',
+              locked_until = NULL,
+              last_dispatched_at = '2026-06-03T05:50:00.000Z'
+          WHERE id = '50000000-0000-4000-8000-000000000104'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'failed', failure_code = 'generation_queue_error'
+          WHERE id = '51000000-0000-4000-8000-000000000104'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              response_redacted_json = '{"videoUrl":"https://cdn.example.test/result.mp4"}'::jsonb
+          WHERE id = '52000000-0000-4000-8000-000000000104'
+        `,
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE id = '51000000-0000-4000-8000-000000000104'",
+      );
+      const outbox = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM outbox_events
+          WHERE event_type = 'generation.task.finalize_requested'
+        `,
+      );
+
+      assert.deepEqual(repaired.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000104",
+      ]);
+      assert.deepEqual(task.rows[0], {
+        status: "manual_review_required",
+        failure_code: "generation_queue_error",
+      });
+      assert.deepEqual(attempt.rows[0], {
+        status: "manual_review_required",
+        failure_code: "generation_queue_error",
+      });
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recovers a provider-succeeded image task from the legacy failed state", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      await seedGenerationTaskReservationAndSnapshot(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed',
+              failure_code = 'generation_queue_error',
+              locked_until = NULL,
+              last_dispatched_at = '2026-06-03T05:50:00.000Z'
+          WHERE id = '50000000-0000-4000-8000-000000000105';
+          UPDATE task_attempts
+          SET status = 'failed',
+              failure_code = 'generation_queue_error',
+              finished_at = '2026-06-03T05:57:00.000Z'
+          WHERE id = '51000000-0000-4000-8000-000000000105';
+          UPDATE ai_generation_task_snapshots
+          SET status = 'failed',
+              progress_stage = 'failed',
+              credit_status = 'manual_review_required'
+          WHERE task_id = '50000000-0000-4000-8000-000000000105';
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            external_submission_started_at, external_request_id, response_redacted_json
+          ) VALUES (
+            '52000000-0000-4000-8000-000000000105',
+            '30000000-0000-4000-8000-000000000101',
+            '40000000-0000-4000-8000-000000000105',
+            '50000000-0000-4000-8000-000000000105',
+            '51000000-0000-4000-8000-000000000105',
+            'bananarouter', 'episode.image.generate', 'workflow-105:task-105',
+            'request-hash-105', 'creator://payload-105', 'payload-hash-105',
+            '{}'::jsonb, 'succeeded', '2026-06-03T05:56:00.000Z',
+            NULL, '{"imageUrl":"https://cdn.example.test/result.png"}'::jsonb
+          )
+        `,
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      const state = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        snapshot_status: string;
+        finished_at: Date | string | null;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 attempt.status AS attempt_status,
+                 snapshot.status AS snapshot_status,
+                 attempt.finished_at
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+          WHERE task.id = '50000000-0000-4000-8000-000000000105'
+        `,
+      );
+
+      assert.deepEqual(repaired.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000105",
+      ]);
+      assert.deepEqual(state.rows[0], {
+        task_status: "manual_review_required",
+        attempt_status: "manual_review_required",
+        snapshot_status: "manual_review_required",
+        finished_at: null,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recovers a provider-succeeded ApiMart audio task from the legacy failed state", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id
+          ) VALUES (
+            '40000000-0000-4000-8000-000000000106',
+            '30000000-0000-4000-8000-000000000101',
+            'episode_audio_generation', 'running', '{}'::jsonb,
+            '00000000-0000-4000-8000-000000000101'
+          );
+          INSERT INTO tasks (
+            id, project_id, workflow_id, task_type, status, failure_code,
+            queue_name, scheduled_at, last_dispatched_at, input_snapshot_json,
+            target_entity_type, target_entity_id
+          ) VALUES (
+            '50000000-0000-4000-8000-000000000106',
+            '30000000-0000-4000-8000-000000000101',
+            '40000000-0000-4000-8000-000000000106',
+            'episode_generate_audio', 'failed', 'generation_queue_error',
+            'generation-submit-audio', '2026-06-03T05:55:00.000Z',
+            '2026-06-03T05:50:00.000Z',
+            '{"kind":"audio","model":"suno-v4","providerExecutor":"apimart-audio","targetType":"episode","targetId":"60000000-0000-4000-8000-000000000106"}'::jsonb,
+            'episode', '60000000-0000-4000-8000-000000000106'
+          );
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            failure_code, started_at, finished_at
+          ) VALUES (
+            '51000000-0000-4000-8000-000000000106',
+            '30000000-0000-4000-8000-000000000101',
+            '40000000-0000-4000-8000-000000000106',
+            '50000000-0000-4000-8000-000000000106', 1, 'failed',
+            'generation_queue_error', '2026-06-03T05:56:00.000Z', '2026-06-03T05:57:00.000Z'
+          );
+          UPDATE tasks
+          SET current_attempt_id = '51000000-0000-4000-8000-000000000106'
+          WHERE id = '50000000-0000-4000-8000-000000000106';
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            external_submission_started_at, external_request_id, response_redacted_json
+          ) VALUES (
+            '52000000-0000-4000-8000-000000000106',
+            '30000000-0000-4000-8000-000000000101',
+            '40000000-0000-4000-8000-000000000106',
+            '50000000-0000-4000-8000-000000000106',
+            '51000000-0000-4000-8000-000000000106',
+            'apimart', 'episode.audio.generate', 'workflow-106:task-106',
+            'request-hash-106', 'creator://payload-106', 'payload-hash-106',
+            '{}'::jsonb, 'succeeded', '2026-06-03T05:56:00.000Z',
+            'audio-external-106', '{"artifact":{"url":"https://cdn.example.test/result.mp3","mediaType":"audio"}}'::jsonb
+          )
+        `,
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      const state = await db.query<{ task_status: string; attempt_status: string }>(
+        `
+          SELECT task.status AS task_status, attempt.status AS attempt_status
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          WHERE task.id = '50000000-0000-4000-8000-000000000106'
+        `,
+      );
+
+      assert.deepEqual(repaired.repairedTaskIds, [
+        "50000000-0000-4000-8000-000000000106",
+      ]);
+      assert.deepEqual(state.rows[0], {
+        task_status: "manual_review_required",
+        attempt_status: "manual_review_required",
+      });
     } finally {
       await db.close();
     }

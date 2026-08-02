@@ -42,6 +42,8 @@ export interface GenerationBullMQJob {
     queuePriority?: number;
     priorityReason?: string;
     queueAssignmentKey?: string;
+    retrySequence?: number;
+    dispatchToken?: string;
   };
   options: JobsOptions;
 }
@@ -92,6 +94,9 @@ export function buildGenerationBullMQJob(
   };
   const queueAssignmentKey = readString(event.payload.queueAssignmentKey);
   if (queueAssignmentKey) data.queueAssignmentKey = queueAssignmentKey;
+  if (dispatchToken) data.dispatchToken = dispatchToken;
+  const retrySequence = readPositiveInteger(event.payload.retrySequence);
+  if (retrySequence !== undefined) data.retrySequence = retrySequence;
   if (readBoolean(event.payload.membershipPriority) === true) {
     data.membershipPriority = true;
     if (queuePriority !== undefined) {

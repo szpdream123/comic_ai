@@ -23,6 +23,7 @@ type BananaRouterRequestFormat =
 
 const BANANA_ROUTER_IMAGE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 const BANANA_ROUTER_JSON_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
+const BANANA_ROUTER_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export class BananaRouterProviderAdapter implements ProviderAdapter {
   constructor(
@@ -59,11 +60,13 @@ export class BananaRouterProviderAdapter implements ProviderAdapter {
     const endpoint = referenceImageUrls.length > 0
       ? this.config.editEndpoint ?? this.config.createTaskEndpoint
       : this.config.createTaskEndpoint;
+    const asyncImageSubmission = isAsyncImageEndpoint(endpoint);
     const response = await executeBananaRouterRequest(this.config.fetchImpl, endpoint, {
       method: "POST",
       headers: {
         authorization: `Bearer ${this.config.apiKey}`,
         "content-type": "application/json",
+        ...(asyncImageSubmission ? { "Idempotency-Key": input.providerRequestId } : {}),
       },
       body: JSON.stringify(requestBody),
     });
@@ -102,6 +105,34 @@ export class BananaRouterProviderAdapter implements ProviderAdapter {
       );
     }
     const payload = parsedPayload;
+    if (asyncImageSubmission) {
+      const externalRequestId = findFirstString(payload, [
+        ["taskID"],
+        ["taskId"],
+        ["task_id"],
+        ["id"],
+        ["data", "taskID"],
+        ["data", "taskId"],
+        ["data", "task_id"],
+      ]);
+      if (!externalRequestId) {
+        throw attachProviderRedactedRequest(
+          bananaRouterResponseError("banana_router_image_invalid_response", diagnostics),
+          requestBody,
+        );
+      }
+      return {
+        externalRequestId,
+        status: normalizeImageStatus(findFirstString(payload, [["status"], ["data", "status"]])) === "running"
+          ? "running"
+          : "accepted",
+        redactedRequest: requestBody,
+        redactedResponse: attachProviderRawResponse({
+          model: this.config.model ?? "gpt-image-2",
+          providerStatus: findFirstString(payload, [["status"], ["data", "status"]]) ?? null,
+        }, payload),
+      };
+    }
     const artifacts = imageArtifacts(payload);
     if (!artifacts.length) {
       throw attachProviderRedactedRequest(
@@ -122,11 +153,26 @@ export class BananaRouterProviderAdapter implements ProviderAdapter {
     };
   }
 
+  async recoverSubmission(
+    input: ProviderSubmissionInput & { externalSubmissionStartedAt?: Date | null },
+  ): Promise<ProviderSubmissionResult | null> {
+    if (this.config.requestFormat !== "banana_router_openai_images") return null;
+    if (
+      input.externalSubmissionStartedAt &&
+      Date.now() - input.externalSubmissionStartedAt.getTime() >= BANANA_ROUTER_IDEMPOTENCY_WINDOW_MS
+    ) {
+      return null;
+    }
+    const referenceImageUrls = collectImageUrls(input.redactedPayload);
+    const endpoint = referenceImageUrls.length > 0
+      ? this.config.editEndpoint ?? this.config.createTaskEndpoint
+      : this.config.createTaskEndpoint;
+    return isAsyncImageEndpoint(endpoint) ? this.submit(input) : null;
+  }
+
   async poll(input: { externalRequestId: string }): Promise<ProviderPollResult> {
     if (this.config.requestFormat === "banana_router_openai_images") {
-      throw ModelError.fromUnknown(new Error("provider_adapter_missing"), {
-        failureCode: "provider_adapter_missing",
-      });
+      return this.pollImage(input);
     }
     if (!this.config.queryTaskEndpoint) {
       throw ModelError.fromUnknown(new Error("video_provider_query_endpoint_required"), {
@@ -179,6 +225,50 @@ export class BananaRouterProviderAdapter implements ProviderAdapter {
         taskId: input.externalRequestId,
         providerStatus: providerStatus ?? null,
       }, payload),
+    };
+  }
+
+  private async pollImage(input: { externalRequestId: string }): Promise<ProviderPollResult> {
+    if (!this.config.queryTaskEndpoint) {
+      throw ModelError.fromUnknown(new Error("image_provider_query_endpoint_required"), {
+        failureCode: "provider_adapter_missing",
+      });
+    }
+    const response = await executeBananaRouterRequest(
+      this.config.fetchImpl,
+      this.config.queryTaskEndpoint.replace("{taskId}", encodeURIComponent(input.externalRequestId)),
+      {
+        method: "GET",
+        headers: { authorization: `Bearer ${this.config.apiKey}` },
+      },
+    );
+    const payload = await readJsonResponse(
+      response,
+      "banana_router_image_poll",
+      undefined,
+      BANANA_ROUTER_IMAGE_RESPONSE_MAX_BYTES,
+    );
+    const providerStatus = findFirstString(payload, [
+      ["status"],
+      ["data", "status"],
+      ["result", "status"],
+    ]);
+    const status = normalizeImageStatus(providerStatus);
+    const artifacts = imageArtifacts(readImageResultPayload(payload));
+    if (status === "succeeded" && !artifacts.length) {
+      throw bananaRouterResponseError(
+        "banana_router_image_poll_invalid_response",
+        providerResponseDiagnostics(response, JSON.stringify(payload)),
+      );
+    }
+    return {
+      status,
+      redactedResponse: attachProviderRawResponse({
+        taskId: input.externalRequestId,
+        providerStatus: providerStatus ?? null,
+        imageCount: artifacts.length,
+      }, payload),
+      ...(artifacts.length ? { artifacts } : {}),
     };
   }
 
@@ -441,6 +531,22 @@ function imageArtifacts(payload: Record<string, unknown>): MediaGenerationArtifa
   });
 }
 
+function readImageResultPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  for (const field of ["result", "response", "output"]) {
+    const candidate = payload[field];
+    if (isRecord(candidate)) return candidate;
+  }
+  return payload;
+}
+
+function isAsyncImageEndpoint(endpoint: string) {
+  try {
+    return new URL(endpoint).pathname.replace(/\/+$/g, "") === "/v1/images/generations/async";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeImageResultFormat(value: unknown) {
   const format = readString(value);
   return format === "url" || format === "b64_json" ? format : undefined;
@@ -454,10 +560,11 @@ async function readJsonResponse(
   response: Response,
   prefix: string,
   redactedRequest?: Record<string, unknown>,
+  maxBytes = BANANA_ROUTER_JSON_RESPONSE_MAX_BYTES,
 ) {
   const text = await readBananaRouterResponseText(
     response,
-    BANANA_ROUTER_JSON_RESPONSE_MAX_BYTES,
+    maxBytes,
     `${prefix}_response_too_large`,
   );
   const diagnostics = providerResponseDiagnostics(response, text);
@@ -555,6 +662,10 @@ function normalizeVideoStatus(status: string | undefined): ProviderPollResult["s
   if (["failed", "error", "canceled", "cancelled"].includes(normalized ?? "")) return "failed";
   if (["running", "processing", "generating", "in_progress"].includes(normalized ?? "")) return "running";
   return "accepted";
+}
+
+function normalizeImageStatus(status: string | undefined): ProviderPollResult["status"] {
+  return normalizeVideoStatus(status);
 }
 
 function removeUndefined(value: Record<string, unknown>) {

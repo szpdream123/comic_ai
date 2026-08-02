@@ -62,6 +62,7 @@ describe("Seedance video worker user ownership", () => {
     const source = await readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8");
     assert.match(source, /t\.status IN \('queued', 'running', 'manual_review_required', 'result_unknown'\)/);
     assert.match(source, /status = 'running',[\s\S]*failure_code = NULL[\s\S]*status IN \('running', 'manual_review_required', 'result_unknown'\)/);
+    assert.match(source, /t\.failure_code IN \('provider_output_persist_failed', 'generation_queue_error'\)/);
   });
 
   it("reports the uploaded storage key when availability persistence loses the row", async () => {

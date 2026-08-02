@@ -189,7 +189,7 @@ export default function App({
 
         if (records.length === 0) {
           const canCreate = await onAuthorizeCreate?.({ interactive: false }) ?? true;
-          if (canCreate) {
+          if (canCreate && initialScreen === "editor") {
             const firstRecord = await createDirectorDeskRecord("导演台 1 号", "desk_1");
             if (cancelled) return;
             records = [firstRecord];

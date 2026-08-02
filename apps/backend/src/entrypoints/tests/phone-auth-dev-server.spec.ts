@@ -118,7 +118,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
   it("requires authentication and returns the unified task-center list", async () => {
     const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
+    let taskCenterQueryPayloadBytes: number | null = null;
+    let taskCenterQuerySql: string | null = null;
+    const observedDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        const result = await db.query<T>(sql, params);
+        if (sql.includes("WITH generation_items AS")) {
+          taskCenterQuerySql = sql;
+          taskCenterQueryPayloadBytes = Buffer.byteLength(JSON.stringify(result.rows), "utf8");
+        }
+        return result;
+      },
+      async close() {
+        await db.close();
+      },
+    };
+    const server = createPhoneAuthDevServer({ db: observedDb });
 
     try {
       await server.listen(0);
@@ -355,6 +370,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           UPDATE ai_generation_task_snapshots
           SET status = 'failed',
               failure_json = '{"failureCode":"provider_failed","displayMessage":"图片生成服务失败，请稍后重试"}'::jsonb,
+              provider_status_json = '{}'::jsonb,
               failed_at = '2026-07-14T08:00:20.000Z',
               updated_at = '2026-07-14T08:00:20.000Z'
           WHERE task_id = $1
@@ -371,13 +387,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
             id, project_id, workflow_id, task_id,
             provider_name, provider_operation, request_key, request_hash,
             payload_ref, payload_hash, payload_redacted_json, status,
-            failure_code, response_redacted_json, created_by_user_id, created_at, updated_at
+            failure_code, response_redacted_json, task_center_diagnostics_json,
+            created_by_user_id, created_at, updated_at
           )
           VALUES (
             $1, NULL, $2, $3,
             'image-provider', 'episode.image.generate', $4, $4,
             $4, $4, '{}'::jsonb, 'failed',
-            'provider_failed', $5::jsonb, $6,
+            'provider_failed', $5::jsonb, $5::jsonb, $6,
             '2026-07-14T08:00:19.000Z', '2026-07-14T08:00:20.000Z'
           )
         `,
@@ -405,9 +422,217 @@ describe("phone auth dev server", { concurrency: false }, () => {
         failedEnvelope.data.items[0].failure.displayMessage,
         "本地图片无法解析，请上传公网图片。",
       );
+      assert.doesNotMatch(taskCenterQuerySql ?? "", /response_redacted_json/);
+
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              failure_code = NULL,
+              response_redacted_json = jsonb_build_object(
+                'diagnostics', jsonb_build_object(
+                  'httpStatus', 400,
+                  'responseBodyPreview', '{"error":{"message":"image_url must be a publicly reachable http or https URL"}}'
+                ),
+                'artifact', jsonb_build_object(
+                  'mediaType', 'image',
+                  'b64Json', repeat('A', 262144)
+                ),
+                'futureProviderPayload', jsonb_build_object(
+                  'opaqueBinary', repeat('B', 262144)
+                )
+              ),
+              updated_at = '2026-07-14T08:00:21.000Z'
+          WHERE request_key = $1
+        `,
+        [`task-center-large-success:${taskId}`],
+      );
+      taskCenterQueryPayloadBytes = null;
+      const oversizedFailedResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?status=failed&taskIds=${taskId}`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3000) },
+      );
+      const oversizedFailedEnvelope = await oversizedFailedResponse.json();
+
+      assert.equal(oversizedFailedResponse.status, 200);
+      assert.equal(
+        oversizedFailedEnvelope.data.items[0].failure.displayMessage,
+        "本地图片无法解析，请上传公网图片。",
+      );
+      assert.notEqual(taskCenterQueryPayloadBytes, null, "task-center query must be observed");
+      assert.ok(
+        taskCenterQueryPayloadBytes! < 64 * 1024,
+        `task-center query payload must stay bounded, received ${taskCenterQueryPayloadBytes} bytes`,
+      );
+
+      const failedTeamAssetId = randomUUID();
+      const failedTeamAssetTaskId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO team_assets (
+            id, admin_user_id, asset_name, asset_prompt, asset_category, asset_status,
+            asset_url, resource_type, resource_size, created_at, updated_at,
+            created_by_name, updated_by_name, is_admin_created, created_user_id
+          )
+          VALUES (
+            $1, $2, 'failed task-center asset', 'prompt', 'character', 'generating',
+            NULL, 'image', 0, $3, $3, 'test actor', 'test actor', true, $2
+          )
+        `,
+        [failedTeamAssetId, userId, new Date("2026-07-14T08:01:00.000Z")],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status, failure_code,
+            response_redacted_json, task_center_diagnostics_json,
+            created_by_user_id, created_at, updated_at
+          )
+          VALUES (
+            $1, 'test-provider', 'episode.image.generate', $2, $2,
+            $2, $2, $3::jsonb, 'failed', 'provider_failed',
+            jsonb_build_object(
+              'diagnostics', jsonb_build_object(
+                'httpStatus', 400,
+                'responseBodyPreview', '{"error":{"message":"image_url must be a publicly reachable http or https URL"}}'
+              ),
+              'futureProviderPayload', jsonb_build_object('opaqueBinary', repeat('C', 262144))
+            ),
+            jsonb_build_object(
+              'providerMessage', 'image_url must be a publicly reachable http or https URL'
+            ),
+            $4, $5, $5
+          )
+        `,
+        [
+          failedTeamAssetTaskId,
+          `task-center-failed-team-asset:${failedTeamAssetTaskId}`,
+          JSON.stringify({ assetId: failedTeamAssetId, category: "character" }),
+          userId,
+          new Date("2026-07-14T08:01:00.000Z"),
+        ],
+      );
+      const failedTeamAssetResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?status=failed&taskIds=${failedTeamAssetTaskId}`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3000) },
+      );
+      const failedTeamAssetEnvelope = await failedTeamAssetResponse.json();
+
+      assert.equal(failedTeamAssetResponse.status, 200);
+      assert.equal(
+        failedTeamAssetEnvelope.data.items[0].failure.displayMessage,
+        "本地图片无法解析，请上传公网图片。",
+      );
+
+      await db.query(
+        "UPDATE provider_requests SET status = 'result_unknown', failure_code = 'provider_result_unknown' WHERE id = $1",
+        [failedTeamAssetTaskId],
+      );
+      const unknownTeamAssetResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?status=failed&taskIds=${failedTeamAssetTaskId}`,
+        { headers: { cookie } },
+      );
+      const unknownTeamAssetEnvelope = await unknownTeamAssetResponse.json();
+      assert.equal(unknownTeamAssetEnvelope.data.items[0].status, "result_unknown");
+      assert.equal(unknownTeamAssetEnvelope.data.items[0].failureCode, "provider_result_unknown");
+
+      await db.query(
+        "UPDATE provider_requests SET status = 'canceled', failure_code = 'user_canceled' WHERE id = $1",
+        [failedTeamAssetTaskId],
+      );
+      const canceledTeamAssetResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?status=canceled&taskIds=${failedTeamAssetTaskId}`,
+        { headers: { cookie } },
+      );
+      const canceledTeamAssetEnvelope = await canceledTeamAssetResponse.json();
+      assert.equal(canceledTeamAssetEnvelope.data.items[0].status, "canceled");
+      assert.equal(canceledTeamAssetEnvelope.data.items[0].failureCode, "user_canceled");
+
+      await db.query(
+        "UPDATE provider_requests SET status = 'manual_review_required', failure_code = 'provider_manual_review_required' WHERE id = $1",
+        [failedTeamAssetTaskId],
+      );
+      const reviewTeamAssetResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?status=failed&taskIds=${failedTeamAssetTaskId}`,
+        { headers: { cookie } },
+      );
+      const reviewTeamAssetEnvelope = await reviewTeamAssetResponse.json();
+      assert.equal(reviewTeamAssetEnvelope.data.items[0].status, "manual_review_required");
+      assert.equal(reviewTeamAssetEnvelope.data.items[0].failureCode, "provider_manual_review_required");
     } finally {
       await server.close();
       await db.close();
+    }
+  });
+
+  it("keeps the task center readable while provider diagnostics columns are pending migration", async () => {
+    const db = await createMigratedTestDb();
+    let schemaProbeCount = 0;
+    const taskCenterQueries: string[] = [];
+    const observedDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (sql.includes("FROM information_schema.columns")) schemaProbeCount += 1;
+        if (sql.includes("WITH generation_items AS")) taskCenterQueries.push(sql);
+        return db.query<T>(sql, params);
+      },
+      async close() {
+        await db.close();
+      },
+    };
+    const server = createPhoneAuthDevServer({ db: observedDb });
+
+    try {
+      await db.query(`
+        ALTER TABLE provider_requests
+          DROP COLUMN task_center_diagnostics_json CASCADE,
+          DROP COLUMN task_center_diagnostics_backfilled_at CASCADE;
+        ALTER TABLE ai_generation_task_snapshots
+          DROP COLUMN task_center_diagnostics_json CASCADE,
+          DROP COLUMN task_center_diagnostics_backfilled_at CASCADE;
+      `);
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const response = await fetch(`${server.origin}/api/task-center/tasks?page=1&pageSize=20`, {
+        headers: { cookie },
+        signal: AbortSignal.timeout(3_000),
+      });
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(envelope.data.items, []);
+      assert.equal(schemaProbeCount, 1);
+      assert.doesNotMatch(taskCenterQueries.at(-1) ?? "", /provider_request\.task_center_diagnostics_json/);
+
+      await db.query(`
+        ALTER TABLE provider_requests
+          ADD COLUMN task_center_diagnostics_json jsonb,
+          ADD COLUMN task_center_diagnostics_backfilled_at timestamptz;
+        ALTER TABLE ai_generation_task_snapshots
+          ADD COLUMN task_center_diagnostics_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+          ADD COLUMN task_center_diagnostics_backfilled_at timestamptz;
+      `);
+      const migratedResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3_000) },
+      );
+
+      assert.equal(migratedResponse.status, 200);
+      assert.equal(schemaProbeCount, 1);
+      assert.doesNotMatch(taskCenterQueries.at(-1) ?? "", /provider_request\.task_center_diagnostics_json/);
+
+      await new Promise((resolve) => setTimeout(resolve, 5_100));
+      const refreshedResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3_000) },
+      );
+
+      assert.equal(refreshedResponse.status, 200);
+      assert.equal(schemaProbeCount, 2);
+      assert.match(taskCenterQueries.at(-1) ?? "", /provider_request\.task_center_diagnostics_json/);
+    } finally {
+      await server.close();
     }
   });
 

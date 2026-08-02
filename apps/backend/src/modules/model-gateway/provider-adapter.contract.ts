@@ -57,7 +57,9 @@ export interface MediaGenerationArtifact {
 
 export interface ProviderAdapter {
   submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult>;
-  recoverSubmission?(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult | null>;
+  recoverSubmission?(
+    input: ProviderSubmissionInput & { externalSubmissionStartedAt?: Date | null },
+  ): Promise<ProviderSubmissionResult | null>;
   poll?(input: ProviderPollInput): Promise<ProviderPollResult>;
   cancel?(input: { externalRequestId: string }): Promise<ProviderCancellationResult>;
 }

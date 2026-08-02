@@ -20,6 +20,7 @@ export interface GenerationTaskCreatedOutboxInput {
   queuePriority?: number | null;
   priorityReason?: string | null;
   dispatchToken?: string | null;
+  retrySequence?: number | null;
   availableAt: Date;
 }
 
@@ -80,6 +81,9 @@ export async function appendGenerationTaskCreatedOutboxEvent(
   if (input.dispatchToken) {
     payload.dispatchToken = input.dispatchToken;
   }
+  if (Number.isInteger(input.retrySequence) && Number(input.retrySequence) >= 1) {
+    payload.retrySequence = Number(input.retrySequence);
+  }
 
   const row = await queryOne<{
     id: string;
@@ -131,6 +135,34 @@ export async function appendGenerationTaskCreatedOutboxEvent(
   );
 
   return row ?? await readActiveGenerationOutboxEvent(db, dedupeKey);
+}
+
+export async function rescheduleGenerationTaskCreatedOutboxEvent(
+  db: SqlDatabase,
+  input: {
+    eventId: string;
+    availableAt: Date;
+    dispatchToken: string;
+    retrySequence: number;
+    now: Date;
+  },
+) {
+  return queryOne<{ id: string }>(
+    db,
+    `
+      UPDATE outbox_events
+      SET available_at = $2,
+          payload_json = payload_json || jsonb_build_object(
+            'dispatchToken', $4::text,
+            'retrySequence', $5::integer
+          ),
+          updated_at = $3
+      WHERE id = $1
+        AND status IN ('pending', 'failed')
+      RETURNING id
+    `,
+    [input.eventId, input.availableAt, input.now, input.dispatchToken, input.retrySequence],
+  );
 }
 
 export async function appendGenerationTaskPollRequestedOutboxEvent(

@@ -26,6 +26,10 @@ import {
 } from "../workflow-task/workflow-task.service.ts";
 import { resolveImageProviderAdapterKey } from "../model-catalog/provider-adapter-routing.ts";
 import { findActiveAiModelDispatchPolicyByModelCode } from "../model-catalog/ai-model-config.store.ts";
+import {
+  appendGenerationTaskCreatedOutboxEvent,
+  rescheduleGenerationTaskCreatedOutboxEvent,
+} from "./generation-outbox.service.ts";
 import { createProviderAdapterFromModelConfig } from "./provider-adapter.factory.ts";
 import type { MediaGenerationArtifact, ProviderPollResult } from "./provider-adapter.contract.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
@@ -74,12 +78,17 @@ interface GptImageTaskRow {
   task_id: string;
   workflow_id: string;
   attempt_id: string | null;
+  task_status?: string | null;
+  queue_name?: string | null;
+  target_entity_type?: string | null;
+  target_entity_id?: string | null;
   user_id: string;
   project_id: string | null;
   input_snapshot_json: Record<string, unknown> | string;
   created_by_user_id: string | null;
   provider_request_id?: string | null;
   provider_status?: string | null;
+  provider_failure_code?: string | null;
   external_request_id?: string | null;
   provider_response_redacted_json?: Record<string, unknown> | string | null;
   reservation_id: string | null;
@@ -116,6 +125,7 @@ async function updateTeamAssetGenerationResult(
   db: SqlDatabase,
   input: {
     snapshot: Record<string, unknown>;
+    userId: string;
     status: "active" | "failed";
     previewUrl?: string | null;
     storageObjectId?: string | null;
@@ -141,8 +151,9 @@ async function updateTeamAssetGenerationResult(
           END,
           updated_at = $5
       WHERE id = $1
+        AND admin_user_id = $6
     `,
-    [assetId, input.status, input.previewUrl ?? null, input.storageObjectId ?? null, input.now],
+    [assetId, input.status, input.previewUrl ?? null, input.storageObjectId ?? null, input.now, input.userId],
   );
 }
 
@@ -328,7 +339,10 @@ export async function processGptImageSubmitJob(
 > {
   const row = await findGptImageTaskForSubmit(db, input.taskId);
   if (!row) {
-    return { status: "skipped" };
+    return recoverFailedGptImageSubmitJob(db, {
+      taskId: input.taskId,
+      now: input.now,
+    });
   }
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
@@ -743,6 +757,12 @@ export async function processGptImageSubmitJob(
       }),
       now: input.now,
     });
+    await updateTeamAssetGenerationResult(db, {
+      snapshot,
+      userId: row.user_id,
+      status: "failed",
+      now: input.now,
+    });
     await markGenerationTaskSnapshotFailed(db, {
       taskId: row.task_id,
       attemptId: claim.attempt.id,
@@ -760,11 +780,6 @@ export async function processGptImageSubmitJob(
         released: resolveGptImageBillingAmount(row, snapshot),
         settledAt: input.now.toISOString(),
       },
-      now: input.now,
-    });
-    await updateTeamAssetGenerationResult(db, {
-      snapshot,
-      status: "failed",
       now: input.now,
     });
     return { status: "failed", failureCode };
@@ -820,6 +835,150 @@ async function findLatestGptImageProviderRequestForTask(db: SqlDatabase, taskId:
   );
 }
 
+const failedGptImageSubmissionRepairMinAgeMs = 30_000;
+const failedGptImageSubmissionRepairableSnapshotStatuses = ["queued", "running", "result_unknown"];
+
+async function recoverFailedGptImageSubmitJob(
+  db: SqlDatabase,
+  input: { taskId: string; now: Date; enqueueRateLimitRetry?: boolean },
+): Promise<
+  | { status: "failed"; failureCode: string }
+  | { status: "rate_limited"; retryAfterMs: number; reason: string }
+  | { status: "skipped" }
+> {
+  const row = await findGptImageTaskForSubmitRecovery(db, input.taskId);
+  if (!row?.attempt_id || !row.provider_request_id || row.provider_status !== "failed") {
+    return { status: "skipped" };
+  }
+  const failureCode = row.provider_failure_code ?? "provider_failed";
+  const snapshot = parseSnapshot(row.input_snapshot_json);
+  const providerStatus = {
+    ...parseProviderResponse(row.provider_response_redacted_json),
+    providerStatus: "failed",
+    failureCode,
+  };
+  const rateLimitDeadline = resolveGptImageTimeoutAt(snapshot, input.now);
+  if (
+    row.task_status !== "failed"
+    && failureCode === "cumob_image_429"
+    && rateLimitDeadline.getTime() > input.now.getTime()
+  ) {
+    let retryAfterMs: number | null = null;
+    const retryCount = await requeueGptImageAfterCumobRateLimit(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      now: input.now,
+      onRequeued: input.enqueueRateLimitRetry
+        ? async (committedRetryCount) => {
+            retryAfterMs = resolveCumobRateLimitDelayMs(
+              providerStatus,
+              committedRetryCount,
+              input.now,
+              rateLimitDeadline,
+            );
+            const queuePriority = Number(snapshot.queuePriority);
+            const retryAvailableAt = new Date(input.now.getTime() + retryAfterMs);
+            const dispatchToken = `cumob-429-repair-${committedRetryCount}`;
+            const retryEvent = await appendGenerationTaskCreatedOutboxEvent(db, {
+              userId: row.user_id,
+              workflowId: row.workflow_id,
+              taskId: row.task_id,
+              kind: "image",
+              modelCode: readString(snapshot.model) ?? null,
+              queueName: row.queue_name ?? "generation-submit-image",
+              targetType: readString(snapshot.targetType) ?? row.target_entity_type ?? "episode",
+              targetId: readString(snapshot.targetId) ?? row.target_entity_id ?? row.task_id,
+              providerExecutor: readString(snapshot.providerExecutor) ?? "gpt-image-2",
+              dispatchToken,
+              retrySequence: committedRetryCount,
+              ...(snapshot.membershipPriority === true
+                && Number.isInteger(queuePriority)
+                && queuePriority > 0
+                ? {
+                    membershipPriority: true,
+                    queuePriority,
+                    priorityReason: readString(snapshot.priorityReason) ?? "membership_priority",
+                  }
+                : {}),
+              availableAt: retryAvailableAt,
+            });
+            if (!retryEvent) {
+              throw new Error("cumob_rate_limit_retry_outbox_missing");
+            }
+            const scheduledEvent = await rescheduleGenerationTaskCreatedOutboxEvent(db, {
+              eventId: retryEvent.id,
+              availableAt: retryAvailableAt,
+              dispatchToken,
+              retrySequence: committedRetryCount,
+              now: input.now,
+            });
+            if (!scheduledEvent) {
+              throw new Error("cumob_rate_limit_retry_outbox_state_conflict");
+            }
+          }
+        : undefined,
+    });
+    retryAfterMs ??= resolveCumobRateLimitDelayMs(
+      providerStatus,
+      retryCount,
+      input.now,
+      rateLimitDeadline,
+    );
+    return {
+      status: "rate_limited",
+      retryAfterMs,
+      reason: "cumob_image_429",
+    };
+  }
+
+  return failGptImagePollJob(db, {
+    row,
+    snapshot,
+    failureCode,
+    providerStatus,
+    phase: "submit",
+    now: input.now,
+  });
+}
+
+export async function repairFailedGptImageSubmissions(
+  db: SqlDatabase,
+  input: { now: Date; limit: number },
+) {
+  const candidates = await findFailedGptImageSubmissionRepairCandidates(
+    db,
+    new Date(input.now.getTime() - failedGptImageSubmissionRepairMinAgeMs),
+    input.limit,
+  );
+  const repairedTaskIds: string[] = [];
+  const requeuedTaskIds: string[] = [];
+  const failedTaskIds: string[] = [];
+
+  for (const candidate of candidates) {
+    try {
+      const result = await recoverFailedGptImageSubmitJob(db, {
+        taskId: candidate.task_id,
+        now: input.now,
+        enqueueRateLimitRetry: true,
+      });
+      if (result.status === "failed") repairedTaskIds.push(candidate.task_id);
+      if (result.status === "rate_limited") requeuedTaskIds.push(candidate.task_id);
+    } catch (error) {
+      failedTaskIds.push(candidate.task_id);
+      await deferFailedGptImageSubmissionRepair(db, {
+        taskId: candidate.task_id,
+        now: input.now,
+      }).catch(() => undefined);
+      console.error(
+        `[gpt-image-repair] taskId=${candidate.task_id} ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return { repairedTaskIds, requeuedTaskIds, failedTaskIds };
+}
+
 async function requeueGptImageAfterCumobRateLimit(
   db: SqlDatabase,
   input: {
@@ -827,6 +986,7 @@ async function requeueGptImageAfterCumobRateLimit(
     attemptId: string;
     providerRequestId: string;
     now: Date;
+    onRequeued?: (retryCount: number) => Promise<void>;
   },
 ) {
   await db.query("BEGIN");
@@ -872,7 +1032,7 @@ async function requeueGptImageAfterCumobRateLimit(
             updated_at = $3
         WHERE id = $2
           AND task_id = $1
-          AND status = 'running'
+          AND status IN ('running', 'result_unknown')
         RETURNING id
       `,
       [input.taskId, input.attemptId, input.now],
@@ -891,12 +1051,13 @@ async function requeueGptImageAfterCumobRateLimit(
             updated_at = $3
         WHERE id = $1
           AND current_attempt_id = $2
-          AND status = 'running'
+          AND status IN ('running', 'result_unknown')
         RETURNING id
       `,
       [input.taskId, input.attemptId, input.now],
     );
-    await db.query(
+    const generationSnapshot = await queryOne<{ id: string }>(
+      db,
       `
         UPDATE ai_generation_task_snapshots
         SET status = 'queued',
@@ -905,13 +1066,15 @@ async function requeueGptImageAfterCumobRateLimit(
               || jsonb_build_object('failureCode', 'cumob_image_429'),
             updated_at = $2
         WHERE task_id = $1
-          AND status = 'running'
+          AND status IN ('running', 'result_unknown')
+        RETURNING id
       `,
       [input.taskId, input.now],
     );
-    if (!providerRequest || !attempt || !task) {
+    if (!providerRequest || !attempt || !task || !generationSnapshot) {
       throw new Error("cumob_rate_limit_requeue_state_conflict");
     }
+    await input.onRequeued?.(Number(providerRequest.retry_count));
     await db.query("COMMIT");
     return Number(providerRequest.retry_count);
   } catch (error) {
@@ -1173,6 +1336,7 @@ export async function expireGptImagePollJob(
     });
     await updateTeamAssetGenerationResult(db, {
       snapshot: parseSnapshot(row.input_snapshot_json),
+      userId: row.user_id,
       status: "failed",
       now: input.now,
     });
@@ -1320,6 +1484,7 @@ export async function finalizeGptImageArtifactJob(
       });
       await updateTeamAssetGenerationResult(db, {
         snapshot,
+        userId: row.user_id,
         status: "failed",
         now: input.now,
       });
@@ -1358,6 +1523,7 @@ export async function finalizeGptImageArtifactJob(
     });
     await updateTeamAssetGenerationResult(db, {
       snapshot,
+      userId: row.user_id,
       status: "failed",
       now: input.now,
     });
@@ -1374,6 +1540,7 @@ export async function finalizeGptImageArtifactJob(
       if (readTeamAssetTargetId(snapshot)) {
         await updateTeamAssetGenerationResult(db, {
           snapshot,
+          userId: row.user_id,
           status: "active",
           previewUrl: persisted.previewUrl,
           storageObjectId: persisted.storageObjectId,
@@ -1581,6 +1748,7 @@ export async function persistGptImageArtifactJob(
     finalize: async () => {
       await updateTeamAssetGenerationResult(db, {
         snapshot,
+        userId: row.user_id,
         status: "active",
         previewUrl: urls.previewUrl,
         storageObjectId: storageObject.id,
@@ -1836,6 +2004,7 @@ async function findGptImageTaskForPollExpiration(db: SqlDatabase, taskId: string
         SELECT request.*
         FROM provider_requests request
         WHERE request.task_id = t.id
+          AND request.attempt_id = t.current_attempt_id
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
@@ -1847,6 +2016,134 @@ async function findGptImageTaskForPollExpiration(db: SqlDatabase, taskId: string
       LIMIT 1
     `,
     [taskId],
+  );
+}
+
+async function findGptImageTaskForSubmitRecovery(db: SqlDatabase, taskId: string) {
+  return queryOne<GptImageTaskRow>(
+    db,
+    `
+      SELECT
+        t.id AS task_id,
+        t.workflow_id,
+        t.current_attempt_id AS attempt_id,
+        t.status AS task_status,
+        t.queue_name,
+        t.target_entity_type,
+        t.target_entity_id,
+        w.created_by_user_id AS user_id,
+        t.project_id,
+        t.input_snapshot_json,
+        w.created_by_user_id,
+        pr.id AS provider_request_id,
+        pr.status AS provider_status,
+        pr.failure_code AS provider_failure_code,
+        pr.external_request_id,
+        pr.response_redacted_json AS provider_response_redacted_json,
+        r.id AS reservation_id,
+        r.amount_reserved
+      FROM tasks t
+      JOIN workflows w ON w.id = t.workflow_id
+      LEFT JOIN LATERAL (
+        SELECT request.*
+        FROM provider_requests request
+        WHERE request.task_id = t.id
+          AND request.attempt_id = t.current_attempt_id
+        ORDER BY request.updated_at DESC, request.created_at DESC
+        LIMIT 1
+      ) pr ON true
+      LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
+      LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+      WHERE t.id = $1
+        AND t.task_type = 'episode_generate_image'
+        AND t.status IN ('running', 'result_unknown', 'failed')
+        AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
+        AND (
+          t.status <> 'failed'
+          OR (
+            t.failure_code = COALESCE(pr.failure_code, 'provider_failed')
+            AND snapshot.status = ANY($2::text[])
+          )
+        )
+      LIMIT 1
+    `,
+    [taskId, failedGptImageSubmissionRepairableSnapshotStatuses],
+  );
+}
+
+async function findFailedGptImageSubmissionRepairCandidates(
+  db: SqlDatabase,
+  staleBefore: Date,
+  limit: number,
+) {
+  const result = await db.query<{ task_id: string }>(
+    `
+      SELECT candidate.task_id
+      FROM (
+        (
+          SELECT task.id AS task_id, task.updated_at
+          FROM tasks task
+          JOIN LATERAL (
+            SELECT provider.*
+            FROM provider_requests provider
+            WHERE provider.task_id = task.id
+              AND provider.attempt_id = task.current_attempt_id
+            ORDER BY provider.updated_at DESC, provider.created_at DESC
+            LIMIT 1
+          ) request ON request.status = 'failed'
+          WHERE task.task_type = 'episode_generate_image'
+            AND task.status IN ('running', 'result_unknown')
+            AND task.updated_at <= $1
+            AND request.updated_at <= $1
+            AND task.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
+          ORDER BY task.updated_at ASC, task.id ASC
+          LIMIT $2
+        )
+        UNION ALL
+        (
+          SELECT task.id AS task_id, task.updated_at
+          FROM ai_generation_task_snapshots snapshot
+          JOIN tasks task ON task.id = snapshot.task_id
+          JOIN LATERAL (
+            SELECT provider.*
+            FROM provider_requests provider
+            WHERE provider.task_id = task.id
+              AND provider.attempt_id = task.current_attempt_id
+            ORDER BY provider.updated_at DESC, provider.created_at DESC
+            LIMIT 1
+          ) request ON request.status = 'failed'
+          WHERE snapshot.status IN ('queued', 'running', 'result_unknown')
+            AND task.task_type = 'episode_generate_image'
+            AND task.status = 'failed'
+            AND task.failure_code = COALESCE(request.failure_code, 'provider_failed')
+            AND task.updated_at <= $1
+            AND request.updated_at <= $1
+            AND task.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
+          ORDER BY task.updated_at ASC, task.id ASC
+          LIMIT $2
+        )
+      ) candidate
+      ORDER BY candidate.updated_at ASC, candidate.task_id ASC
+      LIMIT $2
+    `,
+    [staleBefore, Math.max(1, Math.floor(limit))],
+  );
+  return result.rows;
+}
+
+async function deferFailedGptImageSubmissionRepair(
+  db: SqlDatabase,
+  input: { taskId: string; now: Date },
+) {
+  await db.query(
+    `
+      UPDATE tasks
+      SET updated_at = $2
+      WHERE id = $1
+        AND task_type = 'episode_generate_image'
+        AND status IN ('running', 'result_unknown', 'failed')
+    `,
+    [input.taskId, input.now],
   );
 }
 
@@ -1894,13 +2191,14 @@ async function failGptImagePollJob(
     snapshot: Record<string, unknown>;
     failureCode: string;
     providerStatus: Record<string, unknown>;
+    phase?: "submit" | "poll";
     now: Date;
   },
 ): Promise<{ status: "failed"; failureCode: string }> {
   const errorMessage = translateProviderErrorMessage(input.providerStatus, {
     failureCode: input.failureCode,
     mediaType: "image",
-    phase: "poll",
+    phase: input.phase ?? "poll",
   });
   await markProviderRequestFailed(db, {
     providerRequestId: input.row.provider_request_id!,
@@ -1921,21 +2219,37 @@ async function failGptImagePollJob(
     failureCode: input.failureCode,
     now: input.now,
   });
-  await failGptImageTask(db, {
-    row: input.row,
-    failureCode: input.failureCode,
-    providerRequestId: input.row.provider_request_id,
-    metadata: {
-      billingEvent: "released",
-      outcome: "released",
-      provider: "model-gateway",
-      providerRequestId: input.row.provider_request_id,
-      externalRequestId: input.row.external_request_id,
+  if (input.row.task_status === "failed") {
+    await updateProjectAssetGenerationTerminalResult(db, {
+      row: input.row,
+      snapshot: input.snapshot,
+      status: "failed",
       failureCode: input.failureCode,
-      errorMessage,
-      providerResponse: input.providerStatus,
-      settledAt: input.now,
-    },
+      now: input.now,
+    });
+  } else {
+    await failGptImageTask(db, {
+      row: input.row,
+      failureCode: input.failureCode,
+      providerRequestId: input.row.provider_request_id,
+      metadata: {
+        billingEvent: "released",
+        outcome: "released",
+        provider: "model-gateway",
+        providerRequestId: input.row.provider_request_id,
+        externalRequestId: input.row.external_request_id,
+        failureCode: input.failureCode,
+        errorMessage,
+        providerResponse: input.providerStatus,
+        settledAt: input.now,
+      },
+      now: input.now,
+    });
+  }
+  await updateTeamAssetGenerationResult(db, {
+    snapshot: input.snapshot,
+    userId: input.row.user_id,
+    status: "failed",
     now: input.now,
   });
   await markGenerationTaskSnapshotFailed(db, {
@@ -1953,11 +2267,6 @@ async function failGptImagePollJob(
       released: resolveGptImageBillingAmount(input.row, input.snapshot),
       settledAt: input.now.toISOString(),
     },
-    now: input.now,
-  });
-  await updateTeamAssetGenerationResult(db, {
-    snapshot: input.snapshot,
-    status: "failed",
     now: input.now,
   });
   return { status: "failed", failureCode: input.failureCode };

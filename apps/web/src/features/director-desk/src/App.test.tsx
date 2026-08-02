@@ -177,14 +177,13 @@ it("shows home loading feedback without inserting a placeholder into the desk gr
   expect(await screen.findByTestId("mock-director-canvas")).toBeInTheDocument();
 });
 
-it("creates a first integrated director desk through the API when the list is empty", async () => {
+it("creates a first direct-entry director desk through the API when the list is empty", async () => {
   apiDirectorDesks = [];
   localStorage.setItem("standalone-3d-director-desk-registry-v1", "[]");
 
-  render(<App initialScreen="home" />);
+  render(<App />);
 
-  expect(screen.getByRole("heading", { name: "导演台" })).toBeInTheDocument();
-  expect(await screen.findByRole("button", { name: "打开导演台 1 号" })).toBeInTheDocument();
+  expect(await screen.findByTestId("mock-director-canvas")).toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith("/api/director-desks", expect.objectContaining({
     method: "POST",
     credentials: "include",
@@ -270,6 +269,24 @@ it("paginates director desks and supports renaming and deleting from the card me
 
   expect(await screen.findByRole("button", { name: "打开导演台 1 号" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "打开主场景导演台" })).not.toBeInTheDocument();
+});
+
+it("keeps the last director desk deleted after the home is reloaded", async () => {
+  apiDirectorDesks = createDirectorDeskRecords(1);
+  const user = userEvent.setup();
+  const firstRender = render(<App initialScreen="home" />);
+
+  await user.click(await screen.findByRole("button", { name: "编辑导演台 1 号" }));
+  await user.click(screen.getByRole("menuitem", { name: "删除" }));
+  await user.click(screen.getByRole("button", { name: "确认删除" }));
+  expect(screen.queryByRole("button", { name: "打开导演台 1 号" })).not.toBeInTheDocument();
+
+  firstRender.unmount();
+  vi.mocked(fetch).mockClear();
+  render(<App initialScreen="home" />);
+
+  expect(await screen.findByText("共 0 个")).toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
 });
 
 it("waits for the scoped scene before displaying the integrated editor", async () => {

@@ -24,6 +24,15 @@ interface EpisodeRow {
   updated_at: Date | string;
 }
 
+export class EpisodeGenerationInProgressError extends Error {
+  readonly code = "episode_generation_in_progress";
+
+  constructor() {
+    super("episode_generation_in_progress");
+    this.name = "EpisodeGenerationInProgressError";
+  }
+}
+
 export async function replaceEpisodesForProject(
   db: SqlDatabase,
   input: {
@@ -180,74 +189,119 @@ export async function deleteEpisodeForProject(
     episodeId: string;
   },
 ): Promise<boolean> {
-  await db.query(
-    `
-      DELETE FROM episode_asset_conversation_threads
-      WHERE project_id = $1
-        AND episode_id = $2
-    `,
-    [input.projectId, input.episodeId],
-  );
-  await db.query(
-    `
-      DELETE FROM episode_generation_drafts
-      WHERE project_id = $1
-        AND episode_id = $2
-    `,
-    [input.projectId, input.episodeId],
-  );
-  await db.query(
-    `
-      DELETE FROM export_records
-      WHERE project_id = $1
-        AND episode_id = $2
-    `,
-    [input.projectId, input.episodeId],
-  );
-  await db.query(
-    `
-      DELETE FROM shot_reference_assets
-      WHERE project_id = $1
-        AND shot_id IN (
-          SELECT id
-          FROM shots
-          WHERE project_id = $1
-            AND episode_id = $2
-        )
-    `,
-    [input.projectId, input.episodeId],
-  );
-  await db.query(
-    `
-      DELETE FROM calibration_items
-      WHERE shot_id IN (
-          SELECT id
-          FROM shots
-          WHERE project_id = $1
-            AND episode_id = $2
-        )
-    `,
-    [input.projectId, input.episodeId],
-  );
-  await db.query(
-    `
-      DELETE FROM shots
-      WHERE project_id = $1
-        AND episode_id = $2
-    `,
-    [input.projectId, input.episodeId],
-  );
-  const result = await db.query<{ id: string }>(
-    `
-      DELETE FROM episodes
-      WHERE project_id = $1
-        AND id = $2
-      RETURNING id
-    `,
-    [input.projectId, input.episodeId],
-  );
+  await db.query("BEGIN");
+  try {
+    const episode = await db.query<{ id: string }>(
+      `
+        SELECT id
+        FROM episodes
+        WHERE project_id = $1
+          AND id = $2
+        FOR UPDATE
+      `,
+      [input.projectId, input.episodeId],
+    );
+    if (!episode.rows[0]) {
+      await db.query("COMMIT");
+      return false;
+    }
+    const activeGeneration = await db.query<{ id: string }>(
+      `
+        SELECT task.id
+        FROM ai_generation_task_snapshots snapshot
+        JOIN tasks task ON task.id = snapshot.task_id
+        WHERE snapshot.episode_id = $1
+          AND task.status IN ('queued', 'running', 'cancel_requested', 'result_unknown', 'manual_review_required')
+        LIMIT 1
+        FOR UPDATE OF task, snapshot
+      `,
+      [input.episodeId],
+    );
+    if (activeGeneration.rows[0]) {
+      throw new EpisodeGenerationInProgressError();
+    }
+    await db.query(
+      `
+        UPDATE ai_generation_task_snapshots
+        SET episode_id = NULL,
+            updated_at = now()
+        WHERE episode_id = $1
+      `,
+      [input.episodeId],
+    );
+    await db.query(
+      `
+        DELETE FROM episode_asset_conversation_threads
+        WHERE project_id = $1
+          AND episode_id = $2
+      `,
+      [input.projectId, input.episodeId],
+    );
+    await db.query(
+      `
+        DELETE FROM episode_generation_drafts
+        WHERE project_id = $1
+          AND episode_id = $2
+      `,
+      [input.projectId, input.episodeId],
+    );
+    await db.query(
+      `
+        DELETE FROM export_records
+        WHERE project_id = $1
+          AND episode_id = $2
+      `,
+      [input.projectId, input.episodeId],
+    );
+    await db.query(
+      `
+        DELETE FROM shot_reference_assets
+        WHERE project_id = $1
+          AND shot_id IN (
+            SELECT id
+            FROM shots
+            WHERE project_id = $1
+              AND episode_id = $2
+          )
+      `,
+      [input.projectId, input.episodeId],
+    );
+    await db.query(
+      `
+        DELETE FROM calibration_items
+        WHERE shot_id IN (
+            SELECT id
+            FROM shots
+            WHERE project_id = $1
+              AND episode_id = $2
+          )
+      `,
+      [input.projectId, input.episodeId],
+    );
+    await db.query(
+      `
+        DELETE FROM shots
+        WHERE project_id = $1
+          AND episode_id = $2
+      `,
+      [input.projectId, input.episodeId],
+    );
+    const result = await db.query<{ id: string }>(
+      `
+        DELETE FROM episodes
+        WHERE project_id = $1
+          AND id = $2
+        RETURNING id
+      `,
+      [input.projectId, input.episodeId],
+    );
 
-  return Boolean(result.rows[0]);
+    await db.query("COMMIT");
+    return Boolean(result.rows[0]);
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 async function insertEpisode(

@@ -152,12 +152,14 @@ ALTER TABLE ai_model_configs
     'volcengine_ark_video',
     'aliyun_bailian_video',
     'aliyun_bailian_audio',
+    'apimart_audio',
     'globalaiopc_video',
     'lingdong_api',
     'cumob_image',
     'global_ai_opc_image',
     'extra_token_video',
     'saier_video',
+    'banana_router',
     'custom_http'
   ));
 

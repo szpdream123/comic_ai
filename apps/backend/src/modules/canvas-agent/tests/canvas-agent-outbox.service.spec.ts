@@ -10,6 +10,9 @@ test("Canvas Agent outbox publishes a claimed wakeup and marks it dispatched", a
   const db: SqlDatabase = {
     async query<T>(sql: string) {
       if (sql.includes("WITH candidates AS")) {
+        assert.match(sql, /FOR UPDATE OF outbox, conversation SKIP LOCKED/);
+        assert.match(sql, /UPDATE canvas_agent_conversations conversation/);
+        assert.match(sql, /COALESCE\(assigned\.shard_id, candidates\.shard_id\)/);
         return {
           rows: [{
             id: "10000000-0000-4000-8000-000000000001",

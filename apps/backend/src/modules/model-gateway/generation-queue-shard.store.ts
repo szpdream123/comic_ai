@@ -227,6 +227,43 @@ export async function hasReleasedGenerationQueueStageAssignment(
   return row?.matched === true;
 }
 
+export async function hasRecoverableGenerationQueueSuccessor(
+  db: SqlDatabase,
+  input: { taskId: string; sourceAssignmentKey: string },
+): Promise<boolean> {
+  const row = await queryOne<{ matched: boolean }>(
+    db,
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM generation_queue_stage_assignments successor
+        JOIN generation_queue_stage_assignments source
+          ON source.assignment_key = $2
+         AND source.task_id = successor.task_id
+        WHERE successor.task_id = $1::uuid
+          AND successor.assignment_key <> source.assignment_key
+          AND successor.created_at >= source.created_at
+          AND (
+            (source.stage IN ('submit', 'poll') AND successor.stage IN ('poll', 'fetch', 'persist'))
+            OR (source.stage = 'fetch' AND successor.stage = 'persist')
+          )
+          AND (
+            successor.status = 'admitted'
+            OR (
+              successor.status = 'released'
+              AND successor.release_reason = 'completed'
+            )
+          )
+      ) AS matched
+    `,
+    [
+      input.taskId,
+      requiredTrimmed(input.sourceAssignmentKey, "generation_queue_assignment_key_required"),
+    ],
+  );
+  return row?.matched === true;
+}
+
 export async function markGenerationQueueStagePublished(
   db: SqlDatabase,
   input: { assignmentKey: string; redisJobId: string; now: Date },

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
@@ -10,6 +10,89 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
   it("registers the BananaRouter model migration", async () => {
     const names = (await loadSqlMigrations()).map((migration) => migration.name);
     assert.ok(names.includes("20260728-add-bananarouter-models.sql"));
+    assert.ok(names.includes("20260825-bananarouter-image-async-recovery.sql"));
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    assert.match(productionMigrationScript, /20260825-bananarouter-image-async-recovery\.sql/);
+  });
+
+  it("registers bounded task-center diagnostics in application and production migrations", async () => {
+    const names = (await loadSqlMigrations()).map((migration) => migration.name);
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    for (const migrationName of [
+      "20260824-task-center-provider-diagnostics.sql",
+      "20260824-z-task-center-provider-diagnostics-index.sql",
+    ]) {
+      assert.ok(names.includes(migrationName));
+      assert.match(productionMigrationScript, new RegExp(migrationName.replaceAll(".", "\\.")));
+    }
+    assert.match(productionMigrationScript, /backfill_provider_request_task_center_diagnostics_batch/);
+    assert.match(productionMigrationScript, /backfill_generation_snapshot_task_center_diagnostics_batch/);
+    assert.match(productionMigrationScript, /cursor = batch\.rows\[0\]\?\.next_id/);
+  });
+
+  it("registers failed image submission repair indexes in application and production migrations", async () => {
+    const names = (await loadSqlMigrations()).map((migration) => migration.name);
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    for (const name of [
+      "20260731-failed-image-submission-active-repair-index.sql",
+      "20260731-failed-image-submission-snapshot-repair-index.sql",
+    ]) {
+      assert.ok(names.includes(name));
+      assert.match(productionMigrationScript, new RegExp(name.replaceAll(".", "\\.")));
+    }
+    assert.match(productionMigrationScript, /nonTransactionalMigrationNames/);
+  });
+
+  it("applies failed image submission repair indexes idempotently", async () => {
+    const db = await createEmptyTestDb();
+    try {
+      await db.query(`
+        CREATE TABLE tasks (
+          id uuid PRIMARY KEY,
+          task_type text NOT NULL,
+          status text NOT NULL,
+          input_snapshot_json jsonb NOT NULL,
+          updated_at timestamptz NOT NULL
+        );
+        CREATE TABLE ai_generation_task_snapshots (
+          task_id uuid NOT NULL,
+          status text NOT NULL,
+          updated_at timestamptz NOT NULL
+        );
+      `);
+      for (const name of [
+        "20260731-failed-image-submission-active-repair-index.sql",
+        "20260731-failed-image-submission-snapshot-repair-index.sql",
+      ]) {
+        await applySqlMigration(db, process.cwd(), name);
+        await applySqlMigration(db, process.cwd(), name);
+      }
+      const indexes = await db.query<{ indexname: string }>(`
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = ANY($1::text[])
+        ORDER BY indexname
+      `, [[
+        "generation_snapshots_failed_image_submission_repair_idx",
+        "tasks_failed_image_submission_active_repair_idx",
+      ]]);
+      assert.deepEqual(indexes.rows.map((row) => row.indexname), [
+        "generation_snapshots_failed_image_submission_repair_idx",
+        "tasks_failed_image_submission_active_repair_idx",
+      ]);
+    } finally {
+      await db.close();
+    }
   });
 
   it("seeds the four disabled BananaRouter models with dedicated adapter contracts", async () => {
@@ -17,6 +100,7 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     try {
       await applySqlMigration(db, process.cwd(), "20260728-add-bananarouter-models.sql");
       await applySqlMigration(db, process.cwd(), "20260728-add-bananarouter-models.sql");
+      await applySqlMigration(db, process.cwd(), "20260825-bananarouter-image-async-recovery.sql");
       const models = await db.query<{
         model_code: string;
         provider_model: string;
@@ -48,7 +132,7 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
           model_code: "bananarouter-gpt-image-2",
           provider_model: "gpt-image-2",
           provider_protocol: "banana_router",
-          invocation_mode: "sync",
+          invocation_mode: "async_polling",
           media_type: "image",
           status: "disabled",
           request_format: "banana_router_openai_images",
@@ -90,6 +174,30 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         },
       ]);
 
+      const imageAsyncContract = await db.query<{
+        create_task_endpoint: string;
+        edit_endpoint: string;
+        query_task_endpoint: string;
+        result_format: string;
+        async_polling: boolean;
+      }>(`
+        SELECT
+          provider_config_json->>'createTaskEndpoint' AS create_task_endpoint,
+          provider_config_json->>'editEndpoint' AS edit_endpoint,
+          provider_config_json->>'queryTaskEndpoint' AS query_task_endpoint,
+          provider_config_json->>'resultFormat' AS result_format,
+          (capabilities_json->>'asyncPolling')::boolean AS async_polling
+        FROM ai_model_configs
+        WHERE model_code = 'bananarouter-gpt-image-2'
+      `);
+      assert.deepEqual(imageAsyncContract.rows, [{
+        create_task_endpoint: "/v1/images/generations/async",
+        edit_endpoint: "/v1/images/generations/async",
+        query_task_endpoint: "/v1/async-tasks/{taskId}",
+        result_format: "url",
+        async_polling: true,
+      }]);
+
       const policies = await db.query<{
         model_code: string;
         submit_queue_name: string;
@@ -102,7 +210,7 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         ORDER BY model.sort_order
       `, [["bananarouter-gpt-image-2", "bananarouter-sora2", "bananarouter-seedance-2.0", "bananarouter-seedance-2.0-sp"]]);
       assert.deepEqual(policies.rows, [
-        { model_code: "bananarouter-gpt-image-2", submit_queue_name: "generation-submit-image", poll_queue_name: null },
+        { model_code: "bananarouter-gpt-image-2", submit_queue_name: "generation-submit-image", poll_queue_name: "generation-poll-image" },
         { model_code: "bananarouter-sora2", submit_queue_name: "generation-submit-video", poll_queue_name: "generation-poll-video" },
         { model_code: "bananarouter-seedance-2.0", submit_queue_name: "generation-submit-video", poll_queue_name: "generation-poll-video" },
         { model_code: "bananarouter-seedance-2.0-sp", submit_queue_name: "generation-submit-video", poll_queue_name: "generation-poll-video" },
@@ -652,8 +760,10 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         "generation_stage_successors_orphan_idx",
         "provider_webhook_inbox_pending_idx",
         "ai_generation_task_snapshots_user_updated_task_idx",
+        "tasks_failed_image_submission_active_repair_idx",
+        "generation_snapshots_failed_image_submission_repair_idx",
       ]]);
-      assert.equal(indexes.rows.length, 7);
+      assert.equal(indexes.rows.length, 9);
 
       const constraints = await db.query<{ conname: string }>(`
         SELECT conname

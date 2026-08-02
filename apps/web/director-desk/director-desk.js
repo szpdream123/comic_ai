@@ -73042,7 +73042,7 @@ function lq({
         let ne = await RP();
         if (re || await QK(ne) && (re || (ne = await RP(), re)))
           return;
-        if (ne.length === 0 && (await (i == null ? void 0 : i({ interactive: !1 })) ?? !0)) {
+        if (ne.length === 0 && (await (i == null ? void 0 : i({ interactive: !1 })) ?? !0) && o === "editor") {
           const se = await y2("导演台 1 号", "desk_1");
           if (re) return;
           ne = [se];

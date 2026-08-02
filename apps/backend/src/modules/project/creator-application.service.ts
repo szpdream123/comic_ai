@@ -76,6 +76,7 @@ import {
   createEpisodeForProject,
   createEpisodeForProjectWithId,
   deleteEpisodeForProject,
+  EpisodeGenerationInProgressError,
   listEpisodesForProject,
   replaceEpisodesForProject,
   updateEpisodeForProject,
@@ -2490,10 +2491,18 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (actor.teamMember) {
         return { status: 403, body: { error: "team_member_delete_forbidden" } };
       }
-      const deleted = await deleteEpisodeForProject(deps.db, {
-        projectId,
-        episodeId: input.body.episodeId,
-      });
+      let deleted: boolean;
+      try {
+        deleted = await deleteEpisodeForProject(deps.db, {
+          projectId,
+          episodeId: input.body.episodeId,
+        });
+      } catch (error) {
+        if (error instanceof EpisodeGenerationInProgressError) {
+          return { status: 409, body: { error: error.code } };
+        }
+        throw error;
+      }
       return { status: deleted ? 200 : 404, body: deleted ? { deleted: true } : { error: "episode_not_found" } };
     },
 

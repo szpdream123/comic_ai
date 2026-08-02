@@ -418,7 +418,20 @@ export function validateBananaRouterProviderConfig(
     return "provider_request_format_media_mismatch";
   }
   if (mediaType === "image") {
-    if (requestFormat !== "banana_router_openai_images" || (invocationMode && invocationMode !== "sync")) {
+    if (
+      requestFormat !== "banana_router_openai_images" ||
+      (invocationMode && invocationMode !== "sync" && invocationMode !== "async_polling")
+    ) {
+      return "provider_request_format_media_mismatch";
+    }
+    if (invocationMode === "async_polling" && (!queryEndpoint || !queryEndpoint.includes("{taskId}"))) {
+      return "provider_query_endpoint_required";
+    }
+    if (
+      invocationMode === "async_polling" &&
+      (!isBananaRouterAsyncImageEndpoint(createEndpoint) ||
+        Boolean(editEndpoint && !isBananaRouterAsyncImageEndpoint(editEndpoint)))
+    ) {
       return "provider_request_format_media_mismatch";
     }
   }
@@ -543,6 +556,17 @@ function isBananaRouterEndpoint(endpoint: string | undefined): boolean {
   try {
     const url = new URL(endpoint);
     return url.origin === "https://api.bananarouter.com" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function isBananaRouterAsyncImageEndpoint(endpoint: string | undefined): boolean {
+  if (!endpoint) return false;
+  try {
+    const url = new URL(endpoint);
+    return url.origin === "https://api.bananarouter.com" &&
+      url.pathname.replace(/\/+$/g, "") === "/v1/images/generations/async";
   } catch {
     return false;
   }

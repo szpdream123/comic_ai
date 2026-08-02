@@ -19,13 +19,15 @@ export function compactProviderAuditValue(value: unknown, parentKey = ""): unkno
   const compacted = compactProviderAuditEntry(value, parentKey, {
     remaining: PROVIDER_AUDIT_TOTAL_LIMIT,
   }, 0);
-  const serializedLength = JSON.stringify(compacted).length;
-  return serializedLength <= PROVIDER_AUDIT_TOTAL_LIMIT
+  const serialized = JSON.stringify(compacted);
+  const serializedBytes = Buffer.byteLength(serialized, "utf8");
+  return serializedBytes <= PROVIDER_AUDIT_TOTAL_LIMIT
     ? compacted
     : {
         omitted: true,
         reason: "oversized_audit_value",
-        originalCharacters: serializedLength,
+        originalCharacters: serialized.length,
+        originalBytes: serializedBytes,
       };
 }
 
@@ -74,7 +76,7 @@ function compactProviderAuditEntry(
   const entries = Object.entries(value as Record<string, unknown>);
   const result: Record<string, unknown> = {};
   for (const [key, entryValue] of entries.slice(0, PROVIDER_AUDIT_MAX_ENTRIES)) {
-    budget.remaining -= key.length;
+    budget.remaining -= Buffer.byteLength(key, "utf8");
     result[key] = compactProviderAuditEntry(entryValue, key, budget, depth + 1);
     if (budget.remaining <= 0) break;
   }
@@ -106,11 +108,26 @@ function parseOversizedJson(value: string): unknown | undefined {
 
 function consumeProviderAuditText(value: string, budget: { remaining: number }) {
   const maximum = Math.max(0, Math.min(PROVIDER_AUDIT_STRING_LIMIT, budget.remaining));
-  const compacted = value.length <= maximum
-    ? value
-    : `${value.slice(0, Math.max(0, maximum - 64))}\n...[truncated: ${value.length} chars total]`;
-  budget.remaining = Math.max(0, budget.remaining - compacted.length);
+  const compacted = truncateProviderAuditTextToBytes(value, maximum);
+  budget.remaining = Math.max(0, budget.remaining - Buffer.byteLength(compacted, "utf8"));
   return compacted;
+}
+
+function truncateProviderAuditTextToBytes(value: string, maximumBytes: number) {
+  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
+  const suffix = `\n...[truncated: ${value.length} chars total]`;
+  const contentBudget = Math.max(0, maximumBytes - Buffer.byteLength(suffix, "utf8"));
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const midpoint = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, midpoint), "utf8") <= contentBudget) {
+      low = midpoint;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  return `${value.slice(0, low)}${suffix}`;
 }
 
 export function attachProviderRawResponse<T extends object>(value: T, rawResponse: unknown): T {

@@ -4,6 +4,8 @@ import { attachCanvasTaskResultToHistory } from "../project/creator-canvas-recor
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
+import { compactProviderAuditValue } from "./provider-response-diagnostics.ts";
+import { buildTaskCenterProviderDiagnostics } from "./task-center-provider-diagnostics.ts";
 
 export async function upsertQueuedGenerationTaskSnapshot(
   db: SqlDatabase,
@@ -173,12 +175,13 @@ export async function markGenerationTaskSnapshotSucceeded(
           attempt_id = COALESCE($2, attempt_id),
           provider_request_id = COALESCE($3, provider_request_id),
           provider_status_json = COALESCE($4::jsonb, provider_status_json),
-          result_assets_json = $5::jsonb,
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          result_assets_json = $6::jsonb,
           failure_json = NULL,
           credit_status = 'consumed',
-          credit_summary_json = COALESCE($6::jsonb, credit_summary_json),
-          completed_at = $7,
-          updated_at = $7
+          credit_summary_json = COALESCE($7::jsonb, credit_summary_json),
+          completed_at = $8,
+          updated_at = $8
       WHERE task_id = $1
       RETURNING canvas_project_id, target_type, target_id, media_type, user_id, request_summary_json
     `,
@@ -186,7 +189,8 @@ export async function markGenerationTaskSnapshotSucceeded(
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      serializeGenerationProviderStatus(input.providerStatus),
+      serializeGenerationTaskCenterProviderDiagnostics(input.providerStatus),
       JSON.stringify(input.resultAssets),
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
@@ -257,9 +261,10 @@ export async function markGenerationTaskSnapshotRunning(
           attempt_id = COALESCE($2, attempt_id),
           provider_request_id = COALESCE($3, provider_request_id),
           provider_status_json = COALESCE($6::jsonb, provider_status_json),
-          started_at = COALESCE(started_at, $7),
-          last_polled_at = $7,
-          updated_at = $7
+          task_center_diagnostics_json = COALESCE($7::jsonb, task_center_diagnostics_json),
+          started_at = COALESCE(started_at, $8),
+          last_polled_at = $8,
+          updated_at = $8
       WHERE task_id = $1
         AND status IN ('queued', 'running', 'result_unknown', 'manual_review_required')
     `,
@@ -269,7 +274,8 @@ export async function markGenerationTaskSnapshotRunning(
       input.providerRequestId ?? null,
       input.progressStage ?? "running",
       input.progressPercent ?? null,
-      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      serializeGenerationProviderStatus(input.providerStatus),
+      serializeGenerationTaskCenterProviderDiagnostics(input.providerStatus),
       input.now,
     ],
   );
@@ -295,18 +301,20 @@ export async function markGenerationTaskSnapshotResultUnknown(
           attempt_id = COALESCE($2, attempt_id),
           provider_request_id = COALESCE($3, provider_request_id),
           provider_status_json = COALESCE($4::jsonb, provider_status_json),
-          failure_json = $5::jsonb,
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          failure_json = $6::jsonb,
           credit_status = 'manual_review_required',
-          credit_summary_json = COALESCE($6::jsonb, credit_summary_json),
-          failed_at = $7,
-          updated_at = $7
+          credit_summary_json = COALESCE($7::jsonb, credit_summary_json),
+          failed_at = $8,
+          updated_at = $8
       WHERE task_id = $1
     `,
     [
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      serializeGenerationProviderStatus(input.providerStatus),
+      serializeGenerationTaskCenterProviderDiagnostics(input.providerStatus),
       JSON.stringify(sanitizeGenerationSnapshotRecord(withDefaultNoticeType(input.failure, "manual_review"))),
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
@@ -335,11 +343,12 @@ export async function markGenerationTaskSnapshotManualReviewRequired(
           attempt_id = COALESCE($2, attempt_id),
           provider_request_id = COALESCE($3, provider_request_id),
           provider_status_json = COALESCE($5::jsonb, provider_status_json),
-          failure_json = $6::jsonb,
+          task_center_diagnostics_json = COALESCE($6::jsonb, task_center_diagnostics_json),
+          failure_json = $7::jsonb,
           credit_status = 'manual_review_required',
-          credit_summary_json = COALESCE($7::jsonb, credit_summary_json),
-          failed_at = $8,
-          updated_at = $8
+          credit_summary_json = COALESCE($8::jsonb, credit_summary_json),
+          failed_at = $9,
+          updated_at = $9
       WHERE task_id = $1
     `,
     [
@@ -347,7 +356,8 @@ export async function markGenerationTaskSnapshotManualReviewRequired(
       input.attemptId ?? null,
       input.providerRequestId ?? null,
       input.progressStage ?? "manual_review_required",
-      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      serializeGenerationProviderStatus(input.providerStatus),
+      serializeGenerationTaskCenterProviderDiagnostics(input.providerStatus),
       JSON.stringify(sanitizeGenerationSnapshotRecord(withDefaultNoticeType(input.failure, "manual_review"))),
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
       input.now,
@@ -377,18 +387,20 @@ export async function markGenerationTaskSnapshotFailed(
           attempt_id = COALESCE($2, attempt_id),
           provider_request_id = COALESCE($3, provider_request_id),
           provider_status_json = COALESCE($4::jsonb, provider_status_json),
-          failure_json = $5::jsonb,
-          credit_status = $6,
-          credit_summary_json = COALESCE($7::jsonb, credit_summary_json),
-          failed_at = $8,
-          updated_at = $8
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          failure_json = $6::jsonb,
+          credit_status = $7,
+          credit_summary_json = COALESCE($8::jsonb, credit_summary_json),
+          failed_at = $9,
+          updated_at = $9
       WHERE task_id = $1
     `,
     [
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      serializeGenerationProviderStatus(input.providerStatus),
+      serializeGenerationTaskCenterProviderDiagnostics(input.providerStatus),
       JSON.stringify(sanitizeGenerationSnapshotRecord(withDefaultNoticeType(input.failure, noticeTypeForFailure(input.failure)))),
       creditStatus,
       input.creditSummary ? JSON.stringify(input.creditSummary) : null,
@@ -417,18 +429,20 @@ export async function markGenerationTaskSnapshotCanceled(
           attempt_id = COALESCE($2, attempt_id),
           provider_request_id = COALESCE($3, provider_request_id),
           provider_status_json = COALESCE($4::jsonb, provider_status_json),
-          failure_json = $5::jsonb,
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          failure_json = $6::jsonb,
           credit_status = 'released',
-          credit_summary_json = COALESCE($6::jsonb, credit_summary_json),
-          failed_at = $7,
-          updated_at = $7
+          credit_summary_json = COALESCE($7::jsonb, credit_summary_json),
+          failed_at = $8,
+          updated_at = $8
       WHERE task_id = $1
     `,
     [
       input.taskId,
       input.attemptId ?? null,
       input.providerRequestId ?? null,
-      input.providerStatus ? JSON.stringify(sanitizeGenerationSnapshotRecord(input.providerStatus)) : null,
+      serializeGenerationProviderStatus(input.providerStatus),
+      serializeGenerationTaskCenterProviderDiagnostics(input.providerStatus),
       JSON.stringify({
         failureCode: "user_canceled",
         displayMessage: "生成任务已取消，未消耗的预留积分已释放。",
@@ -452,6 +466,23 @@ function withDefaultNoticeType(
 
 function sanitizeGenerationSnapshotRecord(value: Record<string, unknown>): Record<string, unknown> {
   return sanitizeGenerationSnapshotValue(value) as Record<string, unknown>;
+}
+
+export function serializeGenerationProviderStatus(value: Record<string, unknown> | undefined): string | null {
+  return value
+    ? JSON.stringify(sanitizeGenerationSnapshotRecord(
+        compactProviderAuditValue(value) as Record<string, unknown>,
+      ))
+    : null;
+}
+
+export function serializeGenerationTaskCenterProviderDiagnostics(
+  value: Record<string, unknown> | undefined,
+): string | null {
+  const diagnostics = value
+    ? buildTaskCenterProviderDiagnostics(sanitizeGenerationSnapshotRecord(value))
+    : null;
+  return diagnostics ? JSON.stringify(diagnostics) : null;
 }
 
 function sanitizeGenerationSnapshotValue(value: unknown, parentKey?: string): unknown {

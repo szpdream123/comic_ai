@@ -67,6 +67,8 @@ import {
   markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotSucceeded,
   markGenerationTaskSnapshotManualReviewRequired,
+  serializeGenerationProviderStatus,
+  serializeGenerationTaskCenterProviderDiagnostics,
 } from "./generation-task-snapshot.service.ts";
 import { appendGenerationTaskFinalizeRequestedOutboxEvent } from "./generation-outbox.service.ts";
 import {
@@ -2533,13 +2535,19 @@ async function claimSeedancePollTimeoutRecovery(
         SET status = 'running',
             progress_stage = 'recovering_provider_result',
             provider_status_json = $2::jsonb,
+            task_center_diagnostics_json = COALESCE($3::jsonb, '{}'::jsonb),
             failure_json = NULL,
             failed_at = NULL,
-            updated_at = $3
+            updated_at = $4
         WHERE task_id = $1
           AND status IN ('failed', 'running')
       `,
-      [input.taskId, JSON.stringify(input.providerResponse), input.now],
+      [
+        input.taskId,
+        serializeGenerationProviderStatus(input.providerResponse),
+        serializeGenerationTaskCenterProviderDiagnostics(input.providerResponse),
+        input.now,
+      ],
     );
     await db.query("COMMIT");
     return true;
@@ -2758,7 +2766,7 @@ async function findSeedanceTaskForPersist(db: SqlDatabase, taskId: string) {
           t.status = 'running'
           OR (
             t.status = 'manual_review_required'
-            AND t.failure_code = 'provider_output_persist_failed'
+            AND t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
           )
         )
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'

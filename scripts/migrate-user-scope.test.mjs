@@ -1,11 +1,81 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import pg from "pg";
 
+import { loadSqlMigrations } from "../apps/backend/src/modules/shared/db/migrations.ts";
+
 describe("user-centric migration runner", { concurrency: false }, () => {
+  it("tracks the complete application migration manifest in the same order", async () => {
+    const runnerSource = await readFile(new URL("migrate-user-scope.mjs", import.meta.url), "utf8");
+    const manifestSource = runnerSource.slice(
+      runnerSource.indexOf("const migrations = ["),
+      runnerSource.indexOf("const requiredBaselineMigrationNames"),
+    );
+    const runnerNames = [...manifestSource.matchAll(/^\s+\["([^"]+\.sql)",\s*"[^"]+"\],/gm)]
+      .map((match) => match[1]);
+    const applicationNames = (await loadSqlMigrations()).map((migration) => migration.name);
+
+    assert.deepEqual(runnerNames, applicationNames);
+    assert.ok(
+      applicationNames.includes("20260826-converge-provider-protocol-constraint.sql"),
+      "semantic edits to historical provider migrations require a forward convergence migration",
+    );
+    assert.ok(
+      applicationNames.includes("20260827-converge-canvas-agent-shard-constraint.sql"),
+      "schema-scoped constraint repair requires a forward convergence migration",
+    );
+  });
+
+  it("fails closed before runtime-safe startup can mutate an uninitialized database", async () => {
+    const connectionString = process.env.DATABASE_URL?.trim();
+    assert.ok(connectionString, "DATABASE_URL is required");
+    const schema = `test_${randomUUID().replaceAll("-", "_")}`;
+    const urlSchema = `test_${randomUUID().replaceAll("-", "_")}`;
+    const client = new pg.Client({ connectionString });
+
+    await client.connect();
+    try {
+      await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(
+        "SELECT set_config('search_path', format('%I, pg_catalog', $1::text), false)",
+        [schema],
+      );
+      await client.query(`CREATE SCHEMA "${urlSchema}"`);
+      const isolatedUrl = new URL(connectionString);
+      isolatedUrl.searchParams.set("options", `-c search_path=${urlSchema}`);
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply", "--runtime-safe"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DATABASE_URL: isolatedUrl.toString(),
+            DATABASE_SCHEMA: schema,
+          },
+        },
+      );
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /runtime_schema_baseline_required/);
+      assert.match(result.stdout, new RegExp(`target=[^/]+/${schema}`));
+      const tables = await client.query(
+        "SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1",
+        [schema],
+      );
+      assert.equal(tables.rows[0]?.count, 0);
+    } finally {
+      await client.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await client.query(`DROP SCHEMA "${urlSchema}" CASCADE`);
+      await client.end();
+    }
+  });
+
   it("rolls back the migration ledger and baseline during an empty-schema dry run", { concurrency: false }, async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");
@@ -17,6 +87,10 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     await client.connect();
     try {
       await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(
+        "SELECT set_config('search_path', format('%I, pg_catalog', $1::text), false)",
+        [schema],
+      );
       const isolatedUrl = new URL(connectionString);
       isolatedUrl.searchParams.set("options", `-c search_path=${schema}`);
       const result = spawnSync(
@@ -52,6 +126,10 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     await client.connect();
     try {
       await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(
+        "SELECT set_config('search_path', format('%I, pg_catalog', $1::text), false)",
+        [schema],
+      );
       const isolatedUrl = new URL(connectionString);
       isolatedUrl.searchParams.set("options", `-c search_path=${schema}`);
       const result = spawnSync(
@@ -72,8 +150,117 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 46);
+      assert.equal(migrations.rows[0]?.count, 86);
+      await client.query(`DROP INDEX "${schema}".canvas_agent_conversations_shard_idx`);
+      const missingRequiredRuntimeSchema = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply", "--runtime-safe"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(missingRequiredRuntimeSchema.status, 1);
+      assert.match(
+        missingRequiredRuntimeSchema.stderr,
+        /runtime_schema_postcondition_missing:20260823-canvas-agent-queue-shards\.sql/,
+      );
+      await client.query(`
+        CREATE INDEX canvas_agent_conversations_shard_idx
+        ON "${schema}".canvas_agent_conversations (shard_id, id)
+        WHERE shard_id IS NOT NULL
+      `);
+      await client.query(`
+        ALTER TABLE "${schema}".canvas_agent_conversations
+          DROP CONSTRAINT canvas_agent_conversations_shard_id_check,
+          ADD CONSTRAINT canvas_agent_conversations_shard_id_check
+          CHECK (shard_id IS NULL OR shard_id >= -1)
+      `);
+      const wrongRequiredRuntimeSchema = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply", "--runtime-safe"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(wrongRequiredRuntimeSchema.status, 1);
+      assert.match(
+        wrongRequiredRuntimeSchema.stderr,
+        /runtime_schema_postcondition_missing:20260823-canvas-agent-queue-shards\.sql/,
+      );
+      const canvasAgentShardConstraintConvergenceSql = await readFile(
+        new URL(
+          "../packages/db/migrations/20260827-converge-canvas-agent-shard-constraint.sql",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+      await client.query(canvasAgentShardConstraintConvergenceSql);
+      const repairIndexMigrations = await client.query(`
+        SELECT migration_name
+        FROM "${schema}"."app_schema_migrations"
+        WHERE migration_name IN (
+          '20260731-failed-image-submission-active-repair-index.sql',
+          '20260731-failed-image-submission-snapshot-repair-index.sql'
+        )
+        ORDER BY migration_name
+      `);
+      assert.deepEqual(repairIndexMigrations.rows.map((row) => row.migration_name), [
+        "20260731-failed-image-submission-active-repair-index.sql",
+        "20260731-failed-image-submission-snapshot-repair-index.sql",
+      ]);
       assert.equal(users.rows[0]?.count, 1);
+      await client.query(`
+        CREATE TABLE "${schema}"."task_center_backfill_probe" (function_name text PRIMARY KEY);
+        CREATE OR REPLACE FUNCTION "${schema}".backfill_provider_request_task_center_diagnostics_batch(
+          after_id uuid,
+          batch_size integer
+        ) RETURNS TABLE(processed_count integer, next_id uuid)
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO "${schema}"."task_center_backfill_probe" VALUES ('provider');
+          RETURN QUERY SELECT 0, NULL::uuid;
+        END
+        $$;
+        CREATE OR REPLACE FUNCTION "${schema}".backfill_generation_snapshot_task_center_diagnostics_batch(
+          after_id uuid,
+          batch_size integer
+        ) RETURNS TABLE(processed_count integer, next_id uuid)
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          INSERT INTO "${schema}"."task_center_backfill_probe" VALUES ('snapshot');
+          RETURN QUERY SELECT 0, NULL::uuid;
+        END
+        $$;
+        DELETE FROM "${schema}"."app_schema_migrations"
+        WHERE migration_name = '20260824-task-center-provider-diagnostics.sql';
+      `);
+      const resumedBackfillResult = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply", "--runtime-safe"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(
+        resumedBackfillResult.status,
+        0,
+        resumedBackfillResult.stderr || resumedBackfillResult.stdout,
+      );
+      const resumedBackfills = await client.query(
+        `SELECT function_name FROM "${schema}"."task_center_backfill_probe" ORDER BY function_name`,
+      );
+      assert.deepEqual(resumedBackfills.rows.map((row) => row.function_name), ["provider", "snapshot"]);
+      const taskCenterProviderDiagnosticsSql = await readFile(
+        new URL("../packages/db/migrations/20260824-task-center-provider-diagnostics.sql", import.meta.url),
+        "utf8",
+      );
+      await client.query(taskCenterProviderDiagnosticsSql);
       const characterLibraryTables = await client.query(
         `SELECT count(*)::int AS count FROM information_schema.tables
          WHERE table_schema = $1
@@ -180,19 +367,42 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         retry_policy_json: { submitAttempts: 3, finalizeAttempts: 3 },
       });
 
+      const legacyWorkflowCleanupSql = await readFile(
+        new URL("../packages/db/migrations/20260728-z-remove-legacy-workflow-runtime.sql", import.meta.url),
+        "utf8",
+      );
+      await client.query(legacyWorkflowCleanupSql);
+
       await client.query(`
         UPDATE "${schema}"."app_schema_migrations"
         SET checksum = CASE migration_name
           WHEN 'user-centric-schema.sql' THEN 'd8b1d9a272896aaa46c3473ebf8161973dfa589c1eb78af687a5b7bbe1cb3a9f'
           WHEN 'model-reference-seed.sql' THEN '3d584b47e1bb425356d77c85076aedf7060cc2e66bd473110b4ae8cf0be975b3'
+          WHEN '20260720-add-aliyun-bailian-audio-model.sql' THEN 'e15713b3f69203ec2688d5bc347535f26853dc8024f7cf2f436d04365fa0b67e'
           WHEN '20260720-enable-project-multi-canvases.sql' THEN '5984810d4b1fd7e6f1aecf6b5413536a28ae7e936794d36dd9581f8db8a25f17'
+          WHEN '20260728-comfyui-workflow-library.sql' THEN '11823cfc09173a497118a2f1853d11af5b536b9ac993998465e44602ab139322'
+          WHEN '20260728-z-remove-legacy-workflow-runtime.sql' THEN '3bdd5a635d991506f9e666f1b4f408ab8acca1e9fbb6a25d0f1c2b8198b49b9e'
+          WHEN '20260728-add-bananarouter-models.sql' THEN 'c34889dfd4cae6f8cef5c179dfaddad87bb0384b9d8f5fe10a50054fb26d5a4c'
+          WHEN '20260802-canvas-settings.sql' THEN '0ad891fddcf504214b574bddaa344056e1b326f832a410eca5acc5c72e0f630f'
           ELSE checksum
         END
         WHERE migration_name IN (
           'user-centric-schema.sql',
           'model-reference-seed.sql',
-          '20260720-enable-project-multi-canvases.sql'
+          '20260720-add-aliyun-bailian-audio-model.sql',
+          '20260720-enable-project-multi-canvases.sql',
+          '20260728-comfyui-workflow-library.sql',
+          '20260728-z-remove-legacy-workflow-runtime.sql',
+          '20260728-add-bananarouter-models.sql',
+          '20260802-canvas-settings.sql'
         )
+      `);
+      await client.query(`
+        ALTER TABLE "${schema}"."ai_model_configs"
+          DROP CONSTRAINT ai_model_configs_provider_protocol_check,
+          ADD CONSTRAINT ai_model_configs_provider_protocol_check CHECK (provider_protocol IS NOT NULL);
+        DELETE FROM "${schema}"."app_schema_migrations"
+        WHERE migration_name = '20260826-converge-provider-protocol-constraint.sql'
       `);
       const compatibilityResult = spawnSync(
         process.execPath,
@@ -207,6 +417,62 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         compatibilityResult.status,
         0,
         compatibilityResult.stderr || compatibilityResult.stdout,
+      );
+      const convergedProviderConstraint = await client.query(`
+        SELECT pg_get_constraintdef(constraint_record.oid) AS definition
+        FROM pg_constraint constraint_record
+        WHERE constraint_record.conrelid = '"${schema}"."ai_model_configs"'::regclass
+          AND constraint_record.conname = 'ai_model_configs_provider_protocol_check'
+      `);
+      assert.match(convergedProviderConstraint.rows[0]?.definition ?? "", /cumob_chat/);
+      assert.match(convergedProviderConstraint.rows[0]?.definition ?? "", /apimart_audio/);
+      assert.match(convergedProviderConstraint.rows[0]?.definition ?? "", /banana_router/);
+      await client.query(`
+        UPDATE "${schema}"."app_schema_migrations"
+        SET checksum = CASE migration_name
+          WHEN '20260720-add-aliyun-bailian-audio-model.sql' THEN 'eb9e734607ef21304fcedc7ab9a3c9cdaddb54adc6cbd03c2dfa4f23c5a82f7b'
+          WHEN '20260728-comfyui-workflow-library.sql' THEN 'c2152426c20d067dd408faec0ee553040e9b034be3caf6c8dc80c1fd8e06171b'
+          WHEN '20260728-z-remove-legacy-workflow-runtime.sql' THEN '7629102ae1825ee04fb31b814a14419a934076c80c880c4596192405decfda69'
+          ELSE checksum
+        END
+        WHERE migration_name IN (
+          '20260720-add-aliyun-bailian-audio-model.sql',
+          '20260728-comfyui-workflow-library.sql',
+          '20260728-z-remove-legacy-workflow-runtime.sql'
+        )
+      `);
+      const cleanupCrlfCompatibilityResult = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(
+        cleanupCrlfCompatibilityResult.status,
+        0,
+        cleanupCrlfCompatibilityResult.stderr || cleanupCrlfCompatibilityResult.stdout,
+      );
+      await client.query(`
+        UPDATE "${schema}"."app_schema_migrations"
+        SET checksum = '99a6a8111f77709b887d65cf71df83b9a0ad1c8f6bb7037319ae3b29ac3b433a'
+        WHERE migration_name = '20260728-add-bananarouter-models.sql'
+      `);
+      const crlfCompatibilityResult = spawnSync(
+        process.execPath,
+        ["scripts/migrate-user-scope.mjs", "--apply"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+        },
+      );
+      assert.equal(
+        crlfCompatibilityResult.status,
+        0,
+        crlfCompatibilityResult.stderr || crlfCompatibilityResult.stdout,
       );
 
       await client.query(`

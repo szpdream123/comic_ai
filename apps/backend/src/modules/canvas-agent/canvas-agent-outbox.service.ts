@@ -88,21 +88,36 @@ export class CanvasAgentOutboxService {
     const result = await this.deps.db.query<OutboxRow>(
       `
         WITH candidates AS (
-          SELECT outbox.id, conversation.shard_id
+          SELECT outbox.id, conversation.id AS conversation_id, conversation.shard_id
           FROM canvas_agent_outbox outbox
           JOIN canvas_agent_tasks task ON task.id = outbox.task_id
           JOIN canvas_agent_conversations conversation ON conversation.id = task.conversation_id
           WHERE outbox.status='pending' AND outbox.available_at <= $1
           ORDER BY outbox.created_at ASC
           LIMIT $2
-          FOR UPDATE OF outbox SKIP LOCKED
+          FOR UPDATE OF outbox, conversation SKIP LOCKED
+        ), assigned_conversations AS (
+          UPDATE canvas_agent_conversations conversation
+          SET shard_id = ((hashtextextended(conversation.id::text, 0) % 16 + 16) % 16)::integer,
+              updated_at = $1
+          FROM (
+            SELECT DISTINCT conversation_id
+            FROM candidates
+            WHERE shard_id IS NULL
+          ) missing
+          WHERE conversation.id = missing.conversation_id
+            AND conversation.shard_id IS NULL
+          RETURNING conversation.id, conversation.shard_id
         )
         UPDATE canvas_agent_outbox outbox
         SET status='dispatching', locked_by=$3, locked_at=$1,
             attempt_count=attempt_count+1, updated_at=$1
         FROM candidates
+        LEFT JOIN assigned_conversations assigned
+          ON assigned.id = candidates.conversation_id
         WHERE outbox.id=candidates.id
-        RETURNING outbox.id, outbox.task_id, outbox.event_key, outbox.payload_json, candidates.shard_id
+        RETURNING outbox.id, outbox.task_id, outbox.event_key, outbox.payload_json,
+          COALESCE(assigned.shard_id, candidates.shard_id) AS shard_id
       `,
       [now, limit, this.deps.workerId],
     );

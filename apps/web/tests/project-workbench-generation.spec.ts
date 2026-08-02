@@ -21884,6 +21884,86 @@ describe("production workbench project tab", () => {
     ), false);
   });
 
+  it("renames real project episodes through the project-scoped endpoint", async () => {
+    const episodeId = "10000000-0000-4000-8000-000000000001";
+    const projectId = "project-1";
+    const updateCalls = [];
+    let legacyUpdateCalled = false;
+    const baseState = buildProjectState();
+    const workbench = {
+      state: {
+        ...baseState,
+        project: {
+          ...baseState.project,
+          id: projectId,
+        },
+        projectDetail: {
+          project: { id: projectId, name: "try" },
+          episodes: [
+            {
+              id: episodeId,
+              title: "旧剧集名",
+              status: "draft",
+              storyboardCount: 0,
+            },
+          ],
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+      api: {
+        async updateProjectEpisode(requestProjectId, requestEpisodeId, input) {
+          updateCalls.push({ projectId: requestProjectId, episodeId: requestEpisodeId, input });
+          return { episode: { id: episodeId, title: input.title } };
+        },
+        async updateEpisode() {
+          legacyUpdateCalled = true;
+          throw new Error("legacy update should not be called for project episodes");
+        },
+        async getProjectDetailV2(requestProjectId) {
+          assert.equal(requestProjectId, projectId);
+          return {
+            project: { id: projectId, name: "try" },
+            episodes: [
+              {
+                id: episodeId,
+                title: "新剧集名",
+                status: "draft",
+                storyboardCount: 0,
+              },
+            ],
+            shots: [],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: projectId,
+        renameEpisodeId: episodeId,
+        renameEpisodeName: "新剧集名",
+      }),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-rename-episode-card" },
+    });
+
+    assert.deepEqual(updateCalls, [{ projectId, episodeId, input: { title: "新剧集名" } }]);
+    assert.equal(legacyUpdateCalled, false);
+    assert.equal(workbench.state.projectDetail.episodes[0]?.title, "新剧集名");
+    assert.equal(workbench.ui.renameEpisodeId, null);
+    assert.equal(workbench.ui.renameEpisodeName, "");
+    assert.equal(workbench.ui.toast, "操作已完成。");
+  });
+
   it("deletes real project episodes through the project-scoped endpoint", async () => {
     const episodeId = "10000000-0000-4000-8000-000000000001";
     const projectId = "project-1";
@@ -22141,7 +22221,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult.taskId, "storyboard-image-task-1");
   });
 
-  it("submits the storyboard generator modal through image generation and restores the video composer", async () => {
+  it("submits the storyboard generator modal while another workbench action is busy", async () => {
     const episodeId = "10000000-0000-4000-8000-000000000001";
     const storyboard = {
       ...addStoryboard([])[0],
@@ -22176,6 +22256,7 @@ describe("production workbench project tab", () => {
         },
       },
       ui: buildProjectUi({
+        busy: true,
         projectPanelMode: "episode-workbench",
         museScopeMode: "storyboard",
         episodeMediaMode: "video",
@@ -22307,6 +22388,66 @@ describe("production workbench project tab", () => {
     const completedOverview = renderStoryboardGeneratorTaskOverview(workbench.ui);
     assert.match(completedOverview, /已完成/);
     assert.match(completedOverview, /storyboard-modal-completed\.png/);
+  });
+
+  it("keeps non-storyboard asset generation blocked while another workbench action is busy", async () => {
+    let createCalls = 0;
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createImageGenerationTask() {
+          createCalls += 1;
+          return { taskId: "unexpected-team-generation" };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "library",
+        busy: true,
+        assetGeneratorTarget: "team",
+        assetGeneratorModal: "scene",
+        assetGeneratorName: "不应提交的场景",
+        assetGeneratorPrompt: "另一个操作繁忙时不应提交。",
+        assetGeneratorModelCode: "gpt-image-2-cn",
+      }),
+      root: { innerHTML: "", querySelector: () => null },
+      timers: new Set(),
+      uploadTasks: new Map(),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    assert.equal(createCalls, 0);
+    assert.equal(workbench.ui.busy, true);
+
+    const html = renderProductionWorkbench({
+      state: workbench.state,
+      session: workbench.session,
+      ui: workbench.ui,
+    });
+    assert.match(html, /data-action="submit-asset-generator"[^>]*disabled/);
+  });
+
+  it("keeps the storyboard generator open while its submission is still in flight", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      ui: buildProjectUi({
+        assetGeneratorTarget: "storyboard",
+        assetGeneratorModal: "storyboard",
+        assetGeneratorSubmitting: true,
+      }),
+      root: { innerHTML: "", querySelector: () => null },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "close-asset-generator-modal" },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorModal, "storyboard");
+    assert.equal(workbench.ui.assetGeneratorSubmitting, true);
+    assert.match(workbench.ui.toast, /正在提交/);
   });
 
   it("renders the completed storyboard image inside the generator task overview", () => {
@@ -53348,6 +53489,35 @@ describe("asset import modal", () => {
     assert.match(createModalBlock, /min-height:\s*0/);
     assert.match(createPreviewBlock, /display:\s*none/);
     assert.match(createPromptBlock, /min-height:\s*15rem/);
+  });
+
+  it("keeps storyboard generator scrolling inside the prompt editor", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    const storyboardFormBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardPromptBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s+\.asset-generator-prompt\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardShellBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s+\.asset-generator-prompt-shell\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardEditorBlock = css.match(
+      /\.asset-generator-modal-create:not\(\.has-task-overview\)\s+\.storyboard-generator-form\s+\.asset-generator-prompt-editor-host\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(storyboardFormBlock, /grid-template-rows:\s*auto auto minmax\(0,\s*1fr\)/);
+    assert.match(storyboardFormBlock, /height:\s*min\(62rem,\s*calc\(100dvh - 6rem\)\)/);
+    assert.match(storyboardFormBlock, /overflow:\s*hidden/);
+    assert.match(storyboardPromptBlock, /min-height:\s*0/);
+    assert.match(storyboardShellBlock, /box-sizing:\s*border-box/);
+    assert.match(storyboardShellBlock, /height:\s*100%/);
+    assert.match(storyboardEditorBlock, /height:\s*100%/);
+    assert.match(storyboardEditorBlock, /max-height:\s*none/);
   });
 
   it("renders a real local upload intake and in-modal review state", () => {

@@ -168,10 +168,12 @@ async function routeGenerationOutboxEvent(
     providerRouteIdentity,
     stage === "persist" ? readString(event.payload.storageBucket) : "",
   ].filter(Boolean).join(":");
-  const assignmentDiscriminator = event.eventType === generationTaskFinalizeRequestedEventType
-      && readString(event.payload.finalizeMode) !== "retry_persist_asset"
-    ? event.id
-    : readPositiveInteger(event.payload.pollAttempt) ?? 0;
+  const assignmentDiscriminator = event.eventType === generationTaskCreatedEventType
+    ? readString(event.payload.dispatchToken) || 0
+    : event.eventType === generationTaskFinalizeRequestedEventType
+        && readString(event.payload.finalizeMode) !== "retry_persist_asset"
+      ? event.id
+      : readPositiveInteger(event.payload.pollAttempt) ?? 0;
   const assignmentKey = `${event.eventType}:${taskId}:${stage}:${assignmentDiscriminator}`;
   const redisJobId = buildGenerationBullMQJob(event, input.config).jobId;
   let assignment: {

@@ -780,6 +780,11 @@ export async function settleReservationAllocationInTransaction(
           consumedDelta: 0,
         };
 
+  const wallet = await findCreditWalletForUpdate(db, { userId: reservation.userId });
+  if (!wallet) {
+    throw new CreditLedgerConflictError();
+  }
+
   const updatedReservation = await applyReservationSettlement(db, {
     reservationId: reservation.id,
     amount: input.amount,
@@ -793,11 +798,6 @@ export async function settleReservationAllocationInTransaction(
     outcome: input.outcome,
     now: input.now,
   });
-
-  const wallet = await findCreditWalletForUpdate(db, { userId: reservation.userId });
-  if (!wallet) {
-    throw new CreditLedgerConflictError();
-  }
 
   const ledger = await insertLedgerEntry(db, {
     userId: reservation.userId,

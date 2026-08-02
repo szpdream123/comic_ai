@@ -24,6 +24,34 @@ interface ModelErrorRule {
   pattern: RegExp;
 }
 
+const MODEL_ERROR_RESPONSE_CANDIDATE_KEYS = [
+  "providerRawResponse",
+  "responseBodyPreview",
+  "responseBody",
+  "body",
+  "providerDiagnostics",
+  "diagnostics",
+  "providerResponse",
+  "response",
+  "snapshotFailure",
+  "failure",
+  "data",
+  "value",
+  "error",
+  "errors",
+  "providerMessage",
+  "errorMessage",
+  "message",
+  "reason",
+  "displayMessage",
+  "details",
+  "providerErrorCode",
+  "errorCode",
+  "code",
+  "failureCode",
+  "statusText",
+] as const;
+
 const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">>> = {
   model_not_configured: {
     code: "model_not_configured",
@@ -371,33 +399,6 @@ function collectModelErrorCandidates(value: unknown): string[] {
   const candidates: string[] = [];
   const seenStrings = new Set<string>();
   const seenObjects = new WeakSet<object>();
-  const prioritizedKeys = [
-    "providerRawResponse",
-    "responseBodyPreview",
-    "responseBody",
-    "body",
-    "providerDiagnostics",
-    "diagnostics",
-    "providerResponse",
-    "response",
-    "snapshotFailure",
-    "failure",
-    "data",
-    "value",
-    "error",
-    "errors",
-    "providerMessage",
-    "errorMessage",
-    "message",
-    "reason",
-    "displayMessage",
-    "details",
-    "providerErrorCode",
-    "errorCode",
-    "code",
-    "failureCode",
-    "statusText",
-  ];
   const visit = (entry: unknown, depth: number) => {
     if (depth > 6 || candidates.length >= 80 || entry === null || entry === undefined) return;
     if (typeof entry === "string") {
@@ -420,7 +421,7 @@ function collectModelErrorCandidates(value: unknown): string[] {
     if (seenObjects.has(entry)) return;
     seenObjects.add(entry);
     const record = entry as Record<string, unknown>;
-    for (const key of prioritizedKeys) {
+    for (const key of MODEL_ERROR_RESPONSE_CANDIDATE_KEYS) {
       if (key in record) visit(record[key], depth + 1);
     }
   };
