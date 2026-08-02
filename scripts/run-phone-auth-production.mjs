@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
+import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
 const runtime = findNodeRuntime(18);
 const serverEntrypoint = join(
@@ -22,6 +23,7 @@ if (!existsSync(serverEntrypoint)) {
 
 loadDotEnvFile(envFilePath);
 process.env.NODE_ENV = "production";
+runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
 
 const listenHost = (process.env.HOST ?? "0.0.0.0").trim() || "0.0.0.0";
 const publicHost = (process.env.PUBLIC_HOST ?? listenHost).trim() || listenHost;
@@ -41,7 +43,10 @@ const supervisor = createCreatorDevServiceSupervisor({
   spawnProcess(name, args) {
     const child = spawn(runtime, args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: {
+        ...process.env,
+        CREATOR_DEV_STACK_MANAGED: "true",
+      },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

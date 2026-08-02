@@ -555,6 +555,76 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("keeps the task center readable while provider diagnostics columns are pending migration", async () => {
+    const db = await createMigratedTestDb();
+    let schemaProbeCount = 0;
+    const taskCenterQueries: string[] = [];
+    const observedDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (sql.includes("FROM information_schema.columns")) schemaProbeCount += 1;
+        if (sql.includes("WITH generation_items AS")) taskCenterQueries.push(sql);
+        return db.query<T>(sql, params);
+      },
+      async close() {
+        await db.close();
+      },
+    };
+    const server = createPhoneAuthDevServer({ db: observedDb });
+
+    try {
+      await db.query(`
+        ALTER TABLE provider_requests
+          DROP COLUMN task_center_diagnostics_json CASCADE,
+          DROP COLUMN task_center_diagnostics_backfilled_at CASCADE;
+        ALTER TABLE ai_generation_task_snapshots
+          DROP COLUMN task_center_diagnostics_json CASCADE,
+          DROP COLUMN task_center_diagnostics_backfilled_at CASCADE;
+      `);
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+
+      const response = await fetch(`${server.origin}/api/task-center/tasks?page=1&pageSize=20`, {
+        headers: { cookie },
+        signal: AbortSignal.timeout(3_000),
+      });
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(envelope.data.items, []);
+      assert.equal(schemaProbeCount, 1);
+      assert.doesNotMatch(taskCenterQueries.at(-1) ?? "", /provider_request\.task_center_diagnostics_json/);
+
+      await db.query(`
+        ALTER TABLE provider_requests
+          ADD COLUMN task_center_diagnostics_json jsonb,
+          ADD COLUMN task_center_diagnostics_backfilled_at timestamptz;
+        ALTER TABLE ai_generation_task_snapshots
+          ADD COLUMN task_center_diagnostics_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+          ADD COLUMN task_center_diagnostics_backfilled_at timestamptz;
+      `);
+      const migratedResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3_000) },
+      );
+
+      assert.equal(migratedResponse.status, 200);
+      assert.equal(schemaProbeCount, 1);
+      assert.doesNotMatch(taskCenterQueries.at(-1) ?? "", /provider_request\.task_center_diagnostics_json/);
+
+      await new Promise((resolve) => setTimeout(resolve, 5_100));
+      const refreshedResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20`,
+        { headers: { cookie }, signal: AbortSignal.timeout(3_000) },
+      );
+
+      assert.equal(refreshedResponse.status, 200);
+      assert.equal(schemaProbeCount, 2);
+      assert.match(taskCenterQueries.at(-1) ?? "", /provider_request\.task_center_diagnostics_json/);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("limits a team member task center to tasks created by that member", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });

@@ -2,6 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
+
 const runtime = findNodeRuntime(18);
 const serverEntrypoint = join(
   process.cwd(),
@@ -19,6 +21,10 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath, { override: true });
+if (process.env.NODE_ENV === "production") {
+  console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
+  process.exit(1);
+}
 if (process.env.PHONE_AUTH_HTTP_ONLY === "true") {
   process.env.GENERATION_QUEUE_REQUIRED = "false";
   process.env.BULLMQ_OUTBOX_DISPATCHER_ENABLED = "false";
@@ -45,9 +51,8 @@ if (generationQueueRequired && process.env.CREATOR_DEV_STACK_MANAGED !== "true")
   });
   process.exit(stackResult.status ?? 1);
 }
-if (process.env.NODE_ENV === "production") {
-  console.error("Refusing to start phone-auth dev server with NODE_ENV=production.");
-  process.exit(1);
+if (process.env.CREATOR_DEV_STACK_MANAGED !== "true") {
+  runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
 }
 const serverArgs = [
     ...resolveTsxRuntimeArgs(runtime),

@@ -3,7 +3,12 @@ import { join } from "node:path";
 import Redis from "ioredis";
 import { Client } from "pg";
 
+import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
+
 loadDotEnvFile(join(process.cwd(), ".env"));
+if (process.env.CREATOR_DEV_STACK_MANAGED !== "true") {
+  runRuntimeSchemaMigrations({ runtime: process.execPath, cwd: process.cwd(), env: process.env });
+}
 
 const [
   { createDevDb, runWithDatabaseContext },

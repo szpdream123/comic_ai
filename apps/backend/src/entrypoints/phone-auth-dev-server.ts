@@ -5352,6 +5352,7 @@ async function listTaskCenterTasks(
     cursor?: { updatedAt: string; taskId: string } | null;
   },
 ) {
+  const diagnosticsSchema = await taskCenterDiagnosticsSchemaForDb(db);
   const offset = input.cursor ? 0 : Math.max(0, (input.page - 1) * input.pageSize);
   const normalizedStatus = readString(input.status) || null;
   const normalizedKind = readString(input.kind) || null;
@@ -5418,9 +5419,16 @@ async function listTaskCenterTasks(
           CASE
             WHEN task.status = 'succeeded' THEN NULL::jsonb
             ELSE COALESCE(
-              ${taskCenterProviderDiagnosticsSql("provider_request.task_center_diagnostics_json")},
+              ${diagnosticsSchema.providerRequests
+                ? taskCenterProviderDiagnosticsSql("provider_request.task_center_diagnostics_json")
+                : "NULL::jsonb"},
               '{}'::jsonb
-            ) || COALESCE(snapshot.task_center_diagnostics_json, '{}'::jsonb)
+            ) || COALESCE(
+              ${diagnosticsSchema.generationSnapshots
+                ? "snapshot.task_center_diagnostics_json"
+                : "NULL::jsonb"},
+              '{}'::jsonb
+            )
           END AS provider_response_json,
           snapshot.submitted_at,
           snapshot.started_at,
@@ -5437,7 +5445,7 @@ async function listTaskCenterTasks(
         LEFT JOIN projects project ON project.id = snapshot.project_id
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
         LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
-        LEFT JOIN LATERAL (
+        ${diagnosticsSchema.providerRequests ? `LEFT JOIN LATERAL (
           SELECT request.task_center_diagnostics_json
           FROM provider_requests request
           WHERE request.task_id = snapshot.task_id
@@ -5445,7 +5453,7 @@ async function listTaskCenterTasks(
             AND request.task_center_diagnostics_json <> '{}'::jsonb
           ORDER BY request.updated_at DESC, request.created_at DESC, request.id DESC
           LIMIT 1
-        ) provider_request ON true
+        ) provider_request ON true` : ""}
         WHERE snapshot.user_id = $1
           AND ($2::uuid IS NULL OR snapshot.request_summary_json->>'teamMemberId' = $2::text)
           AND (
@@ -5543,7 +5551,9 @@ async function listTaskCenterTasks(
                 'providerErrorCode', request.failure_code,
                 'errorCode', request.failure_code
               )) || COALESCE(
-                ${taskCenterProviderDiagnosticsSql("request.task_center_diagnostics_json")},
+                ${diagnosticsSchema.providerRequests
+                  ? taskCenterProviderDiagnosticsSql("request.task_center_diagnostics_json")
+                  : "NULL::jsonb"},
                 '{}'::jsonb
               )
             ELSE NULL::jsonb
@@ -5716,6 +5726,58 @@ async function listTaskCenterTasks(
     hasNext,
     nextCursor,
   };
+}
+
+const taskCenterDiagnosticsSchemaNegativeTtlMs = 5_000;
+const taskCenterDiagnosticsSchemaCache = new WeakMap<object, {
+  loading: Promise<{
+    providerRequests: boolean;
+    generationSnapshots: boolean;
+  }>;
+  expiresAt: number;
+}>();
+
+async function taskCenterDiagnosticsSchemaForDb(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const cached = taskCenterDiagnosticsSchemaCache.get(db);
+  if (cached && cached.expiresAt > Date.now()) return cached.loading;
+  if (cached) taskCenterDiagnosticsSchemaCache.delete(db);
+  const loading = db.query<{
+    provider_requests: boolean;
+    generation_snapshots: boolean;
+  }>(`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'provider_requests'
+          AND column_name = 'task_center_diagnostics_json'
+      ) AS provider_requests,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'ai_generation_task_snapshots'
+          AND column_name = 'task_center_diagnostics_json'
+      ) AS generation_snapshots
+  `).then((result) => ({
+    providerRequests: result.rows[0]?.provider_requests === true,
+    generationSnapshots: result.rows[0]?.generation_snapshots === true,
+  }));
+  const cacheEntry = { loading, expiresAt: Number.POSITIVE_INFINITY };
+  taskCenterDiagnosticsSchemaCache.set(db, cacheEntry);
+  try {
+    const schema = await loading;
+    if (!schema.providerRequests || !schema.generationSnapshots) {
+      cacheEntry.expiresAt = Date.now() + taskCenterDiagnosticsSchemaNegativeTtlMs;
+    }
+    return schema;
+  } catch (error) {
+    taskCenterDiagnosticsSchemaCache.delete(db);
+    throw error;
+  }
 }
 
 function encodeTaskCenterCursor(cursor: { updatedAt: string; taskId: string }) {

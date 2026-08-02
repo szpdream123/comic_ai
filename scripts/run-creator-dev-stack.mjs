@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
+import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
 const runtime = findNodeRuntime(18);
 const envFilePath = join(process.cwd(), ".env");
@@ -11,6 +12,7 @@ const runDir = join(process.cwd(), ".local", "run");
 const stopRequestFile = join(runDir, "creator-dev-stack.stop");
 
 loadDotEnvFile(envFilePath, { override: true });
+runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
 mkdirSync(logDir, { recursive: true });
 mkdirSync(runDir, { recursive: true });
 rmSync(stopRequestFile, { force: true });
