@@ -8343,7 +8343,10 @@ function isCurrentEpisodeComposerGenerationPending(workbench, scopeMode, mediaMo
   }
   const storyboardId = target.storyboardId ?? workbench.ui.selectedStoryboardId ?? null;
   const submissionKey = `${workbench.ui.selectedEpisodeId ?? ""}:${storyboardId ?? ""}:${mediaKind}`;
-  if (mediaKind === "video" && workbench.videoGenerationSubmissionKeys?.has(submissionKey)) {
+  const submissionKeys = mediaKind === "video"
+    ? workbench.videoGenerationSubmissionKeys
+    : workbench.imageGenerationSubmissionKeys;
+  if (submissionKeys?.has(submissionKey)) {
     return true;
   }
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId) ?? null;
@@ -8457,6 +8460,10 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
   const nextPromptDock = replacement.firstElementChild;
   if (nextPromptDock) {
     if (options.preserveControls === true) {
+      syncEpisodeWorkbenchPromptSubmissionStateDom(currentPromptDock, nextPromptDock);
+      if (options.submissionStateOnly === true) {
+        return;
+      }
       const currentPromptContent = currentPromptDock.querySelector?.(".episode-replica-textarea") ?? null;
       const nextPromptContent = nextPromptDock.querySelector?.(".episode-replica-textarea") ?? null;
       if (currentPromptContent && nextPromptContent) {
@@ -8479,6 +8486,44 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
     return;
   }
   render(workbench);
+}
+
+function syncEpisodeWorkbenchPromptSubmissionStateDom(currentPromptDock, nextPromptDock) {
+  currentPromptDock.removeAttribute?.("inert");
+  if (nextPromptDock.hasAttribute?.("aria-busy")) {
+    currentPromptDock.setAttribute?.("aria-busy", nextPromptDock.getAttribute?.("aria-busy") ?? "true");
+  } else {
+    currentPromptDock.removeAttribute?.("aria-busy");
+  }
+  const currentGenerateButton = currentPromptDock.querySelector?.(".episode-replica-generate") ?? null;
+  const nextGenerateButton = nextPromptDock.querySelector?.(".episode-replica-generate") ?? null;
+  if (!currentGenerateButton || !nextGenerateButton) {
+    return;
+  }
+  const generateDisabled = Boolean(
+    nextGenerateButton.disabled || nextGenerateButton.hasAttribute?.("disabled"),
+  );
+  currentGenerateButton.disabled = generateDisabled;
+  if (generateDisabled) {
+    currentGenerateButton.setAttribute?.("disabled", "");
+  } else {
+    currentGenerateButton.removeAttribute?.("disabled");
+  }
+  const currentLabel = currentGenerateButton.querySelector?.(".episode-replica-generate-label") ?? null;
+  const nextLabel = nextGenerateButton.querySelector?.(".episode-replica-generate-label") ?? null;
+  if (currentLabel && nextLabel) {
+    currentLabel.textContent = nextLabel.textContent;
+  }
+}
+
+export function syncEpisodeWorkbenchPromptSubmissionStateDomForTest(currentPromptDock, nextPromptDock) {
+  syncEpisodeWorkbenchPromptSubmissionStateDom(currentPromptDock, nextPromptDock);
+}
+
+function syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench) {
+  if (workbench.root?.querySelector?.(".episode-replica-prompt")) {
+    renderEpisodeWorkbenchPromptDockOnly(workbench, { preserveControls: true });
+  }
 }
 
 function syncEpisodeWorkbenchPromptContentDom(workbench, currentContent, nextContent, promptInputState) {
@@ -9270,7 +9315,7 @@ function isPromptMentionGeneratedMediaItem(item) {
   );
 }
 
-function renderEpisodeWorkbenchSelectionOnly(workbench) {
+function renderEpisodeWorkbenchSelectionOnly(workbench, options = {}) {
   const root = workbench?.root;
   if (!root?.querySelector || workbench.ui.projectPanelMode !== "episode-workbench") {
     return false;
@@ -9284,7 +9329,10 @@ function renderEpisodeWorkbenchSelectionOnly(workbench) {
   syncEpisodeWorkbenchStageTitleDom(workbench);
   renderEpisodeWorkbenchStageBodyOnly(workbench);
   syncEpisodeWorkbenchAssetStageStateDomForTest(workbench, stageBody);
-  renderEpisodeWorkbenchPromptDockOnly(workbench, { preserveControls: true });
+  renderEpisodeWorkbenchPromptDockOnly(workbench, {
+    preserveControls: true,
+    submissionStateOnly: options.submissionStateOnly === true,
+  });
   return true;
 }
 
@@ -9303,8 +9351,8 @@ export function syncEpisodeWorkbenchAssetStageStateDomForTest(workbench, stageBo
   center.classList.toggle("empty-composer", !hasConversationEntries);
 }
 
-function renderEpisodeWorkbenchHydratedSurfacesOnly(workbench) {
-  const didRender = renderEpisodeWorkbenchSelectionOnly(workbench);
+function renderEpisodeWorkbenchHydratedSurfacesOnly(workbench, options = {}) {
+  const didRender = renderEpisodeWorkbenchSelectionOnly(workbench, options);
   if (!didRender) {
     return false;
   }
@@ -9320,7 +9368,7 @@ function renderEpisodeWorkbenchGenerationSurfacesOnly(workbench) {
     render(workbench);
     return;
   }
-  if (!renderEpisodeWorkbenchHydratedSurfacesOnly(workbench)) {
+  if (!renderEpisodeWorkbenchHydratedSurfacesOnly(workbench, { submissionStateOnly: true })) {
     render(workbench);
   }
 }
@@ -9455,6 +9503,12 @@ function renderEpisodeWorkbenchPollingUpdate(workbench) {
   if (workbench?.ui?.projectPanelMode === "episode-workbench") {
     renderStoryboardGeneratorTaskOverviewOnly(workbench);
     syncEpisodeWorkbenchGenerationBadgeDom(workbench);
+    if (workbench.root?.querySelector?.(".episode-replica-prompt")) {
+      renderEpisodeWorkbenchPromptDockOnly(workbench, {
+        preserveControls: true,
+        submissionStateOnly: true,
+      });
+    }
     if (renderEpisodeWorkbenchGenerationEntryUpdate(workbench)) {
       return;
     }
@@ -38246,8 +38300,14 @@ function clearStoryboardGenerationComposerAfterSubmit(workbench, storyboardId, l
 function captureStoryboardGenerationComposerDraft(workbench, storyboard) {
   const generationState = storyboard?.generationState ?? createEmptyGenerationState();
   const prompt = String(getCurrentScopePrompt(workbench) ?? "");
-  return {
+  const draft = {
     prompt,
+    context: {
+      episodeId: workbench.ui.selectedEpisodeId ?? null,
+      storyboardId: storyboard?.id ?? null,
+      scopeMode: workbench.ui.museScopeMode ?? "storyboard",
+      mediaMode: workbench.ui.episodeMediaMode ?? "image",
+    },
     generationState: {
       ...generationState,
       prompt,
@@ -38259,6 +38319,40 @@ function captureStoryboardGenerationComposerDraft(workbench, storyboard) {
     selectedAttachmentIds: [...(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [])],
     lipSyncAudioItems: [...(workbench.ui.lipSyncAudioItems ?? [])],
   };
+  return {
+    ...draft,
+    fingerprint: createStoryboardGenerationComposerDraftFingerprint(draft),
+  };
+}
+
+function createStoryboardGenerationComposerDraftFingerprint(draft) {
+  const { lastSubmission: _lastSubmission, ...generationState } = draft?.generationState ?? {};
+  return JSON.stringify({
+    prompt: draft?.prompt ?? "",
+    context: draft?.context ?? null,
+    generationState,
+    attachmentItems: draft?.attachmentItems ?? [],
+    selectedAttachmentIds: draft?.selectedAttachmentIds ?? [],
+    lipSyncAudioItems: draft?.lipSyncAudioItems ?? [],
+  });
+}
+
+function isStoryboardGenerationComposerDraftUnchanged(workbench, storyboardId, expectedDraft) {
+  const expectedContext = expectedDraft?.context ?? null;
+  if (
+    workbench.ui.selectedEpisodeId !== expectedContext?.episodeId ||
+    workbench.ui.selectedStoryboardId !== storyboardId ||
+    storyboardId !== expectedContext?.storyboardId ||
+    (workbench.ui.museScopeMode ?? "storyboard") !== expectedContext?.scopeMode ||
+    (workbench.ui.episodeMediaMode ?? "image") !== expectedContext?.mediaMode
+  ) {
+    return false;
+  }
+  const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId) ?? null;
+  if (!storyboard || !expectedDraft?.fingerprint) {
+    return false;
+  }
+  return captureStoryboardGenerationComposerDraft(workbench, storyboard).fingerprint === expectedDraft.fingerprint;
 }
 
 function restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, storyboardId, draft) {
@@ -38273,6 +38367,19 @@ function restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, storyb
   workbench.ui.episodeWorkbenchAttachments = draft.attachmentItems;
   workbench.ui.episodeWorkbenchSelectedAttachmentIds = draft.selectedAttachmentIds;
   workbench.ui.lipSyncAudioItems = draft.lipSyncAudioItems;
+}
+
+function restoreStoryboardGenerationComposerAfterSubmitFailureIfUnchanged(
+  workbench,
+  storyboardId,
+  draft,
+  expectedCurrentDraft,
+) {
+  if (!isStoryboardGenerationComposerDraftUnchanged(workbench, storyboardId, expectedCurrentDraft)) {
+    return false;
+  }
+  restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, storyboardId, draft);
+  return true;
 }
 
 function resolveStoryboardReferenceLabel(storyboard) {
@@ -38293,8 +38400,24 @@ export async function generateStoryboardImages(workbench, options = {}) {
     throw new Error("creator_shots_missing");
   }
 
-  stopGenerationPolling(workbench);
   const isStoryboardGenerator = options.sourceSurface === STORYBOARD_GENERATOR_SOURCE_SURFACE;
+  const submissionKey = `${workbench.ui.selectedEpisodeId ?? ""}:${selectedStoryboard.id}:image`;
+  const submissionKeys = workbench.imageGenerationSubmissionKeys ?? new Set();
+  workbench.imageGenerationSubmissionKeys = submissionKeys;
+  if (
+    !isStoryboardGenerator &&
+    (
+      submissionKeys.has(submissionKey) ||
+      isCurrentEpisodeComposerGenerationPending(workbench, "storyboard", "image", {
+        storyboardId: selectedStoryboard.id,
+      })
+    )
+  ) {
+    return;
+  }
+
+  stopGenerationPolling(workbench);
+  const composerDraft = captureStoryboardGenerationComposerDraft(workbench, selectedStoryboard);
   const submission = {
     ...createGenerationSubmissionSnapshot(workbench, selectedStoryboard, "image"),
     ...(isStoryboardGenerator ? { sourceSurface: STORYBOARD_GENERATOR_SOURCE_SURFACE } : {}),
@@ -38323,6 +38446,10 @@ export async function generateStoryboardImages(workbench, options = {}) {
   } else {
     renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
   }
+  if (!isStoryboardGenerator) {
+    submissionKeys.add(submissionKey);
+  }
+  let composerClearedAfterSubmit = false;
 
   try {
     const payload = buildImageGenerationPayload(workbench);
@@ -38361,7 +38488,10 @@ export async function generateStoryboardImages(workbench, options = {}) {
       applyStoryboardGeneratorTaskResult(workbench, result, selectedStoryboard.id, submission);
     } else {
       workbench.ui.imageGenerationResult = submittedResult;
-      clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.imageGenerationResult);
+      if (isStoryboardGenerationComposerDraftUnchanged(workbench, selectedStoryboard.id, composerDraft)) {
+        clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.imageGenerationResult);
+        composerClearedAfterSubmit = true;
+      }
     }
     if (isRealEpisodeWorkbench(workbench) && !isStoryboardGenerator) {
       applyEpisodeGenerationTaskResult(workbench, result, selectedStoryboard.id, "image");
@@ -38372,6 +38502,9 @@ export async function generateStoryboardImages(workbench, options = {}) {
       renderStoryboardGeneratorGenerationSurfacesOnly(workbench);
     } else {
       renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+      if (composerClearedAfterSubmit) {
+        syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
+      }
     }
     if (
       isStoryboardGenerator
@@ -38394,11 +38527,14 @@ export async function generateStoryboardImages(workbench, options = {}) {
     if (isStoryboardGenerator) {
       renderStoryboardGeneratorGenerationSurfacesOnly(workbench);
     } else {
-      render(workbench);
+      renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
     }
     throw error;
   } finally {
     workbench.ui.busy = false;
+    if (!isStoryboardGenerator) {
+      submissionKeys.delete(submissionKey);
+    }
     if (isStoryboardGenerator) {
       renderStoryboardGeneratorGenerationSurfacesOnly(workbench);
     } else {
@@ -38466,10 +38602,16 @@ export async function generateStoryboardVideos(workbench) {
   if (workbench.ui.episodeMediaMode === "lip-sync") {
     workbench.ui.lipSyncAudioItems = submission.generatedAudioItems ?? [];
   }
+  let clearedComposerDraft = null;
   try {
     const payload = buildVideoGenerationPayload(workbench);
     clearStoryboardGenerationComposerAfterSubmit(workbench, selectedStoryboard.id, workbench.ui.videoGenerationResult);
+    clearedComposerDraft = captureStoryboardGenerationComposerDraft(
+      workbench,
+      getActiveStoryboards(workbench).find((item) => item.id === selectedStoryboard.id) ?? null,
+    );
     renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+    syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
     collectEpisodeWorkbenchEvent(workbench, "generation.submit", {
       mediaKind: "video",
       payload,
@@ -38515,7 +38657,12 @@ export async function generateStoryboardVideos(workbench) {
     if (String(error?.errorCode ?? "") === "generation_target_busy") {
       if (!activeTaskId) {
         workbench.ui.videoGenerationResult = previousVideoGenerationResult;
-        restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, selectedStoryboard.id, composerDraft);
+        const draftRestored = restoreStoryboardGenerationComposerAfterSubmitFailureIfUnchanged(
+          workbench,
+          selectedStoryboard.id,
+          composerDraft,
+          clearedComposerDraft,
+        );
         updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => ({
           ...generationState,
           lastSubmission: composerDraft.generationState.lastSubmission ?? null,
@@ -38523,6 +38670,9 @@ export async function generateStoryboardVideos(workbench) {
         workbench.ui.generationPollingActive = false;
         workbench.ui.toast = "当前分镜已有视频任务生成中，请等待完成后再试。";
         renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+        if (draftRestored) {
+          syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
+        }
         return;
       }
       const activeTask = {
@@ -38541,10 +38691,20 @@ export async function generateStoryboardVideos(workbench) {
         lastSubmission: activeTask,
       }));
       registerTaskCenterTask(workbench, activeTask, activeTask);
-      restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, selectedStoryboard.id, composerDraft);
+      const draftRestored = restoreStoryboardGenerationComposerAfterSubmitFailureIfUnchanged(
+        workbench,
+        selectedStoryboard.id,
+        composerDraft,
+        clearedComposerDraft,
+      );
       workbench.ui.generationPollingActive = true;
-      workbench.ui.toast = "当前分镜已有视频任务生成中，已恢复草稿并同步现有任务。";
+      workbench.ui.toast = draftRestored
+        ? "当前分镜已有视频任务生成中，已恢复草稿并同步现有任务。"
+        : "当前分镜已有视频任务生成中，已同步现有任务并保留正在编辑的新草稿。";
       renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+      if (draftRestored) {
+        syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
+      }
       scheduleGenerationPolling(workbench, selectedStoryboard.id, "video", { immediate: true });
       return;
     }
@@ -38569,8 +38729,16 @@ export async function generateStoryboardVideos(workbench) {
         status: "failed",
       },
     }));
-    restoreStoryboardGenerationComposerAfterSubmitFailure(workbench, selectedStoryboard.id, composerDraft);
-    render(workbench);
+    const draftRestored = restoreStoryboardGenerationComposerAfterSubmitFailureIfUnchanged(
+      workbench,
+      selectedStoryboard.id,
+      composerDraft,
+      clearedComposerDraft,
+    );
+    renderEpisodeWorkbenchGenerationSurfacesOnly(workbench);
+    if (draftRestored) {
+      syncEpisodeWorkbenchComposerAfterSubmissionHandoff(workbench);
+    }
     throw error;
   } finally {
     workbench.ui.busy = false;
@@ -38579,7 +38747,10 @@ export async function generateStoryboardVideos(workbench) {
   } finally {
     submissionKeys.delete(submissionKey);
     if (workbench.root?.querySelector?.(".episode-replica-prompt")) {
-      renderEpisodeWorkbenchPromptDockOnly(workbench);
+      renderEpisodeWorkbenchPromptDockOnly(workbench, {
+        preserveControls: true,
+        submissionStateOnly: true,
+      });
     }
   }
 }
