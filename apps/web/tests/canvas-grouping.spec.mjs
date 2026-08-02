@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { createDefaultCanvasDocument } from "../src/features/production-workbench/canvas/canvas-default-document.js";
 import {
   addCanvasNode,
+  arrangeCanvasGroupNodes,
   groupCanvasNodes,
   removeCanvasNode,
   ungroupCanvasNodes,
@@ -18,6 +19,7 @@ import {
   applyCanvasGraphGrouping,
   canvasGraphCellAndDescendantIds,
   clearCanvasGraphSelection,
+  constrainCanvasGraphSelectionToGroups,
   detachCanvasGroupChildrenForRemoval,
   readCanvasWorkflowGraphData,
   resolveCanvasGraphNodeSelectionZIndex,
@@ -155,6 +157,55 @@ describe("canvas grouping", () => {
       assert.deepEqual(node.position, positions.get(node.id));
     }
     assert.equal(canvasDocumentToX6Data(result.document).nodes.some((node) => node.parent), false);
+  });
+
+  it("rearranges group members without changing their content, membership, or edges", () => {
+    const withThird = addCanvasNode(createGroupingDocument(), {
+      id: "node-c",
+      type: "output",
+      position: { x: 900, y: 260 },
+    });
+    const grouped = groupCanvasNodes({
+      ...withThird,
+      edges: [{ id: "edge-a-b", sourceNodeId: "node-a", sourcePortId: "out", targetNodeId: "node-b", targetPortId: "in" }],
+    }, ["node-a", "node-b", "node-c"]);
+    const source = grouped.document;
+    const group = source.nodes.find((node) => node.id === grouped.groupId);
+    const sourceEdges = structuredClone(source.edges);
+    const sourceMembership = source.nodes
+      .filter((node) => node.type !== "group")
+      .map((node) => [node.id, node.parentGroupId]);
+
+    const grid = arrangeCanvasGroupNodes(source, grouped.groupId, "grid");
+    const gridNodes = new Map(grid.document.nodes.map((node) => [node.id, node]));
+    assert.equal(grid.layout, "grid");
+    assert.equal(gridNodes.get("node-a").position.y, gridNodes.get("node-b").position.y);
+    assert.ok(gridNodes.get("node-c").position.y > gridNodes.get("node-a").position.y);
+    assert.deepEqual(gridNodes.get(grouped.groupId).size, { width: 840, height: 604 });
+    const graph = createMockGraph(canvasDocumentToX6Data(source));
+    applyCanvasGraphGrouping(graph, grid.document);
+    assert.deepEqual(graph.getCellById(grouped.groupId).getSize(), { width: 840, height: 604 });
+    assert.deepEqual(grid.document.edges, sourceEdges);
+    assert.deepEqual(
+      grid.document.nodes.filter((node) => node.type !== "group").map((node) => [node.id, node.parentGroupId]),
+      sourceMembership,
+    );
+    assert.deepEqual(gridNodes.get(grouped.groupId).data, group.data);
+
+    const horizontal = arrangeCanvasGroupNodes(source, grouped.groupId, "horizontal").document;
+    const horizontalNodes = new Map(horizontal.nodes.map((node) => [node.id, node]));
+    assert.equal(horizontalNodes.get("node-a").position.y, horizontalNodes.get("node-b").position.y);
+    assert.ok(horizontalNodes.get("node-b").position.x > horizontalNodes.get("node-a").position.x);
+    assert.deepEqual(horizontalNodes.get(grouped.groupId).size, { width: 1224, height: 360 });
+
+    const vertical = arrangeCanvasGroupNodes(source, grouped.groupId, "vertical").document;
+    const verticalNodes = new Map(vertical.nodes.map((node) => [node.id, node]));
+    assert.equal(verticalNodes.get("node-a").position.x, verticalNodes.get("node-b").position.x);
+    assert.ok(verticalNodes.get("node-b").position.y > verticalNodes.get("node-a").position.y);
+    assert.deepEqual(verticalNodes.get(grouped.groupId).size, { width: 516, height: 808 });
+    const x6Group = canvasDocumentToX6Data(vertical).nodes.find((node) => node.id === grouped.groupId);
+    assert.equal(x6Group.width, 516);
+    assert.equal(x6Group.height, 808);
   });
 
   it("rejects nested groups and tolerates stale membership during node or group deletion", () => {
@@ -308,6 +359,39 @@ describe("canvas grouping", () => {
     assert.equal(resolveCanvasGraphNodeSelectionZIndex({
       getData: () => ({ canvasNode: { type: "ai-image" } }),
     }), 1001);
+  });
+
+  it("keeps a moving multi-selection inside its parent group without changing relative spacing", () => {
+    const groupBounds = { x: 100, y: 100, width: 500, height: 400 };
+    const group = {
+      id: "group",
+      getData: () => ({ canvasNode: { type: "group" } }),
+      getBBox: () => groupBounds,
+    };
+    const child = (id, x, y, width, height) => ({
+      id,
+      position: { x, y },
+      isNode: () => true,
+      getParent: () => group,
+      getBBox() { return { ...this.position, width, height }; },
+      translate(dx, dy) {
+        this.position = { x: this.position.x + dx, y: this.position.y + dy };
+      },
+    });
+    const first = child("first", 560, 180, 100, 100);
+    const second = child("second", 430, 440, 120, 80);
+    const initialOffset = {
+      x: second.position.x - first.position.x,
+      y: second.position.y - first.position.y,
+    };
+
+    assert.equal(constrainCanvasGraphSelectionToGroups([first, second]), true);
+    assert.deepEqual(first.position, { x: 500, y: 160 });
+    assert.deepEqual(second.position, { x: 370, y: 420 });
+    assert.deepEqual({
+      x: second.position.x - first.position.x,
+      y: second.position.y - first.position.y,
+    }, initialOffset);
   });
 
   it("anchors group actions to the group frame instead of stale selected children", () => {

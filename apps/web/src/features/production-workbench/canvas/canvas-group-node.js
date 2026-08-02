@@ -155,6 +155,18 @@ export function updateCanvasGroupData(document, groupId, patch = {}) {
 
 export function renderCanvasGroupNodeBody(node = {}) {
   const nodeId = text(node?.id);
+  const workflowGroupKind = text(node?.data?.scriptWorkflowGroupKind);
+  if (workflowGroupKind === "assets" || workflowGroupKind === "storyboards") {
+    const title = text(node?.data?.title) || (workflowGroupKind === "assets" ? "资产批量生成" : "分镜批量生成");
+    const count = canvasGroupChildIds(node).length;
+    const detail = workflowGroupKind === "assets" ? "角色 · 场景 · 道具" : "视频分镜";
+    const color = normalizeCanvasGroupColor(node?.data?.color);
+    return `<section class="canvas-group-node-body is-script-workflow-group is-${workflowGroupKind}" data-canvas-group-body data-node-id="${escapeAttr(nodeId)}" style="--canvas-script-group-accent:${escapeAttr(color)}">
+      <span class="canvas-script-group-kicker">批量运行</span>
+      <strong class="canvas-group-node-label">${escapeHtml(title)}</strong>
+      <span class="canvas-script-group-meta">${escapeHtml(detail)} · ${count} 个节点</span>
+    </section>`;
+  }
   return `<section class="canvas-group-node-body" data-canvas-group-body data-node-id="${escapeAttr(nodeId)}">
     <strong class="canvas-group-node-label">运行组</strong>
   </section>`;
@@ -168,4 +180,8 @@ function escapeAttr(value) {
     '"': "&quot;",
     "'": "&#39;",
   })[character]);
+}
+
+function escapeHtml(value) {
+  return escapeAttr(value);
 }

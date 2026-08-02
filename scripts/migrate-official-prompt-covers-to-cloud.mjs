@@ -7,6 +7,9 @@ import pg from "pg";
 import { createStorageAdapterFromEnv } from "../apps/backend/src/modules/storage/storage-adapter.factory.ts";
 
 const apply = process.argv.includes("--apply");
+const promptIdArgument = process.argv.find((argument) => argument.startsWith("--prompt-id="));
+const promptId = promptIdArgument?.slice("--prompt-id=".length).trim();
+if (!promptId) throw new Error("--prompt-id is required");
 const databaseUrl = process.env.DATABASE_URL?.trim();
 if (!databaseUrl) throw new Error("PostgreSQL connection failed: DATABASE_URL is required");
 
@@ -38,34 +41,31 @@ const client = new pg.Client({ connectionString: databaseUrl });
 try {
   await client.connect();
   const result = await client.query(`
-    SELECT id, code, cover_image_url
-    FROM image_prompt_styles
-    WHERE deleted_at IS NULL
-      AND category = 'official'
+    SELECT id, name, cover_image_url
+    FROM prompts
+    WHERE id = $1
+      AND prompt_category = 'image_style'
+      AND is_official = true
+      AND deleted_at IS NULL
       AND cover_image_url LIKE '/admin/assets/prompt-covers/%'
-    ORDER BY sort_order DESC, code ASC
-  `);
+  `, [promptId]);
 
   const mappings = [];
   for (const row of result.rows) {
-    const expectedFileName = `${row.code}.webp`;
     const actualFileName = basename(row.cover_image_url);
-    if (actualFileName !== expectedFileName) {
-      throw new Error(`Cover mapping mismatch for ${row.code}: expected ${expectedFileName}, found ${actualFileName}`);
-    }
     const localPath = join(localRoot, actualFileName);
     const fileStat = await stat(localPath);
     if (!fileStat.isFile()) throw new Error(`Local cover is not a file: ${localPath}`);
-    const objectKey = `${rootPrefix}/promptCovers/officialStyles/${expectedFileName}`;
-    mappings.push({ ...row, localPath, expectedFileName, objectKey, publicUrl: `${publicBaseUrl}/${objectKey}` });
+    const objectKey = `${rootPrefix}/promptCovers/officialStyles/${actualFileName}`;
+    mappings.push({ ...row, localPath, actualFileName, objectKey, publicUrl: `${publicBaseUrl}/${objectKey}` });
   }
 
   if (!mappings.length) {
-    console.log("No official prompt covers still use local paths.");
+    throw new Error("Official prompt cover was not found or is already migrated");
   } else if (!apply) {
-    console.log(`Dry run: ${mappings.length} official prompt covers are ready for sequential migration.`);
+    console.log(`Dry run: ${mappings.length} official prompt cover is ready for migration.`);
     for (const [index, item] of mappings.entries()) {
-      console.log(`[${index + 1}/${mappings.length}] ${item.code} -> ${item.publicUrl}`);
+      console.log(`[${index + 1}/${mappings.length}] ${item.name} -> ${item.publicUrl}`);
     }
     console.log("Run again with --apply to upload and update the database.");
   } else {
@@ -132,11 +132,16 @@ try {
 
         await client.query(
           `
-            UPDATE image_prompt_styles
-            SET cover_image_url = $2, updated_at = now()
-            WHERE id = $1 AND category = 'official' AND deleted_at IS NULL
+            UPDATE prompts
+            SET cover_image_url = $2,
+                cover_storage_object_id = $3,
+                updated_at = now()
+            WHERE id = $1
+              AND prompt_category = 'image_style'
+              AND is_official = true
+              AND deleted_at IS NULL
           `,
-          [item.id, item.publicUrl],
+          [item.id, item.publicUrl, trackedStorageObjectId],
         );
         await client.query(
           `
@@ -156,7 +161,7 @@ try {
           [
             randomUUID(),
             trackedStorageObjectId,
-            item.expectedFileName,
+            item.actualFileName,
             item.objectKey,
             bucket,
             storageMode === "cos" ? "tencent_cos" : "s3_compatible",
@@ -170,7 +175,7 @@ try {
         throw error;
       }
 
-      console.log(`[${index + 1}/${mappings.length}] migrated ${item.code} -> ${item.publicUrl}`);
+      console.log(`[${index + 1}/${mappings.length}] migrated ${item.name} -> ${item.publicUrl}`);
     }
   }
 } catch (error) {

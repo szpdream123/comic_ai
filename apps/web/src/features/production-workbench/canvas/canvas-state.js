@@ -64,8 +64,8 @@ const MODEL_MODE_BY_MEDIA_KIND = {
 
 const NODE_PORTS = {
   script: {
-    inputs: [],
-    outputs: [{ id: "out_text", kind: "text", label: "文本" }],
+    inputs: [{ id: "in_text", kind: "text", label: "剧本/小说" }],
+    outputs: [{ id: "out_text", kind: "text", label: "分镜" }],
   },
   send: {
     inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image"], label: "文本/图片" }],
@@ -137,7 +137,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_text", kind: "text", label: "分镜" }],
   },
   "ai-director": {
-    inputs: [{ id: "in_any", kind: "any", label: "资源" }],
+    inputs: [],
     outputs: [{ id: "out_text", kind: "text", label: "导演指令" }],
   },
   "source-text": { inputs: [], outputs: [{ id: "out_text", kind: "text", label: "文本" }] },
@@ -147,7 +147,7 @@ const NODE_PORTS = {
 };
 
 const NODE_TITLES = {
-  script: "剧本源",
+  script: "脚本分镜",
   send: "图片生成",
   image: "图片结果",
   video: "视频生成",
@@ -199,7 +199,7 @@ const CANVAS_NODE_TEMPLATES = [
     mediaKind: "image", defaultData: { title: "图片切分", status: "ready", mediaKind: "image", text: "", prompt: "" },
   },
   {
-    id: "template-ai-director", group: "AI", type: "ai-director", title: "导演台", description: "分析并编排画布",
+    id: "template-ai-director", group: "来源", type: "ai-director", title: "导演台", description: "分析并编排画布",
     defaultData: { title: "导演台", status: "ready", mediaKind: "text", text: "", prompt: "" },
   },
   {
@@ -219,17 +219,21 @@ const CANVAS_NODE_TEMPLATES = [
     defaultData: { title: "音频源", status: "empty", mediaKind: "audio", source: "upload" },
   },
   {
+    id: "template-script-source",
+    group: "来源",
+    type: "source-text",
+    title: "剧本源",
+    description: "导入或输入剧本文本",
+    defaultData: { title: "剧本源", status: "ready", mediaKind: "text", text: "", source: "project_script" },
+  },
+  {
     id: "template-script",
-    group: "节点",
+    group: "来源",
     type: "script",
-    title: "剧本工作流",
-    description: "选择、编写或从小说生成剧本，并连接资产与分镜",
+    title: "脚本节点",
+    description: "连接剧本源或文本源后生成分镜",
     defaultData: {
-      title: "剧本工作流",
-      text: "",
-      source: "manual",
-      sourceMode: "library",
-      novelText: "",
+      title: "脚本节点",
     },
   },
   {
@@ -262,7 +266,7 @@ const CANVAS_NODE_TEMPLATES = [
   },
   {
     id: "template-upload",
-    group: "节点",
+    group: "来源",
     type: "upload",
     title: "上传",
     description: "添加上传资源节点",
@@ -537,7 +541,7 @@ export function buildCanvasSidebarItems(document, options = {}) {
     const modelCode = node?.data?.modelCode;
     const nodeSource = String(node?.data?.source ?? "");
     const displayTitle = kind === "script" || nodeSource === "project_script" || nodeSource === "project_script_episode"
-      ? "剧本源"
+      ? "脚本节点"
       : (node?.data?.mediaKind === "text" || kind === "director")
         ? "文本源"
         : title;
@@ -1773,6 +1777,101 @@ export function groupCanvasNodes(document, nodeIds = []) {
           ? { ...clone(node), parentGroupId: group.id }
           : clone(node)),
       ],
+    }),
+  };
+}
+
+export function arrangeCanvasGroupNodes(document, groupId, layout = "grid") {
+  const nodes = safeArray(document?.nodes);
+  const normalizedGroupId = String(groupId ?? "").trim();
+  const group = nodes.find((node) => node?.type === "group" && String(node?.id ?? "") === normalizedGroupId);
+  if (!group) {
+    return { document: clone(document), groupId: "", layout: "grid", nodeIds: [] };
+  }
+
+  const normalizedLayout = ["grid", "horizontal", "vertical"].includes(String(layout ?? ""))
+    ? String(layout)
+    : "grid";
+  const grouping = resolveCanvasGroupMembership(nodes);
+  const memberIds = grouping.groupChildren.get(normalizedGroupId) ?? [];
+  const memberIdSet = new Set(memberIds);
+  const storedChildIds = safeArray(group?.data?.childNodeIds).map(String).filter((nodeId) => memberIdSet.has(nodeId));
+  const childIds = [...new Set([...storedChildIds, ...memberIds])];
+  const children = childIds
+    .map((nodeId) => nodes.find((node) => String(node?.id ?? "") === nodeId))
+    .filter(Boolean);
+  if (!children.length) {
+    return { document: clone(document), groupId: normalizedGroupId, layout: normalizedLayout, nodeIds: [] };
+  }
+
+  const groupX = Number(group.position?.x);
+  const groupY = Number(group.position?.y);
+  const groupPosition = {
+    x: Number.isFinite(groupX) ? groupX : 0,
+    y: Number.isFinite(groupY) ? groupY : 0,
+  };
+  const padding = { left: 28, top: 52, right: 28, bottom: 28 };
+  const gap = 24;
+  const columnCount = normalizedLayout === "horizontal"
+    ? children.length
+    : normalizedLayout === "vertical"
+      ? 1
+      : Math.max(1, Math.ceil(Math.sqrt(children.length)));
+  const rowCount = Math.ceil(children.length / columnCount);
+  const metrics = children.map((node) => {
+    const fallbackSize = CANVAS_NODE_SIZES[node?.type] ?? CANVAS_NODE_SIZES.output;
+    const width = Number(node.size?.width);
+    const height = Number(node.size?.height);
+    return {
+      id: String(node.id),
+      width: Math.max(1, Number.isFinite(width) ? width : fallbackSize.width),
+      height: Math.max(1, Number.isFinite(height) ? height : fallbackSize.height),
+    };
+  });
+  const columnWidths = Array(columnCount).fill(0);
+  const rowHeights = Array(rowCount).fill(0);
+  metrics.forEach((metric, index) => {
+    const column = index % columnCount;
+    const row = Math.floor(index / columnCount);
+    columnWidths[column] = Math.max(columnWidths[column], metric.width);
+    rowHeights[row] = Math.max(rowHeights[row], metric.height);
+  });
+  const columnOffsets = [];
+  const rowOffsets = [];
+  let x = groupPosition.x + padding.left;
+  let y = groupPosition.y + padding.top;
+  columnWidths.forEach((width) => {
+    columnOffsets.push(x);
+    x += width + gap;
+  });
+  rowHeights.forEach((height) => {
+    rowOffsets.push(y);
+    y += height + gap;
+  });
+  const positions = new Map(metrics.map((metric, index) => [metric.id, {
+    x: columnOffsets[index % columnCount],
+    y: rowOffsets[Math.floor(index / columnCount)],
+  }]));
+  const contentWidth = columnWidths.reduce((total, width) => total + width, 0) + gap * Math.max(0, columnCount - 1);
+  const contentHeight = rowHeights.reduce((total, height) => total + height, 0) + gap * Math.max(0, rowCount - 1);
+  const groupSize = {
+    width: contentWidth + padding.left + padding.right,
+    height: contentHeight + padding.top + padding.bottom,
+  };
+
+  return {
+    groupId: normalizedGroupId,
+    layout: normalizedLayout,
+    nodeIds: childIds,
+    document: touchCanvasDocument({
+      ...clone(document),
+      nodes: nodes.map((node) => {
+        if (String(node?.id ?? "") === normalizedGroupId) {
+          return { ...clone(node), size: groupSize };
+        }
+        const position = positions.get(String(node?.id ?? ""));
+        return position ? { ...clone(node), position } : clone(node);
+      }),
     }),
   };
 }

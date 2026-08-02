@@ -327,16 +327,31 @@ export function reconcileCanvasMediaDocumentSources(document = {}, assets = []) 
   let changed = false;
   const nodes = (Array.isArray(document?.nodes) ? document.nodes : []).map((node) => {
     const kind = canvasNodeMediaKind(node);
-    if (kind !== "audio" && kind !== "video") return node;
+    if (!kind) return node;
+    const nodeId = String(node?.id ?? "").trim();
+    const generatedAsset = assets.find((asset) => (
+      String(asset?.nodeKey ?? "").trim() === nodeId
+      && String(asset?.kind ?? "image").trim().toLowerCase() === kind
+    ));
     const identity = resolveCanvasMediaStableIdentity(nodeData(node), assets);
-    if (!identity.storageObjectId || String(node?.data?.storageObjectId ?? "").trim() === identity.storageObjectId) return node;
+    const storageObjectId = firstText(generatedAsset?.storageObjectId, identity.storageObjectId);
+    const assetVersionId = firstText(generatedAsset?.assetVersionId, identity.assetVersionId);
+    const mediaUrl = firstText(generatedAsset?.url, generatedAsset?.previewUrl);
+    if (!storageObjectId && !assetVersionId && !mediaUrl) return node;
+    if (
+      String(node?.data?.storageObjectId ?? "").trim() === storageObjectId
+      && String(node?.data?.assetVersionId ?? "").trim() === assetVersionId
+      && (!mediaUrl || String(node?.data?.previewUrl ?? "").trim() === mediaUrl)
+    ) return node;
     changed = true;
     return {
       ...node,
       data: {
         ...(node.data ?? {}),
-        storageObjectId: identity.storageObjectId,
-        ...(identity.assetVersionId ? { assetVersionId: identity.assetVersionId } : {}),
+        ...(storageObjectId ? { storageObjectId } : {}),
+        ...(assetVersionId ? { assetVersionId } : {}),
+        ...(mediaUrl ? { previewUrl: mediaUrl, resultUrl: mediaUrl, url: mediaUrl } : {}),
+        ...(generatedAsset ? { status: "completed" } : {}),
       },
     };
   });
@@ -377,6 +392,7 @@ function canvasNodeMediaKind(node) {
   const explicit = String(nodeData(node).mediaKind ?? "").toLowerCase();
   if (type.includes("audio") || explicit === "audio") return "audio";
   if (type.includes("video") || explicit === "video") return "video";
+  if (type.includes("image") || explicit === "image") return "image";
   return "";
 }
 

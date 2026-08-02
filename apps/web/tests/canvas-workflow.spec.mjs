@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
@@ -207,6 +207,12 @@ describe("canvas workflow document", () => {
       e: { clientX: 600, clientY: 500, data: { selection: { action: "selecting" } } },
     });
     assert.deepEqual(correctedSelection.map((node) => node.id), ["inside"]);
+    assert.deepEqual(rubberbandStyle, {
+      left: "",
+      top: "",
+      width: "",
+      height: "",
+    });
 
     correctedSelection = null;
     const styleAfterRubberband = { ...rubberbandStyle };
@@ -393,6 +399,7 @@ describe("canvas workflow document", () => {
     assert.equal(style.get("--canvas-grid-major-size"), "150px");
     assert.equal(style.get("--canvas-grid-x"), "48px");
     assert.equal(style.get("--canvas-grid-y"), "-24px");
+    assert.equal(style.get("--canvas-input-scale"), String(1 / 1.5));
   });
 
   it("turns an X6 output released on blank canvas into a compatible-node menu request", () => {
@@ -521,6 +528,28 @@ describe("canvas workflow document", () => {
     );
   });
 
+  it("keeps selectable script sources separate from script storyboard nodes", () => {
+    const templates = resolveCanvasNodeTemplates({});
+    const scriptSource = templates.find((template) => template.id === "template-script-source");
+    const scriptNode = templates.find((template) => template.id === "template-script");
+
+    assert.deepEqual(
+      { type: scriptSource?.type, title: scriptSource?.title, source: scriptSource?.defaultData?.source },
+      { type: "source-text", title: "剧本源", source: "project_script" },
+    );
+    assert.deepEqual(
+      { type: scriptNode?.type, title: scriptNode?.title },
+      { type: "script", title: "脚本节点" },
+    );
+
+    const render = loadCanvasGenericX6Renderer();
+    const scriptSourceHtml = render({
+      id: "script-source",
+      type: "source-text",
+      data: { title: "剧本源", source: "project_script", text: "" },
+    });
+    assert.match(scriptSourceHtml, /data-action="open-canvas-script-picker" data-node-id="script-source">选择剧本<\/button>/);
+  });
   it("round trips the canvas document through X6 graph data", () => {
     const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
     const x6Data = canvasDocumentToX6Data(document);
@@ -531,7 +560,7 @@ describe("canvas workflow document", () => {
     assert.equal(x6Data.edges.every((edge) => edge.shape === "comic-ai-canvas-edge"), true);
     assert.equal(x6Data.edges.every((edge) => edge.attrs.lines?.connection === true), true);
     assert.equal(x6Data.nodes[0].shape, "comic-ai-canvas-special-media-node");
-    assert.equal(x6Data.nodes[0].attrs.title.text, "剧本源");
+    assert.equal(x6Data.nodes[0].attrs.title.text, "脚本节点");
     assert.equal(x6Data.nodes[0].attrs.status.text, "ready");
     assert.equal(typeof x6Data.nodes[0].attrs.summary.text, "string");
     assert.equal(nextDocument.nodes.length, document.nodes.length);
@@ -539,7 +568,7 @@ describe("canvas workflow document", () => {
     assert.deepEqual(nextDocument.nodes.map((node) => node.position), document.nodes.map((node) => node.position));
   });
 
-  it("renders new and legacy source nodes as uniform squares", () => {
+  it("keeps ordinary source nodes square while giving the script workflow room for controls", () => {
     const sourceTypes = ["script", "upload", "source-text", "source-image", "source-video", "source-audio"];
     const document = {
       ...createDefaultCanvasDocument({ canvasProjectId: "canvas-source-squares" }),
@@ -554,12 +583,13 @@ describe("canvas workflow document", () => {
 
     const x6Data = canvasDocumentToX6Data(document);
 
-    for (const type of sourceTypes) {
+    assert.deepEqual(CANVAS_NODE_SIZES.script, { width: 500, height: 420 });
+    for (const type of sourceTypes.filter((type) => type !== "script")) {
       assert.deepEqual(CANVAS_NODE_SIZES[type], { width: 300, height: 300 });
     }
     assert.deepEqual(
       x6Data.nodes.map((node) => ({ width: node.width, height: node.height })),
-      sourceTypes.map(() => ({ width: 300, height: 300 })),
+      sourceTypes.map((type) => type === "script" ? ({ width: 500, height: 420 }) : ({ width: 300, height: 300 })),
     );
   });
 
@@ -647,6 +677,92 @@ describe("canvas workflow document", () => {
     assert.deepEqual(videoNode.data.ports.inputs[0].accepts, ["text", "image", "video", "audio"]);
   });
 
+  it("creates script workflow nodes as text-to-storyboard tools", () => {
+    const scriptNode = createCanvasNodeFromTemplate(createDefaultCanvasDocument(), {
+      type: "script",
+      defaultData: { title: "脚本分镜" },
+    });
+
+    assert.deepEqual(scriptNode.data.ports.inputs, [{ id: "in_text", kind: "text", label: "剧本/小说" }]);
+    assert.deepEqual(scriptNode.data.ports.outputs, [{ id: "out_text", kind: "text", label: "分镜" }]);
+  });
+
+  it("adds the text input port to existing script workflow nodes in X6", () => {
+    const legacyScript = {
+      id: "script-legacy",
+      type: "script",
+      position: { x: 120, y: 160 },
+      data: { ports: { inputs: [], outputs: [{ id: "out_text", kind: "text", label: "文本" }] } },
+    };
+    const x6Node = canvasDocumentToX6Data({ nodes: [legacyScript], edges: [] }).nodes[0];
+
+    assert.deepEqual(x6Node.data.canvasNode.data.ports.inputs, [{ id: "in_text", kind: "text", label: "剧本/小说" }]);
+    assert.deepEqual(x6Node.ports.items.map((port) => port.id), ["in_text", "out_text"]);
+  });
+
+  it("persists the injected script input port when an edge is connected", () => {
+    const legacyScript = {
+      id: "script-legacy",
+      type: "script",
+      position: { x: 120, y: 160 },
+      data: { ports: { inputs: [], outputs: [{ id: "out_text", kind: "text", label: "文本" }] } },
+    };
+    const textSource = {
+      id: "text-source",
+      type: "source-text",
+      position: { x: 0, y: 160 },
+      data: { ports: { inputs: [], outputs: [{ id: "out_text", kind: "text", label: "文本" }] } },
+    };
+    const restoredDocument = canvasDocumentFromX6Data({
+      nodes: canvasDocumentToX6Data({ nodes: [legacyScript, textSource], edges: [] }).nodes,
+      edges: [{
+        id: "edge-text-script",
+        source: { cell: "text-source", port: "out_text" },
+        target: { cell: "script-legacy", port: "in_text" },
+      }],
+    }, { nodes: [legacyScript, textSource], edges: [] });
+
+    assert.deepEqual(restoredDocument.nodes.find((node) => node.id === "script-legacy")?.data.ports.inputs, [
+      { id: "in_text", kind: "text", label: "剧本/小说" },
+    ]);
+    assert.equal(restoredDocument.edges[0]?.targetPortId, "in_text");
+  });
+
+  it("clears the transient script connection state after an edge is removed", () => {
+    const scriptNode = {
+      id: "script-connected",
+      type: "script",
+      position: { x: 120, y: 160 },
+      data: { __canvasHasTextInput: true },
+    };
+    const x6Node = canvasDocumentToX6Data({ nodes: [scriptNode], edges: [] }).nodes[0];
+
+    assert.equal(x6Node.data.canvasNode.data.__canvasHasTextInput, undefined);
+  });
+
+  it("keeps director desk as an output-only node, including persisted nodes", () => {
+    const directorNode = createCanvasNodeFromTemplate(createDefaultCanvasDocument(), {
+      type: "ai-director",
+      defaultData: { title: "导演台" },
+    });
+    assert.deepEqual(directorNode.data.ports.inputs, []);
+    assert.deepEqual(directorNode.data.ports.outputs, [{ id: "out_text", kind: "text", label: "导演指令" }]);
+
+    const persistedNode = {
+      id: "director-1",
+      type: "ai-director",
+      position: { x: 100, y: 100 },
+      data: {
+        ports: {
+          inputs: [{ id: "in_any", kind: "any", label: "资源" }],
+          outputs: [{ id: "out_text", kind: "text", label: "导演指令" }],
+        },
+      },
+    };
+    const x6Node = canvasDocumentToX6Data({ nodes: [persistedNode], edges: [] }).nodes[0];
+    assert.deepEqual(x6Node.ports.items.map((port) => port.id), ["out_text"]);
+  });
+
   it("connects compatible nodes as executable workflow edges", () => {
     const document = addCanvasNode(createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" }), {
       type: "image",
@@ -726,7 +842,7 @@ describe("canvas workflow document", () => {
     });
 
     const templateKeys = templates.map((template) => `${template.group}:${template.type}`);
-    assert.ok(["节点:script", "节点:send", "节点:video", "节点:upload"].every((key) => templateKeys.includes(key)));
+    assert.ok(["节点:script", "节点:send", "节点:video", "来源:upload"].every((key) => templateKeys.includes(key)));
     assert.equal(templates.find((template) => template.type === "send").defaultData.modelCode, "image-live");
     assert.equal(templates.find((template) => template.type === "video").defaultData.modelCode, "video-live");
   });
@@ -1335,7 +1451,22 @@ describe("canvas workflow document", () => {
     assert.match(textRunning, /data-canvas-text-output/);
     assert.match(textRunning, /aria-live="polite"/);
     assert.match(textRunning, /这是刚刚流式返回的最新内容/);
+    assert.match(textRunning, /class="canvas-x6-text-generation-mask"[^>]*aria-label="正在生成剧本中"/);
+    assert.match(textRunning, /正在生成剧本中/);
     assert.doesNotMatch(textRunning, /canvas-x6-generation-state|生成中 50%|文本模型正在生成内容/);
+
+    const scriptTextRunning = render({
+      type: "ai-text",
+      data: { status: "running", generationStage: "text_generating", summary: "剧本片段" },
+    });
+    assert.match(scriptTextRunning, /canvas-x6-text-generation-mask/);
+    assert.match(scriptTextRunning, /正在生成剧本中/);
+
+    const textCompleted = render({
+      type: "ai-text",
+      data: { status: "completed", summary: "剧本已生成" },
+    });
+    assert.doesNotMatch(textCompleted, /canvas-x6-text-generation-mask|正在生成剧本中/);
   });
 
   it("renders escaped X6 image generation failures without changing ordinary nodes", () => {
@@ -1357,18 +1488,44 @@ describe("canvas workflow document", () => {
     assert.doesNotMatch(ordinary, /canvas-x6-generation-state/);
   });
 
-  it("keeps script actions and editable text sources available in X6 nodes", () => {
+  it("keeps script workflow as a connected-text conversion tool", () => {
     const render = loadCanvasGenericX6Renderer();
     const emptyScript = render({
       id: "script-source",
       type: "script",
       data: { summary: "请选择剧本内容" },
     });
-    assert.match(emptyScript, /class="canvas-x6-source-text-actions"/);
-    assert.match(emptyScript, /data-action="open-canvas-script-picker" data-node-id="script-source">选择剧本<\/button>/);
-    assert.match(emptyScript, /data-action="duplicate-canvas-node" data-node-id="script-source">复制<\/button>/);
-    assert.match(emptyScript, /data-action="delete-canvas-node" data-node-id="script-source">删除<\/button>/);
-    assert.doesNotMatch(emptyScript, />剧本源<\/span>/);
+    assert.match(emptyScript, /class="canvas-script-workflow-body"/);
+    assert.match(emptyScript, /请连接剧本或文本节点。连接后可转换为角色、场景、道具和分镜。/);
+    assert.match(emptyScript, /等待剧本或文本连接/);
+    assert.doesNotMatch(emptyScript, /open-canvas-script-picker|open-canvas-script-workspace/);
+    assert.match(emptyScript, /脚本分镜/);
+    assert.doesNotMatch(emptyScript, /选择剧本|自己填写|小说生成|生成剧本/);
+
+    const awaitingConfirmation = render({
+      id: "script-source",
+      type: "script",
+      data: { __canvasHasTextInput: true },
+    });
+    assert.match(awaitingConfirmation, /已检测到剧本内容，可以开始生成分镜。/);
+    assert.match(awaitingConfirmation, /class="canvas-script-workflow-confirm" aria-hidden="true">开始<\/div>/);
+    assert.doesNotMatch(awaitingConfirmation, /open-canvas-script-start-modal/);
+
+    const generating = render({
+      id: "script-source",
+      type: "script",
+      data: { __canvasHasTextInput: true, workflowStatus: "running", workflowStage: "prop" },
+    });
+    assert.match(generating, /canvas-script-workflow-generating/);
+    assert.match(generating, /正在生成道具中/);
+    assert.match(generating, /data-action="open-canvas-script-workspace"[^>]*>查看实时提示词<\/button>/);
+
+    const generated = render({
+      id: "script-source",
+      type: "script",
+      data: { __canvasHasTextInput: true, workflowNodes: [{ id: "shot-1", kind: "storyboard" }] },
+    });
+    assert.match(generated, /分镜已生成/);
 
     const emptyTextSource = render({ id: "text-source", type: "source-text", data: {} });
     assert.match(emptyTextSource, /aria-label="文本源操作"/);
@@ -1383,23 +1540,35 @@ describe("canvas workflow document", () => {
     const populatedScript = render({
       id: "script-source",
       type: "script",
-      data: { summary: "请选择剧本内容", text: "第一场：雨夜。" },
+      data: { __canvasHasTextInput: true, summary: "请选择剧本内容", text: "第一场：雨夜。" },
     });
-    assert.match(populatedScript, /canvas-x6-source-text-actions/);
-    assert.match(populatedScript, /class="canvas-x6-source-text-output" data-canvas-text-output data-canvas-source-text-output tabindex="0"/);
-    assert.match(populatedScript, /第一场：雨夜。/);
-    assert.doesNotMatch(populatedScript, /请选择剧本内容/);
+    assert.match(populatedScript, /canvas-script-workflow-actions/);
+    assert.match(populatedScript, /class="canvas-script-workflow-confirm" aria-hidden="true">开始<\/div>/);
+    assert.doesNotMatch(populatedScript, /第一场：雨夜。/);
+    assert.doesNotMatch(populatedScript, /选择剧本|自己填写|小说生成|生成剧本/);
 
     const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
     const applyStart = workbenchSource.indexOf('if (action === "apply-canvas-script-episode")');
     const applyEnd = workbenchSource.indexOf('if (action === "delete-canvas-node")', applyStart);
     assert.match(workbenchSource.slice(applyStart, applyEnd), /refreshCanvasWorkflowNode\(workbench, nodeId\)/);
 
+    const projectDetailSource = readFileSync(new URL("../src/features/production-workbench/project-detail.js", import.meta.url), "utf8");
+    assert.match(projectDetailSource, /return renderLiblibGenerationEditor\(\{/);
+    assert.match(projectDetailSource, /data-canvas-prompt-input/);
+    assert.match(projectDetailSource, /submitAction: "run-canvas-script-workflow-start"/);
+    assert.match(projectDetailSource, /renderCanvasGenerationSkillTrigger\(node\)/);
+    assert.doesNotMatch(projectDetailSource, /canvas-script-generation-editor|data-canvas-script-workflow-instruction/);
     const styles = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
-    assert.match(styles, /\.canvas-x6-special-node:is\(\.is-script, \.is-source-text\) \.canvas-x6-generic-body\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\) auto/);
-    assert.match(styles, /\.canvas-x6-generic-body > \.canvas-x6-source-text-output\s*\{[\s\S]*?overflow-y:\s*auto[\s\S]*?white-space:\s*pre-wrap[\s\S]*?-webkit-line-clamp:\s*unset/);
+    assert.match(styles, /\.canvas-x6-special-node\.is-script-workflow\s*\{/);
+    assert.match(styles, /\.canvas-stage\.is-x6-ready \.canvas-x6-special-node :is\(input, textarea, select, \[contenteditable="true"\]\)\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
+    assert.match(styles, /\.canvas-stage\.is-x6-ready \.canvas-x6-special-node\.is-source-text \.canvas-x6-source-text-input\s*\{[\s\S]*?transform:\s*none[\s\S]*?transform-origin:\s*initial/);
+    assert.match(styles, /\.script-workspace-layer\s*\{[\s\S]*?position:\s*fixed/);
     assert.match(styles, /\.canvas-x6-generic-body > \.canvas-x6-source-text-input\s*\{[\s\S]*?resize:\s*none[\s\S]*?overflow-y:\s*auto/);
     const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+    const workbenchStyles = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+    assert.match(graphSource, /setProperty\?\.\("--canvas-input-scale", String\(1 \/ Math\.max\(0\.1, normalizedZoom\)\)\)/);
+    assert.match(workbenchStyles, /\.canvas-stage\.is-x6-ready \.canvas-flow \.canvas-node-editor\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
+    assert.match(workbenchStyles, /\.canvas-stage\.is-x6-ready \.canvas-x6-editor-overlay\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
     assert.match(graphSource, /followLatest:\s*!textOutput\.matches\?\.\("\[data-canvas-source-text-output\]"\)/);
   });
 
@@ -1508,16 +1677,21 @@ it("requires a compatible target port before creating a Canvas edge", () => {
 it("keeps animated X6 edges above the retired Canvas flow layer", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
   const hostSource = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
   assert.match(source, /\.canvas-stage\.is-x6-ready \.canvas-x6-mount\s*\{\s*z-index:\s*4/);
   assert.match(source, /\.canvas-x6-mount \.x6-edge\.is-canvas-edge-connecting path:nth-child\(2\)[\s\S]*?stroke-dasharray:\s*9 7[\s\S]*?canvas-x6-edge-connecting 720ms linear infinite/);
   assert.match(source, /\.canvas-x6-mount \.x6-edge path:nth-child\(3\)[\s\S]*?opacity:\s*0/);
-  assert.match(source, /\.canvas-x6-mount \.x6-edge:is\(\.is-canvas-edge-connecting, \.is-canvas-edge-flowing\) path:nth-child\(3\)[\s\S]*?canvas-x6-edge-flow 1\.15s linear infinite/);
+  assert.match(source, /\.canvas-x6-mount \.x6-edge:is\(\.is-canvas-edge-connecting, \.is-canvas-edge-flowing\) path:nth-child\(3\)[\s\S]*?canvas-x6-edge-flow 2\.2s linear infinite/);
   assert.match(source, /@keyframes canvas-x6-edge-connecting[\s\S]*?stroke-dashoffset:\s*-16/);
-  assert.match(source, /@keyframes canvas-x6-edge-flow[\s\S]*?stroke-dashoffset:\s*-30/);
+  assert.match(source, /@keyframes canvas-x6-edge-flow[\s\S]*?stroke-dashoffset:\s*-100/);
   assert.match(source, /prefers-reduced-motion:\s*reduce[\s\S]*?\.canvas-x6-mount \.x6-edge path:nth-child\(3\)[\s\S]*?animation:\s*none/);
   assert.match(source, /\.canvas-stage\.is-panning \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing path:nth-child\(3\)[\s\S]*?animation-play-state:\s*paused/);
   assert.doesNotMatch(source, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge path:nth-child\(3\)[\s\S]*?animation-play-state:\s*paused/);
+  assert.match(source, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing path:nth-child\(3\)[\s\S]*?filter:\s*none/);
   assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.canvas-x6-special-node\s*\{[\s\S]*?box-shadow:\s*none/);
+  assert.match(graphSource, /selectCurrentCanvasNode\(graph, workbench\);\s*refreshCanvasConnectedEdgeMotion\(graph\);/);
+  assert.match(graphSource, /strokeDasharray:\s*"18 82"/);
+  assert.match(graphSource, /if \(flowing\) edgeView\?\.container\?\.querySelector\?\.\("path:nth-child\(3\)"\)\?\.setAttribute\?\.\("pathLength", "100"\);/);
 });
 
 it("defers Canvas drag calculations until the pointer is released", () => {
@@ -1533,10 +1707,12 @@ it("defers Canvas drag calculations until the pointer is released", () => {
   const selectionMoveEnd = wireSource.indexOf('selectionPlugin?.on?.("box:mouseup"', selectionMoveStart);
 
   assert.match(wireSource.slice(nodeMoveStart, nodeMoveEnd), /classList\?\.add\?\.\("is-node-dragging"\)/);
+  assert.match(wireSource.slice(nodeMoveStart, nodeMoveEnd), /setNodeDragMotion\(node, true\)/);
   assert.doesNotMatch(wireSource.slice(nodeMoveStart, nodeMoveEnd), /canvasGraphCellAndDescendantIds|refreshCanvasConnectedEdgeMotion|positionCanvasSelectionActionToolbar|updateStoryboardReturnTarget/);
   assert.doesNotMatch(wireSource.slice(positionChangeStart, positionChangeEnd), /refreshCanvasConnectedEdgeMotion|scheduleSelectionPresentation/);
   assert.doesNotMatch(wireSource.slice(selectionMoveStart, selectionMoveEnd), /canvasGraphCellAndDescendantIds|refreshCanvasConnectedEdgeMotion|scheduleSelectionPresentation/);
   assert.match(wireSource, /node:moved[\s\S]*?classList\?\.remove\?\.\("is-node-dragging"\)/);
+  assert.match(wireSource, /node:moved[\s\S]*?setNodeDragMotion\(event\?\.node, false\)/);
   const mouseDownStart = wireSource.indexOf('graph.on("node:mousedown"');
   const mouseDownEnd = wireSource.indexOf('graph.on("node:dblclick"', mouseDownStart);
   assert.doesNotMatch(wireSource.slice(mouseDownStart, mouseDownEnd), /refreshCanvasConnectedEdgeMotion/);
@@ -1555,6 +1731,9 @@ it("keeps X6 edge rendering native while a node is dragged", () => {
   const wireStart = source.indexOf("function wireGraphSync");
   const wireEnd = source.indexOf("function refreshCanvasConnectedEdgeMotion", wireStart);
   const wireSource = source.slice(wireStart, wireEnd);
+  const createGraphStart = source.indexOf("function createGraph");
+  const createGraphEnd = source.indexOf("function wireGraphSync", createGraphStart);
+  const createGraphSource = source.slice(createGraphStart, createGraphEnd);
   const positionChangeStart = wireSource.indexOf('graph.on("node:change:position"');
   const positionChangeEnd = wireSource.indexOf('graph.on("node:move"', positionChangeStart);
 
@@ -1568,7 +1747,10 @@ it("keeps X6 edge rendering native while a node is dragged", () => {
   assert.doesNotMatch(wireSource, /node:mouseup[\s\S]*?restoreDragEdgeRendering\(\)/);
   assert.match(wireSource.slice(positionChangeStart, positionChangeEnd), /!event\?\.options\?\.ui && !event\?\.options\?\.selection/);
   assert.match(wireSource, /box:mouseup[\s\S]*?syncCanvasGraphEditorOverlay\(graph, node\)/);
+  assert.match(createGraphSource, /async:\s*false/);
+  assert.doesNotMatch(createGraphSource, /virtual:\s*\{/);
   assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.x6-node\[data-cell-id="__comic-ai-canvas-editor-overlay__"\][\s\S]*?visibility:\s*hidden/);
+  assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.x6-node-selected\.is-canvas-node-flowing \.canvas-x6-special-node::after[\s\S]*?canvas-x6-selected-border-flow 1\.2s linear infinite/);
   assert.doesNotMatch(wireSource, /requestCanvasDragViewUpdate[\s\S]*?view\?\.cell\?\.isEdge\?\.\(\)[\s\S]*?deferredUpdates\.set/);
   assert.doesNotMatch(cssSource, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing\s*\{[\s\S]*?visibility:\s*hidden/);
 });
@@ -1607,13 +1789,26 @@ it("restores the saved X6 viewport without replacing it during initial mount", (
   assert.match(mountSource, /applyInitialViewport\(graph, canvasDocument\.viewport\)/);
   assert.match(
     mountSource,
-    /classList\.add\("is-x6-ready"\);\s*void stabilizeInitialCanvasViewport\(graph, canvasDocument\.viewport, mount\)/,
+    /classList\.add\("is-x6-ready"\);\s*void stabilizeInitialCanvasViewport\(graph, workbench\.ui\.canvasDocument\?\.viewport \?\? canvasDocument\.viewport, mount\)/,
   );
   assert.match(mountSource, /syncCanvasZoomControlDisplay\(workbench\.root, graph\.zoom\?\.\(\)\)/);
   assert.doesNotMatch(mountSource, /syncCanvasGraphViewport\(graph, workbench\)/);
   assert.match(source, /link\[data-new-canvas-style\]/);
   assert.match(source, /styleLinks\.every\(\(link\) => Boolean\(link\.sheet\)\)/);
   assert.match(source, /async function stabilizeInitialCanvasViewport[\s\S]*?await nextCanvasGraphFrame\(\)[\s\S]*?applyInitialViewport\(graph, viewport\)/);
+});
+
+it("uses the latest Canvas document when the asynchronous X6 mount completes", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  const mountStart = source.indexOf("export async function mountCanvasWorkflowIfPresent");
+  const mountEnd = source.indexOf("export function bindCanvasNativeNodeSelection", mountStart);
+  const mountSource = source.slice(mountStart, mountEnd);
+
+  assert.ok(
+    mountSource.indexOf("const graphSize = await waitForCanvasGraphMountSize(mount);")
+      < mountSource.indexOf("const canvasDocument = ensureCanvasDocument(workbench);"),
+  );
+  assert.match(mountSource, /workbench\.canvasGraph = graph;\s*refreshCanvasWorkflowGraph\(workbench\);/);
 });
 
 it("keeps existing X6 port instances when a node-only refresh does not change ports", () => {
@@ -1763,6 +1958,11 @@ it("bridges X6 selection plugin changes into the Canvas editor state", () => {
   assert.match(source, /graph\.on\("selection:changed", \(\{ added = \[\] \} = \{\}\) => \{/);
   assert.match(source, /const selectionPlugin = graph\.getPlugin\?\.\("selection"\)[\s\S]*?selectionPlugin\?\.on\?\.\("selection:changed"/);
   assert.match(source, /const selectedNode = added\.find\(\(cell\) => cell\?\.isNode\?\.\(\) && cell\?\.getData\?\.\(\)\?\.canvasTransientEditor !== true\)/);
+
+  const styles = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  assert.match(styles, /\.new-canvas-root \.x6-node-selected \.canvas-x6-special-node::after\s*\{/);
+  assert.match(styles, /animation:\s*canvas-x6-selected-border-flow [^;]+ infinite/);
+  assert.match(styles, /@keyframes canvas-x6-selected-border-flow\s*\{/);
 });
 
 it("persists X6 selection-box moves when the selection drag ends", () => {

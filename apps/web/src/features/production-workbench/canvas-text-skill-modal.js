@@ -22,6 +22,17 @@ const CATEGORY_ORDER = [
   "other",
 ];
 
+export const CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES = ["image_style", "storyboard", "other"];
+
+export function resolveCanvasGenerationSkillCategories(node = {}) {
+  const nodeType = String(node?.type ?? "").trim().toLowerCase();
+  const mediaKind = String(node?.data?.mediaKind ?? "").trim().toLowerCase();
+  const imageNodeTypes = ["send", "image", "ai-image", "ai-animation", "ai-panorama", "ai-storyboard"];
+  return mediaKind === "image" || imageNodeTypes.includes(nodeType)
+    ? [...CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES]
+    : [];
+}
+
 export function normalizeCanvasTextSkills(items = [], source = "") {
   return (Array.isArray(items) ? items : [])
     .map((item) => ({
@@ -29,6 +40,7 @@ export function normalizeCanvasTextSkills(items = [], source = "") {
       title: String(item?.title ?? item?.name ?? "未命名技能").trim(),
       summary: String(item?.summary ?? "").trim(),
       category: String(item?.category ?? item?.promptCategory ?? "other").trim() || "other",
+      coverImageUrl: String(item?.coverImageUrl ?? item?.cover_image_url ?? item?.thumbnailUrl ?? item?.thumbnail_url ?? "").trim(),
       priceCredits: Math.max(0, Math.round(Number(item?.priceCredits ?? item?.price_credits ?? 0) || 0)),
       source: source || (item?.official === true ? "official" : "private"),
       official: item?.official === true,
@@ -43,23 +55,37 @@ export function renderCanvasTextSkillModal({
   officialSkills = [],
   privateSkills = [],
   draftSkillId = "",
+  officialPagination = {},
+  privatePagination = {},
   loading = false,
+  allowedCategories = [],
 } = {}) {
   if (!show) return "";
   const source = sourceTab === "private" ? "private" : "official";
-  const official = normalizeCanvasTextSkills(officialSkills, "official");
-  const privateLibrary = normalizeCanvasTextSkills(privateSkills, "private");
+  const categoryWhitelist = new Set((Array.isArray(allowedCategories) ? allowedCategories : []).map(String).filter(Boolean));
+  const official = normalizeCanvasTextSkills(officialSkills, "official")
+    .filter((item) => !categoryWhitelist.size || categoryWhitelist.has(item.category));
+  const privateLibrary = normalizeCanvasTextSkills(privateSkills, "private")
+    .filter((item) => !categoryWhitelist.size || categoryWhitelist.has(item.category));
   const allSkills = [...official, ...privateLibrary];
   const sourceSkills = source === "private" ? privateLibrary : official;
+  const sourcePagination = source === "private" ? privatePagination : officialPagination;
+  const sourceCategoryCounts = sourcePagination?.categoryCounts && typeof sourcePagination.categoryCounts === "object"
+    ? sourcePagination.categoryCounts
+    : {};
   const selected = allSkills.find((item) => item.id === String(draftSkillId ?? "")) ?? null;
-  const categories = resolveCategoryTabs(allSkills);
-  const sourceCategories = resolveCategoryTabs(sourceSkills);
-  const category = sourceSkills.some((item) => item.category === activeCategory)
+  const categories = resolveCategoryTabs(allSkills, sourceCategoryCounts, [...categoryWhitelist]);
+  const sourceCategories = resolveCategoryTabs(sourceSkills, sourceCategoryCounts, [...categoryWhitelist]);
+  const category = (!categoryWhitelist.size || categoryWhitelist.has(activeCategory))
+    && (sourceSkills.some((item) => item.category === activeCategory) || Number(sourceCategoryCounts[activeCategory]) > 0)
     ? activeCategory
-    : sourceSkills.some((item) => item.category === selected?.category)
+    : (!categoryWhitelist.size || categoryWhitelist.has(selected?.category))
+      && (sourceSkills.some((item) => item.category === selected?.category) || Number(sourceCategoryCounts[selected?.category]) > 0)
       ? selected.category
       : sourceCategories[0]?.id ?? categories[0]?.id ?? "other";
-  const visibleSkills = sourceSkills.filter((item) => item.category === category);
+  const visibleSkills = String(sourcePagination?.category ?? "all") === "all"
+    ? sourceSkills.filter((item) => item.category === category)
+    : sourceSkills;
   return `
     <section class="canvas-text-skill-layer" data-canvas-text-skill-picker="true">
       <button class="canvas-text-skill-scrim" type="button" data-action="close-canvas-text-skill-modal" aria-label="关闭技能选择"></button>
@@ -69,11 +95,11 @@ export function renderCanvasTextSkillModal({
           <button type="button" data-action="close-canvas-text-skill-modal" aria-label="关闭" title="关闭">×</button>
         </header>
         <nav class="canvas-text-skill-tabs" aria-label="技能来源">
-          ${renderSourceTab("official", "官方技能", official.length, source)}
-          ${renderSourceTab("private", "私人技能库", privateLibrary.length, source)}
+          ${renderSourceTab("official", "官方技能", sourceSkillTotal(officialPagination, official, categoryWhitelist), source)}
+          ${renderSourceTab("private", "私人技能库", sourceSkillTotal(privatePagination, privateLibrary, categoryWhitelist), source)}
         </nav>
         <nav class="canvas-text-skill-category-tabs" aria-label="技能分类">
-          ${categories.map((item) => renderCategoryTab(item, category, sourceSkills)).join("")}
+          ${categories.map((item) => renderCategoryTab(item, category, sourceSkills, sourceCategoryCounts)).join("")}
         </nav>
         <div class="canvas-text-skill-list" role="radiogroup" aria-label="${escapeAttr(categoryLabel(category))}技能">
           ${loading
@@ -82,6 +108,7 @@ export function renderCanvasTextSkillModal({
               ? visibleSkills.map((skill) => renderSkillCard(skill, selected?.id ?? "")).join("")
               : `<div class="canvas-text-skill-empty">${source === "private" ? "私人技能库" : "官方技能"}暂无${escapeHtml(categoryLabel(category))}技能</div>`}
         </div>
+        ${renderSkillPagination(source, sourcePagination, loading)}
         <footer class="canvas-text-skill-footer">
           <div class="canvas-text-skill-selection">
             <small>当前选择</small>
@@ -101,9 +128,16 @@ function renderSourceTab(id, label, count, activeSource) {
   return `<button class="${id === activeSource ? "active" : ""}" type="button" data-action="set-canvas-text-skill-source" data-skill-source="${id}" aria-pressed="${id === activeSource}"><span>${label}</span><small>${count}</small></button>`;
 }
 
-function renderCategoryTab(category, activeCategory, sourceSkills) {
+function sourceSkillTotal(pagination = {}, skills = [], categoryWhitelist = new Set()) {
+  if (categoryWhitelist.size && pagination?.categoryCounts && typeof pagination.categoryCounts === "object") {
+    return [...categoryWhitelist].reduce((total, category) => total + Math.max(0, Number(pagination.categoryCounts[category]) || 0), 0);
+  }
+  return Math.max(0, Number(pagination?.total) || skills.length);
+}
+
+function renderCategoryTab(category, activeCategory, sourceSkills, categoryCounts = {}) {
   const active = category.id === activeCategory;
-  const count = sourceSkills.filter((item) => item.category === category.id).length;
+  const count = Math.max(0, Number(categoryCounts[category.id]) || sourceSkills.filter((item) => item.category === category.id).length);
   return `<button class="${active ? "active" : ""}" type="button" data-action="set-canvas-text-skill-category" data-skill-category="${escapeAttr(category.id)}" aria-pressed="${active}"><span>${escapeHtml(category.label)}</span><small>${count}</small></button>`;
 }
 
@@ -119,7 +153,9 @@ function renderSkillCard(skill, selectedId) {
       data-skill-id="${escapeAttr(skill.id)}"
       data-skill-category="${escapeAttr(skill.category)}"
     >
-      <span class="canvas-text-skill-card-mark" aria-hidden="true">${escapeHtml(categoryLabel(skill.category).slice(0, 1))}</span>
+      <span class="canvas-text-skill-card-mark ${skill.coverImageUrl ? "has-image" : ""}" aria-hidden="true">${skill.coverImageUrl
+        ? `<img src="${escapeAttr(skill.coverImageUrl)}" alt="" loading="lazy" />`
+        : escapeHtml(categoryLabel(skill.category).slice(0, 1))}</span>
       <span class="canvas-text-skill-card-copy">
         <span><small>${escapeHtml(categoryLabel(skill.category))}</small><em>${formatCredits(skill.priceCredits)}</em></span>
         <strong>${escapeHtml(skill.title)}</strong>
@@ -134,13 +170,34 @@ function categoryLabel(category) {
   return CATEGORY_LABELS[category] ?? String(category || "其他");
 }
 
-function resolveCategoryTabs(skills) {
-  const available = new Set(skills.map((item) => item.category).filter(Boolean));
+function resolveCategoryTabs(skills, categoryCounts = {}, allowedCategories = []) {
+  const whitelist = new Set((Array.isArray(allowedCategories) ? allowedCategories : []).filter(Boolean));
+  if (whitelist.size) {
+    return CATEGORY_ORDER.filter((category) => whitelist.has(category))
+      .map((id) => ({ id, label: categoryLabel(id) }));
+  }
+  const available = new Set([
+    ...skills.map((item) => item.category).filter(Boolean),
+    ...Object.entries(categoryCounts).filter(([, count]) => Number(count) > 0).map(([category]) => category),
+  ]);
   const ordered = CATEGORY_ORDER.filter((category) => available.has(category));
   const remaining = [...available].filter((category) => !CATEGORY_ORDER.includes(category));
   const categories = [...ordered, ...remaining];
   if (!categories.length) categories.push("other");
   return categories.map((id) => ({ id, label: categoryLabel(id) }));
+}
+
+function renderSkillPagination(source, pagination = {}, loading = false) {
+  const page = Math.max(1, Number(pagination?.page) || 1);
+  const totalPages = Math.max(1, Number(pagination?.totalPages) || 1);
+  if (totalPages <= 1) return "";
+  return `
+    <nav class="canvas-text-skill-pagination" aria-label="技能分页">
+      <span>第 ${page} / ${totalPages} 页</span>
+      <button type="button" data-action="set-canvas-text-skill-page" data-skill-page="${page - 1}" ${loading || page <= 1 ? "disabled" : ""}>上一页</button>
+      <button type="button" data-action="set-canvas-text-skill-page" data-skill-page="${page + 1}" ${loading || page >= totalPages ? "disabled" : ""}>下一页</button>
+    </nav>
+  `;
 }
 
 function formatCredits(value) {

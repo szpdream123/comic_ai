@@ -19,6 +19,8 @@ import {
   cancelCanvasGenerationBatch,
   assertCanvasGenerationPerItemBilling,
   CanvasGenerationBatchError,
+  canvasScriptWorkflowReferencesBelongToTarget,
+  compileCanvasScriptWorkflowPrompt,
   createCanvasGenerationBatch,
   getCanvasGenerationBatch,
   planCanvasGenerationDag,
@@ -39,6 +41,36 @@ import {
 } from "../canvas-asset-reference.service.ts";
 
 describe("Canvas generation runtime", { concurrency: false }, () => {
+  it("recompiles script workflow mentions by backend first-appearance order", () => {
+    const compiled = compileCanvasScriptWorkflowPrompt("@主角走入@街道，@主角停下。", [
+      { mention: "@街道", nodeId: "scene", referenceAssetVersionId: "scene-version" },
+      { mention: "@主角", nodeId: "role", referenceAssetVersionId: "role-version" },
+    ]);
+
+    assert.equal(compiled.prompt, "图1中的主角走入图2中的街道，图1中的主角停下。");
+    assert.deepEqual(compiled.references.map((reference) => reference.nodeId), ["role", "scene"]);
+  });
+  it("accepts script references only when the shot and assets share one workflow parent", () => {
+    const document = {
+      nodes: [
+        { id: "shot", data: { workflowParentId: "script-a", workflowKind: "storyboard" } },
+        { id: "role-a", data: { workflowParentId: "script-a", workflowKind: "character" } },
+        { id: "scene-a", data: { workflowParentId: "script-a", workflowKind: "scene" } },
+        { id: "role-b", data: { workflowParentId: "script-b", workflowKind: "character" } },
+      ],
+    };
+
+    assert.equal(canvasScriptWorkflowReferencesBelongToTarget(document, "shot", [
+      { nodeId: "role-a" },
+      { nodeId: "scene-a" },
+    ]), true);
+    assert.equal(canvasScriptWorkflowReferencesBelongToTarget(document, "shot", [
+      { nodeId: "role-b" },
+    ]), false);
+    assert.equal(canvasScriptWorkflowReferencesBelongToTarget(document, "missing-shot", [
+      { nodeId: "role-a" },
+    ]), false);
+  });
   it("plans stable DAG levels and rejects cycles", () => {
     assert.deepEqual(planCanvasGenerationDag([
       { nodeKey: "image-a", mediaKind: "image" },
@@ -357,6 +389,7 @@ describe("Canvas generation runtime", { concurrency: false }, () => {
         dispatched.push({ nodeKey: input.nodeKey, payload: input.payload, taskId });
         return { taskId };
       };
+      const existingReferenceVersionId = randomUUID();
       const created = await createCanvasGenerationBatch(db, {
         canvasProjectId: fixture.canvasId,
         actorScope: fixture.scope,
@@ -368,8 +401,15 @@ describe("Canvas generation runtime", { concurrency: false }, () => {
             mediaKind: "image",
             dependsOn: ["root"],
             payload: {
+              prompt: "前端传入的错误图号",
+              motionPrompt: "前端传入的错误图号",
               canvasContext: {
+                sourcePrompt: "@新场景 在 @已有角色。",
                 promptReadDependencies: [{ kind: "canvas_node_read", nodeKey: "root" }],
+                scriptWorkflowReferences: [
+                  { mention: "@已有角色", nodeId: "existing", referenceIndex: 1, referenceAssetVersionId: existingReferenceVersionId },
+                  { mention: "@新场景", nodeId: "root", referenceIndex: 2, referenceAssetVersionId: "" },
+                ],
               },
             },
           },
@@ -423,7 +463,16 @@ describe("Canvas generation runtime", { concurrency: false }, () => {
       });
       assert.equal(reconciled.items.find((item) => item.nodeKey === "dependent")?.status, "queued");
       const dependentDispatch = dispatched.find((item) => item.nodeKey === "dependent")!;
-      assert.deepEqual(dependentDispatch.payload.referenceAssetVersionIds, [stable.assetVersionId]);
+      assert.deepEqual(dependentDispatch.payload.referenceAssetVersionIds, [stable.assetVersionId, existingReferenceVersionId]);
+      assert.equal(dependentDispatch.payload.prompt, "图1中的新场景 在 图2中的已有角色。");
+      assert.equal(dependentDispatch.payload.motionPrompt, "图1中的新场景 在 图2中的已有角色。");
+      assert.deepEqual(
+        (dependentDispatch.payload.canvasContext as Record<string, unknown>).scriptWorkflowReferences,
+        [
+          { mention: "@新场景", nodeId: "root", referenceIndex: 1, referenceAssetVersionId: stable.assetVersionId },
+          { mention: "@已有角色", nodeId: "existing", referenceIndex: 2, referenceAssetVersionId: existingReferenceVersionId },
+        ],
+      );
       assert.equal(JSON.stringify(dependentDispatch.payload).includes("http"), false);
       assert.equal(JSON.stringify(dependentDispatch.payload).includes("base64"), false);
     } finally {

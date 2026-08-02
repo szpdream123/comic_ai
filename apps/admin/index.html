@@ -5263,6 +5263,7 @@
               <div class="filters">
                 <input value="${escapeAttribute(state.promptMarketplaceKeyword || "")}" placeholder="搜索名称 / 简介 / 发布者" oninput="updatePromptMarketplaceKeyword(this.value)" />
                 <select onchange="updatePromptMarketplaceStatus(this.value)">${optionPairs([["all", "全部状态"], ["published", "已发布"], ["draft", "草稿"], ["archived", "已归档"]], state.promptMarketplaceStatus)}</select>
+                ${isOfficial ? `<button class="btn primary" onclick="openPromptMarketplaceItemDrawer()" ${permissionAttrs("storyboard_prompt:create")}>新增官方提示词</button>` : ""}
                 <button class="btn ghost" onclick="loadPromptMarketplace().then(renderShell)">刷新</button>
               </div>
             </div>
@@ -5306,25 +5307,26 @@
         return (state.promptMarketplaceItems || []).find((item) => String(item.id) === String(itemId));
       }
 
-      function openPromptMarketplaceItemDrawer(itemId) {
+      function openPromptMarketplaceItemDrawer(itemId = "") {
         const existing = promptMarketplaceItemById(itemId);
-        if (!existing) return;
-        const isOfficial = existing.official === true;
+        if (itemId && !existing) return;
+        const isOfficial = !existing || existing.official === true;
+        const selectedCategory = existing?.category || (state.promptMarketplaceCategory !== "all" ? state.promptMarketplaceCategory : "script");
         const formId = "prompt-marketplace-item-form";
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(820px,100%);">
-          <div class="drawer-head"><h3>编辑${isOfficial ? "官方" : "用户"}提示词</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
+          <div class="drawer-head"><h3>${existing ? `编辑${isOfficial ? "官方" : "用户"}提示词` : "新增官方提示词"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div>
           <form id="${formId}">
             <div class="form-grid">
-              <label class="field"><span>名称</span><input name="title" value="${escapeAttribute(existing.title || "")}" minlength="2" maxlength="80" required /></label>
-              <label class="field"><span>分类</span><input value="${escapeAttribute(promptMarketplaceCategoryLabels[existing.category] || existing.category || "提示词")}" disabled /></label>
+              <label class="field"><span>名称</span><input name="title" value="${escapeAttribute(existing?.title || "")}" minlength="2" maxlength="80" required /></label>
+              <label class="field"><span>分类</span>${existing ? `<input value="${escapeAttribute(promptMarketplaceCategoryLabels[selectedCategory] || selectedCategory || "提示词")}" disabled />` : `<select name="category">${optionPairs(Object.entries(promptMarketplaceCategoryLabels), selectedCategory)}</select>`}</label>
               <label class="field"><span>来源</span><input value="${isOfficial ? "官方提示词" : "用户提示词"}" disabled /></label>
             </div>
             ${promptPublishingFields(existing)}
-            <label class="field"><span>封面</span><div class="prompt-cover-upload" data-cover-field="cover_image_url">${promptCoverMarkup({ name: existing.title, coverImageUrl: existing.coverImageUrl }, "提")}${promptCoverUploadFields(existing, formId)}</div></label>
-            <label class="field"><span>简介</span><textarea name="remark" rows="3" maxlength="240" placeholder="说明该提示词的用途与效果">${escapeHtml(existing.summary || "")}</textarea></label>
-            ${isOfficial ? `<label class="field"><span>提示词正文</span><textarea name="prompt_content" rows="14" maxlength="50000" required>${escapeHtml(existing.content || "")}</textarea></label>` : '<p class="metric-note" style="margin:0;">用户提示词正文受保护，后台不展示也不修改正文。</p>'}
+            <label class="field"><span>封面</span><div class="prompt-cover-upload" data-cover-field="cover_image_url">${promptCoverMarkup({ name: existing?.title, coverImageUrl: existing?.coverImageUrl }, "提")}${promptCoverUploadFields(existing, formId)}</div></label>
+            <label class="field"><span>简介</span><textarea name="remark" rows="3" maxlength="240" placeholder="说明该提示词的用途与效果">${escapeHtml(existing?.summary || "")}</textarea></label>
+            ${isOfficial ? `<label class="field"><span>提示词正文</span><textarea name="prompt_content" rows="14" maxlength="50000" required>${escapeHtml(existing?.content || "")}</textarea></label>` : '<p class="metric-note" style="margin:0;">用户提示词正文受保护，后台不展示也不修改正文。</p>'}
             <div class="error-text" id="prompt-marketplace-item-error"></div>
             <div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存</button></div>
           </form>
@@ -5342,9 +5344,10 @@
               ...promptPublishingPayloadFromForm(form),
             };
             if (isOfficial) payload.prompt_content = String(form.get("prompt_content") || "").trim();
-            await api(`/api/admin/prompt-marketplace/items/${encodeURIComponent(existing.id)}`, {
-              method: "PATCH",
-              headers: { "idempotency-key": `admin-ui-prompt-marketplace-${existing.id}-${Date.now()}` },
+            if (!existing) payload.category = String(form.get("category") || "");
+            await api(existing ? `/api/admin/prompt-marketplace/items/${encodeURIComponent(existing.id)}` : "/api/admin/prompt-marketplace/items", {
+              method: existing ? "PATCH" : "POST",
+              headers: { "idempotency-key": `admin-ui-prompt-marketplace-${existing?.id || "new"}-${Date.now()}` },
               body: JSON.stringify(payload),
             });
             await loadPromptMarketplace();

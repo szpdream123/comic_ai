@@ -6,6 +6,7 @@ import {
   collapseAgentTimelineEvents,
   createCanvasAgentController,
   ensureCanvasAgentState,
+  persistCanvasAgentUiState,
   normalizeAgentMediaTask,
   normalizeAgentMemoryRecord,
   normalizeAgentMessage,
@@ -338,12 +339,16 @@ test("Canvas Agent closes without rerendering the workspace or resetting the han
     },
   };
   const panel = { remove() { panelRemoved = true; } };
+  let sessionPersisted = false;
   const workbench = {
     ui: {
       canvasDocument: { viewport: { interactionMode: "hand" } },
       canvasAgent: { panelOpen: true },
     },
     api: {},
+    persistCanvasSession() {
+      sessionPersisted = true;
+    },
   };
   const controller = createCanvasAgentController({
     surface: {
@@ -364,6 +369,8 @@ test("Canvas Agent closes without rerendering the workspace or resetting the han
   await controller.handleAction({ dataset: { agentAction: "close-agent-panel" } });
 
   assert.equal(panelRemoved, true);
+  assert.equal(sessionPersisted, true);
+  assert.equal(workbench.ui.canvasSessionUiState.canvasAgent.panelOpen, false);
   assert.match(reopenMarkup, /data-agent-action="open-agent-panel"/);
   assert.equal(renderLayoutCalls, 0);
   assert.equal(workbench.ui.canvasDocument.viewport.interactionMode, "hand");
@@ -445,6 +452,18 @@ test("Canvas Agent event reducer deduplicates sequences and exposes pending appr
   assert.equal(agent.sequence, 2);
   assert.equal(agent.status, "waiting_approval");
   assert.match(renderCanvasAgentPanel(ui), /data-approval-id="approval-1"/);
+});
+
+test("Canvas Agent restores and persists the session panel state", () => {
+  const ui = { canvasSessionUiState: { canvasAgent: { panelOpen: false, panelWidth: 420 } } };
+  const agent = ensureCanvasAgentState(ui);
+  assert.equal(agent.panelOpen, false);
+  assert.equal(agent.panelWidth, 420);
+
+  agent.panelOpen = true;
+  agent.panelWidth = 520;
+  persistCanvasAgentUiState(ui, agent);
+  assert.deepEqual(ui.canvasSessionUiState.canvasAgent, { panelOpen: true, panelWidth: 520 });
 });
 
 test("Canvas Agent approval identifies the controlled effect and originating tool", () => {

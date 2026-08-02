@@ -166,6 +166,8 @@ import {
 import {
   cancelCanvasGenerationBatch,
   CanvasGenerationBatchError,
+  canvasScriptWorkflowReferencesBelongToTarget,
+  compileCanvasScriptWorkflowPrompt,
   createCanvasGenerationBatch,
   getCanvasGenerationBatch,
   reconcileCanvasGenerationBatch,
@@ -5555,7 +5557,9 @@ async function listTaskCenterTasks(
             OR COALESCE(item.episode_title, '') ILIKE '%' || $5 || '%'
           )
           AND ($6::uuid[] IS NULL OR $3 = 'poll' OR item.task_id = ANY($6))
-          AND ($7::timestamptz IS NULL OR item.updated_at > $7::timestamptz)
+          -- Explicit task-id polling is authoritative for locally tracked tasks. Do not
+          -- hide an already-terminal task behind the shared incremental watermark.
+          AND ($7::timestamptz IS NULL OR $6::uuid[] IS NOT NULL OR item.updated_at > $7::timestamptz)
           AND (
             $8::timestamptz IS NULL
             OR item.updated_at < $8::timestamptz
@@ -7985,6 +7989,53 @@ function prependCanvasGenerationSkill(
   return next;
 }
 
+function appendCanvasGenerationSkillReference(
+  body: Record<string, unknown>,
+  skill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>>,
+) {
+  const coverImageUrl = readString(skill?.coverImageUrl);
+  const coverStorageObjectId = readString(skill?.coverStorageObjectId);
+  if (!coverImageUrl && !coverStorageObjectId) return body;
+  const reference = {
+    id: `prompt-skill-reference:${skill!.id}`,
+    kind: "image",
+    originalName: "技能缩略图",
+    isGenerationStyleReference: true,
+    ...(coverImageUrl ? { url: coverImageUrl } : {}),
+    // Public skill covers must not be resolved as canvas-owned storage objects.
+    ...(!coverImageUrl && coverStorageObjectId ? { storageObjectId: coverStorageObjectId } : {}),
+  };
+  const parameters = readJsonRecord(body.parameters);
+  const existingReferences = [
+    ...readArray(body.referenceImages),
+    ...readArray(parameters.referenceImages),
+    ...readArray(parameters.quickReferences),
+  ];
+  const hasCover = existingReferences.some((item) => {
+    const candidate = readJsonRecord(item);
+    return (coverStorageObjectId && readString(candidate.storageObjectId) === coverStorageObjectId)
+      || (coverImageUrl && readString(candidate.url) === coverImageUrl);
+  });
+  if (hasCover) return body;
+  const referenceImages = [...readArray(body.referenceImages), reference];
+  return {
+    ...body,
+    referenceImages,
+    parameters: {
+      ...parameters,
+      referenceImages: [...readArray(parameters.referenceImages), reference],
+      quickReferences: [...readArray(parameters.quickReferences), reference],
+    },
+  };
+}
+
+function imageGenerationSkillReference(
+  canvasSkill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>>,
+  imageStyleSkill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>>,
+) {
+  return canvasSkill ?? imageStyleSkill;
+}
+
 function generationTaskPromptSkill(
   skill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>>,
 ): NonNullable<GenerationTaskContext["promptSkill"]> | null {
@@ -8039,13 +8090,77 @@ async function resolveCanvasGenerationPromptBody(
   mediaKindHint?: string,
 ) {
   const canvasContext = readJsonRecord(body.canvasContext);
-  const sourcePrompt = readString(canvasContext.sourcePrompt)
+  const semanticSourcePrompt = readString(canvasContext.sourcePrompt)
     || readString(body.sourcePrompt)
     || readString(body.text)
     || readString(body.prompt)
     || readString(body.promptOverride)
     || readString(body.motionPrompt)
     || "";
+  const scriptWorkflowReferences = Array.isArray(canvasContext.scriptWorkflowReferences)
+    ? canvasContext.scriptWorkflowReferences
+      .map((reference) => readJsonRecord(reference))
+      .map((reference) => ({
+        mention: readString(reference.mention) || "",
+        nodeId: readString(reference.nodeId) || "",
+        referenceAssetVersionId: readString(reference.referenceAssetVersionId) || "",
+      }))
+      .filter((reference) => reference.mention && reference.nodeId)
+    : [];
+  if (scriptWorkflowReferences.length) {
+    const targetNodeId = readString(body.targetId) || "";
+    const canvas = targetNodeId
+      ? await findCanvasByCanvasProjectId(db, {
+          actorScope,
+          canvasProjectId: actorScope.canvasId,
+        })
+      : null;
+    if (!canvas || !canvasScriptWorkflowReferencesBelongToTarget(
+      canvas.document,
+      targetNodeId,
+      scriptWorkflowReferences,
+    )) {
+      throw new GenerationRequestValidationError(
+        "canvas_script_workflow_reference_invalid",
+        "Script workflow references must belong to the target workflow",
+      );
+    }
+    const versionBindings = scriptWorkflowReferences.filter((reference) => reference.referenceAssetVersionId);
+    if (versionBindings.length) {
+      if (versionBindings.some((reference) => !isUuid(reference.referenceAssetVersionId))) {
+        throw new GenerationRequestValidationError(
+          "canvas_script_workflow_reference_invalid",
+          "Script workflow reference version is invalid",
+        );
+      }
+      const artifacts = await db.query<{ node_key: string; asset_version_id: string }>(`
+        SELECT node_key, asset_version_id
+        FROM creator_canvas_node_artifacts
+        WHERE canvas_project_id=$1
+          AND deleted_at IS NULL
+          AND asset_version_id IS NOT NULL
+          AND (node_key,asset_version_id) IN (
+            SELECT * FROM unnest($2::text[],$3::uuid[])
+          )
+      `, [
+        actorScope.canvasId,
+        versionBindings.map((reference) => reference.nodeId),
+        versionBindings.map((reference) => reference.referenceAssetVersionId),
+      ]);
+      const ownedVersions = new Set(artifacts.rows.map((row) => `${row.node_key}:${row.asset_version_id}`));
+      if (versionBindings.some((reference) =>
+        !ownedVersions.has(`${reference.nodeId}:${reference.referenceAssetVersionId}`))) {
+        throw new GenerationRequestValidationError(
+          "canvas_script_workflow_reference_invalid",
+          "Script workflow reference version does not belong to its asset node",
+        );
+      }
+    }
+  }
+  const scriptWorkflowCompilation = scriptWorkflowReferences.length
+    ? compileCanvasScriptWorkflowPrompt(semanticSourcePrompt, scriptWorkflowReferences)
+    : null;
+  const sourcePrompt = scriptWorkflowCompilation?.prompt ?? semanticSourcePrompt;
   const settings = await getCanvasSettings(db, { actorScope });
   const mediaKind = ["text", "image", "video", "audio"].includes(String(mediaKindHint ?? body.kind ?? body.mediaKind))
     ? String(mediaKindHint ?? body.kind ?? body.mediaKind)
@@ -8075,8 +8190,17 @@ async function resolveCanvasGenerationPromptBody(
     resolvedBody.modelCode = defaultModel;
   }
   const currentParameters = resolvedBody.parameters && typeof resolvedBody.parameters === "object" && !Array.isArray(resolvedBody.parameters)
-    ? resolvedBody.parameters as Record<string, unknown>
+    ? { ...resolvedBody.parameters as Record<string, unknown> }
     : {};
+  if (scriptWorkflowCompilation?.references.length) {
+    const orderedReferenceAssetVersionIds = scriptWorkflowCompilation.references
+      .map((reference) => reference.referenceAssetVersionId)
+      .filter(Boolean);
+    if (orderedReferenceAssetVersionIds.length === scriptWorkflowCompilation.references.length) {
+      resolvedBody.referenceAssetVersionIds = orderedReferenceAssetVersionIds;
+      currentParameters.referenceAssetVersionIds = orderedReferenceAssetVersionIds;
+    }
+  }
   const expandedPrompt = appendCanvasAnimationSpritePrompt(resolved.expandedPrompt, currentParameters);
   const styleReferenceAssetId = settings.settings.visualStyle.styleReferenceEnabled === true
     && (mediaKind === "image" || mediaKind === "video")
@@ -8136,7 +8260,16 @@ async function resolveCanvasGenerationPromptBody(
     ...(body.text === undefined ? {} : { text: expandedPrompt }),
     canvasContext: {
       ...canvasContext,
-      sourcePrompt: resolved.sourcePrompt,
+      sourcePrompt: semanticSourcePrompt,
+      ...(scriptWorkflowCompilation ? {
+        compiledPrompt: resolved.sourcePrompt,
+        scriptWorkflowReferences: scriptWorkflowCompilation.references.map((reference, index) => ({
+          mention: reference.mention,
+          nodeId: reference.nodeId,
+          referenceIndex: index + 1,
+          referenceAssetVersionId: reference.referenceAssetVersionId,
+        })),
+      } : {}),
       expandedPrompt,
       promptReferences: resolved.references,
       promptExpansionOrder: resolved.expansionOrder,
@@ -10282,6 +10415,8 @@ async function createUnifiedImageGenerationTask(
   let promptSkill: GenerationTaskContext["promptSkill"] = null;
   const promptSkills: Array<NonNullable<GenerationTaskContext["promptSkill"]>> = [];
   let promptSkillContent = "";
+  let canvasPromptSkill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>> = null;
+  let imageStyleSkill: Awaited<ReturnType<typeof resolveCanvasGenerationSkill>> = null;
   let imageStyleContent = "";
   if (canvasSkillSelection) {
     if (requestedSkillId && requestedSkillId !== canvasSkillSelection.id) {
@@ -10291,6 +10426,7 @@ async function createUnifiedImageGenerationTask(
     }
     try {
       const skill = await resolveCanvasGenerationSkill(input.db, input.authenticated.user.id, canvasSkillSelection);
+      canvasPromptSkill = skill;
       promptSkill = generationTaskPromptSkill(skill);
       if (promptSkill) promptSkills.push(promptSkill);
       promptSkillContent = String(skill?.content ?? "").trim();
@@ -10329,6 +10465,7 @@ async function createUnifiedImageGenerationTask(
       if (promptSkillCategory === "storyboard") {
         promptSkillContent = String(skill.content ?? "").trim();
       } else {
+        imageStyleSkill = skill;
         imageStyleContent = String(skill.content ?? "").trim();
       }
     } catch (error) {
@@ -10362,6 +10499,7 @@ async function createUnifiedImageGenerationTask(
         official: styleSkill.official,
         ownerUserId: styleSkill.ownerUserId,
       });
+      imageStyleSkill = styleSkill;
       imageStyleContent = String(styleSkill.content ?? "").trim();
     } catch (error) {
       if (error instanceof PromptMarketplaceError) {
@@ -10414,7 +10552,13 @@ async function createUnifiedImageGenerationTask(
     const result = await createGenerationTask(input.db, {
       kind: "image",
       episodeId: prepared.episodeId,
-      body: { ...prepared.body, ...generationBody },
+      body: {
+        ...prepared.body,
+        ...appendCanvasGenerationSkillReference(
+          generationBody,
+          imageGenerationSkillReference(canvasPromptSkill, imageStyleSkill),
+        ),
+      },
       idempotencyKey: input.idempotencyKey,
       authenticated: input.authenticated,
       context: { ...prepared.context, promptSkill, promptSkills },
@@ -10500,7 +10644,10 @@ export function createCanvasGenerationBatchDispatch(input: {
       input.authenticated.user.id,
       readCanvasGenerationSkillSelection(resolvedPromptPayload),
     );
-    const generationPromptPayload = prependCanvasGenerationSkill(resolvedPromptPayload, selectedPromptSkill);
+    const generationPromptPayload = appendCanvasGenerationSkillReference(
+      prependCanvasGenerationSkill(resolvedPromptPayload, selectedPromptSkill),
+      selectedPromptSkill,
+    );
     const promptSkill = generationTaskPromptSkill(selectedPromptSkill);
     const modelCode = readString(generationPromptPayload.model) ?? readString(generationPromptPayload.modelCode);
     const run = await createCanvasNodeRun(input.db, {
@@ -17195,6 +17342,43 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "POST" && pathname === "/api/admin/prompt-marketplace/items") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.storyboardPromptWrite],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as Record<string, unknown>;
+        const service = createPromptMarketplaceService({ db });
+        return writeJson(response, {
+          status: 201,
+          body: {
+            data: await service.createAdminOfficialItem({
+              title: String(body.title ?? body.name ?? ""),
+              category: String(body.category ?? body.prompt_category ?? ""),
+              summary: body.summary === undefined && body.remark === undefined ? undefined : String(body.summary ?? body.remark ?? ""),
+              content: String(body.content ?? body.prompt_content ?? body.promptContent ?? ""),
+              coverImageUrl: body.coverImageUrl === undefined && body.cover_image_url === undefined
+                ? undefined
+                : String(body.coverImageUrl ?? body.cover_image_url ?? ""),
+              priceCredits: body.priceCredits == null && body.price_credits == null
+                ? undefined
+                : Number(body.priceCredits ?? body.price_credits),
+              usageCount: body.usageCount == null && body.usage_count == null
+                ? undefined
+                : Number(body.usageCount ?? body.usage_count),
+              status: body.status == null
+                ? (body.is_published === true || body.isPublished === true ? "published" : undefined)
+                : String(body.status),
+              now: new Date(),
+            }),
+          },
+        });
+      }
+
       const adminPromptMarketplaceItemMatch = pathname.match(/^\/api\/admin\/prompt-marketplace\/items\/([^/]+)$/);
       if (request.method === "PATCH" && adminPromptMarketplaceItemMatch) {
         const adminRoute = await requireAdminRouteSession({
@@ -21096,6 +21280,37 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (pathname === "/api/creator/prompt-skills/catalog" || pathname === "/api/creator/prompt-skills/library") {
+        const authenticated = await findAuthenticatedUser(
+          db,
+          request.headers.cookie,
+          new Date(),
+          authSessionCache,
+          { includeCredit: false },
+        );
+        if (!authenticated) {
+          return writeJson(response, {
+            status: 401,
+            body: { error: { code: "unauthenticated", message: "请先登录" } },
+          });
+        }
+        if (request.method === "GET") {
+          const service = createPromptMarketplaceService({ db });
+          const input = {
+            userId: authenticated.user.id,
+            category: url.searchParams.get("category"),
+            query: url.searchParams.get("query"),
+            page: Number(url.searchParams.get("page") ?? 1),
+            pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 12),
+          };
+          return writeJson(response, {
+            status: 200,
+            body: pathname.endsWith("/library")
+              ? await service.listSkillLibrary(input)
+              : await service.listSkillCatalog(input),
+          });
+        }
+      }
       if (pathname === "/api/creator/prompt-marketplace" || pathname.startsWith("/api/creator/prompt-marketplace/")) {
         const authenticated = await findAuthenticatedUser(
           db,
@@ -24562,7 +24777,12 @@ export function createPhoneAuthDevServer(
             authenticated.user.id,
             readCanvasGenerationSkillSelection(body, node),
           );
-          const generationPromptBody = prependCanvasGenerationSkill(resolvedPromptBody, selectedPromptSkill);
+          const generationPromptBody = mediaKind === "video"
+            ? appendCanvasGenerationSkillReference(
+                prependCanvasGenerationSkill(resolvedPromptBody, selectedPromptSkill),
+                selectedPromptSkill,
+              )
+            : prependCanvasGenerationSkill(resolvedPromptBody, selectedPromptSkill);
           const promptSkill = generationTaskPromptSkill(selectedPromptSkill);
           const run = await createCanvasNodeRun(db, {
             canvasProjectId,
@@ -27144,16 +27364,34 @@ export function createPhoneAuthDevServer(
           if (!isUuid(projectId)) {
             return writeJson(response, envelopedError(400, "invalid_project_id", "project id is invalid"));
           }
-          const actor = await resolveActorContext(db, {
-            sessionToken: authenticated.sessionToken,
-            projectId,
-            now: new Date(),
-          });
+          let actor: ActorContext;
+          let billingProjectId: string | null = projectId;
+          try {
+            actor = await resolveActorContext(db, {
+              sessionToken: authenticated.sessionToken,
+              projectId,
+              now: new Date(),
+            });
+          } catch (error) {
+            if (!(error instanceof AuthorizationError) || error.code !== "project_not_found") throw error;
+            await authorizeCanvasActor(db, {
+              sessionToken: authenticated.sessionToken,
+              canvasId: projectId,
+              action: "run",
+              now: new Date(),
+            });
+            actor = await resolveActorContext(db, {
+              sessionToken: authenticated.sessionToken,
+              now: new Date(),
+            });
+            billingProjectId = null;
+          }
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
             skillId?: string | null;
             modelCode?: string | null;
             skipScriptStage?: boolean | null;
+            useDefaultWorkflowStages?: boolean | null;
             skills?: Partial<Record<"script" | "shot" | "prop_extract" | "character_extract" | "scene_extract", string | null>> | null;
             packages?: {
               genrePackageId?: string | null;
@@ -27162,6 +27400,7 @@ export function createPhoneAuthDevServer(
           };
           const scriptText = String(body.scriptText ?? "").trim();
           const skipScriptStage = body.skipScriptStage === true;
+          const useDefaultWorkflowStages = skipScriptStage && body.useDefaultWorkflowStages === true;
           const skillId = String(body.skillId ?? "").trim();
           const workflowSkillCategories = ["script", "shot", "prop_extract", "character_extract", "scene_extract"] as const;
           const requestedSkillIds = Object.fromEntries(
@@ -27187,7 +27426,7 @@ export function createPhoneAuthDevServer(
           )) {
             return writeJson(response, envelopedError(400, "storyboard_prompt_package_required", "genre and emotion packages are required"));
           }
-          if (!usesLegacyPackages && Object.keys(requestedSkillIds).length === 0) {
+          if (!usesLegacyPackages && !useDefaultWorkflowStages && Object.keys(requestedSkillIds).length === 0) {
             return writeJson(response, envelopedError(400, "workflow_prompt_skill_required", "at least one workflow prompt skill is required"));
           }
           let workflowSkills: Array<Awaited<ReturnType<ReturnType<typeof createPromptMarketplaceService>["resolveWorkflowPromptSkill"]>>> = [];
@@ -27210,7 +27449,7 @@ export function createPhoneAuthDevServer(
             throw error;
           }
           const workflowSkillByCategory = new Map(workflowSkills.map((item) => [item.category, item]));
-          if (usesLegacyPackages) {
+          if (usesLegacyPackages || useDefaultWorkflowStages) {
             await Promise.all([
               ensureDefaultStoryboardPromptData(db),
               ensureDefaultScenePromptTemplates(db),
@@ -27219,7 +27458,7 @@ export function createPhoneAuthDevServer(
               ensureDefaultShotPromptTemplates(db),
             ]);
           }
-          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = usesLegacyPackages
+          const [sceneTemplate, characterTemplate, propTemplate, shotTemplate] = usesLegacyPackages || useDefaultWorkflowStages
             ? await Promise.all([
                 findDefaultScenePromptTemplateForPreview(db),
                 findDefaultCharacterPromptTemplateForPreview(db),
@@ -27227,7 +27466,7 @@ export function createPhoneAuthDevServer(
                 findDefaultShotPromptTemplateForPreview(db),
               ])
             : [null, null, null, null];
-          if (usesLegacyPackages && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
+          if ((usesLegacyPackages || useDefaultWorkflowStages) && (!sceneTemplate || !characterTemplate || !propTemplate || !shotTemplate)) {
             return writeJson(response, envelopedError(500, "ai_storyboard_default_prompt_missing", "default scene, character, prop or shot prompt template is missing"));
           }
           const [genrePackage, emotionPackage, tabooPackages] = usesLegacyPackages
@@ -27249,7 +27488,7 @@ export function createPhoneAuthDevServer(
             throw new TextModelGatewayError("model_not_configured");
           }
           const resolvedModelCode = scriptModelConfig.modelCode;
-          const modelRunCount = usesLegacyPackages
+          const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages
             ? (skipScriptStage ? 4 : 5)
             : workflowSkills.length;
           const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
@@ -27263,7 +27502,8 @@ export function createPhoneAuthDevServer(
             .sort()
             .join("|");
           const billingMetadata = {
-            projectId,
+            projectId: billingProjectId,
+            canvasProjectId: billingProjectId ? null : projectId,
             modelCode: resolvedModelCode,
             modelCreditCost,
             modelRunCount,
@@ -27286,7 +27526,8 @@ export function createPhoneAuthDevServer(
                   skillTitle: item.title,
                   payerUserId: authenticated.user.id,
                   teamMemberId: actor.teamMember?.id ?? null,
-                  projectId,
+                  projectId: billingProjectId,
+                  canvasProjectId: billingProjectId ? null : projectId,
                   modelCode: resolvedModelCode,
                   skillCreditCost: item.priceCredits,
                 },
@@ -27294,7 +27535,7 @@ export function createPhoneAuthDevServer(
           try {
             if (actor.teamMember) {
               await reserveAndConsumeSimpleTeamMemberCredits(db, {
-                projectId,
+                projectId: billingProjectId,
                 teamMemberId: actor.teamMember.id,
                 idempotencyKey,
                 promptPreview: scriptText.slice(0, 200),
@@ -27312,7 +27553,7 @@ export function createPhoneAuthDevServer(
               });
             } else {
               await reserveAndConsumeAiStoryboardPreviewCredits(db, {
-                projectId,
+                projectId: billingProjectId,
                 createdByUserId: authenticated.user.id,
                 idempotencyKey,
                 promptPreview: scriptText.slice(0, 200),
@@ -27333,11 +27574,12 @@ export function createPhoneAuthDevServer(
 
           const previewInput = {
             projectId,
+            canvasProjectId: billingProjectId ? null : projectId,
             createdByUserId: authenticated.user.id,
             teamMemberId: actor.teamMember?.id ?? null,
             scriptText,
             modelCode: resolvedModelCode,
-            selectedStages: usesLegacyPackages
+            selectedStages: usesLegacyPackages || useDefaultWorkflowStages
               ? undefined
               : workflowSkills.map((item) => item.category === "scene_extract"
                   ? "scene"
@@ -30100,8 +30342,11 @@ export function createPhoneAuthDevServer(
 export type { Server };
 
 export const __phoneAuthDevServerTestUtils = {
+  appendCanvasGenerationSkillReference,
   appendImageStylePromptForGeneration,
+  imageGenerationSkillReference,
   appendCanvasAnimationSpritePrompt,
+  prependCanvasGenerationSkill,
   resolveCanvasGenerationPromptBody,
   validateGenerationQueueReplay,
 };

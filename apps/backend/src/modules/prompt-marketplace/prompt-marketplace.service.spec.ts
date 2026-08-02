@@ -728,4 +728,43 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       await db.close();
     }
   });
+  it("paginates lightweight official and private skills without prompt content or marketplace ranking", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "83000000-0000-4000-8000-000000000401";
+      await db.query(
+        "INSERT INTO users (id, phone_e164, display_name, password_hash, status) VALUES ($1, '13800138401', '技能分页用户', 'plain:test-password', 'active')",
+        [userId],
+      );
+      await db.query(
+        `
+          INSERT INTO prompts (
+            id, prompt_category, name, summary, prompt_content, status,
+            is_official, is_published, price_credits, usage_count, rating_score, rating_count, published_at
+          ) VALUES
+            ('83000000-0000-4000-8000-000000000411', 'script', '官方剧本技能一', '官方分页测试', '官方正文一', 'enabled', true, true, 0, 20, 5, 2, now()),
+            ('83000000-0000-4000-8000-000000000412', 'script', '官方剧本技能二', '官方分页测试', '官方正文二', 'enabled', true, true, 0, 10, 5, 1, now()),
+            ('83000000-0000-4000-8000-000000000413', 'shot', '官方分镜技能', '官方分页测试', '官方正文三', 'enabled', true, true, 0, 5, 5, 1, now())
+        `,
+      );
+      const service = createPromptMarketplaceService({ db });
+      const catalog = await service.listSkillCatalog({ userId, query: "官方", page: 1, pageSize: 1 });
+      assert.deepEqual(catalog.pagination, { page: 1, pageSize: 1, total: 3, totalPages: 3, hasNext: true });
+      assert.equal(catalog.categoryCounts.script, 2);
+      assert.equal(catalog.categoryCounts.shot, 1);
+      assert.equal(Object.prototype.hasOwnProperty.call(catalog.items[0]!, "content"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(catalog, "ranking"), false);
+
+      await service.createItem({ userId, title: "私人剧本技能", category: "script", content: "私人正文一", publish: false, now: new Date() });
+      await service.createItem({ userId, title: "私人分镜技能", category: "shot", content: "私人正文二", publish: false, now: new Date() });
+      const library = await service.listSkillLibrary({ userId, query: "私人", page: 99, pageSize: 1 });
+      assert.deepEqual(library.pagination, { page: 2, pageSize: 1, total: 2, totalPages: 2, hasNext: false });
+      assert.equal(library.categoryCounts.script, 1);
+      assert.equal(library.categoryCounts.shot, 1);
+      assert.equal(Object.prototype.hasOwnProperty.call(library.items[0]!, "content"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(library, "ranking"), false);
+    } finally {
+      await db.close();
+    }
+  });
 });

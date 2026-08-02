@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+import { attachCanvasTaskResultToHistory } from "../project/creator-canvas-record.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { queryOne } from "../shared/db/sql.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
 
 export async function upsertQueuedGenerationTaskSnapshot(
@@ -155,7 +157,14 @@ export async function markGenerationTaskSnapshotSucceeded(
     now: Date;
   },
 ) {
-  await db.query(
+  const snapshot = await queryOne<{
+    canvas_project_id: string | null;
+    target_type: string;
+    target_id: string;
+    media_type: string;
+    user_id: string;
+    request_summary_json: Record<string, unknown> | string | null;
+  }>(db,
     `
       UPDATE ai_generation_task_snapshots
       SET status = 'succeeded',
@@ -171,6 +180,7 @@ export async function markGenerationTaskSnapshotSucceeded(
           completed_at = $7,
           updated_at = $7
       WHERE task_id = $1
+      RETURNING canvas_project_id, target_type, target_id, media_type, user_id, request_summary_json
     `,
     [
       input.taskId,
@@ -182,6 +192,48 @@ export async function markGenerationTaskSnapshotSucceeded(
       input.now,
     ],
   );
+  if (snapshot?.canvas_project_id && snapshot.target_type === "canvas") {
+    const nodeKey = snapshotCanvasNodeKey(snapshot.request_summary_json)
+      ?? (await queryOne<{ node_key: string }>(
+        db,
+        `
+          SELECT node_key
+          FROM creator_canvas_node_runs
+          WHERE canvas_project_id = $1
+            AND task_id = $2
+          ORDER BY run_no DESC
+          LIMIT 1
+        `,
+        [snapshot.canvas_project_id, input.taskId],
+      ))?.node_key;
+    if (!nodeKey) return;
+    await attachCanvasTaskResultToHistory(db, {
+      canvasProjectId: snapshot.canvas_project_id,
+      nodeKey,
+      taskId: input.taskId,
+      mediaKind: snapshot.media_type,
+      result: input.resultAssets[0] ?? {},
+      userId: snapshot.user_id,
+      now: input.now,
+    });
+  }
+}
+
+function snapshotCanvasNodeKey(value: Record<string, unknown> | string | null) {
+  const summary = typeof value === "string"
+    ? (() => {
+      try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed as Record<string, unknown>
+          : {};
+      } catch {
+        return {};
+      }
+    })()
+    : value ?? {};
+  const nodeKey = String(summary.canvasNodeId ?? summary.nodeKey ?? "").trim();
+  return nodeKey || null;
 }
 
 export async function markGenerationTaskSnapshotRunning(

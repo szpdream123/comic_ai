@@ -5,28 +5,47 @@ export function canvasDocumentToX6Data(document) {
   const visibleNodes = normalizedNodes
     .filter((node) => !node?.data?.hiddenByCharacterId);
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+  const connectedScriptNodeIds = new Set(
+    (Array.isArray(document?.edges) ? document.edges : [])
+      .filter((edge) => String(edge?.targetPortId ?? "") === "in_text")
+      .map((edge) => String(edge?.targetNodeId ?? ""))
+      .filter(Boolean),
+  );
   const nodes = visibleNodes.map((node) => {
-    const size = normalizeCanvasX6NodeSize(node);
-    const childNodeIds = node?.type === "group"
-      ? (node.data?.childNodeIds ?? []).filter((childId) => visibleNodeIds.has(childId))
+    const nodeData = { ...(node.data ?? {}) };
+    delete nodeData.__canvasHasTextInput;
+    const canvasNode = normalizeCanvasX6NodePorts(
+      node?.type === "script"
+        ? {
+            ...node,
+            data: {
+              ...nodeData,
+              ...(connectedScriptNodeIds.has(String(node.id)) ? { __canvasHasTextInput: true } : {}),
+            },
+          }
+        : node,
+    );
+    const size = normalizeCanvasX6NodeSize(canvasNode);
+    const childNodeIds = canvasNode?.type === "group"
+      ? (canvasNode.data?.childNodeIds ?? []).filter((childId) => visibleNodeIds.has(childId))
       : [];
     return {
-      id: node.id,
+      id: canvasNode.id,
       shape: "comic-ai-canvas-special-media-node",
-      x: Number(node.position?.x ?? 0),
-      y: Number(node.position?.y ?? 0),
+      x: Number(canvasNode.position?.x ?? 0),
+      y: Number(canvasNode.position?.y ?? 0),
       width: size.width,
       height: size.height,
-      zIndex: node?.type === "group" ? -1 : 2,
-      ...(node.parentGroupId && visibleNodeIds.has(node.parentGroupId)
-        ? { parent: node.parentGroupId }
+      zIndex: canvasNode?.type === "group" ? -1 : 2,
+      ...(canvasNode.parentGroupId && visibleNodeIds.has(canvasNode.parentGroupId)
+        ? { parent: canvasNode.parentGroupId }
         : {}),
-      ...(node?.type === "group" ? { children: childNodeIds } : {}),
+      ...(canvasNode?.type === "group" ? { children: childNodeIds } : {}),
       data: {
-        canvasNode: structuredCloneSafe(node),
+        canvasNode: structuredCloneSafe(canvasNode),
       },
-      attrs: buildX6NodeAttrs(node),
-      ports: buildX6Ports(node),
+      attrs: buildX6NodeAttrs(canvasNode),
+      ports: buildX6Ports(canvasNode),
     };
   });
 
@@ -60,11 +79,35 @@ function normalizeCanvasX6NodeSize(node = {}) {
   }
   const requestedWidth = Number(node?.size?.width);
   const requestedHeight = Number(node?.size?.height);
+  if (node?.type === "group") {
+    return {
+      width: Math.max(1, Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : Number(defaults.width ?? 300)),
+      height: Math.max(1, Number.isFinite(requestedHeight) && requestedHeight > 0 ? requestedHeight : Number(defaults.height ?? 180)),
+    };
+  }
   const minimumWidth = Math.max(240, Math.round(Number(defaults.width ?? 300) * 0.7));
   const minimumHeight = Math.max(140, Math.round(Number(defaults.height ?? 180) * 0.65));
   return {
     width: Math.max(minimumWidth, Number.isFinite(requestedWidth) && requestedWidth > 0 ? requestedWidth : Number(defaults.width ?? 300)),
     height: Math.max(minimumHeight, Number.isFinite(requestedHeight) && requestedHeight > 0 ? requestedHeight : Number(defaults.height ?? 180)),
+  };
+}
+
+function normalizeCanvasX6NodePorts(node = {}) {
+  const inputs = Array.isArray(node?.data?.ports?.inputs) ? node.data.ports.inputs : [];
+  if (node?.type !== "script" || inputs.length) return node;
+  return {
+    ...node,
+    data: {
+      ...(node.data ?? {}),
+      ports: {
+        ...(node.data?.ports ?? {}),
+        inputs: [{ id: "in_text", kind: "text", label: "剧本/小说" }],
+        outputs: Array.isArray(node.data?.ports?.outputs) && node.data.ports.outputs.length
+          ? node.data.ports.outputs
+          : [{ id: "out_text", kind: "text", label: "分镜" }],
+      },
+    },
   };
 }
 
@@ -99,8 +142,9 @@ function buildX6NodeAttrs(node) {
   const kindLabel = canvasNodeKindLabel(node);
   const meta = node?.type === "send" ? modelCode || "未选模型" : kindLabel;
   const content = shortCanvasNodeSummary(node);
-  const inputCount = Array.isArray(node?.data?.ports?.inputs) ? node.data.ports.inputs.length : 0;
-  const outputCount = Array.isArray(node?.data?.ports?.outputs) ? node.data.ports.outputs.length : 0;
+  const { inputs, outputs } = resolveCanvasX6NodePorts(node);
+  const inputCount = inputs.length;
+  const outputCount = outputs.length;
   const active = status === "running" || node?.type === "send";
   return {
     body: {
@@ -160,7 +204,7 @@ function canvasNodeKindLabel(node) {
     group: "节点分组",
   };
   if (canonicalLabels[node?.type]) return canonicalLabels[node.type];
-  if (node?.type === "script") return "剧本源";
+  if (node?.type === "script") return "脚本节点";
   if (node?.type === "image") return "图片结果";
   if (node?.type === "video") return "视频结果";
   if (node?.type === "upload") return "上传资源";
@@ -198,7 +242,7 @@ export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
     const previous = previousNode?.data?.hiddenByCharacterId && !stored?.data?.hiddenByCharacterId
       ? stored
       : previousNode ?? stored ?? {};
-    return {
+    return normalizeCanvasX6NodePorts({
       ...structuredCloneSafe(previous),
       id: node.id,
       position: { x: Number(node.x ?? previous.position?.x ?? 0), y: Number(node.y ?? previous.position?.y ?? 0) },
@@ -206,7 +250,7 @@ export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
         width: Number(node.width ?? previous.size?.width ?? 360),
         height: Number(node.height ?? previous.size?.height ?? 240),
       },
-    };
+    });
   }).concat(
     [...previousNodes.values()]
       .filter((node) => node?.data?.hiddenByCharacterId && !visibleNodeIds.has(node.id))
@@ -362,8 +406,7 @@ export function resolveCanvasConnectionPorts(document, connection) {
 }
 
 function buildX6Ports(node) {
-  const inputs = Array.isArray(node?.data?.ports?.inputs) ? node.data.ports.inputs : [];
-  const outputs = Array.isArray(node?.data?.ports?.outputs) ? node.data.ports.outputs : [];
+  const { inputs, outputs } = resolveCanvasX6NodePorts(node);
   return {
     groups: {
       in: {
@@ -395,6 +438,15 @@ function buildX6Ports(node) {
       ...inputs.map((port) => ({ id: port.id, group: "in", data: { kind: port.kind } })),
       ...outputs.map((port) => ({ id: port.id, group: "out", data: { kind: port.kind } })),
     ],
+  };
+}
+
+function resolveCanvasX6NodePorts(node) {
+  return {
+    inputs: node?.type === "ai-director"
+      ? []
+      : Array.isArray(node?.data?.ports?.inputs) ? node.data.ports.inputs : [],
+    outputs: Array.isArray(node?.data?.ports?.outputs) ? node.data.ports.outputs : [],
   };
 }
 

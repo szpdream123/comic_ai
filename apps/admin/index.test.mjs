@@ -2042,6 +2042,7 @@ test("admin prompt manager separates official and user prompts with edit and del
     'promptMarketplaceCategoryLabels',
     'promptMarketplaceSource',
     'openPromptMarketplaceItemDrawer',
+    '新增官方提示词',
     'deletePromptMarketplaceItem',
     '价格',
     '使用次数',
@@ -2063,6 +2064,8 @@ test("admin prompt manager separates official and user prompts with edit and del
   assert.match(script, /params\.set\("source", state\.promptMarketplaceSource\)/);
   assert.match(marketplace, /source === "official" \? item\.official === true : item\.official !== true/);
   assert.match(marketplace, /onclick="openPromptMarketplaceItemDrawer/);
+  assert.match(marketplace, /method: existing \? "PATCH" : "POST"/);
+  assert.match(marketplace, /name="category"/);
   assert.match(marketplace, /onclick="deletePromptMarketplaceItem/);
   assert.match(marketplace, /method: "DELETE"/);
   assert.match(marketplace, /window\.confirm\(/);

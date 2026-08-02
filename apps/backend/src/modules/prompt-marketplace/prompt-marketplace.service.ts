@@ -42,6 +42,29 @@ interface PromptMarketplaceRow {
   is_default?: boolean;
 }
 
+interface PromptSkillListRow {
+  id: string;
+  prompt_category: PromptMarketplaceCategory;
+  name: string;
+  summary: string;
+  cover_image_url: string | null;
+  cover_storage_object_id: string | null;
+  price_credits: number | string;
+  is_official: boolean;
+  usage_count: number | string;
+  rating_score: number | string;
+  rating_count: number | string;
+  published_at: Date | string | null;
+  updated_at: Date | string;
+  user_relation_type?: string | null;
+  is_default?: boolean;
+}
+
+interface PromptSkillCategoryCountRow {
+  prompt_category: PromptMarketplaceCategory;
+  count: number | string;
+}
+
 export class PromptMarketplaceError extends Error {
   constructor(
     readonly status: number,
@@ -224,6 +247,196 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     return { items: rows.rows.map((row) => marketplaceItemFromRow(row, input.userId)) };
   }
 
+  async function listSkillCatalog(input: {
+    userId: string;
+    category?: string | null;
+    query?: string | null;
+    page?: number;
+    pageSize?: number;
+  }) {
+    const category = normalizeCategoryFilter(input.category);
+    const keyword = promptSkillKeyword(input.query);
+    const requestedPage = normalizePage(input.page);
+    const pageSize = normalizePageSize(input.pageSize);
+    const [totalRow, categoryCountRows] = await Promise.all([
+      queryOne<{ count: string | number }>(
+        deps.db,
+        `
+          SELECT COUNT(*) AS count
+          FROM prompts item
+          WHERE item.deleted_at IS NULL
+            AND item.status = 'enabled'
+            AND item.is_published = true
+            AND item.is_official = true
+            AND ($1::text IS NULL OR item.prompt_category = $1)
+            AND ($2::text IS NULL OR lower(item.name) LIKE $2 OR lower(item.summary) LIKE $2)
+        `,
+        [category, keyword],
+      ),
+      deps.db.query<PromptSkillCategoryCountRow>(
+        `
+          SELECT item.prompt_category, COUNT(*) AS count
+          FROM prompts item
+          WHERE item.deleted_at IS NULL
+            AND item.status = 'enabled'
+            AND item.is_published = true
+            AND item.is_official = true
+            AND ($1::text IS NULL OR lower(item.name) LIKE $1 OR lower(item.summary) LIKE $1)
+          GROUP BY item.prompt_category
+        `,
+        [keyword],
+      ),
+    ]);
+    const total = Number(totalRow?.count || 0);
+    const totalPages = Math.ceil(total / pageSize);
+    const page = totalPages === 0 ? 1 : Math.min(requestedPage, totalPages);
+    const rows = await deps.db.query<PromptSkillListRow>(
+      `
+        SELECT
+          item.id,
+          item.prompt_category,
+          item.name,
+          item.summary,
+          item.cover_image_url,
+          item.cover_storage_object_id,
+          item.price_credits,
+          item.is_official,
+          item.usage_count,
+          item.rating_score,
+          item.rating_count,
+          item.published_at,
+          item.updated_at,
+          EXISTS (
+            SELECT 1 FROM prompt_official_defaults prompt_default
+            WHERE prompt_default.prompt_category = item.prompt_category
+              AND prompt_default.prompt_id = item.id
+          ) AS is_default,
+          user_link.relation_type AS user_relation_type
+        FROM prompts item
+        LEFT JOIN prompt_user_links user_link
+          ON user_link.prompt_id = item.id
+          AND user_link.user_id = $1
+          AND user_link.status = 'active'
+        WHERE item.deleted_at IS NULL
+          AND item.status = 'enabled'
+          AND item.is_published = true
+          AND item.is_official = true
+          AND ($2::text IS NULL OR item.prompt_category = $2)
+          AND ($3::text IS NULL OR lower(item.name) LIKE $3 OR lower(item.summary) LIKE $3)
+        ORDER BY item.usage_count DESC, item.rating_count DESC, item.published_at DESC, item.id ASC
+        LIMIT $4
+        OFFSET $5
+      `,
+      [input.userId, category, keyword, pageSize, (page - 1) * pageSize],
+    );
+    return promptSkillListResponse({
+      rows: rows.rows,
+      categoryCountRows: categoryCountRows.rows,
+      page,
+      pageSize,
+      total,
+      totalPages,
+    });
+  }
+
+  async function listSkillLibrary(input: {
+    userId: string;
+    category?: string | null;
+    query?: string | null;
+    page?: number;
+    pageSize?: number;
+  }) {
+    const category = normalizeCategoryFilter(input.category);
+    const keyword = promptSkillKeyword(input.query);
+    const requestedPage = normalizePage(input.page);
+    const pageSize = normalizePageSize(input.pageSize);
+    const [totalRow, categoryCountRows] = await Promise.all([
+      queryOne<{ count: string | number }>(
+        deps.db,
+        `
+          SELECT COUNT(*) AS count
+          FROM prompts item
+          JOIN prompt_user_links user_link
+            ON user_link.prompt_id = item.id
+            AND user_link.user_id = $1
+            AND user_link.status = 'active'
+          WHERE item.deleted_at IS NULL
+            AND item.status = 'enabled'
+            AND (user_link.relation_type = 'owner' OR item.is_published = true)
+            AND ($2::text IS NULL OR item.prompt_category = $2)
+            AND ($3::text IS NULL OR lower(item.name) LIKE $3 OR lower(item.summary) LIKE $3)
+        `,
+        [input.userId, category, keyword],
+      ),
+      deps.db.query<PromptSkillCategoryCountRow>(
+        `
+          SELECT item.prompt_category, COUNT(*) AS count
+          FROM prompts item
+          JOIN prompt_user_links user_link
+            ON user_link.prompt_id = item.id
+            AND user_link.user_id = $1
+            AND user_link.status = 'active'
+          WHERE item.deleted_at IS NULL
+            AND item.status = 'enabled'
+            AND (user_link.relation_type = 'owner' OR item.is_published = true)
+            AND ($2::text IS NULL OR lower(item.name) LIKE $2 OR lower(item.summary) LIKE $2)
+          GROUP BY item.prompt_category
+        `,
+        [input.userId, keyword],
+      ),
+    ]);
+    const total = Number(totalRow?.count || 0);
+    const totalPages = Math.ceil(total / pageSize);
+    const page = totalPages === 0 ? 1 : Math.min(requestedPage, totalPages);
+    const rows = await deps.db.query<PromptSkillListRow>(
+      `
+        SELECT
+          item.id,
+          item.prompt_category,
+          item.name,
+          item.summary,
+          item.cover_image_url,
+          item.cover_storage_object_id,
+          item.price_credits,
+          item.is_official,
+          item.usage_count,
+          item.rating_score,
+          item.rating_count,
+          item.published_at,
+          item.updated_at,
+          EXISTS (
+            SELECT 1 FROM prompt_user_defaults prompt_default
+            WHERE prompt_default.user_id = $1
+              AND prompt_default.prompt_category = item.prompt_category
+              AND prompt_default.prompt_id = item.id
+          ) AS is_default,
+          user_link.relation_type AS user_relation_type
+        FROM prompts item
+        JOIN prompt_user_links user_link
+          ON user_link.prompt_id = item.id
+          AND user_link.user_id = $1
+          AND user_link.status = 'active'
+        WHERE item.deleted_at IS NULL
+          AND item.status = 'enabled'
+          AND (user_link.relation_type = 'owner' OR item.is_published = true)
+          AND ($2::text IS NULL OR item.prompt_category = $2)
+          AND ($3::text IS NULL OR lower(item.name) LIKE $3 OR lower(item.summary) LIKE $3)
+        ORDER BY (user_link.relation_type = 'owner') DESC, item.updated_at DESC, item.id ASC
+        LIMIT $4
+        OFFSET $5
+      `,
+      [input.userId, category, keyword, pageSize, (page - 1) * pageSize],
+    );
+    return promptSkillListResponse({
+      rows: rows.rows,
+      categoryCountRows: categoryCountRows.rows,
+      page,
+      pageSize,
+      total,
+      totalPages,
+    });
+  }
+
   async function listAdminItems(input: { category?: string | null; status?: string | null; source?: string | null; query?: string | null }) {
     const category = normalizeCategoryFilter(input.category);
     const status = normalizeMarketplaceStatusFilter(input.status);
@@ -376,6 +589,60 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     if (!deleted) throw new PromptMarketplaceError(404, "prompt_marketplace_item_not_found", "提示词不存在");
     await deps.db.query("DELETE FROM prompt_user_defaults WHERE prompt_id = $1", [input.itemId]);
     return { deleted: true };
+  }
+
+  async function createAdminOfficialItem(input: {
+    title: string;
+    category: string;
+    summary?: string | null;
+    content: string;
+    coverImageUrl?: string | null;
+    priceCredits?: number;
+    usageCount?: number;
+    status?: string;
+    now: Date;
+  }) {
+    const category = requireCategory(input.category);
+    const title = input.title.trim();
+    const content = input.content.trim();
+    const priceCredits = Number(input.priceCredits ?? 0);
+    const usageCount = Number(input.usageCount ?? 0);
+    const status = normalizeMarketplaceStatus(input.status ?? "draft");
+    if (title.length < 2 || title.length > 80) {
+      throw new PromptMarketplaceError(400, "prompt_marketplace_title_invalid", "提示词名称需为 2-80 个字符");
+    }
+    if (!content || content.length > 50_000) {
+      throw new PromptMarketplaceError(400, "prompt_marketplace_content_invalid", content ? "提示词正文不能超过 50000 个字符" : "提示词正文不能为空");
+    }
+    if (!Number.isInteger(priceCredits) || priceCredits < 0 || priceCredits > 99_999) {
+      throw new PromptMarketplaceError(400, "prompt_marketplace_price_invalid", "积分价格需为 0-99999 的整数");
+    }
+    if (!Number.isInteger(usageCount) || usageCount < 0 || usageCount > 2_147_483_647) {
+      throw new PromptMarketplaceError(400, "prompt_marketplace_usage_count_invalid", "使用次数需为非负整数");
+    }
+    const summary = String(input.summary ?? "").trim().slice(0, 240)
+      || `${categoryLabel(category)}，由后台创建。`;
+    const published = status === "published";
+    const row = await queryOne<PromptMarketplaceRow>(
+      deps.db,
+      `
+        INSERT INTO prompts (
+          id, prompt_category, name, summary, prompt_content, cover_image_url,
+          price_credits, usage_count, status, is_official, is_published,
+          published_at, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, true, $10, $11, $12, $12
+        )
+        RETURNING *
+      `,
+      [
+        randomUUID(), category, title, summary, content, input.coverImageUrl?.trim() || null,
+        priceCredits, usageCount, status === "archived" ? "archived" : "enabled", published,
+        published ? input.now : null, input.now,
+      ],
+    );
+    return { item: adminMarketplaceItemFromRow(row!) };
   }
 
   async function createItem(input: {
@@ -760,6 +1027,10 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
       category: row.prompt_category,
       title: row.name,
       content: row.prompt_content,
+      coverImageUrl: row.cover_image_url || (row.cover_storage_object_id
+        ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
+        : ""),
+      coverStorageObjectId: row.cover_storage_object_id,
       priceCredits: Number(row.price_credits || 0),
       official: Boolean(row.is_official),
       ownerUserId: row.owner_user_id ?? null,
@@ -835,7 +1106,10 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
   return {
     listCatalog,
     listLibrary,
+    listSkillCatalog,
+    listSkillLibrary,
     listAdminItems,
+    createAdminOfficialItem,
     updateAdminItem,
     deleteAdminItem,
     createItem,
@@ -848,6 +1122,60 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     resolveWorkflowPromptSkill,
     rateItem,
   };
+}
+
+function promptSkillListResponse(input: {
+  rows: PromptSkillListRow[];
+  categoryCountRows: PromptSkillCategoryCountRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}) {
+  const categoryCounts = Object.fromEntries(promptMarketplaceCategories.map((category) => [category, 0])) as Record<PromptMarketplaceCategory, number>;
+  for (const row of input.categoryCountRows) categoryCounts[row.prompt_category] = Number(row.count || 0);
+  return {
+    items: input.rows.map(promptSkillListItemFromRow),
+    pagination: {
+      page: input.page,
+      pageSize: input.pageSize,
+      total: input.total,
+      totalPages: input.totalPages,
+      hasNext: input.totalPages > 0 && input.page < input.totalPages,
+    },
+    categoryCounts,
+  };
+}
+
+function promptSkillListItemFromRow(row: PromptSkillListRow) {
+  const owned = row.user_relation_type === "owner";
+  const purchased = row.user_relation_type === "added";
+  return {
+    id: row.id,
+    title: row.name,
+    category: row.prompt_category,
+    summary: row.summary,
+    coverImageUrl: row.cover_image_url || (row.cover_storage_object_id
+      ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
+      : ""),
+    coverStorageObjectId: row.cover_storage_object_id,
+    priceCredits: Number(row.price_credits || 0),
+    official: Boolean(row.is_official),
+    isDefault: Boolean(row.is_default),
+    usageCount: Number(row.usage_count || 0),
+    ratingAverage: Number(row.rating_score || 5),
+    ratingCount: Number(row.rating_count || 0),
+    owned,
+    purchased,
+    canUse: owned || purchased || Boolean(row.is_official),
+    publishedAt: dateString(row.published_at),
+    updatedAt: dateString(row.updated_at),
+  };
+}
+
+function promptSkillKeyword(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized ? `%${normalized}%` : null;
 }
 
 function marketplaceItemFromRow(row: PromptMarketplaceRow, userId: string) {

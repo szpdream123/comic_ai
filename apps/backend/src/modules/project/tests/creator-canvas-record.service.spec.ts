@@ -733,6 +733,71 @@ describe("creator canvas record service", { concurrency: false }, () => {
     }
   });
 
+  it("writes successful Canvas image task results back to the active node", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T12:14:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [{
+            ...canvasNode("image-1", "ai-image", 80, 90, "image", "图片"),
+            data: {
+              ...canvasNode("image-1", "ai-image", 80, 90, "image", "图片").data,
+              status: "queued",
+              taskId: "90000000-0000-4000-8000-000000000101",
+              lastTaskId: "90000000-0000-4000-8000-000000000101",
+            },
+          }],
+          edges: [],
+        },
+        now: new Date("2026-06-12T12:15:00.000Z"),
+      });
+      await createCanvasNodeRun(db, {
+        canvasProjectId: saved.canvasProjectId,
+        nodeKey: "image-1",
+        idempotencyKey: "image-result-run",
+        status: "queued",
+        mediaKind: "image",
+        taskId: "90000000-0000-4000-8000-000000000101",
+        targetType: "canvas",
+        targetId: "image-1",
+        userId,
+        now: new Date("2026-06-12T12:15:30.000Z"),
+      });
+
+      await attachCanvasTaskResultToHistory(db, {
+        canvasProjectId: saved.canvasProjectId,
+        nodeKey: "image-1",
+        taskId: "90000000-0000-4000-8000-000000000101",
+        mediaKind: "image",
+        result: {
+          mediaKind: "image",
+          previewUrl: "https://cdn.example.test/canvas-node-result.png",
+          storageObjectId: "80000000-0000-4000-8000-000000000101",
+        },
+        userId,
+        now: new Date("2026-06-12T12:16:00.000Z"),
+      });
+
+      const current = await findCanvasByCanvasProjectId(db, { canvasProjectId: saved.canvasProjectId, userId });
+      const node = current?.document.nodes.find((item) => item.id === "image-1");
+      assert.equal(node?.data?.status, "completed");
+      assert.equal(node?.data?.previewUrl, "https://cdn.example.test/canvas-node-result.png");
+      assert.equal(node?.data?.imageUrl, "https://cdn.example.test/canvas-node-result.png");
+      assert.equal(node?.data?.storageObjectId, "80000000-0000-4000-8000-000000000101");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("converts plain text into a linked source-text run without provider, task, or billing records", async () => {
     const db = await createMigratedTestDb();
     try {

@@ -13,6 +13,7 @@ import {
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
 import {
   markGenerationTaskSnapshotFailed,
+  markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotResultUnknown,
 } from "./generation-task-snapshot.service.ts";
 import {
@@ -726,11 +727,14 @@ export async function failGenerationTaskAfterQueueError(
       }
     }
 
+    const taskStatus = input.creditOutcome === "manual_review_required"
+      ? "manual_review_required"
+      : "failed";
     const failed = await queryOne<{ id: string }>(
       db,
       `
       UPDATE tasks
-      SET status = 'failed',
+      SET status = $4,
           failure_code = $2,
           locked_by = NULL,
           locked_until = NULL,
@@ -740,7 +744,7 @@ export async function failGenerationTaskAfterQueueError(
         AND status IN ('queued', 'running', 'result_unknown')
       RETURNING id
     `,
-      [row.task_id, input.failureCode, input.now],
+      [row.task_id, input.failureCode, input.now, taskStatus],
     );
     if (!failed) {
       await db.query("COMMIT");
@@ -751,7 +755,7 @@ export async function failGenerationTaskAfterQueueError(
       await db.query(
         `
         UPDATE task_attempts
-        SET status = 'failed',
+        SET status = $5,
             failure_code = $3,
             locked_by = NULL,
             locked_until = NULL,
@@ -762,7 +766,7 @@ export async function failGenerationTaskAfterQueueError(
           AND task_id = $2
           AND status IN ('queued', 'running', 'result_unknown')
       `,
-        [row.current_attempt_id, row.task_id, input.failureCode, input.now],
+        [row.current_attempt_id, row.task_id, input.failureCode, input.now, taskStatus],
       );
     }
 
@@ -792,21 +796,33 @@ export async function failGenerationTaskAfterQueueError(
         now: input.now,
       });
     }
-    await markGenerationTaskSnapshotFailed(db, {
-      taskId: row.task_id,
-      attemptId: row.current_attempt_id,
-      failure: {
-        failureCode: input.failureCode,
-        displayMessage: input.displayMessage,
-        noticeType: creditOutcome === "manual_review_required" ? "admin_action_required" : "error",
-      },
-      creditStatus: creditOutcome,
-      creditSummary: {
-        ...(creditOutcome === "released" ? { released: amount } : { reserved: amount }),
-        settledAt: input.now.toISOString(),
-      },
-      now: input.now,
-    });
+    const failure = {
+      failureCode: input.failureCode,
+      displayMessage: input.displayMessage,
+      noticeType: creditOutcome === "manual_review_required" ? "admin_action_required" : "error",
+    };
+    const creditSummary = {
+      ...(creditOutcome === "released" ? { released: amount } : { reserved: amount }),
+      settledAt: input.now.toISOString(),
+    };
+    if (creditOutcome === "manual_review_required") {
+      await markGenerationTaskSnapshotManualReviewRequired(db, {
+        taskId: row.task_id,
+        attemptId: row.current_attempt_id,
+        failure,
+        creditSummary,
+        now: input.now,
+      });
+    } else {
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: row.task_id,
+        attemptId: row.current_attempt_id,
+        failure,
+        creditStatus: creditOutcome,
+        creditSummary,
+        now: input.now,
+      });
+    }
     await aggregateWorkflowStatus(db, row.workflow_id);
     await db.query("COMMIT");
     return true;
@@ -876,6 +892,10 @@ export async function repairRunningSeedancePollJobs(
           OR (
             t.status = 'result_unknown'
             AND t.failure_code = 'lease_expired_after_external_start'
+          )
+          OR (
+            t.status = 'manual_review_required'
+            AND t.failure_code = 'generation_queue_error'
           )
         )
         AND (
@@ -988,7 +1008,11 @@ export async function repairRunningSeedancePollJobs(
       {
         jobId: redisJobId,
         delay: 0,
-        attempts: 1,
+        attempts: input.config.retry.poll.attempts,
+        backoff: {
+          type: "exponential",
+          delay: input.config.retry.poll.backoffMs,
+        },
         removeOnComplete: {
           age: 86400,
           count: 10000,
@@ -1136,15 +1160,36 @@ async function markRunningPollRepairClaimed(
   const row = await queryOne<{ id: string }>(
     db,
     `
-      UPDATE tasks
-      SET last_dispatched_at = $2,
-          updated_at = $2
+      WITH manual_recovery AS (
+        SELECT id
+        FROM tasks
+        WHERE id = $1
+          AND status = 'manual_review_required'
+          AND failure_code = 'generation_queue_error'
+      ), claimed_task AS (
+        UPDATE tasks
+        SET last_dispatched_at = $2,
+            status = CASE
+              WHEN status = 'manual_review_required' AND failure_code = 'generation_queue_error'
+                THEN 'running'
+              ELSE status
+            END,
+            failure_code = CASE
+              WHEN status = 'manual_review_required' AND failure_code = 'generation_queue_error'
+                THEN NULL
+              ELSE failure_code
+            END,
+            updated_at = $2
       WHERE id = $1
         AND (
           status = 'running'
           OR (
             status = 'result_unknown'
             AND failure_code = 'lease_expired_after_external_start'
+          )
+          OR (
+            status = 'manual_review_required'
+            AND failure_code = 'generation_queue_error'
           )
         )
         AND task_type = $4
@@ -1157,7 +1202,30 @@ async function markRunningPollRepairClaimed(
           last_dispatched_at IS NULL
           OR last_dispatched_at < $3
         )
-      RETURNING id
+        RETURNING id, current_attempt_id
+      ), resumed_attempt AS (
+        UPDATE task_attempts attempt
+        SET status = 'running',
+            failure_code = NULL,
+            finished_at = NULL,
+            updated_at = $2
+        FROM claimed_task task
+        WHERE attempt.id = task.current_attempt_id
+          AND attempt.task_id = task.id
+          AND attempt.status = 'manual_review_required'
+      ), reopened_reservation AS (
+        UPDATE credit_reservations reservation
+        SET status = 'active',
+            updated_at = $2
+        FROM generation_task_credit_reservations task_reservation
+        JOIN claimed_task task ON task.id = task_reservation.task_id
+        JOIN manual_recovery recovery ON recovery.id = task.id
+        WHERE reservation.id = task_reservation.reservation_id
+          AND reservation.status = 'manual_review_required'
+          AND reservation.amount_reserved > 0
+      )
+      SELECT id
+      FROM claimed_task
     `,
     [input.taskId, input.now, input.staleCutoff, input.taskType],
   );

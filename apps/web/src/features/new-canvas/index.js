@@ -3,8 +3,10 @@ import {
   applyCanvasGraphInteractionMode,
   applyCanvasGraphViewportPreferences,
   clearCanvasGraphEditorOverlay,
+  clearCanvasGraphSelection,
   mountCanvasGraphEditorOverlay,
   mountCanvasWorkflowIfPresent,
+  refreshCanvasSelectionActionToolbar,
   refreshCanvasWorkflowGraph,
   refreshCanvasWorkflowNode,
   syncCanvasGraphViewport,
@@ -21,6 +23,7 @@ import {
 } from "../production-workbench/canvas/canvas-media-node.js";
 import {
   createCanvasAgentController,
+  persistCanvasAgentUiState,
   resolveCanvasAgentPanelMaxWidth,
   renderNewCanvasLayout,
 } from "./canvas-agent-panel.js";
@@ -282,17 +285,40 @@ function createProductionCanvasAdapter(dependencies = {}) {
       workbench.onCanvasStoryboardImageReturn = (input) => (
         context.onCanvasStoryboardImageReturn?.(input, { workbench, surface }) === true
       );
-      const createMarkup = () => renderNewCanvasLayout(
+      const createMarkup = (renderUi = workbench.ui) => renderNewCanvasLayout(
         renderer({
           state: workbench.state,
           session: workbench.session,
-          ui: workbench.ui,
+          ui: renderUi,
           api: workbench.api,
         }),
-        workbench.ui,
-        `${renderCanvasMediaToolsShell(workbench.ui)}${renderCanvasConfigLibraryShell(workbench.ui)}${renderCanvasCharacterLibraryShell(workbench.ui)}`,
-        renderCanvasMinimap(workbench.ui),
+        renderUi,
+        `${renderCanvasMediaToolsShell(renderUi)}${renderCanvasConfigLibraryShell(renderUi)}${renderCanvasCharacterLibraryShell(renderUi)}`,
+        renderCanvasMinimap(renderUi),
       );
+      const createNodeMarkup = (nodeId) => {
+        const canvasDocument = workbench.ui?.canvasDocument;
+        const node = canvasDocument?.nodes?.find?.((item) => String(item?.id ?? "") === nodeId);
+        if (!canvasDocument || !node) return "";
+        return createMarkup({
+          ...workbench.ui,
+          canvasDocument: {
+            ...canvasDocument,
+            nodes: [node],
+            edges: [],
+          },
+          selectedCanvasNodeId: null,
+          canvasEditorOpen: false,
+          canvasAddMenuOpen: false,
+          canvasContextMenu: null,
+          canvasScriptPicker: null,
+          canvasScriptWorkspace: null,
+          canvasPromptReferencePicker: null,
+          canvasMarkdownFullscreen: null,
+          canvasVideoFullscreen: null,
+          canvasRevisionConflict: null,
+        });
+      };
       const render = async () => {
         if (disposed) return;
         const token = ++renderToken;
@@ -429,6 +455,25 @@ function createProductionCanvasAdapter(dependencies = {}) {
         const normalizedNodeId = String(nodeId ?? "").trim();
         if (disposed || !graph || !normalizedNodeId || typeof document === "undefined") return render();
         if (!refreshCanvasWorkflowNode(workbench, normalizedNodeId)) return render();
+        if (!canvasNodeRefreshNeedsFullMarkup(workbench.ui, normalizedNodeId)) {
+          if (!["assets", "history"].includes(workbench.ui?.canvasSidebarMode)) {
+            const markup = createNodeMarkup(normalizedNodeId);
+            if (markup) {
+              const template = document.createElement("template");
+              template.innerHTML = markup;
+              syncCanvasSidebarNodeItem(surface, template.content, normalizedNodeId);
+            }
+          }
+          const cell = graph.getCellById?.(normalizedNodeId);
+          const nodeRoot = cell ? graph.findViewByCell?.(cell)?.container : null;
+          if (nodeRoot) {
+            void panoramaViewerController.bind();
+            void bindCanvasAudioWaveforms(nodeRoot);
+          }
+          syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
+          context.onRender?.({ workbench, graph, surface });
+          return;
+        }
         const template = document.createElement("template");
         template.innerHTML = createMarkup();
         const currentFlow = surface.querySelector?.(".canvas-flow");
@@ -537,7 +582,6 @@ function createProductionCanvasAdapter(dependencies = {}) {
         workbench.ui.selectedCanvasNodeId = String(nodeId ?? "").trim() || null;
         workbench.ui.canvasEditorOpen = true;
         workbench.ui.canvasRunPreview = null;
-        agentController.syncPanel();
         if (typeof sourceWorkbench?.onCanvasNodeSelected === "function") {
           sourceWorkbench.onCanvasNodeSelected(nodeId);
         } else {
@@ -619,9 +663,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
           void agentController.handleAction(agentActionTarget);
           return;
         }
-        const actionTarget = (event.composedPath?.() ?? [])
-          .find((candidate) => candidate?.matches?.("[data-action]"))
-          ?? event.target?.closest?.("[data-action]");
+        const actionTarget = event.target?.closest?.("[data-action]")
+          ?? (event.composedPath?.() ?? [])
+            .find((candidate) => candidate?.matches?.("[data-action]"));
         const action = actionTarget?.dataset?.action;
         if (action) {
           if (action === "extract-canvas-storyboard-cell" && Date.now() < suppressStoryboardExtractClickUntil) {
@@ -661,6 +705,17 @@ function createProductionCanvasAdapter(dependencies = {}) {
         context.onAction?.(event, { action, actionTarget, workbench, surface });
         return;
         }
+        if (event.target?.closest?.(".script-workspace-layer")) {
+          event.stopPropagation();
+          return;
+        }
+        const scriptPickerOpen = workbench.ui?.canvasScriptPicker?.nodeId;
+        const scriptPickerTarget = event.target?.closest?.(".canvas-script-picker");
+        const scriptPickerTrigger = event.target?.closest?.('[data-action="open-canvas-script-picker"]');
+        if (scriptPickerOpen && !scriptPickerTarget && !scriptPickerTrigger) {
+          workbench.ui.canvasScriptPicker = null;
+          surface.querySelector?.(".canvas-script-picker")?.remove?.();
+        }
         const canvasCardTarget = event.target?.closest?.(".canvas-x6-special-node[data-node-id]");
         const canvasNodeId = String(
           canvasX6NodeIdFromEvent(event) || canvasCardTarget?.dataset?.nodeId || "",
@@ -678,17 +733,21 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         const canvasStage = event.target?.closest?.(".canvas-stage");
         const interactive = event.target?.closest?.(
-          ".x6-node, .canvas-x6-special-node, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-script-picker, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
+          ".x6-node, .canvas-x6-special-node, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
         );
         if (canvasStage && !interactive && Date.now() < suppressCanvasBlankClickUntil) {
           suppressCanvasBlankClickUntil = 0;
           event.stopPropagation();
           return;
         }
-        if (canvasStage && !interactive && dismissCanvasSurfaceOverlays(workbench.ui)) {
-          clearCanvasGraphEditorOverlay(graph);
+        if (canvasStage && !interactive) {
+          const shouldSyncSelection = Boolean(workbench.ui.selectedCanvasNodeId || workbench.ui.canvasEditorOpen)
+            || dismissCanvasSurfaceOverlays(workbench.ui);
+          clearCanvasSelectionPresentation(surface, graph, workbench);
+          if (shouldSyncSelection) {
+            void renderSelection();
+          }
           event.stopPropagation();
-          void renderInteraction();
         }
       };
       const onDoubleClick = (event) => {
@@ -1022,6 +1081,8 @@ function createProductionCanvasAdapter(dependencies = {}) {
           canvasAgentResize.handle?.releasePointerCapture?.(event.pointerId);
           canvasAgentResize = null;
           surface.querySelector?.(".new-canvas-layout")?.classList?.remove?.("is-agent-resizing");
+          persistCanvasAgentUiState(workbench.ui, workbench.ui.canvasAgent);
+          void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -1205,6 +1266,51 @@ function syncCanvasSelectionClasses(surface, nextRoot, selector) {
   }
 }
 
+function clearCanvasSelectionPresentation(surface, graph, workbench) {
+  clearCanvasGraphEditorOverlay(graph);
+  clearCanvasGraphSelection(graph);
+  for (const element of surface.querySelectorAll?.(
+    '.canvas-sidebar [data-action="select-canvas-node"][data-node-id], [data-canvas-minimap] [data-node-id]',
+  ) ?? []) {
+    element.classList?.remove?.("active", "selected");
+    element.removeAttribute?.("aria-selected");
+  }
+  refreshCanvasSelectionActionToolbar(
+    graph,
+    workbench,
+    surface.querySelector?.("[data-canvas-x6-mount]"),
+  );
+}
+
+function canvasNodeRefreshNeedsFullMarkup(ui, nodeId) {
+  const normalizedNodeId = String(nodeId ?? "").trim();
+  const selectedNodeId = String(ui?.selectedCanvasNodeId ?? "").trim();
+  if (!normalizedNodeId || normalizedNodeId === selectedNodeId) return true;
+  if (ui?.toast) return true;
+  for (const state of [
+    ui?.canvasMarkdownFullscreen,
+    ui?.canvasVideoFullscreen,
+    ui?.canvasPromptReferencePicker,
+    ui?.canvasDirectorCaptureDeleteTarget,
+    ui?.canvasScriptPicker,
+    ui?.canvasScriptWorkspace,
+  ]) {
+    if (String(state?.nodeId ?? "").trim() === normalizedNodeId) return true;
+  }
+  if (ui?.canvasEditorOpen !== true || !selectedNodeId) return false;
+  const canvasDocument = ui?.canvasDocument;
+  const affectsSelectedInput = canvasDocument?.edges?.some?.((edge) =>
+    String(edge?.sourceNodeId ?? "") === normalizedNodeId
+    && String(edge?.targetNodeId ?? "") === selectedNodeId);
+  if (affectsSelectedInput) return true;
+  const selectedNode = canvasDocument?.nodes?.find?.((node) => String(node?.id ?? "") === selectedNodeId);
+  try {
+    return JSON.stringify(selectedNode?.data ?? {}).includes(normalizedNodeId);
+  } catch {
+    return true;
+  }
+}
+
 function syncCanvasSidebarNodeItem(surface, nextRoot, nodeId) {
   const escapedNodeId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
     ? CSS.escape(String(nodeId ?? ""))
@@ -1252,6 +1358,7 @@ function syncCanvasStageOverlays(surface, nextRoot) {
     ".canvas-add-menu",
     ".canvas-context-menu",
     ".canvas-script-picker",
+    ".script-workspace-layer",
     '[data-selection-picker-id="canvas-prompt-reference-picker"]',
     ".canvas-markdown-fullscreen",
     "[data-canvas-video-fullscreen]",
@@ -1420,8 +1527,10 @@ export function dismissCanvasSurfaceOverlays(ui = {}) {
   clear("canvasAddMenuOpen", false);
   clear("canvasContextMenu");
   clear("canvasScriptPicker");
+  clear("canvasScriptWorkspace");
   clear("openGenerationSelectMenu");
   clear("canvasEditorOpen", false);
+  clear("selectedCanvasNodeId");
   return changed;
 }
 
