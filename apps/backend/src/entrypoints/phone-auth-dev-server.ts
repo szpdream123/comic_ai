@@ -431,6 +431,7 @@ import {
 import { recordGenerationProviderWebhook } from "../modules/model-gateway/generation-webhook-inbox.service.ts";
 import { inspectGenerationPlatformMetrics } from "../modules/model-gateway/generation-platform-metrics.service.ts";
 import { recordTaskCenterQuery } from "../modules/model-gateway/task-center-observability.ts";
+import { taskCenterProviderDiagnosticsSql } from "../modules/model-gateway/task-center-provider-diagnostics.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
 import {
   listGenerationQueueShards,
@@ -5416,7 +5417,10 @@ async function listTaskCenterTasks(
           CASE WHEN task.status = 'succeeded' THEN NULL ELSE snapshot.failure_json END AS failure_json,
           CASE
             WHEN task.status = 'succeeded' THEN NULL::jsonb
-            ELSE provider_request.response_redacted_json
+            ELSE COALESCE(
+              ${taskCenterProviderDiagnosticsSql("provider_request.task_center_diagnostics_json")},
+              '{}'::jsonb
+            ) || COALESCE(snapshot.task_center_diagnostics_json, '{}'::jsonb)
           END AS provider_response_json,
           snapshot.submitted_at,
           snapshot.started_at,
@@ -5434,10 +5438,12 @@ async function listTaskCenterTasks(
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
         LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
         LEFT JOIN LATERAL (
-          SELECT request.response_redacted_json
+          SELECT request.task_center_diagnostics_json
           FROM provider_requests request
           WHERE request.task_id = snapshot.task_id
-          ORDER BY request.updated_at DESC, request.created_at DESC
+            AND request.task_center_diagnostics_json IS NOT NULL
+            AND request.task_center_diagnostics_json <> '{}'::jsonb
+          ORDER BY request.updated_at DESC, request.created_at DESC, request.id DESC
           LIMIT 1
         ) provider_request ON true
         WHERE snapshot.user_id = $1
@@ -5462,18 +5468,27 @@ async function listTaskCenterTasks(
           CASE request.status
             WHEN 'succeeded' THEN 'completed'
             WHEN 'failed' THEN 'failed'
+            WHEN 'result_unknown' THEN 'result_unknown'
+            WHEN 'manual_review_required' THEN 'manual_review_required'
+            WHEN 'canceled' THEN 'canceled'
             WHEN 'created' THEN 'queued'
             ELSE 'running'
           END AS status,
           CASE request.status
             WHEN 'succeeded' THEN 'completed'
             WHEN 'failed' THEN 'failed'
+            WHEN 'result_unknown' THEN 'result_unknown'
+            WHEN 'manual_review_required' THEN 'manual_review_required'
+            WHEN 'canceled' THEN 'canceled'
             WHEN 'created' THEN 'task_created'
             ELSE 'provider_processing'
           END AS progress_stage,
           CASE request.status
             WHEN 'succeeded' THEN 100
             WHEN 'failed' THEN 100
+            WHEN 'result_unknown' THEN 100
+            WHEN 'manual_review_required' THEN 100
+            WHEN 'canceled' THEN 100
             WHEN 'created' THEN 10
             ELSE 50
           END AS progress_percent,
@@ -5491,31 +5506,51 @@ async function listTaskCenterTasks(
             'parameters', COALESCE(request.payload_redacted_json->'parameters', '{}'::jsonb)
           ) AS request_summary_json,
           CASE
-            WHEN COALESCE(request.response_redacted_json->>'assetUrl', '') <> ''
+            WHEN COALESCE(asset.asset_url, '') <> ''
             THEN jsonb_build_array(jsonb_build_object(
               'assetId', asset.id,
               'mediaKind', 'image',
-              'sourceUrl', request.response_redacted_json->>'assetUrl',
-              'previewUrl', request.response_redacted_json->>'assetUrl',
-              'downloadUrl', request.response_redacted_json->>'assetUrl'
+              'sourceUrl', asset.asset_url,
+              'previewUrl', asset.asset_url,
+              'downloadUrl', asset.asset_url
             ))
             ELSE '[]'::jsonb
           END AS result_assets_json,
           CASE
-            WHEN request.status = 'failed'
+            WHEN request.status IN ('failed', 'result_unknown', 'manual_review_required', 'canceled')
             THEN jsonb_build_object(
-              'failureCode', COALESCE(request.failure_code, 'provider_failed'),
-              'displayMessage', '团队资产生成失败，请稍后重试。'
+              'failureCode', COALESCE(
+                request.failure_code,
+                CASE request.status
+                  WHEN 'result_unknown' THEN 'provider_result_unknown'
+                  WHEN 'manual_review_required' THEN 'provider_manual_review_required'
+                  WHEN 'canceled' THEN 'user_canceled'
+                  ELSE 'provider_failed'
+                END
+              ),
+              'displayMessage', CASE request.status
+                WHEN 'result_unknown' THEN '团队资产供应商结果暂不明确，正在等待后台复核。'
+                WHEN 'manual_review_required' THEN '团队资产生成需要后台复核。'
+                WHEN 'canceled' THEN '团队资产生成已取消。'
+                ELSE '团队资产生成失败，请稍后重试。'
+              END
             )
             ELSE NULL::jsonb
           END AS failure_json,
           CASE
-            WHEN request.status = 'failed' THEN request.response_redacted_json
+            WHEN request.status IN ('failed', 'result_unknown', 'manual_review_required', 'canceled') THEN jsonb_strip_nulls(jsonb_build_object(
+                'providerMessage', request.failure_code,
+                'providerErrorCode', request.failure_code,
+                'errorCode', request.failure_code
+              )) || COALESCE(
+                ${taskCenterProviderDiagnosticsSql("request.task_center_diagnostics_json")},
+                '{}'::jsonb
+              )
             ELSE NULL::jsonb
           END AS provider_response_json,
           request.created_at AS submitted_at,
           request.external_submission_started_at AS started_at,
-          CASE WHEN request.status IN ('succeeded', 'failed') THEN request.updated_at ELSE NULL END AS returned_at,
+          CASE WHEN request.status IN ('succeeded', 'failed', 'result_unknown', 'manual_review_required', 'canceled') THEN request.updated_at ELSE NULL END AS returned_at,
           request.updated_at,
           request.updated_at::text AS updated_at_cursor
         FROM provider_requests request

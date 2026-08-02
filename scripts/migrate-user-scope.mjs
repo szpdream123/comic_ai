@@ -57,14 +57,18 @@ const migrations = [
   ["20260810-z-canvas-agent-step-input-json.sql", "packages/db/migrations/20260810-z-canvas-agent-step-input-json.sql"],
   ["20260812-canvas-agent-step-skip.sql", "packages/db/migrations/20260812-canvas-agent-step-skip.sql"],
   ["20260822-canvas-agent-worker-indexes.sql", "packages/db/migrations/20260822-canvas-agent-worker-indexes.sql"],
+  ["20260824-task-center-provider-diagnostics.sql", "packages/db/migrations/20260824-task-center-provider-diagnostics.sql"],
+  ["20260824-z-task-center-provider-diagnostics-index.sql", "packages/db/migrations/20260824-z-task-center-provider-diagnostics-index.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
 const nonTransactionalMigrationIndexes = new Map([
   ["20260731-failed-image-submission-active-repair-index.sql", "tasks_failed_image_submission_active_repair_idx"],
   ["20260731-failed-image-submission-snapshot-repair-index.sql", "generation_snapshots_failed_image_submission_repair_idx"],
+  ["20260824-z-task-center-provider-diagnostics-index.sql", "provider_requests_task_center_diagnostics_idx"],
 ]);
 const nonTransactionalMigrationNames = new Set(nonTransactionalMigrationIndexes.keys());
+const taskCenterProviderDiagnosticsMigrationName = "20260824-task-center-provider-diagnostics.sql";
 const compatibleChecksumTransitions = new Map([
   ["20260728-add-bananarouter-models.sql", {
     recorded: [
@@ -210,7 +214,17 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
       continue;
     }
 
-    if (!apply && nonTransactionalMigrationNames.has(migration.name)) {
+    if (apply && migration.name === taskCenterProviderDiagnosticsMigrationName) {
+      await applyTaskCenterProviderDiagnosticsMigration(db, migration);
+    } else if (!apply && migration.name === taskCenterProviderDiagnosticsMigrationName) {
+      await db.query(migration.sql);
+      await backfillTaskCenterProviderDiagnostics(db);
+      await db.query(
+        "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
+        [migration.name, migration.checksum],
+      );
+      console.log(`dry-run ok ${migration.name}`);
+    } else if (!apply && nonTransactionalMigrationNames.has(migration.name)) {
       if (!/^CREATE INDEX CONCURRENTLY IF NOT EXISTS\s+/i.test(migration.sql.trim())) {
         throw new Error(`invalid_non_transactional_migration:${migration.name}`);
       }
@@ -305,6 +319,57 @@ function isCompatibleChecksum(name, recorded, current) {
     ? transition.current
     : [transition?.current];
   return recordedChecksums.includes(recorded) && currentChecksums.includes(current);
+}
+
+async function applyTaskCenterProviderDiagnosticsMigration(db, migration) {
+  await db.query("BEGIN");
+  try {
+    await db.query("SET LOCAL statement_timeout = '15min'");
+    await db.query(migration.sql);
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+
+  const { providerBackfilled, snapshotBackfilled } = await backfillTaskCenterProviderDiagnostics(db);
+
+  await db.query(
+    "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
+    [migration.name, migration.checksum],
+  );
+  console.log(
+    `applied ${migration.name} (provider summaries: ${providerBackfilled}, snapshot summaries: ${snapshotBackfilled})`,
+  );
+}
+
+async function backfillTaskCenterProviderDiagnostics(db) {
+  const totals = {
+    providerBackfilled: 0,
+    snapshotBackfilled: 0,
+  };
+  await db.query("SET statement_timeout = '2min'");
+  try {
+    for (const [functionName, totalKey] of [
+      ["backfill_provider_request_task_center_diagnostics_batch", "providerBackfilled"],
+      ["backfill_generation_snapshot_task_center_diagnostics_batch", "snapshotBackfilled"],
+    ]) {
+      let cursor = null;
+      while (true) {
+        const batch = await db.query(
+          `SELECT processed_count, next_id FROM ${functionName}($1::uuid, 250)`,
+          [cursor],
+        );
+        const processedCount = Number(batch.rows[0]?.processed_count ?? 0);
+        cursor = batch.rows[0]?.next_id ?? null;
+        totals[totalKey] += processedCount;
+        if (processedCount === 0 || !cursor) break;
+      }
+    }
+  } finally {
+    await db.query("RESET statement_timeout").catch(() => undefined);
+  }
+  return totals;
 }
 
 async function assertExpectedExistingSchema(db) {

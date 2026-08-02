@@ -45,6 +45,7 @@ const FAILED_IMAGE_SUBMISSION_SNAPSHOT_REPAIR_INDEX_RELATIVE_PATH = ["packages",
 const CONCURRENT_MIGRATION_INDEX_NAMES = new Map([
   ["20260731-failed-image-submission-active-repair-index.sql", "tasks_failed_image_submission_active_repair_idx"],
   ["20260731-failed-image-submission-snapshot-repair-index.sql", "generation_snapshots_failed_image_submission_repair_idx"],
+  ["20260824-z-task-center-provider-diagnostics-index.sql", "provider_requests_task_center_diagnostics_idx"],
 ]);
 const CANVAS_AGENT_MODEL_PROBES_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-z-canvas-agent-model-compatibility-probes.sql"];
 const PROMPT_RATINGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260801-z-create-prompt-ratings.sql"];
@@ -75,6 +76,9 @@ const CUMOB_TEXT_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "202608
 const SCRIPT_OUTPUT_RULES_RELATIVE_PATH = ["packages", "db", "migrations", "20260821-append-script-output-rules.sql"];
 const CANVAS_AGENT_WORKER_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260822-canvas-agent-worker-indexes.sql"];
 const CANVAS_AGENT_QUEUE_SHARDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260823-canvas-agent-queue-shards.sql"];
+const TASK_CENTER_PROVIDER_DIAGNOSTICS_RELATIVE_PATH = ["packages", "db", "migrations", "20260824-task-center-provider-diagnostics.sql"];
+const TASK_CENTER_PROVIDER_DIAGNOSTICS_INDEX_RELATIVE_PATH = ["packages", "db", "migrations", "20260824-z-task-center-provider-diagnostics-index.sql"];
+const TASK_CENTER_PROVIDER_DIAGNOSTICS_MIGRATION_NAME = "20260824-task-center-provider-diagnostics.sql";
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
 const GENERATION_DUE_POLL_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-due-poll.sql"];
@@ -418,6 +422,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20260823-canvas-agent-queue-shards.sql",
       sql: await readFile(join(rootDir, ...CANVAS_AGENT_QUEUE_SHARDS_RELATIVE_PATH), "utf8"),
     },
+    {
+      name: "20260824-task-center-provider-diagnostics.sql",
+      sql: await readFile(join(rootDir, ...TASK_CENTER_PROVIDER_DIAGNOSTICS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260824-z-task-center-provider-diagnostics-index.sql",
+      sql: await readFile(join(rootDir, ...TASK_CENTER_PROVIDER_DIAGNOSTICS_INDEX_RELATIVE_PATH), "utf8"),
+    },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)
@@ -456,8 +468,29 @@ async function executeMigration(db: SqlDatabase, migration: string, migrationNam
   } else {
     await db.query(migration);
   }
+  if (migrationName === TASK_CENTER_PROVIDER_DIAGNOSTICS_MIGRATION_NAME) {
+    await backfillTaskCenterProviderDiagnostics(db);
+  }
   if (concurrentIndexName) {
     await assertConcurrentIndexValid(db, concurrentIndexName);
+  }
+}
+
+async function backfillTaskCenterProviderDiagnostics(db: SqlDatabase) {
+  for (const functionName of [
+    "backfill_provider_request_task_center_diagnostics_batch",
+    "backfill_generation_snapshot_task_center_diagnostics_batch",
+  ]) {
+    let cursor: string | null = null;
+    while (true) {
+      const result = await db.query<{ processed_count: number | string; next_id: string | null }>(
+        `SELECT processed_count, next_id FROM ${functionName}($1::uuid, 250)`,
+        [cursor],
+      );
+      const processedCount = Number(result.rows[0]?.processed_count ?? 0);
+      cursor = result.rows[0]?.next_id ?? null;
+      if (processedCount === 0 || !cursor) break;
+    }
   }
 }
 

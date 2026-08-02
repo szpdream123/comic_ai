@@ -12,6 +12,24 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     assert.ok(names.includes("20260728-add-bananarouter-models.sql"));
   });
 
+  it("registers bounded task-center diagnostics in application and production migrations", async () => {
+    const names = (await loadSqlMigrations()).map((migration) => migration.name);
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    for (const migrationName of [
+      "20260824-task-center-provider-diagnostics.sql",
+      "20260824-z-task-center-provider-diagnostics-index.sql",
+    ]) {
+      assert.ok(names.includes(migrationName));
+      assert.match(productionMigrationScript, new RegExp(migrationName.replaceAll(".", "\\.")));
+    }
+    assert.match(productionMigrationScript, /backfill_provider_request_task_center_diagnostics_batch/);
+    assert.match(productionMigrationScript, /backfill_generation_snapshot_task_center_diagnostics_batch/);
+    assert.match(productionMigrationScript, /cursor = batch\.rows\[0\]\?\.next_id/);
+  });
+
   it("registers failed image submission repair indexes in application and production migrations", async () => {
     const names = (await loadSqlMigrations()).map((migration) => migration.name);
     const productionMigrationScript = await readFile(

@@ -101,6 +101,7 @@ describe("generation task snapshot service", () => {
             statusText: "Service Unavailable",
             responseBodyPreview: '{"error":{"message":"OpenAI upstream overloaded","code":"temporarily_unavailable"}}',
           },
+          artifact: { b64Json: "A".repeat(256 * 1024) },
         },
         now: new Date("2026-06-03T05:04:00.000Z"),
       });
@@ -116,6 +117,16 @@ describe("generation task snapshot service", () => {
         statusText: "模型服务繁忙或暂时不可用，请稍后重试。",
         responseBodyPreview: "模型服务繁忙或暂时不可用，请稍后重试。",
       });
+      assert.deepEqual(snapshot?.provider_status_json.artifact, {
+        b64Json: "[binary omitted: base64, 262144 chars]",
+      });
+      assert.deepEqual(snapshot?.task_center_diagnostics_json, {
+        diagnostics: {
+          statusText: "模型服务繁忙或暂时不可用，请稍后重试。",
+          responseBodyPreview: "模型服务繁忙或暂时不可用，请稍后重试。",
+        },
+      });
+      assert.ok(Buffer.byteLength(JSON.stringify(snapshot?.provider_status_json), "utf8") < 64 * 1024);
 
       await markGenerationTaskSnapshotRunning(db, {
         taskId: ids.taskId,
@@ -303,12 +314,13 @@ async function loadSnapshot(db: Awaited<ReturnType<typeof createMigratedTestDb>>
     progress_stage: string;
     progress_percent: number | null;
     provider_status_json: Record<string, unknown>;
+    task_center_diagnostics_json: Record<string, unknown>;
     failure_json: Record<string, unknown> | null;
     credit_status: string;
     credit_summary_json: Record<string, unknown>;
   }>(
     `
-      SELECT status, progress_stage, progress_percent, provider_status_json,
+      SELECT status, progress_stage, progress_percent, provider_status_json, task_center_diagnostics_json,
              failure_json, credit_status, credit_summary_json
       FROM ai_generation_task_snapshots
       WHERE task_id = $1

@@ -7,6 +7,7 @@ import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapte
 import { ModelError } from "./model-error.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
 import { compactProviderAuditValue, readProviderRawResponse } from "./provider-response-diagnostics.ts";
+import { buildTaskCenterProviderDiagnostics } from "./task-center-provider-diagnostics.ts";
 
 export interface ProviderRequestRecord {
   id: string;
@@ -407,7 +408,8 @@ export async function markProviderRequestResultUnknown(
           failure_code = $2,
           response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb)
             || COALESCE($3::jsonb, '{}'::jsonb),
-          updated_at = $4
+          task_center_diagnostics_json = COALESCE($4::jsonb, task_center_diagnostics_json),
+          updated_at = $5
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
       RETURNING *
@@ -416,6 +418,7 @@ export async function markProviderRequestResultUnknown(
       input.providerRequestId,
       input.failureCode,
       input.redactedResponse ? JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))) : null,
+      serializeTaskCenterProviderDiagnostics(input.redactedResponse),
       input.now,
     ],
   );
@@ -436,6 +439,11 @@ function readProviderDiagnostics(error: unknown): Record<string, unknown> | unde
   };
   const rawResponse = readProviderRawResponse(diagnostics);
   return rawResponse === undefined ? response : { ...response, providerRawResponse: rawResponse };
+}
+
+function serializeTaskCenterProviderDiagnostics(value: Record<string, unknown> | undefined) {
+  const diagnostics = buildTaskCenterProviderDiagnostics(value);
+  return diagnostics ? JSON.stringify(diagnostics) : null;
 }
 
 function hasDefinitiveProviderResponse(error: unknown): boolean {
@@ -532,7 +540,8 @@ async function recordProviderSubmissionAccepted(
       SET status = $2,
           external_request_id = $3,
           response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
-          updated_at = $5
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          updated_at = $6
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
       RETURNING *
@@ -542,6 +551,7 @@ async function recordProviderSubmissionAccepted(
       input.status,
       input.externalRequestId,
       JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
+      serializeTaskCenterProviderDiagnostics(input.redactedResponse),
       input.now,
     ],
   );
@@ -563,8 +573,9 @@ export async function advanceProviderRequestStage(
     SET status='running',
         external_request_id=$2,
         response_redacted_json=COALESCE(response_redacted_json, '{}'::jsonb) || $3::jsonb,
-        next_poll_at=$4,
-        updated_at=$4
+        task_center_diagnostics_json=COALESCE($4::jsonb, task_center_diagnostics_json),
+        next_poll_at=$5,
+        updated_at=$5
     WHERE id=$1
       AND status IN ('accepted','running')
     RETURNING *
@@ -572,6 +583,7 @@ export async function advanceProviderRequestStage(
     input.providerRequestId,
     input.externalRequestId,
     JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
+    serializeTaskCenterProviderDiagnostics(input.redactedResponse),
     input.now,
   ]);
   if (!row) throw new Error("provider_request_stage_transition_conflict");
@@ -600,8 +612,9 @@ async function updateProviderRequestTerminalStatus(
           external_request_id = COALESCE($3, external_request_id),
           next_poll_at = NULL,
           response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
-          failure_code = $5,
-          updated_at = $6
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          failure_code = $6,
+          updated_at = $7
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
         AND (
@@ -615,6 +628,7 @@ async function updateProviderRequestTerminalStatus(
       input.status,
       input.externalRequestId,
       JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
+      serializeTaskCenterProviderDiagnostics(input.redactedResponse),
       input.failureCode,
       input.now,
     ],
