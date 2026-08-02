@@ -201,6 +201,7 @@ export async function submitProviderRequest(
           payloadRef: prepared.request.payloadRef,
           payloadHash: prepared.request.payloadHash,
           redactedPayload: prepared.request.redactedPayload,
+          externalSubmissionStartedAt: prepared.request.externalSubmissionStartedAt,
         })
       : null;
     if (recovered) {

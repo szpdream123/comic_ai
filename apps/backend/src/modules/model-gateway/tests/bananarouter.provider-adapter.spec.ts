@@ -79,6 +79,230 @@ describe("BananaRouter provider adapter", () => {
     }]);
   });
 
+  it("submits BananaRouter images asynchronously with a stable idempotency key", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: HeadersInit | undefined;
+    let capturedBody = "";
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/generations/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async (url, init) => {
+        capturedUrl = String(url);
+        capturedHeaders = init?.headers;
+        capturedBody = String(init?.body ?? "");
+        return Response.json({
+          taskID: "banana-image-task",
+          status: "pending",
+          createdAt: "2026-08-02T08:00:00.000Z",
+        }, { status: 202 });
+      }) as typeof fetch,
+    );
+
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-image-async",
+      providerName: "BananaRouter",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-image:task-image-async",
+      payloadRef: "creator://banana/image-async",
+      payloadHash: "hash-image-async",
+      redactedPayload: {
+        prompt: "A cinematic comic panel",
+        referenceImages: [{ url: "https://cdn.example.com/reference.png" }],
+      },
+    });
+
+    assert.equal(capturedUrl, "https://api.bananarouter.com/v1/images/generations/async");
+    assert.deepEqual(capturedHeaders, {
+      authorization: "Bearer banana-key",
+      "content-type": "application/json",
+      "Idempotency-Key": "provider-request-image-async",
+    });
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "gpt-image-2",
+      prompt: "A cinematic comic panel",
+      images: ["https://cdn.example.com/reference.png"],
+      response_format: "url",
+    });
+    assert.equal(result.externalRequestId, "banana-image-task");
+    assert.equal(result.status, "accepted");
+    assert.equal(result.artifacts, undefined);
+  });
+
+  it("recovers an ambiguous BananaRouter image submission with the original idempotency key", async () => {
+    const requests: Array<{ url: string; idempotencyKey: string | null }> = [];
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async (url, init) => {
+        requests.push({
+          url: String(url),
+          idempotencyKey: new Headers(init?.headers).get("Idempotency-Key"),
+        });
+        return Response.json({ taskID: "recovered-image-task", status: "pending" }, { status: 202 });
+      }) as typeof fetch,
+    );
+
+    const recovered = await adapter.recoverSubmission?.({
+      providerRequestId: "provider-request-image-recovery",
+      providerName: "BananaRouter",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-image:task-image-recovery",
+      payloadRef: "creator://banana/image-recovery",
+      payloadHash: "hash-image-recovery",
+      redactedPayload: { prompt: "Recover this billed image" },
+    });
+
+    assert.deepEqual(requests, [{
+      url: "https://api.bananarouter.com/v1/images/generations/async",
+      idempotencyKey: "provider-request-image-recovery",
+    }]);
+    assert.equal(recovered?.externalRequestId, "recovered-image-task");
+    assert.equal(recovered?.status, "accepted");
+  });
+
+  it("does not replay an ambiguous BananaRouter image submission after the idempotency window", async () => {
+    let requestCount = 0;
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => {
+        requestCount += 1;
+        return Response.json({ taskID: "duplicate-image-task", status: "pending" }, { status: 202 });
+      }) as typeof fetch,
+    );
+
+    const recovered = await adapter.recoverSubmission?.({
+      providerRequestId: "provider-request-image-expired",
+      providerName: "BananaRouter",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-image:task-image-expired",
+      payloadRef: "creator://banana/image-expired",
+      payloadHash: "hash-image-expired",
+      redactedPayload: { prompt: "Do not double bill this image" },
+      externalSubmissionStartedAt: new Date(0),
+    });
+
+    assert.equal(recovered, null);
+    assert.equal(requestCount, 0);
+  });
+
+  it("polls BananaRouter image tasks through the dedicated async task endpoint", async () => {
+    const requestedUrls: string[] = [];
+    const responses = [
+      { taskID: "image/task 1", status: "processing" },
+      {
+        taskID: "image/task 1",
+        status: "completed",
+        result: { data: [{ url: "https://cdn.example.com/async-image.png" }] },
+      },
+    ];
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async (url) => {
+        requestedUrls.push(String(url));
+        return Response.json(responses.shift());
+      }) as typeof fetch,
+    );
+
+    const running = await adapter.poll?.({ externalRequestId: "image/task 1" });
+    const completed = await adapter.poll?.({ externalRequestId: "image/task 1" });
+
+    assert.deepEqual(requestedUrls, [
+      "https://api.bananarouter.com/v1/async-tasks/image%2Ftask%201",
+      "https://api.bananarouter.com/v1/async-tasks/image%2Ftask%201",
+    ]);
+    assert.equal(running?.status, "running");
+    assert.equal(completed?.status, "succeeded");
+    assert.deepEqual(completed?.artifacts, [{
+      mediaType: "image",
+      mimeType: "image/png",
+      fileExtension: "png",
+      url: "https://cdn.example.com/async-image.png",
+    }]);
+  });
+
+  it("accepts BananaRouter image poll payloads above the video JSON limit", async () => {
+    const largeB64Json = "A".repeat(4 * 1024 * 1024 + 4);
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        taskID: "large-image-task",
+        status: "completed",
+        result: { data: [{ b64_json: largeB64Json }] },
+      })) as typeof fetch,
+    );
+
+    const completed = await adapter.poll?.({ externalRequestId: "large-image-task" });
+
+    assert.equal(completed?.status, "succeeded");
+    assert.equal(completed?.artifacts?.[0]?.b64Json?.length, largeB64Json.length);
+  });
+
   it("submits gpt-image-2 reference edits as BananaRouter JSON image URLs", async () => {
     let capturedUrl = "";
     let capturedBody = "";
@@ -519,6 +743,19 @@ describe("BananaRouter provider adapter", () => {
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
           requestPath: "/v1/images/generations",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
         },

@@ -59,6 +59,7 @@ const migrations = [
   ["20260822-canvas-agent-worker-indexes.sql", "packages/db/migrations/20260822-canvas-agent-worker-indexes.sql"],
   ["20260824-task-center-provider-diagnostics.sql", "packages/db/migrations/20260824-task-center-provider-diagnostics.sql"],
   ["20260824-z-task-center-provider-diagnostics-index.sql", "packages/db/migrations/20260824-z-task-center-provider-diagnostics-index.sql"],
+  ["20260825-bananarouter-image-async-recovery.sql", "packages/db/migrations/20260825-bananarouter-image-async-recovery.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
