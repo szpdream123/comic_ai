@@ -41,7 +41,7 @@ describe("ai script analysis service", () => {
     assert.equal(gateway.calls.length, 1);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-noval"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [8192]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.match(gateway.calls[0]?.prompt ?? "", /通用禁忌/);

@@ -597,6 +597,55 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("resumes polling for a provider-accepted task after a queue failure enters manual review", async () => {
+    const db = await createMigratedTestDb();
+    const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await seedSeedanceTaskReservationAndSnapshot(db);
+      const now = new Date("2026-06-03T06:00:00.000Z");
+
+      const marked = await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000104",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
+        creditOutcome: "manual_review_required",
+        now,
+      });
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:03:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+        }),
+        publisher: {
+          async add(queueName, name, data, options) {
+            added.push({ queueName, name, data, options });
+          },
+        },
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE id = '51000000-0000-4000-8000-000000000104'",
+      );
+
+      assert.equal(marked, true);
+      assert.deepEqual(repaired.repairedTaskIds, ["50000000-0000-4000-8000-000000000104"]);
+      assert.equal(added.length, 1);
+      assert.equal(added[0]?.name, "generation.video.poll.repair");
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(task.rows[0]?.failure_code, null);
+      assert.equal(attempt.rows[0]?.status, "running");
+      assert.equal(attempt.rows[0]?.failure_code, null);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("keeps credits reserved when an expired submit lease started externally without a poll id", async () => {
     const db = await createMigratedTestDb();
 
@@ -674,6 +723,8 @@ describe("generation Redis dispatch repair", () => {
         limit: 10,
         config: loadGenerationQueueConfig({
           GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+          GENERATION_POLL_RETRY_ATTEMPTS: "3",
+          GENERATION_POLL_RETRY_BACKOFF_MS: "5000",
         }),
         publisher: {
           async add(queueName, name, data, options) {
@@ -713,7 +764,11 @@ describe("generation Redis dispatch repair", () => {
         options: {
           jobId: "generation.video.poll__50000000-0000-4000-8000-000000000104__1__repair__1780466400000",
           delay: 0,
-          attempts: 1,
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 5000,
+          },
           removeOnComplete: { age: 86400, count: 10000 },
           removeOnFail: { age: 604800, count: 50000 },
         },

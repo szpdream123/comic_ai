@@ -50,6 +50,9 @@ function renderAgentComposerActionIcon(running = false) {
 
 export function ensureCanvasAgentState(ui = {}) {
   const previous = ui.canvasAgent && typeof ui.canvasAgent === "object" ? ui.canvasAgent : {};
+  const persisted = ui.canvasSessionUiState?.canvasAgent;
+  const persistedPanelOpen = typeof persisted?.panelOpen === "boolean" ? persisted.panelOpen : null;
+  const persistedPanelWidth = Number(persisted?.panelWidth);
   const mode = AGENT_MODES.some((item) => item.id === previous.mode) ? previous.mode : "b";
   Object.assign(previous, {
     conversationId: "",
@@ -102,8 +105,29 @@ export function ensureCanvasAgentState(ui = {}) {
       ? { panelWidth: DEFAULT_CANVAS_AGENT_PANEL_WIDTH }
       : {}),
   });
+  if (persistedPanelOpen !== null) previous.panelOpen = persistedPanelOpen;
+  if (Number.isFinite(persistedPanelWidth)) previous.panelWidth = persistedPanelWidth;
   ui.canvasAgent = previous;
   return previous;
+}
+
+export function persistCanvasAgentUiState(ui = {}, agent = {}) {
+  const current = ui.canvasSessionUiState && typeof ui.canvasSessionUiState === "object"
+    ? ui.canvasSessionUiState
+    : {};
+  const currentAgent = current.canvasAgent && typeof current.canvasAgent === "object"
+    ? current.canvasAgent
+    : {};
+  const panelWidth = Number(agent.panelWidth);
+  ui.canvasSessionUiState = {
+    ...current,
+    canvasAgent: {
+      ...currentAgent,
+      panelOpen: agent.panelOpen !== false,
+      ...(Number.isFinite(panelWidth) ? { panelWidth } : {}),
+    },
+  };
+  return ui.canvasSessionUiState;
 }
 
 export function renderCanvasAgentPanel(ui = {}) {
@@ -212,7 +236,8 @@ function renderAgentHistoryPopover(agent) {
 }
 
 export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "", minimapMarkup = "") {
-  const agentPanelClosed = ui.canvasAgent?.panelOpen === false;
+  const sessionReady = ui.canvasSessionUiStateReady !== false;
+  const agentPanelClosed = !sessionReady || ui.canvasAgent?.panelOpen === false;
   const agentPanelWidth = resolveCanvasAgentPanelWidth(ui);
   const sidebarWidth = ui.canvasSidebarCollapsed !== false
     ? 0
@@ -221,8 +246,8 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
       : 264;
   return `
     <div class="new-canvas-layout ${agentPanelClosed ? "is-agent-collapsed" : ""}" style="--canvas-agent-panel-width:${agentPanelWidth}px">
-      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
-      ${renderCanvasAgentPanel(ui)}
+      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
+      ${sessionReady ? renderCanvasAgentPanel(ui) : ""}
       ${auxiliaryMarkup}
     </div>
   `;
@@ -1123,6 +1148,8 @@ export function createCanvasAgentController({
       if (action === "close-agent-panel" || action === "open-agent-panel") {
         agent.panelOpen = action === "open-agent-panel";
         agent.historyOpen = false;
+        persistCanvasAgentUiState(workbench.ui, agent);
+        void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
         if (!syncPanelVisibility()) {
           if (typeof renderLayout === "function") await renderLayout();
           else syncPanel();
@@ -1316,6 +1343,8 @@ export function createCanvasAgentController({
       if (action === "new-conversation") {
         stopPolling();
         Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], sequence: 0, error: "", panelView: "timeline", panelOpen: true, historyOpen: false, titleEditing: false, titleDraft: "" });
+        persistCanvasAgentUiState(workbench.ui, agent);
+        void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
         await run(action, async () => {
           const conversationId = await ensureConversation();
           agent.conversations = [{ id: conversationId, title: "画布协作", status: "active" }, ...(agent.conversations ?? []).filter((item) => item.id !== conversationId)];

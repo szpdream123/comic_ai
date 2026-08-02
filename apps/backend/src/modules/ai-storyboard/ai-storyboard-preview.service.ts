@@ -5,7 +5,6 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 
-export const DEEPSEEK_STORYBOARD_MAX_TOKENS = 8192;
 const LIVE_ECHO_CHUNK_SIZE = 32;
 
 type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
@@ -36,6 +35,7 @@ export interface TextChatGatewayLike {
     model: string;
     prompt: string;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
@@ -45,6 +45,7 @@ export interface TextChatGatewayLike {
     model: string;
     prompt: string;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
@@ -54,6 +55,7 @@ export interface TextChatGatewayLike {
 
 export interface AiStoryboardPreviewInput {
   projectId: string;
+  canvasProjectId?: string | null;
   createdByUserId?: string | null;
   scriptText: string;
   modelCode?: string | null;
@@ -115,10 +117,10 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
         gateway: deps.gateway,
         model: modelCode,
         prompt: scriptPrompt,
-        projectId: input.projectId,
+        projectId: input.canvasProjectId ? null : input.projectId,
+        canvasProjectId: input.canvasProjectId,
         createdByUserId: input.createdByUserId,
         responseFormat: "text",
-        maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
         signal: input.signal,
       })) {
         scriptRaw += delta;
@@ -141,15 +143,22 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     const propRaw = shouldRunStage("prop")
       ? yield* runAssetPromptStage("prop", "道具提示词生成", buildPropPrompt(scriptText, input), input, modelCode)
       : "";
+    const scenes = sceneRaw.trim() ? parseArrayOrObject(sceneRaw, "scenes") : [];
+    const characters = characterRaw.trim() ? parseArrayOrObject(characterRaw, "characters") : [];
+    const props = propRaw.trim() ? parseArrayOrObject(propRaw, "props") : [];
     const shotRaw = shouldRunStage("shot")
-      ? yield* runAssetPromptStage("shot", "分镜提示词生成", buildShotPrompt(scriptText, input), input, modelCode)
+      ? yield* runAssetPromptStage("shot", "分镜提示词生成", buildShotPrompt(scriptText, input, {
+          scenes,
+          characters,
+          props,
+        }), input, modelCode)
       : "";
 
     yield { type: "complete", preview: {
       ...normalizePreview(scriptText, {
-        scenes: parseArrayOrObject(sceneRaw, "scenes"),
-        characters: parseArrayOrObject(characterRaw, "characters"),
-        props: parseArrayOrObject(propRaw, "props"),
+        scenes,
+        characters,
+        props,
         ...parseStoryboardPromptResult(shotRaw),
       }),
       rawMarkdown: {
@@ -171,24 +180,35 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     yield { type: "asset_prompt", stage, title, text: prompt };
     yield { type: "asset_start", stage, title };
     let raw = "";
-    for await (const delta of streamJsonText({
-      gateway: deps.gateway,
-      model: modelCode,
-      prompt,
-      projectId: input.projectId,
-      createdByUserId: input.createdByUserId,
-      responseFormat: "text",
-      maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
-      signal: input.signal,
-    })) {
-      raw += delta;
-      yield { type: "asset_delta", stage, title, text: delta };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        for await (const delta of streamJsonText({
+          gateway: deps.gateway,
+          model: modelCode,
+          prompt,
+          projectId: input.canvasProjectId ? null : input.projectId,
+          canvasProjectId: input.canvasProjectId,
+          createdByUserId: input.createdByUserId,
+          responseFormat: "text",
+          signal: input.signal,
+        })) {
+          raw += delta;
+          yield { type: "asset_delta", stage, title, text: delta };
+        }
+        break;
+      } catch (error) {
+        if (raw || attempt > 0 || !isRetryableAssetStageError(error)) throw error;
+      }
     }
     yield { type: "asset_done", stage, title, text: raw };
     return raw;
   }
 
   return { generatePreview, generatePreviewStream };
+}
+
+function isRetryableAssetStageError(error: unknown) {
+  return typeof error === "object" && error !== null && "retryable" in error && error.retryable === true;
 }
 
 export function createTextModelChatGateway(deps: {
@@ -198,18 +218,18 @@ export function createTextModelChatGateway(deps: {
     model: string;
     prompt: string;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
     signal?: AbortSignal;
   }) {
     const payloadHash = sha256(input.prompt);
-    const requestKey = `ai-storyboard:${input.projectId ?? "none"}:${randomUUID()}`;
+    const requestKey = `ai-storyboard:${input.projectId ?? input.canvasProjectId ?? "none"}:${randomUUID()}`;
     const requestBody = {
       model: input.model,
       stream: true,
       temperature: 0.2,
-      max_tokens: input.maxTokens ?? DEEPSEEK_STORYBOARD_MAX_TOKENS,
       messages: [
         {
           role: "user",
@@ -222,6 +242,7 @@ export function createTextModelChatGateway(deps: {
       requestBody,
       {
         projectId: input.projectId ?? null,
+        canvasProjectId: input.canvasProjectId ?? null,
         createdByUserId: input.createdByUserId ?? null,
         requestKey,
         requestHash: payloadHash,
@@ -262,6 +283,7 @@ async function* streamJsonText(input: {
   model: string;
   prompt: string;
   projectId?: string | null;
+  canvasProjectId?: string | null;
   createdByUserId?: string | null;
   responseFormat?: "json_object" | "text";
   maxTokens?: number;
@@ -272,6 +294,7 @@ async function* streamJsonText(input: {
       model: input.model,
       prompt: input.prompt,
       projectId: input.projectId,
+      canvasProjectId: input.canvasProjectId,
       createdByUserId: input.createdByUserId,
       responseFormat: input.responseFormat,
       maxTokens: input.maxTokens,
@@ -285,6 +308,7 @@ async function* streamJsonText(input: {
     model: input.model,
     prompt: input.prompt,
     projectId: input.projectId,
+    canvasProjectId: input.canvasProjectId,
     createdByUserId: input.createdByUserId,
     responseFormat: input.responseFormat,
     maxTokens: input.maxTokens,
@@ -324,8 +348,41 @@ function buildPropPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
   return buildAssetStagePrompt("prop", input.templates?.propPrompt || "", scriptText);
 }
 
-function buildShotPrompt(scriptText: string, input: AiStoryboardPreviewInput) {
-  return buildAssetStagePrompt("shot", input.templates?.shotPrompt || "", scriptText);
+function buildShotPrompt(
+  scriptText: string,
+  input: AiStoryboardPreviewInput,
+  assets: {
+    scenes: Record<string, unknown>[];
+    characters: Record<string, unknown>[];
+    props: Record<string, unknown>[];
+  },
+) {
+  const basePrompt = buildAssetStagePrompt("shot", input.templates?.shotPrompt || "", scriptText);
+  const assetCatalog = buildStoryboardCanonicalAssetCatalog(assets);
+  return assetCatalog ? `${basePrompt}\n\n${assetCatalog}` : basePrompt;
+}
+
+function buildStoryboardCanonicalAssetCatalog(assets: {
+  scenes: Record<string, unknown>[];
+  characters: Record<string, unknown>[];
+  props: Record<string, unknown>[];
+}) {
+  const lines = [
+    formatCanonicalAssetCatalogLine("场景", assets.scenes, ["sceneName", "scene_name", "name"]),
+    formatCanonicalAssetCatalogLine("角色", assets.characters, ["characterName", "character_name", "name"]),
+    formatCanonicalAssetCatalogLine("道具", assets.props, ["propName", "prop_name", "name"]),
+  ].filter(Boolean);
+  if (!lines.length) return "";
+  return [
+    "【已生成资产名称清单（唯一命名来源）】",
+    ...lines,
+    "强制规则：分镜中的场景、角色、道具名称，以及视频资产对照表里的每一个 @名称，只能逐字使用以上清单中的完整名称；禁止缩写、改名、添加别名或自行创造新名称。未使用的资产不要引用。",
+  ].join("\n");
+}
+
+function formatCanonicalAssetCatalogLine(label: string, records: Record<string, unknown>[], nameKeys: string[]) {
+  const names = uniqueText(records.map((record) => firstText(record, nameKeys)));
+  return names.length ? `${label}：${names.join("；")}` : "";
 }
 
 function buildAssetStagePrompt(stage: AssetPromptStage, template: string, scriptText: string) {
@@ -1097,17 +1154,21 @@ function buildStoryboardAssetReferenceText(
     propIndex: Map<string, Record<string, unknown>>;
   },
 ) {
+  const videoPrompt = text(storyboard.videoPrompt);
   const sceneRecords = uniqueRecords([
     ...resolveAssetsByRefs([storyboard.sceneId, storyboard.sceneName, storyboard.scene], indexes.sceneIndex),
-    ...arrayOfRecords(storyboard.scenes),
+    ...resolveAssetsByRefs(arrayOfRecords(storyboard.scenes), indexes.sceneIndex),
+    ...resolveAssetsByRefs(extractStoryboardPromptAssetMentions(videoPrompt, "视频场景对照表"), indexes.sceneIndex),
   ]);
   const characterRecords = uniqueRecords([
     ...resolveAssetsByRefs([storyboard.characterIds, storyboard.characters, storyboard.characterNames], indexes.characterIndex),
-    ...arrayOfRecords(storyboard.characterRefs),
+    ...resolveAssetsByRefs(arrayOfRecords(storyboard.characterRefs), indexes.characterIndex),
+    ...resolveAssetsByRefs(extractStoryboardPromptAssetMentions(videoPrompt, "视频角色对照表"), indexes.characterIndex),
   ]);
   const propRecords = uniqueRecords([
     ...resolveAssetsByRefs([storyboard.propIds, storyboard.props, storyboard.propNames], indexes.propIndex),
-    ...arrayOfRecords(storyboard.propRefs),
+    ...resolveAssetsByRefs(arrayOfRecords(storyboard.propRefs), indexes.propIndex),
+    ...resolveAssetsByRefs(extractStoryboardPromptAssetMentions(videoPrompt, "视频道具对照表"), indexes.propIndex),
   ]);
 
   const lines = [
@@ -1134,13 +1195,27 @@ function buildStoryboardAssetReferenceText(
 }
 
 function appendAssetReferenceText(prompt: string, assetReferenceText: string) {
-  if (!prompt.trim()) {
+  const markedTableOffset = prompt.indexOf("【资产对照表】");
+  const legacyTableOffset = prompt.search(/(?:^|\r?\n)\s*(?:资产对照表\s*[:：]?|视频(?:场景|角色|道具)对照表\s*[:：])/u);
+  const tableOffset = [markedTableOffset, legacyTableOffset].filter((offset) => offset >= 0).sort((left, right) => left - right)[0] ?? -1;
+  const basePrompt = (tableOffset >= 0 ? prompt.slice(0, tableOffset) : prompt).trim();
+  if (!basePrompt) {
     return assetReferenceText;
   }
-  if (prompt.includes("【资产对照表】")) {
-    return prompt;
-  }
-  return `${prompt.trim()}\n\n${assetReferenceText}`;
+  return `${basePrompt}\n\n${assetReferenceText}`;
+}
+
+function extractStoryboardPromptAssetMentions(prompt: string, label: string) {
+  const line = prompt.replace(/<br\s*\/?>/giu, "\n")
+    .split(/\r?\n/u)
+    .find((item) => item.includes(label));
+  if (!line) return [];
+  const value = line.slice(line.indexOf(label) + label.length).replace(/^\s*[:：]\s*/u, "");
+  return value.split(/[；;]/u).flatMap((entry) => {
+    const match = entry.match(/(?:【)?@(.+?)(?:】)?\s*$/u);
+    const name = text(match?.[1]).replace(/[，,。]+$/u, "").trim();
+    return name ? [name] : [];
+  });
 }
 
 function formatAssetReferenceLine(
@@ -1251,14 +1326,37 @@ function resolveAssetsByRefs(values: unknown[], index: Map<string, Record<string
   const resolved: Record<string, unknown>[] = [];
   for (const ref of values.flatMap(assetRefs)) {
     if (typeof ref === "object" && ref && !Array.isArray(ref)) {
-      resolved.push(ref as Record<string, unknown>);
+      const record = ref as Record<string, unknown>;
+      resolved.push(resolveIndexedAssetRecord(record, index) ?? record);
       continue;
     }
-    const key = normalizeAssetKey(ref);
-    if (!key) continue;
-    resolved.push(index.get(key) || { name: text(ref) });
+    const indexed = resolveIndexedAssetRecord(ref, index);
+    if (indexed) resolved.push(indexed);
+    else if (normalizeAssetKey(ref)) resolved.push({ name: text(ref) });
   }
   return resolved;
+}
+
+function resolveIndexedAssetRecord(value: unknown, index: Map<string, Record<string, unknown>>) {
+  const candidates = value && typeof value === "object" && !Array.isArray(value)
+    ? ["sceneId", "characterId", "propId", "id", "sceneName", "characterName", "propName", "name"]
+        .map((key) => (value as Record<string, unknown>)[key])
+    : [value];
+  for (const candidate of candidates) {
+    for (const key of normalizeAssetKeyVariants(candidate)) {
+      const exact = index.get(key);
+      if (exact) return exact;
+      if (key.length < 2) continue;
+      const fuzzy = new Set<Record<string, unknown>>();
+      for (const [indexedKey, record] of index.entries()) {
+        if (indexedKey.length >= 2 && (indexedKey.includes(key) || key.includes(indexedKey))) {
+          fuzzy.add(record);
+        }
+      }
+      if (fuzzy.size === 1) return [...fuzzy][0];
+    }
+  }
+  return null;
 }
 
 function assetRefs(value: unknown): unknown[] {
@@ -1274,9 +1372,10 @@ function assetIndex(records: Record<string, unknown>[], keys: string[]) {
   const index = new Map<string, Record<string, unknown>>();
   for (const record of records) {
     for (const key of keys) {
-      const normalized = normalizeAssetKey(record[key]);
-      if (normalized && !index.has(normalized)) {
-        index.set(normalized, record);
+      for (const normalized of normalizeAssetKeyVariants(record[key])) {
+        if (!index.has(normalized)) {
+          index.set(normalized, record);
+        }
       }
     }
   }
@@ -1313,7 +1412,15 @@ function firstText(record: Record<string, unknown>, keys: string[]) {
 }
 
 function normalizeAssetKey(value: unknown) {
-  return text(value).trim().toLowerCase();
+  return text(value).trim().replace(/^@/u, "").replace(/\s+/gu, "").toLowerCase();
+}
+
+function normalizeAssetKeyVariants(value: unknown) {
+  const raw = text(value).trim().replace(/^@/u, "");
+  if (!raw) return [];
+  const parentheticalNames = [...raw.matchAll(/[（(]([^）)]+)[）)]/gu)].map((match) => match[1]);
+  const variants = [raw, raw.replace(/[（(][^）)]*[）)]/gu, ""), ...parentheticalNames];
+  return uniqueText(variants.map(normalizeAssetKey).filter(Boolean));
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {
@@ -1337,6 +1444,14 @@ function parseJsonObject(raw: string): Record<string, unknown> {
 }
 
 function parseArrayOrObject(raw: string, key: string, aliases: string[] = []): Record<string, unknown>[] {
+  const standaloneAssetTableRows = parseStandaloneAssetMarkdownTableRecords(raw, key);
+  if (standaloneAssetTableRows.length) {
+    return standaloneAssetTableRows;
+  }
+  const labeledAssetRows = parseLabeledAssetMarkdownRecords(raw, key);
+  if (labeledAssetRows.length) {
+    return labeledAssetRows;
+  }
   const markdownResult = parseMarkdownPromptResult(raw);
   const markdownRows = [key, ...aliases]
     .map((candidate) => markdownResult?.[candidate])
@@ -1399,6 +1514,108 @@ function parseStoryboardPromptResult(raw: string): Record<string, unknown> {
   }
 }
 
+function parseStandaloneAssetMarkdownTableRecords(raw: string, tableKey: string): Record<string, unknown>[] {
+  const config = tableKey === "scenes"
+    ? { label: "场景名称", descriptionLabels: ["场景描述"], promptLabels: ["场景提示词", "场景图片提示词", "图片提示词"], nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
+    : tableKey === "characters"
+      ? { label: "角色名称", descriptionLabels: ["角色描述"], promptLabels: ["角色提示词", "角色图片提示词", "图片提示词"], nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
+      : tableKey === "props"
+        ? { label: "道具名称", descriptionLabels: ["道具描述"], promptLabels: ["道具提示词", "道具图片提示词", "图片提示词"], nameKey: "propName", descriptionKey: "propDescription", promptKey: "propImagePrompt" }
+        : null;
+  if (!config) {
+    return [];
+  }
+  const table = parseMarkdownTable(extractMarkdownBody(raw));
+  if (!table) {
+    return [];
+  }
+  const header = table.header.map((cell) => text(cell).replace(/\s+/g, ""));
+  const nameIndex = header.findIndex((cell) => cell.includes(config.label));
+  const descriptionIndex = header.findIndex((cell) => config.descriptionLabels.some((label) => cell.includes(label)));
+  const promptIndex = header.findIndex((cell) => config.promptLabels.some((label) => cell.includes(label)));
+  if (nameIndex < 0 || (descriptionIndex < 0 && promptIndex < 0)) {
+    return [];
+  }
+  return table.rows
+    .map((cells) => {
+      const description = compactStoryboardTableCell(cells[descriptionIndex >= 0 ? descriptionIndex : promptIndex]);
+      const prompt = compactStoryboardTableCell(cells[promptIndex >= 0 ? promptIndex : descriptionIndex]);
+      return {
+        [config.nameKey]: compactStoryboardTableCell(cells[nameIndex]),
+        [config.descriptionKey]: description || prompt,
+        [config.promptKey]: prompt || description,
+      };
+    })
+    .filter((row) => text(row[config.nameKey]).trim());
+}
+
+function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record<string, unknown>[] {
+  const config = tableKey === "scenes"
+    ? { label: "场景名称", nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
+    : tableKey === "characters"
+      ? { label: "角色名称", nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
+      : tableKey === "props"
+        ? { label: "道具名称", nameKey: "propName", descriptionKey: "propDescription", promptKey: "propImagePrompt" }
+        : null;
+  if (!config) {
+    return [];
+  }
+  const lines = extractMarkdownBody(raw).split("\n");
+  const records: Record<string, unknown>[] = [];
+  let name = "";
+  let block: string[] = [];
+  const flush = () => {
+    const content = compactLabeledAssetMarkdownBlock(block);
+    if (name && content) {
+      records.push({
+        [config.nameKey]: name,
+        [config.descriptionKey]: content,
+        [config.promptKey]: content,
+      });
+    }
+    name = "";
+    block = [];
+  };
+  for (const rawLine of lines) {
+    const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
+    const marker = normalizedLine.match(new RegExp(`^${config.label}\\s*[:：]\\s*(.+)$`));
+    if (marker) {
+      flush();
+      name = text(marker[1]).replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").trim();
+      block.push(rawLine);
+      continue;
+    }
+    if (name && isLabeledAssetMarkdownNumberHeading(rawLine)) {
+      continue;
+    }
+    if (name) {
+      block.push(rawLine);
+    }
+  }
+  flush();
+  return records;
+}
+
+function normalizeLabeledAssetMarkdownLine(line: string) {
+  return text(line)
+    .trim()
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/\*\*|__/g, "")
+    .replace(/^(?:[-*+]\s*|\d+[.)、]\s*)/, "")
+    .trim();
+}
+
+function compactLabeledAssetMarkdownBlock(lines: string[]) {
+  return lines
+    .map(normalizeLabeledAssetMarkdownLine)
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isLabeledAssetMarkdownNumberHeading(line: string) {
+  return /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*\d+[.)、]\s*.+?(?:\*\*|__)?\s*$/.test(text(line));
+}
+
 function resolveGeneratedScriptText(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -1458,8 +1675,83 @@ function parseMarkdownPromptResult(raw: string): Record<string, unknown> | null 
       return result;
     }
   }
+  const storyboardTableRows = parsePlainStoryboardMarkdownTableRecords(raw);
+  if (storyboardTableRows.length) {
+    return { storyboards: storyboardTableRows };
+  }
+  const storyboardBlockRows = parseLabeledStoryboardMarkdownBlocks(raw);
+  if (storyboardBlockRows.length) {
+    return { storyboards: storyboardBlockRows };
+  }
   const storyboardRows = parseStoryboardMarkdownRecords(raw);
   return storyboardRows.length ? { storyboards: storyboardRows } : null;
+}
+
+function parsePlainStoryboardMarkdownTableRecords(raw: string) {
+  const table = parseMarkdownTable(extractMarkdownBody(raw));
+  if (!table) {
+    return [];
+  }
+  const header = table.header.map((cell) => text(cell).replace(/\s+/g, ""));
+  const findIndex = (patterns: string[]) => header.findIndex((cell) => patterns.some((pattern) => cell.includes(pattern)));
+  const plotIndex = findIndex(["分镜剧情"]);
+  const dialogueIndex = findIndex(["对话/旁白", "对话旁白"]);
+  const imagePromptIndex = findIndex(["静态图片提示词"]);
+  const videoPromptIndex = findIndex(["动态视频提示词"]);
+  if ([plotIndex, dialogueIndex, imagePromptIndex, videoPromptIndex].some((index) => index < 0)) {
+    return [];
+  }
+  return table.rows
+    .map((cells, index) => {
+      const plot = compactStoryboardTableCell(cells[plotIndex]);
+      const shotNo = plot.match(/分镜\s*([一二三四五六七八九十百千两零〇\d]+)/)?.[1] ?? String(index + 1);
+      return {
+        shotNo,
+        plot,
+        dialogue: compactStoryboardTableCell(cells[dialogueIndex]),
+        imagePrompt: compactStoryboardTableCell(cells[imagePromptIndex]),
+        videoPrompt: compactStoryboardTableCell(cells[videoPromptIndex]),
+      };
+    })
+    .filter((row) => row.plot || row.dialogue || row.imagePrompt || row.videoPrompt);
+}
+
+function parseLabeledStoryboardMarkdownBlocks(raw: string) {
+  const lines = extractMarkdownBody(raw).split("\n");
+  const records: Record<string, unknown>[] = [];
+  let shotNo = "";
+  let block: string[] = [];
+  const flush = () => {
+    const content = compactLabeledAssetMarkdownBlock(block);
+    if (shotNo && content) {
+      records.push({ shotNo, plot: content, videoPrompt: content });
+    }
+    shotNo = "";
+    block = [];
+  };
+  for (const rawLine of lines) {
+    const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
+    const marker = normalizedLine.match(/^【?\s*分镜\s*([一二三四五六七八九十百千两零〇\d]+)\s*】?(?=\s*(?:[（(:：]|$))/);
+    if (marker) {
+      flush();
+      shotNo = marker[1];
+      block.push(rawLine);
+      continue;
+    }
+    if (shotNo) {
+      block.push(rawLine);
+    }
+  }
+  flush();
+  return records;
+}
+
+function compactStoryboardTableCell(value: unknown) {
+  return text(value)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function parseMarkdownTableSections(raw: string) {

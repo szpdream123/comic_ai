@@ -1,5 +1,4 @@
 import {
-  DEEPSEEK_STORYBOARD_MAX_TOKENS,
   type TextChatGatewayLike,
 } from "./ai-storyboard-preview.service.ts";
 
@@ -39,7 +38,6 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
           responseFormat: "text",
-          maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
           signal: input.signal,
         })
       : completeAsStream(deps.gateway, {
@@ -48,7 +46,6 @@ export function createAiScriptAnalysisService(deps: { gateway: TextChatGatewayLi
           projectId: input.projectId,
           createdByUserId: input.createdByUserId,
           responseFormat: "text",
-          maxTokens: DEEPSEEK_STORYBOARD_MAX_TOKENS,
           signal: input.signal,
         });
 

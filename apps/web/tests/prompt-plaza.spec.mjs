@@ -83,6 +83,50 @@ test("prompt marketplace combines catalog and private library without a publish 
   assert.doesNotMatch(html, /prompt-marketplace-default-badge">默认/);
   assert.ok(html.indexOf('data-tab="prompts"') < html.indexOf('data-tab="library"'));
   assert.ok(html.indexOf('data-action="set-prompt-plaza-type"') < html.indexOf("data-prompt-plaza-search-input"));
+  assert.match(html, /data-action="open-prompt-marketplace-guide"/);
+});
+
+test("prompt marketplace guide explains required prefixes and shows at-prefixed references", async () => {
+  const html = renderProjectDetail({
+    state: {},
+    session: { user: { phone: "13800138000" } },
+    ui: {
+      activeNavTab: "prompts",
+      promptPlazaSection: "marketplace",
+      promptMarketplaceGuideOpen: true,
+      promptMarketplaceItems: [],
+      promptMarketplaceRankings: [],
+      promptMarketplaceMeta: { page: 1, pageSize: 12, total: 0, totalPages: 1, hasNext: false },
+    },
+  });
+
+  assert.match(html, /role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title"/);
+  assert.match(html, /【角色名称】角色名/);
+  assert.match(html, /【道具名称】道具名/);
+  assert.match(html, /【场景名称】场景名/);
+  assert.match(html, /【分镜】分镜内容/);
+  assert.match(html, /aria-label="镜头运行方式"/);
+  assert.match(html, /大远景.*远景.*全景.*中远景.*中景.*中近景.*近景.*特写.*大特写.*头肩景.*半身景.*全身景/);
+  assert.match(html, /角色名称：白纹鬼\n场景名称:黄昏尸骸战场\n道具名称：切割刀\n分镜1：一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人/);
+  assert.match(html, /data-action="close-prompt-marketplace-guide"/);
+
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { user: { phone: "13800138000" } },
+    api: {},
+    ui: {
+      activeNavTab: "prompts",
+      promptPlazaSection: "marketplace",
+      promptMarketplaceItems: [],
+      promptMarketplaceRankings: [],
+      promptMarketplaceMeta: { page: 1, pageSize: 12, total: 0, totalPages: 1, hasNext: false },
+    },
+  };
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-prompt-marketplace-guide" } });
+  assert.equal(workbench.ui.promptMarketplaceGuideOpen, true);
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "close-prompt-marketplace-guide" } });
+  assert.equal(workbench.ui.promptMarketplaceGuideOpen, false);
 });
 
 test("prompt marketplace ranking shows top twenty metrics and card details", () => {

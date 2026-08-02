@@ -1236,6 +1236,15 @@ export async function attachCanvasTaskResultToHistory(
     outputSnapshot: input.result,
     now: input.now,
   });
+  await persistCanvasNodeTaskSuccess(db, {
+    canvasProjectId: canvas.id,
+    nodeKey: input.nodeKey,
+    taskId: input.taskId,
+    mediaKind: input.mediaKind,
+    result: input.result,
+    userId: input.userId ?? null,
+    now: input.now,
+  });
   if (existingArtifact) {
     await maybeCreateCanvasTranscriptionSourceText(db, {
       canvasProjectId: canvas.id,
@@ -1299,6 +1308,134 @@ export async function attachCanvasTaskResultToHistory(
     now: input.now,
   }).catch(() => undefined);
   return { runId: resolvedRun.id, artifactId: artifact.id };
+}
+
+async function persistCanvasNodeTaskSuccess(
+  db: SqlDatabase,
+  input: {
+    canvasProjectId: string;
+    nodeKey: string;
+    taskId: string;
+    mediaKind: string;
+    result: Record<string, unknown>;
+    userId: string | null;
+    now: Date;
+  },
+) {
+  const canvas = await queryOne<CanvasProjectRow & { created_by_user_id: string }>(
+    db,
+    `
+      SELECT id, title, server_revision,
+             latest_document_id, created_by_user_id
+      FROM creator_canvas_projects
+      WHERE id = $1
+        AND deleted_at IS NULL
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [input.canvasProjectId],
+  );
+  if (!canvas) return;
+  const latest = await queryOne<CanvasDocumentRow>(
+    db,
+    `
+      SELECT id, server_revision, document_json, viewport_json
+      FROM creator_canvas_documents
+      WHERE canvas_project_id = $1
+        AND server_revision = $2
+      LIMIT 1
+    `,
+    [canvas.id, canvas.server_revision],
+  );
+  if (!latest) return;
+  const node = latest.document_json.nodes.find((item) => item.id === input.nodeKey);
+  if (!node) return;
+  const newestRun = await queryOne<{ task_id: string | null }>(
+    db,
+    `
+      SELECT task_id
+      FROM creator_canvas_node_runs
+      WHERE canvas_project_id = $1
+        AND node_key = $2
+      ORDER BY run_no DESC
+      LIMIT 1
+    `,
+    [canvas.id, input.nodeKey],
+  );
+  if (newestRun?.task_id !== input.taskId) return;
+  const mediaKind = normalizeMediaKind(input.mediaKind, "image");
+  const mediaUrl = resultPrimaryUrl(input.result, mediaKind);
+  const nowIso = input.now.toISOString();
+  const document: CanvasDocument = {
+    ...latest.document_json,
+    updatedAt: nowIso,
+    nodes: latest.document_json.nodes.map((item) => item.id === input.nodeKey
+      ? {
+          ...item,
+          data: {
+            ...(item.data ?? {}),
+            status: "completed",
+            taskId: input.taskId,
+            lastTaskId: input.taskId,
+            generationTaskId: input.taskId,
+            generationProgress: 100,
+            generationStage: "completed",
+            failure: null,
+            failureCode: null,
+            failureMessage: null,
+            ...(mediaUrl ? {
+              previewUrl: mediaUrl,
+              resultUrl: mediaUrl,
+              url: mediaUrl,
+              ...(mediaKind === "image" ? { imageUrl: mediaUrl } : {}),
+              ...(mediaKind === "video" ? { videoUrl: mediaUrl } : {}),
+              ...(mediaKind === "audio" ? { audioUrl: mediaUrl } : {}),
+            } : {}),
+            ...(nullableString(input.result.assetId) ? { assetId: nullableString(input.result.assetId) } : {}),
+            ...(nullableString(input.result.assetVersionId) ? { assetVersionId: nullableString(input.result.assetVersionId) } : {}),
+            ...(nullableString(input.result.storageObjectId ?? input.result.fileId)
+              ? { storageObjectId: nullableString(input.result.storageObjectId ?? input.result.fileId) }
+              : {}),
+          },
+        }
+      : item),
+  };
+  const nextRevision = canvas.server_revision + 1;
+  const documentId = canvas.latest_document_id ?? randomUUID();
+  const userId = input.userId ?? canvas.created_by_user_id;
+  await insertCanvasDocument(db, {
+    documentId,
+    canvasProjectId: canvas.id,
+    serverRevision: nextRevision,
+    document,
+    userId,
+    now: input.now,
+  });
+  await syncCanvasNodesAndEdges(db, {
+    canvasProjectId: canvas.id,
+    document,
+    userId,
+    now: input.now,
+  });
+  await appendCanvasRevision(db, {
+    canvasProjectId: canvas.id,
+    serverRevision: nextRevision,
+    operation: "task_succeeded",
+    document,
+    userId,
+    now: input.now,
+  });
+  await db.query(
+    `
+      UPDATE creator_canvas_projects
+      SET server_revision = $2,
+          latest_document_id = $3,
+          updated_by_user_id = $4,
+          updated_at = $5
+      WHERE id = $1
+    `,
+    [canvas.id, nextRevision, documentId, userId, input.now],
+  );
 }
 
 async function maybeSyncCanvasMusicLyrics(

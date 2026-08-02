@@ -522,22 +522,24 @@ async function postMultipart(url, formData) {
   return result;
 }
 
-function patchJson(url, body) {
+function patchJson(url, body, options = {}) {
   return fetchJson(url, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+    timeoutMs: options.timeoutMs,
   }).then((result) => {
     clearReadRequestCaches();
     return result;
   });
 }
 
-function putJson(url, body) {
+function putJson(url, body, options = {}) {
   return fetchJson(url, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+    timeoutMs: options.timeoutMs,
   }).then((result) => {
     clearReadRequestCaches();
     return result;
@@ -1165,16 +1167,16 @@ export const creatorApi = {
     return this.getStandaloneCanvas(canvasProjectId);
   },
 
-  saveStandaloneCanvas(canvasProjectId, input) {
-    return putJson(`/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/document`, input);
+  saveStandaloneCanvas(canvasProjectId, input, options = {}) {
+    return putJson(`/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/document`, input, options);
   },
 
   saveCanvasDocument(canvasProjectId, input) {
     return this.saveStandaloneCanvas(canvasProjectId, input);
   },
 
-  saveCanvasNodePositions(canvasProjectId, input) {
-    return patchJson(`/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/positions`, input);
+  saveCanvasNodePositions(canvasProjectId, input, options = {}) {
+    return patchJson(`/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/positions`, input, options);
   },
 
   listToolPresets() {
@@ -2327,6 +2329,18 @@ export const creatorApi = {
     });
   },
 
+  getPromptSkills(input = {}) {
+    const params = new URLSearchParams();
+    if (input.category && input.category !== "all") params.set("category", input.category);
+    if (String(input.query ?? "").trim()) params.set("query", String(input.query).trim());
+    const page = Math.max(1, Math.floor(Number(input.page) || 1));
+    const pageSize = Math.max(1, Math.min(100, Math.floor(Number(input.pageSize) || 12)));
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+    const source = input.source === "private" ? "library" : "catalog";
+    return fetchJson(`/api/creator/prompt-skills/${source}?${params.toString()}`, { cache: "no-store", unwrapEnvelope: false });
+  },
+
   getPromptMarketplace(input = {}) {
     const params = new URLSearchParams();
     if (input.category && input.category !== "all") params.set("category", input.category);
@@ -2335,12 +2349,19 @@ export const creatorApi = {
     const pageSize = Math.max(1, Math.min(100, Math.floor(Number(input.pageSize) || 12)));
     params.set("page", String(page));
     params.set("pageSize", String(pageSize));
+    if (input.includeRanking === false) params.set("includeRanking", "false");
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return fetchJson(`/api/creator/prompt-marketplace${suffix}`, { cache: "no-store", unwrapEnvelope: false });
   },
 
-  getPromptMarketplaceLibrary() {
-    return fetchJson("/api/creator/prompt-marketplace/library", { cache: "no-store", unwrapEnvelope: false });
+  getPromptMarketplaceLibrary(input = {}) {
+    const params = new URLSearchParams();
+    if (input.category && input.category !== "all") params.set("category", input.category);
+    if (String(input.query ?? "").trim()) params.set("query", String(input.query).trim());
+    if (input.page != null) params.set("page", String(Math.max(1, Math.floor(Number(input.page) || 1))));
+    if (input.pageSize != null) params.set("pageSize", String(Math.max(1, Math.min(100, Math.floor(Number(input.pageSize) || 12)))));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return fetchJson(`/api/creator/prompt-marketplace/library${suffix}`, { cache: "no-store", unwrapEnvelope: false });
   },
 
   setPromptMarketplaceDefault(category, itemId) {

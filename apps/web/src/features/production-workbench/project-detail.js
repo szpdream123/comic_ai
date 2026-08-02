@@ -1,6 +1,12 @@
-﻿import { renderAssetExtractModal } from "./asset-extract-modal.js";
+import { renderAssetExtractModal } from "./asset-extract-modal.js";
 import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
-import { renderCanvasTextSkillModal } from "./canvas-text-skill-modal.js";
+import {
+  CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES,
+  renderCanvasTextSkillModal,
+  resolveCanvasGenerationSkillCategories,
+} from "./canvas-text-skill-modal.js";
+import { renderCanvasScriptBatchModal } from "./canvas-script-batch-modal.js";
+import { renderCanvasScriptStartModal } from "./canvas-script-start-modal.js";
 import { renderExportPanel } from "./export-panel.js";
 import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
@@ -49,6 +55,7 @@ import {
   resolveCanvasModelOptions,
   resolveCanvasNodeTemplates,
 } from "./canvas/canvas-state.js";
+import { renderCanvasScriptWorkspace } from "./canvas/canvas-script-workspace.js";
 
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_GALLERY_DEFAULT_PAGE_SIZE = 18;
@@ -64,6 +71,33 @@ const CANVAS_AUDIO_GENERATION_MODES = [
   { id: "music", label: "音乐生成" },
   { id: "transcription", label: "音频转录" },
 ];
+const CANVAS_SCRIPT_WORKFLOW_SKILL_CATEGORIES = [
+  { id: "shot", label: "分镜提示词", shortLabel: "分镜" },
+  { id: "prop_extract", label: "道具抽取提示词", shortLabel: "道具" },
+  { id: "character_extract", label: "人物抽取提示词", shortLabel: "人物" },
+  { id: "scene_extract", label: "场景抽取提示词", shortLabel: "场景" },
+];
+function resolveCanvasScriptSkillPagination(ui = {}, skills = [], source = "official", category = "shot") {
+  const pageSize = 12;
+  const normalizedCategory = CANVAS_SCRIPT_WORKFLOW_SKILL_CATEGORIES.some((item) => item.id === category) ? category : "shot";
+  const categoryCounts = (Array.isArray(skills) ? skills : []).reduce((counts, skill) => {
+    const id = String(skill?.category ?? skill?.promptCategory ?? "").trim();
+    if (id) counts[id] = (counts[id] ?? 0) + 1;
+    return counts;
+  }, {});
+  const total = Math.max(0, Number(categoryCounts[normalizedCategory]) || 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const pageKey = `${source}:${normalizedCategory}`;
+  const requestedPage = Math.max(1, Number(ui.canvasScriptSkillPages?.[pageKey]) || 1);
+  return {
+    page: Math.min(requestedPage, totalPages),
+    pageSize,
+    total,
+    totalPages,
+    hasNext: requestedPage < totalPages,
+    categoryCounts,
+  };
+}
 const CANVAS_HISTORY_FILTER_OPTIONS = [
   { id: "all", label: "全部" },
   { id: "text", label: "文本" },
@@ -1238,13 +1272,100 @@ function renderGlobalOverlays(ui = {}, session = {}) {
       loading: ui.episodePromptSkillLoading,
     })}
     ${renderCanvasTextSkillModal({
-      show: ui.canvasTextSkillModalOpen === true && ui.canvasProjectView === "detail",
+      show: ui.canvasTextSkillModalOpen === true
+        && ui.canvasProjectView === "detail"
+        && ["generation", "batch-generation"].includes(ui.canvasTextSkillModalMode),
       sourceTab: ui.canvasTextSkillSourceTab,
       activeCategory: ui.canvasTextSkillCategory ?? ui.canvasTextSkillDraftCategory,
       officialSkills: ui.canvasTextOfficialSkills,
       privateSkills: ui.canvasTextPrivateSkills,
       draftSkillId: ui.canvasTextSkillDraftId,
+      officialPagination: ui.canvasTextSkillPagination?.official,
+      privatePagination: ui.canvasTextSkillPagination?.private,
       loading: ui.canvasTextSkillsLoading,
+      allowedCategories: ui.canvasTextSkillModalMode === "batch-generation"
+        && ui.canvasScriptBatchModal?.batchKind === "image"
+        ? CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES
+        : resolveCanvasGenerationSkillCategories(
+          ui.canvasDocument?.nodes?.find?.((node) => String(node?.id ?? "") === String(ui.canvasTextSkillNodeId ?? "")),
+        ),
+    })}
+    ${renderEpisodePromptSkillModal({
+      show: ui.canvasTextSkillModalOpen === true && ui.canvasProjectView === "detail" && ui.canvasTextSkillModalMode === "script",
+      sourceTab: ui.canvasTextSkillSourceTab,
+      activeCategory: ui.canvasTextSkillCategory,
+      officialSkills: ui.episodePromptOfficialSkills,
+      privateSkills: ui.episodePromptPrivateSkills,
+      draftSelections: ui.canvasTextSkillDraftIds,
+      selectionSkills: Object.values(ui.canvasTextSkillDraftSelections ?? {}).map((skill) => ({
+        ...skill,
+        official: skill?.source !== "private",
+      })),
+      categories: CANVAS_SCRIPT_WORKFLOW_SKILL_CATEGORIES,
+      officialPagination: resolveCanvasScriptSkillPagination(ui, ui.episodePromptOfficialSkills, "official", ui.canvasTextSkillCategory),
+      privatePagination: resolveCanvasScriptSkillPagination(ui, ui.episodePromptPrivateSkills, "private", ui.canvasTextSkillCategory),
+      allowClear: true,
+      showPagination: true,
+      actions: {
+        close: "close-canvas-text-skill-modal",
+        source: "set-canvas-text-skill-source",
+        category: "set-canvas-text-skill-category",
+        select: "select-canvas-text-skill-draft",
+        clear: "clear-canvas-text-skill-draft",
+        page: "set-canvas-text-skill-page",
+        confirm: "confirm-canvas-text-skill",
+      },
+      loading: ui.episodePromptSkillLoading,
+    })}
+    ${renderEpisodePromptSkillModal({
+      show: ui.canvasTextSkillModalOpen === true && ui.canvasProjectView === "detail" && ui.canvasTextSkillModalMode === "script-stage",
+      sourceTab: ui.canvasTextSkillSourceTab,
+      activeCategory: ui.canvasTextSkillCategory,
+      officialSkills: ui.episodePromptOfficialSkills,
+      privateSkills: ui.episodePromptPrivateSkills,
+      draftSelections: ui.canvasTextSkillDraftIds,
+      selectionSkills: Object.values(ui.canvasTextSkillDraftSelections ?? {}).map((skill) => ({
+        ...skill,
+        official: skill?.source !== "private",
+      })),
+      categories: CANVAS_SCRIPT_WORKFLOW_SKILL_CATEGORIES.filter((item) => item.id === ui.canvasTextSkillCategory),
+      officialPagination: resolveCanvasScriptSkillPagination(ui, ui.episodePromptOfficialSkills, "official", ui.canvasTextSkillCategory),
+      privatePagination: resolveCanvasScriptSkillPagination(ui, ui.episodePromptPrivateSkills, "private", ui.canvasTextSkillCategory),
+      allowClear: false,
+      showPagination: true,
+      confirmLabel: "确认并生成",
+      actions: {
+        close: "close-canvas-text-skill-modal",
+        source: "set-canvas-text-skill-source",
+        category: "set-canvas-text-skill-category",
+        select: "select-canvas-text-skill-draft",
+        clear: "clear-canvas-text-skill-draft",
+        page: "set-canvas-text-skill-page",
+        confirm: "confirm-canvas-text-skill",
+      },
+      loading: ui.episodePromptSkillLoading,
+    })}
+    ${renderCanvasScriptStartModal({
+      show: ui.canvasTextSkillModalOpen === true && ui.canvasProjectView === "detail" && ui.canvasTextSkillModalMode === "script-start",
+      sourceTab: ui.canvasTextSkillSourceTab,
+      activeCategory: ui.canvasTextSkillCategory ?? ui.canvasTextSkillDraftCategory,
+      officialSkills: ui.canvasTextOfficialSkills,
+      privateSkills: ui.canvasTextPrivateSkills,
+      draftSkillId: ui.canvasTextSkillDraftId,
+      customInstruction: ui.canvasTextSkillCustomInstruction,
+      officialPagination: ui.canvasTextSkillPagination?.official,
+      privatePagination: ui.canvasTextSkillPagination?.private,
+      loading: ui.canvasTextSkillsLoading,
+    })}
+    ${renderCanvasScriptBatchModal({
+      modal: ui.canvasScriptBatchModal,
+      canvasDocument: ui.canvasDocument,
+      generationConfig: ui.episodeGenerationConfig,
+      officialSkills: ui.canvasTextOfficialSkills,
+      privateSkills: ui.canvasTextPrivateSkills,
+      officialPagination: ui.canvasTextSkillPagination?.official,
+      privatePagination: ui.canvasTextSkillPagination?.private,
+      skillsLoading: ui.canvasTextSkillsLoading,
     })}
     ${renderStoryboardPromptSkillModal(ui)}
     ${renderTaskCenterDrawer(ui)}
@@ -8468,10 +8589,28 @@ function renderPromptPlazaPage(ui = {}) {
     </section>
   </div>` : "";
 
+  const guideDialog = ui.promptMarketplaceGuideOpen ? `<div class="prompt-marketplace-guide" role="dialog" aria-modal="true" aria-labelledby="prompt-guide-title">
+    <section>
+      <header><div><span>PROMPT FORMAT</span><h2 id="prompt-guide-title">提示词格式说明</h2><p>每个条目必须以对应的名称标记开头；分镜中的资产引用统一使用“【@名称】”格式。</p></div><button type="button" data-action="close-prompt-marketplace-guide" aria-label="关闭提示词格式说明">×</button></header>
+      <div class="prompt-marketplace-guide-rules">
+        <article><b>01</b><div><strong>角色提示词</strong><code>【角色名称】角色名</code><p>人物名称必须以【角色名称】开头。</p></div></article>
+        <article><b>02</b><div><strong>道具提示词</strong><code>【道具名称】道具名</code><p>道具名称必须以【道具名称】开头。</p></div></article>
+        <article><b>03</b><div><strong>场景提示词</strong><code>【场景名称】场景名</code><p>场景名称必须以【场景名称】开头。</p></div></article>
+        <article><b>04</b><div><strong>分镜提示词</strong><code>【分镜】分镜内容</code><p>分镜必须以【分镜】开头，其中生成的角色、道具和场景引用名称必须使用【@名称】格式。</p></div></article>
+      </div>
+      <section class="prompt-marketplace-guide-shot-sizes" aria-label="镜头运行方式"><header><div><span>SHOT SIZE</span><strong>镜头运行方式</strong></div><p>景别选择</p></header><div>${["大远景", "远景", "全景", "中远景", "中景", "中近景", "近景", "特写", "大特写", "头肩景", "半身景", "全身景"].map((label) => `<span>${label}</span>`).join("")}</div></section>
+      <section class="prompt-marketplace-guide-example" aria-label="提示词格式示例"><header><span>EXAMPLE</span><strong>完整示例</strong></header><pre>角色名称：白纹鬼
+场景名称:黄昏尸骸战场
+道具名称：切割刀
+分镜1：一只【@白纹鬼】来到了【@黄昏尸骸战场】看到一个拿着【@切割刀】的人</pre></section>
+    </section>
+  </div>` : "";
+
   return `
     <section class="prompt-plaza-page" aria-label="提示词管理与广场">
       <nav class="prompt-workspace-tabs" aria-label="提示词工作区">
         ${Object.entries(sectionLabels).map(([section, label]) => `<button class="${section === activeSection ? "active" : ""}" type="button" data-action="set-prompt-plaza-section" data-section="${section}">${label}</button>`).join("")}
+        <button class="prompt-marketplace-guide-trigger" type="button" data-action="open-prompt-marketplace-guide" aria-haspopup="dialog"><span aria-hidden="true">?</span>使用说明</button>
       </nav>
       <div class="prompt-plaza-tools">
         <nav class="prompt-plaza-tabs" aria-label="提示词分类">
@@ -8487,6 +8626,7 @@ function renderPromptPlazaPage(ui = {}) {
       ${ui.promptMarketplaceError ? `<div class="prompt-marketplace-error">${escapeHtml(ui.promptMarketplaceError)}</div>` : ""}
       ${activeSection === "library" ? libraryContent : marketplaceContent}
       ${deleteDraft ? `<div class="prompt-marketplace-confirm" role="dialog" aria-modal="true" aria-labelledby="prompt-delete-title"><div><span>删除提示词</span><h2 id="prompt-delete-title">${deleteDraft.owned ? "停止发布并删除自己的提示词？" : "从私人提示词库移除？"}</h2><p>${deleteDraft.owned ? "删除后其他用户将无法继续添加该提示词。" : "移除后仍可随时从广场免费添加。"}</p><footer><button type="button" data-action="cancel-delete-prompt-marketplace-item">取消</button><button type="button" class="danger" data-action="confirm-delete-prompt-marketplace-item">确认删除</button></footer></div></div>` : ""}
+      ${guideDialog}
       ${rankingDetailDialog}
       ${createDialog}
       ${editDialog}
@@ -9084,6 +9224,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
         </div>
         ${renderInlineStatusToast(ui, "canvas-inline-toast")}
         ${renderCanvasPromptReferencePicker(ui)}
+        ${renderCanvasScriptWorkspace(ui)}
         ${revisionConflict}
       </main>
     </section>
@@ -10015,7 +10156,8 @@ function renderLiblibGenerationNode(node, { selected = false, canvasDocument = n
 
 function isCanvasNodeGenerating(node, generatingNodeId) {
   const status = String(node?.data?.status ?? "").trim().toLowerCase();
-  return ["queued", "running", "processing"].includes(status);
+  const workflowStatus = String(node?.data?.workflowStatus ?? "").trim().toLowerCase();
+  return ["queued", "running", "processing"].includes(status) || workflowStatus === "running";
 }
 
 function renderCanvasGenerationFailure(node, mediaKind) {
@@ -10554,7 +10696,23 @@ function canvasPortAnchor(node, direction) {
   };
 }
 
+function renderCanvasScriptGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", canvasDocument = {}, selectedModel = null, promptReferencePreviews = {} } = {}) {
+  if (!resolveConnectedCanvasTextFragments(canvasDocument, node?.id).length) return "";
+  const prompt = String(node?.data?.prompt ?? node?.data?.workflowStartInstruction ?? "");
+  return renderLiblibGenerationEditor({
+    ...node,
+    data: { ...(node?.data ?? {}), prompt },
+  }, {
+    modelOptionHtml,
+    modelMenuHtml,
+    canvasDocument,
+    selectedModel,
+    promptReferencePreviews,
+    submitAction: "run-canvas-script-workflow-start",
+  });
+}
 function renderLiblibCanvasEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, promptReferencePreviews = {} } = {}) {
+  if (node?.type === "script") return renderCanvasScriptGenerationEditor(node, { modelOptionHtml, modelMenuHtml, canvasDocument, selectedModel, promptReferencePreviews });
   if (["upload", "script", "director", "ai-director", "markdown", "group", "source-image", "source-video", "source-audio"].includes(node?.type) || (node?.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node?.type !== "ai-storyboard")) {
     return "";
   }
@@ -10562,7 +10720,7 @@ function renderLiblibCanvasEditor(node, { modelOptionHtml = "", modelMenuHtml = 
 }
 
 function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
-  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
+  if (!node || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return null;
   }
   const mediaKind = resolveCanvasNodeMediaKind(node);
@@ -10575,7 +10733,7 @@ function resolveSelectedCanvasModel(generationConfig = {}, node = null) {
 }
 
 function renderCanvasModelOptions(generationConfig = {}, node = null) {
-  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
+  if (!node || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return "";
   }
   const mediaKind = resolveCanvasNodeMediaKind(node);
@@ -10595,7 +10753,7 @@ function renderCanvasModelOptions(generationConfig = {}, node = null) {
 }
 
 function renderCanvasModelMenu(generationConfig = {}, node = null, openMenu = "") {
-  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
+  if (!node || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return "";
   }
   const mediaKind = resolveCanvasNodeMediaKind(node);
@@ -10623,7 +10781,7 @@ function renderCanvasModelMenu(generationConfig = {}, node = null, openMenu = ""
 }
 
 function renderCanvasModelParameterControls({ generationConfig = {}, node = null, parameterValues = {}, openMenu = "" } = {}) {
-  if (!node || node.type === "script" || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
+  if (!node || node.type === "director" || (node.data?.mediaKind === "text" && !isCanvasGenerativeTextNode(node) && node.type !== "ai-storyboard")) {
     return "";
   }
   const mediaKind = resolveCanvasNodeMediaKind(node);
@@ -10643,7 +10801,7 @@ function renderCanvasModelParameterControls({ generationConfig = {}, node = null
 }
 
 function resolveCanvasNodeMediaKind(node) {
-  if (isCanvasGenerativeTextNode(node)) return "text";
+  if (node?.type === "script" || isCanvasGenerativeTextNode(node)) return "text";
   if (node?.type === "ai-animation") return "image";
   if (node?.data?.mediaKind === "audio" || node?.type === "audio" || node?.type === "ai-audio") return "audio";
   if (node?.data?.mediaKind === "video" || node?.type === "video") return "video";
@@ -10944,8 +11102,8 @@ function renderCanvasParameterMenu(field, label, openMenu, options, title = "", 
   });
 }
 
-function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, promptReferencePreviews = {} } = {}) {
-  const mediaKind = isCanvasGenerativeTextNode(node)
+function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtml = "", parameterControlHtml = "", canvasDocument = {}, selectedModel = null, promptReferencePreviews = {}, submitAction = "run-canvas-node" } = {}) {
+  const mediaKind = node?.type === "script" || isCanvasGenerativeTextNode(node)
     ? "text"
     : node?.type === "ai-animation"
       ? "image"
@@ -10961,8 +11119,9 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
       : mediaKind === "text"
         ? node?.type === "ai-markdown" ? "描述需要生成的 Markdown 文档结构和内容" : "描述需要生成或改写的文本"
       : "请输入您的生图要求";
-  const skillCredits = Math.max(0, Math.round(Number(node?.data?.promptSkillPriceCredits) || 0));
-  const cost = resolveCanvasGenerationCost(selectedModel, mediaKind, resolveCanvasNodeParameterValues(node)) + skillCredits;
+  const skillCredits = Math.max(0, Math.round(Number(node?.type === "script" ? node?.data?.workflowSkillPriceCredits : node?.data?.promptSkillPriceCredits) || 0));
+  const generationRunCount = node?.type === "script" ? 4 : 1;
+  const cost = resolveCanvasGenerationCost(selectedModel, mediaKind, resolveCanvasNodeParameterValues(node)) * generationRunCount + skillCredits;
   const connectedTextFragments = resolveConnectedCanvasTextFragments(canvasDocument, node?.id);
   const connectedUploadReferences = mediaKind === "image" || mediaKind === "video" || mediaKind === "audio"
     ? resolveCanvasUploadReferences(canvasDocument, node?.id)
@@ -11000,7 +11159,7 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
         ${renderCanvasGenerationSkillTrigger(node)}
         ${parameterControlHtml}
         ${renderGenerationSubmitButton({
-          action: "run-canvas-node",
+          action: submitAction,
           cost,
           className: "canvas-generate-button",
           attrs: `data-node-id="${escapeAttr(node?.id ?? "")}"`,
@@ -11011,10 +11170,19 @@ function renderLiblibGenerationEditor(node, { modelOptionHtml = "", modelMenuHtm
 }
 
 export function renderCanvasGenerationSkillTrigger(node = {}) {
-  const selectedSkillId = String(node?.data?.promptSkillId ?? "").trim()
-    || Object.values(node?.data?.promptSkillIds ?? {}).map(String).find(Boolean)
-    || "";
-  const selectedSkillTitle = String(node?.data?.promptSkillTitle ?? "").trim();
+  const workflowCategories = ["shot", "prop_extract", "scene_extract", "character_extract"];
+  const workflowSkillIds = node?.data?.workflowSkillIds && typeof node.data.workflowSkillIds === "object"
+    ? node.data.workflowSkillIds
+    : {};
+  const workflowSkillCount = node?.type === "script"
+    ? workflowCategories.filter((category) => Boolean(String(workflowSkillIds[category] ?? "").trim())).length
+    : 0;
+  const selectedSkillId = node?.type === "script"
+    ? (workflowSkillCount ? "workflow-skills" : "")
+    : String(node?.data?.promptSkillId ?? "").trim() || Object.values(node?.data?.promptSkillIds ?? {}).map(String).find(Boolean) || "";
+  const selectedSkillTitle = node?.type === "script"
+    ? (workflowSkillCount ? `已选择 ${workflowSkillCount} 项技能` : "选择脚本节点技能")
+    : String(node?.data?.promptSkillTitle ?? "").trim();
   return `<button
     class="canvas-editor-skill-trigger ${selectedSkillId ? "active" : ""}"
     type="button"
@@ -11023,7 +11191,7 @@ export function renderCanvasGenerationSkillTrigger(node = {}) {
     aria-haspopup="dialog"
     aria-label="${escapeAttr(selectedSkillTitle ? `当前技能：${selectedSkillTitle}` : "选择生成技能")}"
     title="${escapeAttr(selectedSkillTitle || "选择生成技能")}"
-  >${renderCanvasIcon("sparkles")}<span>技能</span>${selectedSkillId ? `<small>1</small>` : ""}</button>`;
+  >${renderCanvasIcon("sparkles")}<span>技能</span>${selectedSkillId ? `<small>${node?.type === "script" ? workflowSkillCount : 1}</small>` : ""}</button>`;
 }
 
 export function renderCanvasPromptDisplayValue(prompt, canvasDocument = {}, previewByToken = {}, targetNodeId = "") {
@@ -11321,10 +11489,16 @@ const CANVAS_CONTEXT_GENERATOR_TYPES = new Set([
   "ai-panorama",
   "ai-animation",
   "ai-storyboard",
-  "ai-director",
   "send",
   "video",
   "audio",
+]);
+
+const CANVAS_CONTEXT_HIDDEN_SOURCE_TYPES = new Set([
+  "group",
+  "source-image",
+  "source-video",
+  "source-audio",
 ]);
 
 const CANVAS_CONTEXT_SHORTCUTS = new Map([
@@ -11333,11 +11507,9 @@ const CANVAS_CONTEXT_SHORTCUTS = new Map([
   ["ai-video", "3"],
   ["ai-audio", "4"],
   ["ai-panorama", "5"],
-  ["ai-director", "7"],
+  ["ai-director", "Alt+7"],
   ["source-text", "Alt+1"],
-  ["source-image", "Alt+2"],
-  ["source-video", "Alt+3"],
-  ["source-audio", "Alt+4"],
+  ["script", "Alt+2"],
 ]);
 
 function renderCanvasContextMenuTemplateItems(items = [], { showShortcuts = false } = {}) {
@@ -11361,7 +11533,12 @@ function renderCanvasContextMenu(menu = {}, options = {}) {
   const items = resolveCanvasNodeTemplates(options.episodeGenerationConfig)
     .filter((template) => template.visible !== false)
     .filter((item) => !isNodeMenu && (!isConnectionMenu || compatibleTemplateIds.has(item.id)));
-  const blankMenuContentHeight = 32 + 50 + (2 * 30) + (items.length * 50) + (7 * 10);
+  const generatorItems = items.filter((item) => CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type));
+  const sourceItems = items.filter((item) => (
+    !CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type) && !CANVAS_CONTEXT_HIDDEN_SOURCE_TYPES.has(item.type)
+  ));
+  const canDeleteSelection = !isNodeMenu && !isConnectionMenu && menu.deleteSelectionEligible === true;
+  const blankMenuContentHeight = 32 + ((canDeleteSelection ? 2 : 1) * 50) + (2 * 30) + ((generatorItems.length + sourceItems.length) * 50) + (7 * 10);
   const menuHeight = isNodeMenu
     ? 300 + (menu.characterCaptureEligible ? 44 : 0) + (menu.mediaCopyEligible ? 44 : 0) + (menu.grouped ? 44 : 0)
     : isConnectionMenu ? 360 : Math.min(680, blankMenuContentHeight);
@@ -11411,14 +11588,15 @@ function renderCanvasContextMenu(menu = {}, options = {}) {
         </button>
       ` : ""}
       ${!isNodeMenu && !isConnectionMenu ? `
+        ${canDeleteSelection ? `<button type="button" role="menuitem" class="danger" data-action="delete-canvas-selection"><span aria-hidden="true">${renderCanvasIcon("trash")}</span>删除</button>` : ""}
         <button type="button" role="menuitem" data-action="paste-canvas-selection"><span aria-hidden="true">${renderCanvasIcon("clipboard")}</span>粘贴</button>
         <section class="canvas-context-menu-group" data-canvas-node-group="generator" role="group" aria-label="生成节点">
           <strong>生成节点</strong>
-          ${renderCanvasContextMenuTemplateItems(items.filter((item) => CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type)), { showShortcuts: true })}
+          ${renderCanvasContextMenuTemplateItems(generatorItems, { showShortcuts: true })}
         </section>
         <section class="canvas-context-menu-group" data-canvas-node-group="source" role="group" aria-label="来源节点">
           <strong>来源节点</strong>
-          ${renderCanvasContextMenuTemplateItems(items.filter((item) => !CANVAS_CONTEXT_GENERATOR_TYPES.has(item.type)), { showShortcuts: true })}
+          ${renderCanvasContextMenuTemplateItems(sourceItems, { showShortcuts: true })}
         </section>
       ` : ""}
       ${isNodeMenu || isConnectionMenu ? renderCanvasContextMenuTemplateItems(items) : ""}

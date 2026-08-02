@@ -53,6 +53,7 @@ export function canvasAssetsFromGenerationHistory(payload) {
       );
       assets.push({
         id: dedupeKey,
+        nodeKey: text(run?.nodeKey) || null,
         source: "outputs",
         runId: text(run?.id) || null,
         artifactId: id || null,

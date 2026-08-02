@@ -3,11 +3,13 @@ import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { createCanvasNodeRun } from "../../project/creator-canvas-record.service.ts";
 import {
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotRunning,
+  markGenerationTaskSnapshotSucceeded,
   upsertQueuedGenerationTaskSnapshot,
 } from "../generation-task-snapshot.service.ts";
 
@@ -15,6 +17,71 @@ const projectId = "40000000-0000-4000-8000-000000000001";
 const episodeId = "90000000-0000-4000-8000-000000000001";
 
 describe("generation task snapshot service", () => {
+  it("persists successful Canvas task results into node run history", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const ids = await seedSnapshotFixture(db);
+      const canvas = await createSnapshotCanvas(db, {
+        userId: ids.userId,
+        now: new Date("2026-06-03T05:00:30.000Z"),
+      });
+      await db.query(`
+        UPDATE ai_generation_task_snapshots
+        SET canvas_project_id=$2,
+            target_type='canvas',
+            target_id=$2,
+            media_type='image',
+            request_summary_json=jsonb_build_object('canvasNodeId', 'image-1')
+        WHERE task_id=$1
+      `, [ids.taskId, canvas.canvasProjectId]);
+      const run = await createCanvasNodeRun(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "image-1",
+        idempotencyKey: "snapshot-canvas-image-1",
+        status: "queued",
+        mediaKind: "image",
+        taskId: ids.taskId,
+        targetType: "canvas",
+        targetId: "image-1",
+        userId: ids.userId,
+        now: new Date("2026-06-03T05:00:30.000Z"),
+      });
+
+      await markGenerationTaskSnapshotSucceeded(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        providerRequestId: ids.providerRequestId,
+        resultAssets: [{
+          mediaKind: "image",
+          storageObjectId: "80000000-0000-4000-8000-000000000001",
+          previewUrl: "https://cdn.example.test/canvas-image.png",
+        }],
+        now: new Date("2026-06-03T05:01:00.000Z"),
+      });
+
+      const persisted = await db.query<{
+        status: string;
+        artifact_count: number;
+        storage_object_id: string | null;
+      }>(`
+        SELECT run.status,
+               count(artifact.id)::int AS artifact_count,
+               max(artifact.storage_object_id::text) AS storage_object_id
+        FROM creator_canvas_node_runs run
+        LEFT JOIN creator_canvas_node_artifacts artifact ON artifact.run_id=run.id
+        WHERE run.id=$1
+        GROUP BY run.status
+      `, [run.id]);
+      assert.deepEqual(persisted.rows[0], {
+        status: "succeeded",
+        artifact_count: 1,
+        storage_object_id: "80000000-0000-4000-8000-000000000001",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("updates running, result_unknown, and manual_review_required states with notice types", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -305,7 +372,40 @@ async function seedSnapshotFixture(db: Awaited<ReturnType<typeof createMigratedT
     creditSummary: { reserved: 135 },
     now: new Date("2026-06-03T05:00:00.000Z"),
   });
-  return { workflowId, taskId, attemptId, providerRequestId };
+  return { workflowId, taskId, attemptId, providerRequestId, userId };
+}
+
+async function createSnapshotCanvas(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: { userId: string; now: Date },
+) {
+  const canvasProjectId = randomUUID();
+  const documentId = randomUUID();
+  const nowIso = input.now.toISOString();
+  const document = {
+    version: 2,
+    canvasProjectId,
+    viewport: { x: 0, y: 0, zoom: 1, gridVisible: true, snapEnabled: true },
+    nodes: [],
+    edges: [],
+    groups: [],
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  await db.query(`
+    INSERT INTO creator_canvas_projects (
+      id,title,status,server_revision,
+      created_by_user_id,updated_by_user_id,created_at,updated_at
+    ) VALUES ($1,'Snapshot Canvas','active',1,$2,$2,$3,$3)
+  `, [canvasProjectId, input.userId, input.now]);
+  await db.query(`
+    INSERT INTO creator_canvas_documents (
+      id,canvas_project_id,schema_version,server_revision,document_json,viewport_json,
+      node_count,edge_count,created_by_user_id,updated_by_user_id,created_at,updated_at
+    ) VALUES ($1,$2,2,1,$3::jsonb,$4::jsonb,0,0,$5,$5,$6,$6)
+  `, [documentId, canvasProjectId, JSON.stringify(document), JSON.stringify(document.viewport), input.userId, input.now]);
+  await db.query("UPDATE creator_canvas_projects SET latest_document_id=$2 WHERE id=$1", [canvasProjectId, documentId]);
+  return { canvasProjectId };
 }
 
 async function loadSnapshot(db: Awaited<ReturnType<typeof createMigratedTestDb>>, taskId: string) {

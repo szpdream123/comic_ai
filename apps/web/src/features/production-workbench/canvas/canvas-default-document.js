@@ -49,13 +49,13 @@ export function createLegacyStarterCanvasDocument(input = {}) {
         position: { x: 120, y: 120 },
         size: CANVAS_NODE_SIZES.script,
         data: {
-          title: "剧本源",
+          title: "脚本节点",
           status: "ready",
           source: "manual",
           text: "",
           ports: {
+            inputs: [{ id: "in_text", kind: "text", label: "剧本/小说" }],
             outputs: [{ id: "out_text", kind: "text", label: "文本" }],
-            inputs: [],
           },
         },
       },

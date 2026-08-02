@@ -222,7 +222,10 @@ test("Canvas host actions update the mounted surface without redrawing the workb
   assert.match(source, /if \(isCanvasX6InteractionTarget\(eventTarget, event\)\) \{\s*return;\s*\}/);
   assert.match(source, /surfaceOnly: true/);
   assert.match(hostSource, /\.x6-node, \.canvas-x6-special-node/);
-  assert.match(hostSource, /workbench\.onCanvasNodeSelected = \(nodeId\) => \{[\s\S]*?agentController\.syncPanel\(\);[\s\S]*?void renderSelection\(\);/);
+  const selectionHandler = hostSource.match(/workbench\.onCanvasNodeSelected = \(nodeId\) => \{[\s\S]*?\n      \};/)?.[0] ?? "";
+  assert.match(selectionHandler, /sourceWorkbench\.onCanvasNodeSelected\(nodeId\)/);
+  assert.match(selectionHandler, /void renderSelection\(\)/);
+  assert.doesNotMatch(selectionHandler, /agentController\.syncPanel\(\)/);
   assert.match(hostSource, /if \(next\.ui\) Object\.assign\(workbench\.ui, next\.ui, \{ canvasProjectView: "detail" \}\);/);
   assert.doesNotMatch(hostSource, /if \(next\.ui\) workbench\.ui = \{/);
   assert.match(hostSource, /canvasNodeId !== workbench\.ui\.selectedCanvasNodeId[\s\S]*?workbench\.onCanvasNodeSelected\?\.\(canvasNodeId\)/);
@@ -702,6 +705,15 @@ test("new-canvas editor exposes a full-height workspace and feature rail", () =>
   assert.doesNotMatch(html, /data-new-canvas-action="focus-agent"/);
 });
 
+test("new-canvas waits for the persisted Agent panel state before first paint", () => {
+  const html = renderNewCanvasLayout("<main data-canvas-x6-mount></main>", {
+    canvasSessionUiStateReady: false,
+    canvasAgent: { panelOpen: true },
+  });
+  assert.doesNotMatch(html, /data-canvas-agent-panel/);
+  assert.doesNotMatch(html, /data-agent-action="open-agent-panel"/);
+});
+
 test("Canvas history uses the same friendly failure message as task center", () => {
   const html = renderCanvasSurfaceForHost({
     ui: {
@@ -1027,15 +1039,51 @@ test("Canvas pane dismissal closes settings and transient node overlays", () => 
     canvasAddMenuOpen: true,
     canvasContextMenu: { mode: "add" },
     canvasScriptPicker: { nodeId: "node-1" },
+    canvasScriptWorkspace: { open: true, scriptNodeId: "node-1" },
     openGenerationSelectMenu: "model",
     canvasEditorOpen: true,
+    selectedCanvasNodeId: "node-1",
   };
   assert.equal(dismissCanvasSurfaceOverlays(ui), true);
   assert.equal(ui.canvasConfigLibrary.open, false);
   assert.equal(ui.canvasAddMenuOpen, false);
   assert.equal(ui.canvasContextMenu, null);
+  assert.equal(ui.canvasScriptWorkspace, null);
   assert.equal(ui.canvasEditorOpen, false);
+  assert.equal(ui.selectedCanvasNodeId, null);
   assert.equal(dismissCanvasSurfaceOverlays(ui), false);
+});
+
+test("Canvas selection and deselection stay local instead of rebuilding the canvas", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const selectionHandler = source.match(/workbench\.onCanvasNodeSelected = \(nodeId\) => \{[\s\S]*?\n      \};/)?.[0] ?? "";
+  const clickHandler = source.match(/const onClick = \(event\) => \{[\s\S]*?const onDoubleClick =/)?.[0] ?? "";
+  const blankDismiss = clickHandler.match(/if \(canvasStage && !interactive\) \{[\s\S]*?\n        \}/)?.[0] ?? "";
+
+  assert.doesNotMatch(selectionHandler, /syncPanel\(|renderInteraction\(|refreshCanvasWorkflowGraph\(/);
+  assert.match(blankDismiss, /clearCanvasSelectionPresentation\(surface, graph, workbench\)/);
+  assert.match(blankDismiss, /const shouldSyncSelection = Boolean\(workbench\.ui\.selectedCanvasNodeId \|\| workbench\.ui\.canvasEditorOpen\)/);
+  assert.match(blankDismiss, /if \(shouldSyncSelection\) \{[\s\S]*?void renderSelection\(\);/);
+  assert.doesNotMatch(blankDismiss, /zoomTo\(|translate\(|syncCanvasGraphViewport\(/);
+  assert.doesNotMatch(blankDismiss, /renderInteraction\(|render\(|createMarkup\(|refreshCanvasWorkflowGraph\(/);
+  assert.match(blankDismiss, /dismissCanvasSurfaceOverlays\(workbench\.ui\)/);
+  assert.match(source, /clearCanvasGraphSelection,/);
+  assert.match(source, /function clearCanvasSelectionPresentation\(surface, graph, workbench\) \{[\s\S]*?clearCanvasGraphEditorOverlay\(graph\);[\s\S]*?clearCanvasGraphSelection\(graph\);[\s\S]*?refreshCanvasSelectionActionToolbar/);
+});
+
+test("Canvas treats the script workspace as interactive instead of dismissing it as blank canvas", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const clickHandler = source.match(/const onClick = \(event\) => \{[\s\S]*?const onDoubleClick =/)?.[0] ?? "";
+
+  assert.match(clickHandler, /\.script-workspace-layer/);
+  assert.match(clickHandler, /if \(canvasStage && !interactive\) \{[\s\S]*?dismissCanvasSurfaceOverlays\(workbench\.ui\)/);
+});
+
+test("Canvas add menu stays above the mounted X6 graph so template buttons receive clicks", () => {
+  const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+
+  assert.match(css, /\.canvas-stage\.is-x6-ready \.canvas-x6-mount\s*\{[^}]*z-index:\s*4;/s);
+  assert.match(css, /\.canvas-add-menu\s*\{[^}]*z-index:\s*8;/s);
 });
 
 test("selected nodes render the primary toolbar zone before secondary actions", () => {

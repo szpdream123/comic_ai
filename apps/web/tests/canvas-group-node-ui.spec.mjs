@@ -11,6 +11,8 @@ import {
   updateCanvasGroupData,
 } from "../src/features/production-workbench/canvas/canvas-group-node.js";
 import { canvasDocumentToX6Data } from "../src/features/production-workbench/canvas/canvas-x6-document.js";
+import { canvasAssetsFromGenerationHistory } from "../src/features/production-workbench/canvas/canvas-asset-library.js";
+import { reconcileCanvasMediaDocumentSources } from "../src/features/production-workbench/canvas/canvas-media-node.js";
 
 test("normalizes group colors to the supported swatch palette", () => {
   assert.equal(normalizeCanvasGroupColor("#A855F7"), "#a855f7");
@@ -53,6 +55,78 @@ test("batch download prefers direct media URLs over authenticated storage transf
   );
   assert.ok(handler.indexOf("if (item.url)") < handler.indexOf("else if (item.storageObjectId)"));
   assert.match(handler, /if \(item\.url\) \{\s*triggerBrowserDownload\(item\.url, fileName\);/);
+  assert.match(handler, /renderWorkbenchChrome\(workbench\)/);
+  assert.doesNotMatch(handler, /\brender\(workbench\)/);
+});
+
+test("renders a group layout menu with grid, horizontal, and vertical options", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /toggle-canvas-group-layout-menu/);
+  assert.match(source, /arrange-canvas-group/);
+  assert.match(source, /宫格排列/);
+  assert.match(source, /水平排列/);
+  assert.match(source, /垂直排列/);
+  assert.match(source, /aria-haspopup", "menu/);
+});
+
+test("refreshes the group frame after applying a group layout", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const handler = source.slice(
+    source.indexOf('if (action === "arrange-canvas-group")'),
+    source.indexOf('if (action === "add-canvas-node-to-character-library")'),
+  );
+  assert.match(handler, /updateActiveCanvasDocument\(workbench, result\.document\);\s*workbench\.ui\.selectedCanvasNodeId = result\.groupId;\s*refreshCanvasWorkflowNode\(workbench, result\.groupId\);/);
+});
+
+test("group execution configures every child model before building the batch", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const handler = source.slice(
+    source.indexOf('if (action === "run-canvas-group")'),
+    source.indexOf('if (action === "add-canvas-node-to-character-library")'),
+  );
+  assert.match(handler, /for \(const nodeId of nodeIds\) \{\s*document = ensureCanvasNodeConfiguredModel\(workbench, document, nodeId\);/);
+  assert.ok(handler.indexOf("ensureCanvasNodeConfiguredModel") < handler.indexOf("buildCanvasGenerationBatchNodes"));
+});
+
+test("restores the latest generated image into its canvas node by node key", () => {
+  const assets = canvasAssetsFromGenerationHistory({
+    items: [{
+      id: "run-1",
+      nodeKey: "image-1",
+      mediaKind: "image",
+      artifacts: [{
+        id: "artifact-1",
+        storageObjectId: "storage-1",
+        assetVersionId: "version-1",
+        url: "https://example.test/generated.png",
+      }],
+    }],
+  });
+  const result = reconcileCanvasMediaDocumentSources({
+    nodes: [{ id: "image-1", type: "ai-image", data: { mediaKind: "image", status: "queued" } }],
+    edges: [],
+  }, assets);
+
+  assert.equal(assets[0].nodeKey, "image-1");
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.document.nodes[0].data, {
+    mediaKind: "image",
+    status: "completed",
+    storageObjectId: "storage-1",
+    assetVersionId: "version-1",
+    previewUrl: "https://example.test/generated.png",
+    resultUrl: "https://example.test/generated.png",
+    url: "https://example.test/generated.png",
+  });
 });
 
 test("updates group title and color without changing document contracts", () => {
@@ -71,6 +145,23 @@ test("renders a minimal run group overlay", () => {
   });
   assert.match(html, /class="canvas-group-node-label">运行组</);
   assert.doesNotMatch(html, /canvas-group-node-header/);
+  assert.doesNotMatch(html, /data-action=/);
+});
+
+test("labels script workflow groups with their batch scope and member count", () => {
+  const html = renderCanvasGroupNodeBody({
+    id: "group-assets",
+    type: "group",
+    data: {
+      title: "资产批量生成",
+      color: "#22c55e",
+      childNodeIds: ["role-1", "scene-1", "prop-1"],
+      scriptWorkflowGroupKind: "assets",
+    },
+  });
+  assert.match(html, /is-script-workflow-group is-assets/);
+  assert.match(html, /资产批量生成/);
+  assert.match(html, /角色 · 场景 · 道具 · 3 个节点/);
   assert.doesNotMatch(html, /data-action=/);
 });
 

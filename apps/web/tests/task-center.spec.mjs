@@ -59,6 +59,53 @@ function createTaskCenterActionRoot() {
 }
 
 describe("production workbench task center", () => {
+  it("syncs a batched novel-to-script text result into its parent script node", async () => {
+    const workbench = {
+      root: createRoot(),
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-1",
+        canvasProjects: [{ id: "canvas-1", title: "测试画布" }],
+        canvasDocumentsByProject: {},
+        canvasGenerationHistoryItems: [],
+        canvasDocument: {
+          version: 1,
+          nodes: [
+            { id: "script-1", type: "script", data: { sourceMode: "novel", text: "" } },
+            {
+              id: "text-1",
+              type: "ai-text",
+              data: {
+                mediaKind: "text",
+                status: "queued",
+                lastTaskId: "task-script-1",
+                workflowParentId: "script-1",
+                workflowKind: "script",
+                prompt: "将小说转换为剧本",
+              },
+            },
+          ],
+          edges: [],
+        },
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "task-script-1",
+      kind: "text",
+      mediaKind: "text",
+      status: "succeeded",
+      result: { text: "第一场：雨夜街道。" },
+      updatedAt: "2026-07-31T08:00:00.000Z",
+    });
+
+    const parent = workbench.ui.canvasDocument.nodes.find((node) => node.id === "script-1");
+    const generated = workbench.ui.canvasDocument.nodes.find((node) => node.id === "text-1");
+    assert.equal(generated.data.text, "第一场：雨夜街道。");
+    assert.equal(parent.data.text, "第一场：雨夜街道。");
+    assert.equal(parent.data.generatedScriptNodeId, "text-1");
+  });
+
   it("projects live task status and failures into loaded canvas history", async () => {
     const workbench = {
       taskCenterAppliedVersions: new Map(),

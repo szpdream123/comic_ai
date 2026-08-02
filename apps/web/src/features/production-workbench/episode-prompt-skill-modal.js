@@ -42,44 +42,71 @@ export function renderEpisodePromptSkillModal({
   officialSkills = [],
   privateSkills = [],
   draftSelections = {},
+  selectionSkills = [],
+  categories = EPISODE_PROMPT_SKILL_CATEGORIES,
+  allowClear = true,
+  showPagination = false,
+  actions = {},
+  officialPagination = {},
+  privatePagination = {},
   loading = false,
+  confirmLabel = "确认选择",
 } = {}) {
   if (!show) return "";
   const normalizedSource = sourceTab === "private" ? "private" : "official";
-  const category = EPISODE_PROMPT_SKILL_CATEGORIES.some((item) => item.id === activeCategory)
+  const supportedCategories = Array.isArray(categories) && categories.length ? categories : EPISODE_PROMPT_SKILL_CATEGORIES;
+  const category = supportedCategories.some((item) => item.id === activeCategory)
     ? activeCategory
-    : "script";
+    : supportedCategories[0]?.id ?? "script";
+  const resolvedActions = {
+    close: "close-episode-prompt-skill-modal",
+    source: "set-episode-prompt-skill-source",
+    category: "set-episode-prompt-skill-category",
+    select: "select-episode-prompt-skill-draft",
+    clear: "clear-episode-prompt-skill-draft",
+    page: "set-episode-prompt-skill-page",
+    confirm: "confirm-episode-prompt-skills",
+    ...actions,
+  };
   const official = normalizeEpisodePromptSkills(officialSkills, "official");
   const privateLibrary = normalizeEpisodePromptSkills(privateSkills, "private");
-  const allSkills = [...official, ...privateLibrary];
-  const visibleSkills = (normalizedSource === "private" ? privateLibrary : official)
+  const allSkills = [...new Map([...official, ...privateLibrary, ...normalizeEpisodePromptSkills(selectionSkills)].map((item) => [item.id, item])).values()];
+  const matchingSkills = (normalizedSource === "private" ? privateLibrary : official)
     .filter((item) => item.category === category);
+  const pagination = normalizedSource === "private" ? privatePagination : officialPagination;
+  const pageSize = Math.max(1, Number(pagination?.pageSize) || matchingSkills.length || 1);
+  const page = Math.max(1, Number(pagination?.page) || 1);
+  const visibleSkills = pagination?.pageSize
+    ? matchingSkills.slice((page - 1) * pageSize, page * pageSize)
+    : matchingSkills;
+  const officialTotal = sourceSkillTotal(officialPagination, official, supportedCategories);
+  const privateTotal = sourceSkillTotal(privatePagination, privateLibrary, supportedCategories);
   const selectedId = String(draftSelections?.[category] ?? "");
   const selectedSkills = resolveSelectedSkills(allSkills, draftSelections);
   const total = selectedSkills.reduce((sum, skill) => sum + skill.priceCredits, 0);
   return `
     <section class="episode-skill-picker-layer" data-episode-skill-picker="true">
-      <button class="episode-skill-picker-scrim" type="button" data-action="close-episode-prompt-skill-modal" aria-label="关闭创作技能"></button>
+      <button class="episode-skill-picker-scrim" type="button" data-action="${escapeAttr(resolvedActions.close)}" aria-label="关闭创作技能"></button>
       <div class="episode-skill-picker-modal" role="dialog" aria-modal="true" aria-labelledby="episode-skill-picker-title">
         <header class="episode-skill-picker-header">
           <div>
             <span>WORKFLOW SKILLS</span>
             <h2 id="episode-skill-picker-title">选择创作技能</h2>
           </div>
-          <button type="button" data-action="close-episode-prompt-skill-modal" aria-label="关闭" title="关闭">×</button>
+          <button type="button" data-action="${escapeAttr(resolvedActions.close)}" aria-label="关闭" title="关闭">×</button>
         </header>
         <nav class="episode-skill-source-tabs" aria-label="技能来源">
-          ${renderSourceTab("official", "官方技能", official.length, normalizedSource)}
-          ${renderSourceTab("private", "私人技能库", privateLibrary.length, normalizedSource)}
+          ${renderSourceTab("official", "官方技能", officialTotal, normalizedSource, resolvedActions.source)}
+          ${renderSourceTab("private", "私人技能库", privateTotal, normalizedSource, resolvedActions.source)}
         </nav>
         <nav class="episode-skill-category-tabs" aria-label="提示词分类">
-          ${EPISODE_PROMPT_SKILL_CATEGORIES.map((item) => {
-            const selected = allSkills.find((skill) => skill.id === String(draftSelections?.[item.id] ?? ""));
+          ${supportedCategories.map((item) => {
+            const selected = allSkills.find((skill) => skill.category === item.id && skill.id === String(draftSelections?.[item.id] ?? ""));
             return `
               <button
                 class="${item.id === category ? "active" : ""}"
                 type="button"
-                data-action="set-episode-prompt-skill-category"
+                data-action="${escapeAttr(resolvedActions.category)}"
                 data-skill-category="${escapeAttr(item.id)}"
               >
                 <span>${escapeHtml(item.shortLabel)}</span>
@@ -95,25 +122,29 @@ export function renderEpisodePromptSkillModal({
                 <span>${normalizedSource === "private" ? "PRIVATE LIBRARY" : "OFFICIAL"}</span>
                 <h3>${escapeHtml(categoryLabel(category))}</h3>
               </div>
-              ${selectedId ? `<button type="button" data-action="clear-episode-prompt-skill-draft" data-skill-category="${escapeAttr(category)}">清除选择</button>` : ""}
+              ${allowClear && selectedId ? `<button type="button" data-action="${escapeAttr(resolvedActions.clear)}" data-skill-category="${escapeAttr(category)}">清除选择</button>` : ""}
             </header>
             <div class="episode-skill-list" role="listbox">
               ${loading
                 ? `<div class="episode-skill-empty">正在加载技能...</div>`
                 : visibleSkills.length
-                  ? visibleSkills.map((skill) => renderSkillItem(skill, selectedId)).join("")
+                  ? visibleSkills.map((skill) => renderSkillItem(skill, selectedId, resolvedActions.select)).join("")
                   : `<div class="episode-skill-empty">该分类暂无${normalizedSource === "private" ? "私人技能" : "官方技能"}</div>`}
             </div>
+            ${renderSkillPagination(pagination, loading, resolvedActions.page, showPagination)}
           </section>
           <aside class="episode-selected-skills" aria-label="已选技能">
             <header>
               <div><span>SELECTED</span><h3>已选技能</h3></div>
-              <small data-episode-selected-count>${selectedSkills.length}/5</small>
+              <small data-episode-selected-count>${selectedSkills.length}/${supportedCategories.length}</small>
             </header>
             <div class="episode-selected-skill-list">
-              ${EPISODE_PROMPT_SKILL_CATEGORIES.map((item) => renderSelectedSkillRow({
+              ${supportedCategories.map((item) => renderSelectedSkillRow({
                 category: item,
-                skill: allSkills.find((candidate) => candidate.id === String(draftSelections?.[item.id] ?? "")),
+                skill: allSkills.find((candidate) => candidate.category === item.id && candidate.id === String(draftSelections?.[item.id] ?? "")),
+                categoryAction: resolvedActions.category,
+                clearAction: resolvedActions.clear,
+                allowClear,
                 sourceTab: normalizedSource,
               })).join("")}
             </div>
@@ -124,8 +155,8 @@ export function renderEpisodePromptSkillModal({
             <strong data-episode-skill-selected-count>已选 ${selectedSkills.length} 项</strong>
             <span>技能费用 <b data-episode-skill-total-price>${formatSkillCredits(total)}</b></span>
           </div>
-          <button class="episode-skill-picker-cancel" type="button" data-action="close-episode-prompt-skill-modal">取消</button>
-          <button class="episode-skill-picker-confirm" type="button" data-action="confirm-episode-prompt-skills" ${disabled(loading)}>确认选择</button>
+          <button class="episode-skill-picker-cancel" type="button" data-action="${escapeAttr(resolvedActions.close)}">取消</button>
+          <button class="episode-skill-picker-confirm" type="button" data-action="${escapeAttr(resolvedActions.confirm)}" ${disabled(loading)}>${escapeHtml(confirmLabel)}</button>
         </footer>
       </div>
     </section>
@@ -190,15 +221,32 @@ export function sumEpisodePromptSkillCredits(skills = [], selectedByCategory = {
     .reduce((sum, skill) => sum + skill.priceCredits, 0);
 }
 
-function renderSourceTab(id, label, count, activeTab) {
+function sourceSkillTotal(pagination = {}, skills = [], categories = []) {
+  const allowedCategories = new Set((Array.isArray(categories) ? categories : []).map((item) => item?.id).filter(Boolean));
+  const categoryCounts = pagination?.categoryCounts && typeof pagination.categoryCounts === "object"
+    ? Object.entries(pagination.categoryCounts).filter(([category]) => !allowedCategories.size || allowedCategories.has(category))
+    : [];
+  if (categoryCounts.length) {
+    return categoryCounts.reduce((sum, [, count]) => sum + Math.max(0, Number(count) || 0), 0);
+  }
+  return (Array.isArray(skills) ? skills : []).filter((skill) => !allowedCategories.size || allowedCategories.has(String(skill?.category ?? skill?.promptCategory ?? ""))).length;
+}
+
+function renderSkillPagination(pagination = {}, loading = false, action = "", alwaysShow = false) {
+  const page = Math.max(1, Number(pagination?.page) || 1);
+  const totalPages = Math.max(1, Number(pagination?.totalPages) || 1);
+  if ((!alwaysShow && totalPages <= 1) || !action) return "";
+  return `<nav class="canvas-text-skill-pagination" aria-label="技能分页"><span>第 ${page} / ${totalPages} 页</span><button type="button" data-action="${escapeAttr(action)}" data-skill-page="${page - 1}" ${loading || page <= 1 ? "disabled" : ""}>上一页</button><button type="button" data-action="${escapeAttr(action)}" data-skill-page="${page + 1}" ${loading || page >= totalPages ? "disabled" : ""}>下一页</button></nav>`;
+}
+function renderSourceTab(id, label, count, activeTab, action) {
   return `
-    <button class="${id === activeTab ? "active" : ""}" type="button" data-action="set-episode-prompt-skill-source" data-skill-source="${id}">
+    <button class="${id === activeTab ? "active" : ""}" type="button" data-action="${escapeAttr(action)}" data-skill-source="${id}">
       <span>${label}</span><small>${count}</small>
     </button>
   `;
 }
 
-function renderSkillItem(skill, selectedId) {
+function renderSkillItem(skill, selectedId, action) {
   const selected = skill.id === selectedId;
   return `
     <button
@@ -206,7 +254,7 @@ function renderSkillItem(skill, selectedId) {
       type="button"
       role="option"
       aria-selected="${selected ? "true" : "false"}"
-      data-action="select-episode-prompt-skill-draft"
+      data-action="${escapeAttr(action)}"
       data-episode-skill-id="${escapeAttr(skill.id)}"
       data-skill-category="${escapeAttr(skill.category)}"
     >
@@ -218,12 +266,12 @@ function renderSkillItem(skill, selectedId) {
   `;
 }
 
-function renderSelectedSkillRow({ category, skill, sourceTab }) {
+function renderSelectedSkillRow({ category, skill, sourceTab, categoryAction, clearAction, allowClear }) {
   return `
     <article class="episode-selected-skill ${skill ? "has-selection" : ""}" data-episode-selected-category="${escapeAttr(category.id)}">
       <button
         type="button"
-        data-action="set-episode-prompt-skill-category"
+        data-action="${escapeAttr(categoryAction)}"
         data-skill-category="${escapeAttr(category.id)}"
         data-skill-source="${escapeAttr(skill?.source ?? sourceTab)}"
       >
@@ -237,19 +285,20 @@ function renderSelectedSkillRow({ category, skill, sourceTab }) {
       <button
         class="episode-selected-skill-clear"
         type="button"
-        data-action="clear-episode-prompt-skill-draft"
+        data-action="${escapeAttr(clearAction)}"
         data-skill-category="${escapeAttr(category.id)}"
         aria-label="清除${escapeAttr(category.label)}"
         title="清除选择"
-        ${skill ? "" : "hidden"}
+        ${allowClear && skill ? "" : "hidden"}
       >×</button>
     </article>
   `;
 }
 
 function resolveSelectedSkills(skills, selectedByCategory) {
-  const selectedIds = new Set(Object.values(selectedByCategory ?? {}).map(String).filter(Boolean));
-  return skills.filter((skill) => selectedIds.has(skill.id));
+  return Object.entries(selectedByCategory ?? {})
+    .map(([category, id]) => skills.find((skill) => skill.category === category && skill.id === String(id)))
+    .filter(Boolean);
 }
 
 function categoryLabel(category) {

@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import {
   normalizeCanvasTextSkills,
   renderCanvasTextSkillModal,
+  resolveCanvasGenerationSkillCategories,
 } from "../src/features/production-workbench/canvas-text-skill-modal.js";
 import { renderCanvasGenerationSkillTrigger } from "../src/features/production-workbench/project-detail.js";
 
@@ -57,16 +58,40 @@ describe("canvas generation skill picker", () => {
 
   it("normalizes marketplace records without introducing category selections", () => {
     assert.deepEqual(normalizeCanvasTextSkills([
-      { id: 7, name: "技能", promptCategory: "storyboard", price_credits: 2.6 },
+      { id: 7, name: "技能", promptCategory: "storyboard", price_credits: 2.6, coverImageUrl: "https://example.test/cover.png" },
     ], "private"), [{
       id: "7",
       title: "技能",
       summary: "",
       category: "storyboard",
+      coverImageUrl: "https://example.test/cover.png",
       priceCredits: 3,
       source: "private",
       official: false,
     }]);
+  });
+
+  it("shows skill cover thumbnails and restricts image nodes to image categories", () => {
+    const html = renderCanvasTextSkillModal({
+      show: true,
+      sourceTab: "official",
+      activeCategory: "image_style",
+      allowedCategories: resolveCanvasGenerationSkillCategories({ type: "ai-image", data: { mediaKind: "image" } }),
+      officialSkills: [
+        { id: "script", title: "转剧本", category: "script", official: true },
+        { id: "style", title: "电影风格", category: "image_style", coverImageUrl: "https://example.test/style.jpg", official: true },
+        { id: "board", title: "故事板", category: "storyboard", official: true },
+        { id: "other", title: "其他", category: "other", official: true },
+      ],
+      officialPagination: { categoryCounts: { script: 9, image_style: 1, storyboard: 1, other: 1 } },
+    });
+
+    assert.match(html, /data-skill-category="image_style"/);
+    assert.match(html, /data-skill-category="storyboard"/);
+    assert.match(html, /data-skill-category="other"/);
+    assert.doesNotMatch(html, /data-skill-category="script"/);
+    assert.match(html, /<img src="https:\/\/example\.test\/style\.jpg" alt="" loading="lazy"/);
+    assert.match(html, /官方技能<\/span><small>3<\/small>/);
   });
 });
 
@@ -92,9 +117,50 @@ describe("canvas generation skill trigger", () => {
     assert.match(html, /光影&lt;增强&gt;&quot;/);
   });
 
+  it("shows the actual number of selected script workflow skills", () => {
+    const html = renderCanvasGenerationSkillTrigger({
+      id: "script-1",
+      type: "script",
+      data: { workflowSkillIds: { shot: "shot", prop_extract: "prop", character_extract: "character" } },
+    });
+
+    assert.match(html, /当前技能：已选择 3 项技能/);
+    assert.match(html, /<small>3<\/small>/);
+  });
+  it("does not mark a script node active after all optional skills are cleared", () => {
+    const html = renderCanvasGenerationSkillTrigger({
+      id: "script-empty",
+      type: "script",
+      data: { workflowSkillIds: { shot: "", prop_extract: "", character_extract: "", scene_extract: "" } },
+    });
+
+    assert.doesNotMatch(html, /canvas-editor-skill-trigger active/);
+    assert.doesNotMatch(html, /<small>/);
+  });
   it("uses the existing themed controls for the new category tabs", async () => {
     const css = await readFile(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
     assert.match(css, /\.canvas-text-skill-category-tabs button\.active[\s\S]*var\(--theme-control-active-border\)/);
     assert.match(css, /\.canvas-text-skill-category-tabs[\s\S]*overflow-x:\s*auto/);
+  });
+
+  it("keeps the skill list on a fixed grid track with or without pagination", async () => {
+    const css = await readFile(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+    const singlePageHtml = renderCanvasTextSkillModal({
+      show: true,
+      officialSkills: [{ id: "style-1", title: "电影风格", category: "image_style", official: true }],
+      officialPagination: { page: 1, totalPages: 1 },
+    });
+    const pagedHtml = renderCanvasTextSkillModal({
+      show: true,
+      officialSkills: [{ id: "style-1", title: "电影风格", category: "image_style", official: true }],
+      officialPagination: { page: 1, totalPages: 2 },
+    });
+
+    assert.doesNotMatch(singlePageHtml, /aria-label="技能分页"/);
+    assert.match(pagedHtml, /aria-label="技能分页"/);
+    assert.match(css, /\.canvas-text-skill-modal\s*\{[\s\S]*?grid-template-rows:\s*auto auto auto minmax\(0, 1fr\) 2\.8rem auto/);
+    assert.match(css, /\.canvas-text-skill-list\s*\{[\s\S]*?grid-row:\s*4/);
+    assert.match(css, /\.canvas-text-skill-pagination\s*\{[\s\S]*?grid-row:\s*5/);
+    assert.match(css, /\.canvas-text-skill-footer\s*\{[\s\S]*?grid-row:\s*6/);
   });
 });

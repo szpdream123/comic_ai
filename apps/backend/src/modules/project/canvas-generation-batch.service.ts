@@ -656,6 +656,45 @@ async function hydrateSucceededPromptDependencies(
   if (nodeKeys.some((nodeKey) => !versionByNode.has(nodeKey))) {
     return { ready: false, payload };
   }
+  const workflowReferences = Array.isArray(canvasContext.scriptWorkflowReferences)
+    ? canvasContext.scriptWorkflowReferences
+      .map((reference) => readRecord(reference))
+      .map((reference) => ({
+        mention: String(reference.mention ?? "").trim(),
+        nodeId: String(reference.nodeId ?? "").trim(),
+        referenceAssetVersionId: String(reference.referenceAssetVersionId ?? "").trim(),
+      }))
+      .filter((reference) => reference.mention && reference.nodeId)
+    : [];
+  if (workflowReferences.length) {
+    const sourcePrompt = String(canvasContext.sourcePrompt ?? payload.prompt ?? "").trim();
+    const compiled = compileCanvasScriptWorkflowPrompt(sourcePrompt, workflowReferences);
+    const ordered = compiled.references.map((reference) =>
+      versionByNode.get(reference.nodeId) ?? reference.referenceAssetVersionId);
+    if (ordered.some((assetVersionId) => !assetVersionId)) {
+      return { ready: false, payload };
+    }
+    return {
+      ready: true,
+      payload: {
+        ...payload,
+        prompt: compiled.prompt,
+        ...(payload.motionPrompt !== undefined ? { motionPrompt: compiled.prompt } : {}),
+        referenceAssetVersionIds: ordered,
+        canvasContext: {
+          ...canvasContext,
+          sourcePrompt,
+          compiledPrompt: compiled.prompt,
+          scriptWorkflowReferences: compiled.references.map((reference, index) => ({
+            mention: reference.mention,
+            nodeId: reference.nodeId,
+            referenceIndex: index + 1,
+            referenceAssetVersionId: ordered[index],
+          })),
+        },
+      },
+    };
+  }
   const existing = readStringArray(payload.referenceAssetVersionIds);
   return {
     ready: true,
@@ -664,6 +703,62 @@ async function hydrateSucceededPromptDependencies(
       referenceAssetVersionIds: [...new Set([...existing, ...nodeKeys.map((nodeKey) => versionByNode.get(nodeKey)!)])],
     },
   };
+}
+
+export function compileCanvasScriptWorkflowPrompt<T extends { mention: string; nodeId: string }>(
+  sourcePrompt: string,
+  references: T[],
+) {
+  const byMention = new Map(references.map((reference) => [
+    reference.mention.startsWith("@") ? reference.mention : `@${reference.mention}`,
+    reference,
+  ]));
+  const mentions = [...byMention.keys()].sort((left, right) => right.length - left.length);
+  const ordered: T[] = [];
+  const indexByNodeId = new Map<string, number>();
+  let prompt = "";
+  let cursor = 0;
+  for (let offset = sourcePrompt.indexOf("@", cursor); offset >= 0; offset = sourcePrompt.indexOf("@", cursor)) {
+    prompt += sourcePrompt.slice(cursor, offset);
+    const mention = mentions.find((candidate) => sourcePrompt.startsWith(candidate, offset));
+    if (!mention) {
+      prompt += "@";
+      cursor = offset + 1;
+      continue;
+    }
+    const reference = byMention.get(mention)!;
+    let referenceIndex = indexByNodeId.get(reference.nodeId);
+    if (!referenceIndex) {
+      referenceIndex = ordered.length + 1;
+      indexByNodeId.set(reference.nodeId, referenceIndex);
+      ordered.push(reference);
+    }
+    prompt += `图${referenceIndex}中的${mention.slice(1)}`;
+    cursor = offset + mention.length;
+  }
+  prompt += sourcePrompt.slice(cursor);
+  return { prompt, references: ordered };
+}
+
+export function canvasScriptWorkflowReferencesBelongToTarget(
+  document: unknown,
+  targetNodeId: string,
+  references: Array<{ nodeId: string }>,
+) {
+  const record = readRecord(document);
+  const nodes = Array.isArray(record.nodes) ? record.nodes.map((node) => readRecord(node)) : [];
+  const target = nodes.find((node) => String(node.id ?? "") === String(targetNodeId ?? ""));
+  const targetData = readRecord(target?.data);
+  const workflowParentId = String(targetData.workflowParentId ?? "").trim();
+  if (!target || targetData.workflowKind !== "storyboard" || !workflowParentId) return false;
+  const allowedKinds = new Set(["character", "scene", "prop"]);
+  return references.every((reference) => {
+    const source = nodes.find((node) => String(node.id ?? "") === String(reference.nodeId ?? ""));
+    const sourceData = readRecord(source?.data);
+    return Boolean(source)
+      && String(sourceData.workflowParentId ?? "").trim() === workflowParentId
+      && allowedKinds.has(String(sourceData.workflowKind ?? ""));
+  });
 }
 
 async function refreshCanvasGenerationBatchStatus(db: SqlDatabase, batchId: string, now: Date) {

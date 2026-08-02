@@ -1,4 +1,4 @@
-﻿import { createDefaultCanvasDocument } from "./canvas-default-document.js";
+import { createDefaultCanvasDocument } from "./canvas-default-document.js";
 import { validateCanvasConnection } from "./canvas-edge-rules.js";
 import { duplicateCanvasNodes } from "./canvas-state.js";
 import { renderCanvasAnimationNodeBody } from "./canvas-animation-node.js";
@@ -43,8 +43,8 @@ export async function mountCanvasWorkflowIfPresent(workbench) {
     registerCanvasNode(X6);
     mirrorX6StylesIntoRoot(mount);
 
-    const canvasDocument = ensureCanvasDocument(workbench);
     const graphSize = await waitForCanvasGraphMountSize(mount);
+    const canvasDocument = ensureCanvasDocument(workbench);
     bindCanvasNativeNodeSelection(mount, workbench);
     const graph = createGraph(X6, mount, workbench, graphSize);
     enableCanvasGraphSelection(X6, graph, canvasDocument.viewport, workbench, mount);
@@ -58,16 +58,19 @@ export async function mountCanvasWorkflowIfPresent(workbench) {
     applyCanvasGraphViewportPreferences(graph, canvasDocument.viewport);
     applyCanvasGraphGrouping(graph, canvasDocument);
     applyInitialViewport(graph, canvasDocument.viewport);
+    applyCanvasGraphViewportStyles(graph, workbench, canvasDocument.viewport);
     syncCanvasZoomControlDisplay(workbench.root, graph.zoom?.());
 
     wireGraphSync(graph, workbench, mount);
     selectCurrentCanvasNode(graph, workbench);
+    refreshCanvasConnectedEdgeMotion(graph);
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasSelectionActionToolbar(graph, workbench, mount);
     workbench.canvasGraph = graph;
+    refreshCanvasWorkflowGraph(workbench);
     mount.dataset.x6Mounted = "true";
     mount.closest(".canvas-stage")?.classList.add("is-x6-ready");
-    void stabilizeInitialCanvasViewport(graph, canvasDocument.viewport, mount);
+    void stabilizeInitialCanvasViewport(graph, workbench.ui.canvasDocument?.viewport ?? canvasDocument.viewport, mount);
     return graph;
   } catch (error) {
     console.warn("Failed to mount canvas workflow graph", error);
@@ -205,9 +208,18 @@ export function enableCanvasGraphSelection(X6, graph, viewport = {}, workbench =
     filter: (cell) => cell?.getData?.()?.canvasTransientEditor !== true,
   });
   graph.use(selection);
+  const clearRubberbandBounds = () => {
+    const rubberband = graphContainer?.querySelector?.(".x6-widget-selection-rubberband");
+    if (!rubberband?.style) return;
+    rubberband.style.left = "";
+    rubberband.style.top = "";
+    rubberband.style.width = "";
+    rubberband.style.height = "";
+  };
   selection.on?.("box:mousemove", ({ e } = {}) => {
     if (!isCanvasRubberbandSelectionEvent(e)) {
       rubberbandStart = null;
+      clearRubberbandBounds();
       return;
     }
     const start = rubberbandStart;
@@ -225,17 +237,26 @@ export function enableCanvasGraphSelection(X6, graph, viewport = {}, workbench =
   selection.on?.("box:mouseup", ({ e } = {}) => {
     const start = rubberbandStart;
     rubberbandStart = null;
-    if (!isCanvasRubberbandSelectionEvent(e)) return;
+    if (!isCanvasRubberbandSelectionEvent(e)) {
+      clearRubberbandBounds();
+      return;
+    }
     const endX = Number(e?.clientX);
     const endY = Number(e?.clientY);
-    if (!start || !Number.isFinite(endX) || !Number.isFinite(endY)) return;
+    if (!start || !Number.isFinite(endX) || !Number.isFinite(endY)) {
+      clearRubberbandBounds();
+      return;
+    }
     const clientRect = {
       x: Math.min(start.x, endX),
       y: Math.min(start.y, endY),
       width: Math.abs(endX - start.x),
       height: Math.abs(endY - start.y),
     };
-    if (clientRect.width <= 4 && clientRect.height <= 4) return;
+    if (clientRect.width <= 4 && clientRect.height <= 4) {
+      clearRubberbandBounds();
+      return;
+    }
     const right = clientRect.x + clientRect.width;
     const bottom = clientRect.y + clientRect.height;
     const selectedNodes = (graph.getNodes?.() ?? []).filter((node) => {
@@ -248,6 +269,7 @@ export function enableCanvasGraphSelection(X6, graph, viewport = {}, workbench =
         && nodeRect.y + nodeRect.height >= clientRect.y;
     });
     selection.reset?.(selectedNodes, { batch: true });
+    clearRubberbandBounds();
     const refreshSelectionToolbar = () => (
       refreshCanvasSelectionActionToolbar(graph, workbench, mount ?? graphContainer)
     );
@@ -426,7 +448,7 @@ function registerCanvasNode(X6) {
       flow: {
         pointerEvents: "none",
         stroke: "#5ec7ff",
-        strokeDasharray: "8 22",
+        strokeDasharray: "18 82",
         strokeLinecap: "round",
         strokeWidth: 2,
         opacity: 0.78,
@@ -783,7 +805,7 @@ function renderCanvasGenericX6Node(node = {}) {
   const title = String(data.title ?? data.name ?? canvasGenericNodeLabel(type) ?? "节点");
   const status = String(data.status ?? "idle");
   const normalizedStatus = status.trim().toLowerCase();
-  const sourceTextNode = ["script", "source-text"].includes(type);
+  const sourceTextNode = type === "source-text";
   const sourceTextValue = sourceTextNode
     ? String(data.text ?? "")
     : "";
@@ -800,9 +822,10 @@ function renderCanvasGenericX6Node(node = {}) {
   const inputCount = Array.isArray(data.ports?.inputs) ? data.ports.inputs.length : 0;
   const outputCount = Array.isArray(data.ports?.outputs) ? data.ports.outputs.length : 0;
   const markdownNode = ["markdown", "ai-markdown"].includes(type);
+  const scriptSourceNode = sourceTextNode && data.source === "project_script";
   const sourceTextActions = sourceTextNode
-    ? `<div class="canvas-x6-source-text-actions" role="group" aria-label="文本源操作">
-        ${type === "script" ? `<button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">选择剧本</button>` : ""}
+    ? `<div class="canvas-x6-source-text-actions" role="group" aria-label="${scriptSourceNode ? "剧本源操作" : "文本源操作"}">
+        ${scriptSourceNode ? `<button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">选择剧本</button>` : ""}
         <button type="button" data-action="duplicate-canvas-node" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">复制</button>
         <button class="danger" type="button" data-action="delete-canvas-node" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">删除</button>
       </div>`
@@ -816,16 +839,20 @@ function renderCanvasGenericX6Node(node = {}) {
   const realtimeText = ["ai-text", "ai-markdown"].includes(type)
     && ["running", "processing"].includes(normalizedStatus);
   const generationState = realtimeText ? "" : renderCanvasX6GenerationState(node, normalizedStatus);
+  const textGenerationMask = realtimeText
+    ? `<div class="canvas-x6-text-generation-mask" role="status" aria-live="polite" aria-label="正在生成剧本中"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成剧本中</strong></div>`
+    : "";
   const statusLabel = isCanvasX6GenerationNode(type)
     ? canvasX6GenerationStatusLabel(normalizedStatus, status)
     : status;
-  return `<article class="canvas-x6-special-node is-generic is-${escapeCanvasX6Html(type || "node")}" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">
+  return `<article class="canvas-x6-special-node is-generic is-${escapeCanvasX6Html(type || "node")}${scriptSourceNode ? " is-script-source" : ""}" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">
     <header><strong>${escapeCanvasX6Html(title)}</strong><small>${escapeCanvasX6Html(statusLabel)}</small></header>
-    <div class="canvas-x6-generic-body${generationState ? " has-generation-state" : ""}">
+    <div class="canvas-x6-generic-body${generationState ? " has-generation-state" : ""}${textGenerationMask ? " has-generation-mask" : ""}">
       ${genericNodeTypeLabel}
       ${sourceTextContent}
       ${sourceTextActions}
       ${generationState}
+      ${textGenerationMask}
     </div>
     <footer><span>${inputCount} 个输入</span><span>${outputCount} 个输出</span></footer>
   </article>`;
@@ -834,49 +861,75 @@ function renderCanvasGenericX6Node(node = {}) {
 function renderCanvasScriptWorkflowX6Node(node = {}) {
   const data = node?.data ?? {};
   const nodeId = String(node?.id ?? "");
-  const mode = ["library", "manual", "novel"].includes(String(data.sourceMode ?? ""))
-    ? String(data.sourceMode)
-    : "library";
-  const scriptText = String(data.text ?? "");
-  const novelText = String(data.novelText ?? "");
   const workflowNodes = Array.isArray(data.workflowNodes) ? data.workflowNodes : [];
+  const hasImportedText = data.__canvasHasTextInput === true;
+  const hasStoryboard = workflowNodes.some((item) => String(item?.kind ?? item) === "storyboard");
   const count = (kind) => workflowNodes.filter((item) => String(item?.kind ?? item) === kind).length;
-  const hasText = scriptText.trim().length > 0;
-  const hasScript = hasText || count("script") > 0;
-  const sourceContent = mode === "library"
-    ? `<div class="canvas-script-source-library">
-        <p>${escapeCanvasX6Html(hasText ? scriptText : "从项目剧本库选择章节后，可继续生成资产和分镜。")}</p>
-        <button type="button" data-action="open-canvas-script-picker" data-node-id="${escapeCanvasX6Html(nodeId)}">选择剧本</button>
-      </div>`
-    : mode === "manual"
-      ? `<textarea class="canvas-script-source-input" data-canvas-text-input data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="手写剧本" placeholder="输入剧本、对白和镜头描述">${escapeCanvasX6Html(scriptText)}</textarea>`
-      : `<div class="canvas-script-novel-source">
-          <textarea class="canvas-script-source-input" data-canvas-text-input data-canvas-script-novel-input data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="小说或故事梗概" placeholder="输入小说片段、故事梗概或人物设定">${escapeCanvasX6Html(novelText)}</textarea>
-          <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="script" data-node-id="${escapeCanvasX6Html(nodeId)}"${novelText.trim() ? "" : " disabled aria-disabled=\"true\""}>生成剧本</button>
-        </div>`;
+  if (!hasImportedText) {
+    return `<article class="canvas-x6-special-node is-generic is-script-workflow is-script-workflow-empty" data-node-id="${escapeCanvasX6Html(nodeId)}">
+      <header><strong>脚本分镜</strong><small>未接入文本</small></header>
+      <div class="canvas-script-workflow-body">
+        <p class="canvas-script-workflow-input-hint">请连接剧本或文本节点。连接后可转换为角色、场景、道具和分镜。</p>
+        <div class="canvas-script-workflow-empty-copy">
+          <span class="canvas-script-workflow-state-mark">01</span>
+          <div><strong>先接入一段文本</strong><span>连接文本源或剧本节点，开始拆解镜头。</span></div>
+        </div>
+        <div class="canvas-script-workflow-connect-hint" role="status"><span>等待剧本或文本连接</span><b aria-hidden="true">←</b></div>
+      </div>
+      <footer><span><i class="canvas-script-workflow-dot"></i>等待输入</span><span>0 个分镜</span></footer>
+    </article>`;
+  }
+  if (String(data.workflowStatus ?? "").trim().toLowerCase() === "running") {
+    const phase = String(data.workflowStage ?? "storyboard").trim().toLowerCase();
+    const phaseLabel = canvasScriptWorkflowPhaseLabel(phase);
+    const phaseOrder = ["scene", "character", "prop", "storyboard"];
+    const phaseIndex = phaseOrder.indexOf(phase);
+    return `<article class="canvas-x6-special-node is-generic is-script-workflow is-script-workflow-generating" data-node-id="${escapeCanvasX6Html(nodeId)}">
+      <header><strong>脚本分镜</strong><small>生成中</small></header>
+      <div class="canvas-script-workflow-body canvas-script-workflow-generating-body" role="status" aria-live="polite">
+        <div class="canvas-script-workflow-generating-copy"><span class="canvas-animation-spinner" aria-hidden="true"></span><div><strong>${escapeCanvasX6Html(phaseLabel)}</strong><span>正在根据已连接文本拆解并生成工作流节点</span></div></div>
+        <div class="canvas-script-workflow-progress" aria-label="分镜生成进度">
+          ${phaseOrder.map((item, index) => `<span class="${index <= phaseIndex ? "is-active" : ""}"><i>${String(index + 1).padStart(2, "0")}</i>${escapeCanvasX6Html(canvasScriptWorkflowPhaseShortLabel(item))}</span>`).join("")}
+        </div>
+        <button class="canvas-script-workflow-open is-live" type="button" data-action="open-canvas-script-workspace" data-node-id="${escapeCanvasX6Html(nodeId)}">查看实时提示词</button>
+      </div>
+      <footer><span><i class="canvas-script-workflow-dot is-live"></i>处理中</span><span>请稍候</span></footer>
+    </article>`;
+  }
+  if (!hasStoryboard) {
+    return `<article class="canvas-x6-special-node is-generic is-script-workflow is-script-workflow-confirm" data-node-id="${escapeCanvasX6Html(nodeId)}">
+      <header><strong>脚本分镜</strong><small>文本已接入</small></header>
+      <div class="canvas-script-workflow-body canvas-script-workflow-actions">
+        <p class="canvas-script-workflow-input-hint">已检测到剧本内容，可以开始生成分镜。</p>
+        <div class="canvas-script-workflow-confirm-copy"><span class="canvas-script-workflow-status-tag">TEXT INPUT</span><strong>准备开始生成分镜</strong><span>下一步将选择技能并生成角色、场景、道具和镜头。</span></div>
+        <div class="canvas-script-workflow-confirm" aria-hidden="true">开始</div>
+      </div>
+      <footer><span><i class="canvas-script-workflow-dot is-live"></i>已接入文本</span><span>等待开始</span></footer>
+    </article>`;
+  }
   return `<article class="canvas-x6-special-node is-generic is-script-workflow" data-node-id="${escapeCanvasX6Html(nodeId)}">
-    <header><strong>剧本工作流</strong><small>${escapeCanvasX6Html(hasScript ? "剧本已就绪" : mode === "novel" && novelText.trim() ? "待生成剧本" : "待输入")}</small></header>
+    <header><strong>脚本分镜</strong><small>分镜已生成</small></header>
     <div class="canvas-script-workflow-body">
-      <div class="canvas-script-source-mode" role="group" aria-label="剧本来源">
-        <button type="button" data-action="set-canvas-script-source-mode" data-script-source-mode="library" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-pressed="${mode === "library"}">选择剧本</button>
-        <button type="button" data-action="set-canvas-script-source-mode" data-script-source-mode="manual" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-pressed="${mode === "manual"}">自己填写</button>
-        <button type="button" data-action="set-canvas-script-source-mode" data-script-source-mode="novel" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-pressed="${mode === "novel"}">小说生成</button>
-      </div>
-      ${sourceContent}
+      <p class="canvas-script-workflow-input-hint">连接剧本或小说文本节点后，转换为角色、场景、道具和分镜。</p>
       <div class="canvas-script-workflow-steps" aria-label="剧本制作链路">
-        <span class="is-ready">剧本</span><i></i><span${count("asset") ? ' class="is-ready"' : ""}>资产 ${count("asset")}</span><i></i><span${count("storyboard") ? ' class="is-ready"' : ""}>分镜 ${count("storyboard")}</span><i></i><span${count("image") || count("video") ? ' class="is-ready"' : ""}>成片</span>
+        <span class="is-ready"><b aria-hidden="true">01</b><strong>确认镜头</strong><small>已完成</small></span><i></i><span class="is-ready"><b aria-hidden="true">02</b><strong>准备资产</strong><small>${count("character") + count("scene") + count("prop")} 项资产</small></span><i></i><span class="is-ready"><b aria-hidden="true">03</b><strong>合成提示词</strong><small>${count("storyboard")} 条分镜</small></span>
       </div>
-      <div class="canvas-script-workflow-actions" role="group" aria-label="剧本工作流操作">
-        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="assets" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>角色/场景/道具</button>
-        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="storyboard" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>生成分镜词</button>
-        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="image" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>生图 ${count("image")}</button>
-        <button type="button" data-action="create-canvas-script-workflow" data-workflow-action="video" data-node-id="${escapeCanvasX6Html(nodeId)}"${hasScript ? "" : " disabled aria-disabled=\"true\""}>生视频 ${count("video")}</button>
+      <div class="canvas-script-workflow-actions" role="group" aria-label="脚本分镜操作">
+        <button class="canvas-script-workflow-open" type="button" data-action="open-canvas-script-workspace" data-node-id="${escapeCanvasX6Html(nodeId)}">打开脚本节点</button>
+        <button class="canvas-script-workflow-download" type="button" data-action="download-canvas-selection" data-node-ids="${escapeCanvasX6Html(JSON.stringify(workflowNodes.filter((item) => String(item?.kind ?? item) === "storyboard").map((item) => String(item?.id ?? "")).filter(Boolean)))}"${count("storyboard") ? "" : " disabled aria-disabled=\"true\""}>下载分镜视频</button>
       </div>
     </div>
-    <footer><span>文本输出</span><span>${count("asset")} 资产技能 / ${count("image")} 图 / ${count("video")} 视频</span></footer>
+      <footer><span><i class="canvas-script-workflow-dot is-live"></i>工作流已就绪</span><span>${count("character")} 角色 · ${count("scene")} 场景 · ${count("storyboard")} 分镜</span></footer>
   </article>`;
 }
 
+function canvasScriptWorkflowPhaseLabel(phase) {
+  return ({ storyboard: "正在分镜中", character: "正在生成角色中", scene: "正在生成场景中", prop: "正在生成道具中" })[phase] ?? "正在生成分镜中";
+}
+
+function canvasScriptWorkflowPhaseShortLabel(phase) {
+  return ({ storyboard: "分镜", character: "角色", scene: "场景", prop: "道具" })[phase] ?? "处理中";
+}
 function renderCanvasImageGenerationX6Node(node = {}) {
   const data = node?.data ?? {};
   const type = String(node?.type ?? "");
@@ -1002,7 +1055,7 @@ function canvasGenericNodeLabel(type) {
   return ({
     "ai-text": "AI 文本", "ai-image": "AI 图片", "ai-audio": "AI 音频", "ai-markdown": "AI Markdown",
     "source-text": "文本源", "source-image": "图片源", upload: "上传", text: "文本", image: "图片结果",
-    markdown: "Markdown", comment: "评论", script: "剧本源", send: "生成节点", shape: "形状",
+    markdown: "Markdown", comment: "评论", script: "脚本节点", send: "生成节点", shape: "形状",
   })[String(type ?? "")] ?? "画布节点";
 }
 
@@ -1022,7 +1075,6 @@ export function refreshCanvasWorkflowGraph(workbench) {
     applyCanvasGraphEdgeStyle(graph, workbench?.ui?.canvasEdgeStyle);
     applyCanvasGraphEdgeVisibility(graph, workbench?.ui?.canvasEdgesHidden !== true);
     applyCanvasGraphViewportPreferences(graph, document.viewport);
-    applyCanvasGraphGrouping(graph, document);
     selectCurrentCanvasNode(graph, workbench);
     refreshCanvasSelectionActionToolbar(graph, workbench);
     return true;
@@ -1109,7 +1161,18 @@ export function reconcileCanvasWorkflowGraph(graph, nextData = {}) {
     for (const config of nextEdges) {
       const edge = graph.getCellById?.(config.id);
       if (!edge?.isEdge?.()) {
-        graph.addEdge?.(config);
+        const addedEdge = graph.addEdge?.(config) ?? graph.getCellById?.(config.id);
+        if (addedEdge) {
+          if (graph.__comicAiCanvasEdgeStyle) {
+            applyCanvasEdgeStyle(graph, addedEdge, graph.__comicAiCanvasEdgeStyle);
+          }
+          if (typeof graph.__comicAiCanvasEdgesVisible === "boolean") {
+            applyCanvasEdgeVisibility(addedEdge, graph.__comicAiCanvasEdgesVisible);
+          }
+        } else {
+          graph.__comicAiCanvasEdgeStyle = undefined;
+          graph.__comicAiCanvasEdgesVisible = undefined;
+        }
         stats.added += 1;
         continue;
       }
@@ -1142,7 +1205,11 @@ export function refreshCanvasWorkflowNode(workbench, nodeId, options = {}) {
     return refreshCanvasWorkflowGraph(workbench);
   }
   const previousNode = cell.getData()?.canvasNode ?? null;
-  const nextCanvasNode = structuredCloneSafe(node);
+  const nextNode = canvasDocumentToX6Data({
+    nodes: [node],
+    edges: Array.isArray(workbench.ui?.canvasDocument?.edges) ? workbench.ui.canvasDocument.edges : [],
+  }).nodes[0];
+  const nextCanvasNode = nextNode?.data?.canvasNode ?? structuredCloneSafe(node);
   if (node.type === "ai-storyboard" && workbench.ui?.canvasStoryboardPreparing?.[nodeId] === true) {
     nextCanvasNode.data = { ...(nextCanvasNode.data ?? {}), storyboardPreparing: true };
   }
@@ -1167,7 +1234,6 @@ export function refreshCanvasWorkflowNode(workbench, nodeId, options = {}) {
           : undefined,
     );
   }
-  const nextNode = canvasDocumentToX6Data({ nodes: [node], edges: [] }).nodes[0];
   if (!nextNode) {
     return false;
   }
@@ -1328,10 +1394,12 @@ export function resolveCanvasGraphInteractionOptions(viewport = {}) {
 
 export function applyCanvasGraphInteractionMode(graph, viewport = {}) {
   if (!graph?.options) return false;
-  const interactions = resolveCanvasGraphInteractionOptions(viewport);
   graph.__comicAiCanvasInteractionMode = ["hand", "classic"].includes(viewport.interactionMode)
     ? viewport.interactionMode
     : "default";
+  const interactionMode = graph.__comicAiCanvasInteractionMode;
+  if (graph.__comicAiAppliedInteractionMode === interactionMode) return true;
+  const interactions = resolveCanvasGraphInteractionOptions(viewport);
   graph.options.interacting = {
     ...(typeof graph.options.interacting === "object" ? graph.options.interacting : {}),
     ...interactions.interacting,
@@ -1349,6 +1417,7 @@ export function applyCanvasGraphInteractionMode(graph, viewport = {}) {
   graph.setRubberbandModifiers?.(interactions.selecting.modifiers);
   graph.enablePanning?.();
   graph.enableMouseWheel?.();
+  graph.__comicAiAppliedInteractionMode = interactionMode;
   return true;
 }
 
@@ -1517,11 +1586,16 @@ function resolveCanvasStoryboardReturnTarget(mount, graphNode, event = {}) {
 function wireGraphSync(graph, workbench, mount) {
   const sync = (options = {}) => {
     if (graph.__comicAiReconciling === true) return;
-    const pendingPositionNodeIds = options.positionNodeIds ?? workbench.canvasPendingPositionNodeIds;
+    const syncOptions = options?.edge ? { ...options, immediateSave: true } : options;
+    const pendingPositionNodeIds = syncOptions.positionNodeIds ?? workbench.canvasPendingPositionNodeIds;
     workbench.canvasPendingPositionNodeIds = null;
     const document = syncCanvasGraphDocument(graph, workbench, pendingPositionNodeIds?.length
-      ? { ...options, scheduleSave: false }
-      : options);
+      ? { ...syncOptions, scheduleSave: false }
+      : syncOptions);
+    const edgeTargetNodeId = syncOptions.edge?.getTargetCellId?.();
+    if (edgeTargetNodeId) {
+      refreshCanvasWorkflowNode(workbench, String(edgeTargetNodeId), { skipDocumentSync: true });
+    }
     if (pendingPositionNodeIds?.length && typeof workbench.persistCanvasNodePositions === "function") {
       const ids = new Set(pendingPositionNodeIds.map((id) => String(id)));
       const positions = (document?.nodes ?? [])
@@ -1534,7 +1608,7 @@ function wireGraphSync(graph, workbench, mount) {
       const positionSave = workbench.persistCanvasNodePositions(positions);
       if (positionSave?.catch) void positionSave.catch(() => undefined);
     }
-    if (options.clearToast) {
+    if (syncOptions.clearToast) {
       workbench.ui.toast = "";
     }
     return document;
@@ -1562,6 +1636,9 @@ function wireGraphSync(graph, workbench, mount) {
     );
     apply();
     if (connecting) requestFrame(apply);
+  };
+  const setNodeDragMotion = (node, dragging) => {
+    graph.findViewByCell?.(node)?.container?.classList?.toggle?.("is-canvas-node-flowing", dragging);
   };
   const scheduleViewportSync = ({ panning = false } = {}) => {
     const stage = mount?.closest?.(".canvas-stage");
@@ -1621,11 +1698,13 @@ function wireGraphSync(graph, workbench, mount) {
       selectionMovePending = true;
     }
   });
-  graph.on("node:move", () => {
+  graph.on("node:move", ({ node } = {}) => {
     mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
+    setNodeDragMotion(node, true);
   });
   graph.on("node:moved", (event) => {
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    setNodeDragMotion(event?.node, false);
     restoreDragSnapline();
     const storyboardReturnTarget = updateStoryboardReturnTarget(event);
     clearStoryboardReturnTarget();
@@ -1664,7 +1743,7 @@ function wireGraphSync(graph, workbench, mount) {
   graph.on("edge:connected", (event = {}) => {
     setConnectingEdgeMotion(event.edge, false);
     if (workbench.ui.canvasEdgesHidden === true) event.edge?.hide?.();
-    sync();
+    sync({ immediateSave: true, edge: event.edge });
     refreshCanvasConnectedEdgeMotion(graph);
   });
   graph.on("edge:removed", sync);
@@ -1693,6 +1772,7 @@ function wireGraphSync(graph, workbench, mount) {
   graph.on("node:click", ({ node }) => selectGraphNode(node));
   graph.on("node:mouseup", ({ node }) => {
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    setNodeDragMotion(node, false);
     restoreDragSnapline();
     refreshCanvasConnectedEdgeMotion(graph);
     selectGraphNode(node);
@@ -1714,12 +1794,14 @@ function wireGraphSync(graph, workbench, mount) {
   graph.on("cell:selected", ({ cell }) => {
     if (cell?.getData?.()?.canvasTransientEditor === true) return;
     selectCanvasNodeFromGraph(workbench, cell?.isNode?.() ? cell.id : null);
+    refreshCanvasConnectedEdgeMotion(graph);
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasSelectionActionToolbar(graph, workbench, mount);
   });
   graph.on("selection:changed", ({ added = [] } = {}) => {
     const selectedNode = added.find((cell) => cell?.isNode?.() && cell?.getData?.()?.canvasTransientEditor !== true);
     selectCanvasNodeFromGraph(workbench, selectedNode?.id);
+    refreshCanvasConnectedEdgeMotion(graph);
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasSelectionActionToolbar(graph, workbench, mount);
   });
@@ -1727,12 +1809,14 @@ function wireGraphSync(graph, workbench, mount) {
   selectionPlugin?.on?.("selection:changed", ({ added = [] } = {}) => {
     const selectedNode = added.find((cell) => cell?.isNode?.() && cell?.getData?.()?.canvasTransientEditor !== true);
     selectCanvasNodeFromGraph(workbench, selectedNode?.id);
+    refreshCanvasConnectedEdgeMotion(graph);
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasSelectionActionToolbar(graph, workbench, mount);
   });
   selectionPlugin?.on?.("box:mousemove", ({ e } = {}) => {
     if (!isCanvasSelectionTranslationEvent(e)) return;
     mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
+    constrainCanvasGraphSelectionToGroups(graph.getSelectedCells?.() ?? []);
   });
   selectionPlugin?.on?.("box:mouseup", () => {
     mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
@@ -1746,6 +1830,7 @@ function wireGraphSync(graph, workbench, mount) {
     }
   });
   graph.on("cell:unselected", () => {
+    refreshCanvasConnectedEdgeMotion(graph);
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasSelectionActionToolbar(graph, workbench, mount);
   });
@@ -1774,12 +1859,17 @@ function wireGraphSync(graph, workbench, mount) {
 }
 
 function refreshCanvasConnectedEdgeMotion(graph, nodeIds = []) {
-  const activeNodeIds = new Set(nodeIds.map(String).filter(Boolean));
+  const activeNodeIds = new Set([
+    ...canvasGraphCellAndDescendantIds(canvasSelectedGraphCells(graph)),
+    ...nodeIds,
+  ].map(String).filter(Boolean));
   for (const edge of graph?.getEdges?.() ?? []) {
     const sourceNodeId = String(edge.getSourceCellId?.() ?? edge.getSource?.()?.cell ?? "");
     const targetNodeId = String(edge.getTargetCellId?.() ?? edge.getTarget?.()?.cell ?? "");
     const flowing = activeNodeIds.has(sourceNodeId) || activeNodeIds.has(targetNodeId);
-    graph.findViewByCell?.(edge)?.container?.classList?.toggle?.("is-canvas-edge-flowing", flowing);
+    const edgeView = graph.findViewByCell?.(edge);
+    edgeView?.container?.classList?.toggle?.("is-canvas-edge-flowing", flowing);
+    if (flowing) edgeView?.container?.querySelector?.("path:nth-child(3)")?.setAttribute?.("pathLength", "100");
   }
 }
 
@@ -2012,17 +2102,23 @@ export function applyCanvasGraphEdgeStyle(graph, value) {
     graph.options.connecting.router = router;
     graph.options.connecting.connector = connector;
   }
+  if (graph.__comicAiCanvasEdgeStyle === style) return true;
   for (const edge of graph.getEdges()) {
-    if (style === "curve") {
-      edge.setRouter?.("normal", {}, { silent: true });
-      edge.setConnector?.("smooth", {}, { silent: true });
-    } else {
-      edge.setRouter?.("orth", { padding: 26 }, { silent: true });
-      edge.setConnector?.("rounded", { radius: 12 }, { silent: true });
-    }
-    graph.findViewByCell?.(edge)?.update?.();
+    applyCanvasEdgeStyle(graph, edge, style);
   }
+  graph.__comicAiCanvasEdgeStyle = style;
   return true;
+}
+
+function applyCanvasEdgeStyle(graph, edge, style, updateView = true) {
+  if (style === "curve") {
+    edge.setRouter?.("normal", {}, { silent: true });
+    edge.setConnector?.("smooth", {}, { silent: true });
+  } else {
+    edge.setRouter?.("orth", { padding: 26 }, { silent: true });
+    edge.setConnector?.("rounded", { radius: 12 }, { silent: true });
+  }
+  if (updateView) graph.findViewByCell?.(edge)?.update?.();
 }
 
 export function syncCanvasZoomControlDisplay(root, zoom) {
@@ -2041,22 +2137,30 @@ export function syncCanvasZoomControlDisplay(root, zoom) {
 
 export function applyCanvasGraphEdgeVisibility(graph, visible = true) {
   if (!graph?.getEdges) return false;
+  const nextVisible = Boolean(visible);
+  if (graph.__comicAiCanvasEdgesVisible === nextVisible) return true;
   for (const edge of graph.getEdges()) {
-    if (visible) edge.show?.();
-    else edge.hide?.();
-    edge.setVisible?.(visible, { silent: true });
+    applyCanvasEdgeVisibility(edge, nextVisible);
   }
-  if (!visible) {
+  if (!nextVisible) {
     for (const edge of graph.getEdges?.() ?? []) edge.removeTools?.();
     const disconnectButton = graph.__comicAiCanvasMount?.querySelector?.("[data-canvas-edge-disconnect]");
     if (disconnectButton) disconnectButton.hidden = true;
   }
+  graph.__comicAiCanvasEdgesVisible = nextVisible;
   return true;
+}
+
+function applyCanvasEdgeVisibility(edge, visible) {
+  if (visible) edge.show?.();
+  else edge.hide?.();
+  edge.setVisible?.(visible, { silent: true });
 }
 
 export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   if (!graph) return false;
   const snapEnabled = viewport.snapEnabled !== false;
+  if (graph.__comicAiCanvasSnapEnabled === snapEnabled) return true;
   if (graph.options?.snapline) graph.options.snapline.enabled = snapEnabled;
   graph.setGridSize?.(1);
   if (graph.options?.connecting) {
@@ -2066,6 +2170,7 @@ export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   if (snapEnabled) snapline?.enable?.();
   else snapline?.disable?.();
   graph.showGrid?.();
+  graph.__comicAiCanvasSnapEnabled = snapEnabled;
   return true;
 }
 
@@ -2161,6 +2266,7 @@ function applyCanvasGraphViewportStyles(graph, workbench, viewport = null) {
   stage?.style?.setProperty?.("--canvas-grid-major-size", `${gridSize * 5}px`);
   stage?.style?.setProperty?.("--canvas-grid-x", `${x}px`);
   stage?.style?.setProperty?.("--canvas-grid-y", `${y}px`);
+  stage?.style?.setProperty?.("--canvas-input-scale", String(1 / Math.max(0.1, normalizedZoom)));
   if (stage?.classList?.contains?.("is-x6-ready")) return true;
   const flow = workbench.root?.querySelector?.(".canvas-flow");
   flow?.style?.setProperty?.("--canvas-pan-x", `${x}px`);
@@ -2247,7 +2353,15 @@ export function resolveCanvasSelectionActionState(canvasDocument, selectedIds = 
   const selectedGroup = selectedNodes.length === 1 && selectedNodes[0]?.type === "group"
     ? selectedNodes[0]
     : null;
-  const mode = selectedGroup ? "group" : selectedNodes.length > 1 ? "selection" : "none";
+  const selectedScript = selectedNodes.length === 1 && selectedNodes[0]?.type === "script"
+    ? selectedNodes[0]
+    : null;
+  const scriptChildren = selectedScript
+    ? nodes.filter((node) => String(node?.data?.workflowParentId ?? "") === String(selectedScript.id))
+    : [];
+  const imageNodeCount = scriptChildren.filter((node) => ["character", "scene", "prop"].includes(String(node?.data?.workflowKind ?? ""))).length;
+  const videoNodeCount = scriptChildren.filter((node) => String(node?.data?.workflowKind ?? "") === "storyboard").length;
+  const mode = selectedGroup ? "group" : selectedScript ? "script" : selectedNodes.length > 1 ? "selection" : "none";
   const canGroup = mode === "selection" && selectedNodes.every((node) => (
     node?.type !== "group" && !String(node?.parentGroupId ?? "").trim()
   ));
@@ -2256,8 +2370,13 @@ export function resolveCanvasSelectionActionState(canvasDocument, selectedIds = 
     mode,
     selectedIds: normalizedIds,
     groupId: String(selectedGroup?.id ?? ""),
-    nodeCount: selectedGroup ? canvasGroupChildIds(selectedGroup).length : selectedNodes.length,
+    nodeCount: selectedGroup ? canvasGroupChildIds(selectedGroup).length : selectedScript ? scriptChildren.length : selectedNodes.length,
     canGroup,
+    ...(selectedScript ? {
+      scriptNodeId: String(selectedScript.id ?? ""),
+      imageNodeCount,
+      videoNodeCount,
+    } : {}),
   };
 }
 
@@ -2282,15 +2401,32 @@ export function refreshCanvasSelectionActionToolbar(graph, workbench, mount = gr
   toolbar.dataset.canvasSelectionActionToolbar = "true";
   toolbar.dataset.nodeIds = JSON.stringify(state.selectedIds);
   toolbar.dataset.groupId = state.groupId;
+  if (state.scriptNodeId) toolbar.dataset.scriptNodeId = state.scriptNodeId;
   toolbar.setAttribute("role", "toolbar");
-  toolbar.setAttribute("aria-label", state.mode === "group" ? "分组操作" : "所选节点操作");
+  toolbar.setAttribute("aria-label", state.mode === "group" ? "分组操作" : state.mode === "script" ? "脚本批量生成" : "所选节点操作");
   const count = document.createElement("span");
   count.className = "canvas-selection-action-count";
-  count.textContent = `${state.nodeCount} 个节点`;
+  count.textContent = state.mode === "script"
+    ? `${state.imageNodeCount} 资产 · ${state.videoNodeCount} 分镜`
+    : `${state.nodeCount} 个节点`;
   toolbar.append(count);
 
-  if (state.mode === "group") {
+  if (state.mode === "script") {
     toolbar.append(
+      createCanvasSelectionActionButton("open-canvas-script-batch-modal", "批量生成图片", "image", {
+        nodeId: state.scriptNodeId,
+        batchKind: "image",
+        disabled: state.imageNodeCount === 0,
+      }),
+      createCanvasSelectionActionButton("open-canvas-script-batch-modal", "批量生成视频", "video", {
+        nodeId: state.scriptNodeId,
+        batchKind: "video",
+        disabled: state.videoNodeCount === 0,
+      }),
+    );
+  } else if (state.mode === "group") {
+    toolbar.append(
+      createCanvasGroupLayoutControl(state.groupId, state.nodeCount === 0),
       createCanvasSelectionActionButton("run-canvas-group", "整组执行", "play", {
         nodeId: state.groupId,
         disabled: state.nodeCount === 0,
@@ -2323,16 +2459,49 @@ export function refreshCanvasSelectionActionToolbar(graph, workbench, mount = gr
   return true;
 }
 
+function createCanvasGroupLayoutControl(groupId, disabled = false) {
+  const control = document.createElement("div");
+  control.className = "canvas-group-layout-control";
+  const toggle = createCanvasSelectionActionButton("toggle-canvas-group-layout-menu", "整理组内节点", "layout", {
+    nodeId: groupId,
+    disabled,
+    iconOnly: true,
+  });
+  toggle.setAttribute("aria-haspopup", "menu");
+  toggle.setAttribute("aria-expanded", "false");
+  const menu = document.createElement("div");
+  menu.className = "canvas-group-layout-menu";
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "整理组内节点");
+  [
+    ["grid", "宫格排列", "layout"],
+    ["horizontal", "水平排列", "horizontal"],
+    ["vertical", "垂直排列", "vertical"],
+  ].forEach(([layout, label, icon]) => {
+    const option = createCanvasSelectionActionButton("arrange-canvas-group", label, icon, {
+      nodeId: groupId,
+      disabled,
+    });
+    option.dataset.layout = layout;
+    option.setAttribute("role", "menuitem");
+    menu.append(option);
+  });
+  control.append(toggle, menu);
+  return control;
+}
+
 function createCanvasSelectionActionButton(action, label, icon, options = {}) {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.action = action;
   if (options.nodeId) button.dataset.nodeId = String(options.nodeId);
   if (options.nodeIds) button.dataset.nodeIds = JSON.stringify(options.nodeIds);
+  if (options.batchKind) button.dataset.batchKind = String(options.batchKind);
   button.disabled = options.disabled === true;
   button.setAttribute("aria-label", label);
   button.title = label;
-  button.innerHTML = `${canvasSelectionActionIcon(icon)}<span>${label}</span>`;
+  if (options.iconOnly) button.classList.add("is-icon-only");
+  button.innerHTML = `${canvasSelectionActionIcon(icon)}${options.iconOnly ? "" : `<span>${label}</span>`}`;
   return button;
 }
 
@@ -2342,6 +2511,11 @@ function canvasSelectionActionIcon(icon) {
     group: '<rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" />',
     ungroup: '<rect x="3.5" y="3.5" width="7" height="7" rx="1" /><rect x="13.5" y="13.5" width="7" height="7" rx="1" /><path d="M14 7h4v4M10 17H6v-4" />',
     download: '<path d="M12 4v11" /><path d="m7.5 10.5 4.5 4.5 4.5-4.5" /><path d="M5 20h14" />',
+    layout: '<rect x="4" y="4" width="6" height="6" rx="1" /><rect x="14" y="4" width="6" height="6" rx="1" /><rect x="4" y="14" width="6" height="6" rx="1" /><rect x="14" y="14" width="6" height="6" rx="1" />',
+    horizontal: '<path d="M5 6h14M5 12h14M5 18h14" /><circle cx="3" cy="6" r=".6" fill="currentColor" stroke="none" /><circle cx="3" cy="12" r=".6" fill="currentColor" stroke="none" /><circle cx="3" cy="18" r=".6" fill="currentColor" stroke="none" />',
+    vertical: '<path d="M6 5v14M12 5v14M18 5v14" /><circle cx="6" cy="3" r=".6" fill="currentColor" stroke="none" /><circle cx="12" cy="3" r=".6" fill="currentColor" stroke="none" /><circle cx="18" cy="3" r=".6" fill="currentColor" stroke="none" />',
+    image: '<rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.5" /><path d="m5 18 5-5 3 3 2-2 4 4" />',
+    video: '<rect x="3" y="5" width="14" height="14" rx="2" /><path d="m17 10 4-2.5v9L17 14" />',
   };
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[icon] ?? paths.group}</svg>`;
 }
@@ -2350,17 +2524,22 @@ function positionCanvasSelectionActionToolbar(graph, mount = graph?.__comicAiCan
   const toolbar = mount?.querySelector?.("[data-canvas-selection-action-toolbar]");
   const backdrop = mount?.querySelector?.("[data-canvas-selection-action-backdrop]");
   if (!toolbar) return false;
-  const cells = resolveCanvasSelectionAnchorCells(
-    graph,
-    toolbar.dataset?.groupId,
-    canvasSelectedGraphCells(graph),
-  );
+  const scriptNodeId = String(toolbar.dataset?.scriptNodeId ?? "").trim();
+  const scriptCell = scriptNodeId ? graph?.getCellById?.(scriptNodeId) : null;
+  const cells = scriptCell?.isNode?.() && scriptCell?.getData?.()?.canvasNode?.type === "script"
+    ? [scriptCell]
+    : resolveCanvasSelectionAnchorCells(
+        graph,
+        toolbar.dataset?.groupId,
+        canvasSelectedGraphCells(graph),
+      );
   if (!cells.length) {
     toolbar.remove();
     backdrop?.remove?.();
     return false;
   }
-  const selectionBounds = resolveCanvasGroupMountBounds(graph, mount, toolbar.dataset?.groupId)
+  const selectionBounds = resolveCanvasNodeMountBounds(graph, mount, scriptNodeId, "script")
+    ?? resolveCanvasGroupMountBounds(graph, mount, toolbar.dataset?.groupId)
     ?? resolveCanvasSelectionMountBounds(graph, mount, cells);
   if (!selectionBounds) {
     toolbar.remove();
@@ -2392,19 +2571,23 @@ export function resolveCanvasSelectionAnchorCells(graph, groupId = "", selectedC
 }
 
 export function resolveCanvasGroupMountBounds(graph, mount, groupId = "") {
-  const normalizedGroupId = String(groupId ?? "").trim();
-  const group = normalizedGroupId ? graph?.getCellById?.(normalizedGroupId) : null;
-  if (!group?.isNode?.() || group?.getData?.()?.canvasNode?.type !== "group") return null;
-  const groupRect = graph.findViewByCell?.(group)?.container?.getBoundingClientRect?.();
+  return resolveCanvasNodeMountBounds(graph, mount, groupId, "group");
+}
+
+export function resolveCanvasNodeMountBounds(graph, mount, nodeId = "", expectedType = "") {
+  const normalizedNodeId = String(nodeId ?? "").trim();
+  const node = normalizedNodeId ? graph?.getCellById?.(normalizedNodeId) : null;
+  if (!node?.isNode?.() || (expectedType && node?.getData?.()?.canvasNode?.type !== expectedType)) return null;
+  const nodeRect = graph.findViewByCell?.(node)?.container?.getBoundingClientRect?.();
   const mountRect = mount?.getBoundingClientRect?.();
-  if (!groupRect || !mountRect || Number(groupRect.width) <= 0 || Number(groupRect.height) <= 0) return null;
+  if (!nodeRect || !mountRect || Number(nodeRect.width) <= 0 || Number(nodeRect.height) <= 0) return null;
   const scaleX = Number(mountRect.width) > 0 ? Number(mount.clientWidth ?? mountRect.width) / Number(mountRect.width) : 1;
   const scaleY = Number(mountRect.height) > 0 ? Number(mount.clientHeight ?? mountRect.height) / Number(mountRect.height) : 1;
   return {
-    left: (Number(groupRect.left) - Number(mountRect.left)) * scaleX,
-    top: (Number(groupRect.top) - Number(mountRect.top)) * scaleY,
-    width: Number(groupRect.width) * scaleX,
-    height: Number(groupRect.height) * scaleY,
+    left: (Number(nodeRect.left) - Number(mountRect.left)) * scaleX,
+    top: (Number(nodeRect.top) - Number(mountRect.top)) * scaleY,
+    width: Number(nodeRect.width) * scaleX,
+    height: Number(nodeRect.height) * scaleY,
   };
 }
 
@@ -2465,6 +2648,39 @@ export function resolveCanvasGraphTranslationRestriction(view) {
   const parent = view?.cell?.getParent?.();
   if (parent?.getData?.()?.canvasNode?.type !== "group") return null;
   return parent.getBBox?.() ?? null;
+}
+
+export function constrainCanvasGraphSelectionToGroups(cells = []) {
+  const cellsByGroup = new Map();
+  for (const cell of Array.isArray(cells) ? cells : []) {
+    if (!cell?.isNode?.()) continue;
+    const parent = cell.getParent?.();
+    if (parent?.getData?.()?.canvasNode?.type !== "group") continue;
+    if (!cellsByGroup.has(parent)) cellsByGroup.set(parent, []);
+    if (!cellsByGroup.get(parent).includes(cell)) cellsByGroup.get(parent).push(cell);
+  }
+
+  let changed = false;
+  for (const [group, groupedCells] of cellsByGroup) {
+    const groupBounds = group.getBBox?.();
+    const boxes = groupedCells.map((cell) => cell.getBBox?.()).filter(Boolean);
+    if (!groupBounds || !boxes.length) continue;
+    const left = Math.min(...boxes.map((box) => Number(box.x)));
+    const top = Math.min(...boxes.map((box) => Number(box.y)));
+    const right = Math.max(...boxes.map((box) => Number(box.x) + Number(box.width)));
+    const bottom = Math.max(...boxes.map((box) => Number(box.y) + Number(box.height)));
+    const groupLeft = Number(groupBounds.x);
+    const groupTop = Number(groupBounds.y);
+    const groupRight = groupLeft + Number(groupBounds.width);
+    const groupBottom = groupTop + Number(groupBounds.height);
+    if (![left, top, right, bottom, groupLeft, groupTop, groupRight, groupBottom].every(Number.isFinite)) continue;
+    const dx = left < groupLeft ? groupLeft - left : right > groupRight ? groupRight - right : 0;
+    const dy = top < groupTop ? groupTop - top : bottom > groupBottom ? groupBottom - bottom : 0;
+    if (!dx && !dy) continue;
+    groupedCells.forEach((cell) => cell.translate?.(dx, dy, { canvasGroupRestriction: true }));
+    changed = true;
+  }
+  return changed;
 }
 
 export function resolveCanvasGraphNodeSelectionZIndex(node) {

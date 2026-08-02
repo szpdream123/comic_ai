@@ -168,6 +168,16 @@ describe("creator canvas validation", () => {
     assert.doesNotThrow(() => validateCanvasDocumentGraph(documentWith()));
   });
 
+  it("allows a text source to feed the script storyboard input", () => {
+    assert.doesNotThrow(() => validateCanvasDocumentGraph({
+      nodes: [
+        { id: "text-source", type: "source-text", data: { ports: { inputs: [], outputs: [{ id: "out_text", kind: "text" }] } } },
+        { id: "script", type: "script", data: { ports: CANONICAL_WORKFLOW_NODE_PORTS.script } },
+      ],
+      edges: [{ id: "edge-text-script", sourceNodeId: "text-source", sourcePortId: "out_text", targetNodeId: "script", targetPortId: "in_text" }],
+    }));
+  });
+
   it("allows image and video nodes to receive their supported media kinds", () => {
     const document = documentWith({
       id: "edge-1",

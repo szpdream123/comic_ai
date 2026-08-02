@@ -323,6 +323,17 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(recentOnlyResponse.status, 200);
       assert.deepEqual(recentOnly.data.items.map((item: { taskId: string }) => item.taskId), [taskId]);
 
+      const trackedTerminalResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?taskIds=${olderTaskId}&updatedAfter=2026-07-14T08%3A00%3A17.000Z`,
+        { headers: { cookie } },
+      );
+      const trackedTerminal = await trackedTerminalResponse.json();
+      assert.equal(trackedTerminalResponse.status, 200);
+      assert.deepEqual(
+        trackedTerminal.data.items.map((item: { taskId: string; status: string }) => [item.taskId, item.status]),
+        [[olderTaskId, "completed"]],
+      );
+
       const invalidIncrementalResponse = await fetch(
         `${server.origin}/api/task-center/tasks?cursor=invalid&updatedAfter=not-a-date`,
         { headers: { cookie } },
@@ -6400,6 +6411,26 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const purchased = library.items.find((item: { id: string }) => item.id === created.item.id);
       assert.equal(purchased.purchased, true);
       assert.equal(Object.prototype.hasOwnProperty.call(purchased, "content"), false);
+
+      const skillCatalogResponse = await fetch(`${server.origin}/api/creator/prompt-skills/catalog?category=scene_extract&page=1&pageSize=1`, {
+        headers: { cookie: buyerCookie },
+      });
+      const skillCatalog = await skillCatalogResponse.json();
+      assert.equal(skillCatalogResponse.status, 200);
+      assert.equal(skillCatalog.pagination.pageSize, 1);
+      assert.equal(Object.prototype.hasOwnProperty.call(skillCatalog, "ranking"), false);
+      assert.equal(skillCatalog.items.every((item: Record<string, unknown>) => !Object.prototype.hasOwnProperty.call(item, "content")), true);
+      assert.equal(typeof skillCatalog.categoryCounts.scene_extract, "number");
+
+      const skillLibraryResponse = await fetch(`${server.origin}/api/creator/prompt-skills/library?category=scene_extract&query=${encodeURIComponent("创作者")}&page=99&page_size=1`, {
+        headers: { cookie: buyerCookie },
+      });
+      const skillLibrary = await skillLibraryResponse.json();
+      assert.equal(skillLibraryResponse.status, 200);
+      assert.equal(skillLibrary.pagination.page, skillLibrary.pagination.totalPages || 1);
+      assert.equal(skillLibrary.pagination.pageSize, 1);
+      assert.equal(skillLibrary.items.some((item: { id: string }) => item.id === created.item.id), true);
+      assert.equal(Object.prototype.hasOwnProperty.call(skillLibrary.items[0], "content"), false);
     } finally {
       await server.close();
     }

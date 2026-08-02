@@ -3,10 +3,83 @@ import { describe, it } from "node:test";
 
 import {
   createAiStoryboardPreviewService,
+  createTextModelChatGateway,
   type TextChatGatewayLike,
 } from "./ai-storyboard-preview.service.ts";
 
 describe("ai storyboard preview service", () => {
+  it("routes canvas ownership through canvasProjectId without sending max_tokens", async () => {
+    const canvasProjectId = "40000000-0000-4000-8000-000000000099";
+    let capturedRequest: Record<string, unknown> | null = null;
+    let capturedContext: Record<string, unknown> | null = null;
+    const gateway = createTextModelChatGateway({
+      gateway: {
+        chat: {
+          completions: {
+            async create(request: Record<string, unknown>, context: Record<string, unknown>) {
+              capturedRequest = request;
+              capturedContext = context;
+              return {
+                providerRequestId: "provider-request-1",
+                stream: (async function* () {
+                  yield { choices: [{ delta: { content: "ok" } }] };
+                })(),
+                abort() {},
+                completed: Promise.resolve({
+                  status: "succeeded" as const,
+                  usage: null,
+                  usageSource: "provider_missing" as const,
+                }),
+              };
+            },
+          },
+        },
+      } as never,
+    });
+
+    for await (const _delta of gateway.streamJson!({
+      model: "text-model",
+      prompt: "prompt",
+      projectId: null,
+      canvasProjectId,
+    })) {
+      // Drain the stream so the gateway request completes.
+    }
+
+    assert.equal(capturedContext?.projectId, null);
+    assert.equal(capturedContext?.canvasProjectId, canvasProjectId);
+    assert.equal("max_tokens" in (capturedRequest ?? {}), false);
+  });
+
+  it("passes canvas ownership to every storyboard model stage", async () => {
+    const canvasProjectId = "40000000-0000-4000-8000-000000000098";
+    const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];
+    const gateway: TextChatGatewayLike = {
+      async completeJson(input) {
+        calls.push(input);
+        return JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] });
+      },
+      async *streamJson(input) {
+        calls.push(input);
+        yield JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] });
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    await service.generatePreview({
+      projectId: canvasProjectId,
+      canvasProjectId,
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene"],
+      packages: {},
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.projectId, null);
+    assert.equal(calls[0]?.canvasProjectId, canvasProjectId);
+  });
+
   it("uses deepseek-chat for script, scene, character and storyboard prompts", async () => {
     const gateway = new FakeTextGateway([
       JSON.stringify({
@@ -41,7 +114,7 @@ describe("ai storyboard preview service", () => {
     assert.equal(gateway.calls.length, 5);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text", "text", "text", "text", "text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [8192, 8192, 8192, 8192, 8192]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined, undefined, undefined, undefined, undefined]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /短剧快节奏/);
@@ -104,6 +177,61 @@ describe("ai storyboard preview service", () => {
     assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /【分镜1】/);
     assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /【镜头1】 转场: 无 镜头类型: 未注明 画面描述:/);
     assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /【镜头】3-4秒，中景固定镜头，任小野递出饭食。/);
+  });
+
+  it("splits labeled assets by each name and keeps each storyboard row complete", async () => {
+    const gateway = new FakeTextGateway([
+      [
+        "场景提取结果",
+        "-**场景名称**: 城外尸堆",
+        "-**画面构图**: 尸骸铺满前景",
+        "-**生图提示词**: 阴冷荒野全景",
+        "-**场景名称**: 铁木城门",
+        "-**画面构图**: 绞盘位于画面中央",
+        "-**生图提示词**: 暮色城门全景",
+      ].join("\n"),
+      [
+        "| 角色名称 | 角色描述 |",
+        "| --- | --- |",
+        "| 任小野 | 黑发少年，冷静警觉 |",
+        "| 叙言 | 瘦削青年，神情慌乱 |",
+      ].join("\n"),
+      [
+        "**1. 切割刀**",
+        "* **道具名称**: 切割刀",
+        "* **外观**: 黑色短刀",
+        "* **生图提示词**: 磨损刀刃",
+        "**2. 普通灰晶**",
+        "* **道具名称**: 普通灰晶",
+        "* **外观**: 灰白晶体",
+        "* **生图提示词**: 半透明碎片",
+      ].join("\n"),
+      [
+        "| 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |",
+        "| --- | --- | --- | --- |",
+        "| 分镜1：任小野拔刀。 | 无台词 | 尸堆前拔刀定格 | 【镜头1】特写拔刀<br>【镜头2】中景起身 |",
+        "| 分镜2：叙言后退。 | 快跑！ | 城门前惊慌定格 | 【镜头1】近景后退<br>【镜头2】全景逃跑 |",
+      ].join("\n"),
+    ]);
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000011",
+      scriptText: "任小野在尸堆前拔刀，叙言向城门后退。",
+      skipScriptStage: true,
+      packages: {},
+    });
+
+    assert.deepEqual(result.commitPayload.scenes.map((row) => row.sceneName), ["城外尸堆", "铁木城门"]);
+    assert.match(result.commitPayload.scenes[0]?.sceneDescription ?? "", /画面构图: 尸骸铺满前景/);
+    assert.doesNotMatch(result.commitPayload.scenes[0]?.sceneDescription ?? "", /铁木城门/);
+    assert.deepEqual(result.commitPayload.characters.map((row) => row.characterName), ["任小野", "叙言"]);
+    assert.match(result.commitPayload.characters[1]?.characterDescription ?? "", /瘦削青年，神情慌乱/);
+    assert.deepEqual(result.commitPayload.props.map((row) => row.propName), ["切割刀", "普通灰晶"]);
+    assert.match(result.commitPayload.props[0]?.propDescription ?? "", /生图提示词: 磨损刀刃/);
+    assert.doesNotMatch(result.commitPayload.props[0]?.propDescription ?? "", /普通灰晶/);
+    assert.equal(result.commitPayload.storyboards.length, 2);
+    assert.match(result.commitPayload.storyboards[0]?.plot ?? "", /^分镜1：任小野拔刀/);
+    assert.match(result.commitPayload.storyboards[0]?.videoPrompt ?? "", /【镜头2】中景起身/);
+    assert.match(result.commitPayload.storyboards[1]?.videoPrompt ?? "", /【镜头2】全景逃跑/);
   });
 
   it("skips the script generation stage when skipScriptStage is enabled", async () => {
@@ -354,11 +482,59 @@ describe("ai storyboard preview service", () => {
     });
 
     const storyboard = result.commitPayload.storyboards[0];
+    assert.match(gateway.calls[4]?.prompt ?? "", /【已生成资产名称清单（唯一命名来源）】/);
+    assert.match(gateway.calls[4]?.prompt ?? "", /场景：废土道路临时停驻点/);
+    assert.match(gateway.calls[4]?.prompt ?? "", /角色：我/);
+    assert.match(gateway.calls[4]?.prompt ?? "", /道具：机械臂；匕首/);
     assert.match(storyboard?.videoPrompt ?? "", /【资产对照表】/);
     assert.match(storyboard?.videoPrompt ?? "", /视频场景对照表: 废土道路临时停驻点=【@废土道路临时停驻点】/);
     assert.match(storyboard?.videoPrompt ?? "", /视频角色对照表: 我=【@我】/);
     assert.match(storyboard?.videoPrompt ?? "", /视频道具对照表: 机械臂=【@机械臂】；匕首=【@匕首】/);
     assert.match(storyboard?.assetReferenceText ?? "", /机械臂/);
+  });
+
+  it("canonicalizes storyboard @ names to the generated asset names", async () => {
+    const gateway = new FakeTextGateway([
+      JSON.stringify({
+        scenes: [{ sceneName: "铁木城门（城门外）", sceneImagePrompt: "黄昏城门" }],
+      }),
+      JSON.stringify({
+        characters: [{ characterName: "任小野", characterImagePrompt: "黑发少年" }],
+      }),
+      JSON.stringify({
+        props: [{ propName: "切割刀（任小野的短刀）", propImagePrompt: "黑色短刀" }],
+      }),
+      JSON.stringify({
+        storyboards: [{
+          shotNo: 1,
+          plot: "城门外拔刀",
+          videoPrompt: [
+            "任小野在城门外拔出切割刀。",
+            "资产对照表：",
+            "视频场景对照表: 城门外=【@城门外】",
+            "视频角色对照表: 任小野=【@任小野】",
+            "视频道具对照表: 切割刀=【@切割刀】",
+          ].join("\n"),
+          sceneName: "城门外",
+          characterNames: ["任小野"],
+          props: [{ propName: "切割刀" }],
+        }],
+      }),
+    ]);
+
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000012",
+      scriptText: "任小野在城门外拔出切割刀。",
+      skipScriptStage: true,
+      packages: {},
+    });
+
+    const storyboard = result.commitPayload.storyboards[0];
+    assert.match(gateway.calls[3]?.prompt ?? "", /场景：铁木城门（城门外）/);
+    assert.match(gateway.calls[3]?.prompt ?? "", /道具：切割刀（任小野的短刀）/);
+    assert.match(storyboard?.videoPrompt ?? "", /视频场景对照表: 铁木城门（城门外）=【@铁木城门（城门外）】/);
+    assert.match(storyboard?.videoPrompt ?? "", /视频道具对照表: 切割刀（任小野的短刀）=【@切割刀（任小野的短刀）】/);
+    assert.doesNotMatch(storyboard?.videoPrompt ?? "", /视频道具对照表: 切割刀=【@切割刀】/);
   });
 
   it("streams raw DeepSeek output before returning the final parsed preview", async () => {
@@ -898,6 +1074,34 @@ describe("ai storyboard preview service", () => {
     assert.doesNotMatch(shotCall?.prompt ?? "", /请根据【/);
     assert.doesNotMatch(shotCall?.prompt ?? "", /【返回协议】/);
     assert.doesNotMatch(shotCall?.prompt ?? "", /【剧本分镜列表】/);
+  });
+
+  it("retries an asset stage once when the model fails before producing output", async () => {
+    let calls = 0;
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error("provider failed"), { retryable: true });
+        yield [
+          JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
+          JSON.stringify({ characters: [{ characterName: "任小野" }] }),
+          JSON.stringify({ props: [{ propName: "饭食" }] }),
+          JSON.stringify({ storyboards: [{ shotNo: 1, plot: "递出饭食" }] }),
+        ][calls - 2]!;
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      packages: {},
+    });
+
+    assert.equal(calls, 5);
+    assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
   });
 
   it("yields each model chunk before the model stream is finished", async () => {
