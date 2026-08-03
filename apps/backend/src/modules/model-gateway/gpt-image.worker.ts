@@ -1368,7 +1368,7 @@ export async function finalizeGptImageArtifactJob(
   const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
   const artifact = parseArtifactFromProviderResponse(providerResponse);
   if (!artifact) {
-    return { status: "skipped" };
+    return { status: "failed", failureCode: "provider_output_missing" };
   }
 
   let persisted: PersistedGptImageArtifact;
@@ -1633,7 +1633,7 @@ export async function fetchGptImageArtifactJob(
   if (existing) return { status: "succeeded" };
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const artifact = parseArtifactFromProviderResponse(parseProviderResponse(row.provider_response_redacted_json));
-  if (!artifact) return { status: "skipped" };
+  if (!artifact) return { status: "failed", failureCode: "provider_output_missing" };
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,

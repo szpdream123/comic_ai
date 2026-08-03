@@ -98,6 +98,22 @@ describe("gpt-image artifact finalizer", () => {
     );
   });
 
+  it("applies a 64 MiB image cap and requires image content", () => {
+    const limits = __gptImageArtifactFinalizerTestUtils.readArtifactValidationConfig("image");
+    assert.deepEqual(limits, {
+      maxBytes: 64 * 1024 * 1024,
+      requiredContentTypePrefix: "image/",
+    });
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.assertProviderArtifactDownloadMetadata({
+        contentType: "application/json",
+        contentLength: 128,
+        ...limits,
+      }),
+      /provider_artifact_mime_invalid/,
+    );
+  });
+
   it("rejects non-audio provider content and streaming bodies that cross the audio cap", async () => {
     assert.throws(
       () => __gptImageArtifactFinalizerTestUtils.assertProviderArtifactDownloadMetadata({
@@ -106,7 +122,7 @@ describe("gpt-image artifact finalizer", () => {
         maxBytes: 100 * 1024 * 1024,
         requiredContentTypePrefix: "audio/",
       }),
-      /audio_artifact_mime_invalid/,
+      /provider_artifact_mime_invalid/,
     );
 
     const source = new ReadableStream<Uint8Array>({

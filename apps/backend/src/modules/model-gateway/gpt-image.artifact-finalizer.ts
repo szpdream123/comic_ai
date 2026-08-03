@@ -44,7 +44,7 @@ export async function persistGptImageArtifact(
   },
 ) {
   const mediaKind = input.artifact.mediaType === "audio" ? "audio" : "image";
-  const maxArtifactBytes = mediaKind === "audio" ? 100 * 1024 * 1024 : undefined;
+  const artifactValidation = readArtifactValidationConfig(mediaKind);
   const artifactMetadata = {
     episodeId: readString(input.snapshot.episodeId) ?? null,
     taskId: input.task.taskId,
@@ -90,8 +90,8 @@ export async function persistGptImageArtifact(
             env: input.env,
             fetchImpl: artifactFetchImpl,
             createdByUserId: input.task.createdByUserId,
-            maxBytes: maxArtifactBytes,
-            requiredContentTypePrefix: mediaKind === "audio" ? "audio/" : undefined,
+            maxBytes: artifactValidation.maxBytes,
+            requiredContentTypePrefix: artifactValidation.requiredContentTypePrefix,
             fetchTimeoutMs: readArtifactDownloadTimeoutMs(input.env, mediaKind),
             now: input.now,
           })
@@ -337,6 +337,7 @@ async function uploadProviderArtifactUrlToStorage(
         throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
           failureCode: "provider_output_download_failed",
           storageObjectId: storageObject?.id,
+          httpStatus: response.status,
         });
       }
       contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
@@ -485,7 +486,7 @@ function assertProviderArtifactDownloadMetadata(input: {
     input.contentType !== "application/octet-stream" &&
     !input.contentType.toLowerCase().startsWith(input.requiredContentTypePrefix.toLowerCase())
   ) {
-    throw Object.assign(new Error("audio_artifact_mime_invalid"), {
+    throw Object.assign(new Error("provider_artifact_mime_invalid"), {
       failureCode: "provider_output_download_failed",
     });
   }
@@ -514,6 +515,18 @@ function readArtifactDownloadTimeoutMs(env: NodeJS.ProcessEnv, mediaKind: "audio
   return mediaKind === "audio"
     ? parsePositiveInteger(env.AUDIO_GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 120_000, 600_000)
     : parsePositiveInteger(env.GENERATION_ARTIFACT_DOWNLOAD_TIMEOUT_MS, 5 * 60_000, 10 * 60_000);
+}
+
+function readArtifactValidationConfig(mediaKind: "audio" | "image") {
+  return mediaKind === "audio"
+    ? {
+        maxBytes: 100 * 1024 * 1024,
+        requiredContentTypePrefix: "audio/",
+      }
+    : {
+        maxBytes: 64 * 1024 * 1024,
+        requiredContentTypePrefix: "image/",
+      };
 }
 
 function parseContentLength(value: string | null) {
@@ -561,6 +574,7 @@ export const __gptImageArtifactFinalizerTestUtils = {
   createCountingUploadStream,
   readProviderArtifactBytes,
   readArtifactDownloadTimeoutMs,
+  readArtifactValidationConfig,
   readGenerationArtifactUploadConfig,
 };
 

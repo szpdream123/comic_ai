@@ -10,9 +10,109 @@ import {
 } from "../generation-bullmq.worker.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 import { dispatchClaimedGenerationOutboxEvents } from "../generation-outbox.dispatcher.ts";
-import { persistGptImageArtifactJob } from "../gpt-image.worker.ts";
+import {
+  handleGptImageArtifactQueueExhaustion,
+} from "../gpt-image-artifact-recovery.service.ts";
+import { fetchGptImageArtifactJob, persistGptImageArtifactJob } from "../gpt-image.worker.ts";
 
 describe("generation artifact recovery", () => {
+  it("keeps a transient exhausted image finalize wave running with a durable next retry", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = createArtifactRecoveryDb({ taskStatus: "running", providerStatus: {}, queries });
+
+    const outcome = await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task-image-retry",
+      error: Object.assign(new Error("provider_artifact_download_503"), {
+        failureCode: "provider_output_download_failed",
+        httpStatus: 503,
+      }),
+      now: new Date("2026-08-03T10:00:00.000Z"),
+    });
+
+    assert.equal(outcome, "retry_pending");
+    assert.ok(queries.some(({ sql }) => /UPDATE tasks task[\s\S]*SET status = 'running'/.test(sql)));
+    const snapshotUpdate = queries.find(({ sql }) => sql.includes("UPDATE ai_generation_task_snapshots"));
+    assert.ok(snapshotUpdate);
+    assert.match(snapshotUpdate.sql, /progress_stage = 'asset_transfer_retry_pending'/);
+    assert.match(String(snapshotUpdate.params[1]), /"round":1/);
+    assert.match(String(snapshotUpdate.params[1]), /"nextRetryAt":"2026-08-03T10:02:00.000Z"/);
+  });
+
+  it("moves permanent image artifact failures to storage manual review without releasing credits", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = createArtifactRecoveryDb({ taskStatus: "running", providerStatus: {}, queries });
+
+    const outcome = await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task-image-manual",
+      error: Object.assign(new Error("provider_artifact_download_404"), {
+        failureCode: "provider_output_download_failed",
+        httpStatus: 404,
+      }),
+      now: new Date("2026-08-03T10:00:00.000Z"),
+    });
+
+    assert.equal(outcome, "manual_review_required");
+    assert.ok(queries.some(({ sql }) => /UPDATE tasks task[\s\S]*SET status = 'manual_review_required'/.test(sql)));
+    const snapshotUpdate = queries.find(({ sql }) => sql.includes("UPDATE ai_generation_task_snapshots"));
+    assert.ok(snapshotUpdate);
+    assert.match(snapshotUpdate.sql, /progress_stage = 'asset_transfer_manual_review'/);
+    assert.match(snapshotUpdate.sql, /credit_status = 'manual_review_required'/);
+    assert.match(String(snapshotUpdate.params[2]), /admin_action_required/);
+  });
+
+  it("does not let a late exhausted callback overwrite a succeeded image task", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = createArtifactRecoveryDb({ taskStatus: "succeeded", providerStatus: {}, queries });
+
+    const outcome = await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task-image-succeeded",
+      error: Object.assign(new Error("late timeout"), {
+        failureCode: "provider_output_upload_failed",
+      }),
+      now: new Date("2026-08-03T10:00:00.000Z"),
+    });
+
+    assert.equal(outcome, "skipped");
+    assert.equal(queries.some(({ sql }) => sql.includes("UPDATE ai_generation_task_snapshots")), false);
+    assert.equal(queries.some(({ sql }) => /UPDATE tasks task/.test(sql)), false);
+  });
+
+  it("fails permanently when a provider-succeeded image has no artifact to finalize", async () => {
+    const result = await fetchGptImageArtifactJob({
+      async query(sql) {
+        if (sql.includes("FROM tasks t") && sql.includes("LEFT JOIN provider_requests pr")) {
+          return {
+            rows: [{
+              task_id: "task-no-artifact",
+              workflow_id: "workflow-no-artifact",
+              attempt_id: "attempt-no-artifact",
+              user_id: "user-no-artifact",
+              project_id: null,
+              input_snapshot_json: {},
+              created_by_user_id: "user-no-artifact",
+              provider_request_id: "provider-no-artifact",
+              external_request_id: "external-no-artifact",
+              provider_response_redacted_json: {},
+              reservation_id: null,
+              amount_reserved: null,
+            }],
+          };
+        }
+        if (sql.includes("provider_status_json->'artifactHandoff'") || sql.includes("FROM storage_objects")) {
+          return { rows: [] };
+        }
+        throw new Error(`unexpected_query:${sql}`);
+      },
+    } as never, {
+      taskId: "task-no-artifact",
+      runtime: {} as never,
+      env: {},
+      now: new Date("2026-08-03T10:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "failed", failureCode: "provider_output_missing" });
+  });
+
   it("uses distinct shard assignments for repeated retry-finalize outbox events", async () => {
     const taskId = "50000000-0000-4000-8000-000000000035";
     const eventIds = [
@@ -322,6 +422,35 @@ describe("generation artifact recovery", () => {
     assert.deepEqual(result, { status: "succeeded" });
   });
 });
+
+function createArtifactRecoveryDb(input: {
+  taskStatus: string;
+  providerStatus: Record<string, unknown>;
+  queries: Array<{ sql: string; params: unknown[] }>;
+}) {
+  return {
+    async query(sql: string, params: unknown[] = []) {
+      input.queries.push({ sql, params });
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] };
+      if (sql.includes("FOR UPDATE OF task")) {
+        return {
+          rows: [{
+            task_id: "task-image",
+            workflow_id: "workflow-image",
+            task_status: input.taskStatus,
+            current_attempt_id: "attempt-image",
+            input_snapshot_json: {},
+            provider_request_id: "provider-image",
+            reservation_id: null,
+            amount_reserved: null,
+            provider_status_json: input.providerStatus,
+          }],
+        };
+      }
+      return { rows: [{ id: "updated" }] };
+    },
+  };
+}
 
 function generationFinalizeOutboxEvent(id: string, taskId: string) {
   const now = new Date("2026-07-24T11:59:00.000Z");

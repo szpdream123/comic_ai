@@ -35,6 +35,10 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /finalizeRateLimiter: rateLimiter/);
     assert.match(launcherScript, /withDefaultStorageBucket\(job, storageRuntime\.bucket\)/);
     assert.match(launcherScript, /failGenerationTaskAfterQueueError/);
+    assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion/);
+    assert.match(launcherScript, /artifactQueueFailure && job\?\.data\?\.mediaType === "image"/);
+    assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion\(db, \{[\s\S]*taskId,[\s\S]*error,[\s\S]*now: failedAt/);
+    assert.match(launcherScript, /if \(imageRecoveryOutcome !== "skipped"\) return/);
     assert.match(launcherScript, /job\.attemptsMade/);
     assert.match(launcherScript, /job\?\.opts\?\.attempts/);
     assert.doesNotMatch(launcherScript, /SUBMIT_IMAGE_WORKER_CAPACITY/);
