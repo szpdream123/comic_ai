@@ -110,7 +110,6 @@ export function classifyGptImageArtifactRecoveryFailure(
   const failure = normalizeRecoveryFailure(value);
   if ([
     "provider_output_missing",
-    "provider_output_persist_failed",
   ].includes(failure.failureCode)) {
     return { kind: "permanent", reason: failure.failureCode };
   }
@@ -127,6 +126,8 @@ export function classifyGptImageArtifactRecoveryFailure(
   const permanentMessagePatterns = [
     "provider_artifact_too_large",
     "provider_artifact_mime_invalid",
+    "provider_artifact_base64_invalid",
+    "provider_artifact_content_invalid",
     "provider_artifact_url_",
     "gpt_image_artifact_source_missing",
     "storage_put_object_required",
@@ -191,6 +192,18 @@ export function isGptImageArtifactRecoveryExpired(
   now: Date,
 ): boolean {
   return Boolean(state && state.deadlineAt.getTime() <= now.getTime());
+}
+
+export function resolveGptImageArtifactRecoveryDispatch(
+  value: unknown,
+  now: Date,
+): "dispatch" | "wait" | "manual_review" | "skip" {
+  if (value == null) return "dispatch";
+  const state = parseGptImageArtifactRecoveryState(value);
+  if (!state) return "dispatch";
+  if (state.state === "manual_review") return "skip";
+  if (isGptImageArtifactRecoveryExpired(state, now)) return "manual_review";
+  return isGptImageArtifactRecoveryDue(state, now) ? "dispatch" : "wait";
 }
 
 export function serializeGptImageArtifactRecoveryState(

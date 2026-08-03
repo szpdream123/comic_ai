@@ -108,10 +108,117 @@ describe("gpt-image artifact finalizer", () => {
       () => __gptImageArtifactFinalizerTestUtils.assertProviderArtifactDownloadMetadata({
         contentType: "application/json",
         contentLength: 128,
+        invalidMimeMessage: "provider_artifact_mime_invalid",
         ...limits,
       }),
       /provider_artifact_mime_invalid/,
     );
+  });
+
+  it("rejects oversized and non-image base64 artifacts before decoding", () => {
+    const limits = {
+      ...__gptImageArtifactFinalizerTestUtils.readArtifactValidationConfig("image"),
+      maxBytes: 10,
+    };
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.decodeProviderArtifactBytes({
+        mediaType: "image",
+        mimeType: "image/png",
+        b64Json: "A".repeat(16),
+      }, {
+        contentType: "image/png",
+        mediaKind: "image",
+        ...limits,
+      }),
+      /provider_artifact_too_large/,
+    );
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.decodeProviderArtifactBytes({
+        mediaType: "image",
+        mimeType: "application/json",
+        b64Json: "e30=",
+      }, {
+        contentType: "application/json",
+        mediaKind: "image",
+        ...limits,
+      }),
+      /provider_artifact_mime_invalid/,
+    );
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.decodeProviderArtifactBytes({
+        mediaType: "image",
+        mimeType: "image/png",
+        b64Json: "not*base64",
+      }, {
+        contentType: "image/png",
+        mediaKind: "image",
+        ...limits,
+      }),
+      /provider_artifact_base64_invalid/,
+    );
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.decodeProviderArtifactBytes({
+        mediaType: "image",
+        mimeType: "image/png",
+        b64Json: "e30=",
+      }, {
+        contentType: "image/png",
+        mediaKind: "image",
+        ...limits,
+      }),
+      /provider_artifact_content_invalid/,
+    );
+  });
+
+  it("caps each recovery I/O attempt at the remaining six-hour window", () => {
+    const deadline = new Date("2026-08-03T16:00:00.000Z");
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.resolveRecoveryAttemptTimeoutMs(
+        30 * 60_000,
+        deadline,
+        new Date("2026-08-03T15:58:00.000Z"),
+      ),
+      2 * 60_000,
+    );
+    assert.throws(
+      () => __gptImageArtifactFinalizerTestUtils.resolveRecoveryAttemptTimeoutMs(
+        30 * 60_000,
+        deadline,
+        deadline,
+      ),
+      /artifact_recovery_deadline_reached/,
+    );
+  });
+
+  it("marks deterministic image artifact failures as unrecoverable for BullMQ", () => {
+    const source = Object.assign(new Error("provider_artifact_mime_invalid"), {
+      failureCode: "provider_output_download_failed",
+    });
+    const error = __gptImageArtifactFinalizerTestUtils.toUnrecoverableImageArtifactError(source);
+    assert.equal((error as Error).name, "UnrecoverableError");
+    assert.equal((error as { failureCode?: string }).failureCode, "provider_output_download_failed");
+  });
+
+  it("does not start the storage HEAD check after the recovery deadline", async () => {
+    let headCalls = 0;
+    const runtime = {
+      adapter: {
+        async headObject() {
+          headCalls += 1;
+          return { exists: true, contentLength: 1 };
+        },
+      },
+    };
+    await assert.rejects(
+      () => __gptImageArtifactFinalizerTestUtils.assertStoredArtifactAvailable(runtime as never, {
+        bucket: "creator-test",
+        objectKey: "image.png",
+        sizeBytes: 1,
+        recoveryDeadlineAt: new Date("2000-01-01T00:00:00.000Z"),
+      }),
+      /artifact_recovery_deadline_reached/,
+    );
+    assert.equal(headCalls, 0);
   });
 
   it("rejects non-audio provider content and streaming bodies that cross the audio cap", async () => {
@@ -122,7 +229,7 @@ describe("gpt-image artifact finalizer", () => {
         maxBytes: 100 * 1024 * 1024,
         requiredContentTypePrefix: "audio/",
       }),
-      /provider_artifact_mime_invalid/,
+      /audio_artifact_mime_invalid/,
     );
 
     const source = new ReadableStream<Uint8Array>({

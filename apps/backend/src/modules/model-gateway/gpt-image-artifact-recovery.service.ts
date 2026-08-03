@@ -57,7 +57,7 @@ export async function handleGptImageArtifactQueueExhaustion(
         LEFT JOIN generation_task_credit_reservations task_reservation
           ON task_reservation.task_id = task.id
         LEFT JOIN credit_reservations reservation
-          ON reservation.id = task_reservation.reservation_id
+          ON reservation.id = task_reservation.id
         WHERE task.id = $1
           AND task.task_type = 'episode_generate_image'
           AND task.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
@@ -73,6 +73,17 @@ export async function handleGptImageArtifactQueueExhaustion(
 
     const providerStatus = readRecord(row.provider_status_json);
     const previous = parseGptImageArtifactRecoveryState(providerStatus.artifactRecovery);
+    if (
+      previous?.state === "manual_review"
+      || (
+        previous?.state === "retry_pending"
+        && previous.nextRetryAt
+        && previous.nextRetryAt.getTime() > input.now.getTime()
+      )
+    ) {
+      await db.query("COMMIT");
+      return "skipped";
+    }
     const decision = planGptImageArtifactRecovery({
       now: input.now,
       previous,
@@ -89,11 +100,11 @@ export async function handleGptImageArtifactQueueExhaustion(
               locked_by = NULL,
               locked_until = NULL,
               heartbeat_at = NULL,
-              updated_at = $3
+              updated_at = $2
           WHERE task.id = $1
             AND task.status IN ('running', 'failed', 'result_unknown', 'manual_review_required')
         `,
-        [row.task_id, serializedRecovery, input.now],
+        [row.task_id, input.now],
       );
       if (row.current_attempt_id) {
         await db.query(
@@ -148,7 +159,6 @@ export async function handleGptImageArtifactQueueExhaustion(
       failureCode: "provider_output_storage_failed",
       lastFailureCode: decision.lastFailureCode,
       displayMessage: "供应商已完成图片生成，但平台未能在自动恢复窗口内保存结果，正在等待后台处理。",
-      errorMessage: decision.lastErrorMessage,
       recoveryReason: decision.reason,
       noticeType: "admin_action_required",
     });
@@ -160,11 +170,11 @@ export async function handleGptImageArtifactQueueExhaustion(
             locked_by = NULL,
             locked_until = NULL,
             heartbeat_at = NULL,
-            updated_at = $4
+            updated_at = $2
         WHERE task.id = $1
           AND task.status IN ('running', 'failed', 'result_unknown', 'manual_review_required')
       `,
-      [row.task_id, serializedRecovery, failure, input.now],
+      [row.task_id, input.now],
     );
     if (row.current_attempt_id) {
       await db.query(

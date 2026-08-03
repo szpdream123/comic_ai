@@ -1,4 +1,5 @@
 import { Readable, Transform } from "node:stream";
+import { UnrecoverableError } from "bullmq";
 
 import type { AssetType } from "../project/asset.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
@@ -11,6 +12,7 @@ import {
 import type { UploadSessionRuntime } from "../storage/upload-session.service.ts";
 import type { MediaGenerationArtifact } from "./provider-adapter.contract.ts";
 import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
+import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
 
 export interface GptImageArtifactTaskContext {
   userId: string;
@@ -41,6 +43,7 @@ export async function persistGptImageArtifact(
       sourceUrl: string;
       downloadUrl: string;
     }>;
+    recoveryDeadlineAt?: Date | null;
   },
 ) {
   const mediaKind = input.artifact.mediaType === "audio" ? "audio" : "image";
@@ -63,7 +66,12 @@ export async function persistGptImageArtifact(
 
   try {
     const artifactFetchImpl = await resolveArtifactFetch(input);
-    const bytes = decodeImageArtifactBytes(input.artifact);
+    const bytes = decodeProviderArtifactBytes(input.artifact, {
+      contentType,
+      mediaKind,
+      maxBytes: artifactValidation.maxBytes,
+      requiredContentTypePrefix: artifactValidation.requiredContentTypePrefix,
+    });
     const uploaded = bytes
       ? await uploadProviderArtifactBytesToStorage(db, {
           bytes,
@@ -75,7 +83,9 @@ export async function persistGptImageArtifact(
           runtime: input.runtime,
           metadata: artifactMetadata,
           env: input.env,
+          mediaKind,
           createdByUserId: input.task.createdByUserId,
+          recoveryDeadlineAt: input.recoveryDeadlineAt,
           now: input.now,
         })
       : input.artifact.url
@@ -92,7 +102,12 @@ export async function persistGptImageArtifact(
             createdByUserId: input.task.createdByUserId,
             maxBytes: artifactValidation.maxBytes,
             requiredContentTypePrefix: artifactValidation.requiredContentTypePrefix,
+            invalidMimeMessage: mediaKind === "audio"
+              ? "audio_artifact_mime_invalid"
+              : "provider_artifact_mime_invalid",
+            mediaKind,
             fetchTimeoutMs: readArtifactDownloadTimeoutMs(input.env, mediaKind),
+            recoveryDeadlineAt: input.recoveryDeadlineAt,
             now: input.now,
           })
         : null;
@@ -126,6 +141,7 @@ export async function persistGptImageArtifact(
       bucket: available.bucket,
       objectKey: available.objectKey,
       sizeBytes: available.sizeBytes,
+      recoveryDeadlineAt: input.recoveryDeadlineAt,
     });
 
     const urls = input.resolveUrls
@@ -160,7 +176,7 @@ export async function persistGptImageArtifact(
         now: input.now,
       });
     }
-    throw error;
+    throw mediaKind === "image" ? toUnrecoverableImageArtifactError(error) : error;
   }
 }
 
@@ -218,9 +234,35 @@ function buildDefaultArtifactUrls(runtime: UploadSessionRuntime, object: Storage
   };
 }
 
-function decodeImageArtifactBytes(artifact: MediaGenerationArtifact) {
-  if (artifact.b64Json && artifact.b64Json.trim()) {
-    return new Uint8Array(Buffer.from(artifact.b64Json, "base64"));
+function decodeProviderArtifactBytes(
+  artifact: MediaGenerationArtifact,
+  input: {
+    contentType: string;
+    mediaKind: "audio" | "image";
+    maxBytes: number;
+    requiredContentTypePrefix: string;
+  },
+) {
+  if (artifact.b64Json && hasNonWhitespace(artifact.b64Json)) {
+    if (input.mediaKind === "audio") {
+      return new Uint8Array(Buffer.from(artifact.b64Json, "base64"));
+    }
+    const estimatedBytes = validateAndEstimateBase64DecodedByteLength(artifact.b64Json);
+    assertProviderArtifactDownloadMetadata({
+      contentType: input.contentType,
+      contentLength: estimatedBytes,
+      maxBytes: input.maxBytes,
+      requiredContentTypePrefix: input.requiredContentTypePrefix,
+      invalidMimeMessage: input.mediaKind === "audio"
+        ? "audio_artifact_mime_invalid"
+        : "provider_artifact_mime_invalid",
+    });
+    const bytes = new Uint8Array(Buffer.from(artifact.b64Json, "base64"));
+    if (bytes.byteLength > input.maxBytes) {
+      throw createArtifactTooLargeError(input.maxBytes, bytes.byteLength);
+    }
+    assertDecodedImageContent(bytes, input.contentType);
+    return bytes;
   }
   return null;
 }
@@ -237,7 +279,9 @@ async function uploadProviderArtifactBytesToStorage(
     runtime: UploadSessionRuntime;
     metadata: Record<string, unknown>;
     env: NodeJS.ProcessEnv;
+    mediaKind: "audio" | "image";
     createdByUserId?: string | null;
+    recoveryDeadlineAt?: Date | null;
     now: Date;
   },
 ): Promise<{
@@ -247,6 +291,7 @@ async function uploadProviderArtifactBytesToStorage(
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
   const { retryAttempts, retryDelayMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
+  assertRecoveryTimeRemaining(input.recoveryDeadlineAt);
   const storageObject = await createScopedStorageObject(db, {
     userId: input.userId,
     projectId: input.projectId,
@@ -264,6 +309,7 @@ async function uploadProviderArtifactBytesToStorage(
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     try {
+      const attemptTimeoutMs = resolveRecoveryAttemptTimeoutMs(uploadTimeoutMs, input.recoveryDeadlineAt);
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
       }
@@ -273,7 +319,7 @@ async function uploadProviderArtifactBytesToStorage(
         body: input.bytes,
         contentType: input.contentType,
         contentLength: input.bytes.byteLength,
-        timeoutMs: uploadTimeoutMs,
+        timeoutMs: attemptTimeoutMs,
       });
       return {
         storageObject,
@@ -282,13 +328,29 @@ async function uploadProviderArtifactBytesToStorage(
         uploadResult,
       };
     } catch (error) {
-      if (attempt >= retryAttempts) {
-        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-          failureCode: "provider_output_upload_failed",
-          storageObjectId: storageObject.id,
-        });
+      const transferError = annotateArtifactTransferError(
+        error,
+        "provider_output_upload_failed",
+        storageObject.id,
+      );
+      if (
+        input.mediaKind === "image"
+        && classifyGptImageArtifactRecoveryFailure(transferError).kind === "permanent"
+      ) {
+        throw transferError;
       }
-      await delay(retryDelayMs);
+      if (attempt >= retryAttempts) {
+        throw transferError;
+      }
+      try {
+        await delayWithinRecoveryWindow(retryDelayMs, input.recoveryDeadlineAt);
+      } catch (deadlineError) {
+        throw annotateArtifactTransferError(
+          deadlineError,
+          "provider_output_upload_failed",
+          storageObject.id,
+        );
+      }
     }
   }
 
@@ -313,7 +375,10 @@ async function uploadProviderArtifactUrlToStorage(
     createdByUserId?: string | null;
     maxBytes?: number;
     requiredContentTypePrefix?: string;
+    invalidMimeMessage?: string;
+    mediaKind: "audio" | "image";
     fetchTimeoutMs?: number;
+    recoveryDeadlineAt?: Date | null;
     now: Date;
   },
 ): Promise<{
@@ -330,8 +395,12 @@ async function uploadProviderArtifactUrlToStorage(
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     let response: Response | null = null;
     try {
-      response = await fetchProviderArtifactSafely(input.artifactUrl, input.fetchTimeoutMs
-        ? { signal: AbortSignal.timeout(input.fetchTimeoutMs) }
+      const fetchTimeoutMs = resolveRecoveryAttemptTimeoutMs(
+        input.fetchTimeoutMs ?? 5 * 60_000,
+        input.recoveryDeadlineAt,
+      );
+      response = await fetchProviderArtifactSafely(input.artifactUrl, fetchTimeoutMs
+        ? { signal: AbortSignal.timeout(fetchTimeoutMs) }
         : undefined, input.fetchImpl);
       if (!response.ok || !response.body) {
         throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
@@ -347,6 +416,7 @@ async function uploadProviderArtifactUrlToStorage(
         contentLength: knownSizeBytes,
         maxBytes: input.maxBytes,
         requiredContentTypePrefix: input.requiredContentTypePrefix,
+        invalidMimeMessage: input.invalidMimeMessage,
       });
 
       if (!storageObject) {
@@ -368,6 +438,10 @@ async function uploadProviderArtifactUrlToStorage(
 
       const bytes = await readProviderArtifactBytes(response.body, input.maxBytes);
       knownSizeBytes = bytes.byteLength;
+      if (input.mediaKind === "image") {
+        assertDecodedImageContent(bytes, contentType);
+      }
+      const attemptTimeoutMs = resolveRecoveryAttemptTimeoutMs(uploadTimeoutMs, input.recoveryDeadlineAt);
       if (typeof input.runtime.adapter.putObject !== "function") {
         throw new Error("storage_put_object_required");
       }
@@ -377,7 +451,7 @@ async function uploadProviderArtifactUrlToStorage(
         body: bytes,
         contentType,
         contentLength: knownSizeBytes,
-        timeoutMs: uploadTimeoutMs,
+        timeoutMs: attemptTimeoutMs,
       });
       return {
         storageObject,
@@ -389,13 +463,21 @@ async function uploadProviderArtifactUrlToStorage(
       const failureCode = !response || readErrorFailureCode(error) === "provider_output_download_failed"
         ? "provider_output_download_failed"
         : "provider_output_upload_failed";
-      if (attempt >= retryAttempts) {
-        throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-          failureCode,
-          storageObjectId: storageObject?.id,
-        });
+      const transferError = annotateArtifactTransferError(error, failureCode, storageObject?.id);
+      if (
+        input.mediaKind === "image"
+        && classifyGptImageArtifactRecoveryFailure(transferError).kind === "permanent"
+      ) {
+        throw transferError;
       }
-      await delay(retryDelayMs);
+      if (attempt >= retryAttempts) {
+        throw transferError;
+      }
+      try {
+        await delayWithinRecoveryWindow(retryDelayMs, input.recoveryDeadlineAt);
+      } catch (deadlineError) {
+        throw annotateArtifactTransferError(deadlineError, failureCode, storageObject?.id);
+      }
     } finally {
       await response?.body?.cancel().catch(() => undefined);
     }
@@ -480,23 +562,152 @@ function assertProviderArtifactDownloadMetadata(input: {
   contentLength: number | null;
   maxBytes?: number;
   requiredContentTypePrefix?: string;
+  invalidMimeMessage?: string;
 }) {
   if (
     input.requiredContentTypePrefix &&
     input.contentType !== "application/octet-stream" &&
     !input.contentType.toLowerCase().startsWith(input.requiredContentTypePrefix.toLowerCase())
   ) {
-    throw Object.assign(new Error("provider_artifact_mime_invalid"), {
+    throw Object.assign(new Error(input.invalidMimeMessage ?? "audio_artifact_mime_invalid"), {
       failureCode: "provider_output_download_failed",
     });
   }
   if (input.maxBytes !== undefined && input.contentLength !== null && input.contentLength > input.maxBytes) {
-    throw Object.assign(new Error("provider_artifact_too_large"), {
+    throw createArtifactTooLargeError(input.maxBytes, input.contentLength);
+  }
+}
+
+function createArtifactTooLargeError(maxBytes: number, sizeBytes: number) {
+  return Object.assign(new Error("provider_artifact_too_large"), {
+    failureCode: "provider_output_download_failed",
+    maxBytes,
+    sizeBytes,
+  });
+}
+
+function annotateArtifactTransferError(
+  error: unknown,
+  failureCode: string,
+  storageObjectId?: string | null,
+) {
+  return Object.assign(error instanceof Error ? error : new Error(String(error)), {
+    failureCode,
+    storageObjectId: storageObjectId ?? undefined,
+  });
+}
+
+function hasNonWhitespace(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!/\s/.test(value[index] ?? "")) return true;
+  }
+  return false;
+}
+
+function validateAndEstimateBase64DecodedByteLength(value: string) {
+  let significantLength = 0;
+  let padding = 0;
+  let sawPadding = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index] ?? "";
+    if (/\s/.test(character)) continue;
+    const isAlphabet = /[A-Za-z0-9+/_-]/.test(character);
+    if (character !== "=" && (!isAlphabet || sawPadding)) {
+      throw createInvalidBase64Error();
+    }
+    significantLength += 1;
+    if (character === "=") {
+      sawPadding = true;
+      padding += 1;
+    }
+  }
+  if (
+    significantLength === 0
+    || significantLength % 4 === 1
+    || padding > 2
+    || (padding > 0 && significantLength % 4 !== 0)
+  ) {
+    throw createInvalidBase64Error();
+  }
+  return Math.max(0, Math.floor(significantLength * 3 / 4) - Math.min(2, padding));
+}
+
+function createInvalidBase64Error() {
+  return Object.assign(new Error("provider_artifact_base64_invalid"), {
+    failureCode: "provider_output_download_failed",
+  });
+}
+
+function assertDecodedImageContent(bytes: Uint8Array, contentType: string) {
+  const detected = detectImageContentType(bytes);
+  const declared = contentType.toLowerCase() === "image/jpg" ? "image/jpeg" : contentType.toLowerCase();
+  if (!detected || (declared !== "application/octet-stream" && declared !== detected)) {
+    throw Object.assign(new Error("provider_artifact_content_invalid"), {
       failureCode: "provider_output_download_failed",
-      maxBytes: input.maxBytes,
-      sizeBytes: input.contentLength,
     });
   }
+}
+
+function detectImageContentType(bytes: Uint8Array) {
+  if (
+    bytes.length >= 8
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 6) {
+    const header = Buffer.from(bytes.subarray(0, 6)).toString("ascii");
+    if (header === "GIF87a" || header === "GIF89a") return "image/gif";
+  }
+  if (
+    bytes.length >= 12
+    && Buffer.from(bytes.subarray(0, 4)).toString("ascii") === "RIFF"
+    && Buffer.from(bytes.subarray(8, 12)).toString("ascii") === "WEBP"
+  ) return "image/webp";
+  if (
+    bytes.length >= 12
+    && Buffer.from(bytes.subarray(4, 8)).toString("ascii") === "ftyp"
+    && ["avif", "avis"].includes(Buffer.from(bytes.subarray(8, 12)).toString("ascii"))
+  ) return "image/avif";
+  return null;
+}
+
+function resolveRecoveryAttemptTimeoutMs(
+  configuredTimeoutMs: number,
+  recoveryDeadlineAt?: Date | null,
+  now = new Date(),
+) {
+  if (!recoveryDeadlineAt) return configuredTimeoutMs;
+  const remainingMs = recoveryDeadlineAt.getTime() - now.getTime();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    throw Object.assign(new Error("artifact_recovery_deadline_reached"), {
+      failureCode: "provider_output_upload_failed",
+    });
+  }
+  return Math.max(1, Math.min(configuredTimeoutMs, remainingMs));
+}
+
+function assertRecoveryTimeRemaining(recoveryDeadlineAt?: Date | null) {
+  resolveRecoveryAttemptTimeoutMs(1, recoveryDeadlineAt);
+}
+
+async function delayWithinRecoveryWindow(delayMs: number, recoveryDeadlineAt?: Date | null) {
+  const boundedDelayMs = resolveRecoveryAttemptTimeoutMs(delayMs || 1, recoveryDeadlineAt);
+  await delay(delayMs > 0 ? boundedDelayMs : 0);
+  assertRecoveryTimeRemaining(recoveryDeadlineAt);
+}
+
+function toUnrecoverableImageArtifactError(error: unknown) {
+  if (error instanceof UnrecoverableError) return error;
+  if (classifyGptImageArtifactRecoveryFailure(error).kind !== "permanent") return error;
+  const source = error instanceof Error ? error : new Error(String(error));
+  return Object.assign(new UnrecoverableError(source.message), {
+    cause: source,
+    failureCode: readErrorFailureCode(source),
+    httpStatus: readErrorHttpStatus(source),
+    storageObjectId: readErrorStorageObjectId(source),
+    storageObjectKey: readErrorStorageObjectKey(source),
+  });
 }
 
 function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
@@ -543,8 +754,10 @@ async function assertStoredArtifactAvailable(
     bucket: string;
     objectKey: string;
     sizeBytes: number | null;
+    recoveryDeadlineAt?: Date | null;
   },
 ) {
+  assertRecoveryTimeRemaining(input.recoveryDeadlineAt);
   if (typeof runtime.adapter.headObject !== "function") {
     if (Number.isFinite(input.sizeBytes) && Number(input.sizeBytes) > 0) {
       return;
@@ -554,10 +767,13 @@ async function assertStoredArtifactAvailable(
       storageObjectKey: input.objectKey,
     });
   }
-  const remote = await runtime.adapter.headObject({
-    bucket: input.bucket,
-    objectKey: input.objectKey,
-  });
+  const remote = await runWithinRecoveryDeadline(
+    () => runtime.adapter.headObject!({
+      bucket: input.bucket,
+      objectKey: input.objectKey,
+    }),
+    input.recoveryDeadlineAt,
+  );
   const remoteSize = Number(remote.contentLength ?? 0);
   if (!remote.exists || !Number.isFinite(remoteSize) || remoteSize <= 0) {
     throw Object.assign(new Error("gpt_image_storage_object_empty"), {
@@ -576,6 +792,9 @@ export const __gptImageArtifactFinalizerTestUtils = {
   readArtifactDownloadTimeoutMs,
   readArtifactValidationConfig,
   readGenerationArtifactUploadConfig,
+  decodeProviderArtifactBytes,
+  resolveRecoveryAttemptTimeoutMs,
+  toUnrecoverableImageArtifactError,
 };
 
 function delay(ms: number) {
@@ -596,6 +815,35 @@ function readErrorStorageObjectId(error: unknown): string | undefined {
   return error && typeof error === "object" && typeof (error as { storageObjectId?: unknown }).storageObjectId === "string"
     ? String((error as { storageObjectId: string }).storageObjectId)
     : undefined;
+}
+
+async function runWithinRecoveryDeadline<T>(operation: () => Promise<T>, recoveryDeadlineAt?: Date | null) {
+  if (!recoveryDeadlineAt) return operation();
+  const timeoutMs = resolveRecoveryAttemptTimeoutMs(2_147_483_647, recoveryDeadlineAt);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(Object.assign(new Error("artifact_recovery_deadline_reached"), {
+          failureCode: "provider_output_upload_failed",
+        })), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function readErrorStorageObjectKey(error: unknown): string | undefined {
+  return error && typeof error === "object" && typeof (error as { storageObjectKey?: unknown }).storageObjectKey === "string"
+    ? String((error as { storageObjectKey: string }).storageObjectKey)
+    : undefined;
+}
+
+function readErrorHttpStatus(error: unknown): number | undefined {
+  const value = error && typeof error === "object" ? Number((error as { httpStatus?: unknown }).httpStatus) : Number.NaN;
+  return Number.isFinite(value) ? value : undefined;
 }
 
 function readErrorFailureCode(error: unknown): string | undefined {

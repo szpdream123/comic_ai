@@ -6,6 +6,7 @@ import {
 } from "../generation-artifact-handoff.service.ts";
 import {
   handleGenerationFetchArtifactJob,
+  handleGenerationFinalizeArtifactJob,
   handleGenerationPersistArtifactJob,
 } from "../generation-bullmq.worker.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
@@ -77,6 +78,67 @@ describe("generation artifact recovery", () => {
     assert.equal(queries.some(({ sql }) => /UPDATE tasks task/.test(sql)), false);
   });
 
+  it("does not reopen a terminal artifact recovery after a duplicate exhausted callback", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = createArtifactRecoveryDb({
+      taskStatus: "manual_review_required",
+      providerStatus: {
+        artifactRecovery: {
+          state: "manual_review",
+          round: 8,
+          startedAt: "2026-08-03T10:00:00.000Z",
+          nextRetryAt: null,
+          deadlineAt: "2026-08-03T16:00:00.000Z",
+          lastFailureCode: "provider_output_upload_failed",
+        },
+      },
+      queries,
+    });
+
+    const outcome = await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task-image-manual",
+      error: Object.assign(new Error("late transient callback"), {
+        failureCode: "provider_output_upload_failed",
+        httpStatus: 503,
+      }),
+      now: new Date("2026-08-03T16:01:00.000Z"),
+    });
+
+    assert.equal(outcome, "skipped");
+    assert.equal(queries.some(({ sql }) => sql.includes("UPDATE ai_generation_task_snapshots")), false);
+    assert.equal(queries.some(({ sql }) => /UPDATE tasks task/.test(sql)), false);
+  });
+
+  it("does not consume another recovery round before the durable retry time", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = createArtifactRecoveryDb({
+      taskStatus: "running",
+      providerStatus: {
+        artifactRecovery: {
+          state: "retry_pending",
+          round: 2,
+          startedAt: "2026-08-03T10:00:00.000Z",
+          nextRetryAt: "2026-08-03T10:20:00.000Z",
+          deadlineAt: "2026-08-03T16:00:00.000Z",
+          lastFailureCode: "provider_output_upload_failed",
+        },
+      },
+      queries,
+    });
+
+    const outcome = await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task-image-retry",
+      error: Object.assign(new Error("duplicate exhausted callback"), {
+        failureCode: "provider_output_upload_failed",
+      }),
+      now: new Date("2026-08-03T10:05:00.000Z"),
+    });
+
+    assert.equal(outcome, "skipped");
+    assert.equal(queries.some(({ sql }) => sql.includes("UPDATE ai_generation_task_snapshots")), false);
+    assert.equal(queries.some(({ sql }) => /UPDATE tasks task/.test(sql)), false);
+  });
+
   it("fails permanently when a provider-succeeded image has no artifact to finalize", async () => {
     const result = await fetchGptImageArtifactJob({
       async query(sql) {
@@ -111,6 +173,75 @@ describe("generation artifact recovery", () => {
     });
 
     assert.deepEqual(result, { status: "failed", failureCode: "provider_output_missing" });
+  });
+
+  it("marks missing provider image output unrecoverable at the queue boundary", async () => {
+    const config = loadGenerationQueueConfig({});
+    await assert.rejects(
+      () => handleGenerationFetchArtifactJob({
+        job: {
+          data: {
+            taskId: "task-no-artifact",
+            workflowId: "workflow-no-artifact",
+            mediaType: "image",
+            modelCode: "gpt-image-2-cn",
+            providerExecutor: "gpt-image-2",
+            artifactKind: "image",
+            artifactStage: "fetch",
+          },
+        },
+        processors: {
+          async fetchGptImageArtifact() {
+            return { status: "failed" as const, failureCode: "provider_output_missing" };
+          },
+          async submitSeedanceVideo() { return { status: "settled" as const }; },
+          async pollSeedanceVideo() { return { status: "waiting" as const }; },
+          async finalizeSeedanceVideoArtifact() { return { status: "skipped" as const }; },
+        },
+        publisher: { async add() {} },
+        config,
+        now: new Date("2026-08-03T10:00:00.000Z"),
+      } as never),
+      (error: unknown) => {
+        assert.equal((error as Error).name, "UnrecoverableError");
+        assert.equal((error as { failureCode?: string }).failureCode, "provider_output_missing");
+        return true;
+      },
+    );
+  });
+
+  it("marks missing output unrecoverable for legacy combined finalize jobs", async () => {
+    const config = loadGenerationQueueConfig({});
+    await assert.rejects(
+      () => handleGenerationFinalizeArtifactJob({
+        job: {
+          data: {
+            taskId: "task-no-artifact",
+            workflowId: "workflow-no-artifact",
+            mediaType: "image",
+            modelCode: "gpt-image-2-cn",
+            providerExecutor: "gpt-image-2",
+            artifactKind: "image",
+          },
+        },
+        processors: {
+          async finalizeGptImageArtifact() {
+            return { status: "failed" as const, failureCode: "provider_output_missing" };
+          },
+          async submitSeedanceVideo() { return { status: "settled" as const }; },
+          async pollSeedanceVideo() { return { status: "waiting" as const }; },
+          async finalizeSeedanceVideoArtifact() { return { status: "skipped" as const }; },
+        },
+        publisher: { async add() {} },
+        config,
+        now: new Date("2026-08-03T10:00:00.000Z"),
+      } as never),
+      (error: unknown) => {
+        assert.equal((error as Error).name, "UnrecoverableError");
+        assert.equal((error as { failureCode?: string }).failureCode, "provider_output_missing");
+        return true;
+      },
+    );
   });
 
   it("uses distinct shard assignments for repeated retry-finalize outbox events", async () => {

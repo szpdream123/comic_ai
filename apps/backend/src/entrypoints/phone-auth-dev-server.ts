@@ -5053,6 +5053,7 @@ async function mapGenerationTaskResponse(
     provider_response_redacted_json: Record<string, unknown> | string | null;
     snapshot_failure_json: Record<string, unknown> | string | null;
     snapshot_result_assets_json: Record<string, unknown>[] | string | null;
+    snapshot_provider_status_json: Record<string, unknown> | string | null;
     snapshot_progress_stage: string | null;
     snapshot_progress_percent: number | string | null;
     credit_balance_cached: number | string | null;
@@ -5092,6 +5093,7 @@ async function mapGenerationTaskResponse(
         s.progress_percent AS snapshot_progress_percent,
         s.failure_json AS snapshot_failure_json,
         s.result_assets_json AS snapshot_result_assets_json,
+        s.provider_status_json AS snapshot_provider_status_json,
         u.credit_balance_cached,
         m.display_name AS model_display_name
       FROM tasks t
@@ -5148,6 +5150,11 @@ async function mapGenerationTaskResponse(
   const providerResponse = readJsonRecord(row.provider_response_redacted_json);
   const snapshotFailure = readJsonRecord(row.snapshot_failure_json);
   const snapshotResultAssets = readRecordArray(row.snapshot_result_assets_json);
+  const snapshotProviderStatus = readJsonRecord(row.snapshot_provider_status_json);
+  const artifactRecovery = generationArtifactRecoveryProjection(
+    snapshotProviderStatus.artifactRecovery,
+    row.provider_request_status === "succeeded",
+  );
   const snapshotProgressPercent = Number(row.snapshot_progress_percent);
   const snapshotResultAsset =
     snapshotResultAssets.find((asset) => readString(asset.mediaKind) === kind) ??
@@ -5317,6 +5324,7 @@ async function mapGenerationTaskResponse(
     timeoutAt: snapshot.timeoutAt ?? null,
     progressStage: readString(row.snapshot_progress_stage) || null,
     progressPercent: Number.isFinite(snapshotProgressPercent) ? snapshotProgressPercent : null,
+    ...artifactRecovery,
     snapshot: {
       progressStage: readString(row.snapshot_progress_stage) || null,
       progressPercent: Number.isFinite(snapshotProgressPercent) ? snapshotProgressPercent : null,
@@ -5336,6 +5344,28 @@ async function mapGenerationTaskResponse(
     createdAt: new Date(row.created_at).toISOString(),
     returnedAt: row.returned_at ? new Date(row.returned_at).toISOString() : null,
     updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function generationArtifactRecoveryProjection(
+  value: unknown,
+  providerSucceeded: boolean,
+) {
+  const recovery = readJsonRecord(value);
+  const recoveryState = recovery.state === "retry_pending" || recovery.state === "manual_review"
+    ? recovery.state
+    : null;
+  const recoveryRound = Number(recovery.round);
+  return {
+    providerSucceeded: providerSucceeded || recoveryState !== null,
+    recoveryState,
+    recoveryRound: recoveryState && Number.isInteger(recoveryRound) && recoveryRound > 0
+      ? recoveryRound
+      : null,
+    recoveryStartedAt: recoveryState ? toIsoString(readString(recovery.startedAt)) : null,
+    nextRetryAt: recoveryState === "retry_pending" ? toIsoString(readString(recovery.nextRetryAt)) : null,
+    recoveryDeadlineAt: recoveryState ? toIsoString(readString(recovery.deadlineAt)) : null,
+    lastFailureCode: recoveryState ? readString(recovery.lastFailureCode) || null : null,
   };
 }
 
@@ -5379,6 +5409,8 @@ async function listTaskCenterTasks(
     result_assets_json: Record<string, unknown>[] | string | null;
     failure_json: Record<string, unknown> | string | null;
     provider_response_json: Record<string, unknown> | string | null;
+    artifact_recovery_json: Record<string, unknown> | string | null;
+    provider_succeeded: boolean;
     submitted_at: Date | string;
     started_at: Date | string | null;
     returned_at: Date | string | null;
@@ -5432,6 +5464,16 @@ async function listTaskCenterTasks(
               '{}'::jsonb
             )
           END AS provider_response_json,
+          CASE
+            WHEN task.status = 'succeeded' THEN NULL::jsonb
+            ELSE snapshot.provider_status_json->'artifactRecovery'
+          END AS artifact_recovery_json,
+          EXISTS (
+            SELECT 1
+            FROM provider_requests succeeded_request
+            WHERE succeeded_request.task_id = snapshot.task_id
+              AND succeeded_request.status = 'succeeded'
+          ) AS provider_succeeded,
           snapshot.submitted_at,
           snapshot.started_at,
           CASE
@@ -5560,6 +5602,8 @@ async function listTaskCenterTasks(
               )
             ELSE NULL::jsonb
           END AS provider_response_json,
+          NULL::jsonb AS artifact_recovery_json,
+          (request.status = 'succeeded') AS provider_succeeded,
           request.created_at AS submitted_at,
           request.external_submission_started_at AS started_at,
           CASE WHEN request.status IN ('succeeded', 'failed', 'result_unknown', 'manual_review_required', 'canceled') THEN request.updated_at ELSE NULL END AS returned_at,
@@ -5642,6 +5686,10 @@ async function listTaskCenterTasks(
     const resultAssets = readRecordArray(row.result_assets_json);
     const failure = readJsonRecord(row.failure_json);
     const providerResponse = readJsonRecord(row.provider_response_json);
+    const artifactRecovery = generationArtifactRecoveryProjection(
+      row.artifact_recovery_json,
+      row.provider_succeeded === true,
+    );
     const mediaKind = readString(row.media_kind) || "image";
     const firstResultAsset = resultAssets[0] ?? null;
     const result = firstResultAsset
@@ -5684,6 +5732,7 @@ async function listTaskCenterTasks(
       workflowStatus: status,
       progressStage: row.progress_stage,
       progressPercent: Number(row.progress_percent ?? 0),
+      ...artifactRecovery,
       projectId: row.project_id,
       projectName: row.project_name,
       episodeId: row.episode_id,

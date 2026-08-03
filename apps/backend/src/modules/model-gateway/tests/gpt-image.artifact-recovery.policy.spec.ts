@@ -7,6 +7,7 @@ import {
   isGptImageArtifactRecoveryExpired,
   parseGptImageArtifactRecoveryState,
   planGptImageArtifactRecovery,
+  resolveGptImageArtifactRecoveryDispatch,
 } from "../gpt-image-artifact-recovery.policy.ts";
 
 describe("GPT image artifact recovery policy", () => {
@@ -85,10 +86,9 @@ describe("GPT image artifact recovery policy", () => {
     }
   });
 
-  it("classifies stable client, missing-output, invalid-media, and persist errors as permanent", () => {
+  it("classifies stable client, missing-output, and invalid-media errors as permanent", () => {
     for (const failure of [
       { failureCode: "provider_output_missing" },
-      { failureCode: "provider_output_persist_failed" },
       { failureCode: "provider_output_download_failed", httpStatus: 404 },
       { failureCode: "provider_output_download_failed", httpStatus: 410 },
       { failureCode: "provider_output_download_failed", message: "provider_artifact_too_large" },
@@ -105,6 +105,7 @@ describe("GPT image artifact recovery policy", () => {
       { failureCode: "provider_output_download_failed", httpStatus: 429 },
       { failureCode: "provider_output_download_failed", httpStatus: 503 },
       { failureCode: "provider_output_upload_failed", message: "ConnectTimeoutError" },
+      { failureCode: "provider_output_persist_failed", message: "database connection reset" },
     ]) {
       assert.equal(classifyGptImageArtifactRecoveryFailure(failure).kind, "transient");
     }
@@ -138,5 +139,42 @@ describe("GPT image artifact recovery policy", () => {
     assert.equal(isGptImageArtifactRecoveryExpired(state, new Date("2026-08-03T15:59:59.999Z")), false);
     assert.equal(isGptImageArtifactRecoveryExpired(state, new Date("2026-08-03T16:00:00.000Z")), true);
     assert.equal(parseGptImageArtifactRecoveryState({ state: "manual_review", round: 0 }), null);
+  });
+
+  it("dispatches legacy and due recoveries without waking waiting or terminal recoveries", () => {
+    const now = new Date("2026-08-03T10:10:00.000Z");
+    assert.equal(resolveGptImageArtifactRecoveryDispatch(null, now), "dispatch");
+    assert.equal(resolveGptImageArtifactRecoveryDispatch({
+      state: "retry_pending",
+      round: 1,
+      startedAt: "2026-08-03T10:00:00.000Z",
+      nextRetryAt: "2026-08-03T10:11:00.000Z",
+      deadlineAt: "2026-08-03T16:00:00.000Z",
+      lastFailureCode: "provider_output_upload_failed",
+    }, now), "wait");
+    assert.equal(resolveGptImageArtifactRecoveryDispatch({
+      state: "retry_pending",
+      round: 2,
+      startedAt: "2026-08-03T10:00:00.000Z",
+      nextRetryAt: "2026-08-03T10:10:00.000Z",
+      deadlineAt: "2026-08-03T16:00:00.000Z",
+      lastFailureCode: "provider_output_upload_failed",
+    }, now), "dispatch");
+    assert.equal(resolveGptImageArtifactRecoveryDispatch({
+      state: "retry_pending",
+      round: 7,
+      startedAt: "2026-08-03T04:00:00.000Z",
+      nextRetryAt: "2026-08-03T09:59:00.000Z",
+      deadlineAt: "2026-08-03T10:00:00.000Z",
+      lastFailureCode: "provider_output_upload_failed",
+    }, now), "manual_review");
+    assert.equal(resolveGptImageArtifactRecoveryDispatch({
+      state: "manual_review",
+      round: 8,
+      startedAt: "2026-08-03T04:00:00.000Z",
+      nextRetryAt: null,
+      deadlineAt: "2026-08-03T10:00:00.000Z",
+      lastFailureCode: "provider_output_upload_failed",
+    }, now), "skip");
   });
 });

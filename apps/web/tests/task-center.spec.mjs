@@ -59,6 +59,66 @@ function createTaskCenterActionRoot() {
 }
 
 describe("production workbench task center", () => {
+  it("accepts a newer provider-success recovery state over a cached terminal task", () => {
+    const workbench = {
+      root: createRoot(),
+      ui: { taskCenterTasksById: {}, taskCenterTaskOrder: [] },
+    };
+    registerTaskCenterTaskForTest(workbench, {
+      taskId: "task-image-recovery",
+      kind: "image",
+      status: "manual_review_required",
+      updatedAt: "2026-08-03T10:00:00.000Z",
+    });
+    registerTaskCenterTaskForTest(workbench, {
+      taskId: "task-image-recovery",
+      kind: "image",
+      status: "running",
+      providerSucceeded: true,
+      recoveryState: "retry_pending",
+      updatedAt: "2026-08-03T10:01:00.000Z",
+    });
+
+    assert.equal(workbench.ui.taskCenterTasksById["task-image-recovery"].status, "running");
+    assert.equal(workbench.ui.taskCenterTasksById["task-image-recovery"].recoveryState, "retry_pending");
+  });
+
+  it("preserves recovery fields through the single-task polling fallback", async () => {
+    const workbench = {
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      root: createRoot(),
+      taskCenterPollInFlight: false,
+      taskCenterPageLoadInFlight: false,
+      taskCenterAppliedVersions: new Map(),
+      ui: { taskCenterTasksById: {}, taskCenterTaskOrder: [] },
+      api: {
+        async getGenerationTask() {
+          return {
+            taskId: "task-fallback-recovery",
+            kind: "image",
+            status: "running",
+            providerSucceeded: true,
+            recoveryState: "retry_pending",
+            recoveryRound: 4,
+            nextRetryAt: "2026-08-03T10:30:00.000Z",
+            updatedAt: "2026-08-03T10:00:00.000Z",
+          };
+        },
+      },
+    };
+    registerTaskCenterTaskForTest(workbench, "task-fallback-recovery", {
+      status: "queued",
+      kind: "image",
+    });
+
+    await runTaskCenterPollingForTest(workbench);
+
+    assert.equal(workbench.ui.taskCenterTasksById["task-fallback-recovery"].providerSucceeded, true);
+    assert.equal(workbench.ui.taskCenterTasksById["task-fallback-recovery"].recoveryState, "retry_pending");
+    assert.equal(workbench.ui.taskCenterTasksById["task-fallback-recovery"].recoveryRound, 4);
+  });
+
   it("syncs a batched novel-to-script text result into its parent script node", async () => {
     const workbench = {
       root: createRoot(),
@@ -154,6 +214,11 @@ describe("production workbench task center", () => {
             progressStage: "asset_transfer_retry_pending",
             kind: "image",
             prompt: "retry",
+            providerSucceeded: true,
+            recoveryState: "retry_pending",
+            recoveryRound: 3,
+            nextRetryAt: "2026-08-03T10:22:00.000Z",
+            recoveryDeadlineAt: "2026-08-03T16:00:00.000Z",
           },
           "task-storage-review": {
             taskId: "task-storage-review",
@@ -171,6 +236,9 @@ describe("production workbench task center", () => {
 
     assert.match(html, /存储超时，正在重试/);
     assert.match(html, /存储失败，等待人工处理/);
+    assert.match(html, /供应商已完成生成/);
+    assert.match(html, /第 3 轮/);
+    assert.match(html, /下次恢复/);
     assert.doesNotMatch(html, /task-storage-retry[^]*生成中/);
   });
 
@@ -524,5 +592,19 @@ describe("production workbench task center", () => {
     assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 30_000), 30_000);
     assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 299_999), 30_000);
     assert.equal(resolveTaskCenterPollDelayForTest(startedAt, false, startedAt + 300_000), 60_000);
+  });
+
+  it("aligns recovery polling with the durable next retry without waiting more than five minutes", () => {
+    const now = Date.parse("2026-08-03T10:00:00.000Z");
+    const recovery = (nextRetryAt) => [{
+      status: "running",
+      progressStage: "asset_transfer_retry_pending",
+      recoveryState: "retry_pending",
+      nextRetryAt,
+    }];
+
+    assert.equal(resolveTaskCenterPollDelayForTest(now, false, now, recovery("2026-08-03T10:02:00.000Z")), 120_000);
+    assert.equal(resolveTaskCenterPollDelayForTest(now, false, now, recovery("2026-08-03T10:10:00.000Z")), 300_000);
+    assert.equal(resolveTaskCenterPollDelayForTest(now, false, now, recovery("2026-08-03T09:59:00.000Z")), 15_000);
   });
 });

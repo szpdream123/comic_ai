@@ -93,6 +93,7 @@ interface GptImageTaskRow {
   provider_response_redacted_json?: Record<string, unknown> | string | null;
   reservation_id: string | null;
   amount_reserved: number | string | null;
+  snapshot_provider_status_json?: Record<string, unknown> | string | null;
 }
 
 type PersistedGptImageArtifact = Omit<
@@ -1364,6 +1365,7 @@ export async function finalizeGptImageArtifactJob(
   }
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
+  const snapshotProviderStatus = parseSnapshot(row.snapshot_provider_status_json ?? {});
   const providerLabel = "model-gateway";
   const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
   const artifact = parseArtifactFromProviderResponse(providerResponse);
@@ -1381,6 +1383,7 @@ export async function finalizeGptImageArtifactJob(
       progressStage: "artifact_persisting",
       progressPercent: 75,
       providerStatus: {
+        ...snapshotProviderStatus,
         provider: providerLabel,
         externalRequestId: row.external_request_id ?? null,
       },
@@ -1402,6 +1405,7 @@ export async function finalizeGptImageArtifactJob(
       env: input.env,
       fetchImpl: input.fetchImpl,
       now: input.now,
+      recoveryDeadlineAt: readGptImageArtifactRecoveryDeadline(row.snapshot_provider_status_json),
       assetType: resolveEpisodeGenerationAssetType({
         targetType: readString(snapshot.targetType),
         assetType: snapshot.assetType,
@@ -1437,6 +1441,7 @@ export async function finalizeGptImageArtifactJob(
         progressStage: "asset_transfer_retry_pending",
         progressPercent: 75,
         providerStatus: {
+          ...snapshotProviderStatus,
           provider: providerLabel,
           externalRequestId: row.external_request_id ?? null,
           transferStatus: "retry_pending",
@@ -1659,6 +1664,7 @@ export async function fetchGptImageArtifactJob(
     env: input.env,
     fetchImpl: input.fetchImpl,
     now: input.now,
+    recoveryDeadlineAt: readGptImageArtifactRecoveryDeadline(row.snapshot_provider_status_json),
   });
   await recordGenerationArtifactHandoff(db, {
     taskId: row.task_id,
@@ -2287,6 +2293,7 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         pr.id AS provider_request_id,
         pr.external_request_id,
         pr.response_redacted_json AS provider_response_redacted_json,
+        generation_snapshot.provider_status_json AS snapshot_provider_status_json,
         r.id AS reservation_id,
         r.amount_reserved
       FROM tasks t
@@ -2296,6 +2303,8 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         ON pr.task_id = t.id
       LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
+      LEFT JOIN ai_generation_task_snapshots generation_snapshot
+        ON generation_snapshot.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_image'
         AND t.status IN ('running', 'manual_review_required')
@@ -2305,6 +2314,18 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
     `,
     [taskId],
   );
+}
+
+function readGptImageArtifactRecoveryDeadline(value: Record<string, unknown> | string | null | undefined) {
+  const providerStatus = parseSnapshot(value ?? {});
+  const recovery = providerStatus.artifactRecovery && typeof providerStatus.artifactRecovery === "object"
+    && !Array.isArray(providerStatus.artifactRecovery)
+    ? providerStatus.artifactRecovery as Record<string, unknown>
+    : null;
+  const deadlineAt = readString(recovery?.deadlineAt);
+  if (!deadlineAt) return null;
+  const parsed = new Date(deadlineAt);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
 async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {

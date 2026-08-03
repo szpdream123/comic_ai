@@ -368,6 +368,53 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await db.query(
         `
           UPDATE ai_generation_task_snapshots
+          SET status = 'running',
+              progress_stage = 'asset_transfer_retry_pending',
+              progress_percent = 85,
+              failure_json = NULL,
+              provider_status_json = '{
+                "providerSucceeded": true,
+                "artifactRecovery": {
+                  "state": "retry_pending",
+                  "round": 3,
+                  "startedAt": "2026-07-14T08:00:18.000Z",
+                  "nextRetryAt": "2026-07-14T08:22:00.000Z",
+                  "deadlineAt": "2026-07-14T14:00:18.000Z",
+                  "lastFailureCode": "provider_output_upload_failed"
+                }
+              }'::jsonb,
+              failed_at = NULL,
+              updated_at = '2026-07-14T08:00:19.000Z'
+          WHERE task_id = $1
+        `,
+        [taskId],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'running', failure_code = NULL, updated_at = '2026-07-14T08:00:19.000Z'
+          WHERE id = $1
+        `,
+        [taskId],
+      );
+      const recoveryResponse = await fetch(
+        `${server.origin}/api/task-center/tasks?page=1&pageSize=20&status=poll&taskIds=${taskId}`,
+        { headers: { cookie } },
+      );
+      const recoveryEnvelope = await recoveryResponse.json();
+      assert.equal(recoveryResponse.status, 200);
+      assert.equal(recoveryEnvelope.data.items[0].providerSucceeded, true);
+      assert.equal(recoveryEnvelope.data.items[0].recoveryState, "retry_pending");
+      assert.equal(recoveryEnvelope.data.items[0].recoveryRound, 3);
+      assert.equal(recoveryEnvelope.data.items[0].recoveryStartedAt, "2026-07-14T08:00:18.000Z");
+      assert.equal(recoveryEnvelope.data.items[0].nextRetryAt, "2026-07-14T08:22:00.000Z");
+      assert.equal(recoveryEnvelope.data.items[0].recoveryDeadlineAt, "2026-07-14T14:00:18.000Z");
+      assert.equal(recoveryEnvelope.data.items[0].lastFailureCode, "provider_output_upload_failed");
+      assert.equal(recoveryEnvelope.data.items[0].returnedAt, null);
+
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
           SET status = 'failed',
               failure_json = '{"failureCode":"provider_failed","displayMessage":"图片生成服务失败，请稍后重试"}'::jsonb,
               provider_status_json = '{}'::jsonb,

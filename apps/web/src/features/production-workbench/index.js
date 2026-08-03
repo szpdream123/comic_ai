@@ -29851,8 +29851,8 @@ export function reconcileSelectedStoryboardPendingGenerationForTest(workbench, s
   return reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
 }
 
-export function resolveTaskCenterPollDelayForTest(startedAt, immediate = false, now = Date.now()) {
-  return resolveTaskCenterPollDelay(startedAt, immediate, now);
+export function resolveTaskCenterPollDelayForTest(startedAt, immediate = false, now = Date.now(), tasks = []) {
+  return resolveTaskCenterPollDelay(startedAt, immediate, now, tasks);
 }
 
 export function isTaskCenterPollDeadlineExceededForTest(task, now = Date.now()) {
@@ -44769,6 +44769,12 @@ function taskCenterTaskVersion(task) {
     task?.failureCode ?? "",
     task?.failure?.displayMessage ?? "",
     task?.failure?.providerMessage ?? "",
+    task?.providerSucceeded === true ? "provider_succeeded" : "",
+    task?.recoveryState ?? "",
+    task?.recoveryRound ?? "",
+    task?.nextRetryAt ?? "",
+    task?.recoveryDeadlineAt ?? "",
+    task?.lastFailureCode ?? "",
     task?.deadlineFinalPollCompletedAt ?? "",
     resultUrl,
   ].join("|");
@@ -44787,9 +44793,14 @@ function upsertTaskCenterTask(workbench, task) {
   }
   const currentStatus = resolveWorkflowStatus(current?.status ?? current?.workflowStatus);
   const incomingStatus = resolveWorkflowStatus(task?.status ?? task?.workflowStatus ?? "queued");
+  const isExplicitArtifactRecovery = task?.providerSucceeded === true &&
+    task?.recoveryState === "retry_pending" &&
+    incomingStatus === "running" &&
+    nextUpdatedAt >= currentUpdatedAt;
   const preserveTerminalStatus = Boolean(current) &&
     isGenerationTaskTerminalStatus(currentStatus) &&
-    !isGenerationTaskTerminalStatus(incomingStatus);
+    !isGenerationTaskTerminalStatus(incomingStatus) &&
+    !isExplicitArtifactRecovery;
   const next = preserveTerminalStatus
     ? {
         ...(task ?? {}),
@@ -45274,6 +45285,8 @@ function scheduleTaskCenterPolling(workbench, options = {}) {
   const delayMs = resolveTaskCenterPollDelay(
     workbench.taskCenterPollStartedAt,
     options.immediate === true,
+    Date.now(),
+    Object.values(workbench.ui.taskCenterTasksById ?? {}),
   );
   workbench.taskCenterPollTimer = window.setTimeout(async () => {
     workbench.taskCenterPollTimer = null;
@@ -45282,9 +45295,27 @@ function scheduleTaskCenterPolling(workbench, options = {}) {
   }, delayMs);
 }
 
-function resolveTaskCenterPollDelay(startedAt, immediate = false, now = Date.now()) {
+function resolveTaskCenterPollDelay(startedAt, immediate = false, now = Date.now(), tasks = []) {
   if (immediate) {
     return 0;
+  }
+  const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((task) =>
+    isTaskCenterActiveStatus(task?.status ?? task?.workflowStatus)
+  );
+  const recoveryTasks = activeTasks.filter((task) =>
+    String(task?.recoveryState ?? "").trim().toLowerCase() === "retry_pending" &&
+    String(task?.progressStage ?? task?.snapshot?.progressStage ?? "").trim().toLowerCase() === "asset_transfer_retry_pending"
+  );
+  if (activeTasks.length > 0 && recoveryTasks.length === activeTasks.length) {
+    const nearestRetryAt = Math.min(...recoveryTasks
+      .map((task) => Date.parse(String(task?.nextRetryAt ?? "")))
+      .filter(Number.isFinite));
+    if (Number.isFinite(nearestRetryAt)) {
+      return Math.max(
+        TASK_CENTER_FAST_POLL_INTERVAL_MS,
+        Math.min(5 * 60_000, nearestRetryAt - Number(now)),
+      );
+    }
   }
   const elapsedMs = Math.max(0, now - Number(startedAt ?? now));
   if (elapsedMs < TASK_CENTER_FAST_POLL_WINDOW_MS) {
