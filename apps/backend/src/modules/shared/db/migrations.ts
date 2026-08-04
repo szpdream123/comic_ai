@@ -82,6 +82,7 @@ const TASK_CENTER_PROVIDER_DIAGNOSTICS_MIGRATION_NAME = "20260824-task-center-pr
 const BANANAROUTER_IMAGE_ASYNC_RECOVERY_RELATIVE_PATH = ["packages", "db", "migrations", "20260825-bananarouter-image-async-recovery.sql"];
 const PROVIDER_PROTOCOL_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260826-converge-provider-protocol-constraint.sql"];
 const CANVAS_AGENT_SHARD_CONSTRAINT_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260827-converge-canvas-agent-shard-constraint.sql"];
+const BANANAROUTER_IMAGE_ASYNC_CONFIG_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260828-bananarouter-image-async-config-convergence.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
 const GENERATION_DUE_POLL_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-due-poll.sql"];
@@ -444,6 +445,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260827-converge-canvas-agent-shard-constraint.sql",
       sql: await readFile(join(rootDir, ...CANVAS_AGENT_SHARD_CONSTRAINT_CONVERGENCE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260828-bananarouter-image-async-config-convergence.sql",
+      sql: await readFile(join(rootDir, ...BANANAROUTER_IMAGE_ASYNC_CONFIG_CONVERGENCE_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

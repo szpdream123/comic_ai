@@ -11,11 +11,130 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     const names = (await loadSqlMigrations()).map((migration) => migration.name);
     assert.ok(names.includes("20260728-add-bananarouter-models.sql"));
     assert.ok(names.includes("20260825-bananarouter-image-async-recovery.sql"));
+    assert.ok(names.includes("20260828-bananarouter-image-async-config-convergence.sql"));
     const productionMigrationScript = await readFile(
       join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
       "utf8",
     );
     assert.match(productionMigrationScript, /20260825-bananarouter-image-async-recovery\.sql/);
+    assert.match(productionMigrationScript, /20260828-bananarouter-image-async-config-convergence\.sql/);
+  });
+
+  it("converges an existing mixed BananaRouter image config without a synchronous rollback", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(`
+        INSERT INTO ai_model_configs (
+          id, model_code, display_name, provider_name, provider_model, provider_protocol,
+          invocation_mode, media_type, task_modes_json, capabilities_json,
+          parameter_schema_json, default_params_json, provider_config_json, pricing_json,
+          limits_json, ui_config_json, status, sort_order, remark
+        )
+        SELECT
+          gen_random_uuid(), 'bananarouter-custom-image', 'BananaRouter Custom Image',
+          provider_name, 'custom-image-model', provider_protocol,
+          'sync', media_type, task_modes_json, capabilities_json - 'asyncPolling',
+          parameter_schema_json, default_params_json,
+          provider_config_json || '{
+            "baseURL":"https://legacy.example.com",
+            "requestPath":"/v1/images/generations",
+            "endpoint":"/v1/images/generations",
+            "createTaskEndpoint":"/v1/images/generations",
+            "editEndpoint":"/v1/images/edits",
+            "resultFormat":"b64_json"
+          }'::jsonb,
+          pricing_json, limits_json, ui_config_json, status, sort_order + 1,
+          'migration coverage for copied BananaRouter image models'
+        FROM ai_model_configs
+        WHERE model_code = 'bananarouter-gpt-image-2';
+
+        UPDATE ai_model_configs
+        SET invocation_mode = 'sync',
+            capabilities_json = capabilities_json - 'asyncPolling',
+            provider_config_json = provider_config_json || '{
+              "requestPath":"/v1/images/generations/async",
+              "endpoint":"/v1/images/generations/async",
+              "createTaskEndpoint":"/v1/images/generations/async",
+              "editEndpoint":"/v1/images/generations/async",
+              "queryTaskEndpoint":"/v1/async-tasks/{taskId}",
+              "resultFormat":"url"
+            }'::jsonb
+        WHERE model_code = 'bananarouter-gpt-image-2';
+
+        DELETE FROM ai_model_config_revisions
+        WHERE model_config_id = (
+          SELECT id FROM ai_model_configs WHERE model_code = 'bananarouter-gpt-image-2'
+        )
+          AND reason = 'BananaRouter 图片异步配置收敛前同步回滚快照';
+
+        DELETE FROM ai_model_dispatch_policies
+        WHERE model_config_id = (
+          SELECT id FROM ai_model_configs WHERE model_code = 'bananarouter-gpt-image-2'
+        );
+      `);
+
+      await applySqlMigration(db, process.cwd(), "20260828-bananarouter-image-async-config-convergence.sql");
+      await applySqlMigration(db, process.cwd(), "20260828-bananarouter-image-async-config-convergence.sql");
+
+      const model = await db.query<{
+        invocation_mode: string;
+        capabilities_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        poll_queue_name: string | null;
+      }>(`
+        SELECT
+          model.invocation_mode,
+          model.capabilities_json,
+          model.provider_config_json,
+          policy.poll_queue_name
+        FROM ai_model_configs model
+        LEFT JOIN ai_model_dispatch_policies policy ON policy.model_config_id = model.id
+        WHERE model.model_code = 'bananarouter-gpt-image-2'
+      `);
+      const revisions = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM ai_model_config_revisions
+        WHERE model_config_id = (
+          SELECT id FROM ai_model_configs WHERE model_code = 'bananarouter-gpt-image-2'
+        )
+          AND reason = 'BananaRouter 图片异步配置收敛前同步回滚快照'
+      `);
+      const copiedModel = await db.query<{
+        invocation_mode: string;
+        capabilities_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        poll_queue_name: string | null;
+      }>(`
+        SELECT
+          model.invocation_mode,
+          model.capabilities_json,
+          model.provider_config_json,
+          policy.poll_queue_name
+        FROM ai_model_configs model
+        LEFT JOIN ai_model_dispatch_policies policy ON policy.model_config_id = model.id
+        WHERE model.model_code = 'bananarouter-custom-image'
+      `);
+
+      assert.equal(model.rows[0]?.invocation_mode, "async_polling");
+      assert.equal(model.rows[0]?.capabilities_json.asyncPolling, true);
+      assert.equal(model.rows[0]?.provider_config_json.requestPath, "/v1/images/generations/async");
+      assert.equal(model.rows[0]?.provider_config_json.editEndpoint, "/v1/images/edits/async");
+      assert.equal(model.rows[0]?.provider_config_json.queryTaskEndpoint, "/v1/async-tasks/{taskId}");
+      assert.equal(model.rows[0]?.provider_config_json.resultFormat, "url");
+      assert.equal(model.rows[0]?.poll_queue_name, "generation-poll-image");
+      assert.equal(revisions.rows[0]?.count, 0);
+      assert.equal(copiedModel.rows[0]?.invocation_mode, "async_polling");
+      assert.equal(copiedModel.rows[0]?.capabilities_json.asyncPolling, true);
+      assert.equal(copiedModel.rows[0]?.provider_config_json.baseURL, "https://api.bananarouter.com");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.requestPath, "/v1/images/generations/async");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.editEndpoint, "/v1/images/edits/async");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.queryTaskEndpoint, "/v1/async-tasks/{taskId}");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.requestFormat, "banana_router_openai_images");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.resultFormat, "url");
+      assert.equal(copiedModel.rows[0]?.poll_queue_name, "generation-poll-image");
+    } finally {
+      await db.close();
+    }
   });
 
   it("registers bounded task-center diagnostics in application and production migrations", async () => {

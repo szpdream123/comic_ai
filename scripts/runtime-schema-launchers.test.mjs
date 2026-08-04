@@ -98,6 +98,7 @@ describe("runtime schema migration launchers", () => {
       runnerSource.indexOf("const runtimeRequiredPostconditionMigrationNames"),
     );
     assert.doesNotMatch(runtimeSafeBlock, /20260823-canvas-agent-queue-shards\.sql/);
+    assert.doesNotMatch(runtimeSafeBlock, /20260828-bananarouter-image-async-config-convergence\.sql/);
     assert.match(runnerSource, /runtimeRequiredPostconditionMigrationNames/);
     assert.match(runnerSource, /indisvalid/);
     assert.match(runnerSource, /indisready/);

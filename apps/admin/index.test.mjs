@@ -613,8 +613,290 @@ test("admin model editor exposes the dedicated BananaRouter adapter templates", 
   assert.match(script, /requestFormat\.startsWith\("banana_router_"\)/);
   assert.match(
     script,
-    /const providerConfig = \{ \.\.\.fixed\.providerConfig, \.\.\.\(adapterChanged \? \{\} : existing\?\.providerConfig \|\| \{\}\) \};/,
+    /const fixedBananaRouterImageTransport = mediaType === "image" && providerAdapter === "banana_router";/,
   );
+});
+
+test("new BananaRouter image models use the documented recoverable async transport", () => {
+  const start = script.indexOf("function fixedModelTemplate");
+  const end = script.indexOf("function schemaFromSelectedParameterTemplates", start);
+  const context = {
+    defaultModelAdapter: () => "custom_http",
+    result: null,
+  };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = fixedModelTemplate("image", "BananaRouter", "banana_router");
+  `, context);
+
+  assert.equal(context.result.invocationMode, "async_polling");
+  assert.equal(context.result.capabilities.asyncPolling, true);
+  assert.equal(context.result.providerConfig.requestPath, "/v1/images/generations/async");
+  assert.equal(context.result.providerConfig.editEndpoint, "/v1/images/edits/async");
+  assert.equal(context.result.providerConfig.queryTaskEndpoint, "/v1/async-tasks/{taskId}");
+  assert.equal(context.result.providerConfig.resultFormat, "url");
+  assert.equal(context.result.dispatchPolicy.pollQueueName, "generation-poll-image");
+});
+
+test("existing model edits preserve hidden transport fields until the adapter changes", () => {
+  const start = script.indexOf("function modelTransportFields");
+  assert.notEqual(start, -1, "model transport preservation helper exists");
+  const end = script.indexOf("function simplifiedModelPayloadFromForm", start);
+  const context = { result: null };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    const fixed = {
+      providerProtocol: "banana_router",
+      invocationMode: "sync",
+      capabilities: { input: ["prompt", "image"], output: ["image"] },
+      limits: {},
+      dispatchPolicy: { submitQueueName: "generation-submit-image", pollQueueName: null },
+    };
+    const existing = {
+      providerProtocol: "banana_router",
+      invocationMode: "async_polling",
+      capabilities: { input: ["prompt", "image"], output: ["image"], asyncPolling: true },
+      limits: { maxImages: 8 },
+      dispatchPolicy: { submitQueueName: "generation-submit-image", pollQueueName: "generation-poll-image" },
+    };
+    result = {
+      preserved: modelTransportFields(existing, fixed, false),
+      switched: modelTransportFields(existing, fixed, true),
+    };
+  `, context);
+
+  const result = JSON.parse(JSON.stringify(context.result));
+  assert.deepEqual(result.preserved, {
+    providerProtocol: "banana_router",
+    invocationMode: "async_polling",
+    capabilities: { input: ["prompt", "image"], output: ["image"], asyncPolling: true },
+    limits: { maxImages: 8 },
+    dispatchPolicy: { submitQueueName: "generation-submit-image", pollQueueName: "generation-poll-image" },
+  });
+  assert.deepEqual(result.switched, {
+    providerProtocol: "banana_router",
+    invocationMode: "sync",
+    capabilities: { input: ["prompt", "image"], output: ["image"] },
+    limits: {},
+    dispatchPolicy: { submitQueueName: "generation-submit-image", pollQueueName: null },
+  });
+});
+
+test("model transport resets for media changes and mixed BananaRouter image async configs", () => {
+  const start = script.indexOf("function modelTransportChanged");
+  assert.notEqual(start, -1, "model transport change helper exists");
+  const end = script.indexOf("function simplifiedModelPayloadFromForm", start);
+  const context = {
+    inferModelAdapter: () => "banana_router",
+    result: null,
+  };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    const existingVideo = { mediaType: "video", providerProtocol: "banana_router" };
+    const legacyCustomHttp = { mediaType: "image", providerProtocol: "custom_http" };
+    const mixedBananaRouterImage = {
+      mediaType: "image",
+      providerProtocol: "banana_router",
+      invocationMode: "sync",
+      providerConfig: {
+        requestFormat: "banana_router_openai_images",
+        requestPath: "/v1/images/generations/async",
+        createTaskEndpoint: "/v1/images/generations/async",
+        queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+      },
+    };
+    const legacySyncBananaRouterImage = {
+      mediaType: "image",
+      providerProtocol: "banana_router",
+      invocationMode: "sync",
+      providerConfig: {
+        requestFormat: "banana_router_openai_images",
+        requestPath: "/v1/images/generations",
+        createTaskEndpoint: "/v1/images/generations",
+        editEndpoint: "/v1/images/edits",
+      },
+    };
+    result = {
+      sameMedia: modelTransportChanged(existingVideo, "video", "banana_router"),
+      changedMedia: modelTransportChanged(existingVideo, "image", "banana_router"),
+      changedAdapter: modelTransportChanged(existingVideo, "video", "custom_http"),
+      normalizedProtocol: modelTransportChanged(legacyCustomHttp, "image", "banana_router"),
+      repairsMixedBananaRouterImage: modelTransportChanged(mixedBananaRouterImage, "image", "banana_router"),
+      repairsLegacySyncBananaRouterImage: modelTransportChanged(legacySyncBananaRouterImage, "image", "banana_router"),
+    };
+  `, context);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.result)), {
+    sameMedia: false,
+    changedMedia: true,
+    changedAdapter: true,
+    normalizedProtocol: true,
+    repairsMixedBananaRouterImage: true,
+    repairsLegacySyncBananaRouterImage: true,
+  });
+});
+
+test("saving a legacy BananaRouter image model cannot restore its synchronous request path", () => {
+  const start = script.indexOf("function modelTransportFields");
+  assert.notEqual(start, -1, "model transport helpers exist");
+  const end = script.indexOf("modelsPage = function modelsPage", start);
+  const context = {
+    inferModelAdapter: () => "banana_router",
+    inferModelKind: () => "image.reference_image",
+    modelKindOption: () => ({
+      value: "image.reference_image",
+      label: "参考生图",
+      mediaType: "image",
+      taskModes: ["image.edit", "image.reference_generate"],
+    }),
+    providerNameForSecretKey: () => "BananaRouter",
+    defaultModelAdapter: () => "banana_router",
+    fixedModelTemplate: () => ({
+      providerProtocol: "banana_router",
+      invocationMode: "async_polling",
+      taskModes: ["image.generate", "image.edit", "image.reference_generate"],
+      status: "disabled",
+      sortOrder: 100,
+      capabilities: { input: ["prompt", "image"], output: ["image"], asyncPolling: true },
+      defaultParams: {},
+      providerConfig: {
+        baseURL: "https://api.bananarouter.com",
+        requestPath: "/v1/images/generations/async",
+        endpoint: "/v1/images/generations/async",
+        createTaskEndpoint: "/v1/images/generations/async",
+        editEndpoint: "/v1/images/edits/async",
+        queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+        requestFormat: "banana_router_openai_images",
+        resultFormat: "url",
+      },
+      pricing: { unit: "image", billingMode: "fixed", baseCredits: 90 },
+      limits: {},
+      uiConfig: {},
+      dispatchPolicy: {
+        submitQueueName: "generation-submit-image",
+        pollQueueName: "generation-poll-image",
+      },
+    }),
+    schemaFromSelectedParameterTemplates: () => ({
+      schema: { quality: { type: "enum", options: ["high", "auto"] } },
+      defaults: { quality: "auto" },
+    }),
+    resolutionCreditsFromForm: () => ({}),
+    baseCreditsFromForm: () => 90,
+    resolveVideoTaskModes: () => [],
+    videoSupportedModesByTaskModes: () => [],
+    result: null,
+  };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    const values = {
+      modelKind: "image.reference_image",
+      providerName: "BananaRouter",
+      providerAdapter: "banana_router",
+      providerModel: "gpt-image-2",
+      requestPath: "/v1/images/generations",
+      modelApiKeyEnv: "BananaRouter_API_KEY",
+      billingMode: "fixed",
+      modelCode: "bananarouter-gpt-image-2",
+      displayName: "GPT Image 2 Pro",
+      remark: "keep me",
+      reason: "change quality",
+    };
+    const form = { get: (key) => values[key] ?? "" };
+    result = simplifiedModelPayloadFromForm(form, {
+      modelCode: "bananarouter-gpt-image-2",
+      displayName: "GPT Image 2 Pro",
+      providerName: "BananaRouter",
+      providerModel: "gpt-image-2",
+      providerProtocol: "banana_router",
+      invocationMode: "sync",
+      mediaType: "image",
+      taskModes: ["image.generate", "image.edit", "image.reference_generate"],
+      status: "active",
+      pricing: { unit: "image", billingMode: "fixed", baseCredits: 90 },
+      parameterSchema: { quality: { type: "enum", options: ["high", "auto"] } },
+      defaultParams: { quality: "high" },
+      capabilities: { input: ["prompt", "image"], output: ["image"], vendorFeature: true },
+      providerConfig: {
+        baseURL: "https://api.bananarouter.com",
+        requestPath: "/v1/images/generations",
+        endpoint: "/v1/images/generations",
+        createTaskEndpoint: "/v1/images/generations",
+        editEndpoint: "/v1/images/edits",
+        queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+        apiKeyEnv: "BananaRouter_API_KEY",
+        requestFormat: "banana_router_openai_images",
+        resultFormat: "b64_json",
+        vendorOption: "keep-me",
+      },
+      limits: { maxImages: 2, maxPromptLength: 8000 },
+      uiConfig: { modelKind: "image.reference_image", supportedModes: ["reference_image"] },
+      dispatchPolicy: {
+        submitQueueName: "generation-submit-image",
+        pollQueueName: null,
+        providerRpmLimit: 7,
+        providerConcurrentLimit: 1,
+        submitConcurrencyLimit: 2,
+        pollingConcurrencyLimit: 3,
+      },
+    });
+  `, context);
+
+  const result = JSON.parse(JSON.stringify(context.result));
+  assert.equal(result.invocationMode, "async_polling");
+  assert.equal(result.providerConfig.requestPath, "/v1/images/generations/async");
+  assert.equal(result.providerConfig.endpoint, "/v1/images/generations/async");
+  assert.equal(result.providerConfig.createTaskEndpoint, "/v1/images/generations/async");
+  assert.equal(result.providerConfig.editEndpoint, "/v1/images/edits/async");
+  assert.equal(result.providerConfig.queryTaskEndpoint, "/v1/async-tasks/{taskId}");
+  assert.equal(result.providerConfig.resultFormat, "url");
+  assert.equal(result.providerConfig.vendorOption, "keep-me");
+  assert.equal(result.dispatchPolicy.pollQueueName, "generation-poll-image");
+  assert.equal(result.dispatchPolicy.providerRpmLimit, 7);
+  assert.equal(result.dispatchPolicy.providerConcurrentLimit, 1);
+  assert.equal(result.dispatchPolicy.submitConcurrencyLimit, 2);
+  assert.equal(result.dispatchPolicy.pollingConcurrencyLimit, 3);
+  assert.equal(result.capabilities.vendorFeature, true);
+  assert.equal(result.capabilities.asyncPolling, true);
+  assert.deepEqual(result.limits, { maxImages: 2, maxPromptLength: 8000 });
+  assert.equal(result.defaultParams.quality, "auto");
+});
+
+test("saving an unchanged model kind preserves existing task and supported modes", () => {
+  const start = script.indexOf("function modelKindTransportFields");
+  assert.notEqual(start, -1, "model kind transport helper exists");
+  const end = script.indexOf("function modelTransportChanged", start);
+  const context = {
+    inferModelKind: () => "image.reference_image",
+    resolveVideoTaskModes: (kind) => kind.taskModes,
+    videoSupportedModesByTaskModes: () => [],
+    result: null,
+  };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    const existing = {
+      taskModes: ["image.generate", "image.edit", "image.reference_generate"],
+      uiConfig: { supportedModes: ["single-image", "multi-image"] },
+    };
+    result = {
+      preserved: modelKindTransportFields(existing, {
+        value: "image.reference_image",
+        mediaType: "image",
+        taskModes: ["image.edit", "image.reference_generate", "image.image_to_image"],
+      }),
+      switched: modelKindTransportFields(existing, {
+        value: "image.text_to_image",
+        mediaType: "image",
+        taskModes: ["image.generate"],
+      }),
+    };
+  `, context);
+
+  const result = JSON.parse(JSON.stringify(context.result));
+  assert.deepEqual(result.preserved.taskModes, ["image.generate", "image.edit", "image.reference_generate"]);
+  assert.deepEqual(result.preserved.supportedModes, ["single-image", "multi-image"]);
+  assert.deepEqual(result.switched.taskModes, ["image.generate"]);
+  assert.deepEqual(result.switched.supportedModes, ["text_to_image"]);
 });
 
 test("admin image models can configure provider-backed resolution values", () => {
@@ -744,9 +1026,10 @@ test("admin model management uses parameter templates and a simplified model edi
   assert.doesNotMatch(script, /name="inputSchema"|name="outputSchema"|\\u7ed3\\u6784\\u914d\\u7f6e|\\u5165\\u53c2\\u7ed3\\u6784|\\u51fa\\u53c2\\u7ed3\\u6784/);
 
   assert.match(script, /navButton\("parameterTemplates", "\\u53c2\\u6570\\u6a21\\u677f"\)/);
-  assert.match(script, /providerProtocol: fixed\.providerProtocol/);
-  assert.match(script, /invocationMode: fixed\.invocationMode/);
-  assert.match(script, /taskModes = kind\.mediaType === "video" \? resolveVideoTaskModes\(kind, existing\) : kind\.taskModes/);
+  assert.match(script, /providerProtocol: transport\.providerProtocol/);
+  assert.match(script, /invocationMode: transport\.invocationMode/);
+  assert.match(script, /const kindTransport = modelKindTransportFields\(existing, kind\)/);
+  assert.match(script, /const taskModes = kindTransport\.taskModes/);
 });
 
 test("admin user management table keeps model records in the outer action bar", () => {

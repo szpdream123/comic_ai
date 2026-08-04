@@ -11947,13 +11947,14 @@
         const protocol = String(adapterKey || defaultModelAdapter(mediaType, providerName)).trim();
         const isVideo = mediaType === "video";
         const isText = mediaType === "text";
+        const isBananaRouterImage = mediaType === "image" && protocol === "banana_router";
         return {
           providerProtocol: protocol,
-          invocationMode: isText ? "stream" : isVideo ? "async_polling" : "sync",
+          invocationMode: isText ? "stream" : isVideo || isBananaRouterImage ? "async_polling" : "sync",
           taskModes: isText ? ["text.script"] : isVideo ? ["video.text_to_video", "video.image_to_video"] : ["image.generate", "image.edit", "image.reference_generate"],
           status: "disabled",
           sortOrder: 100,
-          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"] } : { input: ["prompt", "image"], output: ["image"] },
+          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"] } : { input: ["prompt", "image"], output: ["image"], ...(isBananaRouterImage ? { asyncPolling: true } : {}) },
           defaultParams: {},
           providerConfig: isText
             ? (protocol === "cumob_chat"
@@ -11979,7 +11980,7 @@
             )
             : (
               protocol === "banana_router"
-                ? { baseURL: "https://api.bananarouter.com", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_openai_images", resultFormat: "b64_json" }
+                ? { baseURL: "https://api.bananarouter.com", requestPath: "/v1/images/generations/async", endpoint: "/v1/images/generations/async", createTaskEndpoint: "/v1/images/generations/async", editEndpoint: "/v1/images/edits/async", queryTaskEndpoint: "/v1/async-tasks/{taskId}", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_openai_images", resultFormat: "url" }
                 : protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url" }
                 : protocol === "global_ai_opc_image"
@@ -11995,7 +11996,7 @@
           uiConfig: isText ? { modelKind: "text.script", modelKindLabel: "\u5267\u672c\u6a21\u578b", supportedModes: ["script"] } : isVideo ? { videoCategory: "first_frame", videoCategoryLabel: "\u9996\u5e27\u89c6\u9891" } : {},
           dispatchPolicy: {
             submitQueueName: isText ? "generation-submit-text" : isVideo ? "generation-submit-video" : "generation-submit-image",
-            pollQueueName: isVideo ? "generation-poll-video" : null,
+            pollQueueName: isVideo ? "generation-poll-video" : isBananaRouterImage ? "generation-poll-image" : null,
             providerRpmLimit: 60,
             providerConcurrentLimit: 5,
             submitConcurrencyLimit: 5,
@@ -12458,18 +12459,115 @@
         });
       };
 
+      function modelTransportFields(existing, fixed, transportChanged) {
+        const source = existing && !transportChanged ? existing : fixed;
+        return {
+          providerProtocol: source.providerProtocol || fixed.providerProtocol,
+          invocationMode: source.invocationMode || fixed.invocationMode,
+          capabilities: source.capabilities || fixed.capabilities,
+          limits: source.limits || fixed.limits,
+          dispatchPolicy: {
+            ...fixed.dispatchPolicy,
+            ...(source.dispatchPolicy || {}),
+          },
+        };
+      }
+
+      function fixedBananaRouterImageTransportFields(existing, fixed) {
+        return {
+          providerProtocol: fixed.providerProtocol,
+          invocationMode: fixed.invocationMode,
+          capabilities: {
+            ...(existing?.capabilities || {}),
+            ...fixed.capabilities,
+          },
+          limits: existing?.limits || fixed.limits,
+          dispatchPolicy: {
+            ...fixed.dispatchPolicy,
+            ...(existing?.dispatchPolicy || {}),
+            submitQueueName: fixed.dispatchPolicy.submitQueueName,
+            pollQueueName: fixed.dispatchPolicy.pollQueueName,
+          },
+        };
+      }
+
+      function modelKindTransportFields(existing, kind) {
+        const kindChanged = Boolean(existing) && kind.value !== inferModelKind(existing);
+        const existingTaskModes = Array.isArray(existing?.taskModes) ? existing.taskModes.map(String) : [];
+        const taskModes = existing && !kindChanged && existingTaskModes.length > 0
+          ? existingTaskModes
+          : kind.mediaType === "video"
+          ? resolveVideoTaskModes(kind, existing)
+          : kind.taskModes;
+        const existingSupportedModes = Array.isArray(existing?.uiConfig?.supportedModes)
+          ? existing.uiConfig.supportedModes.map(String)
+          : [];
+        const supportedModes = existing && !kindChanged && existingSupportedModes.length > 0
+          ? existingSupportedModes
+          : kind.mediaType === "text"
+          ? ["script"]
+          : kind.value.startsWith("image.")
+          ? (kind.value === "image.text_to_image" ? ["text_to_image"] : ["reference_image", "multi_reference", "image_to_image"])
+          : videoSupportedModesByTaskModes(kind.videoCategory, taskModes);
+        return { taskModes, supportedModes };
+      }
+
+      function modelTransportChanged(existing, mediaType, providerAdapter) {
+        const existingProtocol = String(existing?.providerProtocol || "").trim().replaceAll("-", "_");
+        const existingConfig = existing?.providerConfig || {};
+        const providerPath = (value) => {
+          const raw = String(value || "").trim();
+          if (!raw) return "";
+          try {
+            return decodeURIComponent(new URL(raw, "https://provider.invalid").pathname).replace(/\/+$/g, "");
+          } catch {
+            return "";
+          }
+        };
+        const createPaths = [existingConfig.requestPath, existingConfig.endpoint, existingConfig.createTaskEndpoint]
+          .map(providerPath)
+          .filter(Boolean);
+        const repairsMixedBananaRouterImage = providerAdapter === "banana_router"
+          && mediaType === "image"
+          && (
+            String(existing?.invocationMode || "sync") !== "async_polling"
+            || existing?.capabilities?.asyncPolling !== true
+            || createPaths.length === 0
+            || createPaths.some((path) => path !== "/v1/images/generations/async")
+            || providerPath(existingConfig.editEndpoint) !== "/v1/images/edits/async"
+            || providerPath(existingConfig.queryTaskEndpoint) !== "/v1/async-tasks/{taskId}"
+            || String(existingConfig.resultFormat || "") !== "url"
+            || String(existing?.dispatchPolicy?.pollQueueName || "") !== "generation-poll-image"
+          );
+        return Boolean(existing) && (
+          providerAdapter !== inferModelAdapter(existing)
+          || providerAdapter !== existingProtocol
+          || mediaType !== String(existing.mediaType || "")
+          || repairsMixedBananaRouterImage
+        );
+      }
+
       function simplifiedModelPayloadFromForm(form, existing) {
         const kind = modelKindOption(String(form.get("modelKind") || ""));
         const mediaType = kind.mediaType;
         const providerName = String(form.get("providerName") || "").trim() || providerNameForSecretKey(form.get("modelApiKeyEnv")) || String(existing?.providerName || "").trim() || "custom";
         const providerAdapter = String(form.get("providerAdapter") || "").trim() || defaultModelAdapter(mediaType, providerName);
         const fixed = fixedModelTemplate(mediaType, providerName, providerAdapter);
-        const taskModes = kind.mediaType === "video" ? resolveVideoTaskModes(kind, existing) : kind.taskModes;
+        const kindTransport = modelKindTransportFields(existing, kind);
+        const taskModes = kindTransport.taskModes;
         const selected = schemaFromSelectedParameterTemplates(form, existing?.parameterSchema || {}, existing?.defaultParams || {});
-        const adapterChanged = Boolean(existing) && providerAdapter !== inferModelAdapter(existing);
-        const providerConfig = { ...fixed.providerConfig, ...(adapterChanged ? {} : existing?.providerConfig || {}) };
+        const transportChanged = modelTransportChanged(existing, mediaType, providerAdapter);
+        const fixedBananaRouterImageTransport = mediaType === "image" && providerAdapter === "banana_router";
+        const transport = fixedBananaRouterImageTransport
+          ? fixedBananaRouterImageTransportFields(existing, fixed)
+          : modelTransportFields(existing, fixed, transportChanged);
+        const providerConfig = fixedBananaRouterImageTransport
+          ? { ...(existing?.providerConfig || {}), ...fixed.providerConfig }
+          : { ...fixed.providerConfig, ...(transportChanged ? {} : existing?.providerConfig || {}) };
         const requestPath = String(form.get("requestPath") || "").trim();
-        if (requestPath) {
+        if (fixedBananaRouterImageTransport) {
+          providerConfig.requestPath = fixed.providerConfig.requestPath;
+        } else if (requestPath) {
           providerConfig.requestPath = requestPath;
         } else {
           delete providerConfig.requestPath;
@@ -12510,11 +12608,7 @@
           ...(existing?.uiConfig || {}),
           modelKind: kind.value,
           modelKindLabel: kind.label,
-          supportedModes: kind.mediaType === "text"
-            ? ["script"]
-            : kind.value.startsWith("image.")
-            ? (kind.value === "image.text_to_image" ? ["text_to_image"] : ["reference_image", "multi_reference", "image_to_image"])
-            : videoSupportedModesByTaskModes(kind.videoCategory, taskModes),
+          supportedModes: kindTransport.supportedModes,
         };
         if (kind.mediaType === "video") {
           uiConfig.videoCategory = kind.videoCategory;
@@ -12528,20 +12622,20 @@
           displayName: String(form.get("displayName") || "").trim(),
           providerName,
           providerModel: String(form.get("providerModel") || "").trim(),
-          providerProtocol: fixed.providerProtocol,
-          invocationMode: fixed.invocationMode,
+          providerProtocol: transport.providerProtocol,
+          invocationMode: transport.invocationMode,
           mediaType,
           taskModes,
           status: existing?.status || fixed.status,
           sortOrder: Number(existing?.sortOrder || fixed.sortOrder),
           parameterSchema: selected.schema,
           defaultParams: { ...fixed.defaultParams, ...selected.defaults },
-          capabilities: fixed.capabilities,
+          capabilities: transport.capabilities,
           pricing,
           providerConfig,
-          limits: fixed.limits,
+          limits: transport.limits,
           uiConfig,
-          dispatchPolicy: existing?.dispatchPolicy ? { ...fixed.dispatchPolicy, ...existing.dispatchPolicy } : fixed.dispatchPolicy,
+          dispatchPolicy: transport.dispatchPolicy,
           remark: String(form.get("remark") || ""),
           reason: String(form.get("reason") || ""),
         };

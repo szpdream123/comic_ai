@@ -919,6 +919,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.ok(
         asyncMissingPayload.data.failedItems.some((item: { field: string }) => item.field === "queryTaskEndpoint"),
       );
+      assert.ok(
+        asyncMissingPayload.data.failedItems.some((item: { field: string }) => item.field === "pollQueueName"),
+      );
+      assert.ok(
+        asyncMissingPayload.data.failedItems
+          .filter((item: { field: string }) => item.field === "queryTaskEndpoint")
+          .every((item: { message: string }) => !item.message.includes("视频模型")),
+      );
     } finally {
       await server.close();
     }
@@ -2194,7 +2202,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
-  it("blocks publishing async polling model configs without a valid query endpoint", async () => {
+  it("keeps status changes non-blocking while probe diagnoses incomplete async polling configs", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);
 
@@ -2226,7 +2234,6 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           },
           dispatchPolicy: {
             submitQueueName: "generation-submit-async-query-missing",
-            pollQueueName: "generation-poll-async-query-missing",
             providerRpmLimit: 30,
             providerConcurrentLimit: 2,
           },
@@ -2234,6 +2241,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         }),
       });
       const createPayload = await createResponse.json();
+      assert.equal(createResponse.status, 200, JSON.stringify(createPayload));
       const modelId = createPayload.data.id;
 
       const publishResponse = await fetch(`${server.origin}/api/admin/models/${modelId}/status`, {
@@ -2249,10 +2257,23 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         }),
       });
       const publishPayload = await publishResponse.json();
+      const probeResponse = await fetch(`${server.origin}/api/admin/models/${modelId}/probe`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({ reason: "诊断异步轮询配置" }),
+      });
+      const probePayload = await probeResponse.json();
 
       assert.equal(createResponse.status, 200);
       assert.equal(publishResponse.status, 200);
       assert.equal(publishPayload.data.status, "active");
+      assert.equal(probeResponse.status, 200, JSON.stringify(probePayload));
+      assert.equal(probePayload.data.ok, false);
+      assert.ok(probePayload.data.checks.some((check: { key: string }) => check.key === "queryTaskEndpoint"));
+      assert.ok(probePayload.data.checks.some((check: { key: string }) => check.key === "pollQueueName"));
     } finally {
       await server.close();
     }

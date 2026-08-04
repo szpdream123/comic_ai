@@ -96,6 +96,7 @@ const migrations = [
   ["20260825-bananarouter-image-async-recovery.sql", "packages/db/migrations/20260825-bananarouter-image-async-recovery.sql"],
   ["20260826-converge-provider-protocol-constraint.sql", "packages/db/migrations/20260826-converge-provider-protocol-constraint.sql"],
   ["20260827-converge-canvas-agent-shard-constraint.sql", "packages/db/migrations/20260827-converge-canvas-agent-shard-constraint.sql"],
+  ["20260828-bananarouter-image-async-config-convergence.sql", "packages/db/migrations/20260828-bananarouter-image-async-config-convergence.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
