@@ -49,6 +49,7 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /\.new-canvas-root \{ visibility: hidden !important; \}/);
   assert.match(source, /newCanvasStyleGate/);
   assert.match(source, /loadingGate\.innerHTML = "<span><\/span><span><\/span><span><\/span>"/);
+  assert.match(source, /\[data-new-canvas-style-gate\] > \* \{ visibility: hidden; \}/);
   assert.match(source, /pendingLinks\.delete\(link\)/);
   assert.match(source, /pendingLinks\.size === 0[\s\S]*?criticalStyle\.remove\(\)[\s\S]*?loadingGate\.remove\(\)/);
   assert.match(source, /link\.addEventListener\("load", loaded\)/);
@@ -1304,6 +1305,7 @@ test("canvas detail hands rendering to the in-project shadow host while the host
     "utf8",
   );
   assert.match(workbenchCss, /\.new-canvas-workbench-host\s*\{[\s\S]*?height:\s*100%/);
+  assert.match(workbenchCss, /\.new-canvas-loading-skeleton > \*\s*\{[\s\S]*?visibility:\s*hidden/);
   assert.match(workbenchCss, /\.canvas-global-asset-folder-filter\s*\{[\s\S]*?display:\s*flex/);
   assert.match(workbenchCss, /\.canvas-library-asset-folder\s*\{[\s\S]*?display:\s*flex/);
   assert.match(workbenchCss, /\.canvas-library-asset-details\s*\{[\s\S]*?display:\s*grid/);

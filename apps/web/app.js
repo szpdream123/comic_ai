@@ -12,7 +12,7 @@ const LOCAL_STORAGE_PREFIXES = ["comic-ai-project-library", "comic-ai:production
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
-const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements"]);
+const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace"]);
 
 async function bootstrap() {
   const sessionPromise = creatorApi.getSession();

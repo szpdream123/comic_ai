@@ -16,6 +16,32 @@ import {
 } from "./prompt-skill-default.service.ts";
 
 describe("prompt marketplace service", { concurrency: false }, () => {
+  it("does not select non-owner prompt bodies for catalog cards, rankings, or private libraries", async () => {
+    const marketplaceQueries: string[] = [];
+    const service = createPromptMarketplaceService({
+      db: {
+        async query<T>(sql: string) {
+          if (/SELECT COUNT\(\*\) AS count/.test(sql)) {
+            return { rows: [{ count: 0 }] as T[] };
+          }
+          marketplaceQueries.push(sql);
+          return { rows: [] as T[] };
+        },
+      },
+    });
+
+    await service.listCatalog({ userId: null });
+    await service.listLibrary({ userId: "82000000-0000-4000-8000-000000000001" });
+
+    assert.equal(marketplaceQueries.length, 3);
+    for (const sql of marketplaceQueries) {
+      assert.doesNotMatch(sql, /item\.\*/);
+    }
+    assert.match(marketplaceQueries[0], /owner_link\.user_id = \$1 THEN item\.prompt_content/);
+    assert.match(marketplaceQueries[1], /owner_link\.user_id = \$1 THEN item\.prompt_content/);
+    assert.match(marketplaceQueries[2], /user_link\.relation_type = 'owner' THEN item\.prompt_content/);
+  });
+
   it("keeps one optional private default per category and one required official default", async () => {
     const db = await createMigratedTestDb();
     try {

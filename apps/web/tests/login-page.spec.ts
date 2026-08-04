@@ -158,6 +158,19 @@ describe("app login modal client flow", () => {
     );
   });
 
+  it("allows anonymous visitors to read the prompt marketplace catalog", async () => {
+    const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
+
+    assert.match(
+      js,
+      /ANONYMOUS_READ_API_METHODS = new Set\(\[[^\]]*"getPromptMarketplace"[^\]]*\]\)/,
+    );
+    assert.doesNotMatch(
+      js,
+      /ANONYMOUS_READ_API_METHODS = new Set\(\[[^\]]*"getPromptMarketplaceLibrary"[^\]]*\]\)/,
+    );
+  });
+
   it("blocks protected api methods locally for anonymous visitors", async () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const anonymousApiBlock = js.match(/function createAnonymousApi\(api\) \{[\s\S]*?\n\}/)?.[0] ?? "";

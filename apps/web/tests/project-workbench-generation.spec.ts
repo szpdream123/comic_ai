@@ -105,7 +105,11 @@ import {
 import { connectCanvasNodes } from "../src/features/production-workbench/canvas/canvas-state.js";
 import { renderProjectCreateModal } from "../src/features/production-workbench/project-create-modal.js";
 import { buildProjectCreateRequest } from "../src/features/production-workbench/project-create-request.js";
-import { renderCanvasSurfaceForHost, renderStoryboardGeneratorTaskOverview } from "../src/features/production-workbench/project-detail.js";
+import {
+  renderCanvasProjectGallery,
+  renderCanvasSurfaceForHost,
+  renderStoryboardGeneratorTaskOverview,
+} from "../src/features/production-workbench/project-detail.js";
 import {
   validateVideoGeneration,
   videoModels,
@@ -31598,6 +31602,17 @@ describe("production workbench project tab", () => {
     assert.match(html, /data-result-action="set-character"[^>]*>设为场景图</);
   });
 
+  it("marks a canvas project as opening while its document is loading", () => {
+    const html = renderCanvasProjectGallery({
+      canvasProjects: [{ id: "canvas-b", title: "龙珠 画布", createdAt: "2026/07/21" }],
+      canvasOpeningProjectId: "canvas-b",
+    });
+
+    assert.match(html, /data-canvas-project-opening="true"/);
+    assert.match(html, /正在打开画布/);
+    assert.match(html, /class="canvas-project-card-open is-opening"[^>]*disabled/);
+  });
+
   it("renders the tools tab as a canvas project gallery before opening a project", () => {
     const html = renderProductionWorkbench({
       state: {
@@ -33496,6 +33511,94 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasDocument.nodes[0]?.id, "persisted-node");
     assert.equal(workbench.ui.canvasServerRevision, 3);
     assert.equal(workbench.ui.toast, "");
+  });
+
+  it("mounts the canvas before auxiliary project settings finish loading", async () => {
+    let releaseDocument;
+    let releaseConfig;
+    let releaseSettings;
+    let releaseToolbar;
+    const documentPending = new Promise((resolve) => { releaseDocument = resolve; });
+    const configPending = new Promise((resolve) => { releaseConfig = resolve; });
+    const settingsPending = new Promise((resolve) => { releaseSettings = resolve; });
+    const toolbarPending = new Promise((resolve) => { releaseToolbar = resolve; });
+    const openingButton = {
+      disabled: false,
+      dataset: {},
+      setAttribute() {},
+      classList: { add() {}, contains(value) { return value === "canvas-project-card-open"; } },
+    };
+    const titleButton = {
+      disabled: false,
+      setAttribute() {},
+      classList: { add() {}, contains() { return false; } },
+    };
+    let openingLabel = "";
+    const cover = {
+      querySelector() { return null; },
+      ownerDocument: { createElement() { return { className: "", textContent: "" }; } },
+      append(label) { openingLabel = label.textContent; },
+    };
+    const projectCard = {
+      dataset: {},
+      querySelectorAll() { return [openingButton, titleButton]; },
+      querySelector() { return cover; },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        getStandaloneCanvas() {
+          return documentPending;
+        },
+        async getCanvasSession() {
+          return { session: {} };
+        },
+        listGlobalGenerationConfig() {
+          return configPending;
+        },
+        getCanvasSettings() {
+          return settingsPending;
+        },
+        listCanvasUserConfigVersions() {
+          return toolbarPending;
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "list",
+        canvasProjects: [{ id: "canvas-main", title: "画布项目" }],
+        selectedCanvasProjectId: "canvas-main",
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    const opening = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-canvas-project", canvasProjectId: "canvas-main" },
+      closest() { return projectCard; },
+    });
+    await Promise.resolve();
+    assert.equal(workbench.ui.canvasOpeningProjectId, "canvas-main");
+    assert.equal(openingButton.disabled, true);
+    assert.equal(titleButton.disabled, true);
+    assert.equal(openingLabel, "正在打开画布");
+
+    releaseDocument({
+      canvas: {
+        canvasProjectId: "canvas-main",
+        serverRevision: 3,
+        document: createDefaultCanvasDocument({ projectId: "canvas-main" }),
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(workbench.ui.canvasProjectView, "detail");
+    assert.equal(workbench.ui.canvasOpeningProjectId, "canvas-main");
+    assert.match(workbench.root.innerHTML, /data-new-canvas-mount/);
+
+    releaseConfig({ models: [] });
+    releaseSettings({ settings: {}, revision: 1 });
+    releaseToolbar({ versions: [] });
+    await opening;
+    assert.equal(workbench.ui.canvasOpeningProjectId, null);
   });
 
   it("flushes and awaits the current Canvas draft before switching projects", async () => {

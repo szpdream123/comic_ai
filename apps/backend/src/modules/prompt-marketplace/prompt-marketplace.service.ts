@@ -22,7 +22,7 @@ interface PromptMarketplaceRow {
   prompt_category: PromptMarketplaceCategory;
   name: string;
   summary: string;
-  prompt_content: string;
+  prompt_content: string | null;
   cover_image_url: string | null;
   cover_storage_object_id: string | null;
   price_credits: number | string;
@@ -77,7 +77,7 @@ export class PromptMarketplaceError extends Error {
 
 export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
   async function listCatalog(input: {
-    userId: string;
+    userId: string | null;
     category?: string | null;
     query?: string | null;
     page?: number;
@@ -111,7 +111,25 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     const rows = await deps.db.query<PromptMarketplaceRow>(
       `
         SELECT
-          item.*,
+          item.id,
+          item.prompt_category,
+          item.name,
+          item.summary,
+          CASE
+            WHEN $1::uuid IS NOT NULL AND owner_link.user_id = $1 THEN item.prompt_content
+            ELSE NULL
+          END AS prompt_content,
+          item.cover_image_url,
+          item.cover_storage_object_id,
+          item.price_credits,
+          item.status,
+          item.is_published,
+          item.is_official,
+          item.usage_count,
+          item.rating_score,
+          item.rating_count,
+          item.published_at,
+          item.updated_at,
           EXISTS (
             SELECT 1 FROM prompt_official_defaults prompt_default
             WHERE prompt_default.prompt_category = item.prompt_category
@@ -159,7 +177,25 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     const rankingRows = await deps.db.query<PromptMarketplaceRow>(
       `
         SELECT
-          item.*,
+          item.id,
+          item.prompt_category,
+          item.name,
+          item.summary,
+          CASE
+            WHEN $1::uuid IS NOT NULL AND owner_link.user_id = $1 THEN item.prompt_content
+            ELSE NULL
+          END AS prompt_content,
+          item.cover_image_url,
+          item.cover_storage_object_id,
+          item.price_credits,
+          item.status,
+          item.is_published,
+          item.is_official,
+          item.usage_count,
+          item.rating_score,
+          item.rating_count,
+          item.published_at,
+          item.updated_at,
           EXISTS (
             SELECT 1 FROM prompt_official_defaults prompt_default
             WHERE prompt_default.prompt_category = item.prompt_category
@@ -213,7 +249,22 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     const rows = await deps.db.query<PromptMarketplaceRow>(
       `
         SELECT
-          item.*,
+          item.id,
+          item.prompt_category,
+          item.name,
+          item.summary,
+          CASE WHEN user_link.relation_type = 'owner' THEN item.prompt_content ELSE NULL END AS prompt_content,
+          item.cover_image_url,
+          item.cover_storage_object_id,
+          item.price_credits,
+          item.status,
+          item.is_published,
+          item.is_official,
+          item.usage_count,
+          item.rating_score,
+          item.rating_count,
+          item.published_at,
+          item.updated_at,
           EXISTS (
             SELECT 1 FROM prompt_user_defaults prompt_default
             WHERE prompt_default.user_id = $1
@@ -1178,8 +1229,8 @@ function promptSkillKeyword(value: unknown) {
   return normalized ? `%${normalized}%` : null;
 }
 
-function marketplaceItemFromRow(row: PromptMarketplaceRow, userId: string) {
-  const isOwner = row.user_relation_type === "owner" || row.owner_user_id === userId;
+function marketplaceItemFromRow(row: PromptMarketplaceRow, userId: string | null) {
+  const isOwner = Boolean(userId) && (row.user_relation_type === "owner" || row.owner_user_id === userId);
   const purchased = row.user_relation_type === "added" && row.purchase_status === "active";
   const ratingCount = Number(row.rating_count || 0);
   return {

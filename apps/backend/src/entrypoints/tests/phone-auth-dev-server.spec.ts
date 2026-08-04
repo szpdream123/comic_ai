@@ -6401,6 +6401,18 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(updated.item.title, "创作者场景抽取提示词（已编辑）");
       assert.equal(updated.item.coverImageUrl, "https://example.com/scene-prompt-cover.png");
 
+      const anonymousCatalogResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace`);
+      assert.equal(anonymousCatalogResponse.status, 200);
+      const anonymousCatalog = await anonymousCatalogResponse.json();
+      const anonymouslyListed = anonymousCatalog.items.find((item: { id: string }) => item.id === created.item.id);
+      assert.equal(anonymouslyListed.title, "创作者场景抽取提示词（已编辑）");
+      assert.equal(anonymouslyListed.owned, false);
+      assert.equal(anonymouslyListed.purchased, false);
+      assert.equal(anonymouslyListed.contentVisible, false);
+      assert.equal(Object.prototype.hasOwnProperty.call(anonymouslyListed, "content"), false);
+      const anonymousLibraryResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/library`);
+      assert.equal(anonymousLibraryResponse.status, 401);
+
       const unauthorizedUpdateResponse = await fetch(`${server.origin}/api/creator/prompt-marketplace/items/${created.item.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json", cookie: buyerCookie },

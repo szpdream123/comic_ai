@@ -1232,6 +1232,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       canvasAssetTransfers: {},
       canvasDocumentsByProject: null,
       canvasProjectMenuId: null,
+      canvasOpeningProjectId: null,
       canvasAssetSource: "outputs",
       canvasAssetMediaFilter: "all",
       canvasAssetLayoutColumns: 3,
@@ -5210,7 +5211,7 @@ async function syncPromptMarketplace(workbench) {
     try {
       const [catalog, library] = await Promise.all([
         workbench.api.getPromptMarketplace(request),
-        typeof workbench.api.getPromptMarketplaceLibrary === "function"
+        workbench.ui.promptPlazaSection === "library" && workbench.session?.authenticated !== false && typeof workbench.api.getPromptMarketplaceLibrary === "function"
           ? workbench.api.getPromptMarketplaceLibrary()
           : Promise.resolve({ items: [] }),
       ]);
@@ -6812,6 +6813,30 @@ function renderNewCanvasHostActionFailure(workbench, updateOptions) {
     if (updateMountedNewCanvasSurface(workbench, updateOptions)) return;
   }
   render(workbench);
+}
+
+function markCanvasProjectOpening(workbench, target) {
+  const projectCard = target?.closest?.(".canvas-project-card");
+  if (!projectCard) {
+    render(workbench);
+    return;
+  }
+  projectCard.dataset.canvasProjectOpening = "true";
+  projectCard.querySelectorAll?.('[data-action="open-canvas-project"]').forEach((button) => {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.classList?.add("is-opening");
+    if (button.classList?.contains("canvas-project-card-open")) {
+      button.dataset.canvasProjectOpening = "true";
+    }
+  });
+  const cover = projectCard.querySelector?.(".canvas-project-cover");
+  if (!cover || cover.querySelector?.(".canvas-project-opening-label")) return;
+  const label = cover.ownerDocument?.createElement?.("span");
+  if (!label) return;
+  label.className = "canvas-project-opening-label";
+  label.textContent = "正在打开画布";
+  cover.append(label);
 }
 
 async function syncNewCanvasMount(workbench) {
@@ -15499,6 +15524,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-prompt-plaza-section") {
     const section = String(target.dataset.section ?? "marketplace");
     workbench.ui.promptPlazaSection = ["marketplace", "library"].includes(section) ? section : "marketplace";
+    if (workbench.ui.promptPlazaSection === "library") {
+      await syncPromptMarketplace(workbench);
+    }
     render(workbench, { preserveNavigationShell: true });
     return;
   }
@@ -15590,8 +15618,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       } else {
         await workbench.api.setPromptMarketplaceDefault(category, itemId);
       }
-      await Promise.all([syncPromptMarketplace(workbench), syncEpisodePromptSkills(workbench)]);
       workbench.ui.promptPlazaSection = "library";
+      await Promise.all([syncPromptMarketplace(workbench), syncEpisodePromptSkills(workbench)]);
       workbench.ui.toast = clearDefault ? "已取消该分类的私人默认技能。" : "已设为该分类的私人默认技能。";
     });
     return;
@@ -15616,8 +15644,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!itemId || typeof workbench.api?.ratePromptMarketplaceItem !== "function") return;
     await runAction(workbench, "正在提交评价...", async () => {
       await workbench.api.ratePromptMarketplaceItem(itemId, rating);
-      await syncPromptMarketplace(workbench);
       workbench.ui.promptPlazaSection = "library";
+      await syncPromptMarketplace(workbench);
       workbench.ui.toast = `已提交 ${rating} 星推荐。`;
     });
     return;
@@ -15649,8 +15677,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         await workbench.api.removePromptMarketplaceLibraryItem(itemId);
       }
       workbench.ui.promptMarketplaceDeleteConfirm = null;
-      await syncPromptMarketplace(workbench);
       workbench.ui.promptPlazaSection = "library";
+      await syncPromptMarketplace(workbench);
       workbench.ui.toast = draft.owned
         ? "提示词已删除并停止发布。"
         : "已从私人库删除，可随时从广场免费添加。";
@@ -15667,8 +15695,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     await runAction(workbench, input.publish ? "正在发布提示词..." : "正在保存提示词...", async () => {
       await workbench.api.createPromptMarketplaceItem(input);
       form.reset?.();
-      await syncPromptMarketplace(workbench);
       workbench.ui.promptPlazaSection = "library";
+      await syncPromptMarketplace(workbench);
       workbench.ui.promptMarketplaceCreateOpen = false;
       workbench.ui.promptLibraryPage = 1;
       workbench.ui.toast = input.publish
@@ -15686,9 +15714,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const input = buildPromptMarketplacePublishInput(new FormData(form));
     await runAction(workbench, "正在保存提示词...", async () => {
       await workbench.api.updatePromptMarketplaceItem(itemId, input);
-      await syncPromptMarketplace(workbench);
       workbench.ui.promptMarketplaceEditItem = null;
       workbench.ui.promptPlazaSection = "library";
+      await syncPromptMarketplace(workbench);
       workbench.ui.toast = input.publish ? "提示词已更新并发布到广场。" : "提示词已更新并保存到私人提示词库。";
     });
     return;
@@ -15829,6 +15857,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     const projectId = target.dataset.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID;
+    if (workbench.ui.canvasOpeningProjectId) {
+      return;
+    }
+    workbench.ui.canvasOpeningProjectId = projectId;
+    workbench.ui.toast = "正在打开画布...";
+    markCanvasProjectOpening(workbench, target);
     const currentProjectId = resolveCanvasSaveProjectId(workbench);
     if (
       workbench.ui.canvasProjectView === "detail" &&
@@ -15838,6 +15872,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       try {
         await flushProjectCanvasSave(workbench);
       } catch (error) {
+        workbench.ui.canvasOpeningProjectId = null;
         workbench.ui.toast = workbench.ui.canvasSaveError || `画布切换已取消：${friendlyError(error)}`;
         render(workbench);
         return;
@@ -15873,11 +15908,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
     }
     persistWorkbenchState(workbench);
-    await Promise.all([
-      ensureCanvasGenerationConfig(workbench),
-      loadCanvasSettingsRecord(workbench),
-      loadAppliedCanvasToolbar(workbench),
-    ]);
+    renderAfterCanvasLoad(workbench);
+    try {
+      await Promise.all([
+        ensureCanvasGenerationConfig(workbench),
+        loadCanvasSettingsRecord(workbench),
+        loadAppliedCanvasToolbar(workbench),
+      ]);
+    } finally {
+      if (String(workbench.ui.canvasOpeningProjectId ?? "") === String(projectId)) {
+        workbench.ui.canvasOpeningProjectId = null;
+      }
+    }
     renderAfterCanvasLoad(workbench);
     return;
   }

@@ -86,6 +86,19 @@ describe("runtime schema migration launchers", () => {
     assert.match(productionSource, /CREATOR_DEV_STACK_MANAGED:\s*"true"/);
   });
 
+  it("retries only a transient generation maintenance database connection timeout", async () => {
+    const source = await readFile(new URL("run-generation-queue-maintenance.mjs", import.meta.url), "utf8");
+    const retryHelper = source.slice(
+      source.indexOf("async function createGenerationMaintenanceDb"),
+      source.indexOf("\ntry {", source.indexOf("async function createGenerationMaintenanceDb")),
+    );
+
+    assert.match(retryHelper, /Connection terminated due to connection timeout/);
+    assert.match(retryHelper, /await sleep\(500\)/);
+    assert.equal((retryHelper.match(/createDevDb\(\)/g) ?? []).length, 2);
+    assert.match(retryHelper, /throw error/);
+  });
+
   it("keeps rollout-unsafe data flips out of the runtime startup gate", async () => {
     const helperSource = await readFile(new URL("runtime-schema-migrations.mjs", import.meta.url), "utf8");
     const runnerSource = await readFile(new URL("migrate-user-scope.mjs", import.meta.url), "utf8");
