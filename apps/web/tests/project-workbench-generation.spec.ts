@@ -1189,6 +1189,30 @@ function createDeferred() {
 }
 
 describe("episode workbench asset list layout", () => {
+  it("wraps long generation option labels without overlapping adjacent buttons", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const optionsBlock = css.match(
+      /\.episode-replica-video-settings-options\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const buttonBlock = css.match(
+      /\.episode-replica-video-settings-options button\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const panelBlock = css.match(
+      /(?:^|\r?\n)\.episode-replica-video-settings-panel\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+
+    assert.match(optionsBlock, /grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(8\.5rem,\s*100%\),\s*1fr\)\)/);
+    assert.match(buttonBlock, /white-space:\s*normal/);
+    assert.match(buttonBlock, /line-height:\s*1\.25/);
+    assert.match(buttonBlock, /overflow-wrap:\s*anywhere/);
+    assert.match(panelBlock, /max-height:\s*min\(36rem,\s*calc\(100dvh\s*-\s*4rem\)\)/);
+    assert.match(panelBlock, /overflow-y:\s*auto/);
+    assert.match(panelBlock, /overscroll-behavior:\s*contain/);
+  });
+
   it("keeps the batch video settings popover compact and internally scrollable", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),

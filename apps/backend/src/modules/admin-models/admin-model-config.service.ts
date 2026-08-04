@@ -2288,7 +2288,10 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
     failedItems.push({ step: "business", field: "apiKeyEnv", message: "密钥引用只能保存环境变量名，不能填写明文密钥。" });
   }
   if (input.invocationMode === "async_polling" && !isValidOptionalProviderEndpoint(providerConfig.queryTaskEndpoint)) {
-    failedItems.push({ step: "template", field: "queryTaskEndpoint", message: "异步视频模型必须配置合法的轮询接口。" });
+    failedItems.push({ step: "template", field: "queryTaskEndpoint", message: "异步轮询模型必须配置合法的轮询接口。" });
+  }
+  if (input.invocationMode === "async_polling" && !readString(input.dispatchPolicy?.pollQueueName)) {
+    failedItems.push({ step: "template", field: "pollQueueName", message: "异步轮询模型必须配置轮询队列。" });
   }
   if (input.providerProtocol === "custom_http" && !hasValidProviderEndpoint(providerConfig)) {
     failedItems.push({ step: "template", field: "endpoint", message: "标准 HTTP 代理模型必须配置 endpoint 或 createTaskEndpoint。" });
@@ -2399,6 +2402,13 @@ function modelLaunchCheck(model: AdminModelConfigView) {
       message: "异步轮询模型必须配置合法 queryTaskEndpoint，用于查询任务结果。",
     });
   }
+  if (model.invocationMode === "async_polling" && !readString(model.dispatchPolicy?.pollQueueName)) {
+    failedItems.push({
+      key: "pollQueueName",
+      label: "轮询队列",
+      message: "异步轮询模型必须配置 pollQueueName，用于调度任务结果查询。",
+    });
+  }
   const bananaRouterError = validateBananaRouterProviderConfig(model);
   if (bananaRouterError) {
     failedItems.push({
@@ -2433,7 +2443,7 @@ function modelLaunchCheck(model: AdminModelConfigView) {
 
 function bananaRouterValidationMessage(code: string) {
   if (code === "provider_endpoint_invalid") return "BananaRouter 接口必须使用 https://api.bananarouter.com。";
-  if (code === "provider_query_endpoint_required") return "BananaRouter 视频模型必须配置包含 {taskId} 的轮询接口。";
+  if (code === "provider_query_endpoint_required") return "BananaRouter 异步模型必须配置包含 {taskId} 的轮询接口。";
   if (code === "provider_request_format_media_mismatch") return "BananaRouter 请求格式、媒体类型与调用方式不匹配。";
   return "请选择正确的 BananaRouter 请求格式。";
 }

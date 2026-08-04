@@ -417,22 +417,21 @@ export function validateBananaRouterProviderConfig(
   if (mediaType && mediaType !== "image" && mediaType !== "video") {
     return "provider_request_format_media_mismatch";
   }
-  if (mediaType === "image") {
+  if (mediaType === "image" || requestFormat === "banana_router_openai_images") {
     if (
       requestFormat !== "banana_router_openai_images" ||
-      (invocationMode && invocationMode !== "sync" && invocationMode !== "async_polling")
+      invocationMode !== "async_polling"
     ) {
       return "provider_request_format_media_mismatch";
     }
-    if (invocationMode === "async_polling" && (!queryEndpoint || !queryEndpoint.includes("{taskId}"))) {
+    if (!isBananaRouterImageEndpoint(createEndpoint, "/v1/images/generations/async")) {
+      return "provider_request_format_media_mismatch";
+    }
+    if (!isBananaRouterImageEndpoint(editEndpoint, "/v1/images/edits/async")) {
+      return "provider_request_format_media_mismatch";
+    }
+    if (!isBananaRouterImageQueryEndpoint(queryEndpoint)) {
       return "provider_query_endpoint_required";
-    }
-    if (
-      invocationMode === "async_polling" &&
-      (!isBananaRouterAsyncImageEndpoint(createEndpoint) ||
-        Boolean(editEndpoint && !isBananaRouterAsyncImageEndpoint(editEndpoint)))
-    ) {
-      return "provider_request_format_media_mismatch";
     }
   }
   if (mediaType === "video") {
@@ -561,12 +560,23 @@ function isBananaRouterEndpoint(endpoint: string | undefined): boolean {
   }
 }
 
-function isBananaRouterAsyncImageEndpoint(endpoint: string | undefined): boolean {
+function isBananaRouterImageEndpoint(endpoint: string | undefined, expectedPath: string): boolean {
   if (!endpoint) return false;
   try {
     const url = new URL(endpoint);
     return url.origin === "https://api.bananarouter.com" &&
-      url.pathname.replace(/\/+$/g, "") === "/v1/images/generations/async";
+      url.pathname.replace(/\/+$/g, "") === expectedPath;
+  } catch {
+    return false;
+  }
+}
+
+function isBananaRouterImageQueryEndpoint(endpoint: string | undefined): boolean {
+  if (!endpoint || !endpoint.includes("{taskId}")) return false;
+  try {
+    const url = new URL(endpoint);
+    return url.origin === "https://api.bananarouter.com" &&
+      decodeURIComponent(url.pathname).replace(/\/+$/g, "") === "/v1/async-tasks/{taskId}";
   } catch {
     return false;
   }

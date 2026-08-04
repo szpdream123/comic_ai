@@ -1,82 +1,68 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { BananaRouterProviderAdapter } from "../bananarouter.provider-adapter.ts";
 import { ModelError } from "../model-error.ts";
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
 import { readProviderRawResponse } from "../provider-response-diagnostics.ts";
 
 describe("BananaRouter provider adapter", () => {
-  it("submits gpt-image-2 generation through the dedicated BananaRouter protocol", async () => {
-    let capturedUrl = "";
-    let capturedHeaders: HeadersInit | undefined;
-    let capturedBody = "";
-    const adapter = createProviderAdapterFromModelConfig(
-      {
-        providerProtocol: "banana_router",
-        providerModel: "gpt-image-2",
-        providerConfig: {
-          baseURL: "https://api.bananarouter.com",
-          requestPath: "/v1/images/generations",
-          editEndpoint: "/v1/images/edits",
-          apiKeyEnv: "BananaRouter_API_KEY",
-          requestFormat: "banana_router_openai_images",
-          resultFormat: "b64_json",
-        },
-      },
-      { BananaRouter_API_KEY: "banana-key" },
-      (async (url, init) => {
-        capturedUrl = String(url);
-        capturedHeaders = init?.headers;
-        capturedBody = String(init?.body ?? "");
-        return new Response(JSON.stringify({
-          created: 1777347817,
-          data: [{ b64_json: "ZmFrZQ==", revised_prompt: "revised" }],
-        }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-            "x-request-id": "banana-image-request",
+  it("rejects legacy synchronous BananaRouter image configs before adapter creation", () => {
+    assert.throws(
+      () => createProviderAdapterFromModelConfig(
+        {
+          providerProtocol: "banana_router",
+          providerModel: "gpt-image-2",
+          mediaType: "image",
+          invocationMode: "sync",
+          providerConfig: {
+            baseURL: "https://api.bananarouter.com",
+            requestPath: "/v1/images/generations",
+            editEndpoint: "/v1/images/edits",
+            apiKeyEnv: "BananaRouter_API_KEY",
+            requestFormat: "banana_router_openai_images",
+            resultFormat: "b64_json",
           },
-        });
-      }) as typeof fetch,
+        },
+        { BananaRouter_API_KEY: "banana-key" },
+      ),
+      (error: unknown) => error instanceof ModelError,
+    );
+  });
+
+  it("never accepts synchronous image artifacts as a completed submission", async () => {
+    let requestCount = 0;
+    const adapter = new BananaRouterProviderAdapter(
+      {
+        apiKey: "banana-key",
+        model: "gpt-image-2",
+        requestFormat: "banana_router_openai_images",
+        createTaskEndpoint: "https://api.bananarouter.com/v1/images/generations",
+        editEndpoint: "https://api.bananarouter.com/v1/images/edits",
+        resultFormat: "b64_json",
+        fetchImpl: (async () => {
+          requestCount += 1;
+          return Response.json({
+            created: 1777347817,
+            data: [{ b64_json: "ZmFrZQ==", revised_prompt: "revised" }],
+          });
+        }) as typeof fetch,
+      },
     );
 
-    const result = await adapter.submit({
-      providerRequestId: "provider-request-image",
-      providerName: "BananaRouter",
-      providerOperation: "shot.image.generate",
-      requestKey: "workflow-image:task-image",
-      payloadRef: "creator://banana/image",
-      payloadHash: "hash-image",
-      redactedPayload: {
-        prompt: "A cinematic comic panel",
-        parameters: {
-          size: "1536x1024",
-          quality: "high",
-        },
-      },
-    });
-
-    assert.equal(capturedUrl, "https://api.bananarouter.com/v1/images/generations");
-    assert.deepEqual(capturedHeaders, {
-      authorization: "Bearer banana-key",
-      "content-type": "application/json",
-    });
-    assert.deepEqual(JSON.parse(capturedBody), {
-      model: "gpt-image-2",
-      prompt: "A cinematic comic panel",
-      size: "1536x1024",
-      quality: "high",
-      response_format: "b64_json",
-    });
-    assert.equal(result.externalRequestId, "banana-image-request");
-    assert.equal(result.status, "succeeded");
-    assert.deepEqual(result.artifacts, [{
-      mediaType: "image",
-      mimeType: "image/png",
-      fileExtension: "png",
-      b64Json: "ZmFrZQ==",
-    }]);
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-image-sync-blocked",
+        providerName: "BananaRouter",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-image:task-image-sync-blocked",
+        payloadRef: "creator://banana/image-sync-blocked",
+        payloadHash: "hash-image-sync-blocked",
+        redactedPayload: { prompt: "A cinematic comic panel" },
+      }),
+      (error: unknown) => error instanceof ModelError,
+    );
+    assert.equal(requestCount, 0);
   });
 
   it("submits BananaRouter images asynchronously with a stable idempotency key", async () => {
@@ -92,7 +78,7 @@ describe("BananaRouter provider adapter", () => {
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
           requestPath: "/v1/images/generations/async",
-          editEndpoint: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
           queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
@@ -121,7 +107,6 @@ describe("BananaRouter provider adapter", () => {
       payloadHash: "hash-image-async",
       redactedPayload: {
         prompt: "A cinematic comic panel",
-        referenceImages: [{ url: "https://cdn.example.com/reference.png" }],
       },
     });
 
@@ -134,12 +119,106 @@ describe("BananaRouter provider adapter", () => {
     assert.deepEqual(JSON.parse(capturedBody), {
       model: "gpt-image-2",
       prompt: "A cinematic comic panel",
-      images: ["https://cdn.example.com/reference.png"],
       response_format: "url",
     });
     assert.equal(result.externalRequestId, "banana-image-task");
     assert.equal(result.status, "accepted");
     assert.equal(result.artifacts, undefined);
+  });
+
+  it("submits BananaRouter reference edits through the documented async edit endpoint", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: HeadersInit | undefined;
+    let capturedBody = "";
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async (url, init) => {
+        capturedUrl = String(url);
+        capturedHeaders = init?.headers;
+        capturedBody = String(init?.body ?? "");
+        return Response.json({ taskID: "banana-edit-task", status: "pending" }, { status: 202 });
+      }) as typeof fetch,
+    );
+
+    const result = await adapter.submit({
+      providerRequestId: "provider-request-edit-async",
+      providerName: "BananaRouter",
+      providerOperation: "shot.image.edit",
+      requestKey: "workflow-edit:task-edit-async",
+      payloadRef: "creator://banana/edit-async",
+      payloadHash: "hash-edit-async",
+      redactedPayload: {
+        prompt: "Keep the character and replace the background",
+        referenceImages: [{ url: "https://cdn.example.com/character.png" }],
+      },
+    });
+
+    assert.equal(capturedUrl, "https://api.bananarouter.com/v1/images/edits/async");
+    assert.equal(new Headers(capturedHeaders).get("Idempotency-Key"), "provider-request-edit-async");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "gpt-image-2",
+      prompt: "Keep the character and replace the background",
+      images: ["https://cdn.example.com/character.png"],
+      response_format: "url",
+    });
+    assert.equal(result.externalRequestId, "banana-edit-task");
+    assert.equal(result.status, "accepted");
+    assert.equal(result.artifacts, undefined);
+  });
+
+  it("rejects trace IDs and terminal failures as image submission task identities", async () => {
+    for (const responseBody of [
+      { id: "gateway-trace-id", error: { message: "upstream rejected request" } },
+      { taskID: "failed-image-task", status: "failed", error: { message: "invalid prompt" } },
+    ]) {
+      const adapter = createProviderAdapterFromModelConfig(
+        {
+          providerProtocol: "banana_router",
+          providerModel: "gpt-image-2",
+          mediaType: "image",
+          invocationMode: "async_polling",
+          providerConfig: {
+            baseURL: "https://api.bananarouter.com",
+            requestPath: "/v1/images/generations/async",
+            editEndpoint: "/v1/images/edits/async",
+            queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+            apiKeyEnv: "BananaRouter_API_KEY",
+            requestFormat: "banana_router_openai_images",
+            resultFormat: "url",
+          },
+        },
+        { BananaRouter_API_KEY: "banana-key" },
+        (async () => Response.json(responseBody, { status: 200 })) as typeof fetch,
+      );
+
+      await assert.rejects(
+        () => adapter.submit({
+          providerRequestId: "provider-request-invalid-task-identity",
+          providerName: "BananaRouter",
+          providerOperation: "shot.image.generate",
+          requestKey: "workflow-image:invalid-task-identity",
+          payloadRef: "creator://banana/invalid-task-identity",
+          payloadHash: "hash-invalid-task-identity",
+          redactedPayload: { prompt: "A cinematic comic panel" },
+        }),
+        (error: unknown) => error instanceof ModelError,
+      );
+    }
   });
 
   it("recovers an ambiguous BananaRouter image submission with the original idempotency key", async () => {
@@ -153,6 +232,7 @@ describe("BananaRouter provider adapter", () => {
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
           requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
           queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
@@ -197,6 +277,7 @@ describe("BananaRouter provider adapter", () => {
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
           requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
           queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
@@ -243,6 +324,7 @@ describe("BananaRouter provider adapter", () => {
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
           requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
           queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
@@ -273,6 +355,178 @@ describe("BananaRouter provider adapter", () => {
     }]);
   });
 
+  it("treats expired BananaRouter image tasks as terminal failures", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        taskID: "expired-image-task",
+        status: "expired",
+        statusMessage: "task expired before execution",
+      })) as typeof fetch,
+    );
+
+    const expired = await adapter.poll?.({ externalRequestId: "expired-image-task" });
+
+    assert.equal(expired?.status, "failed");
+  });
+
+  it("parses the documented BananaRouter success response with top-level resultImages", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        taskID: "documented-image-task",
+        status: "success",
+        resultImages: [{ url: "https://cdn.example.com/documented-image.png" }],
+      })) as typeof fetch,
+    );
+
+    const completed = await adapter.poll?.({ externalRequestId: "documented-image-task" });
+
+    assert.equal(completed?.status, "succeeded");
+    assert.deepEqual(completed?.artifacts, [{
+      mediaType: "image",
+      mimeType: "image/png",
+      fileExtension: "png",
+      url: "https://cdn.example.com/documented-image.png",
+    }]);
+  });
+
+  it("prefers documented resultImages over compatibility containers", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        taskID: "mixed-image-task",
+        status: "success",
+        data: [{ url: "https://cdn.example.com/legacy-image.png" }],
+        result: { status: "success" },
+        resultImages: [{ url: "https://cdn.example.com/mixed-image.png" }],
+      })) as typeof fetch,
+    );
+
+    const completed = await adapter.poll?.({ externalRequestId: "mixed-image-task" });
+
+    assert.equal(completed?.status, "succeeded");
+    assert.deepEqual(completed?.artifacts, [{
+      mediaType: "image",
+      mimeType: "image/png",
+      fileExtension: "png",
+      url: "https://cdn.example.com/mixed-image.png",
+    }]);
+  });
+
+  it("ignores empty top-level image arrays when a data wrapper contains results", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+          resultFormat: "url",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        resultImages: [],
+        data: {
+          taskID: "wrapped-image-task",
+          status: "success",
+          resultImages: [{ url: "https://cdn.example.com/wrapped-image.png" }],
+        },
+      })) as typeof fetch,
+    );
+
+    const completed = await adapter.poll?.({ externalRequestId: "wrapped-image-task" });
+
+    assert.equal(completed?.status, "succeeded");
+    assert.equal(completed?.artifacts?.[0]?.url, "https://cdn.example.com/wrapped-image.png");
+  });
+
+  it("reads image task status from response and output result wrappers", async () => {
+    for (const field of ["response", "output"] as const) {
+      const adapter = createProviderAdapterFromModelConfig(
+        {
+          providerProtocol: "banana_router",
+          providerModel: "gpt-image-2",
+          mediaType: "image",
+          invocationMode: "async_polling",
+          providerConfig: {
+            baseURL: "https://api.bananarouter.com",
+            requestPath: "/v1/images/generations/async",
+            editEndpoint: "/v1/images/edits/async",
+            queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+            apiKeyEnv: "BananaRouter_API_KEY",
+            requestFormat: "banana_router_openai_images",
+            resultFormat: "url",
+          },
+        },
+        { BananaRouter_API_KEY: "banana-key" },
+        (async () => Response.json({
+          [field]: {
+            status: "success",
+            resultImages: [{ url: `https://cdn.example.com/${field}-image.png` }],
+          },
+        })) as typeof fetch,
+      );
+
+      const completed = await adapter.poll?.({ externalRequestId: `${field}-image-task` });
+
+      assert.equal(completed?.status, "succeeded");
+      assert.equal(completed?.artifacts?.[0]?.url, `https://cdn.example.com/${field}-image.png`);
+    }
+  });
+
   it("accepts BananaRouter image poll payloads above the video JSON limit", async () => {
     const largeB64Json = "A".repeat(4 * 1024 * 1024 + 4);
     const adapter = createProviderAdapterFromModelConfig(
@@ -284,6 +538,7 @@ describe("BananaRouter provider adapter", () => {
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
           requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
           queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
@@ -301,68 +556,6 @@ describe("BananaRouter provider adapter", () => {
 
     assert.equal(completed?.status, "succeeded");
     assert.equal(completed?.artifacts?.[0]?.b64Json?.length, largeB64Json.length);
-  });
-
-  it("submits gpt-image-2 reference edits as BananaRouter JSON image URLs", async () => {
-    let capturedUrl = "";
-    let capturedBody = "";
-    const adapter = createProviderAdapterFromModelConfig(
-      {
-        providerProtocol: "banana_router",
-        providerModel: "gpt-image-2",
-        providerConfig: {
-          baseURL: "https://api.bananarouter.com",
-          requestPath: "/v1/images/generations",
-          editEndpoint: "/v1/images/edits",
-          apiKeyEnv: "BananaRouter_API_KEY",
-          requestFormat: "banana_router_openai_images",
-          resultFormat: "url",
-        },
-      },
-      { BananaRouter_API_KEY: "banana-key" },
-      (async (url, init) => {
-        capturedUrl = String(url);
-        capturedBody = String(init?.body ?? "");
-        return new Response(JSON.stringify({
-          data: [{ url: "https://cdn.example.com/edited.png" }],
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      }) as typeof fetch,
-    );
-
-    const result = await adapter.submit({
-      providerRequestId: "provider-request-edit",
-      providerName: "BananaRouter",
-      providerOperation: "shot.image.edit",
-      requestKey: "workflow-edit:task-edit",
-      payloadRef: "creator://banana/edit",
-      payloadHash: "hash-edit",
-      redactedPayload: {
-        prompt: "Keep the character and replace the background",
-        referenceImages: [
-          { url: "https://cdn.example.com/character.png" },
-          { imageUrl: "https://cdn.example.com/background.png" },
-        ],
-        parameters: { size: "1024x1024" },
-      },
-    });
-
-    assert.equal(capturedUrl, "https://api.bananarouter.com/v1/images/edits");
-    assert.deepEqual(JSON.parse(capturedBody), {
-      model: "gpt-image-2",
-      prompt: "Keep the character and replace the background",
-      images: [
-        "https://cdn.example.com/character.png",
-        "https://cdn.example.com/background.png",
-      ],
-      size: "1024x1024",
-      response_format: "url",
-    });
-    assert.deepEqual(result.artifacts, [{
-      mediaType: "image",
-      mimeType: "image/png",
-      fileExtension: "png",
-      url: "https://cdn.example.com/edited.png",
-    }]);
   });
 
   it("submits Sora2 tasks with the BananaRouter Sora contract", async () => {
@@ -457,6 +650,31 @@ describe("BananaRouter provider adapter", () => {
     assert.equal(capturedUrl, "https://api.bananarouter.com/v1/videos/sora%2Ftask%201");
     assert.equal(result?.status, "succeeded");
     assert.equal(result?.videoUrl, "https://cdn.example.com/sora.mp4");
+  });
+
+  it("does not change legacy BananaRouter video handling for an expired status", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "sora-2",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          createTaskEndpoint: "/v1/videos",
+          queryTaskEndpoint: "/v1/videos/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_sora_video",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        id: "expired-video-task",
+        status: "expired",
+      })) as typeof fetch,
+    );
+
+    const result = await adapter.poll?.({ externalRequestId: "expired-video-task" });
+
+    assert.equal(result?.status, "accepted");
   });
 
   it("submits, polls, and cancels Seedance tasks with the BananaRouter contract", async () => {
@@ -557,9 +775,13 @@ describe("BananaRouter provider adapter", () => {
       {
         providerProtocol: "banana_router",
         providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
-          requestPath: "/v1/images/generations",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
         },
@@ -599,9 +821,13 @@ describe("BananaRouter provider adapter", () => {
       {
         providerProtocol: "banana_router",
         providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
-          requestPath: "/v1/images/generations",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
         },
@@ -631,9 +857,13 @@ describe("BananaRouter provider adapter", () => {
     const modelConfig = {
       providerProtocol: "banana_router",
       providerModel: "gpt-image-2",
+      mediaType: "image",
+      invocationMode: "async_polling",
       providerConfig: {
         baseURL: "https://api.bananarouter.com",
-        requestPath: "/v1/images/generations",
+        requestPath: "/v1/images/generations/async",
+        editEndpoint: "/v1/images/edits/async",
+        queryTaskEndpoint: "/v1/async-tasks/{taskId}",
         apiKeyEnv: "BananaRouter_API_KEY",
         requestFormat: "banana_router_openai_images",
       },
@@ -760,6 +990,62 @@ describe("BananaRouter provider adapter", () => {
           requestFormat: "banana_router_openai_images",
         },
       },
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "sync",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/generations/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/task-without-placeholder",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
+      {
+        providerProtocol: "banana_router",
+        providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/%7BtaskId%7D",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_openai_images",
+        },
+      },
     ]) {
       assert.throws(
         () => createProviderAdapterFromModelConfig(modelConfig, { BananaRouter_API_KEY: "banana-key" }),
@@ -773,9 +1059,13 @@ describe("BananaRouter provider adapter", () => {
       {
         providerProtocol: "banana_router",
         providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
-          requestPath: "/v1/images/generations",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
         },
@@ -806,9 +1096,13 @@ describe("BananaRouter provider adapter", () => {
       {
         providerProtocol: "banana_router",
         providerModel: "gpt-image-2",
+        mediaType: "image",
+        invocationMode: "async_polling",
         providerConfig: {
           baseURL: "https://api.bananarouter.com",
-          requestPath: "/v1/images/generations",
+          requestPath: "/v1/images/generations/async",
+          editEndpoint: "/v1/images/edits/async",
+          queryTaskEndpoint: "/v1/async-tasks/{taskId}",
           apiKeyEnv: "BananaRouter_API_KEY",
           requestFormat: "banana_router_openai_images",
           resultFormat: "url",
@@ -816,7 +1110,8 @@ describe("BananaRouter provider adapter", () => {
       },
       { BananaRouter_API_KEY: "banana-key" },
       (async () => Response.json({
-        data: [
+        status: "success",
+        resultImages: [
           { url: "http://127.0.0.1:4310/internal" },
           { url: "https://[::ffff:127.0.0.1]/internal" },
         ],
@@ -824,15 +1119,7 @@ describe("BananaRouter provider adapter", () => {
     );
 
     await assert.rejects(
-      () => adapter.submit({
-        providerRequestId: "provider-request-unsafe-artifact",
-        providerName: "BananaRouter",
-        providerOperation: "shot.image.generate",
-        requestKey: "workflow-unsafe:task-unsafe",
-        payloadRef: "creator://banana/unsafe",
-        payloadHash: "hash-unsafe",
-        redactedPayload: { prompt: "test" },
-      }),
+      () => adapter.poll?.({ externalRequestId: "unsafe-image-task" }),
       (error: unknown) => error instanceof ModelError,
     );
   });
