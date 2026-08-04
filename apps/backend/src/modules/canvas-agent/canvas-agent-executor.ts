@@ -74,17 +74,17 @@ export class CanvasAgentExecutor {
       }
       actor = await this.deps.resolveActor(current);
       const now = (this.deps.now ?? (() => new Date()))();
-      const context = sanitizeCanvasAgentValue(await this.deps.context.build({
+      const context = compactCanvasReadMessagesForModel(sanitizeCanvasAgentValue(await this.deps.context.build({
         canvasId: current.canvasId,
         conversationId: current.conversationId,
         actor,
-      }));
+      })));
       const referencedNodeIds = latestUserReferencedNodeIds(context);
       const referencedFileGrantIds = latestUserFileGrantIds(context);
       const modelInput = {
         mode: current.mode,
         context,
-        tools: this.deps.tools.listForModel(current.mode),
+        tools: omitRedundantCanvasReadTool(this.deps.tools.listForModel(current.mode)),
         protocol: {
           type: "object",
           additionalProperties: false,
@@ -401,13 +401,16 @@ export class CanvasAgentExecutor {
           now: (this.deps.now ?? (() => new Date()))(),
         });
       } catch (error) {
-        if (!isDuplicateSideEffectStepError(error)) throw error;
+        const duplicateKind = duplicateCanvasAgentStepKind(error);
+        if (!duplicateKind) throw error;
         await this.recordToolCallRejection({
           taskId,
           conversationId: current.conversationId,
           toolId: tool.id,
           callId: turn.callId,
-          errorCode: "canvas_agent_duplicate_side_effect",
+          errorCode: duplicateKind === "call"
+            ? "canvas_agent_duplicate_call"
+            : "canvas_agent_duplicate_side_effect",
           eventType: "tool.duplicate_rejected",
         });
         continue;
@@ -793,7 +796,51 @@ export class CanvasAgentExecutor {
   }
 }
 
-const canvasAgentToolCallInstruction = "In B or C mode, when the latest user request asks to change the canvas, emit the required tool_call instead of a final response that asks for confirmation or promises a future tool call. The runtime presents approval controls after the tool_call. Only return final after tools succeed or when the requested change cannot be performed. When the latest user message contains fileGrantIds from @-referenced canvas nodes, pass those same IDs to generation.create when generating image or video references. The tool maps image grants to referenceImages and a video grant to sourceVideo. When generating or regenerating a single @-referenced media node, pass that exact node ID as generation.create.targetNodeId so the result replaces that node; omit targetNodeId only when no target node was explicitly referenced and a new node is intended. In Plan or Expert mode, do not perform side effects.";
+const canvasAgentToolCallInstruction = "The latest complete canvas state is already available in context.canvas; use it directly and do not request canvas.read. In B or C mode, when the latest user request asks to change the canvas, emit the required tool_call instead of a final response that asks for confirmation or promises a future tool call. The runtime presents approval controls after the tool_call. Only return final after tools succeed or when the requested change cannot be performed. When the latest user message contains fileGrantIds from @-referenced canvas nodes, pass those same IDs to generation.create when generating image or video references. The tool maps image grants to referenceImages and a video grant to sourceVideo. When generating or regenerating a single @-referenced media node, pass that exact node ID as generation.create.targetNodeId so the result replaces that node; omit targetNodeId only when no target node was explicitly referenced and a new node is intended. In Plan or Expert mode, do not perform side effects.";
+
+function compactCanvasReadMessagesForModel(context: unknown): unknown {
+  if (!context || typeof context !== "object" || Array.isArray(context)) return context;
+  const record = context as Record<string, unknown>;
+  if (!Array.isArray(record.messages)) return context;
+  return {
+    ...record,
+    messages: record.messages.map((message) => compactCanvasReadModelMessage(message)),
+  };
+}
+
+function compactCanvasReadModelMessage(message: unknown) {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return message;
+  const record = message as Record<string, unknown>;
+  const content = record.content && typeof record.content === "object" && !Array.isArray(record.content)
+    ? record.content as Record<string, unknown>
+    : undefined;
+  if (record.role !== "tool" || content?.toolId !== "canvas.read") return message;
+  const output = content.output && typeof content.output === "object" && !Array.isArray(content.output)
+    ? content.output as Record<string, unknown>
+    : {};
+  const document = output.document && typeof output.document === "object" && !Array.isArray(output.document)
+    ? output.document as Record<string, unknown>
+    : {};
+  return {
+    ...record,
+    content: {
+      ...content,
+      output: {
+        canvasProjectId: output.canvasProjectId ?? null,
+        serverRevision: output.serverRevision ?? null,
+        document: {
+          nodeCount: Array.isArray(document.nodes) ? document.nodes.length : 0,
+          edgeCount: Array.isArray(document.edges) ? document.edges.length : 0,
+          availableInContext: true,
+        },
+      },
+    },
+  };
+}
+
+function omitRedundantCanvasReadTool<T extends { id: string }>(tools: T[]) {
+  return tools.filter((tool) => tool.id !== "canvas.read");
+}
 
 function latestUserReferencedNodeIds(context: unknown) {
   if (!context || typeof context !== "object") return [];
@@ -874,7 +921,10 @@ function bindReferencedGenerationInput(
 
 export const __canvasAgentExecutorTestUtils = {
   bindReferencedGenerationInput,
+  compactCanvasReadMessagesForModel,
+  duplicateCanvasAgentStepKind,
   fileGrantIdsFromContent,
+  omitRedundantCanvasReadTool,
   parseTurn,
 };
 
@@ -907,7 +957,49 @@ function parseTurn(value: string):
   ) {
     return { kind: "tool_call", toolId: record.toolId, callId: record.callId, input: record.input as Record<string, unknown> };
   }
+  const xmlToolCall = parseXmlToolCall(value);
+  if (xmlToolCall) return xmlToolCall;
   throw new Error("canvas_agent_model_response_protocol_invalid");
+}
+
+function parseXmlToolCall(value: string):
+  | { kind: "tool_call"; toolId: string; callId: string; input: Record<string, unknown> }
+  | undefined {
+  const trimmed = String(value ?? "").trim();
+  const match = trimmed.match(/^<tool_calls>\s*<tool_call\b([^>]*)>([\s\S]*?)<\/tool_call>\s*<\/tool_calls>$/i)
+    ?? trimmed.match(/^<tool_call\b([^>]*)>([\s\S]*?)<\/tool_call>$/i);
+  if (!match) return undefined;
+  const attributeMatch = match[1]?.match(/\bid\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+  const callId = String(attributeMatch?.[1] ?? attributeMatch?.[2] ?? "").trim();
+  if (!callId) return undefined;
+  let payload: unknown;
+  try {
+    payload = parseAgentJsonObject(match[2] ?? "");
+  } catch {
+    return undefined;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  const functionCall = record.function && typeof record.function === "object" && !Array.isArray(record.function)
+    ? record.function as Record<string, unknown>
+    : {};
+  const toolId = String(record.toolId ?? record.name ?? functionCall.name ?? "").trim();
+  const input = parseToolCallInput(record.input ?? record.arguments ?? functionCall.arguments);
+  if (!toolId || !input) return undefined;
+  return { kind: "tool_call", toolId, callId, input };
+}
+
+function parseToolCallInput(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseAgentJsonObject(value: string): unknown {
@@ -1017,14 +1109,19 @@ function readValidationErrors(error: unknown) {
   return Array.isArray(errors) ? errors.filter((item): item is string => typeof item === "string").slice(0, 20) : [];
 }
 
-function isDuplicateSideEffectStepError(error: unknown) {
-  if (!error || typeof error !== "object") return false;
+function duplicateCanvasAgentStepKind(error: unknown): "call" | "effect" | undefined {
+  if (!error || typeof error !== "object") return undefined;
   const candidate = error as { code?: unknown; constraint?: unknown; message?: unknown };
-  return candidate.code === "23505"
-    && (
-      candidate.constraint === "canvas_agent_steps_effect_fingerprint_unique"
-      || String(candidate.message ?? "").includes("canvas_agent_steps_effect_fingerprint_unique")
-    );
+  if (candidate.code !== "23505") return undefined;
+  const constraint = String(candidate.constraint ?? "");
+  const message = String(candidate.message ?? "");
+  if (constraint === "canvas_agent_steps_task_call_unique" || message.includes("canvas_agent_steps_task_call_unique")) {
+    return "call";
+  }
+  if (constraint === "canvas_agent_steps_effect_fingerprint_unique" || message.includes("canvas_agent_steps_effect_fingerprint_unique")) {
+    return "effect";
+  }
+  return undefined;
 }
 
 function isPrematureCanvasMutationFinal(context: unknown, message: string) {

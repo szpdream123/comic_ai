@@ -170,6 +170,9 @@ async function claimFairOutboxEventsForDispatch(
   const claimed: OutboxEventRecord[] = [];
   await db.query("BEGIN");
   try {
+    await db.query("SET LOCAL lock_timeout = '5s'");
+    await db.query("SET LOCAL statement_timeout = '30s'");
+    await db.query("SET LOCAL idle_in_transaction_session_timeout = '15s'");
     await db.query(`
       INSERT INTO outbox_dispatch_fair_cursors (scope_key, main_key, cursor_key, updated_at)
       VALUES ($1, '*', '', $2)

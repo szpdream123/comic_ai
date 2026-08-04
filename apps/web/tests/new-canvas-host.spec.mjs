@@ -226,7 +226,7 @@ test("Canvas host actions update the mounted surface without redrawing the workb
   assert.match(selectionHandler, /sourceWorkbench\.onCanvasNodeSelected\(nodeId\)/);
   assert.match(selectionHandler, /void renderSelection\(\)/);
   assert.doesNotMatch(selectionHandler, /agentController\.syncPanel\(\)/);
-  assert.match(hostSource, /if \(next\.ui\) Object\.assign\(workbench\.ui, next\.ui, \{ canvasProjectView: "detail" \}\);/);
+  assert.match(hostSource, /if \(next\.ui && next\.ui !== workbench\.ui\) Object\.assign\(workbench\.ui, next\.ui, \{ canvasProjectView: "detail" \}\);/);
   assert.doesNotMatch(hostSource, /if \(next\.ui\) workbench\.ui = \{/);
   assert.match(hostSource, /canvasNodeId !== workbench\.ui\.selectedCanvasNodeId[\s\S]*?workbench\.onCanvasNodeSelected\?\.\(canvasNodeId\)/);
   assert.match(hostSource, /classList\?\.contains\?\.\("x6-node"\)[\s\S]*?getAttribute\?\.\("data-cell-id"\)/);
@@ -1326,6 +1326,23 @@ test("canvas startup preserves a pending shadow host across follow-up renders", 
   const mountStart = source.match(/async function syncNewCanvasMount[\s\S]*?try \{/)?.[0] ?? "";
   assert.ok(
     mountStart.indexOf("host.dataset.canvasProjectId") < mountStart.indexOf("workbench.newCanvasPendingHost = host"),
+  );
+});
+
+test("canvas startup reapplies the latest document after a pending shadow mount completes", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const mountSync = source.match(
+    /async function syncNewCanvasMount[\s\S]*?async function runNewCanvasHostAction/,
+  )?.[0] ?? "";
+  const mountCompletion = mountSync.match(
+    /workbench\.newCanvasPendingHost = null;[\s\S]*?return instance;/,
+  )?.[0] ?? "";
+  assert.match(
+    mountCompletion,
+    /workbench\.newCanvasInstance = instance;[\s\S]*?updateMountedNewCanvasSurface\(workbench, \{ surfaceOnly: true \}\)/,
   );
 });
 

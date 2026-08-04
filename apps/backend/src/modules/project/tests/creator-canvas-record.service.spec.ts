@@ -105,6 +105,59 @@ describe("creator canvas record service", { concurrency: false }, () => {
     }
   });
 
+  it("reuses cached canvas payloads while applying current relational positions", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T08:10:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [canvasNode("node-1", "image", 10, 20, "image", "Image")],
+        },
+        now: new Date("2026-06-12T08:11:00.000Z"),
+      });
+      let documentReads = 0;
+      let positionReads = 0;
+      const countingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+          if (sql.includes("FROM creator_canvas_documents")) documentReads += 1;
+          if (sql.includes("FROM creator_canvas_nodes")) positionReads += 1;
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const first = await findCanvasByCanvasProjectId(countingDb, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+      });
+      assert.equal(first?.document.nodes[0]?.position?.x, 10);
+      first!.document.viewport.x = 999;
+      await db.query(
+        "UPDATE creator_canvas_nodes SET position_x = 90, position_y = 120 WHERE canvas_project_id = $1 AND node_key = 'node-1'",
+        [canvas.canvasProjectId],
+      );
+
+      const second = await findCanvasByCanvasProjectId(countingDb, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+      });
+      assert.equal(second?.serverRevision, saved.serverRevision);
+      assert.equal(second?.document.viewport.x, 0);
+      assert.deepEqual(second?.document.nodes[0]?.position, { x: 90, y: 120 });
+      assert.equal(documentReads, 1);
+      assert.equal(positionReads, 2);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("scopes run idempotency keys to a canvas project", async () => {
     const db = await createMigratedTestDb();
     try {

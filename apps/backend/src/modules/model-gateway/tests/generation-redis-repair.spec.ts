@@ -474,6 +474,37 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("does not settle a queue failure after the provider has accepted the request", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      const reserved = await seedSeedanceTaskReservationAndSnapshot(db);
+
+      const marked = await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000104",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在。",
+        creditOutcome: "manual_review_required",
+        requireProviderSubmissionNotStarted: true,
+        now: new Date("2026-08-01T08:00:49.000Z"),
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const reservation = await db.query<{ status: string }>(
+        "SELECT status FROM credit_reservations WHERE id = $1",
+        [reserved.reservation.id],
+      );
+
+      assert.equal(marked, false);
+      assert.deepEqual(task.rows[0], { status: "running", failure_code: null });
+      assert.equal(reservation.rows[0]?.status, "active");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not fail an exhausted stage when a durable downstream assignment already exists", async () => {
     const db = await createMigratedTestDb();
     try {

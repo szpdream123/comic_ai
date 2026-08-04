@@ -53,6 +53,7 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /hasReleasedGenerationQueueStageAssignment/);
     assert.match(launcherScript, /sourceAssignmentKey/);
     assert.match(launcherScript, /failGenerationTaskAfterQueueError\(db, \{[\s\S]*sourceAssignmentKey/);
+    assert.match(launcherScript, /requireProviderSubmissionNotStarted: true/);
     assert.match(launcherScript, /generation_queue_assignment_already_released/);
     assert.match(launcherScript, /publishReservedGenerationJob\(\{[\s\S]*?\}\)\.catch\(async \(error\) => \{[\s\S]*?generation_queue_assignment_already_released[\s\S]*?hasReleasedGenerationQueueStageAssignment/);
     assert.match(launcherScript, /publishReservedGenerationJob/);

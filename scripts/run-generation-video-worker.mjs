@@ -650,6 +650,7 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
         : "generation_queue_error",
       displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
       creditOutcome: "manual_review_required",
+      ...(!artifactQueueFailure ? { requireProviderSubmissionNotStarted: true } : {}),
       now: failedAt,
     }));
   } catch (settleError) {

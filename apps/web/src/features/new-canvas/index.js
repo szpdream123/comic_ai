@@ -609,6 +609,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
       const isCanvasX6Event = (event) => (event.composedPath?.() ?? []).some((candidate) =>
         candidate?.hasAttribute?.("data-canvas-x6-mount"));
       const onCanvasCellClick = (event) => {
+        if (canvasEventPathTarget(event, "[data-action]")) return;
         const nodeId = canvasX6NodeIdFromEvent(event);
         if (nodeId && graph) {
           const cell = graph.getCellById?.(nodeId);
@@ -733,7 +734,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         const canvasStage = event.target?.closest?.(".canvas-stage");
         const interactive = event.target?.closest?.(
-          ".x6-node, .canvas-x6-special-node, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
+          ".x6-node, .canvas-x6-special-node, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-selection-action-toolbar, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
         );
         if (canvasStage && !interactive && Date.now() < suppressCanvasBlankClickUntil) {
           suppressCanvasBlankClickUntil = 0;
@@ -741,8 +742,15 @@ function createProductionCanvasAdapter(dependencies = {}) {
           return;
         }
         if (canvasStage && !interactive) {
-          const shouldSyncSelection = Boolean(workbench.ui.selectedCanvasNodeId || workbench.ui.canvasEditorOpen)
-            || dismissCanvasSurfaceOverlays(workbench.ui);
+          const hadEditor = workbench.ui.canvasEditorOpen === true;
+          const overlaysChanged = dismissCanvasSurfaceOverlays(workbench.ui);
+          if (workbench.ui.canvasEditorOpen === true) {
+            clearCanvasGraphEditorOverlay(graph);
+            workbench.ui.canvasEditorOpen = false;
+          }
+          const shouldSyncSelection = hadEditor
+            || Boolean(workbench.ui.selectedCanvasNodeId)
+            || overlaysChanged;
           clearCanvasSelectionPresentation(surface, graph, workbench);
           if (shouldSyncSelection) {
             void renderSelection();
@@ -1191,7 +1199,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           if (next.state) workbench.state = next.state;
           if (next.session) workbench.session = next.session;
           if (next.api) workbench.api = next.api;
-          if (next.ui) Object.assign(workbench.ui, next.ui, { canvasProjectView: "detail" });
+          if (next.ui && next.ui !== workbench.ui) Object.assign(workbench.ui, next.ui, { canvasProjectView: "detail" });
           if (next.nodeOnly === true) return renderNode(next.nodeId);
           if (next.selectionOnly === true) return renderSelection();
           if (next.sidebarOnly === true) return renderSidebar();
@@ -1557,7 +1565,7 @@ export async function mountNewCanvas(target, options = {}) {
   shadowRoot.replaceChildren();
   const disposeStyles = appendStyles(shadowRoot, options.styleHrefs);
   const surface = createSurface(shadowRoot);
-  surface.innerHTML = `<div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布"><span class="new-canvas-loading-skeleton__rail"></span><span class="new-canvas-loading-skeleton__stage"></span><span class="new-canvas-loading-skeleton__panel"></span></div>`;
+  surface.innerHTML = `<div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布"><span class="new-canvas-loading-skeleton__rail"></span><div class="new-canvas-loading-skeleton__stage"><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--one" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--two" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--three" aria-hidden="true"></span><span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--four" aria-hidden="true"></span><div class="new-canvas-loading-skeleton__copy"><span class="new-canvas-loading-skeleton__spinner" aria-hidden="true"></span><strong>正在打开画布</strong><small>正在载入节点与连接</small></div></div><span class="new-canvas-loading-skeleton__panel"></span></div>`;
   host.dataset.newCanvasMounted = "pending";
   const adapter = options.adapter ?? createProductionCanvasAdapter(options.dependencies);
   let adapterHandle;

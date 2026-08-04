@@ -1182,7 +1182,16 @@ export async function listCanvasAgentMessages(
   }>(
     `
       SELECT messages.id, messages.task_id, messages.sequence, messages.role,
-             messages.content_json, messages.created_at
+             CASE
+               WHEN messages.role = 'tool' AND messages.content_json->>'toolId' = 'canvas.read'
+                 THEN jsonb_set(
+                   messages.content_json,
+                   '{output}',
+                   COALESCE(messages.content_json->'output', '{}'::jsonb) - 'document'
+                 )
+               ELSE messages.content_json
+             END AS content_json,
+             messages.created_at
       FROM canvas_agent_messages messages
       WHERE messages.conversation_id = $1
       ORDER BY messages.sequence DESC

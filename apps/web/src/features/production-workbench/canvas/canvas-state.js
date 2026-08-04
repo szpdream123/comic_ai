@@ -1816,7 +1816,7 @@ export function arrangeCanvasGroupNodes(document, groupId, layout = "grid") {
     ? children.length
     : normalizedLayout === "vertical"
       ? 1
-      : Math.max(1, Math.ceil(Math.sqrt(children.length)));
+      : Math.min(3, children.length);
   const rowCount = Math.ceil(children.length / columnCount);
   const metrics = children.map((node) => {
     const fallbackSize = CANVAS_NODE_SIZES[node?.type] ?? CANVAS_NODE_SIZES.output;
@@ -1874,6 +1874,29 @@ export function arrangeCanvasGroupNodes(document, groupId, layout = "grid") {
       }),
     }),
   };
+}
+
+export function resizeCanvasGroupsToChildren(document) {
+  const nodes = safeArray(document?.nodes);
+  const groups = nodes.filter((node) => node?.type === "group");
+  if (!groups.length) return clone(document);
+  const nextNodes = nodes.map(clone);
+  const nodeById = new Map(nextNodes.map((node) => [String(node?.id ?? ""), node]));
+  const grouping = resolveCanvasGroupMembership(nextNodes);
+  for (const group of groups) {
+    const groupId = String(group.id ?? "");
+    const childIds = grouping.groupChildren.get(groupId) ?? [];
+    const children = childIds.map((childId) => nodeById.get(String(childId))).filter(Boolean);
+    if (!children.length) continue;
+    const groupNode = nodeById.get(groupId);
+    const left = Math.min(...children.map((node) => Number(node.position?.x ?? 0) - 28));
+    const top = Math.min(...children.map((node) => Number(node.position?.y ?? 0) - 52));
+    const right = Math.max(...children.map((node) => Number(node.position?.x ?? 0) + Number(node.size?.width ?? CANVAS_NODE_SIZES[node.type]?.width ?? 320) + 28));
+    const bottom = Math.max(...children.map((node) => Number(node.position?.y ?? 0) + Number(node.size?.height ?? CANVAS_NODE_SIZES[node.type]?.height ?? 180) + 28));
+    groupNode.position = { x: left, y: top };
+    groupNode.size = { width: Math.max(360, right - left), height: Math.max(240, bottom - top) };
+  }
+  return touchCanvasDocument({ ...clone(document), nodes: nextNodes });
 }
 
 export function ungroupCanvasNodes(document, nodeIds = []) {

@@ -173,6 +173,7 @@ export function enableCanvasGraphSelection(X6, graph, viewport = {}, workbench =
       : 1,
   });
   let rubberbandStart = null;
+  let pendingRubberbandClick = null;
   if (graphContainer?.addEventListener && !graphContainer.__comicAiCanvasPointerOffsetBound) {
     const normalizePointerOffset = (event) => {
       const rect = graphContainer.getBoundingClientRect?.();
@@ -196,8 +197,24 @@ export function enableCanvasGraphSelection(X6, graph, viewport = {}, workbench =
         // Browser event offsets may be non-configurable; X6 can still use its native fallback.
       }
     };
+    const suppressRubberbandClick = (event) => {
+      const pending = pendingRubberbandClick;
+      if (!pending || Date.now() > pending.expiresAt) {
+        pendingRubberbandClick = null;
+        return;
+      }
+      const eventPath = event.composedPath?.() ?? [];
+      const withinGraph = eventPath.includes(graphContainer);
+      const sameEndpoint = Math.abs(Number(event.clientX) - pending.x) <= 4
+        && Math.abs(Number(event.clientY) - pending.y) <= 4;
+      if (!withinGraph || !sameEndpoint) return;
+      pendingRubberbandClick = null;
+      event.preventDefault?.();
+      event.stopImmediatePropagation?.();
+    };
     graphContainer.addEventListener("mousedown", normalizePointerOffset, true);
     graphContainer.addEventListener("pointerdown", normalizePointerOffset, true);
+    graphContainer.getRootNode?.()?.addEventListener?.("click", suppressRubberbandClick, true);
     graphContainer.__comicAiCanvasPointerOffsetBound = true;
   }
   const selection = new X6.Selection({
@@ -257,6 +274,11 @@ export function enableCanvasGraphSelection(X6, graph, viewport = {}, workbench =
       clearRubberbandBounds();
       return;
     }
+    pendingRubberbandClick = {
+      x: endX,
+      y: endY,
+      expiresAt: Date.now() + 500,
+    };
     const right = clientRect.x + clientRect.width;
     const bottom = clientRect.y + clientRect.height;
     const selectedNodes = (graph.getNodes?.() ?? []).filter((node) => {
@@ -752,7 +774,7 @@ function resolveCanvasUploadMediaKind(node = {}) {
 function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options = {}) {
   const nodeId = String(node?.id ?? "");
   const data = node?.data ?? {};
-  const mediaUrl = resolveCanvasMediaNodeSource(node, mediaKind);
+  const mediaUrl = resolveCanvasMediaNodeSource(node, mediaKind, mediaKind === "image" ? { proxy: false } : {});
   const directMediaUrl = resolveCanvasMediaUrl(resolveCanvasMediaDirectUrl(node, mediaKind), mediaKind);
   const mediaLabel = mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片";
   const mixedUpload = options.mixed === true;
@@ -784,7 +806,7 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
       ? `<video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline controls></video>${uploadingMask}${generationMask}`
       : mediaKind === "audio"
         ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}${generationMask}`
-        : `<img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy"${storyboardCut ? ' draggable="false"' : ""} />${uploadingMask}${generationMask}`
+        : `<img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} />${uploadingMask}${generationMask}`
     : `${uploadingMask}${generationMask}<strong>${agentGenerating ? `${mediaLabel}正在生成中` : emptyUploadLabel}</strong><small>${agentGenerating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
   return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${agentGenerating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || agentGenerating ? " aria-busy=\"true\"" : ""}>
     <div class="canvas-x6-source-media-preview"${emptyUploadAttrs}>${preview}</div>
@@ -916,10 +938,10 @@ function renderCanvasScriptWorkflowX6Node(node = {}) {
       </div>
       <div class="canvas-script-workflow-actions" role="group" aria-label="脚本分镜操作">
         <button class="canvas-script-workflow-open" type="button" data-action="open-canvas-script-workspace" data-node-id="${escapeCanvasX6Html(nodeId)}">打开脚本节点</button>
-        <button class="canvas-script-workflow-download" type="button" data-action="download-canvas-selection" data-node-ids="${escapeCanvasX6Html(JSON.stringify(workflowNodes.filter((item) => String(item?.kind ?? item) === "storyboard").map((item) => String(item?.id ?? "")).filter(Boolean)))}"${count("storyboard") ? "" : " disabled aria-disabled=\"true\""}>下载分镜视频</button>
+        <button class="canvas-script-workflow-download" type="button" data-action="download-canvas-selection" data-node-id="${escapeCanvasX6Html(nodeId)}" data-node-ids="${escapeCanvasX6Html(JSON.stringify(workflowNodes.filter((item) => String(item?.kind ?? item) === "storyboard").map((item) => String(item?.id ?? "")).filter(Boolean)))}"${count("storyboard") ? "" : " disabled aria-disabled=\"true\""}>下载分镜视频</button>
       </div>
     </div>
-      <footer><span><i class="canvas-script-workflow-dot is-live"></i>工作流已就绪</span><span>${count("character")} 角色 · ${count("scene")} 场景 · ${count("storyboard")} 分镜</span></footer>
+      <footer><span><i class="canvas-script-workflow-dot is-live"></i>工作流已就绪</span><span>${count("character")} 角色 · ${count("scene")} 场景 · ${count("prop")} 道具 · ${count("storyboard")} 分镜</span></footer>
   </article>`;
 }
 
@@ -934,7 +956,7 @@ function renderCanvasImageGenerationX6Node(node = {}) {
   const data = node?.data ?? {};
   const type = String(node?.type ?? "");
   const status = String(data.status ?? "idle").trim().toLowerCase();
-  const imageUrl = resolveCanvasMediaNodeSource(node, "image");
+  const imageUrl = resolveCanvasMediaNodeSource(node, "image", { proxy: false });
   const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
   const taskId = String(data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? "").trim();
   const preparing = !failed && (
@@ -947,7 +969,7 @@ function renderCanvasImageGenerationX6Node(node = {}) {
   const body = preparing
     ? `<div class="canvas-video-empty canvas-image-empty is-loading canvas-image-generation-mask" role="status" aria-label="正在生成图片"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成图片</strong></div>`
     : imageUrl
-      ? `<div class="canvas-video-preview canvas-image-preview"><img src="${escapeCanvasX6Html(imageUrl)}" alt="图片生成结果" loading="lazy" /></div>`
+      ? `<div class="canvas-video-preview canvas-image-preview"><img src="${escapeCanvasX6Html(imageUrl)}" alt="图片生成结果" loading="lazy" decoding="async" fetchpriority="low" /></div>`
       : failed
       ? renderCanvasX6GenerationState(node, status)
       : `<div class="canvas-video-empty canvas-image-empty" role="status"><strong>暂无图片</strong></div>`;
@@ -1311,7 +1333,7 @@ function prefersReducedCanvasMotion() {
 
 export function applyCanvasGraphGrouping(graph, canvasDocument) {
   if (!graph?.getCellById) return false;
-  const x6Nodes = canvasDocumentToX6Data(canvasDocument).nodes;
+  const x6Nodes = expandX6GroupBounds(canvasDocumentToX6Data(canvasDocument).nodes);
   const expectedParentByChild = new Map(x6Nodes
     .filter((node) => node.parent)
     .map((node) => [String(node.id), String(node.parent)]));
@@ -1338,12 +1360,87 @@ export function applyCanvasGraphGrouping(graph, canvasDocument) {
     if (!expectedParentId) continue;
     const parent = graph.getCellById(expectedParentId);
     if (!parent || parent === cell) continue;
-    const parentChildren = parent.getChildren?.() ?? [];
-    if (currentParentId !== expectedParentId || !parentChildren.some((child) => child?.id === cell.id)) {
-      parent.addChild?.(cell, options);
+    ensureCanvasGraphChildEmbedding(parent, cell, options);
+    // Reapply the document's absolute position after embedding so layout
+    // actions remain stable across graph refreshes.
+    const embeddedPosition = cell.getPosition?.() ?? {};
+    if (Number(embeddedPosition.x) !== Number(node.x) || Number(embeddedPosition.y) !== Number(node.y)) {
+      cell.setPosition?.(Number(node.x), Number(node.y), options);
     }
   }
+  resizeCanvasGraphGroupCells(graph, options);
   return true;
+}
+
+function ensureCanvasGraphChildEmbedding(parent, cell, options = {}) {
+  const children = parent?.getChildren?.() ?? [];
+  const seenIds = new Set();
+  const uniqueChildren = children.filter((child) => {
+    const childId = String(child?.id ?? "");
+    if (!childId || seenIds.has(childId)) return false;
+    seenIds.add(childId);
+    return true;
+  });
+  if (uniqueChildren.length !== children.length) parent.setChildren?.(uniqueChildren, options);
+  const cellId = String(cell?.id ?? "");
+  if (!seenIds.has(cellId)) {
+    parent?.addChild?.(cell, options);
+  } else if (cell?.getParent?.() !== parent) {
+    cell?.setParent?.(parent, options);
+  }
+}
+
+function resizeCanvasGraphGroupCells(graph, options = {}) {
+  for (const group of graph.getNodes?.() ?? []) {
+    if (group?.getData?.()?.canvasNode?.type !== "group") continue;
+    const children = group.getChildren?.() ?? [];
+    if (!children.length) continue;
+    const childBoxes = children.map((child) => {
+      const bbox = child?.getBBox?.();
+      if (bbox) return bbox;
+      const position = child?.getPosition?.() ?? {};
+      const size = child?.getSize?.() ?? {};
+      return {
+        x: Number(position.x ?? 0),
+        y: Number(position.y ?? 0),
+        width: Number(size.width ?? 0),
+        height: Number(size.height ?? 0),
+      };
+    }).filter(Boolean);
+    if (!childBoxes.length) continue;
+    const groupPosition = group.getPosition?.() ?? {};
+    const groupSize = group.getSize?.() ?? {};
+    const left = Math.min(...childBoxes.map((box) => Number(box.x ?? 0) - 28));
+    const top = Math.min(...childBoxes.map((box) => Number(box.y ?? 0) - 52));
+    const right = Math.max(...childBoxes.map((box) => Number(box.x ?? 0) + Number(box.width ?? 0) + 28));
+    const bottom = Math.max(...childBoxes.map((box) => Number(box.y ?? 0) + Number(box.height ?? 0) + 28));
+    const nextWidth = Math.max(360, right - left);
+    const nextHeight = Math.max(240, bottom - top);
+    if (Number(groupPosition.x) !== left || Number(groupPosition.y) !== top) {
+      group.setPosition?.(left, top, options);
+    }
+    if (Number(groupSize.width) !== nextWidth || Number(groupSize.height) !== nextHeight) {
+      group.setSize?.(nextWidth, nextHeight, options);
+    }
+  }
+}
+
+function expandX6GroupBounds(nodes = []) {
+  const nextNodes = nodes.map((node) => ({ ...node, data: node?.data ? { ...node.data } : node?.data }));
+  const groups = new Map(nextNodes.filter((node) => node?.data?.canvasNode?.type === "group").map((node) => [String(node.id), node]));
+  for (const [groupId, group] of groups) {
+    const children = nextNodes.filter((node) => String(node.parent ?? "") === groupId);
+    if (!children.length) continue;
+    const left = Math.min(...children.map((node) => Number(node.x ?? 0) - 28));
+    const top = Math.min(...children.map((node) => Number(node.y ?? 0) - 52));
+    const right = Math.max(...children.map((node) => Number(node.x ?? 0) + Number(node.width ?? 0) + 28));
+    const bottom = Math.max(...children.map((node) => Number(node.y ?? 0) + Number(node.height ?? 0) + 28));
+    group.x = left;
+    group.y = top;
+    group.width = Math.max(360, right - left);
+    group.height = Math.max(240, bottom - top);
+  }
+  return nextNodes;
 }
 
 export function detachCanvasGroupChildrenForRemoval(cells = []) {
@@ -1693,6 +1790,26 @@ function wireGraphSync(graph, workbench, mount) {
   };
   graph.on("node:change:position", (event) => {
     if (graph.__comicAiReconciling === true) return;
+    if (
+      event?.node?.getData?.()?.canvasNode?.type === "group"
+      && event?.options?.canvasGroupMove !== true
+    ) {
+      const groupId = String(event.node.id ?? "");
+      const documentNodes = workbench.ui.canvasDocument?.nodes ?? [];
+      const documentGroup = documentNodes.find((node) => String(node?.id ?? "") === groupId);
+      const childIds = new Set([
+        ...(documentGroup?.data?.childNodeIds ?? []).map(String),
+        ...documentNodes
+          .filter((node) => String(node?.parentGroupId ?? "") === groupId)
+          .map((node) => String(node.id ?? "")),
+      ]);
+      for (const childId of childIds) {
+        const child = graph.getCellById?.(childId);
+        if (child && child !== event.node) {
+          ensureCanvasGraphChildEmbedding(event.node, child, { silent: true, canvasGroupMove: true });
+        }
+      }
+    }
     if (!event?.options?.ui && !event?.options?.selection) syncMovedNodeEditor(event);
     if (event?.options?.selection) {
       selectionMovePending = true;
@@ -2846,6 +2963,8 @@ function startCanvasDistributionGapDrag(graph, workbench, mount, items, gapIndex
 }
 
 function syncCanvasGraphDocument(graph, workbench, options = {}) {
+  const previousDocument = workbench.ui.canvasDocument;
+  const graphData = synchronizeCanvasGraphGroupGeometry(graph, previousDocument);
   for (const node of graph.getNodes?.() ?? []) {
     const data = node.getData?.() ?? {};
     const canvasNode = data.canvasNode;
@@ -2867,11 +2986,6 @@ function syncCanvasGraphDocument(graph, workbench, options = {}) {
       },
     }, { overwrite: true, silent: true });
   }
-  const previousDocument = workbench.ui.canvasDocument;
-  const graphData = preserveCanvasGroupChildOffsets(
-    readCanvasWorkflowGraphData(graph),
-    previousDocument,
-  );
   const storedInteractionMode = graph.__comicAiCanvasInteractionMode;
   const interactionMode = ["hand", "classic"].includes(storedInteractionMode)
     ? storedInteractionMode
@@ -2898,6 +3012,24 @@ function syncCanvasGraphDocument(graph, workbench, options = {}) {
   return nextDocument;
 }
 
+export function synchronizeCanvasGraphGroupGeometry(graph, previousDocument = {}) {
+  const positionedGraphData = preserveCanvasGroupChildOffsets(
+    readCanvasWorkflowGraphData(graph),
+    previousDocument,
+  );
+  for (const node of positionedGraphData.nodes ?? []) {
+    if (!node?.parent) continue;
+    const cell = graph.getCellById?.(node.id);
+    const parent = graph.getCellById?.(node.parent);
+    if (parent && parent !== cell) ensureCanvasGraphChildEmbedding(parent, cell, { silent: true, canvasGroupMove: true });
+    const position = cell?.getPosition?.() ?? {};
+    if (Number(position.x) === Number(node.x) && Number(position.y) === Number(node.y)) continue;
+    cell?.setPosition?.(Number(node.x), Number(node.y), { silent: true, canvasGroupMove: true });
+  }
+  resizeCanvasGraphGroupCells(graph, { silent: true });
+  return readCanvasWorkflowGraphData(graph);
+}
+
 export function preserveCanvasGroupChildOffsets(graphData = {}, previousDocument = {}) {
   const nextGraphData = structuredCloneSafe(graphData);
   const previousNodes = new Map((previousDocument?.nodes ?? []).map((node) => [String(node?.id ?? ""), node]));
@@ -2909,10 +3041,11 @@ export function preserveCanvasGroupChildOffsets(graphData = {}, previousDocument
     const deltaY = Number(node?.y ?? previousNode.position?.y ?? 0) - Number(previousNode.position?.y ?? 0);
     if (deltaX || deltaY) groupOffsets.set(String(node.id), { deltaX, deltaY });
   }
-  if (!groupOffsets.size) return nextGraphData;
   for (const node of nextGraphData.nodes ?? []) {
-    const offset = groupOffsets.get(String(node?.parent ?? ""));
     const previousNode = previousNodes.get(String(node?.id ?? ""));
+    const parentGroupId = String(node?.parent || previousNode?.parentGroupId || "");
+    if (!node?.parent && parentGroupId) node.parent = parentGroupId;
+    const offset = groupOffsets.get(parentGroupId);
     if (!offset || !previousNode || previousNode.type === "group") continue;
     node.x = Number(previousNode.position?.x ?? 0) + offset.deltaX;
     node.y = Number(previousNode.position?.y ?? 0) + offset.deltaY;

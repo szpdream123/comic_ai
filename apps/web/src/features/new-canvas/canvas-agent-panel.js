@@ -507,6 +507,9 @@ export function createCanvasAgentController({
   let streamAbortController = null;
   let streamInFlight = false;
   let realtimeGeneration = 0;
+  let fileGrantsConversationId = Array.isArray(agent.fileGrants) && agent.fileGrants.some((grant) => grant?.status === "active")
+    ? String(agent.conversationId ?? "")
+    : "";
   let disposed = false;
   const refreshedCanvasEventKeys = new Set();
   const canvasRefreshRetryTimers = new Set();
@@ -707,8 +710,29 @@ export function createCanvasAgentController({
     return agent.messages;
   };
 
+  const loadTaskEvents = async (canvasId, taskId) => {
+    if (!canvasId || !taskId || typeof workbench.api?.listCanvasAgentEvents !== "function") return [];
+    try {
+      const payload = await workbench.api.listCanvasAgentEvents(canvasId, taskId, { after: 0, limit: 1000 });
+      const events = Array.isArray(payload?.events) ? payload.events : [];
+      if (agent.taskId === taskId) {
+        reduceCanvasAgentEvents(agent, events);
+        syncPanel();
+      }
+      return events;
+    } catch {
+      // Conversation messages remain usable if the task event endpoint is temporarily unavailable.
+      return [];
+    }
+  };
+
   const loadMessages = async (conversationId) => {
     stopPolling();
+    if (fileGrantsConversationId && fileGrantsConversationId !== conversationId) {
+      agent.fileGrants = [];
+      agent.fileGrantsStatus = "idle";
+      fileGrantsConversationId = "";
+    }
     Object.assign(agent, {
       taskId: "",
       status: "idle",
@@ -733,18 +757,15 @@ export function createCanvasAgentController({
       if (conversation?.taskId) {
         agent.taskId = String(conversation.taskId);
         agent.status = String(conversation.taskStatus ?? "queued");
-        if (typeof workbench.api?.listCanvasAgentEvents === "function") {
-          try {
-            const payload = await workbench.api.listCanvasAgentEvents(canvasId, agent.taskId, { after: 0, limit: 1000 });
-            reduceCanvasAgentEvents(agent, Array.isArray(payload?.events) ? payload.events : []);
-          } catch {
-            // Conversation messages remain usable if the task event endpoint is temporarily unavailable.
-          }
+        if (TERMINAL_STATUSES.has(agent.status)) {
+          // Terminal task history is useful for the timeline, but must not delay the conversation render.
+          void loadTaskEvents(canvasId, agent.taskId);
+        } else {
+          // The live endpoint replays the initial history before waiting for new events.
+          schedulePoll(0);
         }
-        if (!TERMINAL_STATUSES.has(agent.status)) schedulePoll(0);
       }
       agent.messagesStatus = "ready";
-      await loadFileGrants(conversationId);
     } catch (error) {
       if (agent.conversationId !== conversationId) return [];
       agent.messagesStatus = "unavailable";
@@ -759,6 +780,7 @@ export function createCanvasAgentController({
     if (!canvasId || !conversationId || typeof workbench.api?.listCanvasAgentFileGrants !== "function") {
       agent.fileGrants = [];
       agent.fileGrantsStatus = "unavailable";
+      fileGrantsConversationId = "";
       return [];
     }
     agent.fileGrantsStatus = "loading";
@@ -769,10 +791,12 @@ export function createCanvasAgentController({
         .map(normalizeAgentFileGrant)
         .filter((grant) => grant.id && grant.status === "active");
       agent.fileGrantsStatus = "ready";
+      fileGrantsConversationId = conversationId;
     } catch (error) {
       if (agent.conversationId !== conversationId) return [];
       agent.fileGrants = [];
       agent.fileGrantsStatus = "unavailable";
+      fileGrantsConversationId = "";
       agent.error = friendlyAgentError(error);
     }
     syncPanel();
@@ -783,6 +807,9 @@ export function createCanvasAgentController({
     const references = Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [];
     const fileGrantIds = [];
     const grantIdByNodeId = new Map();
+    if (references.some((reference) => reference.storageObjectId) && fileGrantsConversationId !== conversationId) {
+      await loadFileGrants(conversationId);
+    }
     for (const reference of references.filter((item) => item.storageObjectId)) {
       const existing = (Array.isArray(agent.fileGrants) ? agent.fileGrants : [])
         .find((grant) => grant.storageObjectId === reference.storageObjectId && grant.status === "active");
@@ -1578,9 +1605,12 @@ export function createCanvasAgentController({
       return false;
     },
     async resume() {
+      const modelsPromise = loadModels();
       await loadConversations();
-      await loadMessages(agent.conversationId);
-      await loadModels();
+      await Promise.all([
+        loadMessages(agent.conversationId),
+        modelsPromise,
+      ]);
       schedulePoll(0);
     },
     dispose() {
@@ -2373,10 +2403,10 @@ function resolveAgentActivityMessage(events = []) {
   if (eventType === "task.waiting_external" || eventType === "step.waiting_external") return "正在等待生成结果";
   if (eventType === "step.waiting_approval" || eventType === "approval.requested") return "正在等待你的确认";
   if (eventType === "step.created") {
-    return event.toolId ? `正在准备 ${event.toolId}` : "正在准备工具";
+    return event.toolId ? `正在准备 ${event.toolId}` : "正在思考中";
   }
   if (eventType === "step.running") {
-    return event.toolId ? `正在执行 ${event.toolId}` : "正在执行工具";
+    return event.toolId ? `正在执行 ${event.toolId}` : "正在思考中";
   }
   if (eventType === "step.succeeded") return event.toolId ? `正在完成 ${event.toolId}` : "正在整理结果";
   return "正在思考中";

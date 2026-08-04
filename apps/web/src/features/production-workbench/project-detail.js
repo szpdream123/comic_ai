@@ -1367,6 +1367,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
       privatePagination: ui.canvasTextSkillPagination?.private,
       skillsLoading: ui.canvasTextSkillsLoading,
     })}
+    ${renderCanvasGroupRunConfirmModal(ui)}
     ${renderStoryboardPromptSkillModal(ui)}
     ${renderTaskCenterDrawer(ui)}
     ${renderCreditLedgerDrawer(ui)}
@@ -1392,7 +1393,8 @@ function renderTaskCenterDrawer(ui = {}) {
   const tasksById = ui.taskCenterTasksById ?? {};
   const taskIds = Array.isArray(ui.taskCenterTaskOrder) ? ui.taskCenterTaskOrder : [];
   const tasks = taskIds.map((taskId) => tasksById[taskId]).filter(Boolean);
-  const selectedTask = tasksById[ui.taskCenterSelectedTaskId] ?? tasks[0] ?? null;
+  const selectedTaskId = String(ui.taskCenterSelectedTaskId ?? "").trim();
+  const selectedTask = tasks.find((task) => String(task?.taskId ?? task?.id ?? "").trim() === selectedTaskId) ?? tasks[0] ?? null;
   const meta = ui.taskCenterMeta ?? {};
   const page = Math.max(1, Number(meta.page ?? ui.taskCenterPage ?? 1));
   const totalPages = Math.max(1, Number(meta.totalPages ?? 1));
@@ -8879,7 +8881,17 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
       <section class="new-canvas-workbench-host" data-new-canvas-mount aria-label="画布编辑器">
         <div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布">
           <span class="new-canvas-loading-skeleton__rail"></span>
-          <span class="new-canvas-loading-skeleton__stage"></span>
+          <div class="new-canvas-loading-skeleton__stage">
+            <span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--one" aria-hidden="true"></span>
+            <span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--two" aria-hidden="true"></span>
+            <span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--three" aria-hidden="true"></span>
+            <span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--four" aria-hidden="true"></span>
+            <div class="new-canvas-loading-skeleton__copy">
+              <span class="new-canvas-loading-skeleton__spinner" aria-hidden="true"></span>
+              <strong>正在打开画布</strong>
+              <small>正在载入节点与连接</small>
+            </div>
+          </div>
           <span class="new-canvas-loading-skeleton__panel"></span>
         </div>
       </section>
@@ -12708,6 +12720,30 @@ function renderGenerationQueueJobConfirmModal(ui) {
         <div class="delete-project-actions">
           <button class="secondary-action delete-cancel-button" type="button" data-action="close-generation-queue-job-confirm">取消</button>
           <button class="delete-confirm-button" type="button" data-action="confirm-generation-queue-job-operation">${isRemove ? "确认移除" : "确认执行"}</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCanvasGroupRunConfirmModal(ui) {
+  const confirmation = ui.canvasGroupRunConfirm ?? null;
+  if (!confirmation) return "";
+  const count = Array.isArray(confirmation.nodeIds) ? confirmation.nodeIds.length : 0;
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认整组执行">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon">▶</div>
+          <div>
+            <h2>整组执行</h2>
+            <p>即将对组内 ${count} 个生成节点依次执行，是否继续？</p>
+          </div>
+          <button class="modal-close" type="button" data-action="close-canvas-group-run-confirm" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-canvas-group-run-confirm">取消</button>
+          <button class="delete-confirm-button" type="button" data-action="confirm-canvas-group-run">开始执行</button>
         </div>
       </div>
     </section>

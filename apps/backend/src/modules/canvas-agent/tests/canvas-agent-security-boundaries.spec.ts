@@ -294,6 +294,12 @@ test("executor lets the model correct invalid and duplicate side-effect calls", 
         callId: "corrected-patch",
         input: { expectedRevision: 2, operations: [] },
       },
+      {
+        kind: "tool_call",
+        toolId: "canvas.patch",
+        callId: "corrected-patch",
+        input: { expectedRevision: 2, operations: [] },
+      },
       { kind: "final", message: "done" },
     ];
     const tools = createDefaultCanvasAgentToolRegistry({
@@ -333,6 +339,7 @@ test("executor lets the model correct invalid and duplicate side-effect calls", 
     const messages = await listCanvasAgentMessages(db, { canvasId, conversationId, actor });
     assert.ok(messages.some((message) => message.content.errorCode === "canvas_agent_tool_input_invalid"));
     assert.ok(messages.some((message) => message.content.errorCode === "canvas_agent_duplicate_side_effect"));
+    assert.ok(messages.some((message) => message.content.errorCode === "canvas_agent_duplicate_call"));
     const events = await listCanvasAgentEventsForActor(db, { taskId: task.id, canvasId, actor });
     assert.ok(events.some((event) => event.eventType === "tool.input_rejected"));
     assert.ok(events.some((event) => event.eventType === "tool.duplicate_rejected"));

@@ -1250,7 +1250,7 @@ async function markRunningPollRepairClaimed(
         FROM generation_task_credit_reservations task_reservation
         JOIN claimed_task task ON task.id = task_reservation.task_id
         JOIN manual_recovery recovery ON recovery.id = task.id
-        WHERE reservation.id = task_reservation.reservation_id
+        WHERE reservation.id = task_reservation.id
           AND reservation.status = 'manual_review_required'
           AND reservation.amount_reserved > 0
       )

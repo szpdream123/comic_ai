@@ -10931,7 +10931,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
     await db.query(
       `
         UPDATE ai_model_configs
-        SET provider_model = 'seedance-db-model',
+        SET provider_name = 'ConfiguredSeedance',
+            provider_model = 'seedance-db-model',
             status = 'active',
             sort_order = -100,
             provider_config_json = provider_config_json
@@ -11125,11 +11126,18 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
       const providerRequest = await db.query<{
         provider_request_id: string;
+        provider_name: string;
         status: string;
         external_request_id: string | null;
+        provider_request_count: number;
       }>(
         `
-          SELECT id AS provider_request_id, status, external_request_id
+          SELECT
+            id AS provider_request_id,
+            provider_name,
+            status,
+            external_request_id,
+            count(*) OVER ()::int AS provider_request_count
           FROM provider_requests
           WHERE task_id = $1
         `,
@@ -11222,6 +11230,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(providerCalls[2]?.url, "https://cdn.example.test/seedance-result.mp4");
       assert.equal(providerRequest.rows[0]?.status, "accepted");
       assert.equal(providerRequest.rows[0]?.external_request_id, "seedance-external-task-1");
+      assert.equal(providerRequest.rows[0]?.provider_name, "ConfiguredSeedance");
+      assert.equal(providerRequest.rows[0]?.provider_request_count, 1);
       assert.equal(userModelRequestLog.rows[0]?.provider_request_id, providerRequest.rows[0]?.provider_request_id);
       assert.equal(userModelRequestLog.rows[0]?.status, "submitted");
       assert.equal(userModelRequestLog.rows[0]?.provider_operation, "episode.video.generate");
@@ -12161,6 +12171,149 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(snapshot.rows[0]?.result_assets_json[0]?.mediaKind, "image");
       assert.match(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /^https:\/\//);
       assert.doesNotMatch(snapshot.rows[0]?.result_assets_json[0]?.url ?? "", /relay\.example\.test/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps queued Cumob image submissions running and schedules their first poll", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET provider_name = 'Cumob',
+            provider_model = 'gpt-image-2-pro',
+            provider_protocol = 'cumob_image',
+            provider_config_json = provider_config_json
+              || '{"baseURL":"https://cumob.example.test","endpoint":"/v1/images/generations","queryTaskEndpoint":"/v1/status/{taskId}","apiKeyEnv":"CUMOB_API_KEY"}'::jsonb,
+            pricing_json = pricing_json || '{"baseCredits":58}'::jsonb
+        WHERE model_code = 'cumob-gpt-image-2-pro'
+      `,
+    );
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        BULLMQ_OUTBOX_DISPATCHER_ENABLED: "false",
+        BULLMQ_WORKERS_ENABLED: "false",
+        CUMOB_API_KEY: "cumob-test-key",
+      },
+      fetchImpl: (async () => new Response(
+        JSON.stringify({
+          id: "cumob-queued-image-1",
+          object: "task",
+          status: "queued",
+          progress: 0,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138017");
+      const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138017"));
+      await seedActiveGenerationMembership(db, { userId });
+      await grantCredits(db, {
+        userId,
+        amount: 100,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "queued Cumob image test",
+        createdByUserId: userId,
+        now: new Date(),
+      });
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "cumob-queued-image-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Queued Cumob Image",
+          scriptInput: "Episode 1: Keep an accepted image task running.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${created.project.id}/episodes`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({ title: "Queued Cumob Image" }),
+        },
+      );
+      const episodeId = (await createEpisodeResponse.json()).data.episode.id;
+      const imageTaskResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "cumob-queued-image-task",
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "episode",
+          targetId: episodeId,
+          prompt: "Queued Cumob image",
+          model: "cumob-gpt-image-2-pro",
+          parameters: { aspectRatio: "16:9" },
+        }),
+      });
+      const imageTaskEnvelope = await imageTaskResponse.json();
+      const taskId = imageTaskEnvelope.data.taskId;
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [taskId],
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE task_id = $1",
+        [taskId],
+      );
+      const providerRequest = await db.query<{
+        status: string;
+        failure_code: string | null;
+        external_request_id: string | null;
+        next_poll_at: Date | null;
+      }>(
+        "SELECT status, failure_code, external_request_id, next_poll_at FROM provider_requests WHERE task_id = $1",
+        [taskId],
+      );
+      const snapshot = await db.query<{
+        status: string;
+        progress_stage: string;
+        failure_json: Record<string, unknown> | null;
+      }>(
+        "SELECT status, progress_stage, failure_json FROM ai_generation_task_snapshots WHERE task_id = $1",
+        [taskId],
+      );
+      const reservation = await db.query<{
+        amount_consumed: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        "SELECT amount_consumed, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        [taskId],
+      );
+
+      assert.equal(imageTaskResponse.status, 200, JSON.stringify(imageTaskEnvelope));
+      assert.equal(imageTaskEnvelope.data.status, "running");
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(task.rows[0]?.failure_code, null);
+      assert.equal(attempt.rows[0]?.status, "running");
+      assert.equal(attempt.rows[0]?.failure_code, null);
+      assert.equal(providerRequest.rows[0]?.status, "accepted");
+      assert.equal(providerRequest.rows[0]?.failure_code, null);
+      assert.equal(providerRequest.rows[0]?.external_request_id, "cumob-queued-image-1");
+      assert.ok(providerRequest.rows[0]?.next_poll_at);
+      assert.equal(snapshot.rows[0]?.status, "running");
+      assert.equal(snapshot.rows[0]?.progress_stage, "provider_accepted");
+      assert.equal(snapshot.rows[0]?.failure_json, null);
+      assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 0);
+      assert.equal(reservation.rows[0]?.status, "active");
     } finally {
       await server.close();
     }

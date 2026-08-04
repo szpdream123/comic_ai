@@ -32,18 +32,58 @@ test("script workspace shows one storyboard row per real video child and its bou
     canvasDocument: {
       nodes: [
         { id: "script-1", type: "script", data: {} },
-        { id: "shot-1", type: "ai-video", data: { workflowParentId: "script-1", workflowKind: "storyboard", prompt: "@林芽走入旧城区", scriptWorkflowReferenceNodeIds: ["role-1", "scene-1"] } },
+        { id: "shot-1", type: "ai-video", data: { workflowParentId: "script-1", workflowKind: "storyboard", prompt: "@林芽走入旧城区", scriptWorkflowReferenceNodeIds: ["role-1", "scene-1"], videoUrl: "https://example.test/shot-1.mp4", thumbnailUrl: "https://example.test/shot-1.jpg" } },
+        { id: "shot-2", type: "ai-video", data: { workflowParentId: "script-1", workflowKind: "storyboard", prompt: "尚未生成的视频" } },
       ],
     },
   });
 
   assert.match(html, /data-script-workspace-child="shot-1"/);
+  assert.match(html, /<th class="script-workspace-shot-video-cell">视频<\/th>/);
+  assert.match(html, /data-action="toggle-canvas-video-fullscreen" data-node-id="shot-1"/);
+  assert.match(html, /src="https:\/\/example\.test\/shot-1\.mp4"/);
+  assert.match(html, /poster="https:\/\/example\.test\/shot-1\.jpg"/);
+  assert.match(html, /data-script-workspace-child="shot-2"[\s\S]*?data-script-shot-video-placeholder="true"[\s\S]*?未生成/);
   assert.match(html, /<th>最终提示词<\/th>/);
   assert.doesNotMatch(html, /<th>时长<\/th>|<th>景别<\/th>|<th>运镜<\/th>|画面描述 \/ 提示词/);
   assert.doesNotMatch(html, /data-script-child-field="videoDurationSec"|data-script-child-field="shotSize"|data-script-child-field="cameraMove"/);
   assert.match(html, /@ 引用 2/);
-  assert.match(html, /data-action="run-canvas-script-workflow" data-node-id="script-1"/);
-  assert.match(html, /data-node-ids="\[&quot;shot-1&quot;\]"/);
+  assert.doesNotMatch(html, /data-action="run-canvas-script-workflow"|data-action="run-canvas-node"[^>]*>生成视频/);
+  assert.match(html, /data-action="delete-canvas-node" data-node-id="shot-1"/);
+  assert.match(html, /data-node-ids="\[&quot;shot-1&quot;,&quot;shot-2&quot;\]"/);
+});
+
+test("script workspace downloads every video reachable from its script node", () => {
+  const html = renderCanvasScriptWorkspace({
+    canvasScriptWorkspace: { open: true, scriptNodeId: "script-1", activeStep: "shots" },
+    canvasDocument: {
+      nodes: [
+        { id: "script-1", type: "script", data: {} },
+        { id: "image-1", type: "ai-image", data: {} },
+        { id: "video-1", type: "ai-video", data: {} },
+        { id: "video-2", type: "ai-video", data: {} },
+        { id: "other-video", type: "ai-video", data: {} },
+      ],
+      edges: [
+        { sourceNodeId: "script-1", targetNodeId: "image-1" },
+        { sourceNodeId: "image-1", targetNodeId: "video-1" },
+        { sourceNodeId: "video-1", targetNodeId: "video-2" },
+      ],
+    },
+  });
+
+  assert.match(html, /data-action="download-canvas-selection" data-node-id="script-1" data-node-ids="\[&quot;video-1&quot;,&quot;video-2&quot;\]"/);
+  assert.doesNotMatch(html, /data-node-ids="[^\"]*other-video/);
+});
+
+test("script workspace keeps the empty shot table aligned with the video column", () => {
+  const html = renderCanvasScriptWorkspace({
+    canvasScriptWorkspace: { open: true, scriptNodeId: "script-1", activeStep: "shots" },
+    canvasDocument: { nodes: [{ id: "script-1", type: "script", data: {} }] },
+  });
+
+  assert.match(html, /<th class="script-workspace-shot-video-cell">视频<\/th>/);
+  assert.match(html, /<td colspan="6" class="script-workspace-empty">/);
 });
 
 test("script workspace supports selecting shots for one batch deletion", () => {
@@ -84,6 +124,20 @@ test("script workspace uses compact episode-style asset cards", () => {
   assert.match(html, /角色<small>1 项<\/small>/);
   assert.match(html, /script-workspace-asset-body/);
   assert.match(html, /角色描述/);
+});
+
+test("script workspace exposes batch image and video actions on the matching steps", () => {
+  const document = {
+    nodes: [
+      { id: "script-1", type: "script", data: {} },
+      { id: "asset-1", type: "ai-image", data: { workflowParentId: "script-1", workflowKind: "character" } },
+      { id: "shot-1", type: "ai-video", data: { workflowParentId: "script-1", workflowKind: "storyboard" } },
+    ],
+  };
+  const assets = renderCanvasScriptWorkspace({ canvasScriptWorkspace: { open: true, scriptNodeId: "script-1", activeStep: "assets" }, canvasDocument: document });
+  const shots = renderCanvasScriptWorkspace({ canvasScriptWorkspace: { open: true, scriptNodeId: "script-1", activeStep: "shots" }, canvasDocument: document });
+  assert.match(assets, /data-action="open-canvas-script-batch-modal"[^>]*data-batch-kind="image"[^>]*>批量生成图片<\/button>/);
+  assert.match(shots, /data-action="open-canvas-script-batch-modal"[^>]*data-batch-kind="video"[^>]*>批量生成视频<\/button>/);
 });
 
 test("editing a script workspace child does not rebuild the entire workspace", () => {

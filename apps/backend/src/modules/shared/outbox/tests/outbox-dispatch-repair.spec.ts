@@ -29,6 +29,19 @@ describe("persistent outbox dispatch repair", () => {
     assert.deepEqual(await claimOutboxEventsForDispatch(db, input), []);
     assert.deepEqual(await claimOutboxEventsForDispatch(db, input), []);
 
+    const expectedTransactionPrefix = [
+      "BEGIN",
+      "SET LOCAL lock_timeout = '5s'",
+      "SET LOCAL statement_timeout = '30s'",
+      "SET LOCAL idle_in_transaction_session_timeout = '15s'",
+    ];
+    const transactionStarts = statements
+      .map((sql, index) => sql === "BEGIN" ? index : -1)
+      .filter((index) => index >= 0);
+    assert.equal(transactionStarts.length, 2);
+    for (const start of transactionStarts) {
+      assert.deepEqual(statements.slice(start, start + expectedTransactionPrefix.length), expectedTransactionPrefix);
+    }
     const cursorInitializers = statements.filter((sql) => (
       sql.includes("INSERT INTO outbox_dispatch_fair_cursors")
     ));

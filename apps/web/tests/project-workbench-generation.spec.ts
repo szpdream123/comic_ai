@@ -33197,6 +33197,60 @@ describe("production workbench project tab", () => {
     }
   });
 
+  it("starts the direct canvas document request before the project list finishes", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: {
+        pathname: "/canvas",
+        search: "?canvasProjectId=canvas-direct",
+        hash: "#tools-canvas",
+      },
+    };
+    let releaseProjects;
+    const projectsPending = new Promise((resolve) => { releaseProjects = resolve; });
+    const calls = [];
+    const workbench = {
+      api: {
+        async getCanvasProjects() {
+          calls.push("projects-started");
+          return projectsPending;
+        },
+        async getStandaloneCanvas(canvasProjectId) {
+          calls.push(["document-started", canvasProjectId]);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 3,
+              document: createDefaultCanvasDocument({ projectId: canvasProjectId }),
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-direct",
+        canvasProjects: null,
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      let syncFinished = false;
+      const syncPending = syncCanvasProjectsFromApiForTest(workbench).then(() => { syncFinished = true; });
+      await Promise.resolve();
+
+      assert.deepEqual(calls, [["document-started", "canvas-direct"], "projects-started"]);
+      assert.equal(syncFinished, false);
+
+      releaseProjects({ projects: [{ id: "canvas-direct", title: "直接画布" }] });
+      await syncPending;
+      assert.equal(workbench.ui.canvasDocument.canvasProjectId, "canvas-direct");
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
   it("loads backend generation config when opening a canvas project and renders image parameters", async () => {
     const configCalls = [];
     const workbench = {

@@ -148,6 +148,8 @@ function buildX6NodeAttrs(node) {
   const active = status === "running" || node?.type === "send";
   return {
     body: {
+      refWidth: "100%",
+      refHeight: "100%",
       stroke: status === "running" ? "#5ec7ff" : "rgba(255,255,255,0.18)",
       strokeWidth: status === "running" ? 2 : 1,
       fill: node?.type === "group"
@@ -155,6 +157,10 @@ function buildX6NodeAttrs(node) {
         : node?.type === "send" ? "#181f22" : "#161717",
       rx: 8,
       ry: 8,
+    },
+    fo: {
+      refWidth: "100%",
+      refHeight: "100%",
     },
     accent: {
       fill: active ? "#5ec7ff" : "rgba(255,255,255,0.22)",

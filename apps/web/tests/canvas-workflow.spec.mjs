@@ -155,6 +155,7 @@ describe("canvas workflow document", () => {
     const rubberbandStyle = {};
     let correctedSelection = null;
     const handlers = new Map();
+    const rootHandlers = new Map();
     const selectionHandlers = new Map();
     class Selection {
       constructor(options) { selectionOptions = options; }
@@ -166,6 +167,7 @@ describe("canvas workflow document", () => {
     const graph = {
       container: {
         addEventListener: (type, handler) => handlers.set(type, handler),
+        getRootNode: () => ({ addEventListener: (type, handler) => rootHandlers.set(type, handler) }),
         clientWidth: 1000,
         clientHeight: 600,
         getBoundingClientRect: () => ({ left: 100, top: 60, width: 500, height: 300 }),
@@ -213,6 +215,15 @@ describe("canvas workflow document", () => {
       width: "",
       height: "",
     });
+    let preventedSyntheticClick = 0;
+    rootHandlers.get("click")({
+      clientX: 600,
+      clientY: 500,
+      composedPath: () => [graph.container],
+      preventDefault: () => { preventedSyntheticClick += 1; },
+      stopImmediatePropagation: () => { preventedSyntheticClick += 1; },
+    });
+    assert.equal(preventedSyntheticClick, 2);
 
     correctedSelection = null;
     const styleAfterRubberband = { ...rubberbandStyle };
@@ -1431,13 +1442,14 @@ describe("canvas workflow document", () => {
     });
     assert.match(completedWithUrl, /class="canvas-video-preview canvas-image-preview"/);
     assert.match(completedWithUrl, /src="https:\/\/example\.test\/result\.png"/);
+    assert.match(completedWithUrl, /loading="lazy" decoding="async" fetchpriority="low"/);
     assert.doesNotMatch(completedWithUrl, /正在生成图片/);
 
     const completedWithStorageObject = render({
       type: "ai-image",
       data: { status: "completed", storageObjectId: "storage/result 1" },
     });
-    assert.match(completedWithStorageObject, /src="\/api\/storage\/objects\/storage%2Fresult%201\/content\?proxy=1"/);
+    assert.match(completedWithStorageObject, /src="\/api\/storage\/objects\/storage%2Fresult%201\/content"/);
 
     const textRunning = render({
       type: "ai-markdown",
@@ -1523,9 +1535,18 @@ describe("canvas workflow document", () => {
     const generated = render({
       id: "script-source",
       type: "script",
-      data: { __canvasHasTextInput: true, workflowNodes: [{ id: "shot-1", kind: "storyboard" }] },
+      data: {
+        __canvasHasTextInput: true,
+        workflowNodes: [
+          { id: "character-1", kind: "character" },
+          { id: "scene-1", kind: "scene" },
+          { id: "prop-1", kind: "prop" },
+          { id: "shot-1", kind: "storyboard" },
+        ],
+      },
     });
     assert.match(generated, /分镜已生成/);
+    assert.match(generated, /1 角色 · 1 场景 · 1 道具 · 1 分镜/);
 
     const emptyTextSource = render({ id: "text-source", type: "source-text", data: {} });
     assert.match(emptyTextSource, /aria-label="文本源操作"/);

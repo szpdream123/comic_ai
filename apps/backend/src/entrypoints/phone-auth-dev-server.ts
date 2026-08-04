@@ -68,7 +68,7 @@ import {
   interjectCanvasAgentTask,
   inspectCanvasAgentMetrics,
   listCanvasAgentConversations,
-  listCanvasAgentEventsForActor,
+  listCanvasAgentEvents,
   listCanvasAgentMessages,
   listAvailableCanvasAgentModels,
   loadCanvasAgentRuntimeConfiguration,
@@ -435,6 +435,7 @@ import { inspectGenerationPlatformMetrics } from "../modules/model-gateway/gener
 import { recordTaskCenterQuery } from "../modules/model-gateway/task-center-observability.ts";
 import { taskCenterProviderDiagnosticsSql } from "../modules/model-gateway/task-center-provider-diagnostics.ts";
 import { loadGenerationQueueConfig } from "../modules/model-gateway/generation-queue.config.ts";
+import { scheduleGenerationProviderPoll } from "../modules/model-gateway/generation-due-poll.service.ts";
 import {
   listGenerationQueueShards,
   markGenerationQueueStagePublished,
@@ -471,6 +472,7 @@ import {
 import {
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotResultUnknown,
+  markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotSucceeded,
   upsertQueuedGenerationTaskSnapshot,
 } from "../modules/model-gateway/generation-task-snapshot.service.ts";
@@ -4524,18 +4526,14 @@ function isLingdongModelConfig(modelConfig: AiModelConfigRecord | undefined) {
 }
 
 function videoProviderNameForModelConfig(modelConfig: AiModelConfigRecord | undefined) {
-  return isLingdongModelConfig(modelConfig)
-    ? modelConfig!.providerName
-    : "volcengine";
+  return modelConfig?.providerName || "volcengine";
 }
 
 function videoProviderModelForModelConfig(
   modelConfig: AiModelConfigRecord | undefined,
   fallbackModel: unknown,
 ) {
-  return isLingdongModelConfig(modelConfig)
-    ? modelConfig!.providerModel
-    : String(fallbackModel ?? "seedance-i2v-pro");
+  return modelConfig?.providerModel || String(fallbackModel ?? "seedance-i2v-pro");
 }
 
 async function readMockGenerationMedia(config: {
@@ -7491,12 +7489,17 @@ async function syncSeedanceVideoTaskOnRead(
       JOIN projects project ON project.id = t.project_id
       LEFT JOIN ai_model_configs task_model_config
         ON task_model_config.model_code = COALESCE(t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model')
-      LEFT JOIN provider_requests pr
-        ON pr.task_id = t.id
-       AND (
-         (task_model_config.provider_protocol = 'lingdong_api' AND pr.provider_name = task_model_config.provider_name)
-         OR (task_model_config.provider_protocol IS DISTINCT FROM 'lingdong_api' AND pr.provider_name = 'volcengine')
-       )
+      LEFT JOIN LATERAL (
+        SELECT request.id, request.external_request_id
+        FROM provider_requests request
+        WHERE request.task_id = t.id
+        ORDER BY
+          (request.external_submission_started_at IS NOT NULL) DESC,
+          (request.provider_name = COALESCE(NULLIF(task_model_config.provider_name, ''), 'volcengine')) DESC,
+          request.updated_at DESC,
+          request.id DESC
+        LIMIT 1
+      ) pr ON true
       LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
@@ -8804,12 +8807,16 @@ async function createGenerationTask(
             AND task.task_type = $2
             AND task.target_entity_type = $3
             AND task.target_entity_id = $4
+            AND (
+              task.target_entity_type <> 'canvas'
+              OR NULLIF(task.input_snapshot_json->>'targetId', '') = $5
+            )
             AND task.status IN ('queued', 'running')
           ORDER BY task.created_at DESC
           LIMIT 1
           FOR UPDATE OF task
         `,
-        [context.userId, config.taskType, targetEntityType, targetEntityId],
+        [context.userId, config.taskType, targetEntityType, targetEntityId, requestSnapshot.targetId],
       )
     : null;
   if (activeVideoTask) {
@@ -9420,6 +9427,47 @@ async function createGenerationTask(
         adapter,
       });
       providerRequestId = submitted.request.id;
+      if (!submitted.artifacts?.length && submitted.request.externalRequestId) {
+        await markGenerationTaskSnapshotRunning(db, {
+          taskId: task.id,
+          attemptId: claim.attempt.id,
+          providerRequestId: submitted.request.id,
+          progressPercent: 50,
+          progressStage: submitted.request.status === "running"
+            ? "provider_rendering"
+            : "provider_accepted",
+          providerStatus: {
+            provider: providerLabel,
+            providerStatus: submitted.request.status,
+            externalRequestId: submitted.request.externalRequestId,
+          },
+          now: input.now,
+        });
+        await scheduleGenerationProviderPoll(db, {
+          taskId: task.id,
+          nextPollAttempt: 1,
+          nextPollAt: new Date(input.now.getTime() + generationQueueConfig.poll.image.intervalMs),
+          pollDeadlineAt: timeoutAt,
+          now: input.now,
+        });
+        const responseBody = await mapGenerationTaskResponse(db, {
+          taskId: task.id,
+          sessionToken: input.authenticated.sessionToken,
+          canvasScope: context.canvasActorScope,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        });
+        await store.update({
+          ...started.record,
+          responseResourceType: "generation_task",
+          responseResourceId: task.id,
+          responseSnapshot: responseBody as Record<string, unknown>,
+          status: "succeeded",
+          updatedAt: input.now,
+        });
+        return { status: 200 as const, body: responseBody };
+      }
       if (submitted.kind !== "submitted" || !submitted.artifacts?.length) {
         throw Object.assign(new Error("gpt_image_artifact_missing"), {
           failureCode: "provider_output_download_failed",
@@ -9775,6 +9823,7 @@ async function createGenerationTask(
       requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
       payloadHash,
       payloadSummary: null,
+      requestFormat: "generation_task",
       requestBody: {
         prompt: requestSnapshot.prompt,
         motionPrompt: requestSnapshot.prompt,
@@ -21805,21 +21854,9 @@ export function createPhoneAuthDevServer(
             body: { error: "unauthenticated" },
           });
         }
-        const membershipCheckoutAuthenticatedAt = Date.now();
-        const membershipCheckoutScopeResolvedAt = Date.now();
-
         const membershipOrders = createMembershipOrderService({
           db,
         });
-        await ensureDefaultMembershipPlan(db, { now: new Date() });
-        const membershipCheckoutPlanEnsuredAt = Date.now();
-
-        if (request.method === "GET" && pathname === "/api/membership/plans") {
-          return writeJson(response, {
-            status: 200,
-            body: await membershipOrders.listPurchasablePlans({ now: new Date() }),
-          });
-        }
 
         if (request.method === "GET" && pathname === "/api/membership/status") {
           return writeJson(
@@ -21829,6 +21866,18 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             }),
           );
+        }
+
+        const membershipCheckoutAuthenticatedAt = Date.now();
+        const membershipCheckoutScopeResolvedAt = Date.now();
+        await ensureDefaultMembershipPlan(db, { now: new Date() });
+        const membershipCheckoutPlanEnsuredAt = Date.now();
+
+        if (request.method === "GET" && pathname === "/api/membership/plans") {
+          return writeJson(response, {
+            status: 200,
+            body: await membershipOrders.listPurchasablePlans({ now: new Date() }),
+          });
         }
 
         if (request.method === "POST" && pathname === "/api/membership/orders") {
@@ -23078,17 +23127,15 @@ export function createPhoneAuthDevServer(
         if (request.method === "GET" && canvasAgentEventsMatch) {
           const canvasProjectId = decodeURIComponent(canvasAgentEventsMatch[1] ?? "");
           const taskId = decodeURIComponent(canvasAgentEventsMatch[2] ?? "");
-          const taskContext = await resolveCanvasAgentTaskActor(db, authenticated.sessionToken, canvasProjectId, taskId, "view");
+          await resolveCanvasAgentTaskActor(db, authenticated.sessionToken, canvasProjectId, taskId, "view");
           const headerCursor = Array.isArray(request.headers["last-event-id"])
             ? request.headers["last-event-id"]?.[0]
             : request.headers["last-event-id"];
           const after = Number(headerCursor ?? url.searchParams.get("after") ?? 0);
           const limit = Number(url.searchParams.get("limit") ?? 200);
           const afterSequence = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
-          const events = await listCanvasAgentEventsForActor(db, {
+          const events = await listCanvasAgentEvents(db, {
             taskId,
-            canvasId: canvasProjectId,
-            actor: taskContext.actor,
             afterSequence,
             limit: Number.isFinite(limit) ? limit : 200,
           });
@@ -23125,9 +23172,8 @@ export function createPhoneAuthDevServer(
                 while (!closed && !response.writableEnded && Date.now() < expiresAt) {
                   await delay(500);
                   if (closed || response.writableEnded) break;
-                  let liveContext;
                   try {
-                    liveContext = await resolveCanvasAgentTaskActor(
+                    await resolveCanvasAgentTaskActor(
                       db,
                       authenticated.sessionToken,
                       canvasProjectId,
@@ -23138,10 +23184,8 @@ export function createPhoneAuthDevServer(
                     response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
                     break;
                   }
-                  const nextEvents = await listCanvasAgentEventsForActor(db, {
+                  const nextEvents = await listCanvasAgentEvents(db, {
                     taskId,
-                    canvasId: canvasProjectId,
-                    actor: liveContext.actor,
                     afterSequence: cursor,
                     limit: Number.isFinite(limit) ? limit : 200,
                   });
@@ -23240,12 +23284,22 @@ export function createPhoneAuthDevServer(
                     WHERE canvas_project_id=$1 AND server_revision=$2
                     LIMIT 1
                   `, [canvasId, revision]);
-                  if (!source) throw new CanvasAgentStateConflictError();
+                  const recoverableSource = source ?? await queryOne<{ document_json: Record<string, unknown> }>(db, `
+                    SELECT input_json #> '{context,canvas,document}' AS document_json
+                    FROM canvas_agent_steps
+                    WHERE task_id=$1
+                      AND step_no < (SELECT step_no FROM canvas_agent_steps WHERE id=$2 AND task_id=$1)
+                      AND input_json #>> '{context,canvas,serverRevision}'=$3
+                      AND input_json #>> '{context,canvas,document,canvasProjectId}'=$4
+                    ORDER BY step_no DESC,id DESC
+                    LIMIT 1
+                  `, [taskId, stepId, String(revision), canvasId]);
+                  if (!recoverableSource) throw new CanvasAgentStateConflictError();
                   const saved = await saveCanvasByCanvasProjectId(db, {
                     canvasProjectId: canvasId,
                     actorScope: canvasActorScopeFromAgentActor(canvasId, actor),
                     clientRevision: expectedRevision,
-                    document: source.document_json,
+                    document: recoverableSource.document_json,
                     events: [{ type: "canvas_agent.rewind", reason }],
                     now: new Date(),
                   });

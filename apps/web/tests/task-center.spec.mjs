@@ -217,6 +217,28 @@ describe("production workbench task center", () => {
     assert.match(html, /generated\/task-image-1\.png/);
   });
 
+  it("does not show a stale task detail outside the current filter result", () => {
+    const html = renderProjectDetail({
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: true,
+        taskCenterStatusFilter: "active",
+        taskCenterTasksById: {
+          "task-failed": { taskId: "task-failed", status: "failed", kind: "image", failureCode: "provider_failed" },
+        },
+        taskCenterTaskOrder: [],
+        taskCenterSelectedTaskId: "task-failed",
+        taskCenterMeta: { page: 1, pageSize: 20, total: 0, totalPages: 1 },
+      },
+    });
+
+    assert.match(html, /<strong>暂无任务<\/strong>/);
+    assert.doesNotMatch(html, /task-failed/);
+    assert.doesNotMatch(html, /失败原因/);
+  });
+
   it("never reveals internal model codes when the display name is missing", () => {
     const html = renderProjectDetail({
       state: {},

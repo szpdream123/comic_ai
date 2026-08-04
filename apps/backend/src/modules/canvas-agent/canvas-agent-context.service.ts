@@ -62,7 +62,7 @@ export class CanvasAgentContextService {
     );
     let messages = result.rows.reverse().map((row) => ({
       role: row.role,
-      content: row.content_json,
+      content: compactCanvasReadMessage(row.role, row.content_json),
       sequence: Number(row.sequence),
     }));
     const memories = this.deps.knowledge
@@ -116,7 +116,7 @@ export class CanvasAgentContextService {
     );
     const compacted = compactedResult.rows.reverse().map((row) => ({
       role: row.role,
-      content: row.content_json,
+      content: compactCanvasReadMessage(row.role, row.content_json),
       sequence: Number(row.sequence),
     }));
     const compactedCount = Number(compactedResult.rows[0]?.total_count ?? 0);
@@ -347,6 +347,24 @@ function summarizeContent(content: Record<string, unknown>) {
       ? content.message
       : JSON.stringify(content);
   return text.replace(/\s+/g, " ").trim().slice(0, 600);
+}
+
+function compactCanvasReadMessage(role: string, content: Record<string, unknown>) {
+  if (role !== "tool" || content.toolId !== "canvas.read") return content;
+  const output = readRecord(content.output);
+  const document = readRecord(output.document);
+  return {
+    ...content,
+    output: {
+      canvasProjectId: output.canvasProjectId ?? null,
+      serverRevision: output.serverRevision ?? null,
+      document: {
+        nodeCount: Array.isArray(document.nodes) ? document.nodes.length : 0,
+        edgeCount: Array.isArray(document.edges) ? document.edges.length : 0,
+        availableInContext: true,
+      },
+    },
+  };
 }
 
 function readRecord(value: unknown): Record<string, unknown> {

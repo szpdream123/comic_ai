@@ -6,6 +6,11 @@ import {
   createUserPasswordHash,
   defaultPasswordFromPhone,
 } from "../../modules/identity/team-account-credentials.service.ts";
+import {
+  appendCanvasAgentMessage,
+  createCanvasAgentConversation,
+  createCanvasAgentTask,
+} from "../../modules/canvas-agent/canvas-agent-task.service.ts";
 import { grantCredits } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
@@ -310,6 +315,104 @@ describe("Canvas Agent HTTP integration", { concurrency: false }, () => {
         { method: "POST", body: { title: "越权 Agent" } },
       );
       assert.equal(otherConversation.status, 404, JSON.stringify(otherConversation.body));
+    } finally {
+      await server.close().catch(() => undefined);
+      await db.close();
+    }
+  });
+
+  it("keeps full canvas reads in storage while returning compact history with one event ownership read", async () => {
+    const db = await createMigratedTestDb();
+    let canvasAgentTaskOwnershipReads = 0;
+    const trackedDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (sql.includes("FROM canvas_agent_tasks") && sql.includes("owner_user_id")) {
+          canvasAgentTaskOwnershipReads += 1;
+        }
+        return db.query<T>(sql, params);
+      },
+      close: () => db.close(),
+    };
+    const server = createPhoneAuthDevServer({
+      db: trackedDb,
+      env: { NODE_ENV: "test", AUTH_SESSION_REDIS_CACHE_ENABLED: "false" },
+      repairScheduler: { enabled: false },
+    });
+    const userId = randomUUID();
+    const phone = uniquePhone("137");
+    const canvasId = randomUUID();
+    const actor = { ownerUserId: userId, actorTeamMemberId: null };
+    try {
+      await seedUser(db, userId, phone);
+      await db.query(
+        `
+          INSERT INTO creator_canvas_projects
+            (id, title, status, server_revision, created_by_user_id, updated_by_user_id)
+          VALUES ($1, 'Agent history performance canvas', 'active', 1, $2, $2)
+        `,
+        [canvasId, userId],
+      );
+      const conversation = await createCanvasAgentConversation(db, {
+        canvasId,
+        actor,
+        title: "History performance",
+        now: new Date(),
+      });
+      const task = await createCanvasAgentTask(db, {
+        canvasId,
+        conversationId: conversation.id,
+        actor,
+        mode: "b",
+        modelCode: "history-performance-model",
+        modelConfigSnapshot: {},
+        baseRevision: 1,
+        userMessage: { text: "读取画布" },
+        now: new Date(),
+      });
+      await appendCanvasAgentMessage(db, {
+        conversationId: conversation.id,
+        taskId: task.id,
+        role: "tool",
+        content: {
+          toolId: "canvas.read",
+          callId: "history-read",
+          output: {
+            canvasProjectId: canvasId,
+            serverRevision: 1,
+            document: { nodes: [{ id: "history-node", payload: "x".repeat(100_000) }], edges: [] },
+          },
+        },
+        actor,
+        now: new Date(),
+      });
+      await server.listen(0);
+      const cookie = await passwordLogin(server.origin, phone);
+
+      const history = await api(
+        server.origin,
+        `/api/canvas/${canvasId}/conversations/${conversation.id}/messages?limit=20`,
+        cookie,
+      );
+      assert.equal(history.status, 200, JSON.stringify(history.body));
+      const canvasReadHistory = history.body.data.messages.find((message: { content: { toolId?: string } }) => (
+        message.content.toolId === "canvas.read"
+      ));
+      assert.deepEqual(canvasReadHistory?.content.output, { canvasProjectId: canvasId, serverRevision: 1 });
+      assert.ok(JSON.stringify(history.body).length < 5_000);
+      const storedCanvasRead = await db.query<{ bytes: number }>(
+        "SELECT octet_length(content_json::text) AS bytes FROM canvas_agent_messages WHERE conversation_id=$1 AND sequence=2",
+        [conversation.id],
+      );
+      assert.ok(Number(storedCanvasRead.rows[0]?.bytes ?? 0) > 100_000);
+
+      canvasAgentTaskOwnershipReads = 0;
+      const events = await api(
+        server.origin,
+        `/api/canvas/${canvasId}/agent-tasks/${task.id}/events?after=0&limit=1000`,
+        cookie,
+      );
+      assert.equal(events.status, 200, JSON.stringify(events.body));
+      assert.equal(canvasAgentTaskOwnershipReads, 1);
     } finally {
       await server.close().catch(() => undefined);
       await db.close();
