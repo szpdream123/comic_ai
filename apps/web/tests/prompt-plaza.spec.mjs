@@ -580,6 +580,7 @@ test("prompt marketplace reuses an in-flight catalog and library sync", async ()
       promptMarketplaceLibrary: [],
       promptMarketplaceLoading: false,
       promptMarketplaceError: "",
+      promptPlazaSection: "library",
       promptPlazaType: "script",
       promptPlazaQuery: "仙侠",
       promptMarketplacePage: 2,
@@ -656,7 +657,7 @@ test("prompt marketplace keeps a newer page response when an older request finis
   assert.equal(workbench.ui.promptMarketplacePage, 2);
 });
 
-test("prompt marketplace schedules its first load after a direct refresh", async () => {
+test("prompt marketplace defers the private library while the public marketplace is active", async () => {
   let catalogRequestCount = 0;
   let libraryRequestCount = 0;
   const workbench = {
@@ -689,9 +690,91 @@ test("prompt marketplace schedules its first load after a direct refresh", async
 
   await scheduleLazySurfaceLoadForTest(workbench);
   assert.equal(catalogRequestCount, 1);
-  assert.equal(libraryRequestCount, 1);
+  assert.equal(libraryRequestCount, 0);
   assert.equal(workbench.ui.promptMarketplaceLoading, false);
   assert.deepEqual(workbench.ui.promptMarketplaceItems, [{ id: "catalog-item" }]);
   assert.deepEqual(workbench.ui.promptMarketplaceRankings, [{ id: "ranked-item" }]);
-  assert.deepEqual(workbench.ui.promptMarketplaceLibrary, [{ id: "library-item" }]);
+  assert.deepEqual(workbench.ui.promptMarketplaceLibrary, []);
+});
+
+test("prompt marketplace loads the editable private library when its section is opened", async () => {
+  let catalogRequestCount = 0;
+  let libraryRequestCount = 0;
+  const workbench = {
+    root: { innerHTML: "", querySelector() { return null; } },
+    state: {},
+    session: { user: { id: "user-1" } },
+    api: {
+      getPromptMarketplace: async () => {
+        catalogRequestCount += 1;
+        return { items: [], ranking: [], pagination: { page: 1, pageSize: 12, total: 0, totalPages: 1 } };
+      },
+      getPromptMarketplaceLibrary: async () => {
+        libraryRequestCount += 1;
+        return { items: [{ id: "owned-prompt", owned: true, contentVisible: true, content: "作者可编辑的提示词正文" }] };
+      },
+    },
+    ui: {
+      activeNavTab: "prompts",
+      promptPlazaSection: "marketplace",
+      promptPlazaType: "all",
+      promptPlazaQuery: "",
+      promptMarketplacePage: 1,
+      promptMarketplaceMeta: { page: 1, pageSize: 12 },
+      promptMarketplaceItems: [],
+      promptMarketplaceRankings: [],
+      promptMarketplaceLibrary: [],
+      promptMarketplaceLoading: false,
+      promptMarketplaceError: "",
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, { dataset: { action: "set-prompt-plaza-section", section: "library" } });
+
+  assert.equal(workbench.ui.promptPlazaSection, "library");
+  assert.equal(catalogRequestCount, 1);
+  assert.equal(libraryRequestCount, 1);
+  assert.deepEqual(workbench.ui.promptMarketplaceLibrary, [{ id: "owned-prompt", owned: true, contentVisible: true, content: "作者可编辑的提示词正文" }]);
+});
+
+test("anonymous prompt marketplace loads the public catalog without requesting the private library", async () => {
+  let catalogRequestCount = 0;
+  let libraryRequestCount = 0;
+  const workbench = {
+    api: {
+      getPromptMarketplace: async () => {
+        catalogRequestCount += 1;
+        return {
+          items: [{ id: "public-prompt" }],
+          ranking: [{ id: "public-ranked-prompt" }],
+          pagination: { page: 1, pageSize: 12, total: 1, totalPages: 1 },
+        };
+      },
+      getPromptMarketplaceLibrary: async () => {
+        libraryRequestCount += 1;
+        throw new Error("unauthenticated");
+      },
+    },
+    session: { authenticated: false, user: { id: "", phone: "" } },
+    ui: {
+      promptPlazaType: "all",
+      promptPlazaQuery: "",
+      promptMarketplacePage: 1,
+      promptMarketplaceMeta: { page: 1, pageSize: 12 },
+      promptMarketplaceItems: [],
+      promptMarketplaceRankings: [],
+      promptMarketplaceLibrary: [],
+      promptMarketplaceLoading: false,
+      promptMarketplaceError: "",
+    },
+  };
+
+  await syncPromptMarketplaceForTest(workbench);
+
+  assert.equal(catalogRequestCount, 1);
+  assert.equal(libraryRequestCount, 0);
+  assert.deepEqual(workbench.ui.promptMarketplaceItems, [{ id: "public-prompt" }]);
+  assert.deepEqual(workbench.ui.promptMarketplaceRankings, [{ id: "public-ranked-prompt" }]);
+  assert.deepEqual(workbench.ui.promptMarketplaceLibrary, []);
+  assert.equal(workbench.ui.promptMarketplaceError, "");
 });

@@ -95,6 +95,7 @@ export function ensureCanvasAgentState(ui = {}) {
     taskCenterError: "",
     memoryEvents: [],
     skippedStepIds: [],
+    rewindConfirmOpen: false,
     sequence: 0,
     busyAction: "",
     error: "",
@@ -248,6 +249,7 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
     <div class="new-canvas-layout ${agentPanelClosed ? "is-agent-collapsed" : ""}" style="--canvas-agent-panel-width:${agentPanelWidth}px">
       <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
       ${sessionReady ? renderCanvasAgentPanel(ui) : ""}
+      ${sessionReady ? renderCanvasAgentRewindConfirmModal(ui) : ""}
       ${auxiliaryMarkup}
     </div>
   `;
@@ -255,6 +257,28 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
 
 function renderCanvasAgentReopenButton() {
   return `<button type="button" class="canvas-agent-reopen" data-agent-action="open-agent-panel" aria-label="展开 Agent 面板" title="展开 Agent 面板">${renderAgentHeaderIcon("open")}</button>`;
+}
+
+function renderCanvasAgentRewindConfirmModal(ui = {}) {
+  if (ui.canvasAgent?.rewindConfirmOpen !== true) return "";
+  return `
+    <section class="modal-backdrop delete-project-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="canvas-agent-rewind-confirm-title" aria-describedby="canvas-agent-rewind-confirm-description">
+      <div class="delete-project-modal asset-delete-modal">
+        <div class="delete-project-head">
+          <div class="delete-project-icon warning" aria-hidden="true">!</div>
+          <div>
+            <h2 id="canvas-agent-rewind-confirm-title">回退最近检查点</h2>
+            <p id="canvas-agent-rewind-confirm-description">将按最近检查点创建补偿 revision，确定回退吗？</p>
+          </div>
+          <button class="modal-close" type="button" data-agent-action="cancel-rewind" aria-label="关闭">×</button>
+        </div>
+        <div class="delete-project-actions">
+          <button class="secondary-action delete-cancel-button" type="button" data-agent-action="cancel-rewind">取消</button>
+          <button class="delete-confirm-button" type="button" data-agent-action="confirm-rewind">确定回退</button>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 export function resolveCanvasAgentPanelMaxWidth() {
@@ -1552,6 +1576,32 @@ export function createCanvasAgentController({
         await run(action, () => control("replan", { reason: agent.interjectionDraft || "user_requested" }));
         return true;
       }
+      if (action === "rewind") {
+        agent.rewindConfirmOpen = true;
+        if (typeof renderLayout === "function") await renderLayout();
+        else syncPanel();
+        return true;
+      }
+      if (action === "cancel-rewind") {
+        agent.rewindConfirmOpen = false;
+        if (typeof renderLayout === "function") await renderLayout();
+        else syncPanel();
+        return true;
+      }
+      if (action === "confirm-rewind") {
+        agent.rewindConfirmOpen = false;
+        if (typeof renderLayout === "function") await renderLayout();
+        else syncPanel();
+        await run("rewind", async () => {
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          if (!canvasId || !agent.taskId || typeof workbench.api?.rewindCanvasAgentTask !== "function") {
+            throw new Error("canvas_agent_rewind_unavailable");
+          }
+          await workbench.api.rewindCanvasAgentTask(canvasId, agent.taskId, {});
+          await poll();
+        });
+        return true;
+      }
       if (action === "interject" || action === "interject-prompt") {
         await run(action, async () => {
           const fromPrompt = action === "interject-prompt";
@@ -1580,18 +1630,6 @@ export function createCanvasAgentController({
             agent.promptNodeReferences = [];
           }
           else agent.interjectionDraft = "";
-        });
-        return true;
-      }
-      if (action === "rewind") {
-        if (typeof globalThis.window?.confirm === "function" && !globalThis.window.confirm("将按最近检查点创建补偿 revision，确定回退吗？")) return true;
-        await run(action, async () => {
-          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
-          if (!canvasId || !agent.taskId || typeof workbench.api?.rewindCanvasAgentTask !== "function") {
-            throw new Error("canvas_agent_rewind_unavailable");
-          }
-          await workbench.api.rewindCanvasAgentTask(canvasId, agent.taskId, {});
-          await poll();
         });
         return true;
       }

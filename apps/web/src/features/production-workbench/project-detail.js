@@ -9369,7 +9369,12 @@ export function renderCanvasProjectGallery(ui = {}) {
       </header>
       <div class="canvas-project-card-grid">
         ${visibleProjects.length
-          ? visibleProjects.map((project) => renderCanvasProjectCard(project, ui.canvasProjectMenuId === project.id, !isTeamMember)).join("")
+          ? visibleProjects.map((project) => renderCanvasProjectCard(
+            project,
+            ui.canvasProjectMenuId === project.id,
+            !isTeamMember,
+            String(ui.canvasOpeningProjectId ?? "") === String(project.id ?? ""),
+          )).join("")
           : searchQuery
             ? `<p class="canvas-project-empty">没有匹配“${escapeHtml(String(ui.canvasProjectSearchQuery ?? "").trim())}”的画布</p>`
             : isTeamMember
@@ -9465,16 +9470,19 @@ function resolveRecentCanvasProjects(ui = {}) {
     .slice(0, 5);
 }
 
-function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = true) {
+function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = true, opening = false) {
+  const openingAttrs = opening ? ' class="canvas-project-card-open is-opening" data-canvas-project-opening="true" disabled aria-busy="true"' : ' class="canvas-project-card-open"';
+  const openingTitleAttrs = opening ? ' disabled aria-busy="true"' : "";
   return `
     <article class="canvas-project-card">
-      <button class="canvas-project-card-open" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+      <button${openingAttrs} type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
         <span class="canvas-project-cover" aria-hidden="true">
           <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
+          ${opening ? '<span class="canvas-project-opening-label">正在打开画布</span>' : ""}
         </span>
       </button>
       <div class="canvas-project-card-copy">
-        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
+        <button class="canvas-project-title" type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}"${openingTitleAttrs}>
           <strong>${escapeHtml(project.title ?? "画布项目")}</strong>
         </button>
         <div class="canvas-project-card-row">

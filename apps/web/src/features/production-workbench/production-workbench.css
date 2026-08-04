@@ -8006,7 +8006,11 @@
   width: 100%;
   min-height: calc(100dvh - 6rem);
   padding: 0.75rem;
-  background: #0b0d10;
+  background: #08111b;
+}
+
+.new-canvas-loading-skeleton > * {
+  visibility: hidden;
 }
 
 .new-canvas-loading-skeleton > span,
@@ -8144,10 +8148,25 @@
   transform: translateY(-0.18rem);
 }
 
+.canvas-project-card-open:disabled {
+  cursor: wait;
+}
+
+.canvas-project-card-open.is-opening .canvas-project-cover {
+  transform: none;
+}
+
 .canvas-project-cover {
   display: grid;
   place-items: center;
   transition: transform 160ms ease;
+}
+
+.canvas-project-opening-label {
+  margin-top: 0.46rem;
+  color: rgba(228, 232, 255, 0.92);
+  font-size: 0.72rem;
+  font-weight: 760;
 }
 
 .canvas-project-play {

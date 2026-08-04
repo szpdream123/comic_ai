@@ -937,7 +937,7 @@ export function createAdminModelConfigService(deps: {
         ],
       );
     }
-    const probeOk = !probeError && (canvasAgentProbeResult?.ok ?? true);
+    const probeOk = canvasAgentProbeResult?.ok ?? true;
     await appendAuditEvent(deps.db, {
       actorUserId: null,
       actorAdminAccountId: input.actorAdminAccountId,

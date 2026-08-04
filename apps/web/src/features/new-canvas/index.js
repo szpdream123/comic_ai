@@ -137,8 +137,8 @@ function appendStyles(shadowRoot, styleHrefs) {
   criticalStyle.textContent = `
     :host { display: block; min-height: 100%; background: #08111b; }
     .new-canvas-root { visibility: hidden !important; }
-    [data-new-canvas-style-gate] { display: grid; grid-template-columns: 4rem minmax(0, 1fr) minmax(12rem, 18rem); gap: .75rem; min-height: calc(100dvh - 6rem); padding: .75rem; box-sizing: border-box; }
-    [data-new-canvas-style-gate] > span { min-width: 0; border: 1px solid rgba(255, 255, 255, .06); border-radius: 6px; background: rgba(255, 255, 255, .035); }
+    [data-new-canvas-style-gate] { display: block; min-height: calc(100dvh - 6rem); background: #08111b; }
+    [data-new-canvas-style-gate] > * { visibility: hidden; }
   `;
   const loadingGate = document.createElement("div");
   loadingGate.dataset.newCanvasStyleGate = "true";

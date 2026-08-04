@@ -49,7 +49,7 @@ const [
 
 const config = loadGenerationQueueConfig(process.env);
 const failedImageSubmissionRepairBatchLimit = 100;
-const db = await createDevDb();
+const db = await createGenerationMaintenanceDb();
 const publisher = createBullMQGenerationPublisher(config);
 const assignmentInspector = createBullMQGenerationQueueAssignmentInspector(config);
 const adminRecoveryJobOps = createGenerationQueueAdminRecoveryJobOps(db, config);
@@ -80,6 +80,22 @@ function requestStop(signal) {
 console.info(
   `[generation-maintenance] Scheduler started. batch=${config.outbox.dispatchBatchSize} intervalMs=${config.outbox.dispatchIntervalMs}`,
 );
+
+async function createGenerationMaintenanceDb() {
+  try {
+    return await createDevDb();
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.includes("Connection terminated due to connection timeout")
+    ) {
+      throw error;
+    }
+    console.warn("[generation-maintenance] PostgreSQL initialization timed out; retrying once in 500ms.");
+    await sleep(500);
+    return createDevDb();
+  }
+}
 
 try {
   while (!stopping) {

@@ -6,6 +6,26 @@ import type { AuthSession } from "./session.service.ts";
 const cacheVersion = 1;
 const defaultTtlSeconds = 300;
 
+const readSessionIdentityScript = `
+  local denied = redis.call('GET', KEYS[1])
+  if denied then return { 1 } end
+
+  local raw = redis.call('GET', KEYS[2])
+  if not raw then return { 0 } end
+
+  local decoded, envelope = pcall(cjson.decode, raw)
+  if not decoded or type(envelope) ~= 'table' or type(envelope.user) ~= 'table' or not envelope.user.id then
+    return { 3 }
+  end
+
+  if redis.call('GET', 'auth:block:user:v1:' .. envelope.user.id) then return { 1 } end
+
+  local member = envelope.user.teamMember
+  if type(member) == 'table' and member.id and redis.call('GET', 'auth:block:member:v1:' .. member.id) then return { 1 } end
+
+  return { 2, raw }
+`;
+
 export interface CachedAuthIdentity {
   session: AuthSession;
   user: {
@@ -41,6 +61,7 @@ export interface AuthSessionCache {
 
 interface RedisAuthCacheClient {
   get(key: string): Promise<string | null>;
+  eval?(script: string, numberOfKeys: number, ...args: string[]): Promise<unknown>;
   set(key: string, value: string, ...args: Array<string | number>): Promise<unknown>;
   del(...keys: string[]): Promise<number>;
   sadd(key: string, ...members: string[]): Promise<number>;
@@ -79,6 +100,36 @@ export function createAuthSessionCache(
     async get(token, now) {
       const tokenHash = hashSecret(token);
       try {
+        const atomicResult = redis.eval
+          ? parseAtomicSessionIdentityResult(await redis.eval(
+              readSessionIdentityScript,
+              2,
+              denyKey(tokenHash),
+              sessionKey(tokenHash),
+            ))
+          : undefined;
+        if (atomicResult?.kind === "denied") {
+          return null;
+        }
+        if (atomicResult?.kind === "missing") {
+          return undefined;
+        }
+        if (atomicResult?.kind === "invalid") {
+          await redis.del(sessionKey(tokenHash));
+          return undefined;
+        }
+        if (atomicResult?.kind === "found") {
+          const envelope = parseEnvelope(atomicResult.raw);
+          if (!isValidEnvelope(envelope, tokenHash, now)) {
+            await redis.del(sessionKey(tokenHash));
+            return undefined;
+          }
+          return {
+            session: envelope.session,
+            user: envelope.user,
+          };
+        }
+
         const [denied, raw] = await Promise.all([
           redis.get(denyKey(tokenHash)),
           redis.get(sessionKey(tokenHash)),
@@ -194,6 +245,23 @@ export function createAuthSessionCache(
       }
     },
   };
+}
+
+function parseAtomicSessionIdentityResult(value: unknown):
+  | { kind: "missing" }
+  | { kind: "denied" }
+  | { kind: "found"; raw: string }
+  | { kind: "invalid" }
+  | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const kind = Number(value[0]);
+  if (kind === 0) return { kind: "missing" };
+  if (kind === 1) return { kind: "denied" };
+  if (kind === 2 && typeof value[1] === "string") return { kind: "found", raw: value[1] };
+  if (kind === 3) return { kind: "invalid" };
+  return undefined;
 }
 
 function parseEnvelope(raw: string): CachedAuthIdentityEnvelope | undefined {

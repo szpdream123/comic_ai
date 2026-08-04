@@ -21108,6 +21108,16 @@ export function createPhoneAuthDevServer(
         }
 
         await ensureDevUserAccess(db, verified.user.id, options);
+        void authSessionCache?.set(verified.token, {
+          session: verified.session,
+          user: {
+            id: verified.user.id,
+            phone: verified.user.phone,
+            displayName: verified.user.displayName ?? null,
+            actorType: "user",
+            teamMember: null,
+          },
+        }, now);
 
         if (verified.isNewUser) {
           const inviteCode = String(body.inviteCode ?? "").trim();
@@ -21172,6 +21182,16 @@ export function createPhoneAuthDevServer(
         }
 
         await ensureDevUserAccess(db, verified.user.id, options);
+        void authSessionCache?.set(verified.token, {
+          session: verified.session,
+          user: {
+            id: verified.user.id,
+            phone: verified.user.phone,
+            displayName: verified.user.displayName ?? null,
+            actorType: "team_member",
+            teamMember: verified.member,
+          },
+        }, now);
 
         return writeJson(response, {
           status: 200,
@@ -21223,6 +21243,16 @@ export function createPhoneAuthDevServer(
             return writeJson(response, { status, body: { error: memberVerified.kind } });
           }
           await ensureDevUserAccess(db, memberVerified.user.id, options);
+          void authSessionCache?.set(memberVerified.token, {
+            session: memberVerified.session,
+            user: {
+              id: memberVerified.user.id,
+              phone: memberVerified.user.phone,
+              displayName: memberVerified.user.displayName ?? null,
+              actorType: "team_member",
+              teamMember: memberVerified.member,
+            },
+          }, now);
           return writeJson(response, {
             status: 200,
             body: {
@@ -21273,6 +21303,16 @@ export function createPhoneAuthDevServer(
         }
 
         await ensureDevUserAccess(db, verified.user.id, options);
+        void authSessionCache?.set(verified.token, {
+          session: verified.session,
+          user: {
+            id: verified.user.id,
+            phone: verified.user.phone,
+            displayName: verified.user.displayName ?? null,
+            actorType: "user",
+            teamMember: null,
+          },
+        }, now);
 
         return writeJson(response, {
           status: 200,
@@ -21514,24 +21554,24 @@ export function createPhoneAuthDevServer(
           authSessionCache,
           { includeCredit: false },
         );
-        if (!authenticated) {
-          return writeJson(response, {
-            status: 401,
-            body: { error: { code: "unauthenticated", message: "请先登录" } },
-          });
-        }
         const service = createPromptMarketplaceService({ db });
         try {
           if (request.method === "GET" && pathname === "/api/creator/prompt-marketplace") {
             return writeJson(response, {
               status: 200,
               body: await service.listCatalog({
-                userId: authenticated.user.id,
+                userId: authenticated?.user.id ?? null,
                 category: url.searchParams.get("category"),
                 query: url.searchParams.get("query"),
                 page: Number(url.searchParams.get("page") ?? 1),
                 pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 12),
               }),
+            });
+          }
+          if (!authenticated) {
+            return writeJson(response, {
+              status: 401,
+              body: { error: { code: "unauthenticated", message: "请先登录" } },
             });
           }
           if (request.method === "GET" && pathname === "/api/creator/prompt-marketplace/library") {
