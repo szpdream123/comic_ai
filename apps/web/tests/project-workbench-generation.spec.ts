@@ -72,6 +72,7 @@ import {
   syncCanvasRouteStateForTest,
   syncEpisodeStoryboardMapForTest,
   syncEpisodeWorkbenchAssetStageStateDomForTest,
+  syncEpisodeWorkbenchPromptSubmissionStateDomForTest,
   syncEpisodeAssetDescriptionState,
   updatePromptMentionState,
   updateStoryboardDescriptionFromInputForTest,
@@ -7671,6 +7672,7 @@ describe("workbench generation payloads and inspectors", () => {
     };
     const activeTaskId = "active-video-task-from-another-tab";
     let includeActiveTaskId = true;
+    let draftWhileSubmitting = null;
     const workbench = {
       state: {
         project: { id: "project-target-busy", aspectRatio: "16:9", resolution: "1080p" },
@@ -7685,6 +7687,9 @@ describe("workbench generation payloads and inspectors", () => {
       },
       api: {
         async createVideoTask() {
+          if (draftWhileSubmitting) {
+            workbench.ui.prompt = draftWhileSubmitting;
+          }
           const error = new Error("当前分镜已有视频生成任务进行中，请等待完成后再试。");
           error.status = 409;
           error.errorCode = "generation_target_busy";
@@ -7766,13 +7771,14 @@ describe("workbench generation payloads and inspectors", () => {
       workbench.ui.taskCenterTasksById = {};
       workbench.ui.generationPollingActive = false;
       workbench.ui.prompt = "另一个子账户不能丢失的草稿";
+      draftWhileSubmitting = "提交期间新写的下一条草稿";
       await generateStoryboardVideos(workbench);
     } finally {
       globalThis.window = previousWindow;
     }
 
     const updatedStoryboard = workbench.ui.episodeStoryboardMap["episode-target-busy"][0];
-    assert.equal(workbench.ui.prompt, "另一个子账户不能丢失的草稿");
+    assert.equal(workbench.ui.prompt, "提交期间新写的下一条草稿");
     assert.equal(workbench.ui.videoGenerationResult, null);
     assert.equal(updatedStoryboard.generationState.lastSubmission, null);
     assert.equal(workbench.ui.taskCenterTasksById[activeTaskId], undefined);
@@ -21804,7 +21810,7 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /episode-replica-generate-label">生成中<\/strong>/);
   });
 
-  it("marks the current composer as generating while its selected task is pending", () => {
+  it("keeps the current prompt editor interactive while its selected task is pending", () => {
     const storyboards = addStoryboard([]);
     for (const status of ["running", "external_submitted"]) {
       const html = renderProductionWorkbench({
@@ -21838,8 +21844,78 @@ describe("production workbench project tab", () => {
 
       assert.match(html, /<button class="episode-replica-generate"[^>]*data-action="generate-videos"[^>]*disabled/);
       assert.match(html, /episode-replica-generate-label">生成中<\/strong>/);
-      assert.match(html, /<section class="episode-replica-prompt[^>]*\sinert(?:\s|>)/);
+      assert.match(html, /<section class="episode-replica-prompt[^>]*\saria-busy="true"/);
+      assert.doesNotMatch(html, /<section class="episode-replica-prompt[^>]*\sinert(?:\s|>)/);
     }
+  });
+
+  it("syncs the preserved prompt dock submit state across the generation lifecycle", () => {
+    const createDock = ({ busy, label }) => {
+      const dockAttributes = new Map(busy ? [["aria-busy", "true"]] : []);
+      const buttonAttributes = new Map(busy ? [["disabled", ""]] : []);
+      const labelNode = { textContent: label };
+      const button = {
+        disabled: busy,
+        hasAttribute(name) {
+          return buttonAttributes.has(name);
+        },
+        setAttribute(name, value) {
+          buttonAttributes.set(name, value);
+        },
+        removeAttribute(name) {
+          buttonAttributes.delete(name);
+        },
+        querySelector(selector) {
+          return selector === ".episode-replica-generate-label" ? labelNode : null;
+        },
+      };
+      const dock = {
+        hasAttribute(name) {
+          return dockAttributes.has(name);
+        },
+        getAttribute(name) {
+          return dockAttributes.get(name) ?? null;
+        },
+        setAttribute(name, value) {
+          dockAttributes.set(name, value);
+        },
+        removeAttribute(name) {
+          dockAttributes.delete(name);
+        },
+        querySelector(selector) {
+          return selector === ".episode-replica-generate" ? button : null;
+        },
+      };
+      return { dock, button, labelNode };
+    };
+
+    const current = createDock({ busy: false, label: "生成" });
+    current.dock.setAttribute("inert", "");
+    const pending = createDock({ busy: true, label: "生成中" });
+    syncEpisodeWorkbenchPromptSubmissionStateDomForTest(current.dock, pending.dock);
+    assert.equal(current.dock.hasAttribute("inert"), false);
+    assert.equal(current.dock.getAttribute("aria-busy"), "true");
+    assert.equal(current.button.disabled, true);
+    assert.equal(current.button.hasAttribute("disabled"), true);
+    assert.equal(current.labelNode.textContent, "生成中");
+
+    const terminal = createDock({ busy: false, label: "生成" });
+    syncEpisodeWorkbenchPromptSubmissionStateDomForTest(current.dock, terminal.dock);
+    assert.equal(current.dock.hasAttribute("aria-busy"), false);
+    assert.equal(current.button.disabled, false);
+    assert.equal(current.button.hasAttribute("disabled"), false);
+    assert.equal(current.labelNode.textContent, "生成");
+
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    assert.match(source, /if \(options\.submissionStateOnly === true\) \{\s*return;/);
+    assert.match(
+      source,
+      /renderEpisodeWorkbenchHydratedSurfacesOnly\(workbench, \{ submissionStateOnly: true \}\)/,
+    );
+    assert.match(source, /context:\s*\{\s*episodeId:[\s\S]*?storyboardId:[\s\S]*?scopeMode:[\s\S]*?mediaMode:/);
   });
 
   it("blocks the current storyboard from authoritative task-center state even when global polling is false", () => {
@@ -22142,6 +22218,7 @@ describe("production workbench project tab", () => {
       },
     ];
     const createImageGenerationTaskCalls = [];
+    let duplicateGenerationPromise = null;
     let calibrationCalls = 0;
     const workbench = {
       state,
@@ -22153,6 +22230,10 @@ describe("production workbench project tab", () => {
         async createImageGenerationTask(payload) {
           const episodeId = payload?.target?.episodeId;
           createImageGenerationTaskCalls.push({ episodeId, payload });
+          if (createImageGenerationTaskCalls.length === 1) {
+            workbench.ui.prompt = "生成期间新写的下一条生图草稿";
+            duplicateGenerationPromise = generateStoryboardImages(workbench);
+          }
           return {
             taskId: "storyboard-image-task-1",
             status: "queued",
@@ -22208,6 +22289,7 @@ describe("production workbench project tab", () => {
     };
     try {
       await generateStoryboardImages(workbench);
+      await duplicateGenerationPromise;
     } finally {
       globalThis.window = previousWindow;
     }
@@ -22219,6 +22301,7 @@ describe("production workbench project tab", () => {
     assert.equal(createImageGenerationTaskCalls[0].payload.target.kind, "storyboard");
     assert.equal(createImageGenerationTaskCalls[0].payload.target.targetId, "10000000-0000-4000-8000-000000000101");
     assert.equal(workbench.ui.imageGenerationResult.taskId, "storyboard-image-task-1");
+    assert.equal(workbench.ui.prompt, "生成期间新写的下一条生图草稿");
   });
 
   it("submits the storyboard generator modal while another workbench action is busy", async () => {
@@ -41558,6 +41641,23 @@ describe("production workbench project tab", () => {
     assert.match(html, /episode-replica-lipsync-voice-chip/);
     assert.match(html, /女\/稚嫩/);
     assert.match(html, /00:04/);
+  });
+
+  it("keeps the lip-sync prompt editor interactive while generation is pending", () => {
+    const storyboards = addStoryboard([]);
+    const html = renderPromptDock({
+      selectedStoryboard: storyboards[0],
+      prompt: "叶尘也在其中。",
+      busy: false,
+      generationPollingActive: true,
+      generationControls: {},
+      generationUiState: {},
+      mediaMode: "lip-sync",
+    });
+
+    assert.match(html, /<section class="episode-replica-prompt lip-sync-mode"[^>]*\saria-busy="true"/);
+    assert.doesNotMatch(html, /<section class="episode-replica-prompt lip-sync-mode"[^>]*\sinert(?:\s|>)/);
+    assert.match(html, /<button class="episode-replica-generate"[^>]*data-action="generate-videos"[^>]*disabled/);
   });
 
   it("renders episode voice modal from project detail audio assets without system placeholders", () => {

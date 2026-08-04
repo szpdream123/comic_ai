@@ -2824,7 +2824,7 @@ export function renderPromptDock({
   const generateCostLabel = !isVideoMode && selectedImageStyleCredits > 0
     ? `${modelGenerateCost} + ${selectedImageStyleCredits}积分`
     : String(generateCost);
-  const interactionLocked = Boolean(busy || generationPollingActive);
+  const interactionBusy = Boolean(busy || generationPollingActive);
   const contextSummary =
     scopeMode === "assets"
       ? ""
@@ -2833,7 +2833,7 @@ export function renderPromptDock({
         : "分镜：";
 
   return `
-    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionLocked ? 'inert aria-busy="true"' : ""}>
+    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
       ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
       ${
@@ -3201,7 +3201,7 @@ function renderLipSyncDock({
     ? generationUiState.lipSyncAudioItems
     : (attachments ?? []).filter((item) => item?.type === "audio" || item?.kind === "audio"));
   return `
-    <section class="episode-replica-prompt lip-sync-mode" ${busy || generationPollingActive ? 'inert aria-busy="true"' : ""}>
+    <section class="episode-replica-prompt lip-sync-mode" ${busy || generationPollingActive ? 'aria-busy="true"' : ""}>
       <div class="episode-replica-stage-head lip-sync-head">
         <p class="episode-replica-stage-title">配音内容</p>
       </div>
