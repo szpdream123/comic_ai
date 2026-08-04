@@ -1487,6 +1487,12 @@ function renderTaskCenterDetail(task) {
   const resultText = resolveTaskCenterResultText(task);
   const failure = taskCenterFailureMessage(task);
   const modelName = String(task.modelName ?? "").trim();
+  const recoveryState = String(task.recoveryState ?? "").trim().toLowerCase();
+  const recoveryRound = Math.max(0, Number(task.recoveryRound ?? 0));
+  const showArtifactRecovery = task.providerSucceeded === true && ["retry_pending", "manual_review"].includes(recoveryState);
+  const recoveryMessage = recoveryState === "manual_review"
+    ? `供应商已完成生成；图片保存仍未完成，已转人工处理${recoveryRound ? `（第 ${recoveryRound} 轮）` : ""}。`
+    : `供应商已完成生成；正在恢复图片保存${recoveryRound ? `（第 ${recoveryRound} 轮）` : ""}。`;
   return `
     <section class="task-center-detail" aria-label="任务详情">
       <header class="task-center-detail-header">
@@ -1506,6 +1512,7 @@ function renderTaskCenterDetail(task) {
           ? `<pre>${escapeHtml(resultText)}</pre>`
           : `<div class="task-center-result-empty">${status.tone === "active" ? "正在生成" : "暂无生成内容"}</div>`}
       </div>
+      ${showArtifactRecovery ? `<div class="task-center-failure task-center-recovery"><span class="task-center-section-label">结果恢复</span><p>${escapeHtml(recoveryMessage)}</p></div>` : ""}
       ${failure ? `<div class="task-center-failure"><span class="task-center-section-label">${status.label === "待复核" ? "复核说明" : "失败原因"}</span><p>${escapeHtml(failure)}</p></div>` : ""}
       <dl class="task-center-metadata">
         ${renderTaskCenterMeta("项目", [task.projectName, task.episodeTitle].filter(Boolean).join(" / ") || "-")}
@@ -1513,6 +1520,8 @@ function renderTaskCenterDetail(task) {
         ${renderTaskCenterMeta("任务类型", taskCenterKindLabel(task))}
         ${renderTaskCenterMeta("提交时间", formatTaskCenterTime(task.submittedAt ?? task.createdAt))}
         ${renderTaskCenterMeta("开始时间", formatTaskCenterTime(task.startedAt))}
+        ${showArtifactRecovery && recoveryState === "retry_pending" ? renderTaskCenterMeta("下次恢复", formatTaskCenterTime(task.nextRetryAt)) : ""}
+        ${showArtifactRecovery ? renderTaskCenterMeta("恢复截止", formatTaskCenterTime(task.recoveryDeadlineAt)) : ""}
         ${renderTaskCenterMeta("返回时间", formatTaskCenterTime(task.returnedAt ?? task.completedAt ?? task.failedAt))}
         ${renderTaskCenterMeta("总耗时", formatTaskCenterDuration(task))}
       </dl>

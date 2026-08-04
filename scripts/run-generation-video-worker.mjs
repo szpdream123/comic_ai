@@ -19,6 +19,7 @@ const [
   { createStorageAdapterFromEnv },
   { buildGenerationBullMQJobId, createBullMQGenerationPublisher, publishGenerationDeadLetter },
   { handleGenerationFinalizeArtifactJob, handleGenerationPollAudioJob, handleGenerationPollImageJob, handleGenerationPollVideoJob, handleGenerationSubmitAudioJob, handleGenerationSubmitImageJob, handleGenerationSubmitVideoJob },
+  { handleGptImageArtifactQueueExhaustion },
   { failGenerationTaskAfterQueueError },
   { loadGenerationQueueConfig },
   { hasReleasedGenerationQueueStageAssignment, listGenerationQueueShards, markGenerationQueueStagePublished, releaseGenerationQueueStage, reserveGenerationQueueStageForPublish },
@@ -40,6 +41,7 @@ const [
   import("../apps/backend/src/modules/storage/storage-adapter.factory.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-bullmq.worker.ts"),
+  import("../apps/backend/src/modules/model-gateway/gpt-image-artifact-recovery.service.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-redis-repair.service.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue.config.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-queue-shard.store.ts"),
@@ -642,6 +644,15 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
     const sourceAssignmentKey = typeof job?.data?.queueAssignmentKey === "string"
       ? job.data.queueAssignmentKey.trim()
       : "";
+    if (artifactQueueFailure && job?.data?.mediaType === "image") {
+      const imageRecoveryOutcome = await runWithDatabaseContext(() =>
+        handleGptImageArtifactQueueExhaustion(db, {
+          taskId,
+          error,
+          now: failedAt,
+        }));
+      if (imageRecoveryOutcome !== "skipped") return;
+    }
     await runWithDatabaseContext(() => failGenerationTaskAfterQueueError(db, {
       taskId,
       ...(sourceAssignmentKey ? { sourceAssignmentKey } : {}),
