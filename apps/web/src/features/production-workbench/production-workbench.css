@@ -32065,6 +32065,27 @@ body.is-episode-layout-resizing {
   text-overflow: ellipsis;
 }
 
+.episode-replica-asset-name-input {
+  width: calc(100% - 1.8rem);
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  cursor: text;
+}
+
+.episode-replica-asset-name-input:hover {
+  background: var(--theme-control-hover-background, rgba(255, 255, 255, 0.04));
+}
+
+.episode-replica-asset-name-input:focus {
+  border-color: var(--theme-control-active-border, rgba(145, 214, 255, 0.48));
+  background: var(--theme-control-active-background, rgba(145, 214, 255, 0.08));
+  box-shadow: 0 0 0 1px var(--theme-control-active-border, rgba(145, 214, 255, 0.48));
+}
+
 .episode-replica-asset-card .title {
   top: 0.04rem;
   right: 0;

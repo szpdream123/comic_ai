@@ -746,9 +746,9 @@ function renderAssetCard(asset, assetKind, active, checked) {
     >
       <div class="episode-replica-asset-card-head">
         <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
-        <button class="episode-replica-asset-select" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">
-          <strong class="name">${escapeHtml(asset?.name ?? "测试素材")}</strong>
-        </button>
+        <label class="episode-replica-asset-select">
+          <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题" />
+        </label>
         <button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button" data-action="quick-append-selected-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">引入到对话框</button>
         <span class="episode-replica-asset-hover-tools" aria-hidden="true">
           <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>

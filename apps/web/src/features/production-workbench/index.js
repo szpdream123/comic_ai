@@ -3487,6 +3487,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       await saveEpisodeAssetDescription(workbench, assetKind, assetId, target.value);
       return;
     }
+    if (target?.matches?.(".episode-replica-asset-name-input")) {
+      const assetId = target.dataset.assetId ?? "";
+      const assetKind = target.dataset.assetKind ?? "character";
+      await saveEpisodeAssetName(workbench, assetKind, assetId, target.value);
+      return;
+    }
     if (
       target?.matches?.("#video-prompt-input") &&
       !target.hasAttribute?.("data-tiptap-prompt-editor") &&
@@ -30257,6 +30263,10 @@ export function saveEpisodeAssetDescriptionForTest(workbench, assetKind, assetId
   return saveEpisodeAssetDescription(workbench, assetKind, assetId, value);
 }
 
+export function saveEpisodeAssetNameForTest(workbench, assetKind, assetId, value) {
+  return saveEpisodeAssetName(workbench, assetKind, assetId, value);
+}
+
 export function isNativeMediaControlInteractionForTest(eventTarget, event) {
   return isNativeMediaControlInteraction(eventTarget, event);
 }
@@ -39878,7 +39888,7 @@ function resolveEpisodeAssetSelectionContextFromDom(workbench) {
   return {
     assetTab,
     selectedAssetId,
-    selectedAssetName: nameNode?.textContent?.trim() ?? null,
+    selectedAssetName: nameNode?.value?.trim() ?? nameNode?.textContent?.trim() ?? null,
     selectedAssetDescription: descriptionInput?.value?.trim() ?? null,
     selectedAssetPreview: previewImage?.getAttribute("src")?.trim() ?? null,
     selectedAssetPreviewMarkup: previewMarkup,
@@ -50485,6 +50495,48 @@ async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value)
     }
   }
 
+  render(workbench);
+}
+
+async function saveEpisodeAssetName(workbench, assetKind, assetId, value) {
+  const name = String(value ?? "").trim();
+  const currentAssets = assetKind === "other"
+    ? workbench.ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
+    : workbench.ui.importedAssets?.[assetKind] ?? [];
+  const targetAsset =
+    currentAssets.find((item) => matchesAssetRecordId(item, assetId)) ??
+    collectEpisodeAssetCandidates(workbench, assetKind).find((item) => matchesAssetRecordId(item, assetId)) ??
+    null;
+  if (!targetAsset) {
+    return;
+  }
+  if (!name) {
+    workbench.ui.toast = "资产名称不能为空。";
+    render(workbench);
+    return;
+  }
+
+  const shouldPersist =
+    isRealEpisodeWorkbench(workbench) &&
+    typeof workbench.api.updateEpisodeAsset === "function" &&
+    workbench.ui.selectedEpisodeId &&
+    (targetAsset.assetId || isUuidLike(assetId));
+  if (shouldPersist) {
+    try {
+      await workbench.api.updateEpisodeAsset(
+        workbench.ui.selectedEpisodeId,
+        targetAsset.assetId ?? assetId,
+        { name },
+      );
+    } catch (_error) {
+      workbench.ui.toast = "资产名称保存失败。";
+      render(workbench);
+      return;
+    }
+  }
+
+  syncProjectAssetNameState(workbench, assetKind, assetId, name);
+  workbench.ui.toast = "修改成功";
   render(workbench);
 }
 
