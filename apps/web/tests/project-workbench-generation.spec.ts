@@ -53669,6 +53669,56 @@ describe("asset import modal", () => {
     assert.match(createPromptBlock, /min-height:\s*15rem/);
   });
 
+  it("keeps storyboard generator footer controls readable", () => {
+    const projectDetailSource = readFileSync(
+      new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
+      "utf8",
+    );
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(
+      projectDetailSource,
+      /asset-generator-modal asset-generator-modal-create \$\{isStoryboardGenerator \? "is-storyboard-generator" : ""\}/,
+    );
+
+    const storyboardModalBlock = css.match(
+      /\.asset-generator-modal-create\.is-storyboard-generator:not\(\.has-task-overview\)\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardControlsBlock = css.match(
+      /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-composer-controls\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardStyleTriggerBlock = css.match(
+      /\.asset-generator-modal-create\.is-storyboard-generator \.episode-image-style-skill-trigger\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const responsiveStoryboardControlsBlock = [
+      ...css.matchAll(
+        /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-composer-controls\s*\{(?<body>[^}]*)\}/g,
+      ),
+    ].at(-1)?.groups?.body ?? "";
+    const responsiveStoryboardPromptShellBlock = [
+      ...css.matchAll(
+        /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-prompt-shell\s*\{(?<body>[^}]*)\}/g,
+      ),
+    ].at(-1)?.groups?.body ?? "";
+    const responsiveStoryboardPromptCountBlock = [
+      ...css.matchAll(
+        /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-prompt small\s*\{(?<body>[^}]*)\}/g,
+      ),
+    ].at(-1)?.groups?.body ?? "";
+
+    assert.match(storyboardModalBlock, /width:\s*min\(56rem,\s*calc\(100vw - 3rem\)\)/);
+    assert.match(storyboardControlsBlock, /display:\s*grid/);
+    assert.match(storyboardControlsBlock, /grid-template-columns:\s*minmax\(8\.5rem,\s*1\.2fr\)\s+minmax\(8rem,\s*auto\)\s+repeat\(2,\s*minmax\(8rem,\s*1fr\)\)/);
+    assert.match(storyboardStyleTriggerBlock, /width:\s*100%/);
+    assert.match(storyboardStyleTriggerBlock, /max-width:\s*none/);
+    assert.match(responsiveStoryboardControlsBlock, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    assert.match(responsiveStoryboardPromptShellBlock, /padding-bottom:\s*10rem/);
+    assert.match(responsiveStoryboardPromptCountBlock, /bottom:\s*10\.2rem/);
+  });
+
   it("keeps storyboard generator scrolling inside the prompt editor", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),

@@ -24241,6 +24241,10 @@
   min-height: 0;
 }
 
+.asset-generator-modal-create.is-storyboard-generator:not(.has-task-overview) {
+  width: min(56rem, calc(100vw - 3rem));
+}
+
 .asset-generator-modal-create.has-task-overview {
   grid-template-columns: minmax(0, 1fr) minmax(22rem, 25rem);
   width: min(78rem, calc(100vw - 5rem));
@@ -24926,6 +24930,29 @@
 .asset-generator-composer .asset-generator-composer-footer {
   justify-content: space-between;
   min-width: 0;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-footer {
+  gap: 0.65rem;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, 1.2fr) minmax(8rem, auto) repeat(2, minmax(8rem, 1fr));
+  gap: 0.5rem;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-control-wrap,
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-video-settings-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-control,
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-video-settings-trigger,
+.asset-generator-modal-create.is-storyboard-generator .episode-image-style-skill-trigger {
+  width: 100%;
+  max-width: none;
 }
 
 .asset-generator-composer .episode-replica-video-settings-wrap {
@@ -33058,9 +33085,29 @@ body.is-episode-layout-resizing {
   .episode-replica-prompt-selects {
     flex-wrap: wrap;
   }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt-shell {
+    padding-bottom: 7.5rem;
+  }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt small {
+    bottom: 7.7rem;
+  }
 }
 
 @media (max-width: 640px) {
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt-shell {
+    padding-bottom: 10rem;
+  }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt small {
+    bottom: 10.2rem;
+  }
+
   .episode-workbench-screen {
     min-height: auto;
     height: auto;

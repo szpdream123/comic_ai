@@ -7197,7 +7197,7 @@ function renderAssetGeneratorModal(ui) {
       : "";
     return `
       <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
-        <div class="asset-generator-modal asset-generator-modal-create ${storyboardTaskOverview ? "has-task-overview" : ""}">
+        <div class="asset-generator-modal asset-generator-modal-create ${isStoryboardGenerator ? "is-storyboard-generator" : ""} ${storyboardTaskOverview ? "has-task-overview" : ""}">
           <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
           <aside class="asset-generator-form ${isStoryboardGenerator ? "storyboard-generator-form" : ""}">
             <h2>生成${escapeHtml(label)}</h2>
