@@ -6,6 +6,7 @@ import {
   collapseAgentTimelineEvents,
   createCanvasAgentController,
   ensureCanvasAgentState,
+  persistCanvasAgentUiState,
   normalizeAgentMediaTask,
   normalizeAgentMemoryRecord,
   normalizeAgentMessage,
@@ -81,6 +82,22 @@ test("Canvas Agent condenses active task events into one thinking indicator", ()
   assert.match(html, /class="canvas-agent-thinking"/);
   assert.match(html, /正在执行 canvas\.patch/);
   assert.doesNotMatch(html, /data-event-status="task\.created"|data-event-status="task\.started"|data-event-status="step\.running"/);
+});
+
+test("Canvas Agent labels a running model step as thinking instead of tool execution", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      taskId: "task-model-thinking",
+      status: "running",
+      events: [
+        { id: "model-created", sequence: 1, eventType: "step.created", event: { stepId: "model-1", kind: "model" } },
+        { id: "model-running", sequence: 2, eventType: "step.running", event: { stepId: "model-1" } },
+      ],
+    },
+  });
+
+  assert.match(html, /正在思考中/);
+  assert.doesNotMatch(html, /正在执行工具/);
 });
 
 test("Canvas Agent keeps the external generation status after an interjection", () => {
@@ -338,12 +355,16 @@ test("Canvas Agent closes without rerendering the workspace or resetting the han
     },
   };
   const panel = { remove() { panelRemoved = true; } };
+  let sessionPersisted = false;
   const workbench = {
     ui: {
       canvasDocument: { viewport: { interactionMode: "hand" } },
       canvasAgent: { panelOpen: true },
     },
     api: {},
+    persistCanvasSession() {
+      sessionPersisted = true;
+    },
   };
   const controller = createCanvasAgentController({
     surface: {
@@ -364,6 +385,8 @@ test("Canvas Agent closes without rerendering the workspace or resetting the han
   await controller.handleAction({ dataset: { agentAction: "close-agent-panel" } });
 
   assert.equal(panelRemoved, true);
+  assert.equal(sessionPersisted, true);
+  assert.equal(workbench.ui.canvasSessionUiState.canvasAgent.panelOpen, false);
   assert.match(reopenMarkup, /data-agent-action="open-agent-panel"/);
   assert.equal(renderLayoutCalls, 0);
   assert.equal(workbench.ui.canvasDocument.viewport.interactionMode, "hand");
@@ -445,6 +468,18 @@ test("Canvas Agent event reducer deduplicates sequences and exposes pending appr
   assert.equal(agent.sequence, 2);
   assert.equal(agent.status, "waiting_approval");
   assert.match(renderCanvasAgentPanel(ui), /data-approval-id="approval-1"/);
+});
+
+test("Canvas Agent restores and persists the session panel state", () => {
+  const ui = { canvasSessionUiState: { canvasAgent: { panelOpen: false, panelWidth: 420 } } };
+  const agent = ensureCanvasAgentState(ui);
+  assert.equal(agent.panelOpen, false);
+  assert.equal(agent.panelWidth, 420);
+
+  agent.panelOpen = true;
+  agent.panelWidth = 520;
+  persistCanvasAgentUiState(ui, agent);
+  assert.deepEqual(ui.canvasSessionUiState.canvasAgent, { panelOpen: true, panelWidth: 520 });
 });
 
 test("Canvas Agent approval identifies the controlled effect and originating tool", () => {
@@ -542,6 +577,160 @@ test("Canvas Agent controller reuses creator-api aliases for conversation, messa
   assert.deepEqual(controls[3][4], { message: { text: "先调整人物关系" } });
   assert.deepEqual(controls[4][4], { approvalId: "approval-1", decision: "approved" });
   assert.deepEqual(controls[5][4], { approvalId: "approval-2", decision: "rejected" });
+  controller.dispose();
+});
+
+test("Canvas Agent loads models without waiting for conversation history", async () => {
+  const calls = [];
+  let releaseConversations;
+  const conversationsPending = new Promise((resolve) => { releaseConversations = resolve; });
+  const workbench = {
+    ui: { selectedCanvasProjectId: "canvas-fast-resume", canvasAgent: {} },
+    api: {
+      async listCanvasAgentConversations() {
+        calls.push("conversations");
+        await conversationsPending;
+        return { conversations: [{ id: "conversation-fast-resume" }] };
+      },
+      async listCanvasAgentMessages() {
+        calls.push("messages");
+        return { messages: [] };
+      },
+      async listCanvasAgentModels() {
+        calls.push("models");
+        return { models: [{ modelCode: "agent-text-fast", modelLabel: "Agent Text Fast" }] };
+      },
+      async listCanvasAgentFileGrants() {
+        return { grants: [] };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+
+  const resumePending = controller.resume();
+  await Promise.resolve();
+  assert.deepEqual(calls, ["models", "conversations"]);
+  releaseConversations();
+  await resumePending;
+  assert.deepEqual(calls, ["models", "conversations", "messages"]);
+  controller.dispose();
+});
+
+test("Canvas Agent resumes an active task from the live stream without loading JSON events first", async () => {
+  const calls = [];
+  const workbench = {
+    ui: { selectedCanvasProjectId: "canvas-active-resume", canvasAgent: {} },
+    api: {
+      async listCanvasAgentConversations() {
+        calls.push("conversations");
+        return {
+          conversations: [{
+            id: "conversation-active-resume",
+            taskId: "task-active-resume",
+            taskStatus: "running",
+          }],
+        };
+      },
+      async listCanvasAgentMessages() {
+        calls.push("messages");
+        return { messages: [] };
+      },
+      async listCanvasAgentModels() {
+        calls.push("models");
+        return { models: [{ modelCode: "agent-text-active", modelLabel: "Agent Text Active" }] };
+      },
+      async listCanvasAgentEvents() {
+        calls.push("events");
+        return { events: [] };
+      },
+      async *streamCanvasAgentEvents(canvasId, taskId, input) {
+        calls.push(["live", canvasId, taskId, input.after]);
+        yield {
+          data: {
+            id: "task-active-finished",
+            sequence: 1,
+            eventType: "task.succeeded",
+            event: {},
+          },
+        };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  for (let index = 0; index < 20 && !calls.some((call) => Array.isArray(call) && call[0] === "live"); index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+
+  assert.equal(calls.includes("events"), false);
+  assert.deepEqual(calls.find((call) => Array.isArray(call) && call[0] === "live"), [
+    "live",
+    "canvas-active-resume",
+    "task-active-resume",
+    0,
+  ]);
+  controller.dispose();
+});
+
+test("Canvas Agent returns from terminal resume while event history backfills without live polling", async () => {
+  let releaseEvents;
+  let streamCalls = 0;
+  const eventsPending = new Promise((resolve) => { releaseEvents = resolve; });
+  const workbench = {
+    ui: { selectedCanvasProjectId: "canvas-terminal-resume", canvasAgent: {} },
+    api: {
+      async listCanvasAgentConversations() {
+        return {
+          conversations: [{
+            id: "conversation-terminal-resume",
+            taskId: "task-terminal-resume",
+            taskStatus: "succeeded",
+          }],
+        };
+      },
+      async listCanvasAgentMessages() {
+        return { messages: [] };
+      },
+      async listCanvasAgentModels() {
+        return { models: [{ modelCode: "agent-text-terminal", modelLabel: "Agent Text Terminal" }] };
+      },
+      async listCanvasAgentEvents() {
+        return eventsPending;
+      },
+      async *streamCanvasAgentEvents() {
+        streamCalls += 1;
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 1,
+  });
+
+  let resumeFinished = false;
+  const resumePending = controller.resume().then(() => { resumeFinished = true; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(resumeFinished, true);
+  assert.equal(streamCalls, 0);
+  assert.equal(workbench.ui.canvasAgent.polling, false);
+
+  releaseEvents({
+    events: [{ id: "terminal-event", sequence: 1, eventType: "task.succeeded", event: {} }],
+  });
+  await resumePending;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(workbench.ui.canvasAgent.sequence, 1);
+  assert.equal(streamCalls, 0);
   controller.dispose();
 });
 
@@ -1392,6 +1581,65 @@ test("Canvas Agent turns @ node references into conversation file grants on send
     mediaKind: "image",
     fileGrantId: "grant-reference",
   }]);
+  controller.dispose();
+});
+
+test("Canvas Agent defers file grant loading until a storage object reference is sent", async () => {
+  const calls = [];
+  const workbench = {
+    ui: { selectedCanvasProjectId: "canvas-lazy-grants", canvasAgent: {} },
+    api: {
+      async listCanvasAgentConversations() {
+        calls.push("conversations");
+        return { conversations: [{ id: "conversation-lazy-grants" }] };
+      },
+      async listCanvasAgentMessages() {
+        calls.push("messages");
+        return { messages: [] };
+      },
+      async listCanvasAgentModels() {
+        calls.push("models");
+        return { models: [{ modelCode: "agent-lazy-grants", modelLabel: "Agent" }] };
+      },
+      async listCanvasAgentFileGrants() {
+        calls.push("list-grants");
+        return { grants: [] };
+      },
+      async createCanvasAgentFileGrant() {
+        calls.push("create-grant");
+        return { grant: { id: "grant-lazy" } };
+      },
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        calls.push(["message", input]);
+        return { task: { id: "task-lazy-grants", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  assert.equal(calls.includes("list-grants"), false);
+
+  Object.assign(workbench.ui.canvasAgent, {
+    promptDraft: "参考图片生成视频",
+    promptNodeReferences: [{
+      nodeId: "node-lazy-reference",
+      title: "角色参考",
+      storageObjectId: "storage-lazy-reference",
+      mediaKind: "image",
+    }],
+  });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+
+  const grantListIndex = calls.indexOf("list-grants");
+  const messageIndex = calls.findIndex((call) => Array.isArray(call) && call[0] === "message");
+  assert.ok(grantListIndex >= 0);
+  assert.ok(grantListIndex < messageIndex);
+  assert.equal(calls.includes("create-grant"), true);
   controller.dispose();
 });
 

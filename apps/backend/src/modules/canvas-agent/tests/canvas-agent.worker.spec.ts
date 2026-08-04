@@ -138,7 +138,7 @@ test("worker maintenance does not scan or process queued tasks", async () => {
   assert.deepEqual(result, { inspected: 1, repaired: 2 });
 });
 
-test("worker skips a task while another worker owns the conversation lock", async () => {
+test("worker keeps a task queued while another worker owns the conversation lock", async () => {
   let executed = false;
   const worker = createWorker({
     execute: async () => {
@@ -147,7 +147,7 @@ test("worker skips a task while another worker owns the conversation lock", asyn
     },
     claimConversationLock: async () => false,
   });
-  assert.equal((await worker.processTask(agentTaskId)).status, "skipped");
+  assert.equal((await worker.processTask(agentTaskId)).status, "queued");
   assert.equal(executed, false);
 });
 

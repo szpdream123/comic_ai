@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { CanvasAgentContextService } from "../canvas-agent-context.service.ts";
 import { __canvasAgentExecutorTestUtils } from "../canvas-agent-executor.ts";
 import { CanvasAgentPolicyService } from "../canvas-agent-policy.service.ts";
 import { createDefaultCanvasAgentToolRegistry } from "../canvas-agent-tool.registry.ts";
@@ -166,9 +167,145 @@ test("executor accepts fenced and prose-wrapped JSON model responses", () => {
     __canvasAgentExecutorTestUtils.parseTurn(`我会按以下操作执行：${JSON.stringify(expected)} 已准备完成。`),
     expected,
   );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.parseTurn(`<tool_calls>\n<tool_call id="call-1">\n${JSON.stringify({ toolId: expected.toolId, input: expected.input })}\n</tool_call>\n</tool_calls>`),
+    expected,
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.parseTurn(`<tool_call id="call-1">${JSON.stringify({ name: expected.toolId, arguments: JSON.stringify(expected.input) })}</tool_call>`),
+    expected,
+  );
   assert.throws(
     () => __canvasAgentExecutorTestUtils.parseTurn("我无法按协议执行"),
     /canvas_agent_model_response_invalid_json/,
+  );
+});
+
+test("executor classifies duplicate tool calls without weakening side-effect protection", () => {
+  assert.equal(
+    __canvasAgentExecutorTestUtils.duplicateCanvasAgentStepKind({
+      code: "23505",
+      constraint: "canvas_agent_steps_task_call_unique",
+    }),
+    "call",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.duplicateCanvasAgentStepKind({
+      code: "23505",
+      message: "duplicate_key_value_violates_unique_constraint_canvas_agent_steps_effect_fingerprint_unique",
+    }),
+    "effect",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.duplicateCanvasAgentStepKind({
+      code: "23505",
+      constraint: "other_unique_constraint",
+    }),
+    undefined,
+  );
+});
+
+test("Canvas Agent context omits a duplicate canvas.read document from history", async () => {
+  const db = {
+    async query<T>(sql: string) {
+      if (sql.includes("SELECT summary_json FROM canvas_agent_conversations")) {
+        return { rows: [{ summary_json: {} }] as T[] };
+      }
+      if (sql.includes("FROM canvas_agent_messages")) {
+        return { rows: [
+          { role: "assistant", sequence: 4, content_json: { message: "已删除粗布节点" } },
+          { role: "tool", sequence: 3, content_json: { toolId: "canvas.patch", callId: "patch-1", output: { revision: 4 } } },
+          {
+            role: "tool",
+            sequence: 2,
+            content_json: {
+              toolId: "canvas.read",
+              callId: "read-1",
+              output: {
+                canvasProjectId: "canvas-1",
+                serverRevision: 4,
+                document: {
+                  nodes: [{ id: "node-1", largeMetadata: "x".repeat(10_000) }],
+                  edges: [{ id: "edge-1" }],
+                },
+              },
+            },
+          },
+          { role: "user", sequence: 1, content_json: { text: "删除粗布节点" } },
+        ] as T[] };
+      }
+      if (sql.includes("UPDATE canvas_agent_file_grants") || sql.includes("FROM canvas_agent_file_grants")) {
+        return { rows: [] as T[] };
+      }
+      if (sql.includes("SELECT id FROM canvas_agent_conversations")) {
+        return { rows: [{ id: "conversation-1" }] as T[] };
+      }
+      throw new Error(`unexpected_query:${sql}`);
+    },
+  } as never;
+  const context = await new CanvasAgentContextService({
+    db,
+    loadCanvasContext: async () => ({ document: { nodes: [], edges: [] } }),
+  }).build({
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor,
+  });
+
+  assert.deepEqual(context.messages[0]?.content, { text: "删除粗布节点" });
+  assert.deepEqual(context.messages[1]?.content, {
+    toolId: "canvas.read",
+    callId: "read-1",
+    output: {
+      canvasProjectId: "canvas-1",
+      serverRevision: 4,
+      document: { nodeCount: 1, edgeCount: 1, availableInContext: true },
+    },
+  });
+  assert.deepEqual(context.messages[2]?.content, {
+    toolId: "canvas.patch",
+    callId: "patch-1",
+    output: { revision: 4 },
+  });
+  assert.deepEqual(context.messages[3]?.content, { message: "已删除粗布节点" });
+  assert.equal(JSON.stringify(context).includes("largeMetadata"), false);
+});
+
+test("Canvas Agent executor preserves conversation history while removing duplicate canvas reads", () => {
+  const context = {
+    canvas: { document: { nodes: [{ id: "node-current" }] } },
+    messages: [
+      { role: "user", content: { text: "删除粗布节点" }, sequence: 1 },
+      {
+        role: "tool",
+        content: {
+          toolId: "canvas.read",
+          callId: "read-1",
+          output: {
+            canvasProjectId: "canvas-1",
+            serverRevision: 4,
+            document: {
+              nodes: [{ id: "node-old", largeMetadata: "x".repeat(10_000) }],
+              edges: [{ id: "edge-old" }],
+            },
+          },
+        },
+        sequence: 2,
+      },
+      { role: "assistant", content: { message: "已删除粗布节点" }, sequence: 3 },
+    ],
+  };
+
+  const compacted = __canvasAgentExecutorTestUtils.compactCanvasReadMessagesForModel(context) as typeof context;
+  assert.deepEqual(compacted.canvas, context.canvas);
+  assert.deepEqual(compacted.messages[0], context.messages[0]);
+  assert.deepEqual(compacted.messages[2], context.messages[2]);
+  assert.equal(JSON.stringify(compacted).includes("largeMetadata"), false);
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.omitRedundantCanvasReadTool([
+      { id: "canvas.read" }, { id: "canvas.patch" }, { id: "generation.create" },
+    ]),
+    [{ id: "canvas.patch" }, { id: "generation.create" }],
   );
 });
 

@@ -5,6 +5,7 @@ import {
   handleWorkbenchActionForTest,
   initProductionWorkbench,
   refreshProductionWorkbenchForTest,
+  syncCanvasProjectsFromApiForTest,
   syncWorkbenchHashRouteForTest,
 } from "../src/features/production-workbench/index.js";
 
@@ -370,6 +371,128 @@ test("navigation tabs render before lazy surface requests finish", async () => {
       globalThis.window = originalWindow;
     }
   }
+});
+
+test("direct canvas refresh starts its document request before the project list returns", async () => {
+  const calls = [];
+  let resolveCanvasProjects;
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: {
+      pathname: "/app.html",
+      search: "?canvasProjectId=canvas-route",
+      hash: "#tools-canvas",
+    },
+    history: { replaceState() {} },
+  };
+  globalThis.localStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  workbench.ui.activeNavTab = "tools";
+  workbench.ui.canvasProjectView = "detail";
+  workbench.ui.selectedCanvasProjectId = "canvas-route";
+  workbench.ui.canvasProjects = [];
+  workbench.api = {
+    async getStandaloneCanvas(canvasProjectId) {
+      calls.push(`canvas:${canvasProjectId}`);
+      return {
+        canvas: {
+          id: canvasProjectId,
+          canvasProjectId,
+          serverRevision: 1,
+          document: { version: 2, canvasProjectId, viewport: {}, nodes: [], edges: [] },
+        },
+      };
+    },
+    async getCanvasSession(canvasProjectId) {
+      calls.push(`session:${canvasProjectId}`);
+      return { session: null };
+    },
+    getCanvasProjects() {
+      calls.push("canvas-projects");
+      return new Promise((resolve) => {
+        resolveCanvasProjects = resolve;
+      });
+    },
+  };
+
+  try {
+    const refreshRequest = syncCanvasProjectsFromApiForTest(workbench);
+    await Promise.resolve();
+    assert.deepEqual(calls, [
+      "canvas:canvas-route",
+      "session:canvas-route",
+      "canvas-projects",
+    ]);
+    resolveCanvasProjects({ projects: [{ id: "canvas-route", title: "路由画布" }] });
+    await refreshRequest;
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+
+  assert.equal(calls.filter((call) => call === "canvas:canvas-route").length, 1);
+});
+
+test("direct canvas refresh retries the selected document when speculative loading fails", async () => {
+  const calls = [];
+  let standaloneAttempts = 0;
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: {
+      pathname: "/app.html",
+      search: "?canvasProjectId=canvas-route",
+      hash: "#tools-canvas",
+    },
+    history: { replaceState() {} },
+  };
+  workbench.ui.activeNavTab = "tools";
+  workbench.ui.canvasProjectView = "detail";
+  workbench.ui.selectedCanvasProjectId = "canvas-route";
+  workbench.ui.canvasProjects = [];
+  workbench.api = {
+    async getStandaloneCanvas(canvasProjectId) {
+      standaloneAttempts += 1;
+      calls.push(`canvas:${canvasProjectId}:${standaloneAttempts}`);
+      if (standaloneAttempts === 1) throw new Error("temporary failure");
+      return {
+        canvas: {
+          canvasProjectId,
+          serverRevision: 1,
+          document: { version: 2, canvasProjectId, viewport: {}, nodes: [], edges: [] },
+        },
+      };
+    },
+    getCanvasProjects() {
+      calls.push("canvas-projects");
+      return Promise.resolve({ projects: [{ id: "canvas-route", title: "路由画布" }] });
+    },
+  };
+
+  try {
+    await syncCanvasProjectsFromApiForTest(workbench);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.deepEqual(calls, ["canvas:canvas-route:1", "canvas-projects", "canvas:canvas-route:2"]);
+  assert.equal(workbench.ui.canvasDocument.canvasProjectId, "canvas-route");
 });
 
 test("path navigation starts lazy surface requests after pushState", async () => {

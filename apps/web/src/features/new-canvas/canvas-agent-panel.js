@@ -50,6 +50,9 @@ function renderAgentComposerActionIcon(running = false) {
 
 export function ensureCanvasAgentState(ui = {}) {
   const previous = ui.canvasAgent && typeof ui.canvasAgent === "object" ? ui.canvasAgent : {};
+  const persisted = ui.canvasSessionUiState?.canvasAgent;
+  const persistedPanelOpen = typeof persisted?.panelOpen === "boolean" ? persisted.panelOpen : null;
+  const persistedPanelWidth = Number(persisted?.panelWidth);
   const mode = AGENT_MODES.some((item) => item.id === previous.mode) ? previous.mode : "b";
   Object.assign(previous, {
     conversationId: "",
@@ -102,8 +105,29 @@ export function ensureCanvasAgentState(ui = {}) {
       ? { panelWidth: DEFAULT_CANVAS_AGENT_PANEL_WIDTH }
       : {}),
   });
+  if (persistedPanelOpen !== null) previous.panelOpen = persistedPanelOpen;
+  if (Number.isFinite(persistedPanelWidth)) previous.panelWidth = persistedPanelWidth;
   ui.canvasAgent = previous;
   return previous;
+}
+
+export function persistCanvasAgentUiState(ui = {}, agent = {}) {
+  const current = ui.canvasSessionUiState && typeof ui.canvasSessionUiState === "object"
+    ? ui.canvasSessionUiState
+    : {};
+  const currentAgent = current.canvasAgent && typeof current.canvasAgent === "object"
+    ? current.canvasAgent
+    : {};
+  const panelWidth = Number(agent.panelWidth);
+  ui.canvasSessionUiState = {
+    ...current,
+    canvasAgent: {
+      ...currentAgent,
+      panelOpen: agent.panelOpen !== false,
+      ...(Number.isFinite(panelWidth) ? { panelWidth } : {}),
+    },
+  };
+  return ui.canvasSessionUiState;
 }
 
 export function renderCanvasAgentPanel(ui = {}) {
@@ -212,7 +236,8 @@ function renderAgentHistoryPopover(agent) {
 }
 
 export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "", minimapMarkup = "") {
-  const agentPanelClosed = ui.canvasAgent?.panelOpen === false;
+  const sessionReady = ui.canvasSessionUiStateReady !== false;
+  const agentPanelClosed = !sessionReady || ui.canvasAgent?.panelOpen === false;
   const agentPanelWidth = resolveCanvasAgentPanelWidth(ui);
   const sidebarWidth = ui.canvasSidebarCollapsed !== false
     ? 0
@@ -221,8 +246,8 @@ export function renderNewCanvasLayout(canvasMarkup, ui = {}, auxiliaryMarkup = "
       : 264;
   return `
     <div class="new-canvas-layout ${agentPanelClosed ? "is-agent-collapsed" : ""}" style="--canvas-agent-panel-width:${agentPanelWidth}px">
-      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
-      ${renderCanvasAgentPanel(ui)}
+      <div class="new-canvas-workspace" data-new-canvas-workspace style="--new-canvas-sidebar-width:${sidebarWidth}px;--new-canvas-sidebar-half-width:${sidebarWidth / 2}px">${canvasMarkup}${minimapMarkup}${renderNewCanvasChromeRail(ui)}${sessionReady && agentPanelClosed ? renderCanvasAgentReopenButton() : ""}</div>
+      ${sessionReady ? renderCanvasAgentPanel(ui) : ""}
       ${auxiliaryMarkup}
     </div>
   `;
@@ -482,6 +507,9 @@ export function createCanvasAgentController({
   let streamAbortController = null;
   let streamInFlight = false;
   let realtimeGeneration = 0;
+  let fileGrantsConversationId = Array.isArray(agent.fileGrants) && agent.fileGrants.some((grant) => grant?.status === "active")
+    ? String(agent.conversationId ?? "")
+    : "";
   let disposed = false;
   const refreshedCanvasEventKeys = new Set();
   const canvasRefreshRetryTimers = new Set();
@@ -682,8 +710,29 @@ export function createCanvasAgentController({
     return agent.messages;
   };
 
+  const loadTaskEvents = async (canvasId, taskId) => {
+    if (!canvasId || !taskId || typeof workbench.api?.listCanvasAgentEvents !== "function") return [];
+    try {
+      const payload = await workbench.api.listCanvasAgentEvents(canvasId, taskId, { after: 0, limit: 1000 });
+      const events = Array.isArray(payload?.events) ? payload.events : [];
+      if (agent.taskId === taskId) {
+        reduceCanvasAgentEvents(agent, events);
+        syncPanel();
+      }
+      return events;
+    } catch {
+      // Conversation messages remain usable if the task event endpoint is temporarily unavailable.
+      return [];
+    }
+  };
+
   const loadMessages = async (conversationId) => {
     stopPolling();
+    if (fileGrantsConversationId && fileGrantsConversationId !== conversationId) {
+      agent.fileGrants = [];
+      agent.fileGrantsStatus = "idle";
+      fileGrantsConversationId = "";
+    }
     Object.assign(agent, {
       taskId: "",
       status: "idle",
@@ -708,18 +757,15 @@ export function createCanvasAgentController({
       if (conversation?.taskId) {
         agent.taskId = String(conversation.taskId);
         agent.status = String(conversation.taskStatus ?? "queued");
-        if (typeof workbench.api?.listCanvasAgentEvents === "function") {
-          try {
-            const payload = await workbench.api.listCanvasAgentEvents(canvasId, agent.taskId, { after: 0, limit: 1000 });
-            reduceCanvasAgentEvents(agent, Array.isArray(payload?.events) ? payload.events : []);
-          } catch {
-            // Conversation messages remain usable if the task event endpoint is temporarily unavailable.
-          }
+        if (TERMINAL_STATUSES.has(agent.status)) {
+          // Terminal task history is useful for the timeline, but must not delay the conversation render.
+          void loadTaskEvents(canvasId, agent.taskId);
+        } else {
+          // The live endpoint replays the initial history before waiting for new events.
+          schedulePoll(0);
         }
-        if (!TERMINAL_STATUSES.has(agent.status)) schedulePoll(0);
       }
       agent.messagesStatus = "ready";
-      await loadFileGrants(conversationId);
     } catch (error) {
       if (agent.conversationId !== conversationId) return [];
       agent.messagesStatus = "unavailable";
@@ -734,6 +780,7 @@ export function createCanvasAgentController({
     if (!canvasId || !conversationId || typeof workbench.api?.listCanvasAgentFileGrants !== "function") {
       agent.fileGrants = [];
       agent.fileGrantsStatus = "unavailable";
+      fileGrantsConversationId = "";
       return [];
     }
     agent.fileGrantsStatus = "loading";
@@ -744,10 +791,12 @@ export function createCanvasAgentController({
         .map(normalizeAgentFileGrant)
         .filter((grant) => grant.id && grant.status === "active");
       agent.fileGrantsStatus = "ready";
+      fileGrantsConversationId = conversationId;
     } catch (error) {
       if (agent.conversationId !== conversationId) return [];
       agent.fileGrants = [];
       agent.fileGrantsStatus = "unavailable";
+      fileGrantsConversationId = "";
       agent.error = friendlyAgentError(error);
     }
     syncPanel();
@@ -758,6 +807,9 @@ export function createCanvasAgentController({
     const references = Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [];
     const fileGrantIds = [];
     const grantIdByNodeId = new Map();
+    if (references.some((reference) => reference.storageObjectId) && fileGrantsConversationId !== conversationId) {
+      await loadFileGrants(conversationId);
+    }
     for (const reference of references.filter((item) => item.storageObjectId)) {
       const existing = (Array.isArray(agent.fileGrants) ? agent.fileGrants : [])
         .find((grant) => grant.storageObjectId === reference.storageObjectId && grant.status === "active");
@@ -1123,6 +1175,8 @@ export function createCanvasAgentController({
       if (action === "close-agent-panel" || action === "open-agent-panel") {
         agent.panelOpen = action === "open-agent-panel";
         agent.historyOpen = false;
+        persistCanvasAgentUiState(workbench.ui, agent);
+        void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
         if (!syncPanelVisibility()) {
           if (typeof renderLayout === "function") await renderLayout();
           else syncPanel();
@@ -1316,6 +1370,8 @@ export function createCanvasAgentController({
       if (action === "new-conversation") {
         stopPolling();
         Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], sequence: 0, error: "", panelView: "timeline", panelOpen: true, historyOpen: false, titleEditing: false, titleDraft: "" });
+        persistCanvasAgentUiState(workbench.ui, agent);
+        void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
         await run(action, async () => {
           const conversationId = await ensureConversation();
           agent.conversations = [{ id: conversationId, title: "画布协作", status: "active" }, ...(agent.conversations ?? []).filter((item) => item.id !== conversationId)];
@@ -1549,9 +1605,12 @@ export function createCanvasAgentController({
       return false;
     },
     async resume() {
+      const modelsPromise = loadModels();
       await loadConversations();
-      await loadMessages(agent.conversationId);
-      await loadModels();
+      await Promise.all([
+        loadMessages(agent.conversationId),
+        modelsPromise,
+      ]);
       schedulePoll(0);
     },
     dispose() {
@@ -2344,10 +2403,10 @@ function resolveAgentActivityMessage(events = []) {
   if (eventType === "task.waiting_external" || eventType === "step.waiting_external") return "正在等待生成结果";
   if (eventType === "step.waiting_approval" || eventType === "approval.requested") return "正在等待你的确认";
   if (eventType === "step.created") {
-    return event.toolId ? `正在准备 ${event.toolId}` : "正在准备工具";
+    return event.toolId ? `正在准备 ${event.toolId}` : "正在思考中";
   }
   if (eventType === "step.running") {
-    return event.toolId ? `正在执行 ${event.toolId}` : "正在执行工具";
+    return event.toolId ? `正在执行 ${event.toolId}` : "正在思考中";
   }
   if (eventType === "step.succeeded") return event.toolId ? `正在完成 ${event.toolId}` : "正在整理结果";
   return "正在思考中";

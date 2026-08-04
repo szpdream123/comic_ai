@@ -11,6 +11,7 @@ import {
   repairStaleGenerationQueueStageAssignments,
 } from "../generation-redis-repair.service.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import { handleGptImageArtifactQueueExhaustion } from "../gpt-image-artifact-recovery.service.ts";
 import {
   markGenerationQueueStagePublished,
   reserveGenerationQueueStageForPublish,
@@ -474,6 +475,37 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("does not settle a queue failure after the provider has accepted the request", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      const reserved = await seedSeedanceTaskReservationAndSnapshot(db);
+
+      const marked = await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000104",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在。",
+        creditOutcome: "manual_review_required",
+        requireProviderSubmissionNotStarted: true,
+        now: new Date("2026-08-01T08:00:49.000Z"),
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const reservation = await db.query<{ status: string }>(
+        "SELECT status FROM credit_reservations WHERE id = $1",
+        [reserved.reservation.id],
+      );
+
+      assert.equal(marked, false);
+      assert.deepEqual(task.rows[0], { status: "running", failure_code: null });
+      assert.equal(reservation.rows[0]?.status, "active");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not fail an exhausted stage when a durable downstream assignment already exists", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -597,6 +629,55 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("resumes polling for a provider-accepted task after a queue failure enters manual review", async () => {
+    const db = await createMigratedTestDb();
+    const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await seedSeedanceTaskReservationAndSnapshot(db);
+      const now = new Date("2026-06-03T06:00:00.000Z");
+
+      const marked = await failGenerationTaskAfterQueueError(db, {
+        taskId: "50000000-0000-4000-8000-000000000104",
+        failureCode: "generation_queue_error",
+        displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
+        creditOutcome: "manual_review_required",
+        now,
+      });
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:03:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+        }),
+        publisher: {
+          async add(queueName, name, data, options) {
+            added.push({ queueName, name, data, options });
+          },
+        },
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = '50000000-0000-4000-8000-000000000104'",
+      );
+      const attempt = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM task_attempts WHERE id = '51000000-0000-4000-8000-000000000104'",
+      );
+
+      assert.equal(marked, true);
+      assert.deepEqual(repaired.repairedTaskIds, ["50000000-0000-4000-8000-000000000104"]);
+      assert.equal(added.length, 1);
+      assert.equal(added[0]?.name, "generation.video.poll.repair");
+      assert.equal(task.rows[0]?.status, "running");
+      assert.equal(task.rows[0]?.failure_code, null);
+      assert.equal(attempt.rows[0]?.status, "running");
+      assert.equal(attempt.rows[0]?.failure_code, null);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("keeps credits reserved when an expired submit lease started externally without a poll id", async () => {
     const db = await createMigratedTestDb();
 
@@ -674,6 +755,8 @@ describe("generation Redis dispatch repair", () => {
         limit: 10,
         config: loadGenerationQueueConfig({
           GENERATION_POLL_VIDEO_QUEUE: "generation-poll-video",
+          GENERATION_POLL_RETRY_ATTEMPTS: "3",
+          GENERATION_POLL_RETRY_BACKOFF_MS: "5000",
         }),
         publisher: {
           async add(queueName, name, data, options) {
@@ -713,7 +796,11 @@ describe("generation Redis dispatch repair", () => {
         options: {
           jobId: "generation.video.poll__50000000-0000-4000-8000-000000000104__1__repair__1780466400000",
           delay: 0,
-          attempts: 1,
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 5000,
+          },
           removeOnComplete: { age: 86400, count: 10000 },
           removeOnFail: { age: 604800, count: 50000 },
         },
@@ -1182,11 +1269,263 @@ describe("generation Redis dispatch repair", () => {
         "50000000-0000-4000-8000-000000000105",
       ]);
       assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        attempt_status: "running",
+        snapshot_status: "running",
+        finished_at: null,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("dispatches image artifact recovery only after its durable next retry time", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      await seedGenerationTaskReservationAndSnapshot(db);
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id,
+            provider_name, provider_operation, request_key, request_hash,
+            payload_ref, payload_hash, payload_redacted_json, status,
+            external_submission_started_at, response_redacted_json
+          ) VALUES (
+            '52000000-0000-4000-8000-000000000105',
+            '30000000-0000-4000-8000-000000000101',
+            '40000000-0000-4000-8000-000000000105',
+            '50000000-0000-4000-8000-000000000105',
+            '51000000-0000-4000-8000-000000000105',
+            'bananarouter', 'episode.image.generate', 'workflow-105:task-105',
+            'request-hash-105', 'creator://payload-105', 'payload-hash-105',
+            '{}'::jsonb, 'succeeded', '2026-06-03T05:56:00.000Z',
+            '{"imageUrl":"https://cdn.example.test/result.png"}'::jsonb
+          );
+          UPDATE ai_generation_task_snapshots
+          SET provider_status_json = '{
+            "artifactRecovery": {
+              "state": "retry_pending",
+              "round": 2,
+              "startedAt": "2026-06-03T05:55:00.000Z",
+              "nextRetryAt": "2026-06-03T06:05:00.000Z",
+              "deadlineAt": "2026-06-03T11:55:00.000Z",
+              "lastFailureCode": "provider_output_upload_failed"
+            }
+          }'::jsonb
+          WHERE task_id = '50000000-0000-4000-8000-000000000105'
+        `,
+      );
+
+      const waiting = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      assert.deepEqual(waiting.repairedTaskIds, []);
+
+      const due = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:05:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      const outbox = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM outbox_events
+          WHERE event_type = 'generation.task.finalize_requested'
+            AND payload_json->>'taskId' = '50000000-0000-4000-8000-000000000105'
+        `,
+      );
+
+      assert.deepEqual(due.repairedTaskIds, ["50000000-0000-4000-8000-000000000105"]);
+      assert.equal(outbox.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps image credits reserved across retry and manual artifact recovery", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      const reserved = await seedGenerationTaskReservationAndSnapshot(db);
+      await seedSucceededGptImageProviderRequest(db);
+      await db.query(
+        "UPDATE credit_reservations SET status = 'manual_review_required' WHERE id = $1",
+        [reserved.reservation.id],
+      );
+
+      const retry = await handleGptImageArtifactQueueExhaustion(db, {
+        taskId: "50000000-0000-4000-8000-000000000105",
+        error: Object.assign(new Error("temporary storage timeout"), {
+          failureCode: "provider_output_upload_failed",
+        }),
+        now: new Date("2026-06-03T06:00:00.000Z"),
+      });
+      const retryState = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        snapshot_status: string;
+        credit_status: string;
+        reservation_status: string;
+        amount_reserved: number;
+        amount_consumed: number;
+        amount_released: number;
+      }>(`
+        SELECT task.status AS task_status,
+               attempt.status AS attempt_status,
+               snapshot.status AS snapshot_status,
+               snapshot.credit_status,
+               reservation.status AS reservation_status,
+               reservation.amount_reserved,
+               reservation.amount_consumed,
+               reservation.amount_released
+        FROM tasks task
+        JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+        JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+        JOIN credit_reservations reservation ON reservation.id = $1
+        WHERE task.id = '50000000-0000-4000-8000-000000000105'
+      `, [reserved.reservation.id]);
+      assert.equal(retry, "retry_pending");
+      assert.deepEqual(retryState.rows[0], {
+        task_status: "running",
+        attempt_status: "running",
+        snapshot_status: "running",
+        credit_status: "reserved",
+        reservation_status: "active",
+        amount_reserved: 200,
+        amount_consumed: 0,
+        amount_released: 0,
+      });
+
+      const manual = await handleGptImageArtifactQueueExhaustion(db, {
+        taskId: "50000000-0000-4000-8000-000000000105",
+        error: Object.assign(new Error("provider output missing"), {
+          failureCode: "provider_output_missing",
+        }),
+        now: new Date("2026-06-03T06:02:00.000Z"),
+      });
+      const manualState = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        snapshot_status: string;
+        credit_status: string;
+        failure_json: Record<string, unknown>;
+        reservation_status: string;
+        amount_reserved: number;
+        amount_consumed: number;
+        amount_released: number;
+      }>(`
+        SELECT task.status AS task_status,
+               attempt.status AS attempt_status,
+               snapshot.status AS snapshot_status,
+               snapshot.credit_status,
+               snapshot.failure_json,
+               reservation.status AS reservation_status,
+               reservation.amount_reserved,
+               reservation.amount_consumed,
+               reservation.amount_released
+        FROM tasks task
+        JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+        JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+        JOIN credit_reservations reservation ON reservation.id = $1
+        WHERE task.id = '50000000-0000-4000-8000-000000000105'
+      `, [reserved.reservation.id]);
+      assert.equal(manual, "manual_review_required");
+      assert.deepEqual({ ...manualState.rows[0], failure_json: undefined }, {
         task_status: "manual_review_required",
         attempt_status: "manual_review_required",
         snapshot_status: "manual_review_required",
-        finished_at: null,
+        credit_status: "manual_review_required",
+        failure_json: undefined,
+        reservation_status: "manual_review_required",
+        amount_reserved: 200,
+        amount_consumed: 0,
+        amount_released: 0,
       });
+      assert.equal("errorMessage" in (manualState.rows[0]?.failure_json ?? {}), false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("moves image artifact recovery to manual review exactly at the six-hour deadline", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningGptImageSubmitTask(db);
+      const reserved = await seedGenerationTaskReservationAndSnapshot(db);
+      await seedSucceededGptImageProviderRequest(db);
+      await db.query(`
+        UPDATE ai_generation_task_snapshots
+        SET provider_status_json = '{
+          "artifactRecovery": {
+            "state": "retry_pending",
+            "round": 7,
+            "startedAt": "2026-06-03T06:00:00.000Z",
+            "nextRetryAt": "2026-06-03T11:00:00.000Z",
+            "deadlineAt": "2026-06-03T12:00:00.000Z",
+            "lastFailureCode": "provider_output_upload_failed"
+          }
+        }'::jsonb
+        WHERE task_id = '50000000-0000-4000-8000-000000000105'
+      `);
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T12:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({
+          GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
+        }),
+        publisher: { async add() {} },
+      });
+      const state = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        snapshot_status: string;
+        credit_status: string;
+        failure_json: Record<string, unknown>;
+        reservation_status: string;
+      }>(`
+        SELECT task.status AS task_status,
+               attempt.status AS attempt_status,
+               snapshot.status AS snapshot_status,
+               snapshot.credit_status,
+               snapshot.failure_json,
+               reservation.status AS reservation_status
+        FROM tasks task
+        JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+        JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+        JOIN credit_reservations reservation ON reservation.id = $1
+        WHERE task.id = '50000000-0000-4000-8000-000000000105'
+      `, [reserved.reservation.id]);
+      const outbox = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.finalize_requested'
+          AND payload_json->>'taskId' = '50000000-0000-4000-8000-000000000105'
+      `);
+
+      assert.deepEqual(repaired.repairedTaskIds, ["50000000-0000-4000-8000-000000000105"]);
+      assert.deepEqual({ ...state.rows[0], failure_json: undefined }, {
+        task_status: "manual_review_required",
+        attempt_status: "manual_review_required",
+        snapshot_status: "manual_review_required",
+        credit_status: "manual_review_required",
+        failure_json: undefined,
+        reservation_status: "manual_review_required",
+      });
+      assert.equal(state.rows[0]?.failure_json?.recoveryReason, "recovery_deadline_reached");
+      assert.equal(outbox.rows[0]?.count, 0);
     } finally {
       await db.close();
     }
@@ -1555,6 +1894,29 @@ async function seedGenerationTaskReservationAndSnapshot(
     now,
   });
   return reserved;
+}
+
+async function seedSucceededGptImageProviderRequest(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+) {
+  await db.query(`
+    INSERT INTO provider_requests (
+      id, project_id, workflow_id, task_id, attempt_id,
+      provider_name, provider_operation, request_key, request_hash,
+      payload_ref, payload_hash, payload_redacted_json, status,
+      external_submission_started_at, response_redacted_json
+    ) VALUES (
+      '52000000-0000-4000-8000-000000000105',
+      '30000000-0000-4000-8000-000000000101',
+      '40000000-0000-4000-8000-000000000105',
+      '50000000-0000-4000-8000-000000000105',
+      '51000000-0000-4000-8000-000000000105',
+      'bananarouter', 'episode.image.generate', 'workflow-105:task-105',
+      'request-hash-105', 'creator://payload-105', 'payload-hash-105',
+      '{}'::jsonb, 'succeeded', '2026-06-03T05:56:00.000Z',
+      '{"imageUrl":"https://cdn.example.test/result.png"}'::jsonb
+    )
+  `);
 }
 
 async function seedRunningSeedanceTask(

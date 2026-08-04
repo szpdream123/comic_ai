@@ -262,6 +262,18 @@ export function createCanvasCharacterLibraryController({ surface, workbench }) {
         sync();
         return true;
       }
+      if (action === "add-library-asset") {
+        if (!isLibraryCharacterScope(state.scope)) return true;
+        const character = findCharacter(state, target.dataset.characterId);
+        if (!character?.libraryAsset) return true;
+        await run("add-library-asset", async () => {
+          if (typeof workbench.addCharacterLibraryAssetToCanvas !== "function") {
+            throw new Error("添加素材功能暂不可用");
+          }
+          await workbench.addCharacterLibraryAssetToCanvas(character);
+        });
+        return true;
+      }
       if (action === "search" || action === "refresh") {
         sync();
         return true;
@@ -539,6 +551,15 @@ function renderCharacterCard(character, selectedId) {
   const id = characterId(character);
   const libraryScope = String(character.libraryScope ?? "");
   const scopeLabel = libraryScope === "team" ? "团队资产" : libraryScope === "official" ? "官方资产" : "";
+  if (libraryScope) {
+    return `<article role="listitem" class="canvas-character-card is-library-asset ${id === selectedId ? "active" : ""}">
+      <button type="button" class="canvas-character-card__open" data-character-action="library-detail-open" data-character-id="${escapeAttr(id)}">
+        <span class="canvas-character-card__image">${renderImage(characterAvatarUrl(character) || characterPrimaryUrl(character), characterName(character))}</span>
+        <span class="canvas-character-card__copy"><strong>${escapeHtml(characterName(character))}</strong><small>${escapeHtml(scopeLabel || character.usage || character.purpose || character.description || "未设置用途")}</small></span>
+      </button>
+      <button type="button" class="canvas-character-card__add-material" data-character-action="add-library-asset" data-character-id="${escapeAttr(id)}">添加素材</button>
+    </article>`;
+  }
   return `<button type="button" role="listitem" class="canvas-character-card ${libraryScope ? "is-library-asset" : ""} ${id === selectedId ? "active" : ""}" data-character-action="${libraryScope ? "library-detail-open" : "select"}" data-character-id="${escapeAttr(id)}">
     <span class="canvas-character-card__image">${renderImage(characterAvatarUrl(character) || characterPrimaryUrl(character), characterName(character))}</span>
     <span class="canvas-character-card__copy"><strong>${escapeHtml(characterName(character))}</strong><small>${escapeHtml(scopeLabel || character.usage || character.purpose || character.description || "未设置用途")}</small></span>

@@ -27,6 +27,8 @@ import {
   markGenerationQueueStagePublished,
   releaseGenerationQueueStage,
 } from "./generation-queue-shard.store.ts";
+import { resolveGptImageArtifactRecoveryDispatch } from "./gpt-image-artifact-recovery.policy.ts";
+import { handleGptImageArtifactQueueExhaustion } from "./gpt-image-artifact-recovery.service.ts";
 
 interface GenerationRepairTaskRow {
   task_id: string;
@@ -46,6 +48,7 @@ interface RunningSeedancePollRepairRow {
   task_type: string;
   input_snapshot_json: Record<string, unknown> | string;
   poll_sequence: number | string;
+  artifact_recovery_json?: Record<string, unknown> | string | null;
 }
 
 interface GenerationQueueFailureTaskRow {
@@ -738,6 +741,9 @@ export async function failGenerationTaskAfterQueueError(
     }
 
     const creditOutcome = input.creditOutcome ?? "released";
+    const taskStatus = creditOutcome === "manual_review_required"
+      ? "manual_review_required"
+      : "failed";
     const failed = await queryOne<{ id: string }>(
       db,
       `
@@ -752,12 +758,7 @@ export async function failGenerationTaskAfterQueueError(
         AND status IN ('queued', 'running', 'result_unknown')
       RETURNING id
     `,
-      [
-        row.task_id,
-        input.failureCode,
-        input.now,
-        creditOutcome === "manual_review_required" ? "manual_review_required" : "failed",
-      ],
+      [row.task_id, input.failureCode, input.now, taskStatus],
     );
     if (!failed) {
       await db.query("COMMIT");
@@ -779,13 +780,7 @@ export async function failGenerationTaskAfterQueueError(
           AND task_id = $2
           AND status IN ('queued', 'running', 'result_unknown')
       `,
-        [
-          row.current_attempt_id,
-          row.task_id,
-          input.failureCode,
-          input.now,
-          creditOutcome === "manual_review_required" ? "manual_review_required" : "failed",
-        ],
+        [row.current_attempt_id, row.task_id, input.failureCode, input.now, taskStatus],
       );
     }
 
@@ -814,7 +809,7 @@ export async function failGenerationTaskAfterQueueError(
         now: input.now,
       });
     }
-    const snapshotFailure = {
+    const failure = {
       failureCode: input.failureCode,
       displayMessage: input.displayMessage,
       noticeType: creditOutcome === "manual_review_required" ? "admin_action_required" : "error",
@@ -827,7 +822,7 @@ export async function failGenerationTaskAfterQueueError(
       await markGenerationTaskSnapshotManualReviewRequired(db, {
         taskId: row.task_id,
         attemptId: row.current_attempt_id,
-        failure: snapshotFailure,
+        failure,
         creditSummary,
         now: input.now,
       });
@@ -835,7 +830,7 @@ export async function failGenerationTaskAfterQueueError(
       await markGenerationTaskSnapshotFailed(db, {
         taskId: row.task_id,
         attemptId: row.current_attempt_id,
-        failure: snapshotFailure,
+        failure,
         creditStatus: creditOutcome,
         creditSummary,
         now: input.now,
@@ -910,6 +905,10 @@ export async function repairRunningSeedancePollJobs(
           OR (
             t.status = 'result_unknown'
             AND t.failure_code = 'lease_expired_after_external_start'
+          )
+          OR (
+            t.status = 'manual_review_required'
+            AND t.failure_code = 'generation_queue_error'
           )
         )
         AND (
@@ -1022,7 +1021,11 @@ export async function repairRunningSeedancePollJobs(
       {
         jobId: redisJobId,
         delay: 0,
-        attempts: 1,
+        attempts: input.config.retry.poll.attempts,
+        backoff: {
+          type: "exponential",
+          delay: input.config.retry.poll.backoffMs,
+        },
         removeOnComplete: {
           age: 86400,
           count: 10000,
@@ -1050,10 +1053,12 @@ export async function repairRunningSeedancePollJobs(
         COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.task_type,
-        t.input_snapshot_json
+        t.input_snapshot_json,
+        snapshot.provider_status_json->'artifactRecovery' AS artifact_recovery_json
       FROM tasks t
       JOIN workflows workflow ON workflow.id = t.workflow_id
       LEFT JOIN projects project ON project.id = t.project_id
+      LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
       WHERE (
           t.status IN ('running', 'manual_review_required', 'result_unknown')
           OR (t.status = 'failed' AND t.failure_code = 'generation_queue_error')
@@ -1092,13 +1097,50 @@ export async function repairRunningSeedancePollJobs(
           t.last_dispatched_at IS NULL
           OR t.last_dispatched_at < $2
         )
+        AND (
+          t.task_type <> 'episode_generate_image'
+          OR snapshot.provider_status_json->'artifactRecovery' IS NULL
+          OR snapshot.provider_status_json#>>'{artifactRecovery,state}' IS NULL
+          OR snapshot.provider_status_json#>>'{artifactRecovery,state}' NOT IN ('retry_pending', 'manual_review')
+          OR (
+            snapshot.provider_status_json#>>'{artifactRecovery,state}' = 'retry_pending'
+            AND (
+              snapshot.provider_status_json#>>'{artifactRecovery,nextRetryAt}' IS NULL
+              OR snapshot.provider_status_json#>>'{artifactRecovery,nextRetryAt}' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$'
+              OR snapshot.provider_status_json#>>'{artifactRecovery,nextRetryAt}' <= $4
+            )
+          )
+        )
       ORDER BY t.updated_at ASC, t.id ASC
       LIMIT $1
     `,
-    [input.limit, staleCutoff, input.now],
+    [input.limit, staleCutoff, input.now, input.now.toISOString()],
   );
 
   for (const candidate of finalizeCandidates.rows) {
+    if (candidate.task_type === "episode_generate_image") {
+      const dispatch = resolveGptImageArtifactRecoveryDispatch(
+        candidate.artifact_recovery_json,
+        input.now,
+      );
+      if (dispatch === "wait" || dispatch === "skip") {
+        continue;
+      }
+      if (dispatch === "manual_review") {
+        const outcome = await handleGptImageArtifactQueueExhaustion(db, {
+          taskId: candidate.task_id,
+          error: {
+            failureCode: "provider_output_upload_failed",
+            message: "image_artifact_recovery_deadline_reached",
+          },
+          now: input.now,
+        });
+        if (outcome !== "skipped") {
+          repairedTaskIds.push(candidate.task_id);
+        }
+        continue;
+      }
+    }
     const claim = await markRunningFinalizeRepairClaimed(db, {
       taskId: candidate.task_id,
       taskType: candidate.task_type,
@@ -1108,7 +1150,27 @@ export async function repairRunningSeedancePollJobs(
     if (!claim.claimed) {
       continue;
     }
-    if (claim.recoveredQueueFailure) {
+    if (claim.recoveredImageFailure) {
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'running',
+              progress_stage = 'asset_transfer_retry_pending',
+              progress_percent = 75,
+              failure_json = NULL,
+              failed_at = NULL,
+              credit_status = 'reserved',
+              provider_status_json = COALESCE(provider_status_json, '{}'::jsonb) || jsonb_build_object(
+                'providerSucceeded', true,
+                'artifactTransferStatus', 'retry_pending'
+              ),
+              updated_at = $2
+          WHERE task_id = $1
+            AND status IN ('failed', 'manual_review_required', 'result_unknown', 'running')
+        `,
+        [candidate.task_id, input.now],
+      );
+    } else if (claim.recoveredQueueFailure) {
       await db.query(
         `
           UPDATE ai_generation_task_snapshots
@@ -1190,15 +1252,36 @@ async function markRunningPollRepairClaimed(
   const row = await queryOne<{ id: string }>(
     db,
     `
-      UPDATE tasks
-      SET last_dispatched_at = $2,
-          updated_at = $2
+      WITH manual_recovery AS (
+        SELECT id
+        FROM tasks
+        WHERE id = $1
+          AND status = 'manual_review_required'
+          AND failure_code = 'generation_queue_error'
+      ), claimed_task AS (
+        UPDATE tasks
+        SET last_dispatched_at = $2,
+            status = CASE
+              WHEN status = 'manual_review_required' AND failure_code = 'generation_queue_error'
+                THEN 'running'
+              ELSE status
+            END,
+            failure_code = CASE
+              WHEN status = 'manual_review_required' AND failure_code = 'generation_queue_error'
+                THEN NULL
+              ELSE failure_code
+            END,
+            updated_at = $2
       WHERE id = $1
         AND (
           status = 'running'
           OR (
             status = 'result_unknown'
             AND failure_code = 'lease_expired_after_external_start'
+          )
+          OR (
+            status = 'manual_review_required'
+            AND failure_code = 'generation_queue_error'
           )
         )
         AND task_type = $4
@@ -1211,7 +1294,30 @@ async function markRunningPollRepairClaimed(
           last_dispatched_at IS NULL
           OR last_dispatched_at < $3
         )
-      RETURNING id
+        RETURNING id, current_attempt_id
+      ), resumed_attempt AS (
+        UPDATE task_attempts attempt
+        SET status = 'running',
+            failure_code = NULL,
+            finished_at = NULL,
+            updated_at = $2
+        FROM claimed_task task
+        WHERE attempt.id = task.current_attempt_id
+          AND attempt.task_id = task.id
+          AND attempt.status = 'manual_review_required'
+      ), reopened_reservation AS (
+        UPDATE credit_reservations reservation
+        SET status = 'active',
+            updated_at = $2
+        FROM generation_task_credit_reservations task_reservation
+        JOIN claimed_task task ON task.id = task_reservation.task_id
+        JOIN manual_recovery recovery ON recovery.id = task.id
+        WHERE reservation.id = task_reservation.id
+          AND reservation.status = 'manual_review_required'
+          AND reservation.amount_reserved > 0
+      )
+      SELECT id
+      FROM claimed_task
     `,
     [input.taskId, input.now, input.staleCutoff, input.taskType],
   );
@@ -1227,15 +1333,29 @@ async function markRunningFinalizeRepairClaimed(
     now: Date;
     staleCutoff: Date;
   },
-): Promise<{ claimed: boolean; recoveredQueueFailure: boolean }> {
-  const row = await queryOne<{ id: string; recovered_queue_failure: boolean }>(
+): Promise<{ claimed: boolean; recoveredQueueFailure: boolean; recoveredImageFailure: boolean }> {
+  const row = await queryOne<{
+    id: string;
+    recovered_queue_failure: boolean;
+    recovered_image_failure: boolean;
+  }>(
     db,
     `
       WITH candidate AS (
         SELECT
           id,
           current_attempt_id,
-          (status = 'failed' AND failure_code = 'generation_queue_error') AS recovered_queue_failure
+          (status = 'failed' AND failure_code = 'generation_queue_error') AS recovered_queue_failure,
+          (
+            task_type = 'episode_generate_image'
+            AND (
+              (status = 'failed' AND failure_code = 'generation_queue_error')
+              OR (
+                status = 'manual_review_required'
+                AND failure_code IN ('generation_queue_error', 'provider_output_storage_failed')
+              )
+            )
+          ) AS recovered_image_failure
         FROM tasks
         WHERE id = $1
           AND (
@@ -1260,35 +1380,63 @@ async function markRunningFinalizeRepairClaimed(
       ),
       reopened_attempt AS (
         UPDATE task_attempts attempt
-        SET status = 'manual_review_required',
+        SET status = CASE
+              WHEN candidate.recovered_image_failure THEN 'running'
+              ELSE 'manual_review_required'
+            END,
+            failure_code = CASE
+              WHEN candidate.recovered_image_failure THEN NULL
+              ELSE attempt.failure_code
+            END,
             locked_by = NULL,
             locked_until = NULL,
             heartbeat_at = NULL,
             finished_at = NULL,
             updated_at = $2
         FROM candidate
-        WHERE candidate.recovered_queue_failure
+        WHERE (candidate.recovered_queue_failure OR candidate.recovered_image_failure)
           AND attempt.id = candidate.current_attempt_id
           AND attempt.task_id = candidate.id
-          AND attempt.status = 'failed'
-          AND attempt.failure_code = 'generation_queue_error'
+          AND attempt.status IN ('failed', 'manual_review_required', 'result_unknown', 'running')
+          AND (
+            candidate.recovered_image_failure
+            OR (attempt.status = 'failed' AND attempt.failure_code = 'generation_queue_error')
+          )
         RETURNING attempt.id
+      ),
+      reopened_reservation AS (
+        UPDATE credit_reservations reservation
+        SET status = 'active',
+            updated_at = $2
+        FROM generation_task_credit_reservations task_reservation
+        JOIN candidate ON candidate.id = task_reservation.task_id
+        WHERE candidate.recovered_image_failure
+          AND reservation.id = task_reservation.id
+          AND reservation.status = 'manual_review_required'
+          AND reservation.amount_reserved > 0
+        RETURNING reservation.id
       )
       UPDATE tasks task
       SET status = CASE
+            WHEN candidate.recovered_image_failure
+              THEN 'running'
             WHEN candidate.recovered_queue_failure
               THEN 'manual_review_required'
             ELSE task.status
+          END,
+          failure_code = CASE
+            WHEN candidate.recovered_image_failure THEN NULL
+            ELSE task.failure_code
           END,
           last_dispatched_at = $2,
           updated_at = $2
       FROM candidate
       WHERE task.id = candidate.id
         AND (
-          NOT candidate.recovered_queue_failure
+          (NOT candidate.recovered_queue_failure AND NOT candidate.recovered_image_failure)
           OR EXISTS (SELECT 1 FROM reopened_attempt)
         )
-      RETURNING task.id, candidate.recovered_queue_failure
+      RETURNING task.id, candidate.recovered_queue_failure, candidate.recovered_image_failure
     `,
     [input.taskId, input.now, input.staleCutoff, input.taskType],
   );
@@ -1296,6 +1444,7 @@ async function markRunningFinalizeRepairClaimed(
   return {
     claimed: Boolean(row),
     recoveredQueueFailure: row?.recovered_queue_failure === true,
+    recoveredImageFailure: row?.recovered_image_failure === true,
   };
 }
 

@@ -105,6 +105,59 @@ describe("creator canvas record service", { concurrency: false }, () => {
     }
   });
 
+  it("reuses cached canvas payloads while applying current relational positions", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T08:10:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [canvasNode("node-1", "image", 10, 20, "image", "Image")],
+        },
+        now: new Date("2026-06-12T08:11:00.000Z"),
+      });
+      let documentReads = 0;
+      let positionReads = 0;
+      const countingDb = {
+        async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
+          if (sql.includes("FROM creator_canvas_documents")) documentReads += 1;
+          if (sql.includes("FROM creator_canvas_nodes")) positionReads += 1;
+          return db.query<T>(sql, params);
+        },
+      };
+
+      const first = await findCanvasByCanvasProjectId(countingDb, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+      });
+      assert.equal(first?.document.nodes[0]?.position?.x, 10);
+      first!.document.viewport.x = 999;
+      await db.query(
+        "UPDATE creator_canvas_nodes SET position_x = 90, position_y = 120 WHERE canvas_project_id = $1 AND node_key = 'node-1'",
+        [canvas.canvasProjectId],
+      );
+
+      const second = await findCanvasByCanvasProjectId(countingDb, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+      });
+      assert.equal(second?.serverRevision, saved.serverRevision);
+      assert.equal(second?.document.viewport.x, 0);
+      assert.deepEqual(second?.document.nodes[0]?.position, { x: 90, y: 120 });
+      assert.equal(documentReads, 1);
+      assert.equal(positionReads, 2);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("scopes run idempotency keys to a canvas project", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -728,6 +781,71 @@ describe("creator canvas record service", { concurrency: false }, () => {
       assert.equal(transcriptNode?.data?.text, "第一句。第二句。");
       assert.equal(transcriptNode?.data?.sourceAudioNodeId, "audio-1");
       assert.equal(transcriptNode?.data?.transcriptionTaskId, taskId);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("writes successful Canvas image task results back to the active node", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T12:14:00.000Z"),
+      });
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [{
+            ...canvasNode("image-1", "ai-image", 80, 90, "image", "图片"),
+            data: {
+              ...canvasNode("image-1", "ai-image", 80, 90, "image", "图片").data,
+              status: "queued",
+              taskId: "90000000-0000-4000-8000-000000000101",
+              lastTaskId: "90000000-0000-4000-8000-000000000101",
+            },
+          }],
+          edges: [],
+        },
+        now: new Date("2026-06-12T12:15:00.000Z"),
+      });
+      await createCanvasNodeRun(db, {
+        canvasProjectId: saved.canvasProjectId,
+        nodeKey: "image-1",
+        idempotencyKey: "image-result-run",
+        status: "queued",
+        mediaKind: "image",
+        taskId: "90000000-0000-4000-8000-000000000101",
+        targetType: "canvas",
+        targetId: "image-1",
+        userId,
+        now: new Date("2026-06-12T12:15:30.000Z"),
+      });
+
+      await attachCanvasTaskResultToHistory(db, {
+        canvasProjectId: saved.canvasProjectId,
+        nodeKey: "image-1",
+        taskId: "90000000-0000-4000-8000-000000000101",
+        mediaKind: "image",
+        result: {
+          mediaKind: "image",
+          previewUrl: "https://cdn.example.test/canvas-node-result.png",
+          storageObjectId: "80000000-0000-4000-8000-000000000101",
+        },
+        userId,
+        now: new Date("2026-06-12T12:16:00.000Z"),
+      });
+
+      const current = await findCanvasByCanvasProjectId(db, { canvasProjectId: saved.canvasProjectId, userId });
+      const node = current?.document.nodes.find((item) => item.id === "image-1");
+      assert.equal(node?.data?.status, "completed");
+      assert.equal(node?.data?.previewUrl, "https://cdn.example.test/canvas-node-result.png");
+      assert.equal(node?.data?.imageUrl, "https://cdn.example.test/canvas-node-result.png");
+      assert.equal(node?.data?.storageObjectId, "80000000-0000-4000-8000-000000000101");
     } finally {
       await db.close();
     }

@@ -1201,6 +1201,95 @@ it("exposes Canvas batch DAG and cursor history HTTP contracts", async () => {
   }
 });
 
+it("queues every independent Canvas video node in the same generation batch", async () => {
+  const db = await createMigratedTestDb();
+  const server = createPhoneAuthDevServer({
+    db,
+    env: {
+      NODE_ENV: "test",
+      AUTH_SESSION_REDIS_CACHE_ENABLED: "false",
+      NEW_CANVAS_ENABLED: "true",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+      BULLMQ_WORKERS_ENABLED: "false",
+    },
+    repairScheduler: { enabled: false },
+  });
+  const userId = randomUUID();
+  const phone = `134${String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0")}`;
+  try {
+    await db.query(
+      "INSERT INTO users (id, phone_e164, password_hash, status) VALUES ($1,$2,$3,'active')",
+      [userId, phone, await createUserPasswordHash(defaultPasswordFromPhone(phone))],
+    );
+    await seedGenerationAccess(db, userId);
+    await server.listen(0);
+    const cookie = await passwordLogin(server.origin, phone);
+    const created = await api(server.origin, "/api/creator/canvas-projects", cookie, {
+      method: "POST",
+      body: { title: "Independent Video Nodes" },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const canvasId = String(created.body.data.project.id);
+    const saved = await api(server.origin, `/api/creator/canvas-projects/${canvasId}/canvas`, cookie, {
+      method: "PUT",
+      body: {
+        clientRevision: 1,
+        document: {
+          version: 2,
+          canvasProjectId: canvasId,
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [videoNode("video-one"), videoNode("video-two")],
+          edges: [],
+        },
+        events: [],
+      },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+
+    const createdBatch = await api(server.origin, `/api/canvas/${canvasId}/generation-batches`, cookie, {
+      method: "POST",
+      headers: { "idempotency-key": `video-batch:${randomUUID()}` },
+      body: {
+        nodes: ["video-one", "video-two"].map((nodeKey) => ({
+          nodeKey,
+          mediaKind: "video",
+          payload: {
+            model: "seedance-i2v-pro",
+            prompt: `Generate ${nodeKey}`,
+            parameters: { durationSec: 5 },
+          },
+        })),
+      },
+    });
+    const tasks = await db.query<{ target_id: string; status: string }>(`
+      SELECT input_snapshot_json->>'targetId' AS target_id,status
+      FROM tasks
+      WHERE canvas_project_id=$1 AND task_type='episode_generate_video'
+      ORDER BY input_snapshot_json->>'targetId'
+    `, [canvasId]);
+
+    assert.equal(createdBatch.status, 201, JSON.stringify(createdBatch.body));
+    assert.deepEqual(
+      createdBatch.body.data.batch.items.map((item: Record<string, unknown>) => ({
+        nodeKey: item.nodeKey,
+        status: item.status,
+        hasTask: Boolean(item.taskId),
+      })),
+      [
+        { nodeKey: "video-one", status: "queued", hasTask: true },
+        { nodeKey: "video-two", status: "queued", hasTask: true },
+      ],
+    );
+    assert.deepEqual(tasks.rows, [
+      { target_id: "video-one", status: "queued" },
+      { target_id: "video-two", status: "queued" },
+    ]);
+  } finally {
+    await server.close().catch(() => undefined);
+    await db.close();
+  }
+});
+
 it("blocks direct Canvas image intake when the new Canvas feature is disabled", async () => {
   const db = await createMigratedTestDb();
   const server = createPhoneAuthDevServer({
@@ -1405,6 +1494,15 @@ function imageNode(id: string, prompt = "") {
     type: "image",
     position: { x: 0, y: 0 },
     data: { mediaKind: "image", prompt, ports: { inputs: [], outputs: [] } },
+  };
+}
+
+function videoNode(id: string) {
+  return {
+    id,
+    type: "video",
+    position: { x: 0, y: 0 },
+    data: { mediaKind: "video", prompt: id, ports: { inputs: [], outputs: [] } },
   };
 }
 

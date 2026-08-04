@@ -35,11 +35,15 @@ describe("Canvas generation history artifact URLs", () => {
         id: "artifact-1",
         storage_object_id: "foreign-storage",
         url: "https://expired.test/private",
+        sourceUrl: "https://expired.test/source",
+        previewUrl: "https://expired.test/preview",
         thumbnail_url: "https://expired.test/thumb",
       }] }],
     }, async () => { throw new Error("storage_object_not_found"); });
 
     assert.equal(Object.hasOwn(result.items[0]?.artifacts[0] ?? {}, "url"), false);
+    assert.equal(Object.hasOwn(result.items[0]?.artifacts[0] ?? {}, "sourceUrl"), false);
+    assert.equal(Object.hasOwn(result.items[0]?.artifacts[0] ?? {}, "previewUrl"), false);
     assert.equal(Object.hasOwn(result.items[0]?.artifacts[0] ?? {}, "thumbnail_url"), false);
   });
 });

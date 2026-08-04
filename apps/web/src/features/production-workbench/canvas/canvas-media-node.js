@@ -195,7 +195,9 @@ export function renderCanvasVideoNodeBody(node = {}, options = {}) {
   const playing = options.playing === true || data.videoPlaying === true;
   const status = String(options.status ?? data.status ?? (fullscreen.url ? "ready" : "empty")).toLowerCase();
   const loading = ["queued", "running", "processing", "loading", "uploading"].includes(status);
-  const preview = fullscreen.url
+  const preview = loading
+    ? `<div class="canvas-video-empty is-loading" role="status"><strong>正在准备视频</strong></div>`
+    : fullscreen.url
     ? `<div class="canvas-video-preview" data-canvas-video-preview>
         <video data-canvas-video-player draggable="false" src="${escapeAttr(fullscreen.url)}"${directUrl && directUrl !== fullscreen.url ? ` data-canvas-video-fallback-src="${escapeAttr(directUrl)}"` : ""}${fullscreen.poster ? ` poster="${escapeAttr(fullscreen.poster)}"` : ""} playsinline preload="metadata" tabindex="-1" aria-label="${escapeAttr(fullscreen.label)}"></video>
         <div class="canvas-video-actions" role="toolbar" aria-label="视频工具">
@@ -204,7 +206,7 @@ export function renderCanvasVideoNodeBody(node = {}, options = {}) {
           <button type="button" data-action="toggle-canvas-video-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="全屏查看" title="全屏查看" aria-pressed="${fullscreen.open}"><span aria-hidden="true">↗</span></button>
         </div>
       </div>`
-    : `<div class="canvas-video-empty${loading ? " is-loading" : ""}" role="status"><strong>${loading ? "正在准备视频" : "暂无视频"}</strong></div>`;
+    : `<div class="canvas-video-empty" role="status"><strong>暂无视频</strong></div>`;
   return `<section class="canvas-video-node-body" data-canvas-video-body data-node-id="${escapeAttr(nodeId)}" aria-label="${escapeAttr(fullscreen.label)}">${preview}</section>`;
 }
 
@@ -253,7 +255,8 @@ export function resolveCanvasMediaNodeSource(node = {}, mediaKind = "", options 
   const assets = Array.isArray(options.assets) ? options.assets : [];
   const identity = resolveCanvasMediaStableIdentity(data, assets);
   if (identity.storageObjectId) {
-    return `/api/storage/objects/${encodeURIComponent(identity.storageObjectId)}/content?proxy=1`;
+    const contentUrl = `/api/storage/objects/${encodeURIComponent(identity.storageObjectId)}/content`;
+    return options.proxy === false ? contentUrl : `${contentUrl}?proxy=1`;
   }
   const directUrl = resolveCanvasMediaDirectUrl(node, mediaKind, options);
   return resolveCanvasMediaUrl(directUrl, mediaKind);
@@ -327,16 +330,31 @@ export function reconcileCanvasMediaDocumentSources(document = {}, assets = []) 
   let changed = false;
   const nodes = (Array.isArray(document?.nodes) ? document.nodes : []).map((node) => {
     const kind = canvasNodeMediaKind(node);
-    if (kind !== "audio" && kind !== "video") return node;
+    if (!kind) return node;
+    const nodeId = String(node?.id ?? "").trim();
+    const generatedAsset = assets.find((asset) => (
+      String(asset?.nodeKey ?? "").trim() === nodeId
+      && String(asset?.kind ?? "image").trim().toLowerCase() === kind
+    ));
     const identity = resolveCanvasMediaStableIdentity(nodeData(node), assets);
-    if (!identity.storageObjectId || String(node?.data?.storageObjectId ?? "").trim() === identity.storageObjectId) return node;
+    const storageObjectId = firstText(generatedAsset?.storageObjectId, identity.storageObjectId);
+    const assetVersionId = firstText(generatedAsset?.assetVersionId, identity.assetVersionId);
+    const mediaUrl = firstText(generatedAsset?.url, generatedAsset?.previewUrl);
+    if (!storageObjectId && !assetVersionId && !mediaUrl) return node;
+    if (
+      String(node?.data?.storageObjectId ?? "").trim() === storageObjectId
+      && String(node?.data?.assetVersionId ?? "").trim() === assetVersionId
+      && (!mediaUrl || String(node?.data?.previewUrl ?? "").trim() === mediaUrl)
+    ) return node;
     changed = true;
     return {
       ...node,
       data: {
         ...(node.data ?? {}),
-        storageObjectId: identity.storageObjectId,
-        ...(identity.assetVersionId ? { assetVersionId: identity.assetVersionId } : {}),
+        ...(storageObjectId ? { storageObjectId } : {}),
+        ...(assetVersionId ? { assetVersionId } : {}),
+        ...(mediaUrl ? { previewUrl: mediaUrl, resultUrl: mediaUrl, url: mediaUrl } : {}),
+        ...(generatedAsset ? { status: "completed" } : {}),
       },
     };
   });
@@ -377,6 +395,7 @@ function canvasNodeMediaKind(node) {
   const explicit = String(nodeData(node).mediaKind ?? "").toLowerCase();
   if (type.includes("audio") || explicit === "audio") return "audio";
   if (type.includes("video") || explicit === "video") return "video";
+  if (type.includes("image") || explicit === "image") return "image";
   return "";
 }
 

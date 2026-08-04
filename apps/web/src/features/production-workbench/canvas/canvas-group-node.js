@@ -1,3 +1,5 @@
+import { resolveCanvasMediaNodeSource } from "./canvas-media-node.js";
+
 export const CANVAS_GROUP_COLORS = Object.freeze([
   "#22c55e",
   "#3b82f6",
@@ -51,91 +53,74 @@ export function canvasSelectionContentNodeIds(document, nodeIds = []) {
   }))].filter((nodeId) => nodeById.get(nodeId)?.type !== "group");
 }
 
-export function resolveCanvasBatchDownloadItems(document, nodeIds = [], options = {}) {
+export function canvasConnectedVideoNodeIds(document, sourceNodeId) {
+  const sourceId = text(sourceNodeId);
   const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
-  const contentNodeIds = new Set(canvasSelectionContentNodeIds(document, nodeIds));
+  if (!sourceId || !nodes.length) return [];
   const nodeById = new Map(nodes.map((node) => [text(node?.id), node]));
-  const assets = Array.isArray(options.assets) ? options.assets : [];
-  const historyItems = Array.isArray(options.historyItems) ? options.historyItems : [];
-  const items = [];
-  const seen = new Set();
-  const addItem = (input = {}) => {
-    const storageObjectId = text(input.storageObjectId);
-    const url = text(input.url);
-    const key = storageObjectId ? `storage:${storageObjectId}` : url ? `url:${url}` : "";
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    items.push({
-      nodeId: text(input.nodeId),
-      storageObjectId,
+  const sourceNode = nodeById.get(sourceId);
+  if (!sourceNode) return [];
+  const targetsBySourceId = new Map();
+  for (const edge of Array.isArray(document?.edges) ? document.edges : []) {
+    const edgeSourceId = text(edge?.sourceNodeId);
+    const edgeTargetId = text(edge?.targetNodeId);
+    if (!edgeSourceId || !edgeTargetId || !nodeById.has(edgeTargetId)) continue;
+    const targetIds = targetsBySourceId.get(edgeSourceId) ?? [];
+    targetIds.push(edgeTargetId);
+    targetsBySourceId.set(edgeSourceId, targetIds);
+  }
+  const reachableNodeIds = new Set([sourceId]);
+  const pendingNodeIds = [sourceId];
+  while (pendingNodeIds.length) {
+    const currentId = pendingNodeIds.shift();
+    for (const targetId of targetsBySourceId.get(currentId) ?? []) {
+      if (reachableNodeIds.has(targetId)) continue;
+      reachableNodeIds.add(targetId);
+      pendingNodeIds.push(targetId);
+    }
+  }
+  const workflowVideoNodeIds = new Set((Array.isArray(sourceNode.data?.workflowNodes) ? sourceNode.data.workflowNodes : [])
+    .filter((item) => text(item?.kind ?? item) === "storyboard")
+    .map((item) => text(item?.id))
+    .filter(Boolean));
+  return nodes
+    .filter((node) => {
+      const nodeId = text(node?.id);
+      const nodeType = text(node?.type).toLowerCase();
+      const isVideo = text(node?.data?.mediaKind).toLowerCase() === "video" || nodeType.includes("video");
+      return isVideo && (
+        reachableNodeIds.has(nodeId)
+        || text(node?.data?.workflowParentId) === sourceId
+        || workflowVideoNodeIds.has(nodeId)
+      );
+    })
+    .map((node) => text(node.id));
+}
+
+export function resolveCanvasCurrentVideoDownloadItems(document, nodeIds = []) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const requestedNodeIds = new Set(canvasSelectionContentNodeIds(document, nodeIds));
+  return nodes.flatMap((node) => {
+    const nodeId = text(node?.id);
+    if (!requestedNodeIds.has(nodeId)) return [];
+    const nodeType = text(node?.type).toLowerCase();
+    const mediaKind = text(node?.data?.mediaKind).toLowerCase();
+    if (!nodeType.includes("video") && mediaKind !== "video") return [];
+    const url = resolveCanvasMediaNodeSource(node, "video");
+    if (!url) return [];
+    return [{
+      nodeId,
+      storageObjectId: "",
       url,
-      fileName: text(input.fileName) || "画布产物",
-      mediaKind: text(input.mediaKind) || "file",
-    });
-  };
+      fileName: text(node?.data?.fileName ?? node?.data?.name ?? node?.data?.title) || "画布视频",
+      mediaKind: "video",
+    }];
+  });
+}
 
-  for (const run of historyItems) {
-    const nodeId = text(run?.nodeKey ?? run?.node_id);
-    if (!contentNodeIds.has(nodeId)) continue;
-    const nodeTitle = text(nodeById.get(nodeId)?.data?.title) || "画布产物";
-    const artifacts = Array.isArray(run?.artifacts) ? run.artifacts : [];
-    artifacts.forEach((artifact, artifactIndex) => {
-      const metadata = artifact?.metadata && typeof artifact.metadata === "object"
-        ? artifact.metadata
-        : artifact?.metadata_json && typeof artifact.metadata_json === "object" ? artifact.metadata_json : {};
-      addItem({
-        nodeId,
-        storageObjectId: artifact?.storageObjectId ?? artifact?.storage_object_id,
-        url: artifact?.downloadUrl ?? artifact?.download_url ?? artifact?.url ?? metadata.downloadUrl ?? metadata.url,
-        fileName: metadata.fileName ?? metadata.name ?? metadata.title ?? artifact?.fileName ?? `${nodeTitle}-${artifactIndex + 1}`,
-        mediaKind: artifact?.artifactKind ?? artifact?.artifact_kind ?? run?.mediaKind,
-      });
-    });
-  }
-
-  for (const asset of assets) {
-    const nodeId = text(asset?.nodeKey ?? asset?.nodeId);
-    if (!contentNodeIds.has(nodeId)) continue;
-    addItem({
-      nodeId,
-      storageObjectId: asset?.storageObjectId,
-      url: asset?.downloadUrl ?? asset?.url ?? asset?.previewUrl,
-      fileName: asset?.fileName ?? asset?.title ?? asset?.name,
-      mediaKind: asset?.kind ?? asset?.mediaKind,
-    });
-  }
-
-  for (const nodeId of contentNodeIds) {
-    const node = nodeById.get(nodeId);
-    const data = node?.data && typeof node.data === "object" ? node.data : {};
-    const assetId = text(data.assetId ?? data.sourceAssetId);
-    const assetVersionId = text(data.assetVersionId ?? data.sourceAssetVersionId);
-    const asset = assets.find((candidate) => (
-      (assetId && text(candidate?.assetId ?? candidate?.id) === assetId)
-      || (assetVersionId && text(candidate?.assetVersionId) === assetVersionId)
-    ));
-    addItem({
-      nodeId,
-      storageObjectId: data.storageObjectId
-        ?? data.sourceStorageObjectId
-        ?? data.resultStorageObjectId
-        ?? data.mediaStorageObjectId
-        ?? asset?.storageObjectId,
-      url: data.downloadUrl
-        ?? data.resultUrl
-        ?? data.url
-        ?? data.assetUrl
-        ?? data.sourceUrl
-        ?? data.previewUrl
-        ?? asset?.downloadUrl
-        ?? asset?.url
-        ?? asset?.previewUrl,
-      fileName: data.fileName ?? data.name ?? data.title ?? asset?.fileName ?? asset?.title ?? node?.type,
-      mediaKind: data.mediaKind ?? asset?.kind ?? node?.type,
-    });
-  }
-
-  return items;
+export function resolveCanvasBatchDownloadItems(document, nodeIds = [], options = {}) {
+  void options;
+  return resolveCanvasCurrentVideoDownloadItems(document, nodeIds);
 }
 
 export function updateCanvasGroupData(document, groupId, patch = {}) {
@@ -155,6 +140,18 @@ export function updateCanvasGroupData(document, groupId, patch = {}) {
 
 export function renderCanvasGroupNodeBody(node = {}) {
   const nodeId = text(node?.id);
+  const workflowGroupKind = text(node?.data?.scriptWorkflowGroupKind);
+  if (workflowGroupKind === "assets" || workflowGroupKind === "storyboards") {
+    const title = text(node?.data?.title) || (workflowGroupKind === "assets" ? "资产批量生成" : "分镜批量生成");
+    const count = canvasGroupChildIds(node).length;
+    const detail = workflowGroupKind === "assets" ? "角色 · 场景 · 道具" : "视频分镜";
+    const color = normalizeCanvasGroupColor(node?.data?.color);
+    return `<section class="canvas-group-node-body is-script-workflow-group is-${workflowGroupKind}" data-canvas-group-body data-node-id="${escapeAttr(nodeId)}" style="--canvas-script-group-accent:${escapeAttr(color)}">
+      <span class="canvas-script-group-kicker">批量运行</span>
+      <strong class="canvas-group-node-label">${escapeHtml(title)}</strong>
+      <span class="canvas-script-group-meta">${escapeHtml(detail)} · ${count} 个节点</span>
+    </section>`;
+  }
   return `<section class="canvas-group-node-body" data-canvas-group-body data-node-id="${escapeAttr(nodeId)}">
     <strong class="canvas-group-node-label">运行组</strong>
   </section>`;
@@ -168,4 +165,8 @@ function escapeAttr(value) {
     '"': "&quot;",
     "'": "&#39;",
   })[character]);
+}
+
+function escapeHtml(value) {
+  return escapeAttr(value);
 }

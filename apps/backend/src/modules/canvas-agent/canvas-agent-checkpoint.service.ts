@@ -4,6 +4,7 @@ import type { CanvasAgentActor } from "./canvas-agent.types.ts";
 
 export interface CanvasAgentCanvasRevisionGateway {
   readRevision(input: { canvasId: string; actor: CanvasAgentActor }): Promise<number>;
+  createCheckpointRevision?(input: { canvasId: string; actor: CanvasAgentActor; now: Date }): Promise<number>;
   restoreRevision(input: {
     canvasId: string;
     actor: CanvasAgentActor;
@@ -28,10 +29,16 @@ export class CanvasAgentCheckpointService {
     actor: CanvasAgentActor;
     now: Date;
   }) {
-    const revision = await this.deps.canvas.readRevision({
-      canvasId: input.canvasId,
-      actor: input.actor,
-    });
+    const revision = this.deps.canvas.createCheckpointRevision
+      ? await this.deps.canvas.createCheckpointRevision({
+          canvasId: input.canvasId,
+          actor: input.actor,
+          now: input.now,
+        })
+      : await this.deps.canvas.readRevision({
+          canvasId: input.canvasId,
+          actor: input.actor,
+        });
     const checkpoint = {
       canvasId: input.canvasId,
       revision,

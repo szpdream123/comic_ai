@@ -1,10 +1,11 @@
-import type { JobsOptions } from "bullmq";
+import { UnrecoverableError, type JobsOptions } from "bullmq";
 
 import {
   buildGenerationBullMQJobId,
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
 
 type SubmitVideoResult =
   | { status: "submitted"; externalRequestId: string | null }
@@ -416,7 +417,7 @@ export async function handleGenerationFinalizeArtifactJob(
         now: input.now,
       });
       if (result.status === "failed") {
-        return { status: "failed", failureCode: result.failureCode };
+        throwArtifactProcessorFailure("image", result.failureCode);
       }
       return { status: result.status };
     }
@@ -447,7 +448,7 @@ export async function handleGenerationFetchArtifactJob(
   try {
     const result = await runFetchArtifactProcessor(input);
     if (result.status === "failed") {
-      throw Object.assign(new Error(result.failureCode), { failureCode: result.failureCode });
+      throwArtifactProcessorFailure(input.job.data.mediaType, result.failureCode);
     }
     if (result.status !== "succeeded") {
       return {
@@ -460,6 +461,17 @@ export async function handleGenerationFetchArtifactJob(
   } finally {
     if (permit?.granted) await permit.release();
   }
+}
+
+function throwArtifactProcessorFailure(mediaType: "video" | "image" | "audio", failureCode: string): never {
+  const error = Object.assign(new Error(failureCode), { failureCode });
+  if (
+    mediaType === "image"
+    && classifyGptImageArtifactRecoveryFailure(error).kind === "permanent"
+  ) {
+    throw Object.assign(new UnrecoverableError(error.message), { failureCode });
+  }
+  throw error;
 }
 
 export async function handleGenerationPersistArtifactJob(

@@ -77,3 +77,71 @@ it("injects Canvas character @drama references into top-level and model generati
     await db.close();
   }
 });
+
+it("combines a Canvas batch node prompt with its skill and sends the skill cover as a reference", () => {
+  const skill = {
+    id: randomUUID(),
+    category: "image_style" as const,
+    title: "儿童绘画",
+    content: "儿童绘画风格，明亮蜡笔笔触。",
+    coverImageUrl: "https://example.test/skills/children-drawing.png",
+    coverStorageObjectId: null,
+    priceCredits: 0,
+    official: true,
+    ownerUserId: null,
+  };
+  const withSkill = __phoneAuthDevServerTestUtils.prependCanvasGenerationSkill({
+    prompt: "一名小女孩在花园中奔跑",
+    parameters: {
+      referenceImages: [{ url: "https://example.test/node-reference.png" }],
+    },
+  }, skill);
+  const result = __phoneAuthDevServerTestUtils.appendCanvasGenerationSkillReference(withSkill, skill);
+  const skillReferences = result.referenceImages as Array<Record<string, unknown>>;
+
+  assert.equal(
+    result.prompt,
+    "儿童绘画风格，明亮蜡笔笔触。\n\n一名小女孩在花园中奔跑",
+  );
+  assert.deepEqual(skillReferences, [{
+    id: `prompt-skill-reference:${skill.id}`,
+    kind: "image",
+    originalName: "技能缩略图",
+    isGenerationStyleReference: true,
+    url: skill.coverImageUrl,
+  }]);
+  assert.deepEqual((result.parameters as Record<string, unknown>).referenceImages, [
+    { url: "https://example.test/node-reference.png" },
+    skillReferences[0],
+  ]);
+  assert.deepEqual((result.parameters as Record<string, unknown>).quickReferences, [skillReferences[0]]);
+});
+
+it("sends a selected image style skill cover as a generation reference", () => {
+  const skill = {
+    id: randomUUID(),
+    category: "image_style" as const,
+    title: "邵氏兄弟风",
+    content: "邵氏兄弟风格，复古港片色彩。",
+    coverImageUrl: "https://storage.example.test/officialStyles/hong_kong_anime.webp",
+    coverStorageObjectId: randomUUID(),
+    priceCredits: 0,
+    official: true,
+    ownerUserId: null,
+  };
+
+  const selected = __phoneAuthDevServerTestUtils.imageGenerationSkillReference(null, skill);
+  const result = __phoneAuthDevServerTestUtils.appendCanvasGenerationSkillReference({
+    prompt: "黄昏街道",
+    parameters: {},
+  }, selected);
+
+  assert.deepEqual(result.referenceImages, [{
+    id: `prompt-skill-reference:${skill.id}`,
+    kind: "image",
+    originalName: "技能缩略图",
+    isGenerationStyleReference: true,
+    url: skill.coverImageUrl,
+  }]);
+  assert.deepEqual((result.parameters as Record<string, unknown>).referenceImages, result.referenceImages);
+});

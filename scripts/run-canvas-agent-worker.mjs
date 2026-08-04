@@ -39,10 +39,10 @@ const queueName = assertCanvasAgentQueueName(shardConfig.baseQueueName);
 const dispatchIntervalMs = positiveInteger(
   process.env.CANVAS_AGENT_OUTBOX_DISPATCH_INTERVAL_MS
     ?? process.env.CANVAS_AGENT_WORKER_POLL_INTERVAL_MS,
-  10_000,
+  1_000,
 );
 const maintenanceIntervalMs = positiveInteger(process.env.CANVAS_AGENT_MAINTENANCE_INTERVAL_MS, 60_000);
-const fallbackScanIntervalMs = positiveInteger(process.env.CANVAS_AGENT_FALLBACK_SCAN_INTERVAL_MS, 60_000);
+const fallbackScanIntervalMs = positiveInteger(process.env.CANVAS_AGENT_FALLBACK_SCAN_INTERVAL_MS, 5_000);
 const batchSize = positiveInteger(process.env.CANVAS_AGENT_WORKER_BATCH_SIZE, 2);
 const outboxBatchSize = positiveInteger(process.env.CANVAS_AGENT_OUTBOX_BATCH_SIZE, 50);
 const concurrency = shardConfig.workerConcurrency;
@@ -154,7 +154,9 @@ async function discoverCanvasAgentShardWorkers() {
       shardQueueName,
       async (job) => {
         const taskId = readTaskId(job.data?.taskId);
-        return executionGate.run(() => runWithDatabaseContext(() => runtime.worker.processTask(taskId)));
+        const result = await executionGate.run(() => runWithDatabaseContext(() => runtime.worker.processTask(taskId)));
+        if (result.status === "queued") throw new Error("canvas_agent_task_deferred");
+        return result;
       },
       {
         connection: canvasAgentRedisConnectionFromUrl(queueConfig.redisUrl),

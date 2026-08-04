@@ -14,6 +14,7 @@ import { upsertQueuedGenerationTaskSnapshot } from "../model-gateway/generation-
 import {
   CanvasConflictError,
   createCanvasNodeRun,
+  ensureCanvasCheckpointRevision,
   findCanvasByCanvasProjectId,
   saveCanvasByCanvasProjectId,
   selectCanvasNodeArtifact,
@@ -161,6 +162,13 @@ export function createCanvasAgentWorkerRuntime(input: {
   const checkpoint = new CanvasAgentCheckpointService({
     db: input.db,
     canvas: {
+      async createCheckpointRevision({ canvasId, actor, now: checkpointNow }) {
+        return ensureCanvasCheckpointRevision(input.db, {
+          canvasProjectId: canvasId,
+          actorScope: actorScope(canvasId, actor),
+          now: checkpointNow,
+        });
+      },
       async readRevision({ canvasId, actor }) {
         const canvas = await findCanvasByCanvasProjectId(input.db, {
           canvasProjectId: canvasId,

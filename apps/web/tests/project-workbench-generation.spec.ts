@@ -36,6 +36,7 @@ import {
   loadStandaloneCanvasProjectForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
+  persistCanvasNodePositionsForTest,
   persistCanvasSessionForTest,
   persistStoryboardCardDescriptionForTest,
   persistStoryboardDescriptionFromCardForTest,
@@ -33303,6 +33304,60 @@ describe("production workbench project tab", () => {
     }
   });
 
+  it("starts the direct canvas document request before the project list finishes", async () => {
+    const previousWindow = globalThis.window;
+    globalThis.window = {
+      location: {
+        pathname: "/canvas",
+        search: "?canvasProjectId=canvas-direct",
+        hash: "#tools-canvas",
+      },
+    };
+    let releaseProjects;
+    const projectsPending = new Promise((resolve) => { releaseProjects = resolve; });
+    const calls = [];
+    const workbench = {
+      api: {
+        async getCanvasProjects() {
+          calls.push("projects-started");
+          return projectsPending;
+        },
+        async getStandaloneCanvas(canvasProjectId) {
+          calls.push(["document-started", canvasProjectId]);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 3,
+              document: createDefaultCanvasDocument({ projectId: canvasProjectId }),
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-direct",
+        canvasProjects: null,
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    try {
+      let syncFinished = false;
+      const syncPending = syncCanvasProjectsFromApiForTest(workbench).then(() => { syncFinished = true; });
+      await Promise.resolve();
+
+      assert.deepEqual(calls, [["document-started", "canvas-direct"], "projects-started"]);
+      assert.equal(syncFinished, false);
+
+      releaseProjects({ projects: [{ id: "canvas-direct", title: "直接画布" }] });
+      await syncPending;
+      assert.equal(workbench.ui.canvasDocument.canvasProjectId, "canvas-direct");
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
   it("loads backend generation config when opening a canvas project and renders image parameters", async () => {
     const configCalls = [];
     const workbench = {
@@ -33983,14 +34038,39 @@ describe("production workbench project tab", () => {
       menuHtml.indexOf('</section>', menuHtml.indexOf('data-canvas-node-group="source"')),
     );
 
+    assert.doesNotMatch(menuHtml, /data-action="delete-canvas-selection"/);
     assert.match(generatorGroup, /生成节点/);
     assert.match(generatorGroup, /data-template-id="template-ai-text"[\s\S]*?<kbd[^>]*>1<\/kbd>/);
-    assert.match(generatorGroup, /data-template-id="template-ai-director"[\s\S]*?<kbd[^>]*>7<\/kbd>/);
+    assert.doesNotMatch(generatorGroup, /data-template-id="template-script"/);
+    assert.doesNotMatch(generatorGroup, /data-template-id="template-ai-director"/);
     assert.match(sourceGroup, /来源节点/);
     assert.match(sourceGroup, /data-template-id="template-source-text"[\s\S]*?<kbd[^>]*>Alt\+1<\/kbd>/);
+    assert.match(sourceGroup, /data-template-id="template-script"[\s\S]*?剧本源[\s\S]*?<kbd[^>]*>Alt\+2<\/kbd>/);
+    assert.match(sourceGroup, /data-template-id="template-ai-director"[\s\S]*?<kbd[^>]*>Alt\+7<\/kbd>/);
+    assert.match(sourceGroup, /data-template-id="template-upload"[\s\S]*?上传/);
+    assert.doesNotMatch(sourceGroup, /template-source-image|template-source-video|template-source-audio/);
+    assert.doesNotMatch(sourceGroup, /data-template-id="template-group"/);
     assert.doesNotMatch(menuHtml, /template-ai-markdown|template-markdown|template-ai-animation/);
     assert.doesNotMatch(menuHtml, /undo-canvas-change|redo-canvas-change|撤销|重做/);
-    assert.match(menuHtml, /data-action="add-canvas-template" data-template-id="template-group"/);
+    assert.doesNotMatch(menuHtml, /data-action="add-canvas-template" data-template-id="template-group"/);
+  });
+
+  it("shows the batch delete action only when Canvas nodes are selected", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasContextMenu: { mode: "add", x: 180, y: 120, deleteSelectionEligible: true },
+      }),
+    });
+    const menuHtml = html.slice(
+      html.indexOf('data-canvas-context-menu'),
+      html.indexOf("</aside>", html.indexOf('data-canvas-context-menu')),
+    );
+
+    assert.match(menuHtml, /data-action="delete-canvas-selection"[\s\S]*?删除[\s\S]*?data-action="paste-canvas-selection"/);
   });
 
   it("does not create an unavailable AI Markdown node from the former Alt+5 Canvas shortcut", async () => {
@@ -34157,6 +34237,53 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasDocument.edges.length, 0);
     assert.equal(workbench.ui.canvasContextMenu, null);
     assert.equal(workbench.ui.canvasEditorOpen, false);
+  });
+
+  it("deletes only the nodes currently box-selected from the Canvas batch menu", async () => {
+    const selectedIds = ["send-flow", "image-result"];
+    const workbench = {
+      state: buildProjectState(),
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasNodeId: "script-source",
+        canvasContextMenu: { mode: "add", x: 200, y: 200 },
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "episode-primary",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            { id: "script-source", type: "script", position: { x: 120, y: 120 }, data: { ports: { inputs: [], outputs: [{ id: "out_text" }] } } },
+            { id: "send-flow", type: "send", position: { x: 520, y: 116 }, data: { ports: { inputs: [{ id: "in_text" }], outputs: [{ id: "out_image" }] } } },
+            { id: "image-result", type: "image", position: { x: 920, y: 116 }, data: { ports: { inputs: [{ id: "in_image" }], outputs: [{ id: "out_image" }] } } },
+          ],
+          edges: [
+            { id: "edge-script-send", sourceNodeId: "script-source", sourcePortId: "out_text", targetNodeId: "send-flow", targetPortId: "in_text" },
+            { id: "edge-send-image", sourceNodeId: "send-flow", sourcePortId: "out_image", targetNodeId: "image-result", targetPortId: "in_image" },
+          ],
+        },
+      }),
+      canvasGraph: {
+        getSelectedCells: () => selectedIds.map((id) => ({ id, isNode: () => true })),
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "delete-canvas-selection" },
+    });
+
+    assert.deepEqual(workbench.ui.canvasDocument.nodes.map((node) => node.id), ["script-source"]);
+    assert.equal(workbench.ui.canvasDocument.edges.length, 0);
+    assert.equal(workbench.ui.selectedCanvasNodeId, "script-source");
+    assert.match(workbench.ui.toast, /已删除 2 个画布节点/);
   });
 
   it("renders upload canvas nodes as a single media upload box", () => {
@@ -38643,6 +38770,41 @@ describe("production workbench project tab", () => {
     assert.equal(persistCanvasViewportBeforePageHide(workbench), true);
     assert.deepEqual(persistedDocument.viewport, { x: 48, y: -24, zoom: 0.37 });
     assert.match(source, /addEventListener\?\.\("pagehide", workbench\.persistCanvasViewportBeforePageHide, \{ once: true \}\)/);
+  });
+
+  it("retries Canvas position saves once with the latest server revision", async () => {
+    const calls = [];
+    const workbench = {
+      api: {
+        async saveCanvasNodePositions(canvasProjectId, input, options) {
+          calls.push({ canvasProjectId, input, options });
+          if (calls.length === 1) {
+            const error = new Error("revision conflict");
+            error.errorCode = "canvas_revision_conflict";
+            error.details = { serverRevision: 8 };
+            throw error;
+          }
+          return { canvas: { canvasProjectId, serverRevision: 8 } };
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 7,
+        canvasSaveStatus: "pending",
+      }),
+    };
+
+    await persistCanvasNodePositionsForTest(workbench, [{ nodeKey: "image-node", x: 240, y: 180 }]);
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].input.clientRevision, 7);
+    assert.equal(calls[1].input.clientRevision, 8);
+    assert.deepEqual(calls[1].input.positions, calls[0].input.positions);
+    assert.equal(calls[1].options.timeoutMs, 30_000);
+    assert.equal(workbench.ui.canvasServerRevision, 8);
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasSaveError, "");
   });
 
   it("preserves the local Canvas draft and exposes recovery data on a revision conflict", async () => {

@@ -72,8 +72,14 @@ export async function listCanvasGenerationHistory(
            COALESCE(run.generation_snapshot_id, snapshot_by_id.id, snapshot_by_task.id) AS generation_snapshot_id,
            COALESCE(run.provider_request_id, snapshot_by_id.provider_request_id, snapshot_by_task.provider_request_id) AS provider_request_id,
            run.created_at, run.updated_at,
-           COALESCE(jsonb_agg(to_jsonb(artifact) ORDER BY artifact.created_at DESC)
-             FILTER (WHERE artifact.id IS NOT NULL), '[]'::jsonb) AS artifacts
+           CASE
+             WHEN COUNT(artifact.id) > 0 THEN COALESCE(
+               jsonb_agg(to_jsonb(artifact) ORDER BY artifact.created_at DESC)
+                 FILTER (WHERE artifact.id IS NOT NULL),
+               '[]'::jsonb
+             )
+             ELSE COALESCE(snapshot_by_id.result_assets_json, snapshot_by_task.result_assets_json, '[]'::jsonb)
+           END AS artifacts
     FROM creator_canvas_node_runs run
     LEFT JOIN ai_generation_task_snapshots snapshot_by_id
       ON snapshot_by_id.id = run.generation_snapshot_id
@@ -216,6 +222,11 @@ export async function hydrateCanvasGenerationHistoryArtifactUrls<T extends {
       if (!urls) {
         const {
           url: _url,
+          imageUrl: _imageUrl,
+          videoUrl: _videoUrl,
+          audioUrl: _audioUrl,
+          sourceUrl: _sourceUrl,
+          previewUrl: _previewUrl,
           thumbnail_url: _thumbnailUrl,
           thumbnailUrl: _thumbnailUrlCamel,
           downloadUrl: _downloadUrl,

@@ -141,6 +141,19 @@ test("Canvas media fragments expose waveform, seek, frame capture, and fullscree
   assert.match(renderCanvasMediaNodeBody({ type: "source-audio", data: { audioUrl: "/voice.wav" } }), /data-canvas-audio-body/);
 });
 
+test("Canvas video regeneration hides the previous result while the new video is preparing", () => {
+  const html = renderCanvasVideoNodeBody({
+    id: "video-regenerating",
+    type: "ai-video",
+    data: {
+      status: "running",
+      videoUrl: "/previous-video.mp4",
+    },
+  });
+  assert.match(html, /正在准备视频/);
+  assert.doesNotMatch(html, /data-canvas-video-player|previous-video\.mp4/);
+});
+
 test("Canvas video fullscreen state and rendering reject unsafe media URLs", () => {
   const state = normalizeCanvasVideoFullscreenState({ data: { videoUrl: "javascript:alert(1)", videoFullscreen: true } });
   assert.deepEqual(state, { open: false, canOpen: false, url: "", poster: "", label: "视频预览" });
@@ -170,6 +183,9 @@ test("Canvas media sources prefer stable storage identity and resolve asset vers
       videoUrl: "https://signed.test/video.mp4?expires=1",
     },
   }, "video"), "/api/storage/objects/storage%2Fvideo%201/content?proxy=1");
+  assert.equal(resolveCanvasMediaNodeSource({
+    data: { storageObjectId: "storage/image-1" },
+  }, "image", { proxy: false }), "/api/storage/objects/storage%2Fimage-1/content");
 
   const assets = [{
     assetVersionId: "version-audio-1",

@@ -6532,6 +6532,26 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(privateItem.contentVisible, false);
       assert.equal(Object.prototype.hasOwnProperty.call(privateItem, "content"), false);
 
+      const createOfficialResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          title: "后台新增人物提示词",
+          category: "character_extract",
+          summary: "由后台手动新增的人物抽取提示词",
+          content: "这是可由后台手动新增并发布的人物抽取提示词完整正文。",
+          priceCredits: 8,
+          usageCount: 0,
+          status: "published",
+        }),
+      });
+      const createOfficialPayload = await createOfficialResponse.json();
+      const createdOfficial = createOfficialPayload.data?.item ?? createOfficialPayload.item ?? createOfficialPayload.body?.item;
+      assert.equal(createOfficialResponse.status, 201, JSON.stringify(createOfficialPayload));
+      assert.equal(createdOfficial?.official, true);
+      assert.equal(createdOfficial?.category, "character_extract");
+      assert.equal(createdOfficial?.status, "published");
+
       const updateResponse = await fetch(`${server.origin}/api/admin/prompt-marketplace/items/${item.id}`, {
         method: "PATCH",
         headers: { cookie, "content-type": "application/json" },

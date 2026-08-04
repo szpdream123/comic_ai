@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   copyCanvasAsset,
   downloadCanvasAsset,
+  downloadCanvasAssetArchive,
   fetchCanvasAssetBlob,
   normalizeCanvasAssetFileName,
 } from "../src/features/production-workbench/canvas/canvas-asset-transfer.js";
@@ -102,6 +103,37 @@ test("Canvas asset copy writes the fetched Blob through ClipboardItem", async ()
   });
   assert.equal(clipboardWrites.length, 1);
   assert.equal(clipboardWrites[0][0].value["image/webp"].size, 2);
+});
+
+test("Canvas batch download writes every media and text item into one archive", async () => {
+  const files = [];
+  const operations = [];
+  class JSZipStub {
+    file(name, blob) { files.push([name, blob]); }
+    async generateAsync(options) {
+      assert.deepEqual(options, { type: "blob", compression: "STORE" });
+      return new Blob(["zip"], { type: "application/zip" });
+    }
+  }
+  const anchor = { click: () => operations.push("click"), remove: () => operations.push("remove") };
+  const result = await downloadCanvasAssetArchive({
+    items: [
+      { storageObjectId: "storage-1", fileName: "镜头", mediaKind: "video" },
+      { storageObjectId: "storage-2", fileName: "镜头", mediaKind: "video" },
+      { textContent: "旁白内容", fileName: "旁白.txt", mediaKind: "text" },
+    ],
+    fileName: "运行组.zip",
+    JSZipCtor: JSZipStub,
+    fetchImpl: async () => responseFromChunks([new Uint8Array([1])], "video/mp4"),
+    documentRef: { createElement: () => anchor, body: { append: () => operations.push("append") } },
+    urlApi: { createObjectURL: () => "blob:zip", revokeObjectURL: (url) => operations.push(`revoke:${url}`) },
+  });
+
+  assert.deepEqual(files.map(([name]) => name), ["镜头.mp4", "镜头-2.mp4", "旁白.txt"]);
+  assert.equal(files[2][1].type, "text/plain;charset=utf-8");
+  assert.equal(anchor.download, "运行组.zip");
+  assert.deepEqual(operations, ["append", "click", "remove", "revoke:blob:zip"]);
+  assert.deepEqual({ downloaded: result.downloaded, failed: result.failed, total: result.total }, { downloaded: 3, failed: 0, total: 3 });
 });
 
 test("Canvas asset transfer rejects truncated content and normalizes empty names", async () => {

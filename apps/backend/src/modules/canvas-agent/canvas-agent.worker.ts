@@ -129,7 +129,7 @@ export class CanvasAgentWorker {
       leaseMs: this.leaseMs,
       now: this.now(),
     });
-    if (!lockHeld) return { taskId, status: "skipped" };
+    if (!lockHeld) return { taskId, status: "queued" };
     const claimed = await this.claimTask(this.deps.db, {
       taskId,
       workerId: this.deps.workerId,

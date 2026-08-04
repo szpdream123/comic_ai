@@ -51,7 +51,7 @@ const canvasEdgeKinds = new Set(["execution", "reference", "layout", "control"])
  * belong to this contract: they are runtime inputs, not reusable tools.
  */
 export const CANONICAL_WORKFLOW_NODE_PORTS = Object.freeze({
-  script: Object.freeze({ inputs: [], outputs: [{ id: "out_text", kind: "text" }] }),
+  script: Object.freeze({ inputs: [{ id: "in_text", kind: "text" }], outputs: [{ id: "out_text", kind: "text" }] }),
   director: Object.freeze({ inputs: [{ id: "in_any", kind: "any" }], outputs: [{ id: "out_text", kind: "text" }] }),
   image: Object.freeze({ inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image"] }], outputs: [{ id: "out_image", kind: "image" }] }),
   video: Object.freeze({ inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image", "video", "audio"] }], outputs: [{ id: "out_video", kind: "video" }] }),

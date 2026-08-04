@@ -12,6 +12,11 @@ export interface CanvasAgentBullMQConfig {
   shardingEnabled?: boolean;
 }
 
+export const CANVAS_AGENT_WAKEUP_RETRY_OPTIONS = Object.freeze({
+  attempts: 300,
+  backoff: { type: "fixed" as const, delay: 1_000 },
+});
+
 export function createBullMQCanvasAgentPublisher(
   config: CanvasAgentBullMQConfig,
 ): CanvasAgentWakeupPublisher & { close(): Promise<void> } {
@@ -50,8 +55,7 @@ export function createBullMQCanvasAgentPublisher(
         input,
         {
           jobId: canvasAgentWakeupJobId(input.eventKey),
-          attempts: 5,
-          backoff: { type: "exponential", delay: 1_000 },
+          ...CANVAS_AGENT_WAKEUP_RETRY_OPTIONS,
           removeOnComplete: { age: 86_400, count: 10_000 },
           removeOnFail: { age: 604_800, count: 50_000 },
         },
