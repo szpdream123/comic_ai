@@ -41,10 +41,37 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
             "endpoint":"/v1/images/generations",
             "createTaskEndpoint":"/v1/images/generations",
             "editEndpoint":"/v1/images/edits",
-            "resultFormat":"b64_json"
+            "resultFormat":"b64_json",
+            "apiKeyEnv":"CUSTOM_BANANA_KEY",
+            "timeoutMs":4242,
+            "vendorExtension":{"mode":"keep"}
           }'::jsonb,
           pricing_json, limits_json, ui_config_json, status, sort_order + 1,
           'migration coverage for copied BananaRouter image models'
+        FROM ai_model_configs
+        WHERE model_code = 'bananarouter-gpt-image-2';
+
+        UPDATE ai_model_configs
+        SET provider_config_json = provider_config_json || '{
+          "migrationSentinel":"banana-video",
+          "timeoutMs":8765
+        }'::jsonb
+        WHERE model_code = 'bananarouter-sora2';
+
+        INSERT INTO ai_model_configs (
+          id, model_code, display_name, provider_name, provider_model, provider_protocol,
+          invocation_mode, media_type, task_modes_json, capabilities_json,
+          parameter_schema_json, default_params_json, provider_config_json, pricing_json,
+          limits_json, ui_config_json, status, sort_order, remark
+        )
+        SELECT
+          gen_random_uuid(), 'other-provider-image', 'Other Provider Image',
+          'OtherProvider', provider_model, 'openai_images',
+          'sync', media_type, task_modes_json, capabilities_json,
+          parameter_schema_json, default_params_json,
+          '{"migrationSentinel":"other-provider","timeoutMs":9876}'::jsonb,
+          pricing_json, limits_json, ui_config_json, status, sort_order + 2,
+          'migration boundary coverage for another image provider'
         FROM ai_model_configs
         WHERE model_code = 'bananarouter-gpt-image-2';
 
@@ -114,6 +141,16 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         LEFT JOIN ai_model_dispatch_policies policy ON policy.model_config_id = model.id
         WHERE model.model_code = 'bananarouter-custom-image'
       `);
+      const unaffectedModels = await db.query<{
+        model_code: string;
+        invocation_mode: string;
+        provider_config_json: Record<string, unknown>;
+      }>(`
+        SELECT model_code, invocation_mode, provider_config_json
+        FROM ai_model_configs
+        WHERE model_code IN ('bananarouter-sora2', 'other-provider-image')
+        ORDER BY model_code
+      `);
 
       assert.equal(model.rows[0]?.invocation_mode, "async_polling");
       assert.equal(model.rows[0]?.capabilities_json.asyncPolling, true);
@@ -131,7 +168,17 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       assert.equal(copiedModel.rows[0]?.provider_config_json.queryTaskEndpoint, "/v1/async-tasks/{taskId}");
       assert.equal(copiedModel.rows[0]?.provider_config_json.requestFormat, "banana_router_openai_images");
       assert.equal(copiedModel.rows[0]?.provider_config_json.resultFormat, "url");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.apiKeyEnv, "CUSTOM_BANANA_KEY");
+      assert.equal(copiedModel.rows[0]?.provider_config_json.timeoutMs, 4242);
+      assert.deepEqual(copiedModel.rows[0]?.provider_config_json.vendorExtension, { mode: "keep" });
       assert.equal(copiedModel.rows[0]?.poll_queue_name, "generation-poll-image");
+      const bananaVideo = unaffectedModels.rows.find((row) => row.model_code === "bananarouter-sora2");
+      const otherProviderImage = unaffectedModels.rows.find((row) => row.model_code === "other-provider-image");
+      assert.equal(bananaVideo?.provider_config_json.migrationSentinel, "banana-video");
+      assert.equal(bananaVideo?.provider_config_json.timeoutMs, 8765);
+      assert.equal(otherProviderImage?.invocation_mode, "sync");
+      assert.equal(otherProviderImage?.provider_config_json.migrationSentinel, "other-provider");
+      assert.equal(otherProviderImage?.provider_config_json.timeoutMs, 9876);
     } finally {
       await db.close();
     }

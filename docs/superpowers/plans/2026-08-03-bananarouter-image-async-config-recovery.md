@@ -1,5 +1,10 @@
 # BananaRouter Image Async Config Recovery Implementation Plan
 
+> **Superseded:** This earlier mixed sync/async recovery plan was replaced by
+> `2026-08-03-bananarouter-image-async-only.md`. Do not use its synchronous
+> rollback snapshot or single-model migration instructions for deployment or
+> incident recovery.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make new and existing model configurations round-trip without transport drift, and complete BananaRouter GPT Image 2's documented asynchronous generation and edit recovery contract without changing the original synchronous paths.

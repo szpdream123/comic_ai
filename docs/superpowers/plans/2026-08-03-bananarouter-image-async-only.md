@@ -287,3 +287,11 @@ Review the full diff against `origin/main`, focusing on SQL safety, migration id
 - [ ] **Step 4: Report evidence**
 
 Provide the acceptance URL, exact test counts, any blocked authenticated browser step, and confirm that other providers were not converted.
+
+## Deployment and rollback safety
+
+1. Deploy the adapter and workers that recognize both BananaRouter async image endpoints and the async task response before running the convergence migration.
+2. Drain every worker still running an older revision, then explicitly apply the convergence migration while BananaRouter image traffic is paused.
+3. After the migration succeeds, the minimum rollback version is this async-only implementation. Do not roll application or worker code back to a revision that treats `/v1/images/edits/async` as synchronous; that revision cannot safely interpret the provider `taskID` response or recover an ambiguous edit submission.
+4. If an application rollback below that minimum is unavoidable, keep BananaRouter image traffic disabled and restore service only with a reviewed data migration plus a provider reconciliation procedure. Do not re-enable the removed synchronous fallback.
+5. Verify generation, edit, polling, and task-center completion before resuming production traffic.

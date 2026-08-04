@@ -652,6 +652,31 @@ describe("BananaRouter provider adapter", () => {
     assert.equal(result?.videoUrl, "https://cdn.example.com/sora.mp4");
   });
 
+  it("does not change legacy BananaRouter video handling for an expired status", async () => {
+    const adapter = createProviderAdapterFromModelConfig(
+      {
+        providerProtocol: "banana_router",
+        providerModel: "sora-2",
+        providerConfig: {
+          baseURL: "https://api.bananarouter.com",
+          createTaskEndpoint: "/v1/videos",
+          queryTaskEndpoint: "/v1/videos/{taskId}",
+          apiKeyEnv: "BananaRouter_API_KEY",
+          requestFormat: "banana_router_sora_video",
+        },
+      },
+      { BananaRouter_API_KEY: "banana-key" },
+      (async () => Response.json({
+        id: "expired-video-task",
+        status: "expired",
+      })) as typeof fetch,
+    );
+
+    const result = await adapter.poll?.({ externalRequestId: "expired-video-task" });
+
+    assert.equal(result?.status, "accepted");
+  });
+
   it("submits, polls, and cancels Seedance tasks with the BananaRouter contract", async () => {
     const requests: Array<{ url: string; method: string; body?: unknown }> = [];
     const adapter = createProviderAdapterFromModelConfig(

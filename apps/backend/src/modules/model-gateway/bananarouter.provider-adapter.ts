@@ -651,12 +651,13 @@ function findFirstString(payload: Record<string, unknown>, paths: string[][]): s
 function normalizeVideoStatus(status: string | undefined): ProviderPollResult["status"] {
   const normalized = status?.trim().toLowerCase();
   if (["succeeded", "success", "completed", "done"].includes(normalized ?? "")) return "succeeded";
-  if (["failed", "error", "canceled", "cancelled", "expired"].includes(normalized ?? "")) return "failed";
+  if (["failed", "error", "canceled", "cancelled"].includes(normalized ?? "")) return "failed";
   if (["running", "processing", "generating", "in_progress"].includes(normalized ?? "")) return "running";
   return "accepted";
 }
 
 function normalizeImageStatus(status: string | undefined): ProviderPollResult["status"] {
+  if (status?.trim().toLowerCase() === "expired") return "failed";
   return normalizeVideoStatus(status);
 }
 
