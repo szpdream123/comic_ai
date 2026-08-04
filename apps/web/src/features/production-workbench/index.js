@@ -165,6 +165,7 @@ import {
 } from "./canvas/canvas-state.js";
 
 const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
+const STORYBOARD_IMAGE_PREVIEW_FALLBACK_WINDOW_MS = 800;
 const MEMBERSHIP_PAYMENT_QR_TTL_MS = 10 * 60 * 1000;
 const MEMBERSHIP_PAYMENT_FAST_POLL_MS = 2000;
 const MEMBERSHIP_PAYMENT_SLOW_POLL_MS = 5000;
@@ -907,6 +908,33 @@ const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WID
 const EPISODE_QUICK_ASSET_TOGGLE_VIEWPORT_MARGIN = 8;
 const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
+function openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget) {
+  const imageUrl = String(imagePreviewTarget?.dataset?.imagePreviewUrl ?? "").trim();
+  if (!imagePreviewTarget || !imageUrl) {
+    return false;
+  }
+  const imageName = String(imagePreviewTarget.dataset.imagePreviewName ?? "故事板图片");
+  const imageKey = String(imagePreviewTarget.dataset.imagePreviewKey ?? "");
+  workbench.storyboardImagePreviewFocus = { imageUrl, imageName, imageKey };
+  if (
+    workbench.ui.assetInspector?.viewerOnly === true
+    && workbench.ui.assetInspector?.url === imageUrl
+  ) {
+    return true;
+  }
+  void handleProductionWorkbenchAction(workbench, {
+    dataset: {
+      action: "open-storyboard-image-preview",
+      imageUrl,
+      imageName,
+    },
+  }).catch((error) => {
+    workbench.ui.toast = friendlyError(error);
+    render(workbench);
+  });
+  return true;
+}
+
 export async function initProductionWorkbench({ root, session, api, onLogout, onRequireLogin, deferInitialRender = false }) {
   const initialCommunityData = readLingxiCommunityData();
   const workbench = {
@@ -1646,6 +1674,27 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     if (event.__newCanvasHandled === true) return;
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const actionTarget = eventTarget?.closest?.("[data-action]");
+    const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
+    if (imagePreviewTarget) {
+      const imageUrl = String(imagePreviewTarget.dataset.imagePreviewUrl ?? "").trim();
+      const imageName = String(imagePreviewTarget.dataset.imagePreviewName ?? "").trim();
+      const clickKey = `${imageUrl}\n${imageName}`;
+      const clickedAt = Date.now();
+      const previousClick = workbench.storyboardImagePreviewClickHistory;
+      const isRepeatedClick = Boolean(
+        clickKey.trim()
+        && previousClick?.key === clickKey
+        && clickedAt - previousClick.clickedAt <= STORYBOARD_IMAGE_PREVIEW_FALLBACK_WINDOW_MS
+      );
+      workbench.storyboardImagePreviewClickHistory = { key: clickKey, clickedAt };
+      if ((event.detail >= 2 || isRepeatedClick) && openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)) {
+        workbench.storyboardImagePreviewClickHistory = null;
+        event.preventDefault();
+        if (actionTarget?.dataset?.action !== "toggle-episode-workbench-attachment-selection") {
+          return;
+        }
+      }
+    }
     if (isNativeMediaControlInteraction(eventTarget, event)) {
       return;
     }
@@ -1961,6 +2010,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dblclick", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
+    if (openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)) {
+      event.preventDefault();
+      return;
+    }
     if (eventTarget?.matches?.('[data-role="script-reader-title-input"]')) {
       return;
     }
@@ -1983,6 +2037,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("keydown", (event) => {
     const searchTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (workbench.ui.assetInspector?.viewerOnly === true && event.key === "Tab") {
+      event.preventDefault();
+      workbench.root?.querySelector?.(".asset-image-lightbox-close")?.focus?.();
+      return;
+    }
+    const imagePreviewTarget = searchTarget?.closest?.('[data-image-preview-url]');
+    if (
+      (event.key === "Enter" || event.key === " ")
+      && openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)
+    ) {
+      event.preventDefault();
+      return;
+    }
     if (searchTarget?.matches?.("[data-canvas-zoom-value-input]") && event.key === "Enter") {
       event.preventDefault();
       void handleAction(workbench, {
@@ -2039,6 +2106,25 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {
+      return;
+    }
+    if (workbench.ui.assetInspector?.viewerOnly === true) {
+      event.preventDefault();
+      const previewFocus = workbench.storyboardImagePreviewFocus;
+      workbench.storyboardImagePreviewClickHistory = null;
+      workbench.storyboardImagePreviewFocus = null;
+      workbench.ui.assetInspector = null;
+      render(workbench);
+      queueMicrotask(() => {
+        const previewTarget = [...(workbench.root?.querySelectorAll?.('[data-image-preview-url]') ?? [])]
+          .find((element) => (
+            previewFocus?.imageKey
+              ? element.dataset.imagePreviewKey === previewFocus.imageKey
+              : element.dataset.imagePreviewUrl === previewFocus?.imageUrl
+                && element.dataset.imagePreviewName === previewFocus?.imageName
+          ));
+        previewTarget?.focus?.();
+      });
       return;
     }
     if (
@@ -10039,6 +10125,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-delete-storyboard-image-modal",
     "confirm-delete-storyboard-image",
     "open-generation-image-preview",
+    "open-storyboard-image-preview",
     "close-asset-inspector",
     "open-episode-batch-actions",
     "close-episode-batch-modal",
@@ -16921,7 +17008,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "open-generation-image-preview") {
+  if (action === "open-generation-image-preview" || action === "open-storyboard-image-preview") {
     const imageUrl = String(target.dataset.imageUrl ?? "").trim();
     if (!imageUrl) {
       return;
@@ -16929,17 +17016,47 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     openAssetInspector(workbench, {
       type: "image",
       viewerOnly: true,
-      name: target.dataset.imageName ?? "生成图片",
+      name: target.dataset.imageName ?? (action === "open-storyboard-image-preview" ? "故事板图片" : "生成图片"),
       url: imageUrl,
       status: "ready",
     });
     render(workbench);
+    queueMicrotask(() => {
+      const lightboxImage = workbench.root?.querySelector?.(".asset-image-lightbox-content img");
+      const syncImageAspectRatio = () => {
+        if (lightboxImage?.naturalWidth > 0 && lightboxImage?.naturalHeight > 0) {
+          lightboxImage.style.setProperty(
+            "--asset-image-lightbox-aspect-ratio",
+            String(lightboxImage.naturalWidth / lightboxImage.naturalHeight),
+          );
+        }
+      };
+      if (lightboxImage?.complete) {
+        syncImageAspectRatio();
+      } else {
+        lightboxImage?.addEventListener?.("load", syncImageAspectRatio, { once: true });
+      }
+      workbench.root?.querySelector?.(".asset-image-lightbox-close")?.focus?.();
+    });
     return;
   }
 
   if (action === "close-asset-inspector") {
+    const previewFocus = workbench.storyboardImagePreviewFocus;
+    workbench.storyboardImagePreviewClickHistory = null;
+    workbench.storyboardImagePreviewFocus = null;
     workbench.ui.assetInspector = null;
     render(workbench);
+    queueMicrotask(() => {
+      const previewTarget = [...(workbench.root?.querySelectorAll?.('[data-image-preview-url]') ?? [])]
+        .find((element) => (
+          previewFocus?.imageKey
+            ? element.dataset.imagePreviewKey === previewFocus.imageKey
+            : element.dataset.imagePreviewUrl === previewFocus?.imageUrl
+              && element.dataset.imagePreviewName === previewFocus?.imageName
+        ));
+      previewTarget?.focus?.();
+    });
     return;
   }
 

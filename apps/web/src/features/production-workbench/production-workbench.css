@@ -32580,6 +32580,15 @@ body.is-episode-layout-resizing {
   outline-offset: -2px;
 }
 
+[data-image-preview-url] {
+  cursor: zoom-in;
+}
+
+[data-image-preview-url]:focus-visible {
+  outline: 2px solid var(--theme-accent, #ffbf4b);
+  outline-offset: 2px;
+}
+
 .asset-image-lightbox {
   align-items: center;
   padding: 1.5rem;
@@ -32593,21 +32602,50 @@ body.is-episode-layout-resizing {
   position: relative;
   z-index: 1;
   display: flex;
+  width: calc(100vw - 3rem);
+  height: calc(100vh - 3rem);
   max-width: calc(100vw - 3rem);
   max-height: calc(100vh - 3rem);
   align-items: center;
   justify-content: center;
+  pointer-events: none;
 }
 
 .asset-image-lightbox-content img {
   display: block;
-  width: auto;
+  width: min(
+    calc(100vw - 3rem),
+    calc((100vh - 3rem) * var(--asset-image-lightbox-aspect-ratio, 1))
+  );
   height: auto;
-  max-width: calc(100vw - 3rem);
-  max-height: calc(100vh - 3rem);
+  max-width: 100%;
+  max-height: 100%;
   border-radius: 8px;
   object-fit: contain;
+  pointer-events: auto;
   box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.5);
+}
+
+.asset-image-lightbox-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(8, 18, 24, 0.78);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.asset-image-lightbox-close:focus-visible {
+  outline: 2px solid var(--theme-accent, #ffbf4b);
+  outline-offset: 2px;
 }
 
 .episode-replica-fixed-video-card video {

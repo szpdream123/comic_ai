@@ -2817,6 +2817,162 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(workbench.ui.assetInspector, null);
   });
 
+  it("marks storyboard and composer image thumbnails for double-click preview", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const storyboard = {
+      ...addStoryboard([])[0],
+      displayTitle: "云海剑阵",
+      previewImageUrl: "/uploads/storyboards/cloud-sword-grid.png",
+      generationState: {
+        quickReferenceItems: [
+          {
+            id: "quick-storyboard-image",
+            kind: "image",
+            name: "故事板参考图",
+            url: "/uploads/references/storyboard-reference.png",
+          },
+        ],
+      },
+    };
+    const cardHtml = renderStoryboardCard(storyboard, true, false, {}, "storyboard");
+    const promptDockHtml = renderPromptDock({
+      selectedStoryboard: storyboard,
+      selectedModelId: "vidu-q3-pro",
+      prompt: "",
+      busy: false,
+      generationControls: {},
+      generationUiState: {},
+      mediaMode: "video",
+      videoMode: "reference-video",
+      attachments: [
+        {
+          id: "uploaded-storyboard-image",
+          kind: "image",
+          type: "image",
+          name: "上传故事板.png",
+          url: "/uploads/references/uploaded-storyboard.png",
+        },
+        {
+          id: "reference-video",
+          kind: "video",
+          type: "video",
+          name: "参考视频.mp4",
+          url: "/uploads/references/reference-video.mp4",
+        },
+      ],
+      selectedAttachmentIds: [],
+      scopeMode: "storyboard",
+    });
+
+    assert.match(
+      cardHtml,
+      /data-image-preview-url="\/uploads\/storyboards\/cloud-sword-grid\.png"[^>]*data-image-preview-name="分镜 1: 云海剑阵"[^>]*data-image-preview-key="storyboard:[^"]+"[^>]*role="button"[^>]*tabindex="0"/,
+    );
+    assert.match(
+      promptDockHtml,
+      /data-image-preview-url="\/uploads\/references\/storyboard-reference\.png"[^>]*data-image-preview-name="故事板参考图"/,
+    );
+    assert.match(
+      promptDockHtml,
+      /data-image-preview-url="\/uploads\/references\/uploaded-storyboard\.png"[^>]*data-image-preview-name="上传故事板\.png"[^>]*data-image-preview-key="attachment:uploaded-storyboard-image"/,
+    );
+    assert.doesNotMatch(promptDockHtml, /data-image-preview-url="\/uploads\/references\/reference-video\.mp4"/);
+    const lightboxContentBlock = css.match(/\.asset-image-lightbox-content\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const lightboxImageBlock = css.match(/\.asset-image-lightbox-content img\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    assert.match(lightboxContentBlock, /width:\s*calc\(100vw - 3rem\)/);
+    assert.match(lightboxContentBlock, /height:\s*calc\(100vh - 3rem\)/);
+    assert.match(lightboxContentBlock, /pointer-events:\s*none/);
+    assert.match(lightboxImageBlock, /width:\s*min\(/);
+    assert.match(lightboxImageBlock, /--asset-image-lightbox-aspect-ratio/);
+    assert.match(lightboxImageBlock, /height:\s*auto/);
+    assert.match(lightboxImageBlock, /max-width:\s*100%/);
+    assert.match(lightboxImageBlock, /max-height:\s*100%/);
+    assert.match(lightboxImageBlock, /object-fit:\s*contain/);
+    assert.match(lightboxImageBlock, /pointer-events:\s*auto/);
+  });
+
+  it("opens storyboard image previews through the delegated double-click action", async () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const doubleClickBlock = source.match(/root\.addEventListener\("dblclick"[\s\S]*?root\.addEventListener\("keydown"/)?.[0] ?? "";
+    const clickBlock = source.match(/root\.addEventListener\("click"[\s\S]*?root\.addEventListener\("contextmenu"/)?.[0] ?? "";
+    assert.match(clickBlock, /storyboardImagePreviewClickHistory/);
+    assert.match(clickBlock, /event\.detail >= 2/);
+    assert.match(clickBlock, /storyboardImagePreviewClickHistory = null/);
+    assert.match(clickBlock, /toggle-episode-workbench-attachment-selection/);
+    assert.match(doubleClickBlock, /closest\?\.\('\[data-image-preview-url\]'\)/);
+    assert.match(doubleClickBlock, /openStoryboardImagePreviewFromTarget/);
+    assert.match(source, /action:\s*"open-storyboard-image-preview"/);
+
+    const workbench = {
+      state: {
+        project: {
+          id: "project-1",
+          name: "try",
+          phase: "asset_review",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        assetReview: { readyForGeneration: false },
+        assetCandidates: { characters: [], scenes: [], props: [] },
+        calibration: null,
+        shots: [],
+        exportPreview: null,
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      root: { innerHTML: "", querySelector: () => null },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        selectedEpisodeId: "episode-new",
+        episodeMediaMode: "image",
+        storyboards: [],
+        episodeStoryboardMap: { "episode-new": [] },
+        busy: true,
+      },
+    };
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "open-storyboard-image-preview",
+        imageUrl: "/uploads/storyboards/cloud-sword-grid.png",
+        imageName: "分镜 1: 云海剑阵",
+      },
+    });
+
+    assert.deepEqual(workbench.ui.assetInspector, {
+      type: "image",
+      viewerOnly: true,
+      name: "分镜 1: 云海剑阵",
+      url: "/uploads/storyboards/cloud-sword-grid.png",
+      status: "ready",
+    });
+    assert.match(workbench.root.innerHTML, /class="modal-backdrop storyboard-description-backdrop asset-image-lightbox"/);
+    assert.match(workbench.root.innerHTML, /class="asset-image-lightbox-close"/);
+  });
+
+  it("closes the storyboard image preview with Escape", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const keydownBlock = source.match(/root\.addEventListener\("keydown"[\s\S]*?root\.addEventListener\("input"/)?.[0] ?? "";
+
+    assert.match(keydownBlock, /event\.key === "Escape"/);
+    assert.match(keydownBlock, /event\.key === "Enter" \|\| event\.key === " "/);
+    assert.match(keydownBlock, /event\.key === "Tab"/);
+    assert.match(keydownBlock, /asset-image-lightbox-close/);
+    assert.match(keydownBlock, /workbench\.ui\.assetInspector\?\.viewerOnly === true/);
+    assert.match(keydownBlock, /workbench\.ui\.assetInspector = null/);
+    assert.match(source, /storyboardImagePreviewFocus/);
+    assert.match(source, /\.focus\?\.\(\)/);
+  });
+
   it("builds image generation payload with visible controls and references", () => {
     const storyboard = {
       ...addStoryboard([])[0],
@@ -27651,9 +27807,9 @@ describe("production workbench project tab", () => {
     assert.equal((html.match(/episode-replica-frame-slot selected/g) ?? []).length, 0);
     assert.equal((html.match(/episode-replica-ref-card quick-reference/g) ?? []).length, 2);
     assert.equal((html.match(/episode-replica-ref-card attachment/g) ?? []).length, 1);
-    assert.equal((html.match(/\/uploads\/quick-ref-1\.png/g) ?? []).length, 1);
-    assert.equal((html.match(/\/uploads\/quick-ref-2\.png/g) ?? []).length, 1);
-    assert.equal((html.match(/\/uploads\/quick-ref-3\.png/g) ?? []).length, 1);
+    assert.equal((html.match(/<img[^>]*src="\/uploads\/quick-ref-1\.png"/g) ?? []).length, 1);
+    assert.equal((html.match(/<img[^>]*src="\/uploads\/quick-ref-2\.png"/g) ?? []).length, 1);
+    assert.equal((html.match(/<img[^>]*src="\/uploads\/quick-ref-3\.png"/g) ?? []).length, 1);
   });
 
   it("renders image result actions with set-storyboard-image and timeout failure copy", () => {
