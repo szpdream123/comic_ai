@@ -401,6 +401,8 @@ const adminApiRouteAuthRegistrations = inventoryRegistrations("admin", [
 ]);
 
 const userApiRouteAuthRegistrations = inventoryRegistrations("user", [
+  ["GET", "/api/toolbox/prompt-reverse/models"],
+  ["POST", "/api/toolbox/prompt-reverse"],
   ["GET", "/api/creator/project-styles"],
   ["GET", "/api/billing/payment-intents/{paymentIntentId}"],
   ["GET", "/api/billing/orders/{orderId}"],

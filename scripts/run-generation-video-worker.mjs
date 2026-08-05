@@ -76,17 +76,19 @@ const workerPublisher = createShardAwareWorkerPublisher({
 });
 const connection = redisConnectionFromUrl(config.redisUrl);
 const redisErrorReporter = createRedisErrorReporter("generation-video");
+const rateLimitRedisErrorReporter = createRedisErrorReporter("generation-video-rate-limit");
+const queueDirectoryRedisErrorReporter = createRedisErrorReporter("generation-video-queue-directory");
 const rateLimitRedis = new Redis(redisClientConnectionFromUrl(config.redisUrl));
 const queueDirectoryRedis = new Redis({
   ...redisClientConnectionFromUrl(config.redisUrl),
-  commandTimeout: 2_000,
-  connectTimeout: 2_000,
-  maxRetriesPerRequest: 1,
+  commandTimeout: 5_000,
+  connectTimeout: 5_000,
+  maxRetriesPerRequest: 2,
 });
-rateLimitRedis.on("error", redisErrorReporter);
-queueDirectoryRedis.on("error", redisErrorReporter);
-rateLimitRedis.on("ready", redisErrorReporter.reset);
-queueDirectoryRedis.on("ready", redisErrorReporter.reset);
+rateLimitRedis.on("error", rateLimitRedisErrorReporter);
+queueDirectoryRedis.on("error", queueDirectoryRedisErrorReporter);
+rateLimitRedis.on("ready", rateLimitRedisErrorReporter.reset);
+queueDirectoryRedis.on("ready", queueDirectoryRedisErrorReporter.reset);
 const rateLimiter = createRedisProviderRateLimiter(rateLimitRedis, {
   keyPrefix: process.env.REDIS_KEY_PREFIX?.trim() || config.queuePrefix,
 });
@@ -381,11 +383,17 @@ const dynamicShardRunner = config.sharding.enabled
       defaultRateLimitDurationMs: config.sharding.rateLimitDurationMs,
       discover: async () => {
         const shards = await listGenerationQueueShards(db);
-        const runnableCounts = await readGenerationQueueRunnableCounts(
-          queueDirectoryRedis,
-          shards.map((shard) => shard.queueName),
-          config.queuePrefix,
-        );
+        const runnableCounts = await runWithRedisStartupRetry({
+          redis: queueDirectoryRedis,
+          timeoutMs: 10_000,
+          maxAttempts: 3,
+          baseDelayMs: 250,
+          run: () => readGenerationQueueRunnableCounts(
+            queueDirectoryRedis,
+            shards.map((shard) => shard.queueName),
+            config.queuePrefix,
+          ),
+        });
         const shardSpecs = shards.map((shard) => ({
           queueName: shard.queueName,
           mediaType: shard.mediaType,
@@ -797,8 +805,9 @@ function createRedisErrorReporter(scope) {
     console.error(`[${scope}] Redis connection error ${code}: ${message}${isConnectivityError ? " (duplicate errors suppressed)" : ""}`);
     if (isConnectivityError && !recoveryTimer) {
       recoveryTimer = setTimeout(() => {
-        console.error(`[${scope}] Redis remained unavailable for 10s; stopping this worker once.`);
-        process.exit(1);
+        console.error(`[${scope}] Redis remained unavailable for 10s; shutting down this worker.`);
+        process.exitCode = 1;
+        void requestShutdown(`${scope}:redis_unavailable`);
       }, 10_000);
       recoveryTimer.unref?.();
     }

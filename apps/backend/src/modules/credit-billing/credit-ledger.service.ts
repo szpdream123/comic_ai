@@ -343,6 +343,7 @@ interface PromptSkillUsageCreditInput {
 function shouldGrantPromptSkillUsageCredits(input: PromptSkillUsageCreditInput) {
   return input.skill?.official === false
     && Boolean(String(input.skill?.ownerUserId ?? "").trim())
+    && String(input.skill?.ownerUserId ?? "").trim() !== String(input.payerUserId ?? "").trim()
     && Math.round(Number(input.skill?.priceCredits) || 0) > 0;
 }
 

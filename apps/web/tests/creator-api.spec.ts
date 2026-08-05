@@ -112,6 +112,22 @@ test("task-center list forwards incremental query parameters", async () => {
   );
 });
 
+test("storyboard prompt packages request the compact creator payload", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ packages: [] }) };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getStoryboardPromptPackages();
+
+  assert.equal(
+    calls[0].url,
+    "/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500&compact=1",
+  );
+});
+
 test("createImageGenerationTask forwards the existing asset id for retries", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -209,6 +225,102 @@ test("getAnnouncements reads the public announcement route", async () => {
   assert.equal(calls[0].options.credentials, "include");
   assert.equal(payload.announcements[0]?.title, "平台公告");
   assert.equal(payload.version, "2026-07-17T05:56:48.039Z");
+});
+
+test("prompt reverse allows image models enough time to complete", async () => {
+  const timeoutCalls = [];
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
+  globalThis.fetch = async () => ({ ok: true, text: async () => "{}" });
+  globalThis.setTimeout = ((callback, delay) => {
+    timeoutCalls.push(delay);
+    return previousSetTimeout(callback, 0);
+  });
+  globalThis.clearTimeout = ((timeoutId) => previousClearTimeout(timeoutId));
+  try {
+    const { creatorApi } = await import(`../src/shared/creator-api.js?prompt-reverse-timeout=${Date.now()}`);
+    await creatorApi.runToolboxPromptReverse({
+      modelCode: "cumob-gpt-5-6-sol",
+      mode: "image",
+      imageDataUrl: "data:image/png;base64,AAAA",
+    });
+    assert.ok(timeoutCalls.includes(180000));
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
+});
+
+test("selectProject preserves unrelated read caches", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify(
+        String(url) === "/api/public/customer-support"
+          ? { data: { contact: "cached-support" } }
+          : { project: { id: "project-2" } },
+      ),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const firstSupport = await creatorApi.getCustomerSupportConfig();
+  await creatorApi.getAssetLibrary("project-1");
+  await creatorApi.selectProject({ projectId: "project-2" });
+  const secondSupport = await creatorApi.getCustomerSupportConfig();
+  await creatorApi.getAssetLibrary("project-1");
+
+  assert.deepEqual(firstSupport, { contact: "cached-support" });
+  assert.deepEqual(secondSupport, firstSupport);
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/public/customer-support",
+    "/api/creator/assets/library?projectId=project-1",
+    "/api/creator/project/select",
+    "/api/creator/assets/library?projectId=project-1",
+  ]);
+});
+
+test("selectProject prevents stale asset refreshes from repopulating invalidated caches", async () => {
+  const previousNow = Date.now;
+  let now = previousNow();
+  let assetCalls = 0;
+  let resolveStaleRefresh;
+  globalThis.fetch = async (url) => {
+    if (String(url) === "/api/creator/project/select") {
+      return { ok: true, text: async () => "{}" };
+    }
+    assetCalls += 1;
+    if (assetCalls === 2) {
+      return new Promise((resolve) => {
+        resolveStaleRefresh = () => resolve({
+          ok: true,
+          text: async () => JSON.stringify({ assets: ["stale"] }),
+        });
+      });
+    }
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ assets: [assetCalls === 1 ? "initial" : "fresh"] }),
+    };
+  };
+
+  try {
+    Date.now = () => now;
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.getAssetLibrary("project-cache-race");
+    now += 6000;
+    assert.deepEqual(await creatorApi.getAssetLibrary("project-cache-race"), { assets: ["initial"] });
+    await creatorApi.selectProject({ projectId: "project-2" });
+    resolveStaleRefresh();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(await creatorApi.getAssetLibrary("project-cache-race"), { assets: ["fresh"] });
+    assert.equal(assetCalls, 3);
+  } finally {
+    Date.now = previousNow;
+  }
 });
 
 test("fresh session reads bypass the cached account balance", async () => {

@@ -1,0 +1,13 @@
+{
+  "id": "video-depth",
+  "name": "视频转深度（本地 GPU）",
+  "version": "1.0.0",
+  "runtime": "python",
+  "entrypoint": "local-video-depth-service.py",
+  "healthUrl": "http://127.0.0.1:48123/health",
+  "contract": {
+    "submit": "POST /jobs (multipart field: file)",
+    "status": "GET /jobs/:id",
+    "output": "GET /jobs/:id/output"
+  }
+}

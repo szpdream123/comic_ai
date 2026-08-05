@@ -177,6 +177,7 @@ async function fetchJson(url, options = {}) {
 
 const fetchJsonCache = new Map();
 const readJsonCache = new Map();
+const readJsonCacheVersions = new Map();
 
 function getCachedFetchJson(key, ttlMs) {
   const cached = fetchJsonCache.get(key);
@@ -236,12 +237,37 @@ function cacheReadJson(key, promise) {
 }
 
 function clearReadJsonCache() {
+  for (const key of readJsonCache.keys()) {
+    invalidateReadJsonCacheKey(key);
+  }
   readJsonCache.clear();
 }
 
 function clearReadRequestCaches() {
   clearFetchJsonCache();
   clearReadJsonCache();
+}
+
+function clearProjectSelectionReadCaches() {
+  for (const key of fetchJsonCache.keys()) {
+    if (isProjectSelectionReadCacheKey(key)) {
+      fetchJsonCache.delete(key);
+    }
+  }
+  for (const key of readJsonCache.keys()) {
+    if (isProjectSelectionReadCacheKey(key)) {
+      invalidateReadJsonCacheKey(key);
+    }
+  }
+}
+
+function invalidateReadJsonCacheKey(key) {
+  readJsonCacheVersions.set(key, (readJsonCacheVersions.get(key) ?? 0) + 1);
+  readJsonCache.delete(key);
+}
+
+function isProjectSelectionReadCacheKey(key) {
+  return key === "GET /api/creator/state" || key.startsWith("GET /api/creator/assets/library");
 }
 
 function fetchJsonWithTtl(url, options = {}) {
@@ -263,13 +289,18 @@ function fetchJsonWithTtl(url, options = {}) {
       Date.now() - cached.createdAt > Math.max(0, silentRefreshMinAgeMs);
     if (shouldRefreshSilently) {
       cached.refreshing = true;
+      const cacheVersion = readJsonCacheVersions.get(cacheKey) ?? 0;
       fetchJson(url, {
         ...fetchOptions,
         dedupeKey: fetchOptions.dedupeKey ?? cacheKey,
       }).then((result) => {
-        cacheReadJson(cacheKey, Promise.resolve(result));
+        if ((readJsonCacheVersions.get(cacheKey) ?? 0) === cacheVersion) {
+          cacheReadJson(cacheKey, Promise.resolve(result));
+        }
       }).catch(() => {
-        cached.refreshing = false;
+        if (readJsonCache.get(cacheKey) === cached) {
+          cached.refreshing = false;
+        }
       });
     }
     return cached.promise;
@@ -302,6 +333,49 @@ export function resolveApiUrl(url) {
       ? "http://127.0.0.1:4310"
       : window.location.origin;
   return new URL(url, origin).toString();
+}
+
+const toolboxVideoDepthPluginBaseUrl = "http://127.0.0.1:48123";
+
+function resolveToolboxVideoDepthPluginUrl(path = "") {
+  const configured = typeof globalThis !== "undefined" && typeof globalThis.__COMIC_AI_VIDEO_DEPTH_PLUGIN_URL__ === "string"
+    ? globalThis.__COMIC_AI_VIDEO_DEPTH_PLUGIN_URL__.trim()
+    : "";
+  const base = (configured || toolboxVideoDepthPluginBaseUrl).replace(/\/$/, "");
+  return `${base}/${String(path).replace(/^\//, "")}`;
+}
+
+async function fetchToolboxVideoDepthPlugin(path, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), Number(options.timeoutMs ?? 5000));
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options;
+  try {
+    const response = await fetch(resolveToolboxVideoDepthPluginUrl(path), {
+      mode: "cors",
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let payload = {};
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = { message: text };
+      }
+    }
+    if (!response.ok) {
+      throw new Error(String(payload?.message ?? payload?.error ?? `plugin_request_failed:${response.status}`));
+    }
+    return payload?.data && typeof payload.data === "object" ? payload.data : payload;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("本地插件连接超时");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 const uploadCompletionTimeoutMs = 60000;
@@ -375,13 +449,21 @@ async function resolveCompletedUploadFromSessionStatus(api, prepared, file, uplo
 }
 
 function postJson(url, body, options = {}) {
+  const {
+    cacheInvalidation = "all",
+    ...fetchOptions
+  } = options;
   return fetchJson(url, {
-    ...options,
+    ...fetchOptions,
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   }).then((result) => {
-    clearReadRequestCaches();
+    if (cacheInvalidation === "project-selection") {
+      clearProjectSelectionReadCaches();
+    } else {
+      clearReadRequestCaches();
+    }
     return result;
   });
 }
@@ -1016,6 +1098,43 @@ export const creatorApi = {
 
   getAnnouncements() {
     return fetchJson("/api/announcements", { dedupeKey: "GET /api/announcements" });
+  },
+
+  getToolboxPromptReverseModels(options = {}) {
+    return fetchJsonWithTtl("/api/toolbox/prompt-reverse/models", {
+      cacheKey: "GET /api/toolbox/prompt-reverse/models",
+      cacheTtlMs: Number.isFinite(options.cacheTtlMs) ? options.cacheTtlMs : 30000,
+      cache: options.fresh === true ? "no-store" : undefined,
+    });
+  },
+
+  runToolboxPromptReverse(input = {}) {
+    return postJsonWithIdempotency("/api/toolbox/prompt-reverse", input, {
+      action: "toolbox.prompt-reverse",
+      timeoutMs: 180000,
+    });
+  },
+
+  checkToolboxVideoDepthPlugin() {
+    return fetchToolboxVideoDepthPlugin("health", { timeoutMs: 2500 });
+  },
+
+  createToolboxVideoDepthJob(file) {
+    const formData = new FormData();
+    formData.set("file", file);
+    return fetchToolboxVideoDepthPlugin("jobs", {
+      method: "POST",
+      body: formData,
+      timeoutMs: 120000,
+    });
+  },
+
+  getToolboxVideoDepthJob(jobId) {
+    return fetchToolboxVideoDepthPlugin(`jobs/${encodeURIComponent(jobId)}`, { timeoutMs: 10000 });
+  },
+
+  getToolboxVideoDepthOutputUrl(jobId) {
+    return resolveToolboxVideoDepthPluginUrl(`jobs/${encodeURIComponent(jobId)}/output`);
   },
 
   async getCustomerSupportConfig() {
@@ -1820,7 +1939,9 @@ export const creatorApi = {
   },
 
   selectProject(input) {
-    return postJson("/api/creator/project/select", input);
+    return postJson("/api/creator/project/select", input, {
+      cacheInvalidation: "project-selection",
+    });
   },
 
   updateProject(input) {
@@ -2322,8 +2443,8 @@ export const creatorApi = {
   },
 
   getStoryboardPromptPackages() {
-    return fetchJsonWithTtl("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500", {
-      cacheKey: "GET /api/creator/storyboard-prompt/packages?status=enabled&pageSize=500",
+    return fetchJsonWithTtl("/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500&compact=1", {
+      cacheKey: "GET /api/creator/storyboard-prompt/packages?status=enabled&pageSize=500&compact=1",
       cacheTtlMs: 600000,
       unwrapEnvelope: false,
     });

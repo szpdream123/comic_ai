@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { promisify } from "node:util";
+import { brotliCompress as brotliCompressCallback, constants as zlibConstants, gzip as gzipCallback } from "node:zlib";
 import mammoth from "mammoth";
 import { transform as transformStaticAsset } from "esbuild";
 
@@ -58,6 +60,7 @@ import {
   CanvasAgentStateConflictError,
   CanvasAgentStepSkipError,
   CanvasAgentKnowledgeService,
+  CanvasAgentBillingService,
   CanvasAgentCheckpointService,
   createCanvasAgentFileGrantHttpService,
   createCanvasAgentConversation,
@@ -401,6 +404,8 @@ import { translateProviderErrorMessage } from "../modules/model-gateway/provider
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import { cancelGenerationTask } from "../modules/model-gateway/seedance-video.worker.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
+import { ModelflareResponsesAdapter } from "../modules/model-gateway/modelflare-responses.adapter.ts";
+import type { TextGatewayChatCompletionRequest } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { TextModelGatewayService } from "../modules/model-gateway/text-model-gateway.service.ts";
 import {
   createOrReuseProviderRequest,
@@ -496,6 +501,9 @@ const staticAssetTransformCache = new Map<string, {
   size: number;
   file: Buffer;
 }>();
+const staticAssetCompressionCache = new Map<string, Buffer>();
+const brotliCompress = promisify(brotliCompressCallback);
+const gzip = promisify(gzipCallback);
 const staticAssetPrewarmPromise = prewarmStaticAssets().catch(() => undefined);
 
 type LingxiCommunityItem = {
@@ -597,6 +605,10 @@ const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".json": "application/json; charset=utf-8",
+  ".onnx": "application/octet-stream",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -762,8 +774,16 @@ function parseCookies(header: string | undefined): Record<string, string> {
   );
 }
 
+const maximumJsonBodyBytes = 6 * 1024 * 1024;
+const promptReverseMaximumImageBytes = 20 * 1024 * 1024;
+const promptReverseMaximumBodyBytes = Math.ceil(promptReverseMaximumImageBytes * 4 / 3) + 128 * 1024;
+const promptReverseMaximumFrameSheetCount = 64;
+// Multipart parsing buffers the request before exposing File objects. Keep its total
+// body bounded while allowing the largest supported file plus MIME framing fields.
+const maximumMultipartBodyBytes = episodeUploadLimits.video.maxBytes + 1024 * 1024;
+
 async function readJsonBody(request: AsyncIterable<Buffer | string>): Promise<unknown> {
-  const body = await readTextBody(request);
+  const body = await readLimitedTextBody(request, maximumJsonBodyBytes);
   return body ? JSON.parse(body) : {};
 }
 
@@ -803,38 +823,57 @@ async function readMultipartFormData(
   request: Parameters<typeof createServer>[0],
   origin: string,
 ) {
+  const declaredContentLength = Number(firstRequestHeader(request.headers["content-length"]));
+  if (Number.isFinite(declaredContentLength) && declaredContentLength > maximumMultipartBodyBytes) {
+    throw new Error("request_body_too_large");
+  }
   const url = new URL(request.url ?? "/", origin);
   const webRequest = new Request(url, {
     method: request.method,
     headers: request.headers as HeadersInit,
-    body: request as unknown as BodyInit,
+    body: Readable.from(readLimitedMultipartBody(request)) as unknown as BodyInit,
     duplex: "half",
   });
   return webRequest.formData();
 }
 
+async function* readLimitedMultipartBody(request: AsyncIterable<Buffer | string>) {
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > maximumMultipartBodyBytes) throw new Error("request_body_too_large");
+    yield buffer;
+  }
+}
+
 const defaultSessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
 
-function sessionCookie(token: string, maxAgeSeconds = defaultSessionCookieMaxAgeSeconds): string {
-  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+function sessionCookie(
+  token: string,
+  maxAgeSeconds = defaultSessionCookieMaxAgeSeconds,
+  secure = false,
+): string {
+  return `auth_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? "; Secure" : ""}`;
 }
 
 function sessionCookieMaxAgeSecondsFromSession(expiresAt: Date, now: Date): number {
   return Math.max(0, Math.round((expiresAt.getTime() - now.getTime()) / 1000));
 }
 
-function clearSessionCookie(): string {
-  return "auth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+function clearSessionCookie(secure = false): string {
+  return `auth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 function redirectWithSessionCookie(
   response: ServerResponse,
   location: string,
   token: string,
+  secure = false,
 ) {
   response.statusCode = 302;
   response.setHeader("location", location);
-  response.setHeader("set-cookie", sessionCookie(token));
+  response.setHeader("set-cookie", sessionCookie(token, defaultSessionCookieMaxAgeSeconds, secure));
   response.end();
 }
 
@@ -1138,7 +1177,10 @@ const adminHttpAuthServices = new WeakMap<
   ReturnType<typeof createAdminHttpAuth>
 >();
 
-function adminAuthServiceForDb(db: AdminAuthDatabase) {
+function adminAuthServiceForDb(db: AdminAuthDatabase, secureCookies = false) {
+  if (secureCookies) {
+    return createAdminAuthService({ db, secureCookies: true });
+  }
   const existing = adminAuthServices.get(db);
   if (existing) {
     return existing;
@@ -1208,6 +1250,12 @@ const adminRouteRoles = {
 } as const;
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
+  if (error instanceof Error && error.message === "request_body_too_large") {
+    response.setHeader("connection", "close");
+    writeJson(response, envelopedError(413, "request_body_too_large", "Request body exceeds the size limit"));
+    return true;
+  }
+
   if (error instanceof SyntaxError) {
     writeJson(response, {
       status: 400,
@@ -3975,7 +4023,9 @@ async function grantPromptSkillAuthorCredits(
   },
 ) {
   const grants = [input.skillAuthorGrant, ...(input.skillAuthorGrants ?? [])]
-    .filter((grant): grant is NonNullable<typeof grant> => Boolean(grant && grant.amount > 0));
+    .filter((grant): grant is NonNullable<typeof grant> => Boolean(
+      grant && grant.amount > 0 && grant.userId !== input.payerUserId,
+    ));
   for (const grant of grants) {
     await grantCredits(db, {
       userId: grant.userId,
@@ -4419,6 +4469,165 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+const promptReverseMaxTokens = 1600;
+const promptReverseCreditReason = (mode: "image" | "video") => (
+  mode === "video" ? "工具箱视频反推消耗积分" : "工具箱图片反推消耗积分"
+);
+
+function isPromptReverseModel(model: AiModelConfigRecord) {
+  return model.status === "active"
+    && model.mediaType === "text"
+    && model.invocationMode === "stream"
+    && ["cumob_chat", "openai_compatible_chat", "modelflare_responses"].includes(model.providerProtocol)
+    && Array.isArray(model.uiConfig.toolboxTools)
+    && model.uiConfig.toolboxTools.includes("prompt-reverse");
+}
+
+async function listPromptReverseModels(db: SqlDatabase) {
+  const models = await listActiveAiModelConfigs(db, { mediaType: "text" });
+  return models.filter(isPromptReverseModel).map((model) => ({
+    displayName: model.displayName,
+  }));
+}
+
+function parsePromptReverseImageDataUrl(value: unknown) {
+  const dataUrl = readString(value);
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/i);
+  if (!match || match[2].length % 4 !== 0) {
+    throw new Error("prompt_reverse_image_invalid");
+  }
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > promptReverseMaximumImageBytes) {
+    throw new Error("prompt_reverse_image_too_large");
+  }
+  return { dataUrl, mediaType: match[1].toLowerCase(), byteLength: bytes.length };
+}
+
+function parsePromptReverseVideoFrameSheets(body: Record<string, unknown>) {
+  if (!Array.isArray(body.frameSheetDataUrls) || body.frameSheetDataUrls.length < 1) {
+    throw new Error("prompt_reverse_video_frame_sheets_invalid");
+  }
+  if (body.frameSheetDataUrls.length > promptReverseMaximumFrameSheetCount) {
+    throw new Error("prompt_reverse_video_frame_sheet_count_invalid");
+  }
+  let frameSheets: ReturnType<typeof parsePromptReverseImageDataUrl>[];
+  try {
+    frameSheets = body.frameSheetDataUrls.map(parsePromptReverseImageDataUrl);
+  } catch (error) {
+    if (error instanceof Error && error.message === "prompt_reverse_image_too_large") {
+      throw new Error("prompt_reverse_video_frame_sheets_too_large");
+    }
+    throw new Error("prompt_reverse_video_frame_sheets_invalid");
+  }
+  const byteLength = frameSheets.reduce((total, sheet) => total + sheet.byteLength, 0);
+  if (byteLength > promptReverseMaximumImageBytes) {
+    throw new Error("prompt_reverse_video_frame_sheets_too_large");
+  }
+
+  const source = readJsonRecord(body.samplingMetadata ?? body.sampling);
+  const frameRate = Number(source.frameRate ?? source.sampleFps ?? source.fps);
+  const frameCount = Number(source.frameCount);
+  const durationMsValue = source.durationMs ?? body.durationMs;
+  const parsedDurationMs = durationMsValue == null ? null : Number(durationMsValue);
+  // Browser-local decoders may not expose duration metadata even when all frames
+  // are valid. Treat zero as unknown; positive durations remain validated below.
+  const durationMs = parsedDurationMs === 0 ? null : parsedDurationMs;
+  const sheetCountValue = source.sheetCount;
+  const sheetCount = sheetCountValue == null ? frameSheets.length : Number(sheetCountValue);
+  const timelineSheetCountValue = source.timelineSheetCount;
+  const timelineSheetCount = timelineSheetCountValue == null ? frameSheets.length : Number(timelineSheetCountValue);
+  const keyFrameCountValue = source.keyFrameCount;
+  const keyFrameCount = keyFrameCountValue == null ? 0 : Number(keyFrameCountValue);
+  const positiveIntegerOrNull = (value: unknown, maximum: number) => {
+    if (value == null) return null;
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : NaN;
+  };
+  const columns = positiveIntegerOrNull(source.columns, 100);
+  const rows = positiveIntegerOrNull(source.rows, 100);
+  const framesPerSheet = positiveIntegerOrNull(source.framesPerSheet, 10_000);
+  if (
+    !Number.isFinite(frameRate) || frameRate < 6 || frameRate > 120
+    || !Number.isInteger(frameCount) || frameCount < 1 || frameCount > 1_000_000
+    || !Number.isInteger(sheetCount) || sheetCount !== frameSheets.length
+    || !Number.isInteger(timelineSheetCount) || timelineSheetCount < 1 || timelineSheetCount > sheetCount
+    || !Number.isInteger(keyFrameCount) || keyFrameCount < 0 || timelineSheetCount + keyFrameCount !== sheetCount
+    || (durationMs !== null && (!Number.isFinite(durationMs) || durationMs <= 0 || durationMs > 86_400_000))
+    || Number.isNaN(columns) || Number.isNaN(rows) || Number.isNaN(framesPerSheet)
+  ) {
+    throw new Error("prompt_reverse_video_sampling_invalid");
+  }
+  return {
+    frameSheets,
+    byteLength,
+    sampling: {
+      frameRate,
+      frameCount,
+      durationMs,
+      sheetCount,
+      timelineSheetCount,
+      keyFrameCount,
+      columns,
+      rows,
+      framesPerSheet,
+    },
+  };
+}
+
+function promptReverseInstruction(mode: "image" | "video" = "image") {
+  if (mode === "video") {
+    return `根据视频内容反推完整视频提示词，必须涵盖以下要素：
+输入图片是本地视频解析插件按时间顺序生成的连续画面联系表，采样率不低于 6 FPS。必须严格按照联系表数组的先后顺序，并在每张联系表内按照从左到右、从上到下的顺序分析完整时间线；将相邻画面的变化还原为连续动作、镜头运动和分镜切换，不得把联系表误判为拼贴画或只描述单个静态画面。
+主体（人物/物品/场景）：详细描述核心对象特征。动作：精确说明动态表现，详细动作分解，包括身体细微动作、头部细微动作、手部细微动作、脸部细微动作、腿部细微动作、眼神细微动作、嘴巴细微动作、身材细节与衣服飘动动作细节，要求最大程度还原。
+场景：环境、氛围、时间设定。
+光影：光线类型、强度、方向。
+运镜：推、拉、摇、移、俯拍、仰拍等镜头运动。
+语言风格：视觉风格、色调等。
+画质：分辨率、帧率、特效参数。着重描写人物的妆造、发型、神态、服饰；完整视频提示词最后统一加上“画面内容无字幕，人物无纹身”。
+
+请严格只输出一个 JSON 对象，不要 Markdown 代码块或额外解释，字段必须是：
+{"description":"中文视频内容分析","positivePrompt":"完整中文视频提示词","tags":["tag"],"negativePrompt":"中文负向提示词"}
+positivePrompt 要可直接用于 AI 视频生成，tags 使用简短英文标签；看不出负面内容时 negativePrompt 输出空字符串。`;
+  }
+  return `帮我拆解这张图片，重点分析主体、场景、风格、色调构图和细节，尽量细化到位，不要只做浅层描述。
+根据刚刚的分析结果，帮我反向生成一套完整的 AI 生图提示词，最大程度还原原图的氛围、风格和画面质感。
+再将这套提示词优化成适配 AI 直接生图的版本，做到表述清晰、细节完善，可以直接使用。
+
+请严格只输出一个 JSON 对象，不要 Markdown 代码块或额外解释，字段必须是：
+{"description":"中文画面描述","positivePrompt":"English prompt","tags":["tag"],"negativePrompt":"English negative prompt"}
+positivePrompt 要可直接用于图像生成，tags 使用简短英文标签；看不出负面内容时 negativePrompt 输出空字符串。`;
+}
+
+function parsePromptReverseResult(raw: string) {
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error("prompt_reverse_result_invalid");
+  }
+  const record = readJsonRecord(parsed);
+  return {
+    description: readString(record.description),
+    positivePrompt: readString(record.positivePrompt),
+    tags: Array.isArray(record.tags) ? record.tags.map(readString).filter(Boolean).slice(0, 100) : [],
+    negativePrompt: readString(record.negativePrompt),
+  };
+}
+
+function promptReverseUsageFromProviderUsage(usage: Record<string, unknown> | null) {
+  if (!usage) return null;
+  const tokenCount = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+  };
+  const promptTokens = tokenCount(usage.prompt_tokens ?? usage.promptTokens ?? usage.input_tokens ?? usage.inputTokens);
+  const completionTokens = tokenCount(usage.completion_tokens ?? usage.completionTokens ?? usage.output_tokens ?? usage.outputTokens);
+  const cachedTokens = tokenCount(usage.cached_tokens ?? usage.cachedTokens);
+  const totalTokens = tokenCount(usage.total_tokens ?? usage.totalTokens) || promptTokens + completionTokens + cachedTokens;
+  return totalTokens > 0 ? { promptTokens, completionTokens, cachedTokens, totalTokens } : null;
 }
 
 function readRecordArray(value: unknown): Record<string, unknown>[] {
@@ -14869,7 +15078,14 @@ async function serveStatic(
     return;
   }
 
-  const etag = staticAssetEtag(file);
+  const encoded = await encodeStaticAsset(request, filePath, file);
+  if (encoded.encoding) {
+    response.setHeader("content-encoding", encoded.encoding);
+  }
+  if (encoded.vary) {
+    response.setHeader("vary", "Accept-Encoding");
+  }
+  const etag = staticAssetEtag(encoded.file);
   response.setHeader("etag", etag);
   response.setHeader("cache-control", "public, max-age=0, must-revalidate");
   if (requestMatchesEtag(request, etag)) {
@@ -14879,7 +15095,58 @@ async function serveStatic(
   }
 
   response.statusCode = 200;
-  response.end(file);
+  response.end(encoded.file);
+}
+
+async function encodeStaticAsset(
+  request: Parameters<typeof createServer>[0],
+  filePath: string,
+  file: Buffer,
+) {
+  const extension = extname(filePath).toLowerCase();
+  const compressible = file.byteLength >= 1024 && [".css", ".js", ".mjs"].includes(extension);
+  if (!compressible) {
+    return { file, encoding: null, vary: false } as const;
+  }
+
+  const acceptEncoding = String(request.headers["accept-encoding"] ?? "");
+  const encoding = acceptsContentEncoding(acceptEncoding, "br")
+    ? "br"
+    : acceptsContentEncoding(acceptEncoding, "gzip")
+      ? "gzip"
+      : null;
+  if (!encoding) {
+    return { file, encoding: null, vary: true } as const;
+  }
+
+  const sourceEtag = staticAssetEtag(file);
+  const cacheKey = `${encoding}:${sourceEtag}`;
+  let compressed = staticAssetCompressionCache.get(cacheKey);
+  if (!compressed) {
+    compressed = encoding === "br"
+      ? await brotliCompress(file, {
+          params: {
+            [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
+          },
+        })
+      : await gzip(file, { level: 6 });
+    if (staticAssetCompressionCache.size >= 128) {
+      staticAssetCompressionCache.delete(staticAssetCompressionCache.keys().next().value ?? "");
+    }
+    staticAssetCompressionCache.set(cacheKey, compressed);
+  }
+  return { file: compressed, encoding, vary: true } as const;
+}
+
+function acceptsContentEncoding(header: string, encoding: "br" | "gzip") {
+  let wildcardAccepted = false;
+  for (const entry of header.split(",")) {
+    const [name, ...parameters] = entry.trim().toLowerCase().split(";");
+    const accepted = !parameters.some((parameter) => /^q=0(?:\.0*)?$/.test(parameter.trim()));
+    if (name === encoding) return accepted;
+    if (name === "*") wildcardAccepted = accepted;
+  }
+  return wildcardAccepted;
 }
 
 async function minifyStaticAsset(filePath: string, file: Buffer) {
@@ -14978,7 +15245,12 @@ async function serveAdminStatic(pathname: string, response: ServerResponse) {
 
 async function serveVendorFile(pathname: string, response: ServerResponse) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
-  const servesWebVendorFile = normalizedPath === "prompt-editor.js";
+  const servesWebVendorFile = [
+    "prompt-editor.js",
+    "transformers.webgpu.bundle.js",
+    "ort-wasm-simd-threaded.asyncify.mjs",
+    "ort-wasm-simd-threaded.asyncify.wasm",
+  ].includes(normalizedPath);
   const filePath = resolve(
     servesWebVendorFile
       ? join(webVendorRoot, normalizedPath)
@@ -15085,12 +15357,49 @@ function resolveLocalStorageObjectPath(bucket: string, objectKey: string) {
   return absolutePath;
 }
 
-async function readBinaryBody(request: AsyncIterable<Buffer | string>) {
-  const chunks = [];
+async function readBinaryBody(
+  request: AsyncIterable<Buffer | string>,
+  maximumBytes: number,
+) {
+  const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    size += buffer.byteLength;
+    if (size > maximumBytes) throw new Error("request_body_too_large");
+    chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+function createLimitedBinaryUploadStream(
+  request: AsyncIterable<Buffer | string>,
+  maximumBytes: number,
+) {
+  let sizeBytes = 0;
+  let signatureBytes = Buffer.alloc(0);
+  const counter = new Transform({
+    transform(chunk, _encoding, callback) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      sizeBytes += buffer.byteLength;
+      if (sizeBytes > maximumBytes) {
+        callback(new Error("request_body_too_large"));
+        return;
+      }
+      if (signatureBytes.byteLength < 128) {
+        signatureBytes = Buffer.concat([
+          signatureBytes,
+          buffer.subarray(0, 128 - signatureBytes.byteLength),
+        ]);
+      }
+      callback(null, buffer);
+    },
+  });
+  return {
+    stream: Readable.from(request).pipe(counter),
+    getSizeBytes: () => sizeBytes,
+    getSignatureBytes: () => signatureBytes,
+  };
 }
 
 async function writeLocalStorageObject(input: {
@@ -15174,6 +15483,7 @@ function isSupportedAppShellPath(pathname: string) {
   }
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
   return normalizedPath === "/new-canvas" ||
+    normalizedPath === "/toolbox" ||
     /^\/projects?\/[^/]+(?:\/(?:overview|assets|episodes|stats))?$/.test(normalizedPath) ||
     /^\/projects?\/[^/]+\/episodes\/[^/]+$/.test(normalizedPath);
 }
@@ -16560,6 +16870,7 @@ export function createPhoneAuthDevServer(
     ...process.env,
     ...(options.env ?? {}),
   };
+  const useSecureSessionCookies = runtimeEnv.NODE_ENV === "production";
   if (runtimeEnv.NODE_ENV === "production" && options.allowProduction !== true) {
     throw new Error("phone_auth_dev_server_forbidden_in_production");
   }
@@ -16775,6 +17086,7 @@ export function createPhoneAuthDevServer(
           gateway: new TextModelGatewayService({
             db,
             adapter: new OpenAICompatibleTextAdapter(),
+            modelflareAdapter: new ModelflareResponsesAdapter(),
             resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
             env: runtimeEnv,
           }),
@@ -16783,6 +17095,7 @@ export function createPhoneAuthDevServer(
         gateway: new TextModelGatewayService({
           db,
           adapter: new OpenAICompatibleTextAdapter(),
+          modelflareAdapter: new ModelflareResponsesAdapter(),
           resolver: new AdminBackedTextModelResolver(db),
           env: runtimeEnv,
         }),
@@ -16791,6 +17104,7 @@ export function createPhoneAuthDevServer(
         gateway: new TextModelGatewayService({
           db,
           adapter: new OpenAICompatibleTextAdapter(),
+          modelflareAdapter: new ModelflareResponsesAdapter(),
           resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
           env: runtimeEnv,
         }),
@@ -16909,7 +17223,7 @@ export function createPhoneAuthDevServer(
           loginName?: string;
           password?: string;
         };
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.login({
@@ -16923,7 +17237,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "GET" && pathname === "/api/admin/auth/me") {
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.me({
@@ -16934,7 +17248,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "POST" && pathname === "/api/admin/auth/logout") {
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.logout({
@@ -16953,7 +17267,7 @@ export function createPhoneAuthDevServer(
           loginName?: string;
           displayName?: string;
         };
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.updateProfile({
@@ -16976,7 +17290,7 @@ export function createPhoneAuthDevServer(
           newPassword?: string;
           revokeOtherSessions?: boolean;
         };
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.changePassword({
@@ -16991,7 +17305,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (request.method === "GET" && pathname === "/api/admin/auth/sessions") {
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.listSessions({
@@ -17006,7 +17320,7 @@ export function createPhoneAuthDevServer(
         if (!idempotencyKey) {
           return writeIdempotencyKeyRequired(response);
         }
-        const adminAuth = adminAuthServiceForDb(db);
+        const adminAuth = adminAuthServiceForDb(db, useSecureSessionCookies);
         return writeJson(
           response,
           await adminAuth.revokeOtherSessions({
@@ -19463,7 +19777,15 @@ export function createPhoneAuthDevServer(
           );
         }
         const contentType = normalizeUploadContentType(request.headers["content-type"]);
-        const bytes = await readBinaryBody(request);
+        const preliminaryUploadPolicy = validateUploadPolicy({
+          fileName,
+          contentType,
+          purpose: adminUploadConfig.policyPurpose,
+        });
+        const bytes = await readBinaryBody(
+          request,
+          preliminaryUploadPolicy.ok ? preliminaryUploadPolicy.rule.maxBytes : episodeUploadLimits.image.maxBytes,
+        );
         if (!bytes.byteLength) {
           return writeJson(
             response,
@@ -20270,8 +20592,8 @@ export function createPhoneAuthDevServer(
               id,
               phone_e164,
               challenge_id,
-              verification_code,
-              sms_content,
+              NULL::text AS verification_code,
+              NULL::text AS sms_content,
               provider,
               status,
               ip_address,
@@ -20294,8 +20616,8 @@ export function createPhoneAuthDevServer(
             data: rows.rows.map((row) => ({
               id: row.id,
               phone: row.phone_e164,
-              verificationCode: row.verification_code,
-              smsContent: row.sms_content,
+              verificationCode: null,
+              smsContent: null,
               provider: row.provider,
               status: row.provider === "dev" && row.status === "sent" ? "test" : row.status,
               ipAddress: row.ip_address,
@@ -21058,7 +21380,7 @@ export function createPhoneAuthDevServer(
           now,
         });
 
-        return redirectWithSessionCookie(response, "/app.html#project", session.token);
+        return redirectWithSessionCookie(response, "/app.html#project", session.token, useSecureSessionCookies);
       }
 
       if (request.method === "POST" && pathname === "/api/auth/code/verify") {
@@ -21150,7 +21472,7 @@ export function createPhoneAuthDevServer(
               expiresAt: verified.session.expiresAt.toISOString(),
             },
           },
-          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now), useSecureSessionCookies)],
         });
       }
 
@@ -21213,7 +21535,7 @@ export function createPhoneAuthDevServer(
               expiresAt: verified.session.expiresAt.toISOString(),
             },
           },
-          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now), useSecureSessionCookies)],
         });
       }
 
@@ -21273,7 +21595,7 @@ export function createPhoneAuthDevServer(
                 expiresAt: memberVerified.session.expiresAt.toISOString(),
               },
             },
-            cookies: [sessionCookie(memberVerified.token, sessionCookieMaxAgeSecondsFromSession(memberVerified.session.expiresAt, now))],
+            cookies: [sessionCookie(memberVerified.token, sessionCookieMaxAgeSecondsFromSession(memberVerified.session.expiresAt, now), useSecureSessionCookies)],
           });
         }
 
@@ -21327,7 +21649,7 @@ export function createPhoneAuthDevServer(
               expiresAt: verified.session.expiresAt.toISOString(),
             },
           },
-          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now))],
+          cookies: [sessionCookie(verified.token, sessionCookieMaxAgeSecondsFromSession(verified.session.expiresAt, now), useSecureSessionCookies)],
         });
       }
 
@@ -21726,15 +22048,25 @@ export function createPhoneAuthDevServer(
 
       if (request.method === "GET" && pathname === "/api/creator/storyboard-prompt/packages") {
         const service = createAdminStoryboardPromptService({ db });
+        const compact = url.searchParams.get("compact") === "1";
         const result = await service.listPackages({
           keyword: url.searchParams.get("keyword"),
           status: url.searchParams.get("status") ?? "enabled",
           pageSize: Number(url.searchParams.get("page_size") ?? url.searchParams.get("pageSize") ?? 500),
+          includeContent: !compact,
         });
+        const packages = compact
+          ? result.data.map((item) => {
+              const summary: Record<string, unknown> = { ...item };
+              delete summary.prompt_content;
+              delete summary.promptContent;
+              return summary;
+            })
+          : result.data;
         return writeJson(response, {
           status: 200,
           body: {
-            packages: result.data,
+            packages,
           },
         });
       }
@@ -21795,7 +22127,7 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 204,
           body: {},
-          cookies: [clearSessionCookie()],
+          cookies: [clearSessionCookie(useSecureSessionCookies)],
         });
       }
 
@@ -21875,7 +22207,7 @@ export function createPhoneAuthDevServer(
         const now = new Date();
         const callbackResult = await commercePayment.processProviderCallback({
           provider,
-          rawBody: await readTextBody(request),
+          rawBody: await readLimitedTextBody(request, maximumJsonBodyBytes),
           headers: singleValueHeaders(request.headers),
           now,
         });
@@ -22483,7 +22815,6 @@ export function createPhoneAuthDevServer(
           pathname.endsWith("/blob")
         ) {
           const uploadSessionId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
-          const bytes = await readBinaryBody(request);
           const session = await findUploadSession(db, uploadSessionId);
           if (!session) {
             response.statusCode = 404;
@@ -22495,6 +22826,11 @@ export function createPhoneAuthDevServer(
             response.end("upload_session_not_found");
             return;
           }
+          const sessionUploadPolicy = validateUploadPolicy({
+            fileName: session.originalFileName,
+            contentType: session.contentType,
+            purpose: session.purpose,
+          });
           const object = await queryOne<{ bucket: string; object_key: string }>(
             db,
             "SELECT bucket, object_key FROM storage_objects WHERE id = $1",
@@ -22505,6 +22841,86 @@ export function createPhoneAuthDevServer(
             response.end("storage_object_not_found");
             return;
           }
+          if (sessionUploadPolicy.ok && sessionUploadPolicy.kind === "video") {
+            const streamedUpload = createLimitedBinaryUploadStream(
+              request,
+              sessionUploadPolicy.rule.maxBytes,
+            );
+            const contentType = String(request.headers["content-type"] ?? session.contentType);
+            const deleteUploadedObject = async () => {
+              if (
+                (storageRuntime.mode === "cos" || storageRuntime.mode === "s3_compatible") &&
+                typeof storageRuntime.adapter.deleteObject === "function"
+              ) {
+                await storageRuntime.adapter.deleteObject({
+                  bucket: object.bucket,
+                  objectKey: object.object_key,
+                });
+                return;
+              }
+              await deleteLocalStorageObject({
+                bucket: object.bucket,
+                objectKey: object.object_key,
+              });
+            };
+            try {
+              if (
+                (storageRuntime.mode === "cos" || storageRuntime.mode === "s3_compatible") &&
+                typeof storageRuntime.adapter.putObject === "function"
+              ) {
+                await storageRuntime.adapter.putObject({
+                  bucket: object.bucket,
+                  objectKey: object.object_key,
+                  body: streamedUpload.stream,
+                  contentType,
+                  contentLength: parseContentLength(firstRequestHeader(request.headers["content-length"])),
+                });
+              } else {
+                await writeLocalStorageObjectFromStream({
+                  bucket: object.bucket,
+                  objectKey: object.object_key,
+                  body: streamedUpload.stream,
+                });
+              }
+            } catch (error) {
+              await deleteUploadedObject().catch(() => undefined);
+              throw error;
+            }
+            const uploadPolicy = validateUploadPolicy({
+              fileName: session.originalFileName,
+              contentType,
+              sizeBytes: streamedUpload.getSizeBytes(),
+              purpose: session.purpose,
+            });
+            const contentBoundary = validateUploadContentBoundary({
+              fileName: session.originalFileName,
+              contentType,
+              bytes: streamedUpload.getSignatureBytes(),
+            });
+            if (!uploadPolicy.ok || !contentBoundary.ok) {
+              await deleteUploadedObject().catch(() => undefined);
+              response.statusCode = !uploadPolicy.ok && uploadPolicy.errorCode === "upload_file_too_large" ? 413 : 400;
+              response.setHeader("content-type", "application/json; charset=utf-8");
+              response.end(JSON.stringify(!uploadPolicy.ok
+                ? {
+                    errorCode: uploadPolicy.errorCode,
+                    message: uploadPolicy.message,
+                    details: "details" in uploadPolicy ? uploadPolicy.details : {},
+                  }
+                : {
+                    errorCode: contentBoundary.errorCode,
+                    message: contentBoundary.message,
+                  }));
+              return;
+            }
+            response.statusCode = 200;
+            response.end("ok");
+            return;
+          }
+          const bytes = await readBinaryBody(
+            request,
+            sessionUploadPolicy.ok ? sessionUploadPolicy.rule.maxBytes : episodeUploadLimits.video.maxBytes,
+          );
           const uploadPolicy = validateUploadPolicy({
             fileName: session.originalFileName,
             contentType: request.headers["content-type"] ?? session.contentType,
@@ -22659,7 +23075,9 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/task-center/") ||
         pathname === "/api/generation/image-tasks" ||
         pathname === "/api/generation-config" ||
-        pathname.startsWith("/api/generation-tasks/")
+        pathname.startsWith("/api/generation-tasks/") ||
+        pathname === "/api/toolbox/prompt-reverse/models" ||
+        pathname === "/api/toolbox/prompt-reverse"
       ) {
         const authenticated = await findAuthenticatedUser(
           db,
@@ -22674,6 +23092,162 @@ export function createPhoneAuthDevServer(
             envelopedError(401, "unauthenticated", "session expired"),
           );
         }
+
+        if (request.method === "GET" && pathname === "/api/toolbox/prompt-reverse/models") {
+          return writeJson(response, enveloped(200, { models: await listPromptReverseModels(db) }));
+        }
+
+        if (request.method === "POST" && pathname === "/api/toolbox/prompt-reverse") {
+          const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+          if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
+          let body: Record<string, unknown>;
+          try {
+            body = readJsonRecord(await readLimitedTextBody(request, promptReverseMaximumBodyBytes));
+          } catch (error) {
+            const code = error instanceof Error && error.message === "request_body_too_large"
+              ? "request_body_too_large"
+              : "invalid_json";
+            return writeJson(response, envelopedError(400, code, code === "request_body_too_large" ? "request body is too large" : "invalid JSON body"));
+          }
+          const displayName = readString(body.displayName);
+          const requestedMode = readString(body.mode).toLowerCase();
+          if (!displayName || (requestedMode && !["image", "video"].includes(requestedMode))) {
+            return writeJson(response, envelopedError(400, "prompt_reverse_input_invalid", "displayName is required and prompt reverse supports image or video mode"));
+          }
+          const mode = requestedMode === "video" ? "video" : "image";
+          let image: ReturnType<typeof parsePromptReverseImageDataUrl> | null = null;
+          let video: ReturnType<typeof parsePromptReverseVideoFrameSheets> | null = null;
+          try {
+            if (mode === "video") {
+              video = parsePromptReverseVideoFrameSheets(body);
+            } else {
+              image = parsePromptReverseImageDataUrl(body.imageDataUrl ?? body.image);
+            }
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "prompt_reverse_image_invalid";
+            const message = code === "prompt_reverse_image_too_large"
+              ? "image exceeds 20MB"
+              : code === "prompt_reverse_video_frame_sheet_count_invalid"
+                ? `video analysis accepts at most ${promptReverseMaximumFrameSheetCount} frame sheets`
+                : code === "prompt_reverse_video_frame_sheets_too_large"
+                  ? "video frame sheets exceed 20MB in total"
+                  : code === "prompt_reverse_video_sampling_invalid"
+                    ? "video sampling metadata is invalid or below 6 FPS"
+                    : mode === "video"
+                      ? "video analysis requires PNG, JPEG, or WEBP frame sheet data URLs"
+                      : "only PNG, JPEG, or WEBP data URLs are supported";
+            return writeJson(response, envelopedError(400, code, message));
+          }
+          const model = (await listActiveAiModelConfigs(db, { mediaType: "text" }))
+            .find((candidate) => candidate.displayName === displayName && isPromptReverseModel(candidate));
+          if (!model) {
+            return writeJson(response, envelopedError(404, "prompt_reverse_model_unavailable", "model is not enabled for prompt reverse"));
+          }
+          const billing = new CanvasAgentBillingService(db);
+          const creditReason = promptReverseCreditReason(mode);
+          // Credit reservations use UUID source IDs. Derive one from the idempotency
+          // key so a retry reaches the same reservation without exposing the key.
+          const billingStepId = uuidFromIdempotencyKey(`toolbox-prompt-reverse:${idempotencyKey}`);
+          let billingReceipt: Awaited<ReturnType<CanvasAgentBillingService["reserveRound"]>>;
+          try {
+            billingReceipt = await billing.reserveRound({
+              ownerUserId: authenticated.user.id,
+              actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+              agentTaskId: billingStepId,
+              stepId: billingStepId,
+              amount: billing.estimateRound({ pricing: model.pricing, maxTokens: promptReverseMaxTokens }),
+              reason: creditReason,
+              now: new Date(),
+            });
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "prompt_reverse_billing_failed";
+            if (code === "insufficient_credits") {
+              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请充值后再反推。"));
+            }
+            return writeJson(response, envelopedError(400, "prompt_reverse_billing_failed", code));
+          }
+          const messages: TextGatewayChatCompletionRequest["messages"] = [
+            { role: "system", content: promptReverseInstruction(mode) },
+            {
+              role: "user",
+              content: mode === "video"
+                ? [
+                  {
+                    type: "text",
+                    text: `前 ${video!.sampling.timelineSheetCount} 张图片是完整视频按顺序生成的连续 ${video!.sampling.frameRate} FPS 时间轴联系表，共 ${video!.sampling.frameCount} 帧${video!.sampling.durationMs ? `，视频时长 ${video!.sampling.durationMs} 毫秒` : ""}。请严格按联系表数组顺序、每张图片从左到右再从上到下分析完整时间线，反推动作、分镜和运镜。末尾 ${video!.sampling.keyFrameCount} 张图片是场景高清关键帧，只用于补充人物妆造、发型、神态、服饰和环境细节。`,
+                  },
+                  ...video!.frameSheets.map((sheet) => ({
+                    type: "image_url" as const,
+                    image_url: { url: sheet.dataUrl, detail: "high" as const },
+                  })),
+                ]
+                : [
+                  { type: "text", text: "请反推这张图片的生成提示词。" },
+                  { type: "image_url", image_url: { url: image!.dataUrl, detail: "high" },
+                  },
+                ],
+            },
+          ];
+          try {
+            const gatewayInput = {
+              model: model.modelCode,
+              messages,
+              responseFormat: "json_object",
+              maxTokens: promptReverseMaxTokens,
+              createdByUserId: authenticated.user.id,
+              payloadSummary: mode === "video"
+                ? "toolbox prompt reverse local 6fps frame sheet analysis"
+                : "toolbox prompt reverse image analysis",
+              requestKeyPrefix: "toolbox-prompt-reverse",
+            } as const;
+            const completion = canvasTextChatGateway.completeJsonWithUsage
+              ? await canvasTextChatGateway.completeJsonWithUsage(gatewayInput)
+              : { content: await canvasTextChatGateway.completeJson(gatewayInput), usage: null, providerRequestId: null };
+            const credit = await billing.settleRound({
+              ownerUserId: authenticated.user.id,
+              actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+              agentTaskId: billingStepId,
+              stepId: billingStepId,
+              reservationId: billingReceipt.reservationId,
+              reservedAmount: billingReceipt.amount,
+              usage: promptReverseUsageFromProviderUsage(completion.usage),
+              pricing: model.pricing,
+              providerRequestId: completion.providerRequestId,
+              reason: creditReason,
+              now: new Date(),
+            });
+            return writeJson(response, enveloped(200, {
+              displayName: model.displayName,
+              mode,
+              ...(image ? { imageBytes: image.byteLength } : {
+                frameSheetCount: video!.frameSheets.length,
+                frameSheetBytes: video!.byteLength,
+                sampling: video!.sampling,
+              }),
+              credit,
+              result: parsePromptReverseResult(completion.content),
+            }));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "prompt_reverse_failed";
+            try {
+              await billing.releaseRound({
+                ownerUserId: authenticated.user.id,
+                actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
+                agentTaskId: billingStepId,
+                stepId: billingStepId,
+                reservationId: billingReceipt.reservationId,
+                reservedAmount: billingReceipt.amount,
+                failureCode: message,
+                reason: creditReason,
+                now: new Date(),
+              });
+            } catch {
+              // The model failure remains the actionable response. Release is idempotent for operational retry.
+            }
+            return writeJson(response, envelopedError(502, "prompt_reverse_failed", message));
+          }
+        }
+
         const canvasFeaturePath = pathname.startsWith("/api/canvas/")
           || pathname === "/api/creator/canvases"
           || pathname.startsWith("/api/creator/canvases/")
@@ -27632,6 +28206,12 @@ export function createPhoneAuthDevServer(
             modelCode?: string | null;
             skipScriptStage?: boolean | null;
             useDefaultWorkflowStages?: boolean | null;
+            stages?: Array<"script" | "scene" | "character" | "prop" | "shot"> | null;
+            context?: {
+              scenes?: Array<Record<string, unknown>> | null;
+              characters?: Array<Record<string, unknown>> | null;
+              props?: Array<Record<string, unknown>> | null;
+            } | null;
             skills?: Partial<Record<"script" | "shot" | "prop_extract" | "character_extract" | "scene_extract", string | null>> | null;
             packages?: {
               genrePackageId?: string | null;
@@ -27641,6 +28221,19 @@ export function createPhoneAuthDevServer(
           const scriptText = String(body.scriptText ?? "").trim();
           const skipScriptStage = body.skipScriptStage === true;
           const useDefaultWorkflowStages = skipScriptStage && body.useDefaultWorkflowStages === true;
+          const workflowStages = ["script", "scene", "character", "prop", "shot"] as const;
+          if (body.stages != null && (!Array.isArray(body.stages) || body.stages.length === 0)) {
+            return writeJson(response, envelopedError(400, "workflow_stage_invalid", "workflow stages are invalid"));
+          }
+          const requestedStages = Array.isArray(body.stages)
+            ? [...new Set(body.stages.map((stage) => String(stage ?? "")))]
+            : [];
+          if (requestedStages.some((stage) => !workflowStages.includes(stage as (typeof workflowStages)[number]))) {
+            return writeJson(response, envelopedError(400, "workflow_stage_invalid", "workflow stages are invalid"));
+          }
+          if (skipScriptStage && requestedStages.includes("script")) {
+            return writeJson(response, envelopedError(400, "workflow_stage_invalid", "script stage cannot be skipped and selected"));
+          }
           const skillId = String(body.skillId ?? "").trim();
           const workflowSkillCategories = ["script", "shot", "prop_extract", "character_extract", "scene_extract"] as const;
           const requestedSkillIds = Object.fromEntries(
@@ -27650,6 +28243,23 @@ export function createPhoneAuthDevServer(
           ) as Partial<Record<(typeof workflowSkillCategories)[number], string>>;
           if (skipScriptStage) {
             delete requestedSkillIds.script;
+          }
+          const categoryByStage = {
+            script: "script",
+            scene: "scene_extract",
+            character: "character_extract",
+            prop: "prop_extract",
+            shot: "shot",
+          } as const;
+          if (requestedStages.length && Object.keys(requestedSkillIds).length) {
+            const requestedCategories = new Set(requestedStages.map((stage) => categoryByStage[stage as keyof typeof categoryByStage]));
+            const selectedCategories = Object.keys(requestedSkillIds);
+            if (
+              selectedCategories.some((category) => !requestedCategories.has(category as (typeof categoryByStage)[keyof typeof categoryByStage]))
+              || requestedCategories.size !== selectedCategories.length
+            ) {
+              return writeJson(response, envelopedError(400, "workflow_stage_skill_mismatch", "workflow stages and skills must match"));
+            }
           }
           const genrePackageId = String(body.packages?.genrePackageId ?? "");
           const emotionPackageId = String(body.packages?.emotionPackageId ?? "");
@@ -27729,7 +28339,7 @@ export function createPhoneAuthDevServer(
           }
           const resolvedModelCode = scriptModelConfig.modelCode;
           const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages
-            ? (skipScriptStage ? 4 : 5)
+            ? (requestedStages.length || (skipScriptStage ? 4 : 5))
             : workflowSkills.length;
           const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
           const skillCreditCost = workflowSkills.reduce(
@@ -27820,7 +28430,9 @@ export function createPhoneAuthDevServer(
             scriptText,
             modelCode: resolvedModelCode,
             selectedStages: usesLegacyPackages || useDefaultWorkflowStages
-              ? undefined
+              ? (requestedStages.length
+                  ? requestedStages as Array<"script" | "scene" | "character" | "prop" | "shot">
+                  : undefined)
               : workflowSkills.map((item) => item.category === "scene_extract"
                   ? "scene"
                   : item.category === "character_extract"
@@ -27829,6 +28441,11 @@ export function createPhoneAuthDevServer(
                       ? "prop"
                       : item.category) as Array<"script" | "scene" | "character" | "prop" | "shot">,
             skipScriptStage,
+            context: {
+              scenes: Array.isArray(body.context?.scenes) ? body.context.scenes.slice(0, 500) : [],
+              characters: Array.isArray(body.context?.characters) ? body.context.characters.slice(0, 500) : [],
+              props: Array.isArray(body.context?.props) ? body.context.props.slice(0, 500) : [],
+            },
             packages: {
               skillPrompt: workflowSkillByCategory.get("script")?.content ?? "",
               genrePrompt: genrePackage ? formatStoryboardPromptPackageContents([genrePackage]) : "",
@@ -27887,6 +28504,9 @@ export function createPhoneAuthDevServer(
                 } else {
                   writeSseData(response, event);
                 }
+              }
+              if (!generationCompleted && !abortController.signal.aborted) {
+                throw new Error("ai_storyboard_stream_incomplete");
               }
               if (generationCompleted) {
                 await grantPromptSkillAuthorCredits(db, {

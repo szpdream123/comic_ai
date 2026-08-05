@@ -2383,6 +2383,15 @@ test("admin model list exposes persisted Canvas Agent compatibility diagnostics"
   }
 });
 
+test("admin model editor manages toolbox model availability through uiConfig", () => {
+  assert.match(script, /TOOLBOX_TOOL_OPTIONS/);
+  assert.match(script, /value: "prompt-reverse"/);
+  assert.match(script, /toolboxToolControls\(base\.uiConfig \|\| \{\}\)/);
+  assert.match(script, /name="toolboxTools"/);
+  assert.match(script, /form\.getAll === "function"/);
+  assert.match(script, /uiConfig\.toolboxTools =/);
+});
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

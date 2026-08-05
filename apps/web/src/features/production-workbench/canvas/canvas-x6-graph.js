@@ -583,6 +583,7 @@ function createCanvasEditorOverlayX6Node(editorHtml = "") {
   }
   editor?.addEventListener?.("pointerdown", (event) => event.stopPropagation());
   editor?.addEventListener?.("mousedown", (event) => event.stopPropagation());
+  editor?.addEventListener?.("wheel", (event) => event.stopPropagation(), { passive: true });
   return wrapper;
 }
 
@@ -803,10 +804,12 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
     : "";
   const preview = mediaUrl
     ? mediaKind === "video"
-      ? `<video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline controls></video>${uploadingMask}${generationMask}`
+      ? mixedUpload
+        ? `<button class="canvas-x6-video-preview-trigger" type="button" data-action="toggle-canvas-video-fullscreen" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看视频" title="放大查看视频"><video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline preload="metadata"></video></button>${uploadingMask}${generationMask}`
+        : `<video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline controls></video>${uploadingMask}${generationMask}`
       : mediaKind === "audio"
         ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}${generationMask}`
-        : `<img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} />${uploadingMask}${generationMask}`
+        : `<button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看图片" title="放大查看图片"><img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} /></button>${uploadingMask}${generationMask}`
     : `${uploadingMask}${generationMask}<strong>${agentGenerating ? `${mediaLabel}正在生成中` : emptyUploadLabel}</strong><small>${agentGenerating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
   return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${agentGenerating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || agentGenerating ? " aria-busy=\"true\"" : ""}>
     <div class="canvas-x6-source-media-preview"${emptyUploadAttrs}>${preview}</div>
@@ -969,7 +972,7 @@ function renderCanvasImageGenerationX6Node(node = {}) {
   const body = preparing
     ? `<div class="canvas-video-empty canvas-image-empty is-loading canvas-image-generation-mask" role="status" aria-label="正在生成图片"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成图片</strong></div>`
     : imageUrl
-      ? `<div class="canvas-video-preview canvas-image-preview"><img src="${escapeCanvasX6Html(imageUrl)}" alt="图片生成结果" loading="lazy" decoding="async" fetchpriority="low" /></div>`
+      ? `<div class="canvas-video-preview canvas-image-preview"><button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(node?.id ?? "")}" aria-label="放大查看生成图片" title="放大查看图片"><img src="${escapeCanvasX6Html(imageUrl)}" alt="图片生成结果" loading="lazy" decoding="async" fetchpriority="low" /></button></div>`
       : failed
       ? renderCanvasX6GenerationState(node, status)
       : `<div class="canvas-video-empty canvas-image-empty" role="status"><strong>暂无图片</strong></div>`;

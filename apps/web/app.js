@@ -274,7 +274,7 @@ function renderLoginModalMarkup() {
                 <input id="password-remember-input" type="checkbox" name="remember" checked />
                 <span>保持登录</span>
               </label>
-              <button type="button" class="text-action">忘记密码？</button>
+              <button id="forgot-password-button" type="button" class="text-action">忘记密码？</button>
             </div>
             <button id="password-login-button" class="primary-action" type="submit">立即登录</button>
           </form>
@@ -365,6 +365,7 @@ function bindLoginModal(modal) {
   const passwordInput = qs("#password-input");
   const passwordRememberInput = qs("#password-remember-input");
   const passwordVisibilityToggle = qs("#password-visibility-toggle");
+  const forgotPasswordButton = qs("#forgot-password-button");
   const passwordLoginButton = qs("#password-login-button");
   const agreementsCheckbox = qs("#agreements-checkbox");
   const agreementsErrorTooltip = qs("#agreements-error-tooltip");
@@ -728,6 +729,21 @@ function bindLoginModal(modal) {
       const provider = button.dataset.providerLabel || "第三方";
       setStatus(`${provider} 登录即将上线`);
     });
+  });
+
+  forgotPasswordButton?.addEventListener("click", () => {
+    if (selectedPasswordAccountType() === "team") {
+      setStatus("子账户请联系主账号管理员重置密码。");
+      accountInput?.focus();
+      return;
+    }
+    const account = accountInput?.value?.trim() ?? "";
+    setAuthMode("phone");
+    if (isMainlandPhoneInput(account) && phoneInput) {
+      phoneInput.value = account;
+    }
+    setStatus("请使用短信验证码恢复登录；如需重置密码，请联系平台客服。");
+    phoneInput?.focus();
   });
 
   updatePasswordAccountHint();

@@ -23,6 +23,13 @@ export async function hydrateStateFromSql(
   },
 ): Promise<CreatorDevStateSnapshot> {
   const sqlState = await loadCreatorStateFromSql(db, input);
+  return hydrateStateFromLoadedSql(state, sqlState);
+}
+
+export function hydrateStateFromLoadedSql(
+  state: CreatorDevStateSnapshot,
+  sqlState: Awaited<ReturnType<typeof loadCreatorStateFromSql>>,
+): CreatorDevStateSnapshot {
   const assetCandidates =
     sqlState.assetCandidates ?? state.assetCandidates;
 
@@ -63,19 +70,21 @@ export async function seedCreatorAppFromSql(
   },
 ) {
   const sqlState = await loadCreatorStateFromSql(db, input);
-  if (!sqlState.bundle?.project || !sqlState.bundle.script) {
+  if (!sqlState.bundle?.project) {
     return null;
   }
 
-  await creatorApp.seedState({
-    bundle: {
-      project: sqlState.bundle.project,
-      script: sqlState.bundle.script,
-    },
-    assetCandidates: sqlState.assetCandidates,
-    calibration: sqlState.calibration,
-    shots: sqlState.shots,
-  });
+  if (sqlState.bundle.script) {
+    await creatorApp.seedState({
+      bundle: {
+        project: sqlState.bundle.project,
+        script: sqlState.bundle.script,
+      },
+      assetCandidates: sqlState.assetCandidates,
+      calibration: sqlState.calibration,
+      shots: sqlState.shots,
+    });
+  }
   return sqlState;
 }
 
@@ -93,19 +102,21 @@ async function loadCreatorStateFromSql(
     projectId: input.projectId,
     now: input.now,
   });
-  const records = await listAssetReviewCandidatesForProject(db, {
-    projectId: input.projectId,
-  });
-  const projectBundle = await loadProjectBundleFromSql(db, {
-    projectId: input.projectId,
-    scriptId: input.scriptId,
-  });
-  const shots = await listShotsForProject(db, {
-    projectId: input.projectId,
-  });
-  const calibration = await getLatestCalibrationSessionForProject(db, {
-    projectId: input.projectId,
-  });
+  const [records, projectBundle, shots, calibration] = await Promise.all([
+    listAssetReviewCandidatesForProject(db, {
+      projectId: input.projectId,
+    }),
+    loadProjectBundleFromSql(db, {
+      projectId: input.projectId,
+      scriptId: input.scriptId,
+    }),
+    listShotsForProject(db, {
+      projectId: input.projectId,
+    }),
+    getLatestCalibrationSessionForProject(db, {
+      projectId: input.projectId,
+    }),
+  ]);
 
   return {
     bundle: projectBundle,

@@ -68,6 +68,7 @@ const migrations = [
   ["20260802-canvas-settings.sql", "packages/db/migrations/20260802-canvas-settings.sql"],
   ["20260803-canvas-agent-conversation-pins.sql", "packages/db/migrations/20260803-canvas-agent-conversation-pins.sql"],
   ["20260804-canvas-prompt-directive-configs.sql", "packages/db/migrations/20260804-canvas-prompt-directive-configs.sql"],
+  ["20260804-z-redact-sms-send-record-secrets.sql", "packages/db/migrations/20260804-z-redact-sms-send-record-secrets.sql"],
   ["20260805-canvas-agent-conversation-locks.sql", "packages/db/migrations/20260805-canvas-agent-conversation-locks.sql"],
   ["20260806-backfill-prompt-summaries.sql", "packages/db/migrations/20260806-backfill-prompt-summaries.sql"],
   ["20260807-canvas-agent-provider-config-drafts.sql", "packages/db/migrations/20260807-canvas-agent-provider-config-drafts.sql"],
@@ -110,6 +111,7 @@ const runtimeSafeMigrationNames = new Set([
   "20260824-task-center-provider-diagnostics.sql",
   "20260824-z-task-center-provider-diagnostics-index.sql",
   "20260826-converge-provider-protocol-constraint.sql",
+  "20260804-z-redact-sms-send-record-secrets.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

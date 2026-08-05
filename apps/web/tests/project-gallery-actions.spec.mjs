@@ -5,6 +5,7 @@ import {
   handleWorkbenchActionForTest,
   initProductionWorkbench,
   refreshProductionWorkbenchForTest,
+  restoreWorkbenchRouteFromLocationForTest,
   syncCanvasProjectsFromApiForTest,
   syncWorkbenchHashRouteForTest,
 } from "../src/features/production-workbench/index.js";
@@ -181,6 +182,68 @@ test("project detail hash keeps the panel on overview", () => {
   assert.equal(workbench.ui.activeNavTab, "project");
   assert.equal(workbench.ui.projectPanelMode, "detail");
   assert.equal(workbench.ui.projectInteriorSection, "overview");
+});
+
+test("history route restoration reloads the target project and episode", async () => {
+  const workbench = createWorkbench();
+  const selectedProjects = [];
+  workbench.session = { user: { id: "user-1", phone: "+86 13800138000" } };
+  workbench.api.selectProject = async ({ projectId }) => {
+    selectedProjects.push(projectId);
+    return {
+      project: { id: projectId, projectId, name: `项目 ${projectId}` },
+      episodes: [{ id: `episode-${projectId}`, title: `剧集 ${projectId}` }],
+      assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+      shots: [],
+    };
+  };
+
+  await restoreWorkbenchRouteFromLocationForTest(workbench, {
+    hash: "#/projects/project-2",
+    pathname: "/app.html",
+  });
+  await restoreWorkbenchRouteFromLocationForTest(workbench, {
+    hash: "#/projects/project-1/episodes/episode-project-1",
+    pathname: "/app.html",
+  });
+
+  assert.deepEqual(selectedProjects, ["project-2", "project-1"]);
+  assert.equal(workbench.state.project.id, "project-1");
+  assert.equal(workbench.ui.selectedProjectCardId, "project-1");
+  assert.equal(workbench.ui.selectedEpisodeId, "episode-project-1");
+  assert.equal(workbench.ui.projectPanelMode, "episode-workbench");
+});
+
+test("a slower history restore cannot replace a newer episode route", async () => {
+  const workbench = createWorkbench();
+  const pendingSelections = new Map();
+  workbench.session = { user: { id: "user-1", phone: "+86 13800138000" } };
+  workbench.api.selectProject = ({ projectId }) => new Promise((resolve) => {
+    pendingSelections.set(projectId, resolve);
+  });
+  const projectDetail = (projectId) => ({
+    project: { id: projectId, projectId, name: `项目 ${projectId}` },
+    episodes: [{ id: `episode-${projectId}`, title: `剧集 ${projectId}` }],
+    assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+    shots: [],
+  });
+
+  const olderRestore = restoreWorkbenchRouteFromLocationForTest(workbench, {
+    hash: "#/projects/project-1/episodes/episode-project-1",
+    pathname: "/app.html",
+  });
+  const newerRestore = restoreWorkbenchRouteFromLocationForTest(workbench, {
+    hash: "#/projects/project-2/episodes/episode-project-2",
+    pathname: "/app.html",
+  });
+  pendingSelections.get("project-2")(projectDetail("project-2"));
+  await newerRestore;
+  pendingSelections.get("project-1")(projectDetail("project-1"));
+  await olderRestore;
+
+  assert.equal(workbench.state.project.id, "project-2");
+  assert.equal(workbench.ui.selectedProjectCardId, "project-2");
+  assert.equal(workbench.ui.selectedEpisodeId, "episode-project-2");
 });
 
 test("asset and episode interior tabs do not wait for supplementary project stats", async () => {

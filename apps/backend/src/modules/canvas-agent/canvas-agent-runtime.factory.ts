@@ -9,6 +9,7 @@ import { createGenerationModelConfigSnapshotForTask, createGenerationProviderRou
 import { appendGenerationTaskCreatedOutboxEvent } from "../model-gateway/generation-outbox.service.ts";
 import { loadGenerationQueueConfig } from "../model-gateway/generation-queue.config.ts";
 import { OpenAICompatibleTextAdapter } from "../model-gateway/openai-compatible-text.adapter.ts";
+import { ModelflareResponsesAdapter } from "../model-gateway/modelflare-responses.adapter.ts";
 import { TextModelGatewayService } from "../model-gateway/text-model-gateway.service.ts";
 import { upsertQueuedGenerationTaskSnapshot } from "../model-gateway/generation-task-snapshot.service.ts";
 import {
@@ -198,6 +199,7 @@ export function createCanvasAgentWorkerRuntime(input: {
   const textGateway = new TextModelGatewayService({
     db: input.db,
     adapter: new OpenAICompatibleTextAdapter(),
+    modelflareAdapter: new ModelflareResponsesAdapter(),
     resolver: new AdminBackedTextModelResolver(input.db),
     env,
     now,

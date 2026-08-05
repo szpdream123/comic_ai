@@ -2169,6 +2169,10 @@ it("recognizes X6 HTML media nodes in the Canvas context menu", () => {
   assert.match(graphSource, /source-image/);
   assert.match(graphSource, /canvas-x6-source-media-body/);
   assert.match(graphSource, /canvas-x6-source-media-preview/);
+  assert.match(graphSource, /canvas-x6-image-preview-trigger/);
+  assert.match(graphSource, /data-action="toggle-canvas-image-fullscreen"/);
+  assert.match(graphSource, /canvas-x6-video-preview-trigger/);
+  assert.match(graphSource, /data-action="toggle-canvas-video-fullscreen"/);
   assert.match(graphSource, /emptyUploadAttrs/);
   assert.match(graphSource, /pick-canvas-upload-file/);
   assert.match(graphSource, /input\?\.click/);
@@ -2194,6 +2198,10 @@ it("recognizes X6 HTML media nodes in the Canvas context menu", () => {
   assert.match(
     newCanvasCss,
     /\.canvas-x6-special-node\.is-source-video \.canvas-x6-source-media-preview video\s*\{[\s\S]*?height:\s*100%;[\s\S]*?max-height:\s*none;[\s\S]*?object-fit:\s*cover;/,
+  );
+  assert.match(
+    newCanvasCss,
+    /\.canvas-x6-source-media-body\.is-upload \.canvas-x6-source-media-preview video\s*\{[\s\S]*?height:\s*100%;[\s\S]*?max-height:\s*none;[\s\S]*?object-fit:\s*contain;/,
   );
 });
 

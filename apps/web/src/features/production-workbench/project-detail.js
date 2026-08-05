@@ -27,6 +27,7 @@ import { getProjectDetailState } from "./storyboard-state.js";
 import { normalizeNovelStyleScriptText, truncateScriptTextByCharacters } from "./script-text-normalizer.js?single-episode-limit=2";
 import { disabled, escapeAttr, escapeHtml } from "./markup.js";
 import { renderLibraryTeam, renderPricingModal } from "../library-team/index.js";
+import { renderToolboxPage } from "../toolbox/toolbox-page.js";
 import { resolveApiUrl } from "../../shared/creator-api.js";
 import {
   renderCanvasPanoramaNodeBody,
@@ -39,6 +40,7 @@ import {
 import { renderCanvasDirectorNodeBody } from "./canvas/canvas-director-node.js";
 import { renderCanvasGroupNodeBody } from "./canvas/canvas-group-node.js";
 import {
+  renderCanvasImageFullscreen,
   renderCanvasMediaNodeBody,
   renderCanvasVideoFullscreen,
   resolveCanvasMediaNodeSource,
@@ -182,6 +184,7 @@ const NAV_TABS = [
   { id: "tools", label: "画布", icon: "wand" },
   { id: "director", label: "导演台", icon: "camera" },
   { id: "script", label: "剧本", icon: "book" },
+  { id: "toolbox", label: "工具箱", icon: "toolbox" },
   { id: "library", label: "资产库", icon: "archive" },
   { id: "team", label: "团队", icon: "users" },
 ];
@@ -3530,14 +3533,17 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
         ${
           hasEpisodes
             ? renderOverviewEpisodePanel({ episodes: overviewEpisodes, ui })
+              + renderOverviewSingleEpisodeLaunch()
             : `
                 <div class="episode-empty-canvas">
                   <div class="episode-canvas-glow"></div>
                   <div class="episode-canvas-copy always-visible">
                     <strong>从这里开始创建第一集</strong>
-                    <span>
-                      从 <button type="button" class="episode-inline-link" data-action="open-single-episode-flow">单集创建</button>
-                    </span>
+                    <p class="episode-canvas-description">创建一个单集，开始安排剧本、分镜和生成内容。</p>
+                    <button type="button" class="episode-empty-create-button" data-action="open-single-episode-flow">
+                      <span aria-hidden="true">＋</span>
+                      创建第一集
+                    </button>
                   </div>
                 </div>
               `
@@ -3586,6 +3592,24 @@ function renderOverviewEpisodePanel({ episodes = [], ui }) {
       <div class="episode-overview-list">
         ${episodes.map((episode) => renderEpisodeHubCard(episode, ui)).join("")}
       </div>
+    </div>
+  `;
+}
+
+function renderOverviewSingleEpisodeLaunch() {
+  return `
+    <div class="episode-overview-create" aria-label="创建单集">
+      <article class="episode-launch-card single" data-action="open-single-episode-flow">
+        <div class="episode-launch-copy">
+          <h2>单集创建</h2>
+          <p>手动创建单集文件，先搭建目录，再补充分镜和生成内容。</p>
+          <button class="episode-launch-button" type="button" data-action="open-single-episode-flow">
+            <span aria-hidden="true">⊕</span>
+            单集创建
+          </button>
+        </div>
+        <div class="episode-launch-art corridor" aria-hidden="true"></div>
+      </article>
     </div>
   `;
 }
@@ -4379,7 +4403,11 @@ export function renderSingleEpisodeAiPreview(ui) {
           ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
           <div class="single-episode-ai-table-stack">
             ${SINGLE_EPISODE_AI_TABLE_ORDER
-              .map((key) => renderSingleEpisodeAiTable(tables[key], key))
+              .map((key) => renderSingleEpisodeAiTable(tables[key], key, {
+                showRegenerate: true,
+                canRegenerate: !preview.regeneratingStage,
+                regeneratingStage: preview.regeneratingStage,
+              }))
               .join("")}
           </div>
         </div>
@@ -4472,7 +4500,12 @@ function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
 function renderSingleEpisodeAiLiveTables(preview) {
   const tables = resolveSingleEpisodeAiRenderTables(preview);
   const renderedTables = SINGLE_EPISODE_AI_TABLE_ORDER
-    .map((key) => renderSingleEpisodeAiTable(tables[key], key, { previewMode: "live" }))
+    .map((key) => renderSingleEpisodeAiTable(tables[key], key, {
+      previewMode: "live",
+      showRegenerate: true,
+      canRegenerate: false,
+      regeneratingStage: preview.regeneratingStage,
+    }))
     .filter(Boolean)
     .join("");
   if (!renderedTables) {
@@ -4764,13 +4797,17 @@ function renderSingleEpisodeAiTable(table, key, options = {}) {
     key === "storyboards" && isChapterStoryboardTable(columns) ? "chapter-storyboards" : "",
   ].filter(Boolean).join(" ");
   if (key === "script") {
-    return renderSingleEpisodeAiScriptText(table);
+    return renderSingleEpisodeAiScriptText(table, options);
   }
+  const regenerateAction = renderSingleEpisodeAiStageRegenerateAction(key, options);
   return `
     <article class="${tableCardClasses}">
       <header>
         <strong>${escapeHtml(title)}</strong>
-        <span>${rows.length} 条</span>
+        <div class="single-episode-ai-table-actions">
+          ${regenerateAction}
+          <span>${rows.length} 条</span>
+        </div>
       </header>
       <div class="single-episode-ai-table-wrap">
         <table>
@@ -4814,7 +4851,7 @@ function resolveSingleEpisodeAiTableColumns(table, key) {
   return Array.isArray(table?.columns) ? table.columns : [];
 }
 
-function renderSingleEpisodeAiScriptText(table) {
+function renderSingleEpisodeAiScriptText(table, options = {}) {
   const rows = Array.isArray(table?.rows) ? table.rows : [];
   const text = resolveScriptDisplayText(rows
     .map((row) => {
@@ -4836,10 +4873,41 @@ function renderSingleEpisodeAiScriptText(table) {
     <article class="single-episode-ai-script-text">
       <header>
         <strong>${escapeHtml(table?.title ?? "剧本")}</strong>
-        <span>${rows.length} 段</span>
+        <div class="single-episode-ai-table-actions">
+          ${renderSingleEpisodeAiStageRegenerateAction("script", options)}
+          <span>${rows.length} 段</span>
+        </div>
       </header>
       <div>${escapeHtml(text)}</div>
     </article>
+  `;
+}
+
+function renderSingleEpisodeAiStageRegenerateAction(tableKey, options = {}) {
+  if (options.showRegenerate !== true) {
+    return "";
+  }
+  const stageByTableKey = {
+    script: "script",
+    scenes: "scene",
+    characters: "character",
+    props: "prop",
+    storyboards: "shot",
+  };
+  const stage = stageByTableKey[tableKey];
+  if (!stage) {
+    return "";
+  }
+  const isRegenerating = String(options.regeneratingStage ?? "") === stage;
+  const disabled = options.canRegenerate !== true || Boolean(options.regeneratingStage);
+  return `
+    <button
+      class="single-episode-ai-stage-regenerate"
+      type="button"
+      data-action="regenerate-ai-storyboard-stage"
+      data-ai-storyboard-stage="${escapeAttr(stage)}"
+      ${disabled ? "disabled" : ""}
+    >${isRegenerating ? "重新生成中..." : "重新生成"}</button>
   `;
 }
 
@@ -8343,6 +8411,10 @@ function renderMainPanel({ state, ui, session, detailState, progress, activeNavT
     `);
   }
 
+  if (activeNavTab === "toolbox") {
+    return renderScrollableWorkbenchSurface("toolbox", renderToolboxPage(ui));
+  }
+
 function renderPromptPlazaPage(ui = {}) {
   const typeLabels = {
     all: "全部",
@@ -9037,6 +9109,12 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   const videoFullscreenNode = videoFullscreenState?.open === true
     ? nodes.find((node) => node.id === videoFullscreenState.nodeId && resolveCanvasNodeMediaKind(node) === "video")
     : null;
+  const imageFullscreenState = ui.canvasImageFullscreen && typeof ui.canvasImageFullscreen === "object"
+    ? ui.canvasImageFullscreen
+    : null;
+  const imageFullscreenNode = imageFullscreenState?.open === true
+    ? nodes.find((node) => node.id === imageFullscreenState.nodeId && resolveCanvasNodeMediaKind(node) === "image")
+    : null;
   return `
     <section class="canvas-panel" aria-label="画布" data-canvas-sidebar-mode="${escapeAttr(sidebarMode)}"${canvasPanelStyle ? ` style="${escapeAttr(canvasPanelStyle)}"` : ""}>
       <aside id="canvas-sidebar-panel" class="canvas-sidebar" aria-label="画布侧栏"${sidebarCollapsed ? ' style="display:none"' : ""}>
@@ -9209,6 +9287,10 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
           renderPreview: renderCanvasMarkdownPreview,
         }) : ""}
         ${videoFullscreenNode ? renderCanvasVideoFullscreen(videoFullscreenNode, {
+          open: true,
+          assets: canvasAssets,
+        }) : ""}
+        ${imageFullscreenNode ? renderCanvasImageFullscreen(imageFullscreenNode, {
           open: true,
           assets: canvasAssets,
         }) : ""}
@@ -10114,26 +10196,26 @@ function renderLiblibUploadNode(node, { selected = false, canvasAssets = [] } = 
         <strong>${escapeHtml(title)}</strong>
         ${isSourceNode ? '<small class="canvas-node-role-label">来源节点</small>' : ""}
       </header>
-      <button class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${uploadLabel}" title="${uploadLabel}">
+      <${mediaUrl && mediaKind === "image" ? "div" : "button"} class="canvas-upload-card ${mediaUrl ? "has-media" : ""}" ${mediaUrl && mediaKind === "image" ? "" : `type="button" data-action="pick-canvas-upload-file"`} data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="${uploadLabel}" title="${uploadLabel}">
         <span class="canvas-node-connect right" data-node-id="${escapeAttr(node?.id ?? "")}" data-port-direction="out" data-port-id="${escapeAttr(firstCanvasPortId(node, "outputs"))}" aria-hidden="true">+</span>
         ${mediaUrl ? `
-          <span class="canvas-upload-preview" ${mediaKind === "video" ? `data-canvas-video-body data-node-id="${escapeAttr(node?.id ?? "")}"` : mediaKind === "audio" ? `data-canvas-audio-body data-node-id="${escapeAttr(node?.id ?? "")}"` : ""}>
+          <${mediaKind === "image" ? "button" : "span"} class="canvas-upload-preview${mediaKind === "image" ? " canvas-image-preview-trigger" : ""}" ${mediaKind === "image" ? `type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="放大查看图片" title="放大查看图片"` : mediaKind === "video" ? `data-canvas-video-body data-node-id="${escapeAttr(node?.id ?? "")}"` : mediaKind === "audio" ? `data-canvas-audio-body data-node-id="${escapeAttr(node?.id ?? "")}"` : ""}>
             ${mediaKind === "video"
               ? `<video data-canvas-video-player src="${escapeAttr(mediaUrl)}" muted playsinline preload="metadata"></video>`
               : mediaKind === "audio"
                 ? `<audio data-canvas-audio-player src="${escapeAttr(mediaUrl)}" controls preload="metadata"></audio>`
                 : `<img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />`}
-          </span>
-          <span class="canvas-upload-meta">
+          </${mediaKind === "image" ? "button" : "span"}>
+          <${mediaKind === "image" ? "button" : "span"} class="canvas-upload-meta" ${mediaKind === "image" ? `type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="更换图片素材" title="更换图片素材"` : ""}>
             <strong>${escapeHtml(fileName || (mediaKind === "video" ? "视频素材" : mediaKind === "audio" ? "音频素材" : "图片素材"))}</strong>
-            <small>${status === "uploading" ? "上传中" : "已选择"}</small>
-          </span>
+            <small>${status === "uploading" ? "上传中" : mediaKind === "image" ? "更换素材" : "已选择"}</small>
+          </${mediaKind === "image" ? "button" : "span"}>
         ` : `
           <span class="canvas-upload-empty-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
           <span class="canvas-upload-empty-text">${uploadLabel}</span>
         `}
         <input class="canvas-upload-file-input" type="file" accept="${uploadAccept}" data-canvas-upload-input data-node-id="${escapeAttr(node?.id ?? "")}" tabindex="-1" aria-hidden="true" />
-      </button>
+      </${mediaUrl && mediaKind === "image" ? "div" : "button"}>
     </article>
   `;
 }
@@ -10242,7 +10324,9 @@ function renderCanvasGenerationResult(node, mediaKind, mediaUrl, isGenerating = 
 
   return `
     <div class="${resultClass}">
-      <img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />
+      <button class="canvas-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeAttr(node?.id ?? "")}" aria-label="放大查看生成图片" title="放大查看图片">
+        <img src="${escapeAttr(mediaUrl)}" alt="" loading="lazy" />
+      </button>
     </div>
   `;
 }
@@ -12909,6 +12993,12 @@ function renderRailIcon(icon) {
       <path d="M9.1 12.2h5.8" />
       <path d="M17.9 14.9h2.7" />
       <path d="M19.25 13.55v2.7" />
+    `,
+    toolbox: `
+      <path d="M9 6.5V5.2A1.7 1.7 0 0 1 10.7 3.5h2.6A1.7 1.7 0 0 1 15 5.2v1.3" />
+      <path d="M4.2 6.5h15.6A1.7 1.7 0 0 1 21.5 8.2v10.1a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1.7-1.7Z" />
+      <path d="M2.5 12h7M14.5 12h7" />
+      <path d="M9.5 10.5h5v3h-5z" />
     `,
     wand: `
       <path fill="currentColor" stroke="none" d="M3.7 15.9 5.3 7.4h14.9l-1.6 8.5H3.7Zm4.4-2.9h7.9l0.5-2.7H8.6L8.1 13Z" />

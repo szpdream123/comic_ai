@@ -370,6 +370,7 @@ test("Canvas node controls refresh only their target X6 node", () => {
   assert.match(pollingSource, /nodeOnly: true, nodeId/);
 
   const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  assert.match(graphSource, /editor\?\.addEventListener\?\.\("wheel", \(event\) => event\.stopPropagation\(\), \{ passive: true \}\)/);
   const nodeRefresh = graphSource.match(/export function refreshCanvasWorkflowNode[\s\S]*?export function classifyCanvasNodeMotion/)?.[0] ?? "";
   assert.match(nodeRefresh, /cell\.setPosition/);
   assert.match(nodeRefresh, /cell\.setSize/);
@@ -702,7 +703,7 @@ test("new-canvas editor exposes a full-height workspace and feature rail", () =>
   assert.match(historyHtml, /历史结果/);
   assert.match(historyHtml, />历史</);
   assert.match(html, /data-character-action="open"/);
-  assert.match(html, /data-media-action="open"/);
+  assert.doesNotMatch(html, /data-media-action="open"/);
   assert.doesNotMatch(html, /data-new-canvas-action="focus-agent"/);
 });
 

@@ -100,6 +100,7 @@ interface AdminAuthSessionListRow {
 export interface AdminAuthServiceDeps {
   db: SqlDatabase;
   sessionMaxAgeSeconds?: number;
+  secureCookies?: boolean;
 }
 
 export function createAdminAuthService(deps: AdminAuthServiceDeps) {
@@ -213,7 +214,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
 
     return {
       status: 200,
-      cookies: [adminSessionCookie(token, sessionMaxAgeSeconds)],
+      cookies: [adminSessionCookie(token, sessionMaxAgeSeconds, deps.secureCookies === true)],
       body: {
         data: {
           account: accountView(account),
@@ -269,7 +270,7 @@ export function createAdminAuthService(deps: AdminAuthServiceDeps) {
 
     return {
       status: 200,
-      cookies: [clearAdminSessionCookie()],
+      cookies: [clearAdminSessionCookie(deps.secureCookies === true)],
       body: { data: { authenticated: false } },
     };
   }
@@ -843,12 +844,12 @@ function hashSessionToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function adminSessionCookie(token: string, maxAgeSeconds: number) {
-  return `admin_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+function adminSessionCookie(token: string, maxAgeSeconds: number, secure: boolean) {
+  return `admin_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? "; Secure" : ""}`;
 }
 
-function clearAdminSessionCookie() {
-  return "admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+function clearAdminSessionCookie(secure: boolean) {
+  return `admin_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 const rolePermissions: Record<string, AdminPermission[]> = {

@@ -779,31 +779,35 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     if (activeLink) return { purchaseId: activeLink.id, alreadyOwned: true };
 
     const purchaseId = randomUUID();
-    await deps.db.query("BEGIN");
     try {
-      await deps.db.query(
+      const link = await queryOne<{ id: string; relation_type: string }>(
+        deps.db,
         `
           INSERT INTO prompt_user_links (
             id, prompt_id, user_id, relation_type, status,
             price_credits_paid, added_at, created_at, updated_at
           ) VALUES ($1, $2, $3, $4, 'active', $5, $6, $6, $6)
+          ON CONFLICT (prompt_id, user_id) WHERE status = 'active'
+          DO UPDATE SET updated_at = prompt_user_links.updated_at
+          RETURNING id, relation_type
         `,
         [purchaseId, item.id, input.userId, "added", 0, input.now],
       );
-      await deps.db.query("COMMIT");
+      if (link?.relation_type === "owner") {
+        throw new PromptMarketplaceError(409, "prompt_marketplace_owner_purchase", "自己的提示词无需重复添加");
+      }
       const wallet = await queryOne<{ credit_balance_cached: number | string }>(
         deps.db,
         "SELECT credit_balance_cached FROM users WHERE id = $1",
         [input.userId],
       );
       return {
-        purchaseId,
-        alreadyOwned: false,
+        purchaseId: link?.id ?? purchaseId,
+        alreadyOwned: link?.id !== purchaseId,
         priceCredits: 0,
         creditBalance: Number(wallet?.credit_balance_cached ?? 0),
       };
     } catch (error) {
-      await deps.db.query("ROLLBACK");
       throw error;
     }
   }
@@ -1024,7 +1028,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
       id: row.id,
       title: row.name,
       content: row.prompt_content,
-      priceCredits: Number(row.price_credits || 0),
+      priceCredits: row.owner_user_id === input.userId ? 0 : Number(row.price_credits || 0),
       official: Boolean(row.is_official),
       ownerUserId: row.owner_user_id ?? null,
     };
@@ -1082,7 +1086,7 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
         ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
         : ""),
       coverStorageObjectId: row.cover_storage_object_id,
-      priceCredits: Number(row.price_credits || 0),
+      priceCredits: row.owner_user_id === input.userId ? 0 : Number(row.price_credits || 0),
       official: Boolean(row.is_official),
       ownerUserId: row.owner_user_id ?? null,
     };
@@ -1210,7 +1214,7 @@ function promptSkillListItemFromRow(row: PromptSkillListRow) {
       ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
       : ""),
     coverStorageObjectId: row.cover_storage_object_id,
-    priceCredits: Number(row.price_credits || 0),
+    priceCredits: owned ? 0 : Number(row.price_credits || 0),
     official: Boolean(row.is_official),
     isDefault: Boolean(row.is_default),
     usageCount: Number(row.usage_count || 0),

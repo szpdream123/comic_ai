@@ -647,6 +647,19 @@ describe("persistent credit ledger and reservation", () => {
       assert.equal(author?.credit_balance_cached, 10);
       assert.equal(authorGrantCount?.count, 1);
 
+      const selfUsageGrant = await grantPromptSkillUsageCredits(db, {
+        skill: {
+          ...input.metadata.promptSkill,
+          ownerUserId: ids.user,
+        },
+        sourceId: ids.attempt,
+        payerUserId: ids.user,
+        projectId: null,
+        modelCode: "image-model-a",
+        now: now(),
+      });
+      assert.equal(selfUsageGrant, null);
+
       const combinedSkills = [
         { ...input.metadata.promptSkill, id: "60000000-0000-4000-8000-000000000002", priceCredits: 6 },
         { ...input.metadata.promptSkill, id: "60000000-0000-4000-8000-000000000003", priceCredits: 4 },

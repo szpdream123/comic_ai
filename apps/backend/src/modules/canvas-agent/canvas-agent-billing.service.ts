@@ -24,7 +24,7 @@ export class CanvasAgentBillingService {
   async settleTask(input: {
     ownerUserId: string;
     actorTeamMemberId?: string | null;
-    canvasId: string;
+    canvasId?: string | null;
     agentTaskId: string;
     workflowId?: string | null;
     workflowTaskId?: string | null;
@@ -40,7 +40,7 @@ export class CanvasAgentBillingService {
       return { consumed: 0, totalTokens: 0 };
     }
     const metadata = {
-      canvasId: input.canvasId,
+      canvasId: input.canvasId ?? null,
       agentTaskId: input.agentTaskId,
       billingEvent: "actual_usage",
       usage: input.usage,
@@ -53,7 +53,7 @@ export class CanvasAgentBillingService {
         sourceType: "canvas_agent_text_task",
         sourceId: input.agentTaskId,
         reason: CANVAS_AGENT_CREDIT_REASON,
-        canvasProjectId: input.canvasId,
+        canvasProjectId: input.canvasId ?? null,
         workflowId: input.workflowId ?? null,
         taskId: input.workflowTaskId ?? null,
         metadata,
@@ -156,17 +156,19 @@ export class CanvasAgentBillingService {
   async reserveRound(input: {
     ownerUserId: string;
     actorTeamMemberId?: string | null;
-    canvasId: string;
+    canvasId?: string | null;
     agentTaskId: string;
     workflowId?: string | null;
     workflowTaskId?: string | null;
     stepId: string;
     amount: number;
+    reason?: string;
     now: Date;
   }) {
     if (!Number.isInteger(input.amount) || input.amount <= 0) throw new Error("canvas_agent_credit_amount_invalid");
+    const reason = input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON;
     const metadata = {
-      canvasId: input.canvasId,
+      canvasId: input.canvasId ?? null,
       agentTaskId: input.agentTaskId,
       agentStepId: input.stepId,
       actorTeamMemberId: input.actorTeamMemberId ?? null,
@@ -178,8 +180,8 @@ export class CanvasAgentBillingService {
         amount: input.amount,
         sourceType: "canvas_agent_text_round",
         sourceId: input.stepId,
-        reason: CANVAS_AGENT_CREDIT_REASON,
-        canvasProjectId: input.canvasId,
+        reason,
+        canvasProjectId: input.canvasId ?? null,
         workflowId: input.workflowId ?? null,
         taskId: input.workflowTaskId ?? null,
         metadata,
@@ -251,7 +253,7 @@ export class CanvasAgentBillingService {
         `,
         [
           randomUUID(), input.ownerUserId, input.actorTeamMemberId, input.amount,
-          Number(updatedMember.member_credits), sourceId, CANVAS_AGENT_CREDIT_REASON,
+          Number(updatedMember.member_credits), sourceId, reason,
           JSON.stringify(metadata), input.now,
         ],
       );
@@ -271,7 +273,7 @@ export class CanvasAgentBillingService {
   async settleRound(input: {
     ownerUserId: string;
     actorTeamMemberId?: string | null;
-    canvasId: string;
+    canvasId?: string | null;
     agentTaskId: string;
     workflowTaskId?: string | null;
     stepId: string;
@@ -280,6 +282,7 @@ export class CanvasAgentBillingService {
     usage: CanvasAgentTextUsage | null;
     pricing: Record<string, unknown>;
     providerRequestId?: string | null;
+    reason?: string;
     now: Date;
   }) {
     const actual = input.usage
@@ -294,7 +297,7 @@ export class CanvasAgentBillingService {
         outcome: "consumed",
         taskId: input.workflowTaskId ?? null,
         providerRequestId: input.providerRequestId ?? null,
-        metadata: { canvasId: input.canvasId, agentStepId: input.stepId, usage: input.usage },
+        metadata: { canvasId: input.canvasId ?? null, agentStepId: input.stepId, usage: input.usage },
         now: input.now,
       });
       if (input.reservedAmount > consumed) {
@@ -305,7 +308,7 @@ export class CanvasAgentBillingService {
           outcome: "released",
           taskId: input.workflowTaskId ?? null,
           providerRequestId: input.providerRequestId ?? null,
-          metadata: { canvasId: input.canvasId, agentStepId: input.stepId },
+          metadata: { canvasId: input.canvasId ?? null, agentStepId: input.stepId },
           now: input.now,
         });
       }
@@ -316,12 +319,60 @@ export class CanvasAgentBillingService {
         teamMemberId: input.actorTeamMemberId,
         amount: input.reservedAmount - consumed,
         sourceId: uuidFromStableId(input.stepId),
-        reason: CANVAS_AGENT_CREDIT_REASON,
-        metadata: { canvasId: input.canvasId, agentTaskId: input.agentTaskId, agentStepId: input.stepId },
+        reason: input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON,
+        metadata: { canvasId: input.canvasId ?? null, agentTaskId: input.agentTaskId, agentStepId: input.stepId },
         now: input.now,
       });
     }
     return { consumed, released: input.reservedAmount - consumed };
+  }
+
+  async releaseRound(input: {
+    ownerUserId: string;
+    actorTeamMemberId?: string | null;
+    canvasId?: string | null;
+    agentTaskId: string;
+    workflowTaskId?: string | null;
+    stepId: string;
+    reservationId: string | null;
+    reservedAmount: number;
+    failureCode: string;
+    reason?: string;
+    now: Date;
+  }) {
+    if (input.reservationId) {
+      await settleReservationAllocation(this.db, {
+        reservationId: input.reservationId,
+        allocationKey: `${input.stepId}:release`,
+        amount: input.reservedAmount,
+        outcome: "released",
+        taskId: input.workflowTaskId ?? null,
+        metadata: {
+          canvasId: input.canvasId ?? null,
+          agentTaskId: input.agentTaskId,
+          agentStepId: input.stepId,
+          failureCode: input.failureCode,
+        },
+        now: input.now,
+      });
+      return { released: input.reservedAmount };
+    }
+    if (input.actorTeamMemberId) {
+      await refundTeamMemberGenerationCredits(this.db, {
+        teamMemberId: input.actorTeamMemberId,
+        amount: input.reservedAmount,
+        sourceId: uuidFromStableId(input.stepId),
+        reason: input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON,
+        metadata: {
+          canvasId: input.canvasId ?? null,
+          agentTaskId: input.agentTaskId,
+          agentStepId: input.stepId,
+          failureCode: input.failureCode,
+        },
+        now: input.now,
+      });
+    }
+    return { released: input.reservedAmount };
   }
 
   private usageCost(pricing: Record<string, unknown>, usage: CanvasAgentTextUsage) {

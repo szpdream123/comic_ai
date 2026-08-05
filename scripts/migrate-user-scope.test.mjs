@@ -150,7 +150,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 87);
+      assert.equal(migrations.rows[0]?.count, 88);
       await client.query(`DROP INDEX "${schema}".canvas_agent_conversations_shard_idx`);
       const missingRequiredRuntimeSchema = spawnSync(
         process.execPath,

@@ -144,12 +144,30 @@ test("dismisses Canvas context menus when clicking blank space", () => {
     new URL("../src/features/production-workbench/index.js", import.meta.url),
     "utf8",
   );
+  const delegatedClickStart = source.indexOf('root.addEventListener("click", (event) => {');
+  const delegatedClickGuard = source.slice(
+    delegatedClickStart,
+    source.indexOf("const quickAssetToggle", delegatedClickStart),
+  );
+  assert.match(
+    delegatedClickGuard,
+    /isCanvasX6InteractionTarget\(eventTarget, event\)\s*&& !isCanvasX6BlankClickTarget\(eventTarget, event\)\s*&& !actionTarget/,
+  );
   const blankClickHandler = source.slice(
     source.indexOf("function closeCanvasEditorWithoutRender"),
     source.indexOf("function trackCanvasRightPanGesture"),
   );
   assert.match(blankClickHandler, /dismissCanvasSurfaceOverlays\(workbench\?\.ui/);
   assert.match(blankClickHandler, /selectionOnly: true/);
+  const newCanvasSource = readFileSync(
+    new URL("../src/features/new-canvas/index.js", import.meta.url),
+    "utf8",
+  );
+  const renderSelection = newCanvasSource.slice(
+    newCanvasSource.indexOf("const renderSelection = async () =>"),
+    newCanvasSource.indexOf("const renderSidebar = async () =>"),
+  );
+  assert.match(renderSelection, /syncCanvasStageOverlays\(surface, template\.content\)/);
 });
 
 test("reapplies absolute child positions after X6 embeds group members", () => {

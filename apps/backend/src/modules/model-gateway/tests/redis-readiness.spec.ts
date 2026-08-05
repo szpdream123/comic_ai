@@ -46,6 +46,25 @@ describe("Redis readiness", () => {
     assert.equal(isRetryableRedisAvailabilityError(new Error("Command timed out")), true);
   });
 
+  it("retries transient connection resets for periodic commands", async () => {
+    const redis = new FakeRedis();
+    redis.status = "ready";
+    let attempts = 0;
+    const result = await runWithRedisStartupRetry({
+      redis,
+      timeoutMs: 200,
+      maxAttempts: 3,
+      baseDelayMs: 1,
+      async run() {
+        attempts += 1;
+        if (attempts < 2) throw Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+        return "recovered";
+      },
+    });
+    assert.equal(result, "recovered");
+    assert.equal(attempts, 2);
+  });
+
   it("fails immediately for authentication errors", async () => {
     const redis = new FakeRedis();
     const waiting = waitForRedisReady(redis, { timeoutMs: 100 });

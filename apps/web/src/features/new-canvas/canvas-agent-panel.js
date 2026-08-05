@@ -19,6 +19,10 @@ const AGENT_MODES = [
 
 const TERMINAL_STATUSES = new Set([
   "succeeded",
+  "completed",
+  "success",
+  "done",
+  "finished",
   "failed",
   "canceled",
   "result_unknown",
@@ -2094,7 +2098,7 @@ function formatAgentMemoryValue(value) {
 function agentStatusText(status) {
   return {
     idle: "未开始", queued: "排队中", running: "执行中", waiting_approval: "等待审批",
-    waiting_external: "等待生成", paused: "已暂停", succeeded: "已完成", failed: "失败",
+    waiting_external: "等待生成", paused: "已暂停", succeeded: "已完成", completed: "已完成", success: "已完成", done: "已完成", finished: "已完成", failed: "失败",
     cancel_requested: "停止中", canceled: "已停止", result_unknown: "结果待确认",
     manual_review_required: "需要复核", unknown: "记录已结束",
   }[status] ?? String(status ?? "未知");
@@ -2790,7 +2794,7 @@ function agentStatusLabel(agent) {
   if (agent.busyAction) return "正在提交";
   const labels = {
     idle: "未开始", queued: "排队中", running: "执行中", waiting_approval: "等待审批",
-    waiting_external: "等待生成", paused: "已暂停", succeeded: "已完成", failed: "失败",
+    waiting_external: "等待生成", paused: "已暂停", succeeded: "已完成", completed: "已完成", success: "已完成", done: "已完成", finished: "已完成", failed: "失败",
     cancel_requested: "停止中", canceled: "已停止", result_unknown: "结果待确认",
     manual_review_required: "需要人工复核",
   };

@@ -69,9 +69,15 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /closeWorkersOnDiscoveryFailure: false/);
     assert.match(launcherScript, /onRefreshError/);
     assert.match(launcherScript, /runWithRedisStartupRetry/);
+    assert.match(launcherScript, /const runnableCounts = await runWithRedisStartupRetry\(\{[\s\S]*readGenerationQueueRunnableCounts/);
+    assert.match(launcherScript, /commandTimeout: 5_000/);
+    assert.match(launcherScript, /maxRetriesPerRequest: 2/);
     assert.match(launcherScript, /readGenerationQueueRunnableCounts/);
     assert.match(launcherScript, /pipeline\.llen/);
     assert.match(launcherScript, /pipeline\.zcard/);
+    assert.match(launcherScript, /Redis remained unavailable for 10s; shutting down this worker/);
+    assert.match(launcherScript, /void requestShutdown\(`\$\{scope\}:redis_unavailable`\)/);
+    assert.doesNotMatch(launcherScript, /Redis remained unavailable[\s\S]*process\.exit\(1\)/);
     assert.doesNotMatch(launcherScript, /GENERATION_WORKER_PROCESS_COUNT/);
     assert.doesNotMatch(launcherScript, /void releaseGenerationAssignment\(job/);
 
