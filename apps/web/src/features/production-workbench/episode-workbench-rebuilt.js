@@ -745,15 +745,19 @@ function renderAssetCard(asset, assetKind, active, checked) {
       data-asset-kind="${escapeAttr(assetKind)}"
     >
       <div class="episode-replica-asset-card-head">
-        <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
-        <label class="episode-replica-asset-select">
-          <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题" />
-        </label>
-        <button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button" data-action="quick-append-selected-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">引入到对话框</button>
-        <span class="episode-replica-asset-hover-tools" aria-hidden="true">
-          <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
-          <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
-        </span>
+        <div class="episode-replica-asset-title-row">
+          <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
+          <label class="episode-replica-asset-select">
+            <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题" />
+          </label>
+        </div>
+        <div class="episode-replica-asset-actions-row">
+          <button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button" data-action="quick-append-selected-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">引入到对话框</button>
+          <span class="episode-replica-asset-hover-tools">
+            <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
+            <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
+          </span>
+        </div>
       </div>
       <span class="toolbar">
         <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>

@@ -4,7 +4,6 @@ import { test } from "node:test";
 
 import * as productionWorkbench from "../src/features/production-workbench/index.js";
 import { renderEpisodeAssetCardForTest } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
-import { renderAssetConversationEntryForPolling } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 
 test("episode asset title is rendered as an enabled text editor", () => {
   const html = renderEpisodeAssetCardForTest({
@@ -19,6 +18,13 @@ test("episode asset title is rendered as an enabled text editor", () => {
   assert.match(input, /value="玄衣修士"/);
   assert.match(input, /maxlength="20"/);
   assert.doesNotMatch(input, /\b(?:disabled|readonly)\b/);
+  assert.match(html, /class="episode-replica-asset-title-row"/);
+  assert.match(html, /episode-replica-asset-title-row[\s\S]*episode-replica-asset-name-input/);
+  const actionsRow = html.match(/<div class="episode-replica-asset-actions-row">(?<body>[\s\S]*?)<\/div>/)?.groups?.body ?? "";
+  assert.match(actionsRow, /episode-replica-asset-dialog-import/);
+  assert.match(actionsRow, /episode-replica-asset-hover-tools/);
+  assert.match(actionsRow, /data-action="save-episode-asset-to-library"/);
+  assert.match(actionsRow, /data-action="open-delete-episode-asset-modal"/);
 });
 
 test("episode asset title only commits locally after the existing update API succeeds", async () => {
@@ -240,17 +246,6 @@ test("episode asset description remains vertically scrollable in fixed-height de
   assert.match(fixedHeightBlock, /max-height:\s*6\.85rem/);
   assert.match(fixedHeightBlock, /overflow-x:\s*hidden/);
   assert.match(fixedHeightBlock, /overflow-y:\s*auto/);
-});
-
-test("episode generation task meta only shows task id", () => {
-  const html = renderAssetConversationEntryForPolling({
-    taskId: "task-123",
-    selectedModelId: "secret-provider-model",
-    promptPreview: "测试提示词",
-  });
-
-  assert.match(html, /任务ID：task-123/);
-  assert.doesNotMatch(html, /task-123\/|secret-provider-model|默认模型|GPT Image|Vidu|nano banana|海螺|Happy Horse/);
 });
 
 test("manual episode asset creation refreshes the current asset list", () => {

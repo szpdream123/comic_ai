@@ -29203,11 +29203,9 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-dialog-import {
-  position: absolute;
-  top: 0.02rem;
-  left: 50%;
-  z-index: 2;
-  transform: translateX(-50%);
+  position: static;
+  flex: 0 0 auto;
+  transform: none;
 }
 
 .episode-replica-shot-card-head .episode-replica-shot-status-badge {
@@ -32051,12 +32049,30 @@ body.is-episode-layout-resizing {
 .episode-replica-asset-card-head {
   grid-column: 1 / -1;
   position: relative;
-  min-height: 2.05rem;
+  display: grid;
+  gap: 0.52rem;
+  min-height: 4.35rem;
+}
+
+.episode-replica-asset-title-row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.58rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.episode-replica-asset-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 .episode-replica-asset-card .name {
-  margin-left: 1.8rem;
-  padding-right: 10.75rem;
+  margin-left: 0;
+  padding: 0.18rem 0.3rem;
   font-size: 0.94rem;
   font-weight: 900;
   line-height: 1.22;
@@ -32066,7 +32082,8 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-name-input {
-  width: calc(100% - 1.8rem);
+  width: 100%;
+  min-width: 0;
   box-sizing: border-box;
   border: 1px solid transparent;
   border-radius: 0.35rem;
@@ -33676,8 +33693,9 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-card .episode-replica-asset-card-head .pick {
-  top: 0.36rem;
-  left: 0.18rem;
+  position: static;
+  top: auto;
+  left: auto;
   width: 1rem;
   height: 1rem;
   padding: 0;
@@ -33697,17 +33715,19 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-card .episode-replica-asset-hover-tools {
-  top: -2.75rem;
-  right: 0.45rem;
+  position: static;
   display: inline-flex;
   align-items: center;
+  margin-left: auto;
   grid-auto-flow: column;
-  transform: translateY(-0.28rem);
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .episode-replica-asset-card:hover .episode-replica-asset-hover-tools,
 .episode-replica-asset-card.active .episode-replica-asset-hover-tools {
-  transform: translateY(0);
+  transform: none;
 }
 
 .episode-replica-shot-shell {
@@ -34071,10 +34091,11 @@ body.is-episode-layout-resizing {
   }
 
   .episode-replica-asset-card-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.45rem;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .episode-replica-asset-actions-row {
+    flex-wrap: wrap;
   }
 
   .episode-replica-asset-stage-frame {
@@ -37269,9 +37290,9 @@ body.is-episode-quick-asset-toggle-dragging {
   }
 
   .episode-replica-asset-card {
-    height: 14.2rem;
-    min-height: 14.2rem;
-    max-height: 14.2rem;
+    height: 16.5rem;
+    min-height: 16.5rem;
+    max-height: 16.5rem;
     overflow: visible;
   }
 
@@ -37288,10 +37309,10 @@ body.is-episode-quick-asset-toggle-dragging {
   }
 
   .episode-replica-asset-card .episode-replica-asset-hover-tools {
-    top: 0.42rem;
-    right: 0.42rem;
+    position: static;
     display: inline-flex;
     align-items: center;
+    margin-left: auto;
     grid-auto-flow: column;
     z-index: 8;
     opacity: 1;
@@ -38374,9 +38395,9 @@ body.is-episode-quick-asset-toggle-dragging {
 
 @media (min-width: 961px) {
   .episode-replica-asset-empty {
-    height: 14.2rem;
-    min-height: 14.2rem;
-    max-height: 14.2rem;
+    height: 16.5rem;
+    min-height: 16.5rem;
+    max-height: 16.5rem;
   }
 }
 

@@ -1341,7 +1341,7 @@ describe("episode workbench asset list layout", () => {
   });
 
 
-  it("renders asset selection and hover tools as compact top-corner controls", () => {
+  it("renders asset selection and action tools in stable header rows", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
@@ -1358,11 +1358,14 @@ describe("episode workbench asset list layout", () => {
 
     assert.match(pickBlock, /width:\s*1rem/);
     assert.match(pickBlock, /height:\s*1rem/);
+    assert.match(pickBlock, /position:\s*static/);
     assert.match(hoverToolsBlock, /display:\s*inline-flex/);
-    assert.match(hoverToolsBlock, /top:\s*0\.42rem/);
-    assert.match(hoverToolsBlock, /right:\s*0\.42rem/);
+    assert.match(hoverToolsBlock, /position:\s*static/);
+    assert.match(hoverToolsBlock, /margin-left:\s*auto/);
     assert.match(hoverToolsBlock, /grid-auto-flow:\s*column/);
-    assert.match(hoverVisibleBlock, /transform:\s*translateY\(0\)/);
+    assert.match(hoverToolsBlock, /opacity:\s*1/);
+    assert.match(hoverToolsBlock, /pointer-events:\s*auto/);
+    assert.match(hoverVisibleBlock, /transform:\s*none/);
   });
 
   it("aligns storyboard selection and add delete controls with asset card controls", () => {
@@ -1528,7 +1531,7 @@ describe("episode workbench asset list layout", () => {
     assert.match(referenceBlock, /\.episode-replica-result-panel\s*\{[\s\S]*?max-width:\s*28\.75rem/);
   });
 
-  it("keeps storyboard and asset cards compact while exposing floating controls", () => {
+  it("keeps storyboard cards compact while giving asset actions enough room", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
@@ -1538,11 +1541,12 @@ describe("episode workbench asset list layout", () => {
     )?.groups?.body ?? "";
 
     assert.match(compactBlock, /\.episode-replica-asset-grid,\s*\.episode-replica-storyboard-grid\s*\{[\s\S]*?overflow:\s*visible/);
-    assert.match(compactBlock, /\.episode-replica-asset-card\s*\{[\s\S]*?height:\s*14\.2rem/);
+    assert.match(compactBlock, /\.episode-replica-asset-card\s*\{[\s\S]*?height:\s*16\.5rem/);
     assert.match(compactBlock, /\.episode-replica-asset-card\s*\{[\s\S]*?overflow:\s*visible/);
     assert.match(compactBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-card\s*\{[\s\S]*?height:\s*13\.2rem/);
     assert.match(compactBlock, /\.episode-replica-shot-card\s*\{[\s\S]*?overflow:\s*visible/);
     assert.match(compactBlock, /\.episode-replica-shot-card-body\s*\{[\s\S]*?overflow:\s*hidden/);
+    assert.match(compactBlock, /\.episode-replica-asset-card \.episode-replica-asset-hover-tools\s*\{[\s\S]*?position:\s*static/);
     assert.match(compactBlock, /\.episode-replica-asset-card \.episode-replica-asset-hover-tools\s*\{[\s\S]*?z-index:\s*8/);
     assert.match(compactBlock, /\.episode-replica-shot-shell \.episode-replica-shot-hover-tools\s*\{[\s\S]*?z-index:\s*8/);
   });
@@ -42849,7 +42853,7 @@ describe("production workbench project tab", () => {
     );
     assert.match(
       css,
-      /@media \(min-width:\s*961px\)[\s\S]*?\.episode-replica-asset-empty\s*\{[^}]*height:\s*14\.2rem[^}]*min-height:\s*14\.2rem[^}]*max-height:\s*14\.2rem/,
+      /@media \(min-width:\s*961px\)[\s\S]*?\.episode-replica-asset-empty\s*\{[^}]*height:\s*16\.5rem[^}]*min-height:\s*16\.5rem[^}]*max-height:\s*16\.5rem/,
     );
     assert.match(
       css,
@@ -42930,12 +42934,18 @@ describe("production workbench project tab", () => {
       /episode-replica-asset-dialog-import[^>]*data-action="quick-append-selected-asset"[^>]*data-asset-id="episode-prop-1"[^>]*data-asset-kind="prop"[^>]*>引入到对话框<\/button>/,
     );
     assert.doesNotMatch(html, /class="episode-replica-mini"[^>]*data-action="quick-append-selected-asset"/);
+    assert.match(html, /episode-replica-asset-title-row[\s\S]*episode-replica-asset-name-input/);
+    assert.match(html, /episode-replica-asset-actions-row[\s\S]*episode-replica-asset-dialog-import/);
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    assert.match(css, /\.episode-replica-asset-dialog-import\s*\{[^}]*position:\s*absolute[^}]*left:\s*50%[^}]*transform:\s*translateX\(-50%\)/);
-    assert.match(css, /\.episode-replica-asset-card \.name\s*\{[^}]*padding-right:\s*10\.75rem/);
+    assert.match(css, /\.episode-replica-asset-card-head\s*\{[^}]*display:\s*grid/);
+    assert.match(css, /\.episode-replica-asset-title-row\s*\{[^}]*grid-template-columns:\s*1rem\s+minmax\(0,\s*1fr\)/);
+    assert.match(css, /\.episode-replica-asset-actions-row\s*\{[^}]*display:\s*flex[^}]*justify-content:\s*space-between/);
+    assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*?\.episode-replica-asset-actions-row\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.doesNotMatch(css, /\.episode-replica-asset-dialog-import\s*\{[^}]*position:\s*absolute/);
+    assert.doesNotMatch(css, /\.episode-replica-asset-card \.name\s*\{[^}]*padding-right:\s*10\.75rem/);
     const assetCreateButtons = [...html.matchAll(/class="episode-replica-asset-empty"[^>]*data-asset-kind="([^"]+)"/g)];
     assert.deepEqual(assetCreateButtons.map((match) => match[1]), ["character", "scene", "prop"]);
     assert.ok(assetCreateButtons[0].index > html.indexOf('data-asset-card-id="episode-character-1"'));
