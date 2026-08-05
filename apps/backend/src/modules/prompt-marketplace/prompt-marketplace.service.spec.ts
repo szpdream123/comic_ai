@@ -215,13 +215,14 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(official.priceCredits, 8);
       assert.equal(official.ownerUserId, null);
       assert.equal(owned.content, "改");
-      assert.equal(owned.priceCredits, 21);
+      assert.equal(owned.priceCredits, 0);
       assert.equal(owned.ownerUserId, ownerId);
       assert.equal(ownedSceneSkill.category, "scene_extract");
+      assert.equal(ownedSceneSkill.priceCredits, 0);
       assert.equal(ownedSceneSkill.ownerUserId, ownerId);
       assert.equal(ownedImageStyleSkill.category, "image_style");
       assert.equal(ownedImageStyleSkill.content, "统一使用东方幻想美术风格。");
-      assert.equal(ownedImageStyleSkill.priceCredits, 13);
+      assert.equal(ownedImageStyleSkill.priceCredits, 0);
       assert.equal(ownedImageStyleSkill.ownerUserId, ownerId);
       await assert.rejects(
         () => service.resolveWorkflowPromptSkill({
@@ -437,7 +438,12 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(republishedPrivate.item.status, "published");
       assert.equal((await service.listCatalog({ userId: buyerId })).items.find((item) => item.id === created.item.id)?.priceCredits, 31);
 
-      const firstPurchase = await service.purchaseItem({ userId: buyerId, itemId: created.item.id, now });
+      const [firstPurchase, concurrentPurchase] = await Promise.all([
+        service.purchaseItem({ userId: buyerId, itemId: created.item.id, now }),
+        service.purchaseItem({ userId: buyerId, itemId: created.item.id, now }),
+      ]);
+      assert.equal(concurrentPurchase.purchaseId, firstPurchase.purchaseId);
+      assert.equal(Number(firstPurchase.alreadyOwned) + Number(concurrentPurchase.alreadyOwned), 1);
       assert.equal(firstPurchase.priceCredits, 0);
       assert.equal(firstPurchase.creditBalance, 100);
       const freeLink = await db.query<{
@@ -781,7 +787,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(Object.prototype.hasOwnProperty.call(catalog.items[0]!, "content"), false);
       assert.equal(Object.prototype.hasOwnProperty.call(catalog, "ranking"), false);
 
-      await service.createItem({ userId, title: "私人剧本技能", category: "script", content: "私人正文一", publish: false, now: new Date() });
+      await service.createItem({ userId, title: "私人剧本技能", category: "script", content: "私人正文一", priceCredits: 10, publish: false, now: new Date() });
       await service.createItem({ userId, title: "私人分镜技能", category: "shot", content: "私人正文二", publish: false, now: new Date() });
       const library = await service.listSkillLibrary({ userId, query: "私人", page: 99, pageSize: 1 });
       assert.deepEqual(library.pagination, { page: 2, pageSize: 1, total: 2, totalPages: 2, hasNext: false });
@@ -789,6 +795,7 @@ describe("prompt marketplace service", { concurrency: false }, () => {
       assert.equal(library.categoryCounts.shot, 1);
       assert.equal(Object.prototype.hasOwnProperty.call(library.items[0]!, "content"), false);
       assert.equal(Object.prototype.hasOwnProperty.call(library, "ranking"), false);
+      assert.equal(library.items.every((item) => item.priceCredits === 0), true);
     } finally {
       await db.close();
     }

@@ -1083,6 +1083,14 @@ describe("phone auth dev server storage uploads", () => {
         }),
       });
       const disguisedPrepared = await disguisedPrepareResponse.json();
+      const oversizedBlobResponse = await fetch(
+        `${server.origin}/api/storage/upload-sessions/${disguisedPrepared.uploadSessionId}/blob`,
+        {
+          method: "PUT",
+          headers: { "content-type": "image/png", cookie },
+          body: Buffer.alloc(20 * 1024 * 1024 + 1),
+        },
+      );
       const otherCookie = await login(server.origin, "13800138001");
       const crossOwnerBlobResponse = await fetch(
         `${server.origin}/api/storage/upload-sessions/${disguisedPrepared.uploadSessionId}/blob`,
@@ -1111,6 +1119,7 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(mismatchedMimeResponse.status, 400);
       assert.equal(mismatchedMime.errorCode, "upload_mime_not_allowed");
       assert.equal(disguisedPrepareResponse.status, 200);
+      assert.equal(oversizedBlobResponse.status, 413);
       assert.equal(crossOwnerBlobResponse.status, 404);
       assert.equal(disguisedBlobResponse.status, 400);
       assert.equal(disguisedBlob.errorCode, "upload_content_mismatch");

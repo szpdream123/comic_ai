@@ -15,7 +15,7 @@ interface StoryboardPromptPackageRow {
   summary: string;
   cover_image_url: string | null;
   cover_storage_object_id: string | null;
-  prompt_content: string;
+  prompt_content?: string;
   status: string;
   price_credits: number;
   usage_count: number;
@@ -24,6 +24,8 @@ interface StoryboardPromptPackageRow {
   updated_at: Date | string;
   is_default?: boolean;
 }
+
+const seededStoryboardPromptDatabases = new WeakSet<object>();
 
 interface StoryboardPromptTemplateRow {
   id: string;
@@ -46,14 +48,17 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
     keyword?: string | null;
     status?: string | null;
     pageSize?: number;
+    includeContent?: boolean;
   } = {}) {
-    await ensureDefaultStoryboardPromptData(deps.db);
-    await ensureOfficialPromptDefault(deps.db, "script");
+    await ensureStoryboardPromptDataOnce(deps.db);
     const pageSize = clamp(Number(input.pageSize || 100), 1, 500);
     const keyword = input.keyword?.trim() ? `%${input.keyword.trim().toLowerCase()}%` : null;
+    const includeContent = input.includeContent !== false;
     const rows = await deps.db.query<StoryboardPromptPackageRow>(
       `
-        SELECT prompts.*, EXISTS (
+        SELECT ${includeContent
+          ? "prompts.*"
+          : "prompts.id, prompts.name, prompts.summary, prompts.cover_image_url, prompts.cover_storage_object_id, prompts.status, prompts.price_credits, prompts.usage_count, prompts.is_published, prompts.created_at, prompts.updated_at"}, EXISTS (
           SELECT 1 FROM prompt_official_defaults prompt_default
           WHERE prompt_default.prompt_category = 'script' AND prompt_default.prompt_id = prompts.id
         ) AS is_default
@@ -63,7 +68,7 @@ export function createAdminStoryboardPromptService(deps: { db: SqlDatabase }) {
           AND (
             $2::text IS NULL
             OR lower(name) LIKE $2
-            OR lower(prompt_content) LIKE $2
+            ${includeContent ? "OR lower(prompt_content) LIKE $2" : ""}
             OR lower(summary) LIKE $2
           )
         ORDER BY updated_at DESC, id ASC
@@ -370,6 +375,14 @@ export async function ensureDefaultStoryboardPromptData(db: SqlDatabase) {
   await ensureOfficialPromptDefault(db, "storyboard", seedUpdatedAt);
 }
 
+async function ensureStoryboardPromptDataOnce(db: SqlDatabase) {
+  if (seededStoryboardPromptDatabases.has(db as object)) {
+    return;
+  }
+  await ensureDefaultStoryboardPromptData(db);
+  seededStoryboardPromptDatabases.add(db as object);
+}
+
 interface AdminMutationInput {
   actorAdminAccountId: string;
   reason?: string;
@@ -440,7 +453,7 @@ function packageFromRow(row: StoryboardPromptPackageRow) {
     coverImageUrl: row.cover_image_url || "",
     cover_storage_object_id: row.cover_storage_object_id,
     coverStorageObjectId: row.cover_storage_object_id,
-    prompt_content: row.prompt_content,
+    ...(row.prompt_content === undefined ? {} : { prompt_content: row.prompt_content }),
     status: row.status,
     price_credits: row.price_credits,
     priceCredits: row.price_credits,

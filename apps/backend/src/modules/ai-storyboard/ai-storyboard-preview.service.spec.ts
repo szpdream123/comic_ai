@@ -51,6 +51,72 @@ describe("ai storyboard preview service", () => {
     assert.equal("max_tokens" in (capturedRequest ?? {}), false);
   });
 
+  it("surfaces a failed provider completion instead of treating it as a complete stream", async () => {
+    const gateway = createTextModelChatGateway({
+      gateway: {
+        chat: {
+          completions: {
+            async create() {
+              return {
+                providerRequestId: "provider-request-failed",
+                stream: (async function* () {
+                  yield { choices: [{ delta: { content: "partial" } }] };
+                })(),
+                abort() {},
+                completed: Promise.resolve({
+                  status: "failed" as const,
+                  failureCode: "provider_stream_error",
+                  usage: null,
+                  usageSource: "provider_missing" as const,
+                }),
+              };
+            },
+          },
+        },
+      } as never,
+    });
+
+    await assert.rejects(
+      async () => {
+        for await (const _delta of gateway.streamJson!({ model: "text-model", prompt: "prompt" })) {
+          // Drain the stream so the completion status is observed.
+        }
+      },
+      /provider_stream_error/,
+    );
+  });
+
+  it("returns provider usage with completed JSON content", async () => {
+    const gateway = createTextModelChatGateway({
+      gateway: {
+        chat: {
+          completions: {
+            async create() {
+              return {
+                providerRequestId: "provider-request-usage",
+                stream: (async function* () {
+                  yield { choices: [{ delta: { content: '{"ok":true}' } }] };
+                })(),
+                abort() {},
+                completed: Promise.resolve({
+                  status: "succeeded" as const,
+                  usage: { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 },
+                  usageSource: "provider" as const,
+                }),
+              };
+            },
+          },
+        },
+      } as never,
+    });
+
+    const result = await gateway.completeJsonWithUsage!({ model: "text-model", prompt: "prompt" });
+
+    assert.equal(result.content, '{"ok":true}');
+    assert.equal(result.providerRequestId, "provider-request-usage");
+    assert.deepEqual(result.usage, { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 });
+  });
+
   it("passes canvas ownership to every storyboard model stage", async () => {
     const canvasProjectId = "40000000-0000-4000-8000-000000000098";
     const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];
@@ -316,6 +382,11 @@ describe("ai storyboard preview service", () => {
       modelCode: "selected-text-model",
       selectedStages: ["shot"],
       packages: {},
+      context: {
+        scenes: [{ sceneName: "旧城门", sceneDescription: "雨夜城门" }],
+        characters: [{ characterName: "任小野", characterDescription: "清瘦少年" }],
+        props: [{ propName: "饭食", propDescription: "旧布包裹" }],
+      },
       templates: { shotPrompt: "分镜技能 {{script_text}}" },
     })) {
       events.push(event);
@@ -324,6 +395,9 @@ describe("ai storyboard preview service", () => {
     assert.equal(gateway.calls.length, 1);
     assert.equal(gateway.calls[0]?.model, "selected-text-model");
     assert.match(gateway.calls[0]?.prompt ?? "", /分镜技能 现成剧本。/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /旧城门/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /任小野/);
+    assert.match(gateway.calls[0]?.prompt ?? "", /饭食/);
     assert.deepEqual(events.filter((event) => event.type === "asset_prompt").map((event) => event.stage), ["shot"]);
     assert.equal(events.some((event) => event.type === "script_start"), false);
   });
@@ -535,6 +609,70 @@ describe("ai storyboard preview service", () => {
     assert.match(storyboard?.videoPrompt ?? "", /视频场景对照表: 铁木城门（城门外）=【@铁木城门（城门外）】/);
     assert.match(storyboard?.videoPrompt ?? "", /视频道具对照表: 切割刀（任小野的短刀）=【@切割刀（任小野的短刀）】/);
     assert.doesNotMatch(storyboard?.videoPrompt ?? "", /视频道具对照表: 切割刀=【@切割刀】/);
+  });
+
+  it("splits bracket-labeled novel storyboard output into project assets and shots", async () => {
+    const gateway = new FakeTextGateway([
+      "原始小说内容。",
+      [
+        "【角色名称】任小野",
+        "黑发少年，衣着朴素。",
+        "【场景名称】黄昏城门口",
+        "暮色压在高大的铁木城门上。",
+        "【道具名称】切割刀",
+        "黑色短刀，刃口有缺损。",
+      ].join("\n"),
+      "无有效角色输出",
+      "无有效道具输出",
+      [
+        "【分镜1】任小野站在【@黄昏城门口】，握紧【@切割刀】。",
+        "【分镜2】任小野抬头望向城门。",
+      ].join("\n"),
+    ]);
+
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000022",
+      scriptText: "原始小说内容。",
+      packages: {},
+    });
+
+    assert.equal(result.commitPayload.characters[0]?.characterName, "任小野");
+    assert.match(result.commitPayload.characters[0]?.characterDescription ?? "", /黑发少年/);
+    assert.equal(result.commitPayload.scenes[0]?.sceneName, "黄昏城门口");
+    assert.match(result.commitPayload.scenes[0]?.sceneDescription ?? "", /暮色/);
+    assert.equal(result.commitPayload.props[0]?.propName, "切割刀");
+    assert.match(result.commitPayload.props[0]?.propDescription ?? "", /黑色短刀/);
+    assert.equal(result.commitPayload.storyboards.length, 2);
+    assert.equal(result.commitPayload.storyboards[0]?.shotNo, 1);
+    assert.match(result.commitPayload.storyboards[0]?.plot ?? "", /任小野站在/);
+    assert.equal(result.commitPayload.storyboards[1]?.shotNo, 2);
+    assert.match(result.commitPayload.storyboards[1]?.plot ?? "", /抬头望向城门/);
+  });
+
+  it("splits all project sections from one bracket-labeled storyboard skill", async () => {
+    const gateway = new FakeTextGateway([[
+      "【角色名称】白玫鬼",
+      "白衣剑客。",
+      "【场景名称】黄昏尸骸战场",
+      "暮色中的荒凉战场。",
+      "【道具名称】切割刀",
+      "刀刃有明显缺口。",
+      "【分镜1】白玫鬼来到【@黄昏尸骸战场】，看见拿着【@切割刀】的人。",
+    ].join("\n")]);
+
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000023",
+      scriptText: "白玫鬼来到黄昏尸骸战场。",
+      skipScriptStage: true,
+      selectedStages: ["shot"],
+      packages: {},
+    });
+
+    assert.equal(result.commitPayload.characters[0]?.characterName, "白玫鬼");
+    assert.equal(result.commitPayload.scenes[0]?.sceneName, "黄昏尸骸战场");
+    assert.equal(result.commitPayload.props[0]?.propName, "切割刀");
+    assert.equal(result.commitPayload.storyboards.length, 1);
+    assert.match(result.commitPayload.storyboards[0]?.plot ?? "", /白玫鬼来到/);
   });
 
   it("streams raw DeepSeek output before returning the final parsed preview", async () => {

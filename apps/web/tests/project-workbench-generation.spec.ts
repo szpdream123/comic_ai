@@ -37118,6 +37118,10 @@ describe("production workbench project tab", () => {
     );
     assert.match(
       css,
+      /\.canvas-connected-text-reference:hover \.canvas-connected-text-popover,[\s\S]*?pointer-events:\s*auto[\s\S]*?\}/,
+    );
+    assert.match(
+      css,
       /\.canvas-node-editor\.generation-editor\.video\s*\{[\s\S]*?min-height:\s*20rem[\s\S]*?\}/,
     );
     assert.match(
@@ -48828,6 +48832,12 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /分镜提示词生成/);
     assert.doesNotMatch(html, /sceneName/);
     assert.match(html, /data-action="close-ai-storyboard-preview"/);
+    for (const stage of ["script", "scene", "character", "prop", "shot"]) {
+      assert.match(
+        html,
+        new RegExp(`data-action="regenerate-ai-storyboard-stage"[\\s\\S]*?data-ai-storyboard-stage="${stage}"`),
+      );
+    }
     assert.match(html, /任小野托付妹妹。/);
     assert.match(html, /1 段/);
     assert.match(html, /single-episode-ai-table-card characters/);
@@ -48900,6 +48910,95 @@ describe("production workbench project tab", () => {
     assert.equal(previewCalls[0].input.modelCode, "custom-text-model");
     assert.equal(Object.hasOwn(previewCalls[0].input, "skipScriptStage"), false);
     assert.equal(workbench.ui.singleEpisodeAiPreview.status, "ready");
+  });
+
+  it("regenerates only the selected AI storyboard section and preserves the other tables", async () => {
+    const previewCalls = [];
+    const originalScene = { sceneName: "旧城门", sceneDescription: "雨夜城门" };
+    const originalCharacter = { characterName: "旧角色", characterDescription: "旧描述" };
+    const regeneratedCharacter = { characterName: "新角色", characterDescription: "新描述" };
+    const baseTables = {
+      script: { title: "剧本", columns: ["剧本文字"], rows: [{ scriptContent: "现成剧本。" }] },
+      scenes: { title: "场景", columns: ["场景名称", "场景描述"], rows: [originalScene] },
+      characters: { title: "角色", columns: ["角色名称", "角色描述"], rows: [originalCharacter] },
+      props: { title: "道具", columns: ["道具名称", "道具描述"], rows: [] },
+      storyboards: { title: "分镜", columns: ["分镜剧情", "对话/旁白", "静态图片提示词", "动态视频提示词"], rows: [] },
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* (projectId, input) {
+          previewCalls.push({ projectId, input });
+          const raw = JSON.stringify({ characters: [regeneratedCharacter] });
+          yield { event: "asset_done", data: { stage: "character", title: "角色提示词生成", text: raw } };
+          yield { event: "complete", data: {
+            scriptText: "现成剧本。",
+            rawMarkdown: { character: raw },
+            commitPayload: { scriptText: "现成剧本。", characters: [regeneratedCharacter] },
+            displayTables: {
+              characters: { title: "角色", columns: ["角色名称", "角色描述"], rows: [regeneratedCharacter] },
+            },
+          } };
+        },
+      },
+      ui: {
+        ...buildProjectUi({
+          projectPanelMode: "detail",
+          projectInteriorSection: "episodes",
+          selectedProjectCardId: "project-1",
+        }),
+        singleEpisodeAiPreview: {
+          status: "ready",
+          source: "single-episode-storyboard",
+          sourceScript: "原始小说。",
+          projectId: "project-1",
+          skills: { character_extract: "character-skill-1" },
+          modelCode: "custom-text-model",
+          scriptText: "现成剧本。",
+          scriptRawText: "现成剧本。",
+          promptText: "",
+          scriptPromptText: "",
+          promptPromptText: "",
+          assetPromptSteps: [],
+          data: {
+            scriptText: "现成剧本。",
+            rawMarkdown: {},
+            commitPayload: {
+              scriptText: "现成剧本。",
+              scenes: [originalScene],
+              characters: [originalCharacter],
+              props: [],
+              storyboards: [],
+            },
+            previewTables: baseTables,
+            displayTables: baseTables,
+          },
+          error: "",
+        },
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "regenerate-ai-storyboard-stage", aiStoryboardStage: "character" },
+    });
+
+    assert.equal(previewCalls.length, 1);
+    assert.equal(previewCalls[0].projectId, "project-1");
+    assert.deepEqual(previewCalls[0].input, {
+      scriptText: "现成剧本。",
+      modelCode: "custom-text-model",
+      stages: ["character"],
+      skipScriptStage: true,
+      skills: { character_extract: "character-skill-1" },
+    });
+    assert.equal(workbench.ui.singleEpisodeAiPreview.data.commitPayload.scenes[0].sceneName, originalScene.sceneName);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.data.commitPayload.scenes[0].sceneDescription, originalScene.sceneDescription);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.data.commitPayload.characters[0].characterName, regeneratedCharacter.characterName);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.data.commitPayload.characters[0].characterDescription, regeneratedCharacter.characterDescription);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.regeneratingStage, "");
+    assert.equal(workbench.ui.toast.message, "角色已重新生成。");
   });
 
   it("keeps the single episode modal open when AI storyboard membership validation fails", async () => {
@@ -51426,8 +51525,8 @@ describe("production workbench project tab", () => {
     assert.match(css, /\.single-episode-ai-overlay\s*{[\s\S]*?overflow:\s*hidden;/);
     assert.match(css, /\.single-episode-ai-preview\s*{[\s\S]*?height:\s*100%;[\s\S]*?overflow-y:\s*auto;/);
     assert.match(css, /\.single-episode-ai-script-text\s*{[\s\S]*?min-height:\s*min\(14rem,\s*28vh\);[\s\S]*?max-height:\s*min\(32rem,\s*56vh\);[\s\S]*?resize:\s*vertical;/);
-    assert.match(css, /\.single-episode-ai-script-text div\s*{[\s\S]*?max-height:\s*none;[\s\S]*?height:\s*100%;/);
-    assert.match(css, /\.single-episode-ai-live-output pre,\s*\.single-episode-ai-script-text div\s*{[\s\S]*?white-space:\s*pre-wrap;[\s\S]*?word-break:\s*break-word;/);
+    assert.match(css, /\.single-episode-ai-script-text\s*>\s*div\s*{[\s\S]*?max-height:\s*none;[\s\S]*?height:\s*100%;/);
+    assert.match(css, /\.single-episode-ai-live-output pre,\s*\.single-episode-ai-script-text\s*>\s*div\s*{[\s\S]*?white-space:\s*pre-wrap;[\s\S]*?word-break:\s*break-word;/);
     assert.match(css, /\.single-episode-ai-table-stack\s*{[\s\S]*?overflow-y:\s*visible;/);
   });
 

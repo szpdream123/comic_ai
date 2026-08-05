@@ -2306,7 +2306,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(providerProtocol);
 }
 
 function providerRequiresApiKey(providerProtocol: string | undefined) {
@@ -2333,7 +2333,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {

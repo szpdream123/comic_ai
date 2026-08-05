@@ -1,12 +1,23 @@
 import OpenAI from "openai";
 import type {
   ChatCompletionChunk,
+  ChatCompletionContentPart,
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
 
+export type TextGatewayVideoUrlContentPart = {
+  type: "video_url";
+  video_url: { url: string };
+};
+
+export type TextGatewayVideoUrlMessage = {
+  role: "user";
+  content: Array<ChatCompletionContentPart | TextGatewayVideoUrlContentPart>;
+};
+
 export type TextGatewayChatCompletionRequest = {
   model: string;
-  messages: ChatCompletionMessageParam[];
+  messages: Array<ChatCompletionMessageParam | TextGatewayVideoUrlMessage>;
   stream: true;
   temperature?: number;
   max_tokens?: number;

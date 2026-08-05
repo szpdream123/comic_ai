@@ -18,6 +18,32 @@ describe("Cumob text gateway routing", () => {
     }, "openai_compatible_chat"), genericAdapter);
   });
 
+  it("removes signed video URLs from persistent audit requests", () => {
+    const request = {
+      model: "video-capable-model",
+      messages: [{
+        role: "user" as const,
+        content: [{
+          type: "video_url" as const,
+          video_url: { url: "https://storage.example.test/reference.mp4?signature=secret" },
+        }],
+      }],
+      stream: true as const,
+    };
+
+    const redacted = __textModelGatewayTestUtils.redactTextGatewayVideoUrls(request);
+
+    assert.equal(
+      JSON.stringify(redacted).includes("signature=secret"),
+      false,
+    );
+    assert.match(JSON.stringify(redacted), /\[signed video URL omitted\]/);
+    assert.equal(
+      request.messages[0]?.content[0]?.video_url.url,
+      "https://storage.example.test/reference.mp4?signature=secret",
+    );
+  });
+
   it("omits max_tokens only for cumob_chat provider requests", () => {
     const request = {
       model: "local-model",

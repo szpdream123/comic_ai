@@ -240,7 +240,7 @@ describe("route auth policy registry", () => {
 
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 171);
+    assert.equal(signatures.length, 174);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");
@@ -253,7 +253,7 @@ describe("route auth policy registry", () => {
 
   it("covers every regex pathname matcher and each method handled by its branch", () => {
     const matchers = dynamicPathMatchers();
-    assert.equal(matchers.length, 131);
+    assert.equal(matchers.length, 132);
     const uncovered: string[] = [];
 
     for (const declaration of matchers) {

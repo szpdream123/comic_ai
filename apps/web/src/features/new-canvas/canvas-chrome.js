@@ -52,7 +52,6 @@ export function renderNewCanvasChromeRail(ui = {}) {
       </details>
       <span class="new-canvas-chrome-separator" aria-hidden="true"></span>
       <button type="button" class="new-canvas-chrome-tool" data-character-action="open" aria-label="角色库" title="角色库">${renderChromeIcon("character")}</button>
-      <button type="button" class="new-canvas-chrome-tool" data-media-action="open" aria-label="媒体工具" title="媒体工具">${renderChromeIcon("media")}</button>
     </nav>`;
 }
 

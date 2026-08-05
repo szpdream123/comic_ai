@@ -62,6 +62,33 @@ import {
   resolveCanvasGenerationSkillCategories,
 } from "./canvas-text-skill-modal.js";
 import { resolveCanvasScriptBatchInitialState, resolveCanvasScriptBatchItems } from "./canvas-script-batch-modal.js";
+import {
+  clearToolboxPromptReverseFile,
+  closeToolboxPromptReverse,
+  closeToolboxVideoDepth,
+  openToolboxPromptReverse,
+  openToolboxVideoDepth,
+  setToolboxPromptReverseKind,
+  setToolboxPromptReverseFile,
+  setToolboxPromptReverseModel,
+  updateToolboxPromptReverseActiveView,
+} from "../toolbox/toolbox-page.js";
+import {
+  buildVideoModelFrameSheets,
+} from "../toolbox/video-analysis-plugin-client.js";
+import {
+  checkBrowserVideoAnalysis,
+  disposeBrowserVideoAnalysisResult,
+  installBrowserVideoAnalysis,
+  runBrowserVideoAnalysis,
+  uninstallBrowserVideoAnalysis,
+} from "../toolbox/browser-video-analysis-client.js";
+import {
+  checkBrowserWebGpuDepth,
+  installBrowserWebGpuDepth,
+  uninstallBrowserWebGpuDepth,
+  runBrowserWebGpuDepth,
+} from "../toolbox/browser-webgpu-depth-client.js";
 
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 import {
@@ -197,6 +224,9 @@ const CANVAS_LIVE_RECONNECT_MAX_MS = 8000;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const EPISODE_BATCH_IMAGE_LIMIT = 30;
 const EPISODE_BATCH_VIDEO_LIMIT = 10;
+const TOOLBOX_PROMPT_REVERSE_MAX_BYTES = 20 * 1024 * 1024;
+const TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES = 500 * 1024 * 1024;
+const TOOLBOX_VIDEO_DEPTH_MAX_BYTES = 500 * 1024 * 1024;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
@@ -206,6 +236,7 @@ const PUBLIC_NAV_PATHS = {
   tools: "/canvas",
   "new-canvas": "/new-canvas",
   script: "/script",
+  toolbox: "/toolbox",
   project: "/projects",
   library: "/assets",
   team: "/team",
@@ -215,6 +246,7 @@ const PUBLIC_PATH_TOKENS = new Map([
   ["/canvas", "tools"],
   ["/new-canvas", "new-canvas"],
   ["/script", "script"],
+  ["/toolbox", "toolbox"],
   ["/projects", "project"],
   ["/assets", "library"],
   ["/team", "team"],
@@ -296,6 +328,518 @@ function validateAccountSettingsForm(form = {}, options = {}) {
 }
 export function renderProductionWorkbench(context = {}) {
   return renderProjectDetail(context);
+}
+
+function applyToolboxPromptReverseFile(workbench, file) {
+  const type = String(file?.type ?? "").toLowerCase();
+  const mode = workbench.ui.toolboxPromptReverse?.activeKind === "video" ? "video" : "image";
+  const accepted = mode === "video"
+    ? new Set(["video/mp4", "video/webm", "video/quicktime"])
+    : new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!accepted.has(type)) {
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      error: mode === "video" ? "视频反推仅支持 MP4、WEBM、MOV 视频。" : "图片反推仅支持 PNG、JPG、WEBP 图片。",
+    });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  const maxBytes = mode === "video" ? TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES : TOOLBOX_PROMPT_REVERSE_MAX_BYTES;
+  if (Number(file?.size ?? 0) > maxBytes) {
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      error: mode === "video" ? "视频大小不能超过 500 MB。" : "图片大小不能超过 20 MB。",
+    });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  revokeToolboxPromptReversePreview(workbench.ui);
+  const previewUrl = typeof globalThis.URL?.createObjectURL === "function"
+    ? globalThis.URL.createObjectURL(file)
+    : "";
+  setToolboxPromptReverseFile(workbench.ui, {
+    fileName: file.name,
+    fileSize: file.size,
+    previewUrl,
+    mode,
+    file,
+  });
+  renderWorkbenchChrome(workbench);
+  return true;
+}
+
+function revokeToolboxPromptReversePreview(ui = {}) {
+  const previewUrl = String(ui.toolboxPromptReverse?.previewUrl ?? "");
+  if (previewUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(previewUrl);
+  }
+}
+
+function applyToolboxVideoDepthFile(workbench, file) {
+  const type = String(file?.type ?? "").toLowerCase();
+  const accepted = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+  if (!accepted.has(type)) {
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      open: true,
+      error: "仅支持 MP4、WEBM 或 MOV 视频。",
+    };
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  if (Number(file?.size ?? 0) > TOOLBOX_VIDEO_DEPTH_MAX_BYTES) {
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      open: true,
+      error: "视频大小不能超过 500 MB。",
+    };
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  revokeToolboxVideoDepthPreview(workbench.ui);
+  const previewUrl = typeof globalThis.URL?.createObjectURL === "function"
+    ? globalThis.URL.createObjectURL(file)
+    : "";
+  workbench.ui.toolboxVideoDepth = {
+    ...(workbench.ui.toolboxVideoDepth ?? {}),
+    open: true,
+    fileName: String(file.name ?? "video.mp4"),
+    fileSize: Number(file.size ?? 0),
+    previewUrl,
+    file,
+    status: "idle",
+    progress: 0,
+    result: null,
+    error: "",
+  };
+  renderWorkbenchChrome(workbench);
+  return true;
+}
+
+function revokeToolboxVideoDepthPreview(ui = {}) {
+  const previewUrl = String(ui.toolboxVideoDepth?.previewUrl ?? "");
+  if (previewUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(previewUrl);
+  }
+}
+
+async function checkToolboxVideoDepthPlugin(workbench) {
+  const current = workbench.ui.toolboxVideoDepth ?? {};
+  workbench.ui.toolboxVideoDepth = { ...current, pluginStatus: "checking", error: "" };
+  renderWorkbenchChrome(workbench);
+  try {
+    const payload = await checkBrowserWebGpuDepth();
+    workbench.ui.toolboxVideoDepth = {
+      ...workbench.ui.toolboxVideoDepth,
+      pluginStatus: payload.ready ? payload.installed ? "ready" : "not-installed" : "unavailable",
+      pluginVersion: payload.device ?? "本地处理",
+      error: payload.ready ? "" : String(payload.error ?? "当前电脑浏览器不支持本地处理，请升级或更换浏览器"),
+    };
+  } catch {
+    workbench.ui.toolboxVideoDepth = {
+      ...workbench.ui.toolboxVideoDepth,
+      pluginStatus: "unavailable",
+      error: "当前电脑浏览器不支持本地处理，请升级或更换浏览器",
+    };
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function installToolboxVideoDepthPlugin(workbench) {
+  const current = workbench.ui.toolboxVideoDepth ?? {};
+  workbench.ui.toolboxVideoDepth = {
+    ...current,
+    pluginStatus: "installing",
+    installProgress: 0,
+    installMessage: "正在安装深度插件",
+    error: "",
+  };
+  renderWorkbenchChrome(workbench);
+  try {
+    const payload = await installBrowserWebGpuDepth({
+      onProgress: (progressPayload) => {
+        const latest = workbench.ui.toolboxVideoDepth ?? {};
+        if (!latest.open || latest.pluginStatus !== "installing") return;
+        const progress = Math.max(0, Math.min(100, Number(progressPayload.progress ?? 0)));
+        workbench.ui.toolboxVideoDepth = {
+          ...latest,
+          installProgress: Number.isFinite(progress) ? progress : latest.installProgress,
+          installMessage: String(progressPayload.message ?? "正在安装深度插件"),
+        };
+        updateToolboxVideoDepthPluginProgress(workbench);
+      },
+    });
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      pluginStatus: "ready",
+      pluginVersion: String(payload.device ?? "本地处理"),
+      installProgress: 100,
+      installMessage: "",
+      error: "",
+    };
+  } catch (error) {
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      pluginStatus: "not-installed",
+      installProgress: 0,
+      installMessage: "",
+      error: `安装失败：${friendlyError(error)}`,
+    };
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function uninstallToolboxVideoDepthPlugin(workbench) {
+  const current = workbench.ui.toolboxVideoDepth ?? {};
+  workbench.ui.toolboxVideoDepth = { ...current, pluginStatus: "uninstalling", error: "" };
+  renderWorkbenchChrome(workbench);
+  try {
+    await uninstallBrowserWebGpuDepth();
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      pluginStatus: "not-installed",
+      pluginVersion: "",
+      installProgress: 0,
+      installMessage: "",
+      error: "",
+    };
+  } catch (error) {
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      pluginStatus: "ready",
+      error: `卸载失败：${friendlyError(error)}`,
+    };
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+function updateToolboxVideoDepthPluginProgress(workbench) {
+  const state = workbench.ui.toolboxVideoDepth ?? {};
+  const modal = workbench.root?.querySelector?.(".toolbox-depth-modal");
+  const message = modal?.querySelector?.("[data-toolbox-depth-plugin-message]");
+  if (!message) return false;
+  message.textContent = `${state.installMessage || "正在安装深度插件"} · ${Math.round(state.installProgress || 0)}%`;
+  return true;
+}
+
+function updateToolboxPromptReversePluginProgress(workbench) {
+  const state = workbench.ui.toolboxPromptReverse ?? {};
+  const modal = workbench.root?.querySelector?.(".toolbox-reverse-modal");
+  const message = modal?.querySelector?.("[data-toolbox-prompt-reverse-plugin-message]");
+  if (!message) return false;
+  message.textContent = `${state.installMessage || "正在安装视频解析插件"} · ${Math.round(state.installProgress || 0)}%`;
+  return true;
+}
+
+function updateToolboxVideoDepthGenerationProgress(workbench) {
+  const state = workbench.ui.toolboxVideoDepth ?? {};
+  const modal = workbench.root?.querySelector?.(".toolbox-depth-modal");
+  const progress = modal?.querySelector?.("[data-toolbox-depth-progress]");
+  const bar = progress?.querySelector?.("[data-toolbox-depth-progress-bar]");
+  const label = progress?.querySelector?.("[data-toolbox-depth-progress-label]");
+  if (!progress || !bar || !label) return false;
+  const percent = Math.round(Math.max(0, Math.min(99, Number(state.progress ?? 0))));
+  progress.hidden = false;
+  bar.style.width = `${percent}%`;
+  label.textContent = `${percent}%`;
+  return true;
+}
+
+function updateToolboxPromptReverseProgress(workbench) {
+  const state = workbench.ui.toolboxPromptReverse ?? {};
+  const modal = workbench.root?.querySelector?.(".toolbox-reverse-modal");
+  const loading = modal?.querySelector?.("[data-toolbox-prompt-reverse-loading]");
+  const title = loading?.querySelector?.("[data-toolbox-prompt-reverse-loading-title]");
+  const copy = loading?.querySelector?.("[data-toolbox-prompt-reverse-loading-copy]");
+  const button = modal?.querySelector?.("[data-toolbox-prompt-reverse-progress-button]");
+  if (!loading || !title || !copy || !button) return false;
+  const percent = Math.round(Math.max(0, Math.min(99, Number(state.progress ?? 0))));
+  if (state.status === "decoding") {
+    title.textContent = `本机正在解析视频 ${percent}%`;
+    copy.textContent = "解码与逐帧提取只在当前电脑进行，源视频不会上传服务器。";
+  } else if (state.status === "preparing") {
+    title.textContent = `正在整理 6 FPS 时间轴 ${percent}%`;
+    copy.textContent = "正在将全部 6 FPS 时间轴画面按时间顺序整理为模型输入。";
+  } else if (state.status === "loading") {
+    title.textContent = state.activeKind === "video" ? "正在反推视频提示词" : "正在分析参考图";
+    copy.textContent = state.activeKind === "video"
+      ? "工具箱视频反推消耗积分，多模态模型正在分析完整时间轴的动作、场景与镜头信息。"
+      : "工具箱图片反推消耗积分，模型正在提炼画面信息，请稍候。";
+  } else {
+    return false;
+  }
+  button.textContent = `${percent}%`;
+  return true;
+}
+
+async function runToolboxVideoDepth(workbench) {
+  const depth = workbench.ui.toolboxVideoDepth ?? {};
+  const requestFile = depth.file;
+  if (!requestFile) {
+    workbench.ui.toolboxVideoDepth = { ...depth, error: "请先添加一段视频。" };
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  if (depth.pluginStatus !== "ready") {
+    workbench.ui.toolboxVideoDepth = { ...depth, error: "请先安装可用的本地深度插件。" };
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  workbench.ui.toolboxVideoDepth = { ...depth, status: "loading", progress: 0, result: null, error: "" };
+  renderWorkbenchChrome(workbench);
+  try {
+    const payload = await runBrowserWebGpuDepth(requestFile, {
+      resolution: depth.resolution,
+      frameRate: depth.frameRate,
+      depthColor: depth.depthColor,
+      onProgress: (progressPayload) => {
+        const current = workbench.ui.toolboxVideoDepth ?? {};
+        if (!current.open || current.file !== requestFile) return;
+        const progress = Number(progressPayload.progress ?? progressPayload.percent ?? current.progress ?? 0);
+        workbench.ui.toolboxVideoDepth = {
+          ...current,
+          status: "loading",
+          progress: Number.isFinite(progress) ? Math.max(0, Math.min(99, progress)) : current.progress,
+          statusMessage: String(progressPayload.message ?? "本机正在处理"),
+        };
+        if (!updateToolboxVideoDepthGenerationProgress(workbench)) {
+          renderWorkbenchChrome(workbench);
+        }
+      },
+    });
+    const output = payload?.file ?? payload?.blob ?? payload?.output;
+    if (!(output instanceof Blob)) throw new Error("当前电脑浏览器不支持本地处理，请升级或更换浏览器");
+    const outputUrl = globalThis.URL?.createObjectURL?.(output);
+    if (!outputUrl) throw new Error("浏览器无法创建本地视频预览。");
+    const current = workbench.ui.toolboxVideoDepth ?? {};
+    if (!current.open || current.file !== requestFile) {
+      globalThis.URL?.revokeObjectURL?.(outputUrl);
+      return;
+    }
+    workbench.ui.toolboxVideoDepth = {
+      ...current,
+      status: "completed",
+      progress: 100,
+      result: { downloadUrl: outputUrl, fileName: String(payload?.fileName ?? "depth.webm") },
+      error: "",
+    };
+    renderWorkbenchChrome(workbench);
+  } catch (error) {
+    const current = workbench.ui.toolboxVideoDepth ?? {};
+    if (current.file !== requestFile) return;
+    workbench.ui.toolboxVideoDepth = { ...current, status: "idle", error: `生成失败：${friendlyError(error)}` };
+    renderWorkbenchChrome(workbench);
+  }
+}
+
+function updateToolboxVideoDepthSettings(workbench, patch = {}) {
+  const current = workbench.ui.toolboxVideoDepth ?? {};
+  const resolution = ["480p", "720p", "1080p", "2k"].includes(patch.resolution)
+    ? patch.resolution
+    : current.resolution ?? "720p";
+  const frameRate = [6, 8, 12, 24].includes(Number(patch.frameRate))
+    ? Number(patch.frameRate)
+    : current.frameRate ?? 8;
+  const depthColor = ["grayscale", "inverse", "spectral", "heatmap"].includes(patch.depthColor)
+    ? patch.depthColor
+    : current.depthColor ?? "grayscale";
+  workbench.ui.toolboxVideoDepth = {
+    ...current,
+    resolution,
+    frameRate,
+    depthColor,
+  };
+}
+
+function normalizeToolboxPromptReverseModels(payload) {
+  const source = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.models)
+      ? payload.models
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
+  return source.map((model) => {
+    const displayName = String(model?.displayName ?? "").trim();
+    return displayName ? { displayName } : null;
+  }).filter(Boolean);
+}
+
+function normalizeToolboxPromptReverseResult(payload) {
+  const source = payload?.result && typeof payload.result === "object" ? payload.result : payload ?? {};
+  return {
+    description: String(source.description ?? source.summary ?? "").trim(),
+    positivePrompt: String(source.positivePrompt ?? source.prompt ?? "").trim(),
+    tags: Array.isArray(source.tags) ? source.tags.map((tag) => String(tag).trim()).filter(Boolean) : source.tags ?? "",
+    negativePrompt: String(source.negativePrompt ?? "").trim(),
+  };
+}
+
+function formatToolboxPromptReverseResult(result = {}) {
+  return [
+    result.description ? `画面描述\n${result.description}` : "",
+    result.positivePrompt ? `正向提示词\n${result.positivePrompt}` : "",
+    result.tags?.length ? `标签\n${Array.isArray(result.tags) ? result.tags.join(", ") : result.tags}` : "",
+    result.negativePrompt ? `负向提示词\n${result.negativePrompt}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+function readToolboxPromptReverseFileAsDataUrl(file) {
+  if (!file) return Promise.reject(new Error("请先添加一张参考图。"));
+  if (typeof globalThis.FileReader !== "function") {
+    return Promise.reject(new Error("当前浏览器不支持读取本地图片。"));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new globalThis.FileReader();
+    reader.onerror = () => reject(new Error("读取图片失败，请重新选择。"));
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl.startsWith("data:image/")) {
+        reject(new Error("图片格式无效，请重新选择。"));
+        return;
+      }
+      resolve(dataUrl);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadToolboxPromptReverseModels(workbench) {
+  const reverse = workbench.ui.toolboxPromptReverse ?? {};
+  if (typeof workbench.api?.getToolboxPromptReverseModels !== "function") {
+    workbench.ui.toolboxPromptReverse = {
+      ...reverse,
+      loadingModels: false,
+      error: "提示词反推模型尚未配置。",
+    };
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  try {
+    const payload = await workbench.api.getToolboxPromptReverseModels({ fresh: true });
+    const models = normalizeToolboxPromptReverseModels(payload);
+    const current = workbench.ui.toolboxPromptReverse ?? {};
+    if (!current.open) return;
+    const selectedModelName = models.some((model) => model.displayName === current.selectedModelName)
+      ? current.selectedModelName
+      : models[0]?.displayName ?? "";
+    workbench.ui.toolboxPromptReverse = {
+      ...current,
+      models,
+      selectedModelName,
+      loadingModels: false,
+      error: models.length ? "" : "暂无可用于提示词反推的模型。",
+    };
+  } catch (error) {
+    const current = workbench.ui.toolboxPromptReverse ?? {};
+    if (!current.open) return;
+    workbench.ui.toolboxPromptReverse = {
+      ...current,
+      loadingModels: false,
+      error: `加载模型失败：${friendlyError(error)}`,
+    };
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function checkToolboxPromptReversePlugin(workbench) {
+  const current = workbench.ui.toolboxPromptReverse ?? {};
+  if (current.activeKind !== "video") return;
+  updateToolboxPromptReverseActiveView(workbench.ui, {
+    pluginStatus: "checking",
+    installMessage: "正在检测浏览器视频解析能力",
+    error: "",
+  });
+  renderWorkbenchChrome(workbench);
+  try {
+    const health = await checkBrowserVideoAnalysis();
+    if (workbench.ui.toolboxPromptReverse?.activeKind !== "video") return;
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      pluginStatus: health.ready ? health.installed ? "ready" : "not-installed" : "unavailable",
+      pluginVersion: health.installed ? `${String(health.device ?? "浏览器本地解析")} · 6 FPS` : "",
+      installProgress: 100,
+      installMessage: "",
+      uninstallPending: false,
+      error: health.ready ? "" : String(health.error ?? "当前电脑浏览器不支持本地视频解析"),
+    });
+  } catch {
+    if (workbench.ui.toolboxPromptReverse?.activeKind !== "video") return;
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      pluginStatus: "not-installed",
+      pluginVersion: "",
+      installProgress: 0,
+      installMessage: "浏览器视频解析插件尚未加载",
+      uninstallPending: false,
+      error: "",
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function installToolboxPromptReversePlugin(workbench) {
+  updateToolboxPromptReverseActiveView(workbench.ui, {
+    pluginStatus: "installing",
+    installProgress: 0,
+    installMessage: "正在加载浏览器视频解析插件",
+    error: "",
+  });
+  renderWorkbenchChrome(workbench);
+  try {
+    const result = await installBrowserVideoAnalysis({
+      onProgress: ({ progress, message }) => {
+        const current = workbench.ui.toolboxPromptReverse ?? {};
+        if (!current.open || current.activeKind !== "video" || current.pluginStatus !== "installing") return;
+        updateToolboxPromptReverseActiveView(workbench.ui, {
+          installProgress: Math.max(0, Math.min(100, Number(progress ?? current.installProgress ?? 0))),
+          installMessage: String(message ?? "正在加载浏览器视频解析插件"),
+        });
+        if (!updateToolboxPromptReversePluginProgress(workbench)) {
+          renderWorkbenchChrome(workbench);
+        }
+      },
+    });
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      pluginStatus: "ready",
+      pluginVersion: `${String(result?.device ?? "浏览器本地解析")} · 6 FPS`,
+      installProgress: 100,
+      installMessage: "",
+      error: "",
+    });
+  } catch (error) {
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      pluginStatus: "not-installed",
+      installProgress: 0,
+      installMessage: "",
+      error: `安装失败：${friendlyError(error)}`,
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function uninstallToolboxPromptReversePlugin(workbench) {
+  updateToolboxPromptReverseActiveView(workbench.ui, {
+    pluginStatus: "uninstalling",
+    installMessage: "正在清理浏览器视频解析插件",
+    error: "",
+  });
+  renderWorkbenchChrome(workbench);
+  try {
+    await uninstallBrowserVideoAnalysis();
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      pluginStatus: "not-installed",
+      pluginVersion: "",
+      installProgress: 0,
+      installMessage: "",
+      uninstallPending: false,
+      error: "",
+    });
+  } catch (error) {
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      pluginStatus: "ready",
+      installMessage: "",
+      uninstallPending: false,
+      error: `卸载失败：${friendlyError(error)}`,
+    });
+  }
+  renderWorkbenchChrome(workbench);
 }
 
 export function removeTeamAssetLocalUpload(ui, category, uploadId) {
@@ -1584,12 +2128,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     syncEpisodeWorkbenchLayoutVars(workbench);
     syncEpisodeQuickAssetTogglePosition(workbench);
   });
-  window.addEventListener("hashchange", () => {
-    syncWorkbenchHashRoute(workbench, window.location.hash);
-  });
-  window.addEventListener("popstate", () => {
-    syncWorkbenchHashRoute(workbench, readWorkbenchRouteToken(window.location));
-  });
+  let lastHistoryRouteToken = readWorkbenchRouteToken(window.location);
+  const restoreHistoryRoute = () => {
+    const routeToken = readWorkbenchRouteToken(window.location);
+    if (routeToken === lastHistoryRouteToken) {
+      return;
+    }
+    lastHistoryRouteToken = routeToken;
+    void restoreWorkbenchRouteFromLocation(workbench, window.location).catch((error) => {
+      console.warn("[workbench] history route restore failed", error);
+    });
+  };
+  window.addEventListener("hashchange", restoreHistoryRoute);
+  window.addEventListener("popstate", restoreHistoryRoute);
   root.addEventListener("wheel", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const stage = eventTarget?.closest?.(".canvas-stage");
@@ -1704,7 +2255,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     ) {
       dismissCanvasPromptMention(workbench);
     }
-    if (isCanvasX6InteractionTarget(eventTarget, event) && !actionTarget) {
+    if (
+      isCanvasX6InteractionTarget(eventTarget, event)
+      && !isCanvasX6BlankClickTarget(eventTarget, event)
+      && !actionTarget
+    ) {
       return;
     }
     const quickAssetToggle = eventTarget?.closest?.(".episode-replica-right-toggle");
@@ -2261,6 +2816,42 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   root.addEventListener("change", async (event) => {
     const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
 
+    if (target?.matches?.("#toolbox-prompt-reverse-file")) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (file) applyToolboxPromptReverseFile(workbench, file);
+      return;
+    }
+
+    if (target?.matches?.("#toolbox-video-depth-file")) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (file) applyToolboxVideoDepthFile(workbench, file);
+      return;
+    }
+
+    if (target?.matches?.("[data-toolbox-prompt-reverse-model]")) {
+      setToolboxPromptReverseModel(workbench.ui, target.value);
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-toolbox-video-depth-resolution]")) {
+      updateToolboxVideoDepthSettings(workbench, { resolution: target.value });
+      return;
+    }
+
+    if (target?.matches?.("[data-toolbox-video-depth-frame-rate]")) {
+      updateToolboxVideoDepthSettings(workbench, { frameRate: target.value });
+      return;
+    }
+
+    if (target?.matches?.("[data-toolbox-video-depth-color]")) {
+      updateToolboxVideoDepthSettings(workbench, { depthColor: target.value });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+
     if (target?.matches?.("[data-canvas-zoom-value-input]")) {
       await handleAction(workbench, {
         dataset: { action: "set-canvas-viewport", viewportPatch: "zoom-value" },
@@ -2626,7 +3217,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dragover", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"]');
     if (!zone) {
       return;
     }
@@ -2639,7 +3230,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dragleave", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"]');
     if (!zone) {
       return;
     }
@@ -2652,12 +3243,22 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("drop", async (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"]');
     if (!zone) {
       return;
     }
     event.preventDefault();
     zone.classList.remove("is-dragging");
+    if (zone.dataset.dropzone === "toolbox-prompt-reverse") {
+      const [file] = [...(event.dataTransfer?.files ?? [])];
+      if (file) applyToolboxPromptReverseFile(workbench, file);
+      return;
+    }
+    if (zone.dataset.dropzone === "toolbox-video-depth") {
+      const [file] = [...(event.dataTransfer?.files ?? [])];
+      if (file) applyToolboxVideoDepthFile(workbench, file);
+      return;
+    }
     if (zone.dataset.dropzone === "generation-frame") {
       const handled = applyDraggedEpisodeAssetToGenerationFrame(workbench, event.dataTransfer, {
         frameTarget: zone.dataset.frameTarget === "last" ? "last" : "first",
@@ -3814,6 +4415,35 @@ function syncWorkbenchHashRoute(workbench, hash) {
   scheduleLazySurfaceLoad(workbench, navigationRenderOptions);
 }
 
+async function restoreWorkbenchRouteFromLocation(workbench, locationLike) {
+  const requestId = Number(workbench.historyRouteRestoreRequestId ?? 0) + 1;
+  workbench.historyRouteRestoreRequestId = requestId;
+  const routeToken = readWorkbenchRouteToken(locationLike);
+  syncWorkbenchHashRoute(workbench, routeToken);
+  if (!hasActiveSessionUser(workbench.session)) {
+    return false;
+  }
+
+  const hasEpisodeRoute = Boolean(parseEpisodeRouteFromLocation(locationLike));
+  const hasProjectRoute = !hasEpisodeRoute && Boolean(parseProjectRouteFromLocation(locationLike));
+  if (!hasEpisodeRoute && !hasProjectRoute) {
+    return false;
+  }
+
+  const restored = hasEpisodeRoute
+    ? await restoreEpisodeRouteState(workbench, locationLike, { requestId })
+    : await restoreProjectRouteState(workbench, locationLike, { requestId });
+  if (!isCurrentHistoryRouteRestore(workbench, requestId)) {
+    return false;
+  }
+  render(workbench, { preserveNavigationShell: true });
+  return restored;
+}
+
+function isCurrentHistoryRouteRestore(workbench, requestId) {
+  return requestId == null || workbench.historyRouteRestoreRequestId === requestId;
+}
+
 function buildProjectDetailHash(projectId, section = "overview") {
   const normalizedProjectId = String(projectId ?? "").trim();
   if (!normalizedProjectId) {
@@ -4124,9 +4754,15 @@ async function syncProjectInteriorSupplementary(workbench) {
 
   try {
     const statsPayload = await workbench.api.getProjectStats(projectId);
+    if (resolveActiveProjectId(workbench) !== projectId) {
+      return;
+    }
     workbench.ui.projectMembers = [];
     workbench.ui.projectStats = statsPayload.stats ?? null;
   } catch (error) {
+    if (resolveActiveProjectId(workbench) !== projectId) {
+      return;
+    }
     workbench.ui.projectMembers = [];
     workbench.ui.projectStats = null;
   }
@@ -6772,7 +7408,9 @@ const NEW_CANVAS_NODE_LOCAL_ACTIONS = new Set([
   "toggle-canvas-markdown-fullscreen",
   "toggle-canvas-panorama-fullscreen",
   "toggle-canvas-storyboard-edit",
+  "toggle-canvas-image-fullscreen",
   "toggle-canvas-video-fullscreen",
+  "close-canvas-image-fullscreen",
   "close-canvas-video-fullscreen",
   "adjust-canvas-storyboard-grid-axis",
   "select-canvas-storyboard-cell",
@@ -8175,6 +8813,11 @@ function cancelSingleEpisodeAiPreviewRequest(workbench) {
   workbench.singleEpisodeAiPreviewAbortController = null;
   if (controller && !controller.signal?.aborted) {
     controller.abort();
+  }
+  const stageController = workbench.singleEpisodeAiStageRegenerateAbortController;
+  workbench.singleEpisodeAiStageRegenerateAbortController = null;
+  if (stageController && !stageController.signal?.aborted) {
+    stageController.abort();
   }
   if (workbench.singleEpisodeAiTableSyncTimer) {
     clearTimeout(workbench.singleEpisodeAiTableSyncTimer);
@@ -10102,6 +10745,10 @@ const WORKBENCH_CHROME_ACTIONS = new Set([
   "set-task-center-kind", "search-task-center", "change-task-center-page", "select-task-center-task",
   "copy-task-center-id", "toggle-workbench-theme-menu", "select-workbench-theme",
   "open-credit-ledger", "close-credit-ledger", "refresh-credit-ledger", "change-credit-ledger-page",
+  "open-toolbox-prompt-reverse", "close-toolbox-prompt-reverse",
+  "set-toolbox-prompt-reverse-kind", "check-toolbox-prompt-reverse-plugin", "install-toolbox-prompt-reverse-plugin", "uninstall-toolbox-prompt-reverse-plugin",
+  "clear-toolbox-prompt-reverse-file", "run-toolbox-prompt-reverse", "copy-toolbox-prompt-reverse",
+  "open-toolbox-video-depth", "close-toolbox-video-depth", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
   "open-pricing", "close-pricing", "switch-pricing-tab", "close-membership-payment",
   "open-announcements", "close-announcements", "open-account-settings", "close-account-settings",
   "open-invite-gift", "close-invite-gift", "toggle-account-settings-password",
@@ -10165,6 +10812,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "select-storyboard-prompt-skill-draft",
     "confirm-storyboard-prompt-skill",
     "close-ai-storyboard-preview",
+    "regenerate-ai-storyboard-stage",
     "toggle-single-episode-script-picker",
     "toggle-single-episode-import-menu",
     "close-single-episode-script-picker",
@@ -10189,6 +10837,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-member-confirm-modal",
     "confirm-script-reader-delete",
     "confirm-member-action",
+    "open-toolbox-video-depth", "close-toolbox-video-depth", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
     "save-manual-script-analysis",
     "regenerate-manual-script-analysis",
     "toggle-canvas-add-menu",
@@ -10245,7 +10894,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "toggle-canvas-audio-play",
     "seek-canvas-audio",
     "toggle-canvas-video-play",
+    "toggle-canvas-image-fullscreen",
     "toggle-canvas-video-fullscreen",
+    "close-canvas-image-fullscreen",
     "close-canvas-video-fullscreen",
     "request-canvas-video-native-fullscreen",
     "capture-canvas-video-frame",
@@ -10329,6 +10980,247 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
   if (!WORKBENCH_CHROME_ACTIONS.has(action)) clearWorkbenchToast(workbench);
+
+  if (action === "open-toolbox-prompt-reverse") {
+    openToolboxPromptReverse(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    await loadToolboxPromptReverseModels(workbench);
+    return;
+  }
+
+  if (action === "close-toolbox-prompt-reverse") {
+    closeToolboxPromptReverse(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "set-toolbox-prompt-reverse-kind") {
+    const current = workbench.ui.toolboxPromptReverse ?? {};
+    if (["checking", "decoding", "preparing", "loading"].includes(current.status)) return;
+    const kind = target.dataset.promptReverseKind === "video" ? "video" : "image";
+    setToolboxPromptReverseKind(workbench.ui, kind);
+    renderWorkbenchChrome(workbench);
+    if (kind === "video" && workbench.ui.toolboxPromptReverse?.pluginStatus !== "ready") {
+      void checkToolboxPromptReversePlugin(workbench);
+    }
+    return;
+  }
+
+  if (action === "check-toolbox-prompt-reverse-plugin") {
+    await checkToolboxPromptReversePlugin(workbench);
+    return;
+  }
+
+  if (action === "install-toolbox-prompt-reverse-plugin") {
+    await installToolboxPromptReversePlugin(workbench);
+    return;
+  }
+
+  if (action === "uninstall-toolbox-prompt-reverse-plugin") {
+    await uninstallToolboxPromptReversePlugin(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-video-depth") {
+    openToolboxVideoDepth(workbench.ui);
+    void checkToolboxVideoDepthPlugin(workbench);
+    return;
+  }
+
+  if (action === "close-toolbox-video-depth") {
+    revokeToolboxVideoDepthPreview(workbench.ui);
+    closeToolboxVideoDepth(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "check-toolbox-video-depth-plugin") {
+    await checkToolboxVideoDepthPlugin(workbench);
+    return;
+  }
+
+  if (action === "install-toolbox-video-depth-plugin") {
+    await installToolboxVideoDepthPlugin(workbench);
+    return;
+  }
+
+  if (action === "uninstall-toolbox-video-depth-plugin") {
+    await uninstallToolboxVideoDepthPlugin(workbench);
+    return;
+  }
+
+  if (action === "clear-toolbox-video-depth-file") {
+    revokeToolboxVideoDepthPreview(workbench.ui);
+    workbench.ui.toolboxVideoDepth = {
+      ...(workbench.ui.toolboxVideoDepth ?? {}),
+      fileName: "",
+      fileSize: 0,
+      previewUrl: "",
+      file: null,
+      status: "idle",
+      progress: 0,
+      result: null,
+      error: "",
+    };
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "run-toolbox-video-depth") {
+    await runToolboxVideoDepth(workbench);
+    return;
+  }
+
+  if (action === "clear-toolbox-prompt-reverse-file") {
+    revokeToolboxPromptReversePreview(workbench.ui);
+    clearToolboxPromptReverseFile(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "run-toolbox-prompt-reverse") {
+    const reverse = workbench.ui.toolboxPromptReverse ?? {};
+    const requestFile = reverse.file;
+    if (!reverse.file) {
+      updateToolboxPromptReverseActiveView(workbench.ui, {
+        error: reverse.activeKind === "video" ? "请先添加一段参考视频。" : "请先添加一张参考图。",
+      });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    if (!reverse.selectedModelName) {
+      updateToolboxPromptReverseActiveView(workbench.ui, { error: "请选择可用模型后再开始反推。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    const selectedModelName = String(
+      workbench.ui.toolboxPromptReverse?.selectedModelName ?? reverse.selectedModelName ?? "",
+    ).trim();
+    if (!selectedModelName) {
+      updateToolboxPromptReverseActiveView(workbench.ui, { error: "请选择可用模型后再开始反推。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    const isVideo = reverse.activeKind === "video";
+    if (typeof workbench.api?.runToolboxPromptReverse !== "function") {
+      updateToolboxPromptReverseActiveView(workbench.ui, { error: "提示词反推服务尚未配置。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    if (isVideo && reverse.pluginStatus !== "ready") {
+      updateToolboxPromptReverseActiveView(workbench.ui, { error: "请先加载浏览器视频解析插件。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    updateToolboxPromptReverseActiveView(workbench.ui, {
+      status: isVideo ? "decoding" : "loading",
+      progress: 0,
+      error: "",
+      result: null,
+    });
+    renderWorkbenchChrome(workbench);
+    let browserAnalysisResult = null;
+    try {
+      let payload;
+      if (isVideo) {
+        const analysis = await runBrowserVideoAnalysis(requestFile, {
+          onProgress(progress) {
+            const current = workbench.ui.toolboxPromptReverse ?? {};
+            if (current.file !== requestFile || current.activeKind !== "video") return;
+            updateToolboxPromptReverseActiveView(workbench.ui, {
+              status: "decoding",
+              progress: Math.round(Number(progress?.progress ?? 0) * 0.7),
+            });
+            if (!updateToolboxPromptReverseProgress(workbench)) renderWorkbenchChrome(workbench);
+          },
+        });
+        browserAnalysisResult = analysis;
+        updateToolboxPromptReverseActiveView(workbench.ui, {
+          status: "preparing",
+          progress: 70,
+          pluginOutput: analysis.output,
+        });
+        if (!updateToolboxPromptReverseProgress(workbench)) renderWorkbenchChrome(workbench);
+        const modelInput = await buildVideoModelFrameSheets(analysis.output, {
+          onProgress(progress) {
+            const current = workbench.ui.toolboxPromptReverse ?? {};
+            if (current.file !== requestFile || current.activeKind !== "video") return;
+            updateToolboxPromptReverseActiveView(workbench.ui, {
+              status: "preparing",
+              progress: 70 + Math.round(Number(progress?.progress ?? 0) * 0.25),
+            });
+            if (!updateToolboxPromptReverseProgress(workbench)) renderWorkbenchChrome(workbench);
+          },
+        });
+        disposeBrowserVideoAnalysisResult(browserAnalysisResult);
+        browserAnalysisResult = null;
+        updateToolboxPromptReverseActiveView(workbench.ui, { status: "loading", progress: 96 });
+        if (!updateToolboxPromptReverseProgress(workbench)) renderWorkbenchChrome(workbench);
+        payload = await workbench.api.runToolboxPromptReverse({
+          displayName: selectedModelName,
+          mode: "video",
+          frameSheetDataUrls: modelInput.frameSheetDataUrls,
+          samplingMetadata: {
+            frameRate: modelInput.frameRate,
+            durationMs: modelInput.durationMs,
+            frameCount: modelInput.frameCount,
+            sheetCount: modelInput.frameSheetDataUrls.length,
+            timelineSheetCount: modelInput.timelineSheetCount,
+            keyFrameCount: modelInput.keyFrameCount,
+            columns: 8,
+            rows: 6,
+            framesPerSheet: 48,
+          },
+        });
+      } else {
+        const imageDataUrl = await readToolboxPromptReverseFileAsDataUrl(requestFile);
+        payload = await workbench.api.runToolboxPromptReverse({
+          displayName: selectedModelName,
+          mode: "image",
+          imageDataUrl,
+        });
+      }
+      const current = workbench.ui.toolboxPromptReverse ?? {};
+      if (!current.open || current.file !== requestFile) return;
+      updateToolboxPromptReverseActiveView(workbench.ui, {
+        status: "completed",
+        progress: 100,
+        result: normalizeToolboxPromptReverseResult(payload),
+        error: "",
+      });
+    } catch (error) {
+      disposeBrowserVideoAnalysisResult(browserAnalysisResult);
+      const current = workbench.ui.toolboxPromptReverse ?? {};
+      if (!current.open || current.file !== requestFile) return;
+      updateToolboxPromptReverseActiveView(workbench.ui, {
+        status: "idle",
+        progress: 0,
+        error: `反推失败：${friendlyError(error)}`,
+      });
+    }
+    renderWorkbenchChrome(workbench);
+    if (workbench.ui.toolboxPromptReverse?.status === "completed") {
+      void refreshSessionCreditBalance(workbench, { fresh: true, renderOnChange: true });
+    }
+    return;
+  }
+
+  if (action === "copy-toolbox-prompt-reverse") {
+    const text = formatToolboxPromptReverseResult(workbench.ui.toolboxPromptReverse?.result);
+    if (!text) {
+      workbench.ui.toast = { tone: "warning", message: "当前没有可复制的反推结果。" };
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    try {
+      await copyTextToClipboard(text);
+      workbench.ui.toast = { tone: "success", message: "提示词已复制。" };
+    } catch (error) {
+      workbench.ui.toast = { tone: "error", message: `复制失败：${friendlyError(error)}` };
+    }
+    renderWorkbenchChrome(workbench);
+    return;
+  }
 
   if (action === "open-task-center") {
     if (!hasActiveSessionUser(workbench.session)) {
@@ -12223,6 +13115,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       ? null
       : { open: true, nodeId };
     workbench.ui.selectedCanvasNodeId = nodeId;
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-canvas-image-fullscreen") {
+    const nodeId = String(target.dataset.nodeId ?? workbench.ui.selectedCanvasNodeId ?? "");
+    const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => (
+      item.id === nodeId
+      && (
+        ["image", "source-image", "ai-image", "send"].includes(String(item.type ?? ""))
+        || (item.type === "upload" && !["video", "audio"].includes(String(item.data?.mediaKind ?? "")))
+      )
+    ));
+    if (!node) return;
+    const current = workbench.ui.canvasImageFullscreen;
+    workbench.ui.canvasImageFullscreen = current?.open === true && current.nodeId === nodeId
+      ? null
+      : { open: true, nodeId };
+    workbench.ui.selectedCanvasNodeId = nodeId;
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-canvas-image-fullscreen") {
+    workbench.ui.canvasImageFullscreen = null;
     render(workbench);
     return;
   }
@@ -19139,6 +20056,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "regenerate-ai-storyboard-stage") {
+    await regenerateSingleEpisodeAiPreviewStage(workbench, target.dataset.aiStoryboardStage);
+    return;
+  }
+
   if (action === "save-manual-script-analysis") {
     await saveManualScriptAnalysisToReader(workbench);
     return;
@@ -19553,6 +20475,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       packages,
       skillId: skillId || null,
       skills: episodeSkills,
+      modelCode: singleEpisodeTextModelCode || (!isManualScriptAnalysis && !hasEpisodeSkills ? "deepseek-script" : ""),
       projectId,
       data: (() => {
         const previewTables = createSingleEpisodeAiLiveDisplayTables();
@@ -19695,6 +20618,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         source: workbench.ui.singleEpisodeAiPreview.source,
         sourceScript: workbench.ui.singleEpisodeAiPreview.sourceScript,
         packages: workbench.ui.singleEpisodeAiPreview.packages,
+        skills: workbench.ui.singleEpisodeAiPreview.skills,
+        modelCode: workbench.ui.singleEpisodeAiPreview.modelCode,
         projectId: workbench.ui.singleEpisodeAiPreview.projectId,
         data: finalizedPreview,
         error: "",
@@ -30025,6 +30950,14 @@ export function installWorkbenchToastQueueForTest(workbench) {
   installWorkbenchToastQueue(workbench);
 }
 
+export function updateToolboxPromptReverseProgressForTest(workbench) {
+  return updateToolboxPromptReverseProgress(workbench);
+}
+
+export function updateToolboxPromptReversePluginProgressForTest(workbench) {
+  return updateToolboxPromptReversePluginProgress(workbench);
+}
+
 export function scheduleGenerationPollingForTest(workbench, storyboardId, mediaKind, options = {}) {
   return scheduleGenerationPolling(workbench, storyboardId, mediaKind, options);
 }
@@ -30213,6 +31146,10 @@ export function syncWorkbenchHashRouteForTest(workbench, hash) {
   return syncWorkbenchHashRoute(workbench, hash);
 }
 
+export function restoreWorkbenchRouteFromLocationForTest(workbench, locationLike) {
+  return restoreWorkbenchRouteFromLocation(workbench, locationLike);
+}
+
 export function syncCanvasRouteStateForTest(workbench, hash, locationLike) {
   return syncCanvasRouteState(workbench, hash, locationLike);
 }
@@ -30289,6 +31226,235 @@ export function updateStoryboardDescriptionFromInputForTest(workbench, target) {
 
 export function syncEpisodeStoryboardMapForTest(currentMap, primaryStoryboards, customEpisodes = []) {
   return syncEpisodeStoryboardMap(currentMap, primaryStoryboards, customEpisodes);
+}
+
+async function regenerateSingleEpisodeAiPreviewStage(workbench, stageValue) {
+  const stageConfig = {
+    script: { category: "script", tableKey: "script", payloadKey: "scriptText", label: "剧本" },
+    scene: { category: "scene_extract", tableKey: "scenes", payloadKey: "scenes", label: "场景" },
+    character: { category: "character_extract", tableKey: "characters", payloadKey: "characters", label: "角色" },
+    prop: { category: "prop_extract", tableKey: "props", payloadKey: "props", label: "道具" },
+    shot: { category: "shot", tableKey: "storyboards", payloadKey: "storyboards", label: "分镜" },
+  }[String(stageValue ?? "")];
+  const currentPreview = workbench.ui.singleEpisodeAiPreview ?? {};
+  if (!stageConfig || currentPreview.status !== "ready" || currentPreview.regeneratingStage) {
+    return;
+  }
+  const projectId = String(
+    currentPreview.projectId ?? workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? "",
+  ).trim();
+  const selectedSkills = currentPreview.skills && typeof currentPreview.skills === "object"
+    ? currentPreview.skills
+    : workbench.ui.selectedEpisodePromptSkillIds ?? {};
+  const stageSkillId = String(selectedSkills?.[stageConfig.category] ?? "").trim();
+  const packages = currentPreview.packages && typeof currentPreview.packages === "object"
+    ? currentPreview.packages
+    : null;
+  const sourceText = stageValue === "script"
+    ? String(currentPreview.sourceScript ?? "").trim()
+    : String(currentPreview.scriptText ?? currentPreview.data?.scriptText ?? "").trim();
+  if (!projectId || !sourceText) {
+    showWorkbenchToast(workbench, `当前${stageConfig.label}缺少重新生成所需的数据。`, { tone: "error" });
+    render(workbench);
+    return;
+  }
+  if (stageValue === "script" && !stageSkillId && !packages) {
+    showWorkbenchToast(workbench, "当前未选择剧本生成技能，无法单独重新生成剧本。", { tone: "error" });
+    render(workbench);
+    return;
+  }
+  const modelCode = String(
+    currentPreview.modelCode ?? resolveSingleEpisodeTextModelCode(workbench.ui) ?? "",
+  ).trim();
+  const previewInput = {
+    scriptText: sourceText,
+    ...(modelCode ? { modelCode } : {}),
+    stages: [String(stageValue)],
+    ...(stageValue === "shot"
+      ? {
+          context: {
+            scenes: currentPreview.data?.commitPayload?.scenes ?? [],
+            characters: currentPreview.data?.commitPayload?.characters ?? [],
+            props: currentPreview.data?.commitPayload?.props ?? [],
+          },
+        }
+      : {}),
+    ...(stageValue === "script" ? {} : { skipScriptStage: true }),
+    ...(stageSkillId
+      ? { skills: { [stageConfig.category]: stageSkillId } }
+      : stageValue === "script"
+        ? { packages }
+        : { useDefaultWorkflowStages: true }),
+  };
+  const requestPreview = {
+    ...currentPreview,
+    regeneratingStage: String(stageValue),
+    regenerationError: "",
+  };
+  workbench.ui.singleEpisodeAiPreview = requestPreview;
+  render(workbench);
+
+  const abortController = new AbortController();
+  workbench.singleEpisodeAiStageRegenerateAbortController = abortController;
+  const stageTables = createSingleEpisodeAiLiveDisplayTables();
+  const stagePreview = {
+    status: "loading",
+    source: currentPreview.source,
+    sourceScript: currentPreview.sourceScript,
+    packages,
+    skills: stageSkillId ? { [stageConfig.category]: stageSkillId } : {},
+    modelCode,
+    projectId,
+    data: { previewTables: stageTables, displayTables: stageTables },
+    error: "",
+    scriptText: stageValue === "script" ? "" : sourceText,
+    scriptRawText: stageValue === "script" ? "" : sourceText,
+    promptText: "",
+    scriptPromptText: "",
+    promptPromptText: "",
+    assetPromptSteps: [],
+    liveStoryboardStreamState: null,
+    livePreviewTables: stageTables,
+    liveDisplayTables: stageTables,
+    activeStage: String(stageValue),
+  };
+  const stageWorkbench = {
+    ...workbench,
+    ui: { ...workbench.ui, singleEpisodeAiPreview: stagePreview },
+  };
+  try {
+    let regeneratedPreview = null;
+    if (typeof workbench.api?.createAiStoryboardPreviewStream === "function") {
+      for await (const event of workbench.api.createAiStoryboardPreviewStream(
+        projectId,
+        previewInput,
+        { signal: abortController.signal },
+      )) {
+        if (abortController.signal.aborted) return;
+        const completedPreview = applySingleEpisodeAiPreviewStreamEvent(stageWorkbench, event);
+        if (completedPreview && typeof completedPreview === "object") {
+          regeneratedPreview = completedPreview;
+        }
+      }
+    } else if (typeof workbench.api?.createAiStoryboardPreview === "function") {
+      regeneratedPreview = await workbench.api.createAiStoryboardPreview(
+        projectId,
+        previewInput,
+        { signal: abortController.signal },
+      );
+    } else {
+      throw new Error("ai_storyboard_preview_api_missing");
+    }
+    if (abortController.signal.aborted || workbench.ui.singleEpisodeAiPreview !== requestPreview) {
+      return;
+    }
+    flushSingleEpisodeAiTableSync(stageWorkbench);
+    const finalizedStage = finalizeSingleEpisodeAiPreviewData(regeneratedPreview, stagePreview);
+    if (Number.isFinite(Number(finalizedStage?.creditBalance))) {
+      setWorkbenchCreditBalance(workbench, Number(finalizedStage.creditBalance));
+    }
+    syncWorkbenchDisplayCreditBalance(workbench, finalizedStage);
+    workbench.ui.singleEpisodeAiPreview = mergeSingleEpisodeAiRegeneratedStage({
+      currentPreview,
+      finalizedStage,
+      stagePreview,
+      stage: String(stageValue),
+      stageConfig,
+    });
+    showWorkbenchToast(workbench, `${stageConfig.label}已重新生成。`, { tone: "success" });
+    render(workbench);
+  } catch (error) {
+    if (isAbortError(error) || abortController.signal.aborted) {
+      return;
+    }
+    if (workbench.ui.singleEpisodeAiPreview === requestPreview) {
+      workbench.ui.singleEpisodeAiPreview = {
+        ...currentPreview,
+        regeneratingStage: "",
+        regenerationError: friendlyError(error),
+      };
+      showWorkbenchToast(workbench, `${stageConfig.label}重新生成失败：${friendlyError(error)}`, { tone: "error" });
+      render(workbench);
+    }
+  } finally {
+    if (stageWorkbench.singleEpisodeAiTableSyncTimer) {
+      clearTimeout(stageWorkbench.singleEpisodeAiTableSyncTimer);
+    }
+    if (workbench.singleEpisodeAiStageRegenerateAbortController === abortController) {
+      workbench.singleEpisodeAiStageRegenerateAbortController = null;
+    }
+  }
+}
+
+function mergeSingleEpisodeAiRegeneratedStage({ currentPreview, finalizedStage, stagePreview, stage, stageConfig }) {
+  const currentData = currentPreview.data && typeof currentPreview.data === "object"
+    ? currentPreview.data
+    : {};
+  const currentTables = currentData.previewTables ?? currentData.displayTables ?? {};
+  const regeneratedTables = finalizedStage.previewTables ?? finalizedStage.displayTables ?? {};
+  const scriptText = stage === "script"
+    ? String(finalizedStage.scriptText ?? stagePreview.scriptText ?? "")
+    : String(currentPreview.scriptText ?? currentData.scriptText ?? "");
+  const rawMarkdown = { ...(currentData.rawMarkdown ?? {}) };
+  if (stage !== "script") {
+    rawMarkdown[stage] = String(finalizedStage.rawMarkdown?.[stage] ?? "");
+  }
+  const commitPayload = {
+    ...(currentData.commitPayload ?? {}),
+    scriptText,
+  };
+  if (stage !== "script") {
+    commitPayload[stageConfig.payloadKey] = Array.isArray(finalizedStage.commitPayload?.[stageConfig.payloadKey])
+      ? finalizedStage.commitPayload[stageConfig.payloadKey]
+      : [];
+  }
+  const previewTables = {
+    ...currentTables,
+    [stageConfig.tableKey]: regeneratedTables[stageConfig.tableKey] ?? currentTables[stageConfig.tableKey],
+  };
+  const mergedDataSeed = {
+    ...currentData,
+    ...finalizedStage,
+    scriptText,
+    rawMarkdown,
+    commitPayload,
+    previewTables,
+    displayTables: previewTables,
+  };
+  const stageStep = (stagePreview.assetPromptSteps ?? []).find((item) => item?.stage === stage);
+  const assetPromptSteps = stage === "script"
+    ? [...(currentPreview.assetPromptSteps ?? [])]
+    : [
+        ...(currentPreview.assetPromptSteps ?? []).filter((item) => item?.stage !== stage),
+        ...(stageStep ? [stageStep] : []),
+      ];
+  const normalizedData = finalizeSingleEpisodeAiPreviewData(mergedDataSeed, {
+    ...currentPreview,
+    data: mergedDataSeed,
+    scriptText,
+    scriptRawText: stage === "script" ? stagePreview.scriptRawText : currentPreview.scriptRawText,
+    assetPromptSteps,
+  });
+  return {
+    ...currentPreview,
+    status: "ready",
+    data: normalizedData,
+    scriptText,
+    scriptRawText: stage === "script"
+      ? String(stagePreview.scriptRawText ?? scriptText)
+      : currentPreview.scriptRawText,
+    promptText: stage === "shot" ? String(stagePreview.promptText ?? "") : currentPreview.promptText,
+    scriptPromptText: stage === "script"
+      ? String(stagePreview.scriptPromptText ?? "")
+      : currentPreview.scriptPromptText,
+    assetPromptSteps,
+    liveStoryboardStreamState: null,
+    livePreviewTables: normalizedData.previewTables,
+    liveDisplayTables: normalizedData.displayTables,
+    activeStage: "complete",
+    regeneratingStage: "",
+    regenerationError: "",
+  };
 }
 
 async function openSingleEpisodeFlow(workbench) {
@@ -48797,7 +49963,7 @@ function syncCanvasRouteState(workbench, hash, locationLike = globalThis.window?
   }
 }
 
-async function restoreEpisodeRouteState(workbench, locationLike) {
+async function restoreEpisodeRouteState(workbench, locationLike, options = {}) {
   const route = parseEpisodeRouteFromLocation(locationLike);
   if (!route) {
     return false;
@@ -48817,12 +49983,29 @@ async function restoreEpisodeRouteState(workbench, locationLike) {
       await ensureProjectOverviewLoaded(workbench, route.projectId);
       hydratePersistedWorkbenchState(workbench);
     }
+    if (
+      !isCurrentHistoryRouteRestore(workbench, options.requestId) ||
+      workbench.ui.selectedProjectCardId !== route.projectId ||
+      workbench.ui.selectedEpisodeId !== route.episodeId
+    ) {
+      return false;
+    }
     await enterEpisodeWorkbench(workbench, route.episodeId, {
       preserveRoute: true,
       shouldRender: false,
     });
+    if (!isCurrentHistoryRouteRestore(workbench, options.requestId)) {
+      return false;
+    }
     return true;
   } catch (error) {
+    if (
+      !isCurrentHistoryRouteRestore(workbench, options.requestId) ||
+      workbench.ui.selectedProjectCardId !== route.projectId ||
+      workbench.ui.selectedEpisodeId !== route.episodeId
+    ) {
+      return false;
+    }
     workbench.ui.selectedEpisodeId = null;
     workbench.ui.projectPanelMode = "detail";
     workbench.ui.projectInteriorSection = "episodes";
@@ -48833,7 +50016,7 @@ async function restoreEpisodeRouteState(workbench, locationLike) {
   }
 }
 
-async function restoreProjectRouteState(workbench, locationLike) {
+async function restoreProjectRouteState(workbench, locationLike, options = {}) {
   const route = parseProjectRouteFromLocation(locationLike);
   if (!route) {
     return false;
@@ -48846,11 +50029,29 @@ async function restoreProjectRouteState(workbench, locationLike) {
 
   try {
     await ensureProjectSectionLoaded(workbench, route.projectId, route.section);
+    if (
+      !isCurrentHistoryRouteRestore(workbench, options.requestId) ||
+      workbench.ui.selectedProjectCardId !== route.projectId
+    ) {
+      return false;
+    }
     if (shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)) {
       await syncProjectInteriorSupplementary(workbench);
     }
+    if (
+      !isCurrentHistoryRouteRestore(workbench, options.requestId) ||
+      workbench.ui.selectedProjectCardId !== route.projectId
+    ) {
+      return false;
+    }
     return true;
   } catch (error) {
+    if (
+      !isCurrentHistoryRouteRestore(workbench, options.requestId) ||
+      workbench.ui.selectedProjectCardId !== route.projectId
+    ) {
+      return false;
+    }
     workbench.ui.projectPanelMode = "library";
     workbench.ui.episodeWorkbenchError = friendlyError(error);
     workbench.ui.toast = `Project route restore failed: ${workbench.ui.episodeWorkbenchError}`;
@@ -52903,6 +54104,9 @@ function deriveInitialNavTab(hash, session = {}) {
   }
   if (token === "script") {
     return "script";
+  }
+  if (token === "toolbox") {
+    return "toolbox";
   }
   if (token === "prompts") {
     return "prompts";

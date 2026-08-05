@@ -67,6 +67,46 @@ describe("Cumob text adapter", () => {
     assert.equal(chunks[0]?.choices[0]?.delta?.content, "ok");
   });
 
+  it("preserves a configured video URL content part for compatible providers", async () => {
+    let capturedBody: Record<string, unknown> | null = null;
+    const adapter = new CumobTextAdapter({
+      fetcher: async (_url, init) => {
+        capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(sseBody(["data: [DONE]\n\n"]), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+
+    const stream = await adapter.createChatCompletionStream({
+      baseURL: "https://api.example.test",
+      apiKey: "secret",
+      providerModel: "video-capable-model",
+      request: {
+        model: "catalog-id",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "分析完整视频" },
+            { type: "video_url", video_url: { url: "https://storage.example.test/reference.mp4?signature=redacted" } },
+          ],
+        }],
+        stream: true,
+      },
+    });
+    for await (const _chunk of stream) {
+      // Consume the stream to keep the adapter contract identical to production.
+    }
+
+    assert.deepEqual(capturedBody?.messages, [{
+      role: "user",
+      content: [
+        { type: "text", text: "分析完整视频" },
+        { type: "video_url", video_url: { url: "https://storage.example.test/reference.mp4?signature=redacted" } },
+      ],
+    }]);
+  });
+
   it("returns a stable provider failure code without exposing the response body", async () => {
     const adapter = new CumobTextAdapter({
       fetcher: async () => new Response('{"error":{"message":"secret provider detail"}}', { status: 401 }),

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 describe("app login modal shell", () => {
-  it("loads the production workbench module while deferring its first render until the session resolves", async () => {
+  it("loads the production workbench module in parallel with the session request", async () => {
     const js = await readFile(new URL("../app.js", import.meta.url), "utf8");
     const html = await readFile(new URL("../app.html", import.meta.url), "utf8");
 
@@ -28,7 +28,7 @@ describe("app login modal shell", () => {
       /function resolvePublicSeoContentForSession\(session\) \{\s*document\.querySelector\("\.public-seo-content"\)\?\.remove\(\);\s*document\.body\.classList\.remove\("public-seo-page"\);/,
     );
     assert.match(js, /classList\.remove\("public-seo-session-pending"\)/);
-    assert.match(html, /rel="modulepreload" href="\/src\/features\/production-workbench\/index\.js\?/);
+    assert.doesNotMatch(html, /rel="modulepreload" href="\/src\/features\/production-workbench\/index\.js\?/);
   });
 
   it("contains phone and code steps inside the homepage modal", async () => {
@@ -59,6 +59,10 @@ describe("app login modal shell", () => {
     assert.match(js, /\/api\/auth\/password\/login/);
     assert.match(js, /\/api\/auth\/team-member\/password\/login/);
     assert.match(js, /const selectedPasswordAccountType = \(\) =>/);
+    assert.match(js, /id="forgot-password-button"/);
+    assert.match(js, /forgotPasswordButton\?\.addEventListener\("click"/);
+    assert.match(js, /请使用短信验证码恢复登录；如需重置密码，请联系平台客服。/);
+    assert.match(js, /子账户请联系主账号管理员重置密码。/);
 
     assert.match(css, /\.auth-mode-tabs/);
     assert.match(css, /\.auth-mode-tab::after/);

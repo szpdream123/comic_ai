@@ -165,6 +165,18 @@ export function normalizeCanvasVideoFullscreenState(node = {}, options = {}) {
   };
 }
 
+export function normalizeCanvasImageFullscreenState(node = {}, options = {}) {
+  const data = nodeData(node);
+  const url = resolveCanvasMediaNodeSource(node, "image", options);
+  const open = options.open === true || data.imageFullscreen === true || data.mediaFullscreen === true;
+  return {
+    open: open && Boolean(url),
+    canOpen: Boolean(url),
+    url,
+    label: firstText(options.label, data.title, data.label, data.fileName, "图片预览"),
+  };
+}
+
 export function renderCanvasAudioNodeBody(node = {}, options = {}) {
   const data = nodeData(node);
   const nodeId = firstText(options.nodeId, node?.id, data.id);
@@ -222,6 +234,21 @@ export function renderCanvasVideoFullscreen(node = {}, options = {}) {
         <button type="button" data-action="request-canvas-video-native-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="进入系统全屏" title="进入系统全屏">⛶</button>
         <button class="canvas-video-fullscreen-close" type="button" data-action="close-canvas-video-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="关闭全屏预览" title="关闭全屏预览">×</button>
       </div>
+    </div>
+  </div>`;
+}
+
+export function renderCanvasImageFullscreen(node = {}, options = {}) {
+  const state = normalizeCanvasImageFullscreenState(node, options);
+  if (!state.open) return "";
+  const nodeId = firstText(options.nodeId, node?.id, nodeData(node).id);
+  return `<div class="canvas-image-fullscreen" data-canvas-image-fullscreen data-node-id="${escapeAttr(nodeId)}" role="dialog" aria-modal="true" aria-label="${escapeAttr(state.label)}">
+    <button class="canvas-image-fullscreen-backdrop" type="button" data-action="close-canvas-image-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="关闭图片预览"></button>
+    <div class="canvas-image-fullscreen-content">
+      <button class="canvas-image-fullscreen-image" type="button" data-action="close-canvas-image-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="关闭图片预览" title="点击关闭">
+        <img src="${escapeAttr(state.url)}" alt="${escapeAttr(state.label)}" />
+      </button>
+      <button class="canvas-image-fullscreen-close" type="button" data-action="close-canvas-image-fullscreen" data-node-id="${escapeAttr(nodeId)}" aria-label="关闭图片预览" title="关闭图片预览">×</button>
     </div>
   </div>`;
 }
@@ -379,7 +406,7 @@ export function resolveCanvasMediaActionBody(target, options = {}) {
 
 export function bindCanvasMediaControlPointerGuards(root) {
   const controls = [...(root?.querySelectorAll?.(
-    "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video",
+    "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video, [data-canvas-image-preview-trigger], .canvas-upload-meta[data-action='pick-canvas-upload-file'], [data-canvas-image-fullscreen] button",
   ) ?? [])];
   controls.forEach((control) => {
     if (control.dataset.canvasMediaPointerGuard === "true") return;

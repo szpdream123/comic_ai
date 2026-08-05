@@ -83,6 +83,9 @@ const BANANAROUTER_IMAGE_ASYNC_RECOVERY_RELATIVE_PATH = ["packages", "db", "migr
 const PROVIDER_PROTOCOL_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260826-converge-provider-protocol-constraint.sql"];
 const CANVAS_AGENT_SHARD_CONSTRAINT_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260827-converge-canvas-agent-shard-constraint.sql"];
 const BANANAROUTER_IMAGE_ASYNC_CONFIG_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260828-bananarouter-image-async-config-convergence.sql"];
+const PROMPT_REVERSE_TOOL_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260829-enable-prompt-reverse-tool-model.sql"];
+const MODELFLARE_RESPONSES_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260830-add-modelflare-responses-model.sql"];
+const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
 const GENERATION_DUE_POLL_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-due-poll.sql"];
@@ -335,6 +338,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       sql: await readFile(join(rootDir, ...CANVAS_PROMPT_DIRECTIVE_CONFIGS_RELATIVE_PATH), "utf8"),
     },
     {
+      name: "20260804-z-redact-sms-send-record-secrets.sql",
+      sql: await readFile(join(rootDir, ...SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH), "utf8"),
+    },
+    {
       name: "20260805-canvas-agent-conversation-locks.sql",
       sql: await readFile(join(rootDir, ...CANVAS_AGENT_CONVERSATION_LOCKS_RELATIVE_PATH), "utf8"),
     },
@@ -449,6 +456,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260828-bananarouter-image-async-config-convergence.sql",
       sql: await readFile(join(rootDir, ...BANANAROUTER_IMAGE_ASYNC_CONFIG_CONVERGENCE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260829-enable-prompt-reverse-tool-model.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_REVERSE_TOOL_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260830-add-modelflare-responses-model.sql",
+      sql: await readFile(join(rootDir, ...MODELFLARE_RESPONSES_MODEL_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

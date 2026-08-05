@@ -4,6 +4,7 @@ import {
   TextModelGatewayService,
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
+import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
 
@@ -33,22 +34,45 @@ type AiStoryboardPromptStage = "script" | AssetPromptStage;
 export interface TextChatGatewayLike {
   completeJson(input: {
     model: string;
-    prompt: string;
+    prompt?: string;
+    messages?: TextGatewayChatCompletionRequest["messages"];
     projectId?: string | null;
     canvasProjectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
+    payloadSummary?: string;
+    requestKeyPrefix?: string;
     signal?: AbortSignal;
   }): Promise<string>;
-  streamJson?(input: {
+  completeJsonWithUsage?(input: {
     model: string;
-    prompt: string;
+    prompt?: string;
+    messages?: TextGatewayChatCompletionRequest["messages"];
     projectId?: string | null;
     canvasProjectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
+    payloadSummary?: string;
+    requestKeyPrefix?: string;
+    signal?: AbortSignal;
+  }): Promise<{
+    content: string;
+    usage: Record<string, unknown> | null;
+    providerRequestId: string;
+  }>;
+  streamJson?(input: {
+    model: string;
+    prompt?: string;
+    messages?: TextGatewayChatCompletionRequest["messages"];
+    projectId?: string | null;
+    canvasProjectId?: string | null;
+    createdByUserId?: string | null;
+    responseFormat?: "json_object" | "text";
+    maxTokens?: number;
+    payloadSummary?: string;
+    requestKeyPrefix?: string;
     signal?: AbortSignal;
   }): AsyncIterable<string>;
 }
@@ -61,6 +85,11 @@ export interface AiStoryboardPreviewInput {
   modelCode?: string | null;
   selectedStages?: AiStoryboardPromptStage[];
   skipScriptStage?: boolean;
+  context?: {
+    scenes?: Array<Record<string, unknown>>;
+    characters?: Array<Record<string, unknown>>;
+    props?: Array<Record<string, unknown>>;
+  };
   packages: {
     skillPrompt?: string;
     genrePrompt?: string;
@@ -143,9 +172,13 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     const propRaw = shouldRunStage("prop")
       ? yield* runAssetPromptStage("prop", "道具提示词生成", buildPropPrompt(scriptText, input), input, modelCode)
       : "";
-    const scenes = sceneRaw.trim() ? parseArrayOrObject(sceneRaw, "scenes") : [];
-    const characters = characterRaw.trim() ? parseArrayOrObject(characterRaw, "characters") : [];
-    const props = propRaw.trim() ? parseArrayOrObject(propRaw, "props") : [];
+    const assetStageOutput = [sceneRaw, characterRaw, propRaw];
+    let scenes = resolveAssetStageRecords(sceneRaw, assetStageOutput, "scenes");
+    let characters = resolveAssetStageRecords(characterRaw, assetStageOutput, "characters");
+    let props = resolveAssetStageRecords(propRaw, assetStageOutput, "props");
+    if (!shouldRunStage("scene") && scenes.length === 0) scenes = arrayOfRecords(input.context?.scenes);
+    if (!shouldRunStage("character") && characters.length === 0) characters = arrayOfRecords(input.context?.characters);
+    if (!shouldRunStage("prop") && props.length === 0) props = arrayOfRecords(input.context?.props);
     const shotRaw = shouldRunStage("shot")
       ? yield* runAssetPromptStage("shot", "分镜提示词生成", buildShotPrompt(scriptText, input, {
           scenes,
@@ -153,6 +186,11 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
           props,
         }), input, modelCode)
       : "";
+    if (shotRaw.trim()) {
+      scenes = scenes.length ? scenes : resolveAssetStageRecords("", [shotRaw], "scenes");
+      characters = characters.length ? characters : resolveAssetStageRecords("", [shotRaw], "characters");
+      props = props.length ? props : resolveAssetStageRecords("", [shotRaw], "props");
+    }
 
     yield { type: "complete", preview: {
       ...normalizePreview(scriptText, {
@@ -216,26 +254,26 @@ export function createTextModelChatGateway(deps: {
 }) {
   async function createStream(input: {
     model: string;
-    prompt: string;
+    prompt?: string;
+    messages?: TextGatewayChatCompletionRequest["messages"];
     projectId?: string | null;
     canvasProjectId?: string | null;
     createdByUserId?: string | null;
     responseFormat?: "json_object" | "text";
     maxTokens?: number;
+    payloadSummary?: string;
+    requestKeyPrefix?: string;
     signal?: AbortSignal;
   }) {
-    const payloadHash = sha256(input.prompt);
-    const requestKey = `ai-storyboard:${input.projectId ?? input.canvasProjectId ?? "none"}:${randomUUID()}`;
+    const messages = input.messages ?? [{ role: "user" as const, content: input.prompt ?? "" }];
+    const payloadHash = sha256(JSON.stringify(messages));
+    const requestKey = `${input.requestKeyPrefix ?? "ai-storyboard"}:${input.projectId ?? input.canvasProjectId ?? "none"}:${randomUUID()}`;
     const requestBody = {
       model: input.model,
       stream: true,
       temperature: 0.2,
-      messages: [
-        {
-          role: "user",
-          content: input.prompt,
-        },
-      ],
+      messages,
+      ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
       ...(input.responseFormat === "json_object" ? { response_format: { type: "json_object" as const } } : {}),
     };
     return deps.gateway.chat.completions.create(
@@ -247,7 +285,7 @@ export function createTextModelChatGateway(deps: {
         requestKey,
         requestHash: payloadHash,
         payloadHash,
-        payloadSummary: "ai storyboard preview text generation",
+        payloadSummary: input.payloadSummary ?? "ai storyboard preview text generation",
         providerOperation: textModelGatewayOperationNames.chatCompletions,
         signal: input.signal,
       },
@@ -263,6 +301,26 @@ export function createTextModelChatGateway(deps: {
       return content;
     },
 
+    async completeJsonWithUsage(input) {
+      const streamResult = await createStream(input);
+      let content = "";
+      for await (const chunk of streamResult.stream) {
+        for (const choice of chunk.choices ?? []) {
+          const delta = choice.delta?.content;
+          if (typeof delta === "string" && delta) content += delta;
+        }
+      }
+      const completed = await streamResult.completed;
+      if (completed.status !== "succeeded") {
+        throw new Error(completed.failureCode || "provider_stream_error");
+      }
+      return {
+        content,
+        usage: completed.usage,
+        providerRequestId: streamResult.providerRequestId,
+      };
+    },
+
     async *streamJson(input) {
       const streamResult = await createStream(input);
       for await (const chunk of streamResult.stream) {
@@ -273,7 +331,10 @@ export function createTextModelChatGateway(deps: {
           }
         }
       }
-      await streamResult.completed;
+      const completed = await streamResult.completed;
+      if (completed.status === "failed") {
+        throw new Error(completed.failureCode || "provider_stream_error");
+      }
     },
   } satisfies TextChatGatewayLike;
 }
@@ -1478,6 +1539,37 @@ function parseArrayOrObject(raw: string, key: string, aliases: string[] = []): R
   }
 }
 
+function resolveAssetStageRecords(
+  primaryRaw: string,
+  allAssetStageOutput: string[],
+  key: "scenes" | "characters" | "props",
+) {
+  const primaryRecords = primaryRaw.trim() ? parseArrayOrObject(primaryRaw, key) : [];
+  if (primaryRecords.length) {
+    return primaryRecords;
+  }
+  for (const raw of allAssetStageOutput) {
+    if (!raw.trim() || raw === primaryRaw) {
+      continue;
+    }
+    const records = parseArrayOrObject(raw, key);
+    const namedRecords = records.filter((record) => hasAssetStageRecordName(record, key));
+    if (namedRecords.length) {
+      return namedRecords;
+    }
+  }
+  return [];
+}
+
+function hasAssetStageRecordName(record: Record<string, unknown>, key: "scenes" | "characters" | "props") {
+  const nameKeys = key === "scenes"
+    ? ["sceneName", "scene_name", "name", "location", "scene"]
+    : key === "characters"
+      ? ["characterName", "character_name", "name", "role", "character"]
+      : ["propName", "prop_name", "name", "prop"];
+  return Boolean(firstText(record, nameKeys));
+}
+
 function parseStoryboardPromptResult(raw: string): Record<string, unknown> {
   const markdownResult = parseMarkdownPromptResult(raw);
   if (markdownResult) {
@@ -1578,14 +1670,15 @@ function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
-    const marker = normalizedLine.match(new RegExp(`^${config.label}\\s*[:：]\\s*(.+)$`));
+    const marker = matchLabeledAssetMarkdownHeading(normalizedLine, config.label);
     if (marker) {
       flush();
       name = text(marker[1]).replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").trim();
       block.push(rawLine);
       continue;
     }
-    if (name && isLabeledAssetMarkdownNumberHeading(rawLine)) {
+    if (name && (isLabeledAssetMarkdownNumberHeading(rawLine) || isLabeledProjectMarkdownHeading(normalizedLine))) {
+      flush();
       continue;
     }
     if (name) {
@@ -1594,6 +1687,15 @@ function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record
   }
   flush();
   return records;
+}
+
+function matchLabeledAssetMarkdownHeading(line: string, label: string) {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return line.match(new RegExp(`^(?:${escapedLabel}\\s*[:：]|(?:【|\\[)\\s*${escapedLabel}\\s*(?:】|\\]))\\s*(.+)$`));
+}
+
+function isLabeledProjectMarkdownHeading(line: string) {
+  return /^(?:(?:【|\[)\s*)?(?:角色名称|场景名称|道具名称|分镜\s*[一二三四五六七八九十百千两零〇\d]+)(?:\s*(?:】|\]))?(?:\s*[:：].*)?$/u.test(line);
 }
 
 function normalizeLabeledAssetMarkdownLine(line: string) {
@@ -1731,11 +1833,14 @@ function parseLabeledStoryboardMarkdownBlocks(raw: string) {
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
-    const marker = normalizedLine.match(/^【?\s*分镜\s*([一二三四五六七八九十百千两零〇\d]+)\s*】?(?=\s*(?:[（(:：]|$))/);
+    const marker = normalizedLine.match(/^(?:【\s*分镜\s*([一二三四五六七八九十百千两零〇\d]+)\s*】|分镜\s*([一二三四五六七八九十百千两零〇\d]+))(?:\s*[:：-]?\s*(.*))?$/u);
     if (marker) {
       flush();
-      shotNo = marker[1];
-      block.push(rawLine);
+      shotNo = marker[1] || marker[2] || "";
+      const inlineContent = text(marker[3]).trim();
+      if (inlineContent) {
+        block.push(inlineContent);
+      }
       continue;
     }
     if (shotNo) {

@@ -91,7 +91,7 @@ function assertTextModelEligible(model: AiModelConfigRecord) {
   if (model.mediaType !== "text") {
     throw new TextModelGatewayError("model_not_configured");
   }
-  if (!["openai_compatible_chat", "cumob_chat"].includes(model.providerProtocol) || model.invocationMode !== "stream") {
+  if (!["openai_compatible_chat", "cumob_chat", "modelflare_responses"].includes(model.providerProtocol) || model.invocationMode !== "stream") {
     throw new TextModelGatewayError("model_not_configured");
   }
 }
@@ -107,7 +107,7 @@ export async function listAvailableCanvasAgentModels(db: SqlDatabase) {
     SELECT model_code,display_name,capabilities_json,pricing_json,status
     FROM ai_model_configs
     WHERE status='active' AND media_type='text'
-      AND provider_protocol IN ('openai_compatible_chat','cumob_chat') AND invocation_mode='stream'
+      AND provider_protocol IN ('openai_compatible_chat','cumob_chat','modelflare_responses') AND invocation_mode='stream'
       AND (
         NOT task_modes_json ? 'text.canvas_agent'
         OR (
@@ -155,7 +155,7 @@ function assertAgentEligible(model: AiModelConfigRecord) {
   if (model.mediaType !== "text" || !model.taskModes.includes("text.canvas_agent")) {
     throw new TextModelGatewayError("model_not_configured");
   }
-  if (!["openai_compatible_chat", "cumob_chat"].includes(model.providerProtocol) || model.invocationMode !== "stream") {
+  if (!["openai_compatible_chat", "cumob_chat", "modelflare_responses"].includes(model.providerProtocol) || model.invocationMode !== "stream") {
     throw new TextModelGatewayError("model_not_configured");
   }
   if (model.uiConfig.agentEligible !== true) {

@@ -49,6 +49,52 @@ describe("lingdong api provider adapter", () => {
     });
   });
 
+  it("submits the provider model configured by admin without a local video allowlist", async () => {
+    let capturedBody = "";
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      model: "cvk-v-720",
+      mediaType: "video",
+      createTaskEndpoint: "https://www.lingdongapi.com/v1/video/generations",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({ id: "cvk-v-720-task", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-cvk-v-720",
+      providerName: "lingdong",
+      providerOperation: "episode.video.generate",
+      requestKey: "workflow:cvk-v-720",
+      payloadRef: "creator://cvk-v-720",
+      payloadHash: "cvk-v-720-hash",
+      redactedPayload: {
+        prompt: "follow the reference video",
+        parameters: {
+          durationSec: 10,
+          ratio: "9:16",
+          resolution: "720p",
+          filePaths: ["https://cdn.example.com/reference.png"],
+          videoFilePaths: ["https://cdn.example.com/reference.webm"],
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "cvk-v-720",
+      prompt: "follow the reference video",
+      images: ["https://cdn.example.com/reference.png"],
+      videos: ["https://cdn.example.com/reference.webm"],
+      duration: 10,
+      resolution: "720p",
+      ratio: "9:16",
+    });
+  });
+
   it("submits image generation requests to the Lingdong images endpoint", async () => {
     let capturedUrl = "";
     let capturedHeaders: HeadersInit | undefined;
@@ -95,6 +141,40 @@ describe("lingdong api provider adapter", () => {
     });
     assert.equal(result.status, "succeeded");
     assert.equal(result.artifacts?.[0]?.url, "https://www.lingdongapi.com/v1/images/generated-1/content");
+  });
+
+  it("submits the provider model configured by admin without a local image allowlist", async () => {
+    let capturedBody = "";
+    const adapter = new LingdongApiProviderAdapter({
+      apiKey: "lingdong-key",
+      mediaType: "image",
+      model: "admin-configured-image-model",
+      imageEndpoint: "https://www.lingdongapi.com/v1/images/generations",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({ data: [{ url: "https://cdn.example.com/generated.png" }] }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-admin-image-model",
+      providerName: "lingdong",
+      providerOperation: "image.generate",
+      requestKey: "workflow:admin-image-model",
+      payloadRef: "creator://admin-image-model",
+      payloadHash: "admin-image-model-hash",
+      redactedPayload: {
+        prompt: "draw a city",
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "admin-configured-image-model",
+      prompt: "draw a city",
+    });
   });
 
   it("uses the documented cvk-image-2 model and images field", async () => {

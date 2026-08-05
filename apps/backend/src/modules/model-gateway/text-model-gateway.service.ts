@@ -5,6 +5,7 @@ import type {
   TextGatewayChatCompletionRequest,
 } from "./openai-compatible-text.adapter.ts";
 import { CumobTextAdapter } from "./cumob-text.adapter.ts";
+import { ModelflareResponsesAdapter } from "./modelflare-responses.adapter.ts";
 import {
   createOrReuseProviderRequest,
   markExternalSubmissionStarted,
@@ -98,6 +99,7 @@ export class TextModelGatewayService {
         "createChatCompletionStream"
       >;
       cumobAdapter?: Pick<CumobTextAdapter, "createChatCompletionStream">;
+      modelflareAdapter?: Pick<ModelflareResponsesAdapter, "createChatCompletionStream">;
       catalog?: readonly TextModelCatalogEntry[];
       resolver?: TextModelResolver;
       env?: NodeJS.ProcessEnv;
@@ -160,9 +162,10 @@ export class TextModelGatewayService {
       model.providerModel,
       model.providerProtocol,
     );
+    const auditRequest = redactTextGatewayVideoUrls(upstreamRequest);
     await recordProviderRequestRedactedBody(this.config.db, {
       providerRequestId: started.id,
-      request: upstreamRequest,
+      request: auditRequest,
       now: now(),
     });
     await createUserModelRequestLog(this.config.db, {
@@ -183,7 +186,7 @@ export class TextModelGatewayService {
       requestHash: context.requestHash,
       payloadHash: context.payloadHash,
       payloadSummary: context.payloadSummary ?? null,
-      requestBody: upstreamRequest,
+      requestBody: auditRequest,
       requestText: extractRequestText(upstreamRequest.messages),
       now: now(),
     });
@@ -480,20 +483,43 @@ function prepareProviderChatCompletionRequest(
   return prepared;
 }
 
+function redactTextGatewayVideoUrls(
+  request: TextGatewayChatCompletionRequest,
+): TextGatewayChatCompletionRequest {
+  return {
+    ...request,
+    messages: request.messages.map((message) => {
+      if (!Array.isArray(message.content)) return message;
+      return {
+        ...message,
+        content: message.content.map((part) => part.type === "video_url"
+          ? { ...part, video_url: { url: "[signed video URL omitted]" } }
+          : part),
+      };
+    }),
+  };
+}
+
 function selectTextCompletionAdapter(
   config: {
     adapter: Pick<OpenAICompatibleTextAdapter, "createChatCompletionStream">;
     cumobAdapter?: Pick<CumobTextAdapter, "createChatCompletionStream">;
+    modelflareAdapter?: Pick<ModelflareResponsesAdapter, "createChatCompletionStream">;
   },
   providerProtocol: string | undefined,
 ) {
-  return providerProtocol === "cumob_chat"
-    ? config.cumobAdapter ?? new CumobTextAdapter()
-    : config.adapter;
+  if (providerProtocol === "cumob_chat") {
+    return config.cumobAdapter ?? new CumobTextAdapter();
+  }
+  if (providerProtocol === "modelflare_responses") {
+    return config.modelflareAdapter ?? new ModelflareResponsesAdapter();
+  }
+  return config.adapter;
 }
 
 export const __textModelGatewayTestUtils = {
   prepareProviderChatCompletionRequest,
+  redactTextGatewayVideoUrls,
   selectTextCompletionAdapter,
 };
 

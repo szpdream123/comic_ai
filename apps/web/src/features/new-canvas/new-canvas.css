@@ -4764,6 +4764,45 @@
   border-radius: 4px;
 }
 
+.canvas-x6-source-media-body.is-upload .canvas-x6-source-media-preview {
+  align-items: stretch;
+  justify-items: stretch;
+  padding: 6px;
+}
+
+.canvas-x6-source-media-body.is-upload .canvas-x6-source-media-preview img,
+.canvas-x6-source-media-body.is-upload .canvas-x6-source-media-preview video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
+.canvas-x6-image-preview-trigger,
+.canvas-x6-video-preview-trigger {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.canvas-x6-image-preview-trigger img,
+.canvas-x6-video-preview-trigger video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+}
+
 .canvas-x6-special-node.is-storyboard-cut {
   border-color: color-mix(in srgb, var(--new-canvas-accent-color) 46%, var(--new-canvas-control-border));
   background: color-mix(in srgb, var(--new-canvas-panel) 90%, #111d20);
@@ -7259,6 +7298,36 @@
   border-color: var(--new-canvas-control-border) !important;
   background: var(--new-canvas-control) !important;
   color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-composer {
+  border-top-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-panel-soft) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-prompt-surface {
+  border-color: var(--new-canvas-control-border) !important;
+  background: var(--new-canvas-field) !important;
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-prompt-surface .episode-prompt-editor-content {
+  color: var(--new-canvas-foreground) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-event {
+  border-bottom-color: var(--new-canvas-control-border) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-event[data-event-role="user"] > div {
+  border-color: var(--new-canvas-control-active-border) !important;
+  background: var(--new-canvas-control-active) !important;
+  color: var(--new-canvas-control-text) !important;
+}
+
+.new-canvas-root .canvas-agent-panel .canvas-agent-event[data-event-role="user"] .canvas-agent-event-title strong,
+.new-canvas-root .canvas-agent-panel .canvas-agent-event[data-event-role="user"] p {
+  color: inherit !important;
 }
 
 .new-canvas-root .canvas-agent-composer button.canvas-agent-send-button,

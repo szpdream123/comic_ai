@@ -28,6 +28,7 @@ describe("API command contracts", () => {
         "GenerateShotVideo",
         "GenerateEpisodeImage",
         "GenerateEpisodeVideo",
+        "GenerateCanvasAudio",
         "GenerateCalibration",
         "CreateExport",
       ].includes(command.name),
@@ -57,6 +58,27 @@ describe("API command contracts", () => {
       status: "skipped",
       decisionType: "override",
     });
+  });
+
+  it("declares Canvas audio and tool preset commands", () => {
+    const commandsByOperation = new Map(
+      allApiCommandContracts.map((command) => [command.operationName, command]),
+    );
+
+    const audio = commandsByOperation.get("canvas.audio.generate");
+    assert.ok(audio);
+    assert.equal(audio.capability, "generation:start");
+    assert.equal(audio.idempotencyRequired, true);
+
+    for (const operationName of [
+      "canvas.tool_preset.create",
+      "canvas.tool_preset.duplicate",
+    ] as const) {
+      const command = commandsByOperation.get(operationName);
+      assert.ok(command);
+      assert.equal(command.capability, "account:read");
+      assert.equal(command.idempotencyRequired, true);
+    }
   });
 
   it("declares membership subscription commands", () => {

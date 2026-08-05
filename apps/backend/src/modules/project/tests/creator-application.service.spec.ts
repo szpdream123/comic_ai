@@ -849,6 +849,7 @@ describe("creator application user ownership", { concurrency: false }, () => {
           scriptInput: "Episode 1",
           aspectRatio: "9:16",
           resolution: "1080p",
+          projectType: "animation",
         },
         idempotencyKey: "creator-project-overview-select",
         now: new Date("2026-07-16T06:20:00.000Z"),
@@ -861,10 +862,15 @@ describe("creator application user ownership", { concurrency: false }, () => {
           scriptInput: "Episode 2",
           aspectRatio: "9:16",
           resolution: "1080p",
+          projectType: "animation",
         },
         idempotencyKey: "creator-project-overview-newer-project",
         now: new Date("2026-07-16T06:20:00.500Z"),
       });
+      await db.query(
+        "DELETE FROM project_source_documents WHERE project_id = $1",
+        [projectId],
+      );
       const observedSql: string[] = [];
       const observedDb: SqlDatabase = {
         async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
@@ -899,8 +905,15 @@ describe("creator application user ownership", { concurrency: false }, () => {
         observedSql.some((sql) => sql.includes(" from shots") && sql.includes(" order by sort_order asc")),
         false,
       );
+      observedSql.length = 0;
       const state = await selectedCreator.getState({ user });
       assert.equal(state.body.project?.id, projectId);
+      assert.equal(observedSql.filter((sql) => sql.includes(" from projects ")).length, 2);
+      assert.equal(observedSql.filter((sql) => sql.includes(" from project_source_documents ")).length, 1);
+      assert.equal(
+        observedSql.filter((sql) => sql.includes(" from shots") && sql.includes(" order by sort_order asc")).length,
+        1,
+      );
     } finally {
       await db.close();
     }

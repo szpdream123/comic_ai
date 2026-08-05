@@ -20,6 +20,7 @@ test("admin auth grants risk export only through the super admin permission set"
   const db = await createMigratedTestDb();
   const service = createAdminAuthService({
     db,
+    secureCookies: true,
   });
 
   try {
@@ -92,6 +93,7 @@ test("admin auth grants risk export only through the super admin permission set"
     assert.ok(allAdminPermissions.includes("risk.export"));
     assert.equal(login.status, 200);
     assert.equal("data" in login.body, true);
+    assert.match(login.cookies?.[0] ?? "", /; Secure$/);
     const sessionToken = login.cookies?.[0]?.match(/admin_session=([^;]+)/)?.[1];
     assert.ok(sessionToken);
     const principal = await service.resolvePrincipal(

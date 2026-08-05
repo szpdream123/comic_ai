@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { describe, it } from "node:test";
 
 import JSZip from "jszip";
@@ -897,21 +898,35 @@ describe("phone auth dev server", { concurrency: false }, () => {
     try {
       await server.listen(0);
 
-      const firstAssetResponse = await fetch(`${server.origin}/app.js`);
+      const firstAssetResponse = await fetch(`${server.origin}/app.js`, {
+        headers: { "accept-encoding": "br" },
+      });
       const etag = firstAssetResponse.headers.get("etag");
       const firstAssetBody = await firstAssetResponse.arrayBuffer();
       const sourceAppJs = await readFile(new URL("../../../../web/app.js", import.meta.url));
       const revalidatedResponse = await fetch(`${server.origin}/app.js`, {
-        headers: { "if-none-match": etag ?? "" },
+        headers: { "accept-encoding": "br", "if-none-match": etag ?? "" },
+      });
+      const brDisabledResponse = await fetch(`${server.origin}/app.js`, {
+        headers: { "accept-encoding": "br;q=0, *;q=1" },
+      });
+      const allCompressionDisabledResponse = await fetch(`${server.origin}/app.js`, {
+        headers: { "accept-encoding": "br;q=0, gzip;q=0, *;q=1" },
       });
       const appShellResponse = await fetch(`${server.origin}/`);
 
       assert.equal(firstAssetResponse.status, 200);
       assert.ok(firstAssetBody.byteLength < sourceAppJs.byteLength);
       assert.equal(firstAssetResponse.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+      assert.equal(firstAssetResponse.headers.get("content-encoding"), "br");
+      assert.match(firstAssetResponse.headers.get("vary") ?? "", /Accept-Encoding/i);
       assert.ok(etag);
       assert.equal(revalidatedResponse.status, 304);
       assert.equal((await revalidatedResponse.arrayBuffer()).byteLength, 0);
+      assert.equal(brDisabledResponse.status, 200);
+      assert.equal(brDisabledResponse.headers.get("content-encoding"), "gzip");
+      assert.equal(allCompressionDisabledResponse.status, 200);
+      assert.equal(allCompressionDisabledResponse.headers.get("content-encoding"), null);
       assert.equal(appShellResponse.headers.get("cache-control"), "no-store");
       assert.equal(appShellResponse.headers.get("etag"), null);
     } finally {
@@ -971,6 +986,30 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(x6Response.status, 200);
       assert.match(x6Response.headers.get("content-type") ?? "", /text\/javascript/);
       assert.match(x6Text, /Graph/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves the browser WebGPU depth model from the app origin", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+
+      const configResponse = await fetch(
+        `${server.origin}/models/onnx-community/depth-anything-v2-small/config.json`,
+      );
+      const modelResponse = await fetch(
+        `${server.origin}/models/onnx-community/depth-anything-v2-small/onnx/model_quantized.onnx`,
+      );
+
+      assert.equal(configResponse.status, 200);
+      assert.match(configResponse.headers.get("content-type") ?? "", /application\/json/);
+      assert.equal((await configResponse.json()).model_type, "depth_anything");
+      assert.equal(modelResponse.status, 200);
+      assert.equal(modelResponse.headers.get("content-type"), "application/octet-stream");
+      await modelResponse.body?.cancel();
     } finally {
       await server.close();
     }
@@ -1070,12 +1109,18 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { connection: "close" },
       });
       const newCanvasHtml = await newCanvasResponse.text();
+      const toolboxResponse = await fetch(`${server.origin}/toolbox`, {
+        headers: { connection: "close" },
+      });
+      const toolboxHtml = await toolboxResponse.text();
 
       assert.equal(missingResponse.status, 404);
       assert.equal(deepLinkResponse.status, 200);
       assert.match(deepLinkHtml, /id="creator-app"/);
       assert.equal(newCanvasResponse.status, 200);
       assert.match(newCanvasHtml, /id="creator-app"/);
+      assert.equal(toolboxResponse.status, 200);
+      assert.match(toolboxHtml, /id="creator-app"/);
     } finally {
       await server.close();
     }
@@ -2041,6 +2086,49 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("marks user session cookies secure in production", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({
+      db,
+      allowProduction: true,
+      env: { NODE_ENV: "production" },
+    });
+
+    try {
+      await ensurePasswordLoginUser(db, normalizeCnPhone("18571521874"));
+      await server.listen(0);
+
+      const response = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ account: "18571521874", password: "521874" }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("set-cookie") ?? "", /; Secure$/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects oversized ordinary JSON request bodies", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const response = await fetch(`${server.origin}/api/community/feedback`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "oversized", content: "x".repeat(6 * 1024 * 1024) }),
+      });
+
+      assert.equal(response.status, 413);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns SMS send metadata and records cooldown through the auth request route", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
     try {
@@ -2129,6 +2217,63 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(response.status, 400);
       assert.deepEqual(payload, { error: "invalid_payment_provider" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects oversized payment provider callback bodies", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+
+      const response = await fetch(
+        `${server.origin}/api/payment-provider-callbacks/paylab`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "x".repeat(6 * 1024 * 1024 + 1),
+        },
+      );
+      const payload = await response.json();
+
+      assert.equal(response.status, 413);
+      assert.equal(payload.errorCode, "request_body_too_large");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects declared oversized multipart uploads before parsing the body", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const response = await new Promise<{ status: number; body: string }>((resolveResponse, reject) => {
+        const request = httpRequest(`${server.origin}/api/creator/uploads`, {
+          method: "POST",
+          headers: {
+            cookie,
+            "content-type": "multipart/form-data; boundary=oversized-test-boundary",
+            "content-length": String(501 * 1024 * 1024 + 1),
+          },
+        }, (incoming) => {
+          let body = "";
+          incoming.setEncoding("utf8");
+          incoming.on("data", (chunk) => { body += chunk; });
+          incoming.on("end", () => {
+            request.destroy();
+            resolveResponse({ status: incoming.statusCode ?? 0, body });
+          });
+        });
+        request.on("error", reject);
+        request.flushHeaders();
+      });
+
+      assert.equal(response.status, 413);
+      assert.equal(JSON.parse(response.body).errorCode, "request_body_too_large");
     } finally {
       await server.close();
     }
@@ -4868,6 +5013,26 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("serves compact storyboard prompt packages without prompt bodies", async () => {
+    const server = await createPhoneAuthDevServerWithTestDb();
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const response = await fetch(
+        `${server.origin}/api/creator/storyboard-prompt/packages?status=enabled&pageSize=500&compact=1`,
+        { headers: { cookie } },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.ok(envelope.packages.length > 0);
+      assert.equal(envelope.packages.every((item: Record<string, unknown>) => !("prompt_content" in item)), true);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects legacy storyboard package selection for user script analysis", async () => {
     const db = await createMigratedTestDb();
     const textChatGateway = new FakeAiStoryboardTextGateway([
@@ -4970,15 +5135,17 @@ describe("phone auth dev server", { concurrency: false }, () => {
       "付费技能重复请求结果",
       "免费技能改编结果",
       "子账户使用付费技能改编结果",
+      "作者使用自己的付费技能改编结果",
     ]);
     const server = createPhoneAuthDevServer({ db, textChatGateway });
 
     try {
       await server.listen(0);
-      await login(server.origin, "13800138231");
+      const authorCookie = await login(server.origin, "13800138231");
       const buyerCookie = await login(server.origin, "13800138232");
       const authorId = await readUserIdForPhone(db, normalizeCnPhone("13800138231"));
       const buyerId = await readUserIdForPhone(db, normalizeCnPhone("13800138232"));
+      await seedGenerationAccessForPhone(db, "13800138231", 5000);
       await seedGenerationAccessForPhone(db, "13800138232", 5000);
       await db.query(
         `INSERT INTO prompts (
@@ -5107,6 +5274,21 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(earningsAfterMemberUsage.rows.length, 2);
       assert.equal(earningsAfterMemberUsage.rows.every((row) => row.user_id === authorId), true);
       assert.equal(earningsAfterMemberUsage.rows.reduce((sum, row) => sum + Number(row.amount), 0), 42);
+
+      const authorBalanceBeforeSelfUsage = await readBalance(authorId);
+      const selfUsageResponse = await postAnalysis(
+        paidSkillId,
+        "author-uses-own-paid-script-skill",
+        authorCookie,
+      );
+      const selfUsageText = await selfUsageResponse.text();
+      assert.equal(selfUsageResponse.status, 200, selfUsageText);
+      assert.match(selfUsageText, /"skillCreditCost":0/);
+      assert.equal(authorBalanceBeforeSelfUsage - await readBalance(authorId), 160);
+      const earningsAfterSelfUsage = await db.query(
+        "SELECT id FROM credit_ledger_entries WHERE source_type = 'prompt_skill_usage_earning'",
+      );
+      assert.equal(earningsAfterSelfUsage.rows.length, 2);
     } finally {
       await server.close();
     }
@@ -5321,6 +5503,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           },
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script", "scene"],
             skills: { script: skillId, scene_extract: sceneSkillId },
             modelCode: "preview-script-model",
           }),
@@ -5372,6 +5555,51 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.characters.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.props.rows));
       assert.ok(Array.isArray(previewEnvelope.data.displayTables.storyboards.rows));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("runs only the requested legacy AI storyboard stage", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 5);
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({ scriptText: "重新生成后的剧本。" }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138241");
+      await seedGenerationAccessForPhone(db, "13800138241", 5000);
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "single-legacy-stage");
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-single-legacy-stage",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(textChatGateway.calls.length, 1);
+      assert.equal(envelope.data.modelRunCount, 1);
+      assert.match(envelope.data.scriptText, /重新生成后的剧本/);
+      assert.deepEqual(envelope.data.commitPayload.scenes, []);
+      assert.deepEqual(envelope.data.commitPayload.characters, []);
+      assert.deepEqual(envelope.data.commitPayload.props, []);
+      assert.deepEqual(envelope.data.commitPayload.storyboards, []);
     } finally {
       await server.close();
     }

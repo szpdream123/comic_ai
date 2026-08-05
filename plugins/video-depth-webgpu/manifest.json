@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Comic AI Video Depth (WebGPU)",
+  "description": "Runs video depth processing on the user's browser GPU without Python or CUDA.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "permissions": [
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://huggingface.co/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://*.comic-ai.example/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

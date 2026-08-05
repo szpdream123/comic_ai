@@ -67,6 +67,7 @@ import {
   type CreatorSqlState,
 } from "./creator-dev-state.service.ts";
 import {
+  hydrateStateFromLoadedSql,
   hydrateStateFromSql,
   loadProjectBundleFromSql,
   seedCreatorAppFromSql,
@@ -744,22 +745,26 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
     }): Promise<CreatorHttpResponse<CreatorDevStateSnapshot>> {
       const { creatorApp, sqlState } = getCreatorState(input.user.id);
       await ensureSqlState(input.user.id, sqlState);
+      const now = new Date();
+      let loadedSqlState: Awaited<ReturnType<typeof seedCreatorAppFromSql>> = null;
       if (sqlState.projectId) {
-        await seedCreatorAppFromSql(deps.db, creatorApp, {
+        loadedSqlState = await seedCreatorAppFromSql(deps.db, creatorApp, {
           projectId: sqlState.projectId,
           scriptId: sqlState.scriptId,
           sessionToken: input.user.sessionToken,
-          now: new Date(),
+          now,
         });
       }
       const state = await creatorApp.getState();
       const hydrated = sqlState.projectId
-        ? await hydrateStateFromSql(deps.db, state, {
-            projectId: sqlState.projectId,
-            scriptId: sqlState.scriptId,
-            sessionToken: input.user.sessionToken,
-            now: new Date(),
-          })
+        ? loadedSqlState
+          ? hydrateStateFromLoadedSql(state, loadedSqlState)
+          : await hydrateStateFromSql(deps.db, state, {
+              projectId: sqlState.projectId,
+              scriptId: sqlState.scriptId,
+              sessionToken: input.user.sessionToken,
+              now,
+            })
         : state;
       return {
         status: 200,

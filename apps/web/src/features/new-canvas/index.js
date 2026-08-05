@@ -315,6 +315,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           canvasScriptWorkspace: null,
           canvasPromptReferencePicker: null,
           canvasMarkdownFullscreen: null,
+          canvasImageFullscreen: null,
           canvasVideoFullscreen: null,
           canvasRevisionConflict: null,
         });
@@ -394,6 +395,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         const nextFlow = template.content.querySelector?.(".canvas-flow");
         if (!currentFlow || !nextFlow) return renderInteraction();
         syncCanvasNodeEditor(currentFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
+        syncCanvasStageOverlays(surface, template.content);
         syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
         syncCanvasZoomControlDisplay(surface, graph?.zoom?.());
@@ -1297,6 +1299,7 @@ function canvasNodeRefreshNeedsFullMarkup(ui, nodeId) {
   if (ui?.toast) return true;
   for (const state of [
     ui?.canvasMarkdownFullscreen,
+    ui?.canvasImageFullscreen,
     ui?.canvasVideoFullscreen,
     ui?.canvasPromptReferencePicker,
     ui?.canvasDirectorCaptureDeleteTarget,
@@ -1369,6 +1372,7 @@ function syncCanvasStageOverlays(surface, nextRoot) {
     ".script-workspace-layer",
     '[data-selection-picker-id="canvas-prompt-reference-picker"]',
     ".canvas-markdown-fullscreen",
+    "[data-canvas-image-fullscreen]",
     "[data-canvas-video-fullscreen]",
     ".canvas-inline-toast",
     ".canvas-revision-conflict-backdrop",

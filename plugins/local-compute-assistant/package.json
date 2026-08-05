@@ -1,0 +1,45 @@
+{
+  "name": "comic-ai-local-compute-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local WebGPU companion for Comic AI video depth processing.",
+  "main": "main.cjs",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.comicai.localcompute",
+    "productName": "Comic AI Local Compute Assistant",
+    "electronDist": "node_modules/electron/dist",
+    "asar": false,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "renderer/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true
+    }
+  }
+}

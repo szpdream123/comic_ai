@@ -5899,30 +5899,24 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(payload.meta.pageSize, 20);
       assert.equal(payload.meta.total, 3);
       assert.equal(payload.data.length, 3);
-      const visibleRecords = payload.data.map((item: { phone: string; verificationCode: string }) => ({
+      const visibleRecords = payload.data.map((item: { phone: string; verificationCode: string | null; smsContent: string | null }) => ({
         phone: item.phone,
         verificationCode: item.verificationCode,
+        smsContent: item.smsContent,
       }));
-      assert.ok(visibleRecords.some((item: { phone: string; verificationCode: string }) => (
-        item.phone === "18575211874" && item.verificationCode === "111111"
-      )));
-      assert.ok(visibleRecords.some((item: { phone: string; verificationCode: string }) => (
-        item.phone === "18575211874" && item.verificationCode === "222222"
-      )));
-      assert.ok(visibleRecords.some((item: { phone: string; verificationCode: string }) => (
-        item.phone === "18612345678" && item.verificationCode === "654321"
-      )));
+      assert.equal(visibleRecords.every((item) => item.verificationCode === null), true);
+      assert.equal(visibleRecords.every((item) => item.smsContent === null), true);
       const localDevRecord = payload.data.find((item: { provider: string }) => item.provider === "dev");
       const localTencentRecord = payload.data.find((item: { errorCode: string }) => (
         item.errorCode === "FailedOperation.SignatureIncorrectOrUnapproved"
       ));
-      const sentTencentRecord = payload.data.find((item: { verificationCode: string }) => (
-        item.verificationCode === "654321"
+      const sentTencentRecord = payload.data.find((item: { phone: string }) => (
+        item.phone === "18612345678"
       ));
       assert.equal(localDevRecord?.ipAddress, "127.0.0.1");
       assert.equal(localDevRecord?.status, "failed");
       assert.equal(localTencentRecord?.ipAddress, "127.0.0.1");
-      assert.equal(sentTencentRecord?.smsContent, "【登录验证】验证码 654321，5 分钟内有效。");
+      assert.equal(sentTencentRecord?.smsContent, null);
       assert.equal(sentTencentRecord?.ipAddress, "198.51.100.42");
     } finally {
       await server.close();
@@ -5949,6 +5943,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({ phone: "18575211874" }),
       });
       const requested = await requestResponse.json();
+      const challengeResponse = await fetch(
+        `${server.origin}/api/auth/dev/challenges/${encodeURIComponent(requested.challengeId)}`,
+      );
+      const challenge = await challengeResponse.json();
       const recordsResponse = await fetch(`${server.origin}/api/admin/sms-records?range=all`, {
         headers: { cookie },
       });
@@ -5961,18 +5959,32 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         body: JSON.stringify({
           challengeId: requested.challengeId,
           phone: "18575211874",
-          code: testRecord?.verificationCode,
+          code: challenge.code,
         }),
       });
+      const storedRecord = await db.query<{
+        verification_code: string | null;
+        sms_content: string | null;
+      }>(
+        `SELECT verification_code, sms_content
+         FROM sms_send_records
+         WHERE challenge_id = $1`,
+        [requested.challengeId],
+      );
       const createdUser = await db.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM users WHERE phone_e164 = $1",
         ["18575211874"],
       );
 
       assert.equal(requestResponse.status, 200);
+      assert.equal(challengeResponse.status, 200);
       assert.equal(recordsResponse.status, 200);
-      assert.match(testRecord?.verificationCode ?? "", /^\d{6}$/);
+      assert.match(challenge.code ?? "", /^\d{6}$/);
+      assert.equal(testRecord?.verificationCode, null);
+      assert.equal(testRecord?.smsContent, null);
       assert.equal(testRecord?.status, "test");
+      assert.equal(storedRecord.rows[0]?.verification_code, null);
+      assert.equal(storedRecord.rows[0]?.sms_content, null);
       assert.equal(verifyResponse.status, 200);
       assert.equal(createdUser.rows[0]?.count, 1);
     } finally {

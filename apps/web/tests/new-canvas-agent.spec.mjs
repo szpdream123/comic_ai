@@ -100,6 +100,20 @@ test("Canvas Agent labels a running model step as thinking instead of tool execu
   assert.doesNotMatch(html, /正在执行工具/);
 });
 
+test("Canvas Agent stops the thinking state for completed task statuses", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      taskId: "task-completed",
+      status: "completed",
+      events: [{ id: "task-completed", sequence: 1, eventType: "task.completed", event: {} }],
+    },
+  });
+
+  assert.doesNotMatch(html, /class="canvas-agent-thinking"/);
+  assert.match(html, /已完成/);
+  assert.match(html, /aria-busy="false"/);
+});
+
 test("Canvas Agent keeps the external generation status after an interjection", () => {
   const agent = { status: "running", events: [] };
   reduceCanvasAgentEvents(agent, [

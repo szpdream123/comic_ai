@@ -259,11 +259,6 @@ function buildLingdongImagePayload(
     readMediaUrl(parameters.image_url),
   ]);
   const resolvedModel = model ?? defaultImageModel;
-  if (resolvedModel !== "cvk-image-2") {
-    throw Object.assign(new Error("lingdong_image_model_unsupported"), {
-      failureCode: "provider_model_unsupported",
-    });
-  }
   return {
     model: resolvedModel,
     prompt,
@@ -279,12 +274,7 @@ export function buildLingdongVideoPayload(
   model?: string,
 ): Record<string, unknown> {
   const resolvedModel = model ?? defaultVideoModel;
-  const profile = lingdongVideoModelProfiles[resolvedModel];
-  if (!profile) {
-    throw Object.assign(new Error("lingdong_video_model_unsupported"), {
-      failureCode: "provider_model_unsupported",
-    });
-  }
+  const profile = lingdongVideoModelProfiles[resolvedModel] ?? null;
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const prompt = readString(payload.prompt) ?? readString(payload.motionPrompt) ?? "";
@@ -352,7 +342,7 @@ function normalizeLingdongResolution(value: string | undefined) {
 function resolveLingdongRatioValue(
   profile: {
     fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
-  },
+  } | null,
   parameters: Record<string, unknown>,
 ) {
   const explicitRatio = readString(parameters.ratio);
@@ -363,28 +353,28 @@ function resolveLingdongRatioValue(
   if (!frontendRatio) {
     return undefined;
   }
-  return profile.fields.includes("ratio") ? frontendRatio : undefined;
+  return !profile || profile.fields.includes("ratio") ? frontendRatio : undefined;
 }
 
 function shouldIncludeLingdongVideoMedia(
   profile: {
     media: Array<"images" | "videos" | "audios">;
     fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
-  },
+  } | null,
   key: "images" | "videos" | "audios",
 ) {
-  return profile.media.includes(key);
+  return !profile || profile.media.includes(key);
 }
 
 function optionalLingdongVideoField(
   profile: {
     media: Array<"images" | "videos" | "audios">;
     fields: Array<"duration" | "resolution" | "ratio" | "orientation" | "size">;
-  },
+  } | null,
   key: "duration" | "resolution" | "ratio" | "orientation" | "size",
   value: unknown,
 ) {
-  return profile.fields.includes(key)
+  return !profile || profile.fields.includes(key)
     ? optionalPayloadField(key, value)
     : {};
 }
