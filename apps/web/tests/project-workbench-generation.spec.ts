@@ -21563,6 +21563,130 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.state.project.coverStorageObjectId, "storage-1");
   });
 
+  it("compresses a large project cover before uploading it", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const previousDocument = globalThis.document;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+      lastModified: 123,
+    });
+    const bitmap = { width: 4000, height: 2000, closeCalled: false, close() { this.closeCalled = true; } };
+    const drawCalls = [];
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage: (...args) => drawCalls.push(args) }),
+      toBlob: (callback, type, quality) => {
+        assert.equal(type, "image/webp");
+        assert.equal(quality, 0.85);
+        callback(new Blob([new Uint8Array(400 * 1024)], { type }));
+      },
+    };
+    let uploadedFile = null;
+    globalThis.createImageBitmap = async () => bitmap;
+    globalThis.document = { createElement: (tagName) => tagName === "canvas" ? canvas : null };
+
+    try {
+      await uploadProjectCoverFile({
+        state: {},
+        ui: {},
+        api: {
+          uploadFile: async (file) => {
+            uploadedFile = file;
+            return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+          },
+          updateProjectCover: async () => ({}),
+        },
+      }, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+      globalThis.document = previousDocument;
+    }
+
+    assert.equal(canvas.width, 1920);
+    assert.equal(canvas.height, 960);
+    assert.equal(drawCalls.length, 1);
+    assert.equal(uploadedFile.name, "cover.webp");
+    assert.equal(uploadedFile.type, "image/webp");
+    assert.equal(uploadedFile.size, 400 * 1024);
+    assert.equal(uploadedFile.lastModified, 123);
+    assert.equal(bitmap.closeCalled, true);
+  });
+
+  it("falls back to the original project cover when browser compression fails", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+    });
+    let uploadedFile = null;
+    let decodeAttempts = 0;
+    globalThis.createImageBitmap = async () => {
+      decodeAttempts += 1;
+      throw new Error("decode_failed");
+    };
+
+    try {
+      await uploadProjectCoverFile({
+        state: {},
+        ui: {},
+        api: {
+          uploadFile: async (file) => {
+            uploadedFile = file;
+            return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+          },
+          updateProjectCover: async () => ({}),
+        },
+      }, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+    }
+
+    assert.equal(decodeAttempts, 1);
+    assert.equal(uploadedFile, original);
+  });
+
+  it("keeps the original project cover when WebP encoding is not smaller", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const previousDocument = globalThis.document;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+    });
+    const bitmap = { width: 2000, height: 1000, close() {} };
+    let encodedBlob = new Blob([new Uint8Array(original.size)], { type: "image/webp" });
+    const canvas = {
+      getContext: () => ({ drawImage() {} }),
+      toBlob: (callback) => callback(encodedBlob),
+    };
+    let uploadedFile = null;
+    globalThis.createImageBitmap = async () => bitmap;
+    globalThis.document = { createElement: (tagName) => tagName === "canvas" ? canvas : null };
+    const workbench = {
+      state: {},
+      ui: {},
+      api: {
+        uploadFile: async (file) => {
+          uploadedFile = file;
+          return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+        },
+        updateProjectCover: async () => ({}),
+      },
+    };
+
+    try {
+      await uploadProjectCoverFile(workbench, original, "project-1");
+      assert.equal(uploadedFile, original);
+
+      encodedBlob = new Blob([new Uint8Array(400 * 1024)], { type: "image/png" });
+      uploadedFile = null;
+      await uploadProjectCoverFile(workbench, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+      globalThis.document = previousDocument;
+    }
+
+    assert.equal(uploadedFile, original);
+  });
+
   it("renders the rename modal when renaming a project", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({
@@ -48645,6 +48769,182 @@ describe("production workbench project tab", () => {
     assert.equal(imports.length, 1);
     assert.equal(workbench.ui.scriptReaderSections[0].title, "第 1 集");
     assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-deepseek-new-1");
+  });
+
+  it("adds script reader sections as the next numbered episodes and opens title editing", async () => {
+    const createCalls = [];
+    const focusedTitleIds = [];
+    const selectedTitleIds = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(scriptId, input) {
+          createCalls.push({ scriptId, input });
+          return {
+            section: {
+              id: `script-section-${createCalls.length + 1}`,
+              title: input.title,
+              body: input.body,
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "script",
+        scriptDetailOpen: true,
+        selectedScriptId: "script-1",
+        selectedScriptEpisodeId: "script-section-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [{ id: "script-section-1", title: "第 1 集", text: "第一集正文" }],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll(selector) {
+          if (selector === '[data-role="script-reader-title-input"]') {
+            return workbench.ui.scriptReaderSections.map((section) => ({
+              dataset: { episodeId: section.id },
+              focus() {
+                focusedTitleIds.push(section.id);
+              },
+              select() {
+                selectedTitleIds.push(section.id);
+              },
+            }));
+          }
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.deepEqual(createCalls.map((call) => call.input.title), ["第 2 集", "第 3 集"]);
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), [
+      "第 1 集",
+      "第 2 集",
+      "第 3 集",
+    ]);
+    assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-3");
+    assert.equal(workbench.ui.editingScriptReaderSectionId, "script-section-3");
+    assert.deepEqual(focusedTitleIds, ["script-section-2", "script-section-3"]);
+    assert.deepEqual(selectedTitleIds, ["script-section-2", "script-section-3"]);
+  });
+
+  it("continues script reader numbering after a middle episode is deleted", async () => {
+    const createTitles = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(_scriptId, input) {
+          createTitles.push(input.title);
+          return {
+            section: { id: "script-section-4", title: input.title, body: input.body },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        selectedScriptId: "script-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [
+          { id: "script-section-1", title: "第 1 集", text: "第一集正文" },
+          { id: "script-section-3", title: "第三集终局", text: "第三集正文" },
+        ],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.deepEqual(createTitles, ["第 4 集"]);
+  });
+
+  it("ignores repeated script reader add actions while creation is pending", async () => {
+    const createCalls = [];
+    let resolveCreate;
+    const createResult = new Promise((resolve) => {
+      resolveCreate = resolve;
+    });
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createScriptReaderSection(scriptId, input) {
+          createCalls.push({ scriptId, input });
+          return createResult;
+        },
+      },
+      ui: buildProjectUi({
+        selectedScriptId: "script-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [{ id: "script-section-1", title: "第 1 集", text: "第一集正文" }],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    const firstAdd = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    const repeatedAdd = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    resolveCreate({
+      section: { id: "script-section-2", title: "第 2 集", body: "请输入新的剧情文本。" },
+    });
+    await Promise.all([firstAdd, repeatedAdd]);
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), ["第 1 集", "第 2 集"]);
+
+    workbench.api.createScriptReaderSection = async () => {
+      throw new Error("create_failed");
+    };
+    await assert.rejects(
+      handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "add-script-reader-section" },
+      }),
+      /create_failed/,
+    );
+    assert.equal(workbench.scriptReaderSectionCreatePending, false);
+
+    workbench.api.createScriptReaderSection = async (_scriptId, input) => ({
+      section: { id: "script-section-3", title: input.title, body: input.body },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), [
+      "第 1 集",
+      "第 2 集",
+      "第 3 集",
+    ]);
   });
 
   it("regenerates manual DeepSeek script analysis with the previous text and skill", async () => {
