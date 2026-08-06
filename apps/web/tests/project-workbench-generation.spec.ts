@@ -48771,6 +48771,182 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-deepseek-new-1");
   });
 
+  it("adds script reader sections as the next numbered episodes and opens title editing", async () => {
+    const createCalls = [];
+    const focusedTitleIds = [];
+    const selectedTitleIds = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(scriptId, input) {
+          createCalls.push({ scriptId, input });
+          return {
+            section: {
+              id: `script-section-${createCalls.length + 1}`,
+              title: input.title,
+              body: input.body,
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "script",
+        scriptDetailOpen: true,
+        selectedScriptId: "script-1",
+        selectedScriptEpisodeId: "script-section-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [{ id: "script-section-1", title: "第 1 集", text: "第一集正文" }],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll(selector) {
+          if (selector === '[data-role="script-reader-title-input"]') {
+            return workbench.ui.scriptReaderSections.map((section) => ({
+              dataset: { episodeId: section.id },
+              focus() {
+                focusedTitleIds.push(section.id);
+              },
+              select() {
+                selectedTitleIds.push(section.id);
+              },
+            }));
+          }
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.deepEqual(createCalls.map((call) => call.input.title), ["第 2 集", "第 3 集"]);
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), [
+      "第 1 集",
+      "第 2 集",
+      "第 3 集",
+    ]);
+    assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-3");
+    assert.equal(workbench.ui.editingScriptReaderSectionId, "script-section-3");
+    assert.deepEqual(focusedTitleIds, ["script-section-2", "script-section-3"]);
+    assert.deepEqual(selectedTitleIds, ["script-section-2", "script-section-3"]);
+  });
+
+  it("continues script reader numbering after a middle episode is deleted", async () => {
+    const createTitles = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(_scriptId, input) {
+          createTitles.push(input.title);
+          return {
+            section: { id: "script-section-4", title: input.title, body: input.body },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        selectedScriptId: "script-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [
+          { id: "script-section-1", title: "第 1 集", text: "第一集正文" },
+          { id: "script-section-3", title: "第三集终局", text: "第三集正文" },
+        ],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.deepEqual(createTitles, ["第 4 集"]);
+  });
+
+  it("ignores repeated script reader add actions while creation is pending", async () => {
+    const createCalls = [];
+    let resolveCreate;
+    const createResult = new Promise((resolve) => {
+      resolveCreate = resolve;
+    });
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createScriptReaderSection(scriptId, input) {
+          createCalls.push({ scriptId, input });
+          return createResult;
+        },
+      },
+      ui: buildProjectUi({
+        selectedScriptId: "script-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [{ id: "script-section-1", title: "第 1 集", text: "第一集正文" }],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    const firstAdd = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    const repeatedAdd = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    resolveCreate({
+      section: { id: "script-section-2", title: "第 2 集", body: "请输入新的剧情文本。" },
+    });
+    await Promise.all([firstAdd, repeatedAdd]);
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), ["第 1 集", "第 2 集"]);
+
+    workbench.api.createScriptReaderSection = async () => {
+      throw new Error("create_failed");
+    };
+    await assert.rejects(
+      handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "add-script-reader-section" },
+      }),
+      /create_failed/,
+    );
+    assert.equal(workbench.scriptReaderSectionCreatePending, false);
+
+    workbench.api.createScriptReaderSection = async (_scriptId, input) => ({
+      section: { id: "script-section-3", title: input.title, body: input.body },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), [
+      "第 1 集",
+      "第 2 集",
+      "第 3 集",
+    ]);
+  });
+
   it("regenerates manual DeepSeek script analysis with the previous text and skill", async () => {
     const previewCalls = [];
     const workbench = {

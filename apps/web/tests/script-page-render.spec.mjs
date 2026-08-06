@@ -472,7 +472,7 @@ test("script reader detail renders save success toast", () => {
   assert.match(html, /剧本已保存。/);
 });
 
-test("script reader supports inline title editing and added story sections", () => {
+test("script reader supports inline title editing for numbered story sections", () => {
   const html = renderScriptManagementPage({
     state: {
       projectDetail: {
@@ -486,12 +486,12 @@ test("script reader supports inline title editing and added story sections", () 
       scriptDetailOpen: true,
       selectedScriptEpisodeId: "added-1",
       editingScriptReaderSectionId: "added-1",
-      scriptReaderSections: [{ id: "added-1", title: "新增剧情 1", text: "新剧情正文" }],
+      scriptReaderSections: [{ id: "added-1", title: "第 2 集", text: "新剧情正文" }],
     },
   });
 
   assert.match(html, /data-role="script-reader-title-input"/);
-  assert.match(html, /value="新增剧情 1"/);
+  assert.match(html, /value="第 2 集"/);
   assert.match(html, /新剧情正文/);
 });
 

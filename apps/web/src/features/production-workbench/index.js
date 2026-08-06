@@ -14809,23 +14809,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "add-script-reader-section") {
+    if (workbench.scriptReaderSectionCreatePending) {
+      return;
+    }
     const currentSections = Array.isArray(workbench.ui.scriptReaderSections)
       ? workbench.ui.scriptReaderSections
       : [];
     const nextIndex = currentSections.length + 1;
     const draftSection = {
       id: `script-reader-added-${Date.now()}-${nextIndex}`,
-      title: `新增剧情 ${nextIndex}`,
+      title: getNextEpisodeTitle(currentSections),
       text: "请输入新的剧情文本。",
     };
     const scriptId = resolveSelectedScriptId(workbench);
     let nextSection = draftSection;
-    if (scriptId && typeof workbench.api?.createScriptReaderSection === "function") {
-      const response = await workbench.api.createScriptReaderSection(scriptId, {
-        title: draftSection.title,
-        body: draftSection.text,
-      });
-      nextSection = normalizeScriptReaderSection(response?.section ?? response, draftSection);
+    workbench.scriptReaderSectionCreatePending = true;
+    try {
+      if (scriptId && typeof workbench.api?.createScriptReaderSection === "function") {
+        const response = await workbench.api.createScriptReaderSection(scriptId, {
+          title: draftSection.title,
+          body: draftSection.text,
+        });
+        nextSection = normalizeScriptReaderSection(response?.section ?? response, draftSection);
+      }
+    } finally {
+      workbench.scriptReaderSectionCreatePending = false;
     }
     workbench.ui.scriptReaderSections = [...currentSections, nextSection];
     workbench.ui.scriptReaderSectionsLoaded = true;
@@ -14838,13 +14846,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       [nextSection.id]: nextSection.title,
     };
     workbench.ui.selectedScriptEpisodeId = nextSection.id;
-    workbench.ui.editingScriptReaderSectionId = "";
+    workbench.ui.editingScriptReaderSectionId = nextSection.id;
     render(workbench);
     queueMicrotask(() => {
-      const editor = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-editor"]') ?? [])]
+      const titleInput = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-title-input"]') ?? [])]
         .find((element) => element.dataset.episodeId === nextSection.id);
-      editor?.focus?.();
-      editor?.select?.();
+      titleInput?.focus?.();
+      titleInput?.select?.();
     });
     return;
   }
@@ -53623,7 +53631,16 @@ function getEpisodeTimestamp(episode) {
 }
 
 function getNextEpisodeTitle(episodes) {
-  const nextIndex = (Array.isArray(episodes) ? episodes.length : 0) + 1;
+  const normalizedEpisodes = Array.isArray(episodes) ? episodes : [];
+  const highestIndex = normalizedEpisodes.reduce((currentMax, episode) => {
+    const sequence = Number(episode?.sequence);
+    const titleMatch = String(episode?.title ?? "").match(/^第\s*(\d+|[一二三四五六七八九十百千两零〇]+)\s*集/);
+    const titleIndex = titleMatch
+      ? (/^\d+$/.test(titleMatch[1]) ? Number(titleMatch[1]) : parseSingleEpisodeAiChineseNumber(titleMatch[1]))
+      : 0;
+    return Math.max(currentMax, Number.isInteger(sequence) && sequence > 0 ? sequence : 0, titleIndex);
+  }, normalizedEpisodes.length);
+  const nextIndex = highestIndex + 1;
   return `第 ${nextIndex} 集`;
 }
 
