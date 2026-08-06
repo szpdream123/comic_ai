@@ -6392,6 +6392,40 @@
   font-weight: 700;
 }
 
+.delete-project-modal button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.delete-confirm-button.is-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  cursor: wait;
+}
+
+.delete-project-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 9999px;
+  animation: delete-project-spin 750ms linear infinite;
+}
+
+@keyframes delete-project-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .delete-project-spinner {
+    animation: none;
+  }
+}
+
 .project-gallery-meta h2 {
   overflow: hidden;
   text-overflow: ellipsis;

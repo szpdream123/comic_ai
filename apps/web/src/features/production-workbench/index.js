@@ -1491,6 +1491,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     librarySearchTimer: null,
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
+    projectLibraryRequestId: 0,
     toastDismissTimers: new Map(),
     toastSequence: 0,
     persistentToastId: null,
@@ -1560,6 +1561,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       selectedProjectIds: [],
       deleteProjectMode: "single",
       deleteProjectIds: [],
+      deleteProjectSubmitting: false,
       projectInteriorSection: deriveInitialProjectInteriorSection(readWorkbenchRouteToken(window.location)),
       projectAssetTab: "character",
       selectedEpisodeAssetKind: null,
@@ -23225,6 +23227,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteProjectId = target.dataset.projectId ?? null;
     workbench.ui.deleteProjectMode = "single";
     workbench.ui.deleteProjectIds = [];
+    workbench.ui.deleteProjectSubmitting = false;
     workbench.ui.projectCardMenuId = null;
     render(workbench);
     return;
@@ -23234,6 +23237,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteProjectId = null;
     workbench.ui.deleteProjectMode = "single";
     workbench.ui.deleteProjectIds = [];
+    workbench.ui.deleteProjectSubmitting = false;
     render(workbench);
     return;
   }
@@ -23243,6 +23247,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.deleteProjectId = null;
       workbench.ui.deleteProjectMode = "single";
       workbench.ui.deleteProjectIds = [];
+      workbench.ui.deleteProjectSubmitting = false;
       workbench.ui.toast = { tone: "error", message: "子账户无法删除项目。" };
       render(workbench);
       return;
@@ -23253,37 +23258,55 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (!uniqueProjectIds.length) {
         workbench.ui.deleteProjectMode = "single";
         workbench.ui.deleteProjectIds = [];
+        workbench.ui.deleteProjectSubmitting = false;
         render(workbench);
         return;
       }
+      workbench.ui.deleteProjectSubmitting = true;
       await runAction(workbench, "正在删除所选项目...", async () => {
-        for (const projectId of uniqueProjectIds) {
-          await workbench.api.deleteProject({ projectId });
+        const deletedProjectIds = [];
+        try {
+          for (const projectId of uniqueProjectIds) {
+            await deleteProjectIfPresent(workbench, projectId);
+            deletedProjectIds.push(projectId);
+          }
+        } catch (error) {
+          applyDeletedProjectsToWorkbench(workbench, deletedProjectIds);
+          const deletedIdSet = new Set(deletedProjectIds);
+          workbench.ui.deleteProjectIds = uniqueProjectIds.filter((projectId) => !deletedIdSet.has(projectId));
+          refreshProjectLibraryAfterDelete(workbench);
+          throw error;
         }
-        await refreshProjectLibraryIfAvailable(workbench);
-        if (uniqueProjectIds.includes(workbench.ui.selectedProjectCardId)) {
-          workbench.ui.selectedProjectCardId = null;
-          workbench.ui.projectPanelMode = "library";
-        }
+        applyDeletedProjectsToWorkbench(workbench, uniqueProjectIds);
         workbench.ui.selectedProjectIds = [];
         workbench.ui.deleteProjectId = null;
         workbench.ui.deleteProjectMode = "single";
         workbench.ui.deleteProjectIds = [];
+        workbench.ui.deleteProjectSubmitting = false;
+        refreshProjectLibraryAfterDelete(workbench);
+      }, {
+        successToast: `已删除 ${uniqueProjectIds.length} 个项目。`,
+        onError() {
+          workbench.ui.deleteProjectSubmitting = false;
+        },
       });
       return;
     }
     const projectId = workbench.ui.deleteProjectId;
+    workbench.ui.deleteProjectSubmitting = true;
     await runAction(workbench, "正在删除项目...", async () => {
-      await workbench.api.deleteProject({ projectId });
-      await refreshProjectLibraryIfAvailable(workbench);
+      await deleteProjectIfPresent(workbench, projectId);
+      applyDeletedProjectsToWorkbench(workbench, [projectId]);
       workbench.ui.deleteProjectId = null;
       workbench.ui.deleteProjectMode = "single";
       workbench.ui.deleteProjectIds = [];
-      workbench.ui.selectedProjectIds = (workbench.ui.selectedProjectIds ?? []).filter((id) => id !== projectId);
-      if (workbench.ui.selectedProjectCardId === projectId) {
-        workbench.ui.selectedProjectCardId = null;
-        workbench.ui.projectPanelMode = "library";
-      }
+      workbench.ui.deleteProjectSubmitting = false;
+      refreshProjectLibraryAfterDelete(workbench);
+    }, {
+      successToast: "项目已删除。",
+      onError() {
+        workbench.ui.deleteProjectSubmitting = false;
+      },
     });
     return;
   }
@@ -55341,6 +55364,8 @@ async function buildOfficialAssetImportPayload(workbench, record, assetKind) {
 }
 
 async function syncProjectLibraryFromApi(workbench, options = {}) {
+  const requestId = (workbench.projectLibraryRequestId ?? 0) + 1;
+  workbench.projectLibraryRequestId = requestId;
   const requestedPage = Math.max(1, Math.floor(Number(options.page ?? workbench.ui.projectLibraryPage ?? 1)));
   const keyword = String(options.keyword ?? workbench.ui.projectSearchQuery ?? "").trim();
   const pageSize = normalizeProjectLibraryPageSize(options.pageSize ?? workbench.ui.projectLibraryPagination?.pageSize);
@@ -55349,6 +55374,9 @@ async function syncProjectLibraryFromApi(workbench, options = {}) {
     pageSize,
     keyword,
   });
+  if (workbench.projectLibraryRequestId !== requestId) {
+    return false;
+  }
   const projects = Array.isArray(payload.projects)
     ? payload.projects.map((project) => mapProjectRecordToCard(project))
     : [];
@@ -55364,6 +55392,7 @@ async function syncProjectLibraryFromApi(workbench, options = {}) {
   if (options.includeAssets !== false) {
     await syncProjectLibraryAssets(workbench);
   }
+  return true;
 }
 
 function normalizeProjectLibraryPagination(value, fallback = {}) {
@@ -55420,6 +55449,73 @@ async function refreshProjectLibraryIfAvailable(workbench) {
     return;
   }
   await syncProjectLibraryFromApi(workbench);
+}
+
+function removeDeletedProjectsFromLibrary(workbench, projectIds) {
+  const deletedIds = new Set(projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean));
+  const currentProjects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [];
+  const nextProjects = currentProjects.filter((project) => !deletedIds.has(String(project?.id ?? "")));
+  const removedCount = currentProjects.length - nextProjects.length;
+  workbench.ui.projectLibrary = nextProjects;
+
+  if (removedCount <= 0) {
+    return;
+  }
+  const currentPagination = workbench.ui.projectLibraryPagination ?? {};
+  const pageSize = normalizeProjectLibraryPageSize(currentPagination.pageSize);
+  const total = Math.max(0, Number(currentPagination.total ?? currentProjects.length) - removedCount);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(totalPages, Math.max(1, Number(currentPagination.page ?? workbench.ui.projectLibraryPage ?? 1)));
+  workbench.ui.projectLibraryPagination = {
+    ...currentPagination,
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
+  workbench.ui.projectLibraryPage = page;
+}
+
+async function deleteProjectIfPresent(workbench, projectId) {
+  try {
+    await workbench.api.deleteProject({ projectId });
+  } catch (error) {
+    const errorText = [
+      error?.errorCode,
+      error?.code,
+      error?.details?.reason,
+      error instanceof Error ? error.message : error,
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (!errorText.includes("project_not_found")) {
+      throw error;
+    }
+  }
+}
+
+function applyDeletedProjectsToWorkbench(workbench, projectIds) {
+  const deletedIds = new Set(projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean));
+  removeDeletedProjectsFromLibrary(workbench, [...deletedIds]);
+  workbench.ui.selectedProjectIds = (workbench.ui.selectedProjectIds ?? [])
+    .filter((projectId) => !deletedIds.has(String(projectId ?? "")));
+  if (deletedIds.has(String(workbench.ui.selectedProjectCardId ?? ""))) {
+    workbench.ui.selectedProjectCardId = null;
+    workbench.ui.projectPanelMode = "library";
+  }
+}
+
+function refreshProjectLibraryAfterDelete(workbench) {
+  if (typeof workbench.api?.getProjects !== "function") {
+    return;
+  }
+  runLazyWorkbenchTask(workbench, "project library after delete", async () => {
+    const refreshed = await syncProjectLibraryFromApi(workbench, {
+      page: workbench.ui.projectLibraryPage,
+      includeAssets: false,
+    });
+    if (refreshed) {
+      render(workbench);
+    }
+  });
 }
 
 async function syncCanvasProjectsFromApi(workbench) {
