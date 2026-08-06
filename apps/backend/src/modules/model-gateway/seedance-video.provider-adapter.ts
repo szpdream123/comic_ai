@@ -4,9 +4,11 @@ import type {
   ProviderSubmissionResult,
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
+import { ModelError } from "./model-error.ts";
 import {
   attachProviderRawResponse,
   attachProviderRedactedRequest,
+  providerResponseDiagnostics,
   providerResponseError,
   readProviderResponseDiagnostics,
   type ProviderResponseDiagnostics,
@@ -69,7 +71,12 @@ export class SeedanceVideoProviderAdapter implements ProviderAdapter {
     ]);
 
     if (!externalRequestId) {
-      throw attachProviderRedactedRequest(new Error("video_provider_invalid_response"), redactedRequest);
+      throw attachProviderRedactedRequest(ModelError.fromUnknown("provider_submission_missing_task_id", {
+        failureCode: "provider_submission_missing_task_id",
+        mediaType: "video",
+        phase: "submit",
+        providerDiagnostics: providerResponseDiagnostics(response, JSON.stringify(payload)),
+      }), redactedRequest);
     }
 
     return {

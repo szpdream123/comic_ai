@@ -30,6 +30,22 @@ export function createBrowserVideoAnalysisFramePlan(durationSeconds, requestedFr
   };
 }
 
+export async function readBrowserVideoSourceFrameRate(file) {
+  if (!(file instanceof Blob)) throw new Error("未找到可处理的视频文件");
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  try {
+    const videoTrack = await input.getPrimaryVideoTrack();
+    if (!videoTrack) throw new Error("所选视频没有可读取的画面");
+    const packetStats = await videoTrack.computePacketStats(120);
+    const sourceFrameRate = Number(packetStats.averagePacketRate);
+    return Number.isFinite(sourceFrameRate) && sourceFrameRate > 0
+      ? Math.max(1, Math.min(60, Math.round(sourceFrameRate)))
+      : 0;
+  } finally {
+    input.dispose();
+  }
+}
+
 export async function decodeBrowserVideoTimeline(file, options = {}) {
   if (!(file instanceof Blob)) throw new Error("未找到可处理的视频文件");
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });

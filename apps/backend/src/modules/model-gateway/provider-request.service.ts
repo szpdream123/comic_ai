@@ -256,6 +256,16 @@ export async function submitProviderRequest(
       },
     });
 
+    if (!submitted.externalRequestId?.trim()) {
+      throw Object.assign(new Error("provider_submission_missing_task_id"), {
+        failureCode: "provider_submission_missing_task_id",
+        providerDiagnostics: {
+          httpStatus: 200,
+          response: submitted.redactedResponse ?? {},
+        },
+      });
+    }
+
     const accepted = await recordProviderSubmissionAccepted(db, {
       providerRequestId: started.id,
       externalRequestId: submitted.externalRequestId,

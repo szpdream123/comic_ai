@@ -53,8 +53,14 @@ import {
   type TextChatGatewayLike,
 } from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
 import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
-import { createAdminSystemSettingsService } from "../modules/admin-system-settings/admin-system-settings.service.ts";
+import {
+  createAdminSystemSettingsService,
+  ensureToolboxPromptReverseConfigEntry,
+} from "../modules/admin-system-settings/admin-system-settings.service.ts";
 import { readBatchImagePromptPresetCategoriesFromDb } from "../modules/admin-system-settings/admin-system-settings.service.ts";
+import {
+  renderToolboxPromptReverseInstruction,
+} from "../modules/toolbox/prompt-reverse-prompt-config.ts";
 import {
   AdminBackedTextModelResolver,
   CanvasAgentStateConflictError,
@@ -122,6 +128,10 @@ import {
 } from "../modules/invite-rewards/invite-reward.service.ts";
 import { createAuthSession, type AuthSession } from "../modules/identity/session.service.ts";
 import { createSmsProviderFromEnv } from "../modules/identity/sms-provider.ts";
+import {
+  extractVideoBatchUrls,
+  resolveVideoBatchLinks,
+} from "../modules/video-batch/video-batch-resolver.service.ts";
 import {
   createAuthSessionCacheFromEnv,
   type AuthSessionCache,
@@ -402,7 +412,7 @@ import {
 } from "../modules/model-gateway/generation-model-config-snapshot.ts";
 import { translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
-import { cancelGenerationTask } from "../modules/model-gateway/seedance-video.worker.ts";
+import { cancelGenerationTask, processSeedanceVideoSubmitJob } from "../modules/model-gateway/seedance-video.worker.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { ModelflareResponsesAdapter } from "../modules/model-gateway/modelflare-responses.adapter.ts";
 import type { TextGatewayChatCompletionRequest } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
@@ -778,6 +788,8 @@ const maximumJsonBodyBytes = 6 * 1024 * 1024;
 const promptReverseMaximumImageBytes = 20 * 1024 * 1024;
 const promptReverseMaximumBodyBytes = Math.ceil(promptReverseMaximumImageBytes * 4 / 3) + 128 * 1024;
 const promptReverseMaximumFrameSheetCount = 64;
+const promptReverseMinimumSegmentDurationMs = 1000;
+const promptReverseMaximumSegmentDurationMs = 300000;
 // Multipart parsing buffers the request before exposing File objects. Keep its total
 // body bounded while allowing the largest supported file plus MIME framing fields.
 const maximumMultipartBodyBytes = episodeUploadLimits.video.maxBytes + 1024 * 1024;
@@ -4472,9 +4484,33 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
 }
 
 const promptReverseMaxTokens = 1600;
+const promptReverseMinimumCreditBalance = 200;
 const promptReverseCreditReason = (mode: "image" | "video") => (
   mode === "video" ? "工具箱视频反推消耗积分" : "工具箱图片反推消耗积分"
 );
+
+const promptReverseBillingMetadata = (mode: "image" | "video") => ({
+  operation: "toolbox_prompt_reverse",
+  promptReverseMode: mode,
+  mediaType: mode,
+  content: promptReverseCreditReason(mode),
+});
+
+function promptReverseReservationTokenLimit(
+  model: AiModelConfigRecord,
+  mode: "image" | "video",
+  video: ReturnType<typeof parsePromptReverseVideoFrameSheets> | null,
+) {
+  const configured = [
+    model.capabilities.contextWindow,
+    model.limits.contextWindow,
+    model.limits.maxPromptTokens,
+    model.limits.maxPromptLength,
+  ].map(Number).find((value) => Number.isFinite(value) && value > 0);
+  if (configured) return Math.ceil(configured);
+  const imageCount = mode === "video" ? Math.max(1, video?.frameSheets.length ?? 1) : 1;
+  return promptReverseMaxTokens + imageCount * 4096;
+}
 
 function isPromptReverseModel(model: AiModelConfigRecord) {
   return model.status === "active"
@@ -4540,6 +4576,8 @@ function parsePromptReverseVideoFrameSheets(body: Record<string, unknown>) {
   const timelineSheetCount = timelineSheetCountValue == null ? frameSheets.length : Number(timelineSheetCountValue);
   const keyFrameCountValue = source.keyFrameCount;
   const keyFrameCount = keyFrameCountValue == null ? 0 : Number(keyFrameCountValue);
+  const segmentDurationMsValue = source.segmentDurationMs ?? source.segmentDuration ?? body.segmentDurationMs;
+  const segmentDurationMs = segmentDurationMsValue == null ? 15000 : Number(segmentDurationMsValue);
   const positiveIntegerOrNull = (value: unknown, maximum: number) => {
     if (value == null) return null;
     const parsed = Number(value);
@@ -4554,6 +4592,7 @@ function parsePromptReverseVideoFrameSheets(body: Record<string, unknown>) {
     || !Number.isInteger(sheetCount) || sheetCount !== frameSheets.length
     || !Number.isInteger(timelineSheetCount) || timelineSheetCount < 1 || timelineSheetCount > sheetCount
     || !Number.isInteger(keyFrameCount) || keyFrameCount < 0 || timelineSheetCount + keyFrameCount !== sheetCount
+    || !Number.isInteger(segmentDurationMs) || segmentDurationMs < promptReverseMinimumSegmentDurationMs || segmentDurationMs > promptReverseMaximumSegmentDurationMs
     || (durationMs !== null && (!Number.isFinite(durationMs) || durationMs <= 0 || durationMs > 86_400_000))
     || Number.isNaN(columns) || Number.isNaN(rows) || Number.isNaN(framesPerSheet)
   ) {
@@ -4569,6 +4608,7 @@ function parsePromptReverseVideoFrameSheets(body: Record<string, unknown>) {
       sheetCount,
       timelineSheetCount,
       keyFrameCount,
+      segmentDurationMs,
       columns,
       rows,
       framesPerSheet,
@@ -4576,28 +4616,13 @@ function parsePromptReverseVideoFrameSheets(body: Record<string, unknown>) {
   };
 }
 
-function promptReverseInstruction(mode: "image" | "video" = "image") {
-  if (mode === "video") {
-    return `根据视频内容反推完整视频提示词，必须涵盖以下要素：
-输入图片是本地视频解析插件按时间顺序生成的连续画面联系表，采样率不低于 6 FPS。必须严格按照联系表数组的先后顺序，并在每张联系表内按照从左到右、从上到下的顺序分析完整时间线；将相邻画面的变化还原为连续动作、镜头运动和分镜切换，不得把联系表误判为拼贴画或只描述单个静态画面。
-主体（人物/物品/场景）：详细描述核心对象特征。动作：精确说明动态表现，详细动作分解，包括身体细微动作、头部细微动作、手部细微动作、脸部细微动作、腿部细微动作、眼神细微动作、嘴巴细微动作、身材细节与衣服飘动动作细节，要求最大程度还原。
-场景：环境、氛围、时间设定。
-光影：光线类型、强度、方向。
-运镜：推、拉、摇、移、俯拍、仰拍等镜头运动。
-语言风格：视觉风格、色调等。
-画质：分辨率、帧率、特效参数。着重描写人物的妆造、发型、神态、服饰；完整视频提示词最后统一加上“画面内容无字幕，人物无纹身”。
-
-请严格只输出一个 JSON 对象，不要 Markdown 代码块或额外解释，字段必须是：
-{"description":"中文视频内容分析","positivePrompt":"完整中文视频提示词","tags":["tag"],"negativePrompt":"中文负向提示词"}
-positivePrompt 要可直接用于 AI 视频生成，tags 使用简短英文标签；看不出负面内容时 negativePrompt 输出空字符串。`;
-  }
-  return `帮我拆解这张图片，重点分析主体、场景、风格、色调构图和细节，尽量细化到位，不要只做浅层描述。
-根据刚刚的分析结果，帮我反向生成一套完整的 AI 生图提示词，最大程度还原原图的氛围、风格和画面质感。
-再将这套提示词优化成适配 AI 直接生图的版本，做到表述清晰、细节完善，可以直接使用。
-
-请严格只输出一个 JSON 对象，不要 Markdown 代码块或额外解释，字段必须是：
-{"description":"中文画面描述","positivePrompt":"English prompt","tags":["tag"],"negativePrompt":"English negative prompt"}
-positivePrompt 要可直接用于图像生成，tags 使用简短英文标签；看不出负面内容时 negativePrompt 输出空字符串。`;
+async function promptReverseInstructionFromRuntimeConfig(
+  db: SqlDatabase,
+  mode: "image" | "video",
+  segmentDurationMs = 15_000,
+) {
+  const config = await ensureToolboxPromptReverseConfigEntry(db);
+  return renderToolboxPromptReverseInstruction(config, mode, segmentDurationMs);
 }
 
 function parsePromptReverseResult(raw: string) {
@@ -4609,11 +4634,28 @@ function parsePromptReverseResult(raw: string) {
     throw new Error("prompt_reverse_result_invalid");
   }
   const record = readJsonRecord(parsed);
+  const parseAssets = (value: unknown) => readRecordArray(value).slice(0, 50).map((asset) => ({
+    name: readString(asset.name) || readString(asset.id) || "未命名资产",
+    prompt: readString(asset.prompt) || readString(asset.description),
+  })).filter((asset) => asset.prompt);
+  const segments = readRecordArray(record.segments).slice(0, 200).map((segment, index) => ({
+    index: Number.isInteger(Number(segment.index)) && Number(segment.index) > 0 ? Number(segment.index) : index + 1,
+    startMs: Math.max(0, Math.round(Number(segment.startMs) || 0)),
+    endMs: Math.max(0, Math.round(Number(segment.endMs) || 0)),
+    description: readString(segment.description),
+    positivePrompt: readString(segment.positivePrompt) || readString(segment.prompt),
+    negativePrompt: readString(segment.negativePrompt),
+    characters: parseAssets(segment.characters),
+    props: parseAssets(segment.props),
+    scenes: parseAssets(segment.scenes),
+    continuity: readString(segment.continuity) || readString(segment.transition),
+  }));
   return {
     description: readString(record.description),
     positivePrompt: readString(record.positivePrompt),
     tags: Array.isArray(record.tags) ? record.tags.map(readString).filter(Boolean).slice(0, 100) : [],
     negativePrompt: readString(record.negativePrompt),
+    segments,
   };
 }
 
@@ -4623,10 +4665,24 @@ function promptReverseUsageFromProviderUsage(usage: Record<string, unknown> | nu
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
   };
-  const promptTokens = tokenCount(usage.prompt_tokens ?? usage.promptTokens ?? usage.input_tokens ?? usage.inputTokens);
+  const rawPromptTokens = tokenCount(usage.prompt_tokens ?? usage.promptTokens ?? usage.input_tokens ?? usage.inputTokens);
   const completionTokens = tokenCount(usage.completion_tokens ?? usage.completionTokens ?? usage.output_tokens ?? usage.outputTokens);
-  const cachedTokens = tokenCount(usage.cached_tokens ?? usage.cachedTokens);
-  const totalTokens = tokenCount(usage.total_tokens ?? usage.totalTokens) || promptTokens + completionTokens + cachedTokens;
+  const promptDetails = readJsonRecord(usage.prompt_tokens_details ?? usage.promptTokensDetails);
+  const inputDetails = readJsonRecord(usage.input_tokens_details ?? usage.inputTokensDetails);
+  const cachedTokens = Math.max(
+    tokenCount(usage.cached_tokens ?? usage.cachedTokens),
+    tokenCount(usage.prompt_cache_hit_tokens),
+    tokenCount(promptDetails.cached_tokens ?? promptDetails.cachedTokens),
+    tokenCount(inputDetails.cached_tokens ?? inputDetails.cachedTokens),
+    tokenCount(usage.cache_read_input_tokens) + tokenCount(usage.cache_creation_input_tokens),
+  );
+  const promptIncludesCache = usage.prompt_tokens !== undefined
+    || usage.promptTokens !== undefined
+    || Object.keys(promptDetails).length > 0
+    || Object.keys(inputDetails).length > 0;
+  const promptTokens = promptIncludesCache ? Math.max(0, rawPromptTokens - cachedTokens) : rawPromptTokens;
+  const totalTokens = promptTokens + completionTokens + cachedTokens
+    || tokenCount(usage.total_tokens ?? usage.totalTokens);
   return totalTokens > 0 ? { promptTokens, completionTokens, cachedTokens, totalTokens } : null;
 }
 
@@ -7782,6 +7838,14 @@ async function syncSeedanceVideoTaskOnRead(
   const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
 
   if (poll.status === "running" || poll.status === "accepted") {
+    await markGenerationTaskSnapshotRunning(db, {
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      providerRequestId: row.provider_request_id,
+      progressStage: poll.status === "running" ? "provider_rendering" : "provider_accepted",
+      providerStatus: poll.redactedResponse,
+      now: input.now,
+    });
     return false;
   }
 
@@ -9996,104 +10060,21 @@ async function createGenerationTask(
   }
 
   if (modelExecution.providerExecutor === "seedance" && !shouldUseBullMQDispatch) {
-    const claim = await claimQueuedTask(db, {
+    const submitted = await processSeedanceVideoSubmitJob(db, {
       taskId: task.id,
-      workerId: "episode-seedance-submit-worker",
+      env: input.env,
+      fetchImpl: input.fetchImpl,
       now: input.now,
-      leaseMs: 15 * 60_000,
     });
-    if (!claim) {
-      throw new Error("task_claim_failed");
+    if (submitted.externalRequestId) {
+      await scheduleGenerationProviderPoll(db, {
+        taskId: task.id,
+        nextPollAttempt: 1,
+        nextPollAt: new Date(input.now.getTime() + generationQueueConfig.poll.video.intervalMs),
+        pollDeadlineAt: timeoutAt,
+        now: input.now,
+      });
     }
-
-    const payloadRef = buildGenerationProviderPayloadRef({
-      targetType: requestSnapshot.targetType,
-      targetId: requestSnapshot.targetId,
-      episodeId,
-      taskId: task.id,
-      mediaType: "video",
-    });
-    const payloadHash = sha256(`${payloadRef}:${requestSnapshot.prompt}:${requestSnapshot.firstFrameUrl}`);
-    const adapter = createProviderAdapterFromModelConfig(
-      modelConfig
-        ? {
-            providerProtocol: modelConfig.providerProtocol,
-            providerModel: modelConfig.providerModel,
-            providerConfig: modelConfig.providerConfig,
-            mediaType: modelConfig.mediaType,
-            invocationMode: modelConfig.invocationMode,
-          }
-        : {
-            providerProtocol: "volcengine_ark_video",
-            providerModel: input.env.SEEDANCE_PROVIDER_MODEL?.trim() || "seedance-1-0-pro",
-            providerConfig: {
-              baseURL: input.env.SEEDANCE_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com",
-              createTaskEndpoint:
-                input.env.SEEDANCE_CREATE_TASK_ENDPOINT?.trim() ||
-                "/api/v3/contents/generations/tasks",
-              queryTaskEndpoint:
-                input.env.SEEDANCE_QUERY_TASK_ENDPOINT?.trim() ||
-                "/api/v3/contents/generations/tasks/{taskId}",
-              apiKeyEnv: input.env.SEEDANCE_API_KEY_ENV?.trim() || "VOLCENGINE_ARK_API_KEY",
-            },
-          },
-      input.env,
-      resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
-    );
-    const submitted = await submitProviderRequest(db, {
-      projectId,
-      canvasProjectId,
-      workflowId: workflow.workflow.id,
-      taskId: task.id,
-      attemptId: claim.attempt.id,
-      providerName: videoProviderNameForModelConfig(modelConfig),
-      providerOperation: operationNames.episodeVideoGenerate,
-      requestKey: `${workflow.workflow.id}:${task.id}`,
-      requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
-      payloadRef,
-      payloadHash,
-      redactedPayload: {
-        prompt: requestSnapshot.prompt,
-        motionPrompt: requestSnapshot.prompt,
-        firstFrameUrl: requestSnapshot.firstFrameUrl,
-        parameters: requestSnapshot.parameters,
-        episodeId,
-        targetType: requestSnapshot.targetType,
-        targetId: requestSnapshot.targetId,
-      },
-      userId: context.userId,
-      now: input.now,
-      adapter,
-    });
-    await createUserModelRequestLog(db, {
-      providerRequestId: submitted.request.id,
-      projectId,
-      canvasProjectId,
-      workflowId: workflow.workflow.id,
-      taskId: task.id,
-      attemptId: claim.attempt.id,
-      userId: context.userId,
-      providerName: videoProviderNameForModelConfig(modelConfig),
-      providerOperation: operationNames.episodeVideoGenerate,
-      modelId: String(requestSnapshot.model ?? "seedance-i2v-pro"),
-      providerModel: videoProviderModelForModelConfig(modelConfig, requestSnapshot.model),
-      requestKey: `${workflow.workflow.id}:${task.id}`,
-      requestHash: sha256(`${task.id}:${requestSnapshot.model}:${requestSnapshot.prompt}`),
-      payloadHash,
-      payloadSummary: null,
-      requestFormat: "generation_task",
-      requestBody: {
-        prompt: requestSnapshot.prompt,
-        motionPrompt: requestSnapshot.prompt,
-        firstFrameUrl: requestSnapshot.firstFrameUrl,
-        parameters: requestSnapshot.parameters,
-        episodeId,
-        targetType: requestSnapshot.targetType,
-        targetId: requestSnapshot.targetId,
-      },
-      requestText: null,
-      now: input.now,
-    });
 
     const responseBody = await mapGenerationTaskResponse(db, {
       taskId: task.id,
@@ -14930,6 +14911,11 @@ function normalizeAssetConversationMessageInput(item: unknown, index: number) {
   };
 }
 
+function applyCrossOriginIsolationHeaders(response: ServerResponse) {
+  response.setHeader("cross-origin-opener-policy", "same-origin");
+  response.setHeader("cross-origin-embedder-policy", "credentialless");
+}
+
 function applyDevCorsHeaders(
   request: Parameters<typeof createServer>[0],
   response: ServerResponse,
@@ -15248,6 +15234,9 @@ async function serveVendorFile(pathname: string, response: ServerResponse) {
   const servesWebVendorFile = [
     "prompt-editor.js",
     "transformers.webgpu.bundle.js",
+    "watermark-removal-ort.bundle.js",
+    "ort-wasm-simd-threaded.mjs",
+    "ort-wasm-simd-threaded.wasm",
     "ort-wasm-simd-threaded.asyncify.mjs",
     "ort-wasm-simd-threaded.asyncify.wasm",
   ].includes(normalizedPath);
@@ -15275,6 +15264,30 @@ async function serveVendorFile(pathname: string, response: ServerResponse) {
   );
   response.setHeader("cache-control", "no-store");
   response.end(file);
+}
+
+async function serveWatermarkRemovalModel(response: ServerResponse, modelUrl: string) {
+  let upstream: Response;
+  try {
+    upstream = await fetch(modelUrl, { redirect: "follow" });
+  } catch {
+    response.statusCode = 502;
+    response.setHeader("content-type", "text/plain; charset=utf-8");
+    response.end("Watermark removal model is unavailable");
+    return;
+  }
+  if (!upstream.ok || !upstream.body) {
+    response.statusCode = 502;
+    response.setHeader("content-type", "text/plain; charset=utf-8");
+    response.end(`Watermark removal model download failed (${upstream.status})`);
+    return;
+  }
+  response.statusCode = 200;
+  response.setHeader("content-type", "application/octet-stream");
+  response.setHeader("cache-control", "public, max-age=86400");
+  const contentLength = upstream.headers.get("content-length");
+  if (contentLength) response.setHeader("content-length", contentLength);
+  Readable.fromWeb(upstream.body as any).pipe(response);
 }
 
 async function appendEpisodeWorkbenchEvent(body: unknown, user: AuthenticatedUser) {
@@ -17032,6 +17045,7 @@ export function createPhoneAuthDevServer(
   const httpServer = createServer((request, response) => {
     void runWithUserAuthRequestContext(() => runWithDatabaseContext(async () => {
       try {
+        applyCrossOriginIsolationHeaders(response);
         applyDevCorsHeaders(request, response);
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
         const pathname = url.pathname;
@@ -17115,6 +17129,32 @@ export function createPhoneAuthDevServer(
 
       if (pathname.startsWith("/vendor/")) {
         return await serveVendorFile(pathname, response);
+      }
+
+      if (request.method === "GET" && pathname === "/api/toolbox/watermark-removal/model") {
+        const modelUrl = String(
+          runtimeEnv.WATERMARK_REMOVAL_MODEL_URL ??
+            "https://hf-mirror.com/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+        ).trim();
+        return await serveWatermarkRemovalModel(response, modelUrl);
+      }
+
+      const watermarkOcrModelMatch = pathname.match(/^\/api\/toolbox\/watermark-removal\/ocr\/(det|rec|dict)$/);
+      if (request.method === "GET" && watermarkOcrModelMatch) {
+        const modelKind = watermarkOcrModelMatch[1];
+        const configuredBaseUrl = String(
+          runtimeEnv.WATERMARK_REMOVAL_OCR_MODEL_BASE_URL
+            ?? "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2",
+        ).trim().replace(/\/+$/, "");
+        const modelPath = modelKind === "det"
+          ? "onnx/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx"
+          : modelKind === "rec"
+            ? "onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx"
+            : "paddle/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile/ppocr_keys_v1.txt";
+        return await serveWatermarkRemovalModel(
+          response,
+          `${configuredBaseUrl}/${modelPath}`,
+        );
       }
 
       if (request.method === "GET" && pathname === "/api/community") {
@@ -17329,6 +17369,43 @@ export function createPhoneAuthDevServer(
             now: new Date(),
           }),
         );
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/video-batch/resolve") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        let body: Record<string, unknown>;
+        try {
+          body = readJsonRecord(await readLimitedTextBody(request, 64 * 1024));
+        } catch (error) {
+          const code = error instanceof Error && error.message === "request_body_too_large"
+            ? "request_body_too_large"
+            : "invalid_json";
+          return writeJson(response, envelopedError(400, code, code === "request_body_too_large" ? "request body is too large" : "invalid JSON body"));
+        }
+        if (body.authorized !== true) {
+          return writeJson(response, envelopedError(400, "video_batch_authorization_required", "请先确认拥有内容下载或使用授权。"));
+        }
+        let urls: string[];
+        try {
+          urls = extractVideoBatchUrls(body.links);
+        } catch (error) {
+          if (error instanceof Error && error.message === "video_batch_link_limit") {
+            return writeJson(response, envelopedError(400, "video_batch_link_limit", "最多一次解析 20 条视频链接。"));
+          }
+          return writeJson(response, envelopedError(400, "video_batch_links_invalid", "视频链接格式无效。"));
+        }
+        if (!urls.length) {
+          return writeJson(response, envelopedError(400, "video_batch_links_required", "请粘贴至少一条受支持的视频链接。"));
+        }
+        const tasks = await resolveVideoBatchLinks({ links: urls.join("\n") });
+        return writeJson(response, enveloped(200, { tasks }));
       }
 
       if (request.method === "GET" && pathname === "/api/admin/dashboard/overview") {
@@ -20592,8 +20669,8 @@ export function createPhoneAuthDevServer(
               id,
               phone_e164,
               challenge_id,
-              NULL::text AS verification_code,
-              NULL::text AS sms_content,
+              verification_code,
+              sms_content,
               provider,
               status,
               ip_address,
@@ -20616,8 +20693,12 @@ export function createPhoneAuthDevServer(
             data: rows.rows.map((row) => ({
               id: row.id,
               phone: row.phone_e164,
-              verificationCode: null,
-              smsContent: null,
+              verificationCode: row.verification_code ?? (
+                row.status === "rate_limited" ? "未生成（短信未发送）" : "历史记录已脱敏，无法恢复"
+              ),
+              smsContent: row.sms_content ?? (
+                row.status === "rate_limited" ? "未发送短信" : "历史记录已脱敏，无法恢复"
+              ),
               provider: row.provider,
               status: row.provider === "dev" && row.status === "sent" ? "test" : row.status,
               ipAddress: row.ip_address,
@@ -23098,6 +23179,19 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "POST" && pathname === "/api/toolbox/prompt-reverse") {
+          const now = new Date();
+          if (!await hasActiveGenerationMembership(db, { userId: authenticated.user.id, now })) {
+            return writeJson(response, envelopedError(403, "membership_required", "请先开通会员后再使用提示词反推。"));
+          }
+          const creditBalance = authenticated.user.teamMember
+            ? await getSimpleTeamMemberCreditBalance(db, {
+                userId: authenticated.user.id,
+                memberId: authenticated.user.teamMember.id,
+              })
+            : await getUserCreditBalance(db, authenticated.user.id);
+          if (creditBalance.availableCredits < promptReverseMinimumCreditBalance) {
+            return writeJson(response, envelopedError(402, "prompt_reverse_credit_reserve_insufficient", "积分余额预留不足，请前往充值"));
+          }
           const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
           if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
           let body: Record<string, unknown>;
@@ -23143,8 +23237,14 @@ export function createPhoneAuthDevServer(
           if (!model) {
             return writeJson(response, envelopedError(404, "prompt_reverse_model_unavailable", "model is not enabled for prompt reverse"));
           }
+          const systemPrompt = await promptReverseInstructionFromRuntimeConfig(
+            db,
+            mode,
+            video?.sampling.segmentDurationMs ?? 15_000,
+          );
           const billing = new CanvasAgentBillingService(db);
           const creditReason = promptReverseCreditReason(mode);
+          const billingMetadata = promptReverseBillingMetadata(mode);
           // Credit reservations use UUID source IDs. Derive one from the idempotency
           // key so a retry reaches the same reservation without exposing the key.
           const billingStepId = uuidFromIdempotencyKey(`toolbox-prompt-reverse:${idempotencyKey}`);
@@ -23155,26 +23255,31 @@ export function createPhoneAuthDevServer(
               actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
               agentTaskId: billingStepId,
               stepId: billingStepId,
-              amount: billing.estimateRound({ pricing: model.pricing, maxTokens: promptReverseMaxTokens }),
+              amount: billing.estimateRound({
+                pricing: model.pricing,
+                maxTokens: promptReverseMaxTokens,
+                contextWindow: promptReverseReservationTokenLimit(model, mode, video),
+              }),
               reason: creditReason,
+              metadata: billingMetadata,
               now: new Date(),
             });
           } catch (error) {
             const code = error instanceof Error ? error.message : "prompt_reverse_billing_failed";
             if (code === "insufficient_credits") {
-              return writeJson(response, envelopedError(402, "insufficient_credits", "积分余额不足，请充值后再反推。"));
+              return writeJson(response, envelopedError(402, "prompt_reverse_credit_reserve_insufficient", "积分余额预留不足，请前往充值"));
             }
             return writeJson(response, envelopedError(400, "prompt_reverse_billing_failed", code));
           }
           const messages: TextGatewayChatCompletionRequest["messages"] = [
-            { role: "system", content: promptReverseInstruction(mode) },
+            { role: "system", content: systemPrompt },
             {
               role: "user",
               content: mode === "video"
                 ? [
                   {
                     type: "text",
-                    text: `前 ${video!.sampling.timelineSheetCount} 张图片是完整视频按顺序生成的连续 ${video!.sampling.frameRate} FPS 时间轴联系表，共 ${video!.sampling.frameCount} 帧${video!.sampling.durationMs ? `，视频时长 ${video!.sampling.durationMs} 毫秒` : ""}。请严格按联系表数组顺序、每张图片从左到右再从上到下分析完整时间线，反推动作、分镜和运镜。末尾 ${video!.sampling.keyFrameCount} 张图片是场景高清关键帧，只用于补充人物妆造、发型、神态、服饰和环境细节。`,
+                    text: `前 ${video!.sampling.timelineSheetCount} 张图片是完整视频按顺序生成的连续 ${video!.sampling.frameRate} FPS 时间轴联系表，共 ${video!.sampling.frameCount} 帧${video!.sampling.durationMs ? `，视频时长 ${video!.sampling.durationMs} 毫秒` : ""}。请以每 ${Math.round(video!.sampling.segmentDurationMs / 1000)} 秒为分镜边界，严格按联系表数组顺序、每张图片从左到右再从上到下分析完整时间线，分别输出每段的人物、道具、场景资产提示词，并说明相邻分镜衔接。末尾 ${video!.sampling.keyFrameCount} 张图片是场景高清关键帧，只用于补充人物妆造、发型、神态、服饰和环境细节。`,
                   },
                   ...video!.frameSheets.map((sheet) => ({
                     type: "image_url" as const,
@@ -23203,6 +23308,7 @@ export function createPhoneAuthDevServer(
             const completion = canvasTextChatGateway.completeJsonWithUsage
               ? await canvasTextChatGateway.completeJsonWithUsage(gatewayInput)
               : { content: await canvasTextChatGateway.completeJson(gatewayInput), usage: null, providerRequestId: null };
+            const usage = promptReverseUsageFromProviderUsage(completion.usage);
             const credit = await billing.settleRound({
               ownerUserId: authenticated.user.id,
               actorTeamMemberId: authenticated.user.teamMember?.id ?? null,
@@ -23210,10 +23316,11 @@ export function createPhoneAuthDevServer(
               stepId: billingStepId,
               reservationId: billingReceipt.reservationId,
               reservedAmount: billingReceipt.amount,
-              usage: promptReverseUsageFromProviderUsage(completion.usage),
+              usage,
               pricing: model.pricing,
               providerRequestId: completion.providerRequestId,
               reason: creditReason,
+              metadata: billingMetadata,
               now: new Date(),
             });
             return writeJson(response, enveloped(200, {
@@ -23225,6 +23332,7 @@ export function createPhoneAuthDevServer(
                 sampling: video!.sampling,
               }),
               credit,
+              usage,
               result: parsePromptReverseResult(completion.content),
             }));
           } catch (error) {
@@ -23239,6 +23347,7 @@ export function createPhoneAuthDevServer(
                 reservedAmount: billingReceipt.amount,
                 failureCode: message,
                 reason: creditReason,
+                metadata: billingMetadata,
                 now: new Date(),
               });
             } catch {

@@ -2131,6 +2131,10 @@ function translateCreditLedgerReason(reason, metadata = {}, sourceType = "") {
   const mediaType = String(metadata.mediaType ?? metadata.kind ?? "").trim().toLowerCase();
   const targetType = String(metadata.targetType ?? metadata.target_type ?? "").trim().toLowerCase();
   const taskType = String(metadata.taskType ?? metadata.task_type ?? metadata.operation ?? "").trim().toLowerCase();
+  const promptReverseLabel = promptReverseCreditLedgerLabel(reason, metadata);
+  if (promptReverseLabel) {
+    return promptReverseLabel;
+  }
   if (isCanvasAgentLedgerEntry(normalizedSourceType, normalized, metadata)) {
     return "画布协作Agent操作消耗";
   }
@@ -2167,6 +2171,10 @@ function translateCreditLedgerReason(reason, metadata = {}, sourceType = "") {
 function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
   const sourceType = String(row.sourceType ?? row.source_type ?? "").trim().toLowerCase();
   const reason = String(row.reason ?? "").trim().toLowerCase();
+  const promptReverseLabel = promptReverseCreditLedgerLabel(row.reason, metadata);
+  if (promptReverseLabel) {
+    return promptReverseLabel;
+  }
   if (isCanvasAgentLedgerEntry(sourceType, reason, metadata)) {
     return "画布协作Agent操作消耗";
   }
@@ -2191,6 +2199,16 @@ function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
     return explicit;
   }
   return fallback || "积分变动";
+}
+
+function promptReverseCreditLedgerLabel(reason, metadata = {}) {
+  const normalizedReason = String(reason ?? "").trim().toLowerCase();
+  const operation = String(metadata.operation ?? metadata.taskType ?? metadata.task_type ?? "").trim().toLowerCase();
+  const mode = String(metadata.promptReverseMode ?? metadata.prompt_reverse_mode ?? metadata.mediaType ?? "").trim().toLowerCase();
+  if (normalizedReason === "工具箱视频反推消耗积分") return "视频提示词反推消耗";
+  if (normalizedReason === "工具箱图片反推消耗积分") return "图片提示词反推消耗";
+  if (operation !== "toolbox_prompt_reverse") return "";
+  return mode === "video" ? "视频提示词反推消耗" : "图片提示词反推消耗";
 }
 
 function isCanvasAgentLedgerEntry(sourceType, reason, metadata = {}) {

@@ -30,3 +30,4 @@ tmp-ui-screenshots/
 test-results/
 secrets/
 artifacts/admin-restore/
+plugins/video-batch/

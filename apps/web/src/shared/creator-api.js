@@ -1111,7 +1111,7 @@ export const creatorApi = {
   runToolboxPromptReverse(input = {}) {
     return postJsonWithIdempotency("/api/toolbox/prompt-reverse", input, {
       action: "toolbox.prompt-reverse",
-      timeoutMs: 180000,
+      timeoutMs: 600000,
     });
   },
 
@@ -1420,6 +1420,7 @@ export const creatorApi = {
         action: "canvas.node.run",
         idempotencyKey: options.idempotencyKey,
         signal: options.signal,
+        timeoutMs: 60000,
       },
     );
   },

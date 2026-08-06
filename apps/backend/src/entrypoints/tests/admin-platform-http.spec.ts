@@ -5899,13 +5899,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(payload.meta.pageSize, 20);
       assert.equal(payload.meta.total, 3);
       assert.equal(payload.data.length, 3);
-      const visibleRecords = payload.data.map((item: { phone: string; verificationCode: string | null; smsContent: string | null }) => ({
+      const visibleRecords = payload.data.map((item: { phone: string; verificationCode: string; smsContent: string }) => ({
         phone: item.phone,
         verificationCode: item.verificationCode,
         smsContent: item.smsContent,
       }));
-      assert.equal(visibleRecords.every((item) => item.verificationCode === null), true);
-      assert.equal(visibleRecords.every((item) => item.smsContent === null), true);
+      assert.equal(visibleRecords.every((item) => item.verificationCode.length > 0), true);
+      assert.equal(visibleRecords.every((item) => item.smsContent.length > 0), true);
       const localDevRecord = payload.data.find((item: { provider: string }) => item.provider === "dev");
       const localTencentRecord = payload.data.find((item: { errorCode: string }) => (
         item.errorCode === "FailedOperation.SignatureIncorrectOrUnapproved"
@@ -5916,7 +5916,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(localDevRecord?.ipAddress, "127.0.0.1");
       assert.equal(localDevRecord?.status, "failed");
       assert.equal(localTencentRecord?.ipAddress, "127.0.0.1");
-      assert.equal(sentTencentRecord?.smsContent, null);
+      assert.equal(sentTencentRecord?.verificationCode, "654321");
+      assert.equal(sentTencentRecord?.smsContent, "【登录验证】验证码 654321，5 分钟内有效。");
       assert.equal(sentTencentRecord?.ipAddress, "198.51.100.42");
     } finally {
       await server.close();
@@ -5980,11 +5981,11 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(challengeResponse.status, 200);
       assert.equal(recordsResponse.status, 200);
       assert.match(challenge.code ?? "", /^\d{6}$/);
-      assert.equal(testRecord?.verificationCode, null);
-      assert.equal(testRecord?.smsContent, null);
+      assert.equal(testRecord?.verificationCode, challenge.code);
+      assert.equal(testRecord?.smsContent, `【登录验证】验证码 ${challenge.code}，5 分钟内有效。`);
       assert.equal(testRecord?.status, "test");
-      assert.equal(storedRecord.rows[0]?.verification_code, null);
-      assert.equal(storedRecord.rows[0]?.sms_content, null);
+      assert.equal(storedRecord.rows[0]?.verification_code, challenge.code);
+      assert.equal(storedRecord.rows[0]?.sms_content, `【登录验证】验证码 ${challenge.code}，5 分钟内有效。`);
       assert.equal(verifyResponse.status, 200);
       assert.equal(createdUser.rows[0]?.count, 1);
     } finally {

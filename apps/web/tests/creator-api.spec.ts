@@ -997,7 +997,7 @@ test("image task creation keeps a 60 second response window", async () => {
   assert.equal(timers[0], 60000);
 });
 
-test("video task creation keeps a 60 second response window", async () => {
+test("video and canvas task creation keep a 60 second response window", async () => {
   globalThis.fetch = async () => ({
     ok: true,
     text: async () => JSON.stringify({ taskId: "video-task-1", status: "queued" }),
@@ -1016,12 +1016,13 @@ test("video task creation keeps a 60 second response window", async () => {
     const { creatorApi } = await import("../src/shared/creator-api.js");
     await creatorApi.createVideoTask("episode-1", { prompt: "test" });
     await creatorApi.generateVideos({ motionPrompt: "test" });
+    await creatorApi.runCanvasNode("canvas-1", "video-node-1", { kind: "video", motionPrompt: "test" });
   } finally {
     globalThis.setTimeout = previousSetTimeout;
     globalThis.clearTimeout = previousClearTimeout;
   }
 
-  assert.deepEqual(timers, [60000, 60000]);
+  assert.deepEqual(timers, [60000, 60000, 60000]);
 });
 
 test("video task retries reuse the same idempotency key until a response succeeds", async () => {

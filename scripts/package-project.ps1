@@ -6,6 +6,12 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$videoBatchBinaryBuilder = Join-Path $repoRoot "scripts\prepare-video-batch-yt-dlp.ps1"
+
+if (-not (Test-Path (Join-Path $repoRoot "apps\backend\vendor\yt-dlp.exe"))) {
+  & $videoBatchBinaryBuilder
+  if ($LASTEXITCODE -ne 0) { throw "Unable to prepare the backend video batch resolver" }
+}
 
 if (-not $OutputPath) {
   $OutputPath = Join-Path $repoRoot "dist\release\comic-ai-package-$timestamp.zip"
@@ -82,6 +88,10 @@ function Test-ExcludedDirectory {
   }
 
   if ($excludedRootNames -contains $segments[0]) {
+    return $true
+  }
+
+  if ($segments.Count -ge 2 -and $segments[0] -eq "plugins" -and $segments[1] -eq "video-batch") {
     return $true
   }
 
