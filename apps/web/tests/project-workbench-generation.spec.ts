@@ -21563,6 +21563,130 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.state.project.coverStorageObjectId, "storage-1");
   });
 
+  it("compresses a large project cover before uploading it", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const previousDocument = globalThis.document;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+      lastModified: 123,
+    });
+    const bitmap = { width: 4000, height: 2000, closeCalled: false, close() { this.closeCalled = true; } };
+    const drawCalls = [];
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage: (...args) => drawCalls.push(args) }),
+      toBlob: (callback, type, quality) => {
+        assert.equal(type, "image/webp");
+        assert.equal(quality, 0.85);
+        callback(new Blob([new Uint8Array(400 * 1024)], { type }));
+      },
+    };
+    let uploadedFile = null;
+    globalThis.createImageBitmap = async () => bitmap;
+    globalThis.document = { createElement: (tagName) => tagName === "canvas" ? canvas : null };
+
+    try {
+      await uploadProjectCoverFile({
+        state: {},
+        ui: {},
+        api: {
+          uploadFile: async (file) => {
+            uploadedFile = file;
+            return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+          },
+          updateProjectCover: async () => ({}),
+        },
+      }, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+      globalThis.document = previousDocument;
+    }
+
+    assert.equal(canvas.width, 1920);
+    assert.equal(canvas.height, 960);
+    assert.equal(drawCalls.length, 1);
+    assert.equal(uploadedFile.name, "cover.webp");
+    assert.equal(uploadedFile.type, "image/webp");
+    assert.equal(uploadedFile.size, 400 * 1024);
+    assert.equal(uploadedFile.lastModified, 123);
+    assert.equal(bitmap.closeCalled, true);
+  });
+
+  it("falls back to the original project cover when browser compression fails", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+    });
+    let uploadedFile = null;
+    let decodeAttempts = 0;
+    globalThis.createImageBitmap = async () => {
+      decodeAttempts += 1;
+      throw new Error("decode_failed");
+    };
+
+    try {
+      await uploadProjectCoverFile({
+        state: {},
+        ui: {},
+        api: {
+          uploadFile: async (file) => {
+            uploadedFile = file;
+            return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+          },
+          updateProjectCover: async () => ({}),
+        },
+      }, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+    }
+
+    assert.equal(decodeAttempts, 1);
+    assert.equal(uploadedFile, original);
+  });
+
+  it("keeps the original project cover when WebP encoding is not smaller", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const previousDocument = globalThis.document;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+    });
+    const bitmap = { width: 2000, height: 1000, close() {} };
+    let encodedBlob = new Blob([new Uint8Array(original.size)], { type: "image/webp" });
+    const canvas = {
+      getContext: () => ({ drawImage() {} }),
+      toBlob: (callback) => callback(encodedBlob),
+    };
+    let uploadedFile = null;
+    globalThis.createImageBitmap = async () => bitmap;
+    globalThis.document = { createElement: (tagName) => tagName === "canvas" ? canvas : null };
+    const workbench = {
+      state: {},
+      ui: {},
+      api: {
+        uploadFile: async (file) => {
+          uploadedFile = file;
+          return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+        },
+        updateProjectCover: async () => ({}),
+      },
+    };
+
+    try {
+      await uploadProjectCoverFile(workbench, original, "project-1");
+      assert.equal(uploadedFile, original);
+
+      encodedBlob = new Blob([new Uint8Array(400 * 1024)], { type: "image/png" });
+      uploadedFile = null;
+      await uploadProjectCoverFile(workbench, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+      globalThis.document = previousDocument;
+    }
+
+    assert.equal(uploadedFile, original);
+  });
+
   it("renders the rename modal when renaming a project", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({

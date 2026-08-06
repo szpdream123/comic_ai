@@ -38032,6 +38032,64 @@ function getProjectCoverUploadLimits() {
   };
 }
 
+const projectCoverCompressionThresholdBytes = 1024 * 1024;
+const projectCoverMaxDimension = 1920;
+const projectCoverWebpQuality = 0.85;
+
+async function prepareProjectCoverUploadFile(file) {
+  const originalSize = Number(file?.size ?? 0);
+  if (
+    !Number.isFinite(originalSize) ||
+    originalSize <= projectCoverCompressionThresholdBytes ||
+    typeof globalThis.createImageBitmap !== "function" ||
+    typeof globalThis.File !== "function"
+  ) {
+    return file;
+  }
+
+  let bitmap = null;
+  try {
+    bitmap = await globalThis.createImageBitmap(file, { imageOrientation: "from-image" });
+    const sourceWidth = Number(bitmap?.width ?? 0);
+    const sourceHeight = Number(bitmap?.height ?? 0);
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+      return file;
+    }
+
+    const scale = Math.min(1, projectCoverMaxDimension / Math.max(sourceWidth, sourceHeight));
+    const canvas = globalThis.document?.createElement?.("canvas");
+    const context = canvas?.getContext?.("2d");
+    if (!canvas || !context || typeof canvas.toBlob !== "function") {
+      return file;
+    }
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    const compressed = await new Promise((resolve) => {
+      canvas.toBlob(resolve, "image/webp", projectCoverWebpQuality);
+    });
+    if (
+      !compressed ||
+      compressed.type !== "image/webp" ||
+      compressed.size <= 0 ||
+      compressed.size >= originalSize
+    ) {
+      return file;
+    }
+
+    const baseName = String(file?.name ?? "project-cover").replace(/\.[^.\\/]+$/, "") || "project-cover";
+    return new File([compressed], `${baseName}.webp`, {
+      type: "image/webp",
+      lastModified: Number.isFinite(Number(file?.lastModified)) ? Number(file.lastModified) : Date.now(),
+    });
+  } catch {
+    return file;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
 function openBatchEpisodeFlow(workbench) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.isSingleEpisodeModalOpen = false;
@@ -39817,9 +39875,12 @@ function buildTeamAssetLocalUploadToast(acceptedCount, skippedCount, suffix) {
 }
 
 export async function uploadProjectCoverFile(workbench, file, projectId) {
-  const upload = await uploadLocalFile(workbench, file, "project-covers", {
+  const uploadLimits = getProjectCoverUploadLimits();
+  validateUploadFile(file, uploadLimits);
+  const uploadFile = await prepareProjectCoverUploadFile(file);
+  const upload = await uploadLocalFile(workbench, uploadFile, "project-covers", {
     projectId,
-    uploadLimits: getProjectCoverUploadLimits(),
+    uploadLimits,
   });
   const result = await workbench.api.updateProjectCover({
     projectId,
