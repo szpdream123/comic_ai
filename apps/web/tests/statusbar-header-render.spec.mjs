@@ -608,6 +608,44 @@ test("credit ledger labels current and historical Canvas Agent charges in Chines
   assert.doesNotMatch(html, /Canvas Agent text round/);
 });
 
+test("credit ledger labels prompt reverse charges by media type instead of Canvas Agent", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000", availableCredits: 2000 } },
+    ui: {
+      activeNavTab: "home",
+      creditLedgerOpen: true,
+      creditLedgerRows: [
+        {
+          entryType: "reservation",
+          amount: 12,
+          availableDelta: -12,
+          balanceAfter: 1988,
+          sourceType: "canvas_agent_text_round",
+          reason: "工具箱视频反推消耗积分",
+          metadata: { agentStepId: "video-reverse-step" },
+          createdAt: "2026-08-06T06:22:00.000Z",
+        },
+        {
+          entryType: "consume",
+          amount: 4,
+          consumedDelta: 4,
+          balanceAfter: 1988,
+          sourceType: "credit_reservation_allocation",
+          reason: "reservation allocation consumed",
+          metadata: { operation: "toolbox_prompt_reverse", promptReverseMode: "image", agentStepId: "image-reverse-step" },
+          createdAt: "2026-08-06T06:23:00.000Z",
+        },
+      ],
+      creditLedgerSummary: { displayAvailableCredits: 1988 },
+    },
+  });
+
+  assert.match(html, /视频提示词反推消耗/);
+  assert.match(html, /图片提示词反推消耗/);
+  assert.doesNotMatch(html, /画布协作Agent操作消耗/);
+});
+
 test("membership pricing overlay renders from every workbench module", () => {
   const cases = [
     ["home", { activeNavTab: "home" }],

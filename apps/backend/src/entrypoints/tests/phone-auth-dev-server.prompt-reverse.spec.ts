@@ -38,7 +38,7 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
     );
     await grantCredits(db, {
       userId,
-      amount: 100,
+      amount: 300,
       sourceType: "test_credit_seed",
       sourceId: randomUUID(),
       reason: "prompt reverse test credit",
@@ -55,8 +55,8 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
        ) VALUES (
          $1, $2, $3, 'test', 'test-vision',
          'openai_compatible_chat', 'stream', 'text', '["text.chat"]'::jsonb,
-         '{"imageInput":true}'::jsonb, '{}'::jsonb, '{}'::jsonb,
-         '{}'::jsonb, '{"minimumCredits":1,"tokenCreditsPerMillion":1}'::jsonb, '{}'::jsonb,
+         '{"imageInput":true,"contextWindow":32000}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+         '{}'::jsonb, '{"minimumCredits":1,"tokenCreditsPerMillion":1000}'::jsonb, '{}'::jsonb,
          '{"toolboxTools":["prompt-reverse"]}'::jsonb,
          'active', -1000, '', NOW(), NOW()
        )`,
@@ -74,6 +74,19 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
             tags: ["video"],
             negativePrompt: "",
           });
+        },
+        async completeJsonWithUsage(input) {
+          gatewayCalls.push(input);
+          return {
+            content: JSON.stringify({
+              description: "完整视频描述",
+              positivePrompt: "完整视频提示词，画面内容无字幕，人物无纹身",
+              tags: ["video"],
+              negativePrompt: "",
+            }),
+            usage: { prompt_tokens: 9000, completion_tokens: 3000, total_tokens: 12000 },
+            providerRequestId: null,
+          };
         },
       },
     });
@@ -132,6 +145,14 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
     assert.equal(JSON.stringify(envelope.data).includes(modelCode), false);
     assert.equal(envelope.data.frameSheetCount, 2);
     assert.equal(envelope.data.sampling.frameRate, 6);
+    assert.deepEqual(envelope.data.usage, {
+      promptTokens: 9000,
+      completionTokens: 3000,
+      cachedTokens: 0,
+      totalTokens: 12000,
+    });
+    assert.equal(envelope.data.credit.consumed, 12);
+    assert.equal(envelope.data.credit.released, 20);
     const content = gatewayCalls.at(-1)?.messages?.[1]?.content;
     assert.ok(Array.isArray(content));
     assert.match(String(content[0]?.type === "text" ? content[0].text : ""), /完整时间线/);
@@ -149,7 +170,7 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
       [userId],
     );
     assert.equal(reservation.rows[0]?.reason, "工具箱视频反推消耗积分");
-    assert.equal(Number(reservation.rows[0]?.amount_consumed), 1);
+    assert.equal(Number(reservation.rows[0]?.amount_consumed), 12);
   });
 
   it("accepts video frame sheets when the browser cannot report duration metadata", async () => {
@@ -192,7 +213,39 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
       [userId],
     );
     assert.equal(reservation.rows[0]?.reason, "工具箱图片反推消耗积分");
-    assert.equal(Number(reservation.rows[0]?.amount_consumed), 1);
+    assert.equal(Number(reservation.rows[0]?.amount_consumed), 12);
+  });
+
+  it("uses the separately managed image and video prompt reverse instructions", async () => {
+    await db.query(
+      `INSERT INTO runtime_config_entries (key, value_json, value_type, scope, description, updated_at)
+       VALUES ($1, $2::jsonb, 'json', 'creator', 'toolbox prompt reverse test', NOW())
+       ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, updated_at = NOW()`,
+      [
+        "creator.toolbox_prompt_reverse",
+        JSON.stringify({
+          imageInstruction: "后台图片反推指令",
+          videoInstruction: "后台视频反推指令：{{segmentDurationSeconds}} 秒，{{segmentDurationMs}} 毫秒",
+        }),
+      ],
+    );
+
+    const imageResponse = await postPromptReverse("image-custom-instruction", {
+      mode: "image",
+      displayName: modelDisplayName,
+      imageDataUrl: "data:image/jpeg;base64,AQIDBA==",
+    });
+    assert.equal(imageResponse.status, 200);
+    assert.equal(gatewayCalls.at(-1)?.messages?.[0]?.content, "后台图片反推指令");
+
+    const videoResponse = await postPromptReverse("video-custom-instruction", {
+      mode: "video",
+      displayName: modelDisplayName,
+      frameSheetDataUrls: ["data:image/jpeg;base64,AQIDBA=="],
+      samplingMetadata: { frameRate: 6, frameCount: 90, durationMs: 15_000, sheetCount: 1 },
+    });
+    assert.equal(videoResponse.status, 200);
+    assert.equal(gatewayCalls.at(-1)?.messages?.[0]?.content, "后台视频反推指令：15 秒，15000 毫秒");
   });
 
   it("rejects video sampling below 6 FPS before model invocation", async () => {
@@ -222,6 +275,44 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
 
     assert.equal(response.status, 400);
     assert.equal(envelope.errorCode, "prompt_reverse_video_frame_sheet_count_invalid");
+    assert.equal(gatewayCalls.length, callsBefore);
+  });
+
+  it("requires at least 200 available credits before prompt reverse", async () => {
+    await db.query(
+      "UPDATE users SET credit_balance_cached = 199 WHERE id = $1",
+      [userId],
+    );
+    const callsBefore = gatewayCalls.length;
+    const response = await postPromptReverse("insufficient-reserved-credits", {
+      mode: "image",
+      displayName: modelDisplayName,
+      imageDataUrl: "data:image/jpeg;base64,AQIDBA==",
+    });
+    const envelope = await response.json();
+
+    assert.equal(response.status, 402);
+    assert.equal(envelope.errorCode, "prompt_reverse_credit_reserve_insufficient");
+    assert.equal(envelope.message, "积分余额预留不足，请前往充值");
+    assert.equal(gatewayCalls.length, callsBefore);
+  });
+
+  it("requires an active membership before prompt reverse", async () => {
+    await db.query(
+      "UPDATE user_memberships SET status = 'expired' WHERE user_id = $1",
+      [userId],
+    );
+    const callsBefore = gatewayCalls.length;
+    const response = await postPromptReverse("membership-required", {
+      mode: "image",
+      displayName: modelDisplayName,
+      imageDataUrl: "data:image/jpeg;base64,AQIDBA==",
+    });
+    const envelope = await response.json();
+
+    assert.equal(response.status, 403);
+    assert.equal(envelope.errorCode, "membership_required");
+    assert.equal(envelope.message, "请先开通会员后再使用提示词反推。");
     assert.equal(gatewayCalls.length, callsBefore);
   });
 

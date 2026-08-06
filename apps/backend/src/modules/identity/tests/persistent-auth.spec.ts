@@ -494,6 +494,8 @@ describe("persistent phone auth", { concurrency: false }, () => {
       const records = await db.query<{
         status: string;
         phone_e164: string;
+        verification_code: string;
+        sms_content: string;
         ip_address_hash: string;
         user_agent_hash: string;
         provider_request_id: string;
@@ -503,6 +505,11 @@ describe("persistent phone auth", { concurrency: false }, () => {
       assert.equal(records.rows.length, 1);
       assert.equal(records.rows[0]?.status, "sent");
       assert.equal(records.rows[0]?.phone_e164, "13800138000");
+      assert.match(records.rows[0]?.verification_code ?? "", /^\d{6}$/);
+      assert.equal(
+        records.rows[0]?.sms_content,
+        `【登录验证】验证码 ${records.rows[0]?.verification_code}，5 分钟内有效。`,
+      );
       assert.notEqual(records.rows[0]?.ip_address_hash, "203.0.113.10");
       assert.notEqual(records.rows[0]?.user_agent_hash, "UnitTest/1.0");
       assert.equal(records.rows[0]?.provider_request_id, "dev-request-1");

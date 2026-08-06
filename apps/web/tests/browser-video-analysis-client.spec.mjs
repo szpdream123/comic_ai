@@ -39,6 +39,8 @@ test("browser video analysis decoder uses Mediabunny capability probing and orde
   assert.match(source, /ALL_FORMATS/);
   assert.match(source, /videoTrack\.canDecode\(\)/);
   assert.match(source, /canvasesAtTimestamps/);
+  assert.match(source, /readBrowserVideoSourceFrameRate/);
+  assert.match(source, /videoTrack\.computePacketStats\(120\)/);
 });
 
 test("browser video analysis installs its decoder bundle into browser storage and uninstalls cleanly", async (context) => {

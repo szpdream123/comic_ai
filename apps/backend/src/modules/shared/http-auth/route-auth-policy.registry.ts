@@ -265,6 +265,7 @@ const adminApiRouteAuthRegistrations = inventoryRegistrations("admin", [
   ["GET", "/api/admin/dashboard/queue-health"],
   ["GET", "/api/admin/dashboard/model-health"],
   ["GET", "/api/admin/dashboard/recent-events"],
+  ["POST", "/api/admin/video-batch/resolve"],
   ["GET", "/api/admin/models"],
   ["POST", "/api/admin/models"],
   ["GET", "/api/admin/model-templates"],

@@ -2166,6 +2166,7 @@
         risks: "风控与审计",
         smsRecords: "短信记录",
         resources: "资源管理",
+        videoBatch: "视频解析",
         settings: "系统设置",
         account: "管理员账户",
       };
@@ -2233,6 +2234,7 @@
         shotPromptKeyword: "",
         shotPromptTemplates: [],
         shotPromptLoadError: "",
+        toolboxMenuTool: "prompt-reverse",
         settings: { configs: [], secretReferences: [] },
         revealedSecretValues: {},
         adminAccounts: [],
@@ -10280,13 +10282,15 @@
         settings: () => loadSettings(),
         account: () => loadAdminSessions(),
         parameterTemplates: () => loadSettings(),
+        toolboxMenu: () => loadSettings(),
       };
 
       function markAdminPageLoaded(page) {
         state.loadedPages[page] = true;
-        if (page === "settings" || page === "parameterTemplates") {
+        if (page === "settings" || page === "parameterTemplates" || page === "toolboxMenu") {
           state.loadedPages.settings = true;
           state.loadedPages.parameterTemplates = true;
+          state.loadedPages.toolboxMenu = true;
         }
       }
 
@@ -10300,6 +10304,7 @@
           .then(loader)
           .then(() => markAdminPageLoaded(page))
           .finally(() => {
+            setPageLoading(page, false);
             delete state.loadingPromises[page];
             renderShell();
           });
@@ -10541,6 +10546,7 @@
       ];
 
       pages.parameterTemplates = "\u53c2\u6570\u6a21\u677f\u5e93";
+      pages.toolboxMenu = "\u5de5\u5177\u7bb1\u83dc\u5355\u7ba1\u7406";
       runtimeConfigHints.push({
         key: MODEL_PARAMETER_TEMPLATES_CONFIG_KEY,
         value: { templates: DEFAULT_MODEL_PARAMETER_TEMPLATES },
@@ -10552,6 +10558,7 @@
 
       routeFromPath = function routeFromPath() {
         const path = location.pathname;
+        if (path.includes("/toolbox-menu")) return "toolboxMenu";
         if (path.includes("/parameter-templates")) return "parameterTemplates";
         if (path.includes("/models/new") || /^\/admin\/models\/[^/]+/.test(path)) return "models";
         if (path.includes("/models")) return "models";
@@ -10575,6 +10582,7 @@
         const pathMap = {
           dashboard: "/admin/dashboard",
           models: "/admin/models",
+          toolboxMenu: "/admin/toolbox-menu",
           parameterTemplates: "/admin/parameter-templates",
           users: "/admin/users",
           membership: "/admin/membership",
@@ -10598,6 +10606,7 @@
               <nav class="nav">
                 ${navButton("dashboard", "\u603b\u89c8")}
                 ${navButton("models", "\u6a21\u578b\u914d\u7f6e")}
+                ${navButton("toolboxMenu", "\u5de5\u5177\u7bb1\u83dc\u5355\u7ba1\u7406")}
                 ${navButton("parameterTemplates", "\u53c2\u6570\u6a21\u677f")}
                 ${navButton("users", "\u7528\u6237\u79ef\u5206")}
                 ${navButton("membership", "\u4f1a\u5458\u6743\u76ca")}
@@ -10629,6 +10638,7 @@
         document.getElementById("logout-btn").addEventListener("click", logout);
         bindUserFilterControls();
         bindInviteRewardConfigForm();
+        bindToolboxMenuForm();
       };
 
       renderPage = function renderPage() {
@@ -10636,6 +10646,7 @@
         if (pageState) return pageState;
         if (state.page === "dashboard") return dashboardPage();
         if (state.page === "models") return modelsPage();
+        if (state.page === "toolboxMenu") return toolboxMenuPage();
         if (state.page === "parameterTemplates") return parameterTemplatesPage();
         if (state.page === "users") return usersPage();
         if (state.page === "membership") return renderMembershipPage();
@@ -12313,6 +12324,7 @@
       const TOOLBOX_TOOL_OPTIONS = [
         { value: "prompt-reverse", label: "\u63d0\u793a\u8bcd\u53cd\u63a8", note: "\u56fe\u7247\u53c2\u8003\u56fe\u53cd\u63a8\u4e3a\u53ef\u7f16\u8f91\u63d0\u793a\u8bcd" },
       ];
+      const TOOLBOX_PROMPT_REVERSE_CONFIG_KEY = "creator.toolbox_prompt_reverse";
 
       function toolboxToolControls(uiConfig = {}) {
         const selected = new Set(Array.isArray(uiConfig.toolboxTools) ? uiConfig.toolboxTools.map(String) : []);
@@ -12322,6 +12334,82 @@
             <span>${escapeHtml(tool.label)}<span class="metric-note">${escapeHtml(tool.note)}</span></span>
           </label>
         `).join("");
+      }
+
+      function toolboxPromptReverseConfig() {
+        const config = (state.settings?.configs || []).find((item) => item.key === TOOLBOX_PROMPT_REVERSE_CONFIG_KEY);
+        const value = config?.value && typeof config.value === "object" ? config.value : {};
+        return {
+          imageInstruction: String(value.imageInstruction || "").trim(),
+          videoInstruction: String(value.videoInstruction || "").trim(),
+        };
+      }
+
+      function toolboxMenuPage() {
+        const toolId = ["prompt-reverse", "video-depth", "watermark-removal"].includes(state.toolboxMenuTool)
+          ? state.toolboxMenuTool
+          : "prompt-reverse";
+        const config = toolboxPromptReverseConfig();
+        const tabs = [
+          ["prompt-reverse", "提示词反推"],
+          ["video-depth", "视频转深度"],
+          ["watermark-removal", "去水印"],
+        ].map(([value, label]) => `<button class="btn ${value === toolId ? "primary" : "ghost"}" type="button" onclick="setToolboxMenuTool('${value}')">${label}</button>`).join("");
+        const content = toolId === "prompt-reverse"
+          ? `<form id="toolbox-prompt-reverse-editor-form">
+              <section class="card"><h4>图片提示词反推</h4><label class="field"><span>发送给模型的系统提示词</span><textarea name="imageInstruction" rows="13" required>${escapeHtml(config.imageInstruction)}</textarea></label></section>
+              <section class="card"><h4>视频提示词反推</h4><p class="metric-note">{{segmentDurationSeconds}} 与 {{segmentDurationMs}} 会在运行时替换为用户选择的分镜时长。</p><label class="field"><span>发送给模型的系统提示词</span><textarea name="videoInstruction" rows="20" required>${escapeHtml(config.videoInstruction)}</textarea></label></section>
+              <section class="card"><label class="field"><span>操作原因</span><input name="reason" maxlength="200" required placeholder="例如：优化视频资产提取要求" /></label></section>
+              <div class="error-text" id="toolbox-prompt-reverse-editor-error"></div>
+              <button class="btn primary" type="submit" ${permissionAttrs("settings.write")}>保存反推提示词</button>
+            </form>`
+          : `<section class="card"><h4>${toolId === "video-depth" ? "视频转深度" : "去水印"}</h4><p class="metric-note">该工具使用独立的本地处理插件，不读取提示词反推的系统提示词，也不会写入反推配置。</p></section>`;
+        return `<section class="page-section">
+          <div class="toolbar"><div><h3>工具箱菜单管理</h3><span class="metric-note">不同工具独立配置。提示词反推的配置统一发送给前台反推所选的全部模型，不按模型分别设置。</span></div></div>
+          <div class="toolbar"><div class="actions">${tabs}</div></div>
+          ${content}
+        </section>`;
+      }
+
+      setToolboxMenuTool = function setToolboxMenuTool(toolId) {
+        state.toolboxMenuTool = toolId;
+        renderShell();
+      };
+
+      function bindToolboxMenuForm() {
+        const form = document.getElementById("toolbox-prompt-reverse-editor-form");
+        if (!form) return;
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          const error = document.getElementById("toolbox-prompt-reverse-editor-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const result = await api(`/api/admin/settings/${encodeURIComponent(TOOLBOX_PROMPT_REVERSE_CONFIG_KEY)}`, {
+              method: "PATCH",
+              headers: { "idempotency-key": `admin-ui-toolbox-prompt-reverse-${Date.now()}` },
+              body: JSON.stringify({
+                value: {
+                  imageInstruction: String(data.get("imageInstruction") || "").trim(),
+                  videoInstruction: String(data.get("videoInstruction") || "").trim(),
+                },
+                valueType: "json",
+                scope: "creator",
+                description: "工具箱图片与视频提示词反推系统提示词",
+                reason: String(data.get("reason") || "").trim(),
+              }),
+            });
+            const saved = result.data;
+            const configs = [...(state.settings?.configs || [])];
+            const index = configs.findIndex((item) => item.key === TOOLBOX_PROMPT_REVERSE_CONFIG_KEY);
+            if (index >= 0) configs[index] = saved;
+            else configs.push(saved);
+            state.settings = settingsWithRuntimeConfigHints({
+              ...(state.settings || {}),
+              configs,
+              secretReferences: state.settings?.secretReferences || [],
+            });
+          }, "反推提示词已保存").catch(() => undefined);
+        });
       }
 
       function modelKindOption(value) {
@@ -12892,6 +12980,121 @@
       window.moveModelSortOrder = moveModelSortOrder;
       window.probeModelCompatibility = probeModelCompatibility;
       const DEFAULT_ADMIN_OPERATION_REASON = "\u540e\u53f0\u7ba1\u7406\u5458\u64cd\u4f5c";
+
+      (function installVideoBatchAdminPage() {
+        pages.videoBatch = "视频解析";
+        state.adminVideoBatch = state.adminVideoBatch || {
+          links: "",
+          authorized: false,
+          status: "idle",
+          tasks: [],
+          error: "",
+        };
+
+        function renderTask(task, index) {
+          const ready = task?.status === "ready" && task.streamUrl;
+          const title = escapeHtml(task?.title || "未命名视频");
+          const message = ready ? "已解析，可在播放器中手动保存" : escapeHtml(task?.error || "解析失败");
+          return `<article class="card" style="display:grid;gap:8px;padding:12px;">
+            <strong>${index + 1}. ${title}</strong>
+            <span class="metric-note">${message}</span>
+            ${ready ? `<video controls preload="metadata" src="${escapeAttribute(task.streamUrl)}" style="width:100%;max-height:360px;background:#0b1220;"></video><a href="${escapeAttribute(task.streamUrl)}" target="_blank" rel="noreferrer">在新标签页打开播放地址</a>` : ""}
+          </article>`;
+        }
+
+        window.updateAdminVideoBatchLinks = (value) => {
+          state.adminVideoBatch.links = String(value || "");
+          state.adminVideoBatch.error = "";
+        };
+
+        window.setAdminVideoBatchAuthorized = (checked) => {
+          state.adminVideoBatch.authorized = checked === true;
+          state.adminVideoBatch.error = "";
+        };
+
+        window.clearAdminVideoBatch = () => {
+          state.adminVideoBatch = { links: "", authorized: false, status: "idle", tasks: [], error: "" };
+          renderShell();
+        };
+
+        window.resolveAdminVideoBatch = async () => {
+          const current = state.adminVideoBatch;
+          if (!current.links.trim()) {
+            current.error = "请粘贴至少一条视频链接。";
+            renderShell();
+            return;
+          }
+          if (current.authorized !== true) {
+            current.error = "请先确认拥有这些内容的下载或使用授权。";
+            renderShell();
+            return;
+          }
+          current.status = "resolving";
+          current.tasks = [];
+          current.error = "";
+          renderShell();
+          try {
+            const result = await api("/api/admin/video-batch/resolve", {
+              method: "POST",
+              headers: { "idempotency-key": adminIdempotencyKey("video-batch-resolve") },
+              body: JSON.stringify({ links: current.links, authorized: true }),
+            });
+            current.tasks = Array.isArray(result.data?.tasks) ? result.data.tasks : [];
+            current.status = "completed";
+          } catch (error) {
+            current.status = "idle";
+            current.error = error.payload?.error?.message || error.message || "解析失败";
+          }
+          renderShell();
+        };
+
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/video-batch")) return "videoBatch";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "videoBatch") return previousNavigate(page);
+          state.page = "videoBatch";
+          history.pushState(null, "", "/admin/video-batch");
+          renderShell();
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() {
+          if (state.page === "videoBatch") {
+            if (!hasPermission("ops.task.retry")) {
+              return `<section class="state-panel" data-state="forbidden"><strong>当前账户没有视频解析权限</strong><span>请使用具备运营处置权限的管理员账户。</span></section>`;
+            }
+            const current = state.adminVideoBatch;
+            const tasks = Array.isArray(current.tasks) ? current.tasks : [];
+            return `<div class="section-stack">
+              <section class="card">
+                <div class="toolbar"><div><h3 style="margin:0;">视频批量解析</h3><div class="metric-note">仅管理员使用。后端只解析播放地址，不暂存或转发视频。</div></div><span class="tag blue">服务端解析</span></div>
+                <label class="field"><span>视频链接或分享内容</span><textarea rows="8" oninput="updateAdminVideoBatchLinks(this.value)" placeholder="每行粘贴一条抖音、小红书、快手或 Bilibili 链接，也可粘贴分享文案">${escapeHtml(current.links)}</textarea></label>
+                <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;"><input type="checkbox" ${current.authorized ? "checked" : ""} onchange="setAdminVideoBatchAuthorized(this.checked)" />我确认对这些内容拥有下载或使用授权</label>
+                <div class="toolbar" style="justify-content:flex-start;margin-top:12px;"><button class="btn primary" onclick="resolveAdminVideoBatch()" ${current.status === "resolving" ? "disabled" : ""}>${current.status === "resolving" ? "正在解析…" : "解析播放地址"}</button><button class="btn ghost" onclick="clearAdminVideoBatch()">清空</button></div>
+                ${current.error ? `<div class="error-text">${escapeHtml(current.error)}</div>` : ""}
+              </section>
+              <section class="card"><div class="toolbar"><h3 style="margin:0;">解析结果</h3><span class="metric-note">${tasks.length ? `已处理 ${tasks.length} 条` : "等待解析"}</span></div><div class="grid">${tasks.length ? tasks.map(renderTask).join("") : `<div class="state-panel" style="min-height:160px;"><span>解析结果将在这里显示</span></div>`}</div></section>
+            </div>`;
+          }
+          return previousRenderPage();
+        };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || !hasPermission("ops.task.retry") || nav.querySelector('[data-page="videoBatch"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "videoBatch";
+          button.innerHTML = "<span>视频解析</span>";
+          if (state.page === "videoBatch") button.classList.add("active");
+          button.addEventListener("click", () => navigate("videoBatch"));
+          nav.insertBefore(button, settingsButton);
+        };
+      })();
 
       function stripAdminReasonFields(root = document) {
         const forms = new Set();

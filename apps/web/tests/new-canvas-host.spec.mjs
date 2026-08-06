@@ -303,6 +303,9 @@ test("Canvas node controls refresh only their target X6 node", () => {
     ...workbench,
     newCanvasMount: { shadowRoot: { contains: () => true } },
   };
+  assert.deepEqual(resolveNewCanvasHostUpdateOptionsForTest(mountedWorkbench, {
+    dataset: { action: "close-canvas-image-fullscreen", nodeId: "node-1" },
+  }), { surfaceOnly: true });
   for (const action of [
     "toggle-canvas-add-menu",
     "toggle-canvas-zoom-menu",

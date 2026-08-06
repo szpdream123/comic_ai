@@ -359,6 +359,39 @@ export async function processSeedanceVideoSubmitJob(
       now: input.now,
     });
 
+    if (submitted.request.externalRequestId) {
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        providerRequestId: submitted.request.id,
+        progressStage: submitted.request.status === "running"
+          ? "provider_rendering"
+          : "provider_accepted",
+        providerStatus: summarizeProviderResponse(submitted.request.redactedResponse)
+          ?? {
+            providerStatus: submitted.request.status,
+            externalRequestId: submitted.request.externalRequestId,
+          },
+        now: input.now,
+      });
+    }
+
+    if (!submitted.request.externalRequestId) {
+      const failureCode = "provider_submission_missing_task_id";
+      const errorMessage = "模型服务未返回可查询的任务 ID。";
+      await markProviderRequestFailed(db, {
+        providerRequestId: submitted.request.id,
+        failureCode,
+        redactedResponse: {
+          ...(submitted.request.redactedResponse ?? {}),
+          failureCode,
+          displayMessage: errorMessage,
+        },
+        now: input.now,
+      });
+      throw Object.assign(new Error(failureCode), { failureCode });
+    }
+
     return {
       status: submitted.kind === "already_started" ? "already_started" : "submitted",
       externalRequestId: submitted.request.externalRequestId,

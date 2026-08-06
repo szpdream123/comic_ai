@@ -29,20 +29,44 @@ if (listenerPid) {
   waitForPortRelease(port, 10_000);
 }
 
-const outFd = openSync(outLog, "a");
-const errFd = openSync(errLog, "a");
-const child = spawn(runtime, ["scripts/run-phone-auth-http-only.mjs"], {
-  cwd: process.cwd(),
-  env: process.env,
-  detached: true,
-  windowsHide: true,
-  stdio: ["ignore", outFd, errFd],
-});
+const child = process.platform === "win32"
+  ? startHiddenWindowsNode(runtime)
+  : spawn(runtime, ["scripts/run-phone-auth-http-only.mjs"], {
+    cwd: process.cwd(),
+    env: process.env,
+    detached: true,
+    stdio: ["ignore", openSync(outLog, "a"), openSync(errLog, "a")],
+  });
 
 child.unref();
 writeFileSync(pidFile, `${child.pid}\n`, "utf8");
 console.log(`Detached phone-auth http-only pid=${child.pid}`);
 console.log(`Logs: ${outLog}`);
+
+function startHiddenWindowsNode(filePath) {
+  const wscript = join(process.env.SystemRoot || "C:\\Windows", "System32", "wscript.exe");
+  const launcher = spawnSync(wscript, [
+    join(process.cwd(), "scripts", "launch-hidden-node.vbs"),
+    filePath,
+    "scripts/run-phone-auth-http-only.mjs",
+    process.cwd(),
+  ], {
+    cwd: process.cwd(),
+    env: process.env,
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  if (launcher.status !== 0) throw new Error("Unable to launch hidden phone-auth process");
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 35_000) {
+    const pid = findListenerPid(port);
+    if (pid) return { pid, unref() {} };
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  throw new Error("Unable to detect hidden phone-auth process listener");
+}
+
+
 
 function readPidFile(path) {
   if (!existsSync(path)) return null;

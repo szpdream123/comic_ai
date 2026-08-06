@@ -500,6 +500,21 @@ describe("Seedance video worker user ownership", () => {
         userId: "70000000-0000-4000-8000-000000000305",
         status: "queued",
       });
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            model_code, media_type, task_mode, status, progress_stage,
+            request_summary_json, submitted_at, created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000305', $1, $2, 'episode', $3, $4, $3,
+            'seedance-i2v-pro', 'video', 'video.image_to_video', 'queued', 'queued',
+            '{}'::jsonb, $5, $5, $5
+          )
+        `,
+        [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, new Date("2026-07-13T02:06:00.000Z")],
+      );
       const result = await processSeedanceVideoSubmitJob(db, {
         taskId: seeded.taskId,
         env: { VOLCENGINE_ARK_API_KEY: "test-key" },
@@ -512,6 +527,8 @@ describe("Seedance video worker user ownership", () => {
       const state = await db.query<{
         task_status: string;
         task_failure_code: string | null;
+        snapshot_status: string;
+        snapshot_progress_stage: string;
         provider_status: string;
         external_request_id: string | null;
         log_status: string;
@@ -522,12 +539,15 @@ describe("Seedance video worker user ownership", () => {
           SELECT
             task.status AS task_status,
             task.failure_code AS task_failure_code,
+            snapshot.status AS snapshot_status,
+            snapshot.progress_stage AS snapshot_progress_stage,
             provider.status AS provider_status,
             provider.external_request_id,
             log.status AS log_status,
             log.failure_code AS log_failure_code,
             log.request_body_json
           FROM tasks task
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
           JOIN provider_requests provider ON provider.task_id = task.id
           JOIN user_model_request_logs log ON log.provider_request_id = provider.id
           WHERE task.id = $1
@@ -542,6 +562,8 @@ describe("Seedance video worker user ownership", () => {
       assert.deepEqual(state.rows[0], {
         task_status: "running",
         task_failure_code: null,
+        snapshot_status: "running",
+        snapshot_progress_stage: "provider_accepted",
         provider_status: "accepted",
         external_request_id: "seedance-task-accepted",
         log_status: "submitted",
@@ -552,6 +574,60 @@ describe("Seedance video worker user ownership", () => {
           watermark: false,
         },
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("fails a provider submission that does not return a queryable task id", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "306",
+        userId: "70000000-0000-4000-8000-000000000306",
+        status: "queued",
+      });
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            model_code, media_type, task_mode, status, progress_stage,
+            request_summary_json, submitted_at, created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000306', $1, $2, 'episode', $3, $4, $3,
+            'seedance-i2v-pro', 'video', 'video.image_to_video', 'queued', 'queued',
+            '{}'::jsonb, $5, $5, $5
+          )
+        `,
+        [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, new Date("2026-07-13T02:07:00.000Z")],
+      );
+      const result = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => new Response(
+          JSON.stringify({ data: { status: "queued" } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as typeof fetch,
+        now: new Date("2026-07-13T02:07:00.000Z"),
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [seeded.taskId],
+      );
+      const snapshot = await db.query<{ status: string; failure_json: { failureCode?: string } | null }>(
+        "SELECT status, failure_json FROM ai_generation_task_snapshots WHERE task_id = $1",
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, { status: "failed", failureCode: "provider_submission_missing_task_id" });
+      assert.deepEqual(task.rows[0], {
+        status: "failed",
+        failure_code: "provider_submission_missing_task_id",
+      });
+      assert.equal(snapshot.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_submission_missing_task_id");
     } finally {
       await db.close();
     }

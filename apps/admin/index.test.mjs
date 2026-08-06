@@ -58,6 +58,7 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/dashboard/overview",
     "/api/admin/dashboard/model-health",
     "/api/admin/dashboard/recent-events",
+    "/api/admin/video-batch/resolve",
     "/api/admin/models",
     "/api/admin/users",
     "/api/admin/settings",
@@ -95,6 +96,10 @@ test("admin shell wires final design actions to real admin APIs", () => {
   ]) {
     assert.match(script, new RegExp(escapeRegExp(apiPath)));
   }
+
+  assert.match(script, /视频解析/);
+  assert.match(script, new RegExp(escapeRegExp("/admin/video-batch")));
+  assert.match(script, /resolveAdminVideoBatch/);
 
   assert.match(script, /idempotency-key": `admin-ui-password-change-\$\{Date\.now\(\)\}`/);
   assert.match(script, /idempotency-key": `admin-ui-revoke-sessions-\$\{Date\.now\(\)\}`/);
@@ -2390,6 +2395,32 @@ test("admin model editor manages toolbox model availability through uiConfig", (
   assert.match(script, /name="toolboxTools"/);
   assert.match(script, /form\.getAll === "function"/);
   assert.match(script, /uiConfig\.toolboxTools =/);
+});
+
+test("admin toolbox menu management edits image and video prompt reverse instructions", () => {
+  for (const contract of [
+    "TOOLBOX_PROMPT_REVERSE_CONFIG_KEY",
+    "toolboxMenuPage",
+    "toolboxMenu: \"/admin/toolbox-menu\"",
+    "setToolboxMenuTool",
+    "video-depth",
+    "watermark-removal",
+    "imageInstruction",
+    "videoInstruction",
+    "/api/admin/settings/${encodeURIComponent(TOOLBOX_PROMPT_REVERSE_CONFIG_KEY)}",
+    "segmentDurationSeconds",
+    "segmentDurationMs",
+  ]) {
+    assert.match(script, new RegExp(escapeRegExp(contract)));
+  }
+  assert.doesNotMatch(script, /openToolboxPromptReverseEditor/);
+  assert.doesNotMatch(script, /DEFAULT_TOOLBOX_PROMPT_REVERSE_CONFIG/);
+  assert.doesNotMatch(script, /帮我拆解这张图片/);
+});
+
+test("admin shared settings loader clears the standalone toolbox page loading state", () => {
+  const loader = script.slice(script.indexOf("function ensureAdminPageData"), script.indexOf("function preloadAdminShellData"));
+  assert.match(loader, /setPageLoading\(page, false\);/);
 });
 
 function escapeRegExp(value) {

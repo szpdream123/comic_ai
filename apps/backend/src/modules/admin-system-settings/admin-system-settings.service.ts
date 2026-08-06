@@ -23,6 +23,12 @@ import {
 } from "./legal-documents.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
+import {
+  defaultToolboxPromptReverseConfig,
+  normalizeToolboxPromptReverseConfig,
+  toolboxPromptReverseConfigKey,
+  type ToolboxPromptReverseConfig,
+} from "../toolbox/prompt-reverse-prompt-config.ts";
 
 export const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_prompt_preset_categories";
 export const customerSupportConfigKey = "creator.customer_support";
@@ -90,6 +96,14 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
     updated_at: null,
   },
   {
+    key: toolboxPromptReverseConfigKey,
+    value_json: defaultToolboxPromptReverseConfig,
+    value_type: "json",
+    scope: "creator",
+    description: "工具箱图片与视频提示词反推系统提示词",
+    updated_at: null,
+  },
+  {
     key: legalDocumentsConfigKey,
     value_json: defaultLegalDocuments(),
     value_type: "json",
@@ -116,6 +130,59 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
 ];
 
 const adminSecretValueStoreReady = new WeakSet<SqlDatabase>();
+
+export async function ensureToolboxPromptReverseConfigEntry(db: SqlDatabase) {
+  const existing = await queryOne<{ value_json: unknown }>(
+    db,
+    "SELECT value_json FROM runtime_config_entries WHERE key = $1",
+    [toolboxPromptReverseConfigKey],
+  );
+  const normalized = normalizeToolboxPromptReverseConfig(existing?.value_json);
+  if (!existing) {
+    await db.query(
+      `
+        INSERT INTO runtime_config_entries (
+          key, value_json, value_type, scope, description, updated_at
+        )
+        VALUES ($1, $2::jsonb, 'json', 'creator', $3, NOW())
+        ON CONFLICT (key) DO NOTHING
+      `,
+      [
+        toolboxPromptReverseConfigKey,
+        JSON.stringify(normalized),
+        "工具箱图片与视频提示词反推系统提示词",
+      ],
+    );
+  } else if (!toolboxPromptReverseConfigIsComplete(existing.value_json, normalized)) {
+    await db.query(
+      `
+        UPDATE runtime_config_entries
+        SET value_json = $2::jsonb,
+            value_type = 'json',
+            scope = 'creator',
+            description = COALESCE(NULLIF(description, ''), $3),
+            updated_at = NOW()
+        WHERE key = $1
+      `,
+      [
+        toolboxPromptReverseConfigKey,
+        JSON.stringify(normalized),
+        "工具箱图片与视频提示词反推系统提示词",
+      ],
+    );
+  }
+  return normalized;
+}
+
+function toolboxPromptReverseConfigIsComplete(
+  value: unknown,
+  normalized: ToolboxPromptReverseConfig,
+) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.imageInstruction === normalized.imageInstruction
+    && record.videoInstruction === normalized.videoInstruction;
+}
 
 async function ensureAdminSecretValueStore(db: SqlDatabase) {
   if (adminSecretValueStoreReady.has(db)) return;
@@ -234,6 +301,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
   }
 
   async function listSettings() {
+    await ensureToolboxPromptReverseConfigEntry(deps.db);
     await ensureAdminSecretValueStore(deps.db);
     const configs = await deps.db.query<RuntimeConfigRow>(
       `
@@ -1625,6 +1693,9 @@ function normalizeRuntimeConfigValue(key: string, value: unknown) {
   }
   if (key === customerSupportConfigKey) {
     return normalizeCustomerSupportConfig(value);
+  }
+  if (key === toolboxPromptReverseConfigKey) {
+    return normalizeToolboxPromptReverseConfig(value);
   }
   if (key === legalDocumentsConfigKey) {
     return normalizeLegalDocuments(value);

@@ -163,11 +163,13 @@ export class CanvasAgentBillingService {
     stepId: string;
     amount: number;
     reason?: string;
+    metadata?: Record<string, unknown>;
     now: Date;
   }) {
     if (!Number.isInteger(input.amount) || input.amount <= 0) throw new Error("canvas_agent_credit_amount_invalid");
     const reason = input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON;
     const metadata = {
+      ...(input.metadata ?? {}),
       canvasId: input.canvasId ?? null,
       agentTaskId: input.agentTaskId,
       agentStepId: input.stepId,
@@ -283,6 +285,7 @@ export class CanvasAgentBillingService {
     pricing: Record<string, unknown>;
     providerRequestId?: string | null;
     reason?: string;
+    metadata?: Record<string, unknown>;
     now: Date;
   }) {
     const actual = input.usage
@@ -297,7 +300,7 @@ export class CanvasAgentBillingService {
         outcome: "consumed",
         taskId: input.workflowTaskId ?? null,
         providerRequestId: input.providerRequestId ?? null,
-        metadata: { canvasId: input.canvasId ?? null, agentStepId: input.stepId, usage: input.usage },
+        metadata: { ...(input.metadata ?? {}), canvasId: input.canvasId ?? null, agentStepId: input.stepId, usage: input.usage },
         now: input.now,
       });
       if (input.reservedAmount > consumed) {
@@ -308,7 +311,7 @@ export class CanvasAgentBillingService {
           outcome: "released",
           taskId: input.workflowTaskId ?? null,
           providerRequestId: input.providerRequestId ?? null,
-          metadata: { canvasId: input.canvasId ?? null, agentStepId: input.stepId },
+          metadata: { ...(input.metadata ?? {}), canvasId: input.canvasId ?? null, agentStepId: input.stepId },
           now: input.now,
         });
       }
@@ -320,7 +323,7 @@ export class CanvasAgentBillingService {
         amount: input.reservedAmount - consumed,
         sourceId: uuidFromStableId(input.stepId),
         reason: input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON,
-        metadata: { canvasId: input.canvasId ?? null, agentTaskId: input.agentTaskId, agentStepId: input.stepId },
+        metadata: { ...(input.metadata ?? {}), canvasId: input.canvasId ?? null, agentTaskId: input.agentTaskId, agentStepId: input.stepId },
         now: input.now,
       });
     }
@@ -338,6 +341,7 @@ export class CanvasAgentBillingService {
     reservedAmount: number;
     failureCode: string;
     reason?: string;
+    metadata?: Record<string, unknown>;
     now: Date;
   }) {
     if (input.reservationId) {
@@ -348,6 +352,7 @@ export class CanvasAgentBillingService {
         outcome: "released",
         taskId: input.workflowTaskId ?? null,
         metadata: {
+          ...(input.metadata ?? {}),
           canvasId: input.canvasId ?? null,
           agentTaskId: input.agentTaskId,
           agentStepId: input.stepId,
@@ -364,6 +369,7 @@ export class CanvasAgentBillingService {
         sourceId: uuidFromStableId(input.stepId),
         reason: input.reason?.trim() || CANVAS_AGENT_CREDIT_REASON,
         metadata: {
+          ...(input.metadata ?? {}),
           canvasId: input.canvasId ?? null,
           agentTaskId: input.agentTaskId,
           agentStepId: input.stepId,

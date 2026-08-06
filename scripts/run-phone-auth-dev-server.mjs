@@ -146,6 +146,7 @@ function forwardStop(signal) {
   }
 }
 
+
 function pathToFileUrl(filePath) {
   return `file:///${filePath.replace(/\\/g, "/")}`;
 }

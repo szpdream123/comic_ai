@@ -64,14 +64,27 @@ import {
 import { resolveCanvasScriptBatchInitialState, resolveCanvasScriptBatchItems } from "./canvas-script-batch-modal.js";
 import {
   clearToolboxPromptReverseFile,
+  clearToolboxWatermarkRemovalFile,
+  clearToolboxWatermarkRemovalMask,
   closeToolboxPromptReverse,
   closeToolboxVideoDepth,
+  closeToolboxWatermarkRemoval,
   openToolboxPromptReverse,
   openToolboxVideoDepth,
+  openToolboxWatermarkRemoval,
+  setToolboxPromptReverseGuideOpen,
   setToolboxPromptReverseKind,
   setToolboxPromptReverseFile,
   setToolboxPromptReverseModel,
+  setToolboxPromptReverseSegmentDuration,
+  setToolboxVideoDepthGuideOpen,
+  setToolboxWatermarkRemovalGuideOpen,
+  setToolboxWatermarkRemovalBrushSize,
+  setToolboxWatermarkRemovalFile,
+  setToolboxWatermarkRemovalTool,
+  undoToolboxWatermarkRemovalMask,
   updateToolboxPromptReverseActiveView,
+  updateToolboxWatermarkRemovalState,
 } from "../toolbox/toolbox-page.js";
 import {
   buildVideoModelFrameSheets,
@@ -89,6 +102,14 @@ import {
   uninstallBrowserWebGpuDepth,
   runBrowserWebGpuDepth,
 } from "../toolbox/browser-webgpu-depth-client.js";
+import {
+  checkBrowserWatermarkRemoval,
+  detectBrowserWatermarkRegions,
+  installBrowserWatermarkRemoval,
+  runBrowserWatermarkRemoval,
+  uninstallBrowserWatermarkRemoval,
+} from "../toolbox/browser-watermark-removal-client.js";
+import { runBrowserVideoWatermarkRemoval } from "../toolbox/browser-video-watermark-removal-client.js";
 
 import { resolvePromptEditorMentionPreview } from "./prompt-editor-document.js";
 import {
@@ -227,6 +248,7 @@ const EPISODE_BATCH_VIDEO_LIMIT = 10;
 const TOOLBOX_PROMPT_REVERSE_MAX_BYTES = 20 * 1024 * 1024;
 const TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES = 500 * 1024 * 1024;
 const TOOLBOX_VIDEO_DEPTH_MAX_BYTES = 500 * 1024 * 1024;
+const TOOLBOX_WATERMARK_REMOVAL_MAX_BYTES = 20 * 1024 * 1024;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
@@ -421,6 +443,627 @@ function revokeToolboxVideoDepthPreview(ui = {}) {
   }
 }
 
+function applyToolboxWatermarkRemovalFile(workbench, file) {
+  if ((workbench.ui.toolboxWatermarkRemoval?.mediaKind ?? "image") === "video") {
+    return applyToolboxVideoWatermarkRemovalFile(workbench, file);
+  }
+  const type = String(file?.type ?? "").toLowerCase();
+  const accepted = new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!accepted.has(type)) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "仅支持 PNG、JPG 或 WEBP 图片。" });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  if (Number(file?.size ?? 0) > TOOLBOX_WATERMARK_REMOVAL_MAX_BYTES) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "图片大小不能超过 20 MB。" });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  revokeToolboxWatermarkRemovalPreview(workbench.ui);
+  revokeToolboxWatermarkRemovalResult(workbench.ui);
+  const previewUrl = typeof globalThis.URL?.createObjectURL === "function"
+    ? globalThis.URL.createObjectURL(file)
+    : "";
+  setToolboxWatermarkRemovalFile(workbench.ui, {
+    file,
+    fileName: String(file.name ?? "image.png"),
+    fileSize: Number(file.size ?? 0),
+    previewUrl,
+    mediaKind: "image",
+  });
+  renderWorkbenchChrome(workbench);
+  void loadToolboxWatermarkRemovalImageDimensions(workbench, file, previewUrl);
+  return true;
+}
+
+function applyToolboxVideoWatermarkRemovalFile(workbench, file) {
+  const type = String(file?.type ?? "").toLowerCase();
+  const accepted = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+  if (!accepted.has(type)) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "仅支持 MP4、WEBM 或 MOV 视频。" });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  if (Number(file?.size ?? 0) > 120 * 1024 * 1024) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "视频大小不能超过 120 MB。" });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  revokeToolboxWatermarkRemovalPreview(workbench.ui);
+  revokeToolboxWatermarkRemovalResult(workbench.ui);
+  setToolboxWatermarkRemovalFile(workbench.ui, {
+    file,
+    fileName: String(file.name ?? "video.mp4"),
+    fileSize: Number(file.size ?? 0),
+    mediaKind: "video",
+  });
+  renderWorkbenchChrome(workbench);
+  void loadToolboxVideoWatermarkRemovalPreview(workbench, file);
+  return true;
+}
+
+async function loadToolboxVideoWatermarkRemovalPreview(workbench, file) {
+  if (typeof globalThis.document?.createElement !== "function" || typeof globalThis.URL?.createObjectURL !== "function") return;
+  const sourceUrl = globalThis.URL.createObjectURL(file);
+  const video = globalThis.document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.src = sourceUrl;
+  let keepPreviewUrl = false;
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = resolve;
+      video.onerror = () => reject(new Error("video_load_failed"));
+    });
+    const width = Number(video.videoWidth || 0);
+    const height = Number(video.videoHeight || 0);
+    if (!width || !height || !Number.isFinite(video.duration) || video.duration <= 0) throw new Error("video_load_failed");
+    await seekToolboxVideoPreviewFrame(video, Math.min(0.12, Math.max(0.01, video.duration * 0.01)));
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (current.file !== file || current.mediaKind !== "video") return;
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      previewUrl: sourceUrl,
+      imageWidth: width,
+      imageHeight: height,
+      videoDuration: Number(video.duration),
+      error: "",
+    });
+    keepPreviewUrl = true;
+    renderWorkbenchChrome(workbench);
+  } catch {
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (current.file === file && current.mediaKind === "video") {
+      updateToolboxWatermarkRemovalState(workbench.ui, { error: "无法读取所选视频的首帧。" });
+      renderWorkbenchChrome(workbench);
+    }
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    if (!keepPreviewUrl) globalThis.URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+async function seekToolboxVideoPreviewFrame(video, time) {
+  const targetTime = Math.max(0.001, Math.min(Math.max(0.001, Number(video.duration || 0) - 0.01), Number(time || 0)));
+  if (Math.abs(Number(video.currentTime || 0) - targetTime) > 0.002) {
+    await new Promise((resolve, reject) => {
+      const cleanup = () => {
+        video.removeEventListener("seeked", complete);
+        video.removeEventListener("error", fail);
+      };
+      const complete = () => { cleanup(); resolve(); };
+      const fail = () => { cleanup(); reject(new Error("video_seek_failed")); };
+      video.addEventListener("seeked", complete, { once: true });
+      video.addEventListener("error", fail, { once: true });
+      video.currentTime = targetTime;
+    });
+  }
+  if (typeof video.requestVideoFrameCallback !== "function") return;
+  await new Promise((resolve) => {
+    let completed = false;
+    const complete = () => {
+      if (completed) return;
+      completed = true;
+      globalThis.clearTimeout?.(timeoutId);
+      resolve();
+    };
+    const timeoutId = globalThis.setTimeout(complete, 1200);
+    video.requestVideoFrameCallback(complete);
+  });
+}
+
+async function loadToolboxWatermarkRemovalImageDimensions(workbench, file, previewUrl) {
+  if (typeof globalThis.Image !== "function" || !previewUrl) return;
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const candidate = new globalThis.Image();
+      candidate.onload = () => resolve(candidate);
+      candidate.onerror = () => reject(new Error("image_load_failed"));
+      candidate.src = previewUrl;
+    });
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (current.file !== file || current.previewUrl !== previewUrl) return;
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      imageWidth: Number(image.naturalWidth ?? image.width ?? 0),
+      imageHeight: Number(image.naturalHeight ?? image.height ?? 0),
+    });
+    renderWorkbenchChrome(workbench);
+  } catch {
+    // The file type was validated before preview creation; leave the editor in its fallback size on decode failure.
+  }
+}
+
+function matchesToolboxWatermarkOcrRequest(workbench, guard) {
+  const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+  return Boolean(
+    current.open
+    && current.file === guard.file
+    && current.previewUrl === guard.previewUrl
+    && current.maskRevision === guard.maskRevision
+    && current.ocrRequestId === guard.requestId
+  );
+}
+
+async function detectToolboxWatermarkOcr(workbench, file, previewUrl) {
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  const guard = {
+    file,
+    previewUrl,
+    maskRevision: Number(state.maskRevision ?? 0),
+    requestId: Number(state.ocrRequestId ?? 0),
+  };
+  if (!matchesToolboxWatermarkOcrRequest(workbench, guard)) return;
+  updateToolboxWatermarkRemovalState(workbench.ui, {
+    ocrStatus: "detecting",
+    ocrProgress: 0,
+    ocrMessage: "正在读取图片文字",
+    ocrError: "",
+  });
+  renderWorkbenchChrome(workbench);
+  try {
+    const result = await detectBrowserWatermarkRegions(file, {
+      onProgress(progress) {
+        if (!matchesToolboxWatermarkOcrRequest(workbench, guard)) return;
+        updateToolboxWatermarkRemovalState(workbench.ui, {
+          ocrProgress: Number(progress?.progress ?? 0),
+          ocrMessage: String(progress?.message ?? "正在识别平台水印"),
+        });
+        renderWorkbenchChrome(workbench);
+      },
+    });
+    if (!matchesToolboxWatermarkOcrRequest(workbench, guard)) return;
+    if (!result?.maskDataUrl || !Array.isArray(result.regions) || result.regions.length === 0) {
+      updateToolboxWatermarkRemovalState(workbench.ui, {
+        ocrStatus: "no-match",
+        ocrProgress: 100,
+        ocrMessage: "未识别到指定平台水印",
+        ocrConfidence: 0,
+        ocrRegionCount: 0,
+        ocrPlatforms: [],
+        autoMaskApplied: false,
+      });
+    } else {
+      revokeToolboxWatermarkRemovalResult(workbench.ui);
+      updateToolboxWatermarkRemovalState(workbench.ui, {
+        ocrStatus: "completed",
+        ocrProgress: 100,
+        ocrMessage: "已自动生成水印蒙版",
+        ocrConfidence: Number(result.confidence ?? 0),
+        ocrRegionCount: result.regions.length,
+        ocrPlatforms: Array.isArray(result.platforms) ? result.platforms : [],
+        maskDataUrl: result.maskDataUrl,
+        maskDirty: true,
+        maskRevision: guard.maskRevision + 1,
+        autoMaskApplied: true,
+        result: null,
+        error: "",
+      });
+    }
+  } catch (error) {
+    if (!matchesToolboxWatermarkOcrRequest(workbench, guard)) return;
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      ocrStatus: "failed",
+      ocrProgress: 0,
+      ocrMessage: "",
+      ocrError: friendlyError(error),
+      autoMaskApplied: false,
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+function revokeToolboxWatermarkRemovalPreview(ui = {}) {
+  const previewUrl = String(ui.toolboxWatermarkRemoval?.previewUrl ?? "");
+  if (previewUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(previewUrl);
+  }
+}
+
+function revokeToolboxWatermarkRemovalResult(ui = {}) {
+  const downloadUrl = String(ui.toolboxWatermarkRemoval?.result?.downloadUrl ?? "");
+  if (downloadUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(downloadUrl);
+  }
+}
+
+async function checkToolboxWatermarkRemovalPlugin(workbench) {
+  updateToolboxWatermarkRemovalState(workbench.ui, { pluginStatus: "checking", error: "" });
+  renderWorkbenchChrome(workbench);
+  try {
+    const payload = await checkBrowserWatermarkRemoval();
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      pluginStatus: payload.ready ? payload.installed ? "ready" : "not-installed" : "unavailable",
+      pluginVersion: String(payload.version ?? payload.device ?? ""),
+      error: payload.ready ? "" : String(payload.error ?? "当前电脑浏览器不支持本地去水印"),
+    });
+  } catch (error) {
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      pluginStatus: "unavailable",
+      error: `检测失败：${friendlyError(error)}`,
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function installToolboxWatermarkRemovalPlugin(workbench) {
+  updateToolboxWatermarkRemovalState(workbench.ui, {
+    pluginStatus: "installing",
+    installProgress: 0,
+    installMessage: "正在安装本地去水印插件",
+    error: "",
+  });
+  renderWorkbenchChrome(workbench);
+  try {
+    const payload = await installBrowserWatermarkRemoval({
+      onProgress: (progressPayload) => {
+        const latest = workbench.ui.toolboxWatermarkRemoval ?? {};
+        if (!latest.open || latest.pluginStatus !== "installing") return;
+        updateToolboxWatermarkRemovalState(workbench.ui, {
+          installProgress: Math.max(0, Math.min(100, Number(progressPayload.progress ?? 0))),
+          installMessage: String(progressPayload.message ?? "正在安装本地去水印插件"),
+        });
+        renderWorkbenchChrome(workbench);
+      },
+    });
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      pluginStatus: "ready",
+      installProgress: 100,
+      installMessage: "",
+      pluginVersion: String(payload.device ?? "浏览器本地 WASM"),
+      error: "",
+    });
+    workbench.ui.toast = "本地去水印插件安装完成。";
+  } catch (error) {
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      pluginStatus: "not-installed",
+      installProgress: 0,
+      installMessage: "",
+      error: `安装失败：${friendlyError(error)}`,
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function uninstallToolboxWatermarkRemovalPlugin(workbench) {
+  const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+  if (["loading", "processing"].includes(current.status)) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "请等待当前处理结束后再卸载插件。" });
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  updateToolboxWatermarkRemovalState(workbench.ui, { pluginStatus: "uninstalling", error: "" });
+  renderWorkbenchChrome(workbench);
+  try {
+    await uninstallBrowserWatermarkRemoval();
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      pluginStatus: "not-installed",
+      pluginVersion: "",
+      installProgress: 0,
+      installMessage: "",
+      error: "",
+    });
+    workbench.ui.toast = "本地去水印插件已卸载。";
+  } catch (error) {
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      pluginStatus: "ready",
+      error: `卸载失败：${friendlyError(error)}`,
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function runToolboxWatermarkRemoval(workbench) {
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  const isVideo = state.mediaKind === "video";
+  const requestFile = state.file;
+  if (!requestFile) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: `请先添加需要处理的${isVideo ? "视频" : "图片"}。` });
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  if (!state.maskDirty || !state.maskDataUrl) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "请先框选需要去除的水印区域。" });
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  if (state.pluginStatus !== "ready") {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "请先检测并安装本地去水印插件。" });
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+  revokeToolboxWatermarkRemovalResult(workbench.ui);
+  updateToolboxWatermarkRemovalState(workbench.ui, {
+    status: "processing",
+    progress: 0,
+    statusMessage: "正在准备去除水印",
+    result: null,
+    error: "",
+  });
+  renderWorkbenchChrome(workbench);
+  try {
+    const runRemoval = isVideo ? runBrowserVideoWatermarkRemoval : runBrowserWatermarkRemoval;
+    const result = await runRemoval(requestFile, state.maskDataUrl, {
+      onProgress(progress) {
+        const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+        if (!current.open || current.file !== requestFile || current.status !== "processing") return;
+        updateToolboxWatermarkRemovalState(workbench.ui, {
+          progress: Number(progress?.progress ?? 0),
+          statusMessage: String(progress?.message ?? "正在修复涂抹区域"),
+        });
+        updateToolboxWatermarkRemovalProgress(workbench);
+      },
+    });
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (!current.open || current.file !== requestFile) {
+      if (String(result?.downloadUrl ?? "").startsWith("blob:")) globalThis.URL?.revokeObjectURL?.(result.downloadUrl);
+      return;
+    }
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      status: "completed",
+      progress: 100,
+      statusMessage: "处理完成",
+      result,
+      error: "",
+    });
+  } catch (error) {
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (!current.open || current.file !== requestFile) return;
+    updateToolboxWatermarkRemovalState(workbench.ui, {
+      status: "idle",
+      progress: 0,
+      statusMessage: "",
+      error: `处理失败：${friendlyError(error)}`,
+    });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+function restoreToolboxWatermarkRemovalMask(workbench) {
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  const canvas = workbench.root?.querySelector?.("[data-toolbox-watermark-mask]");
+  const maskDataUrl = String(state.maskDataUrl ?? "");
+  if (!canvas?.getContext || !maskDataUrl) return;
+  const context = canvas.getContext("2d");
+  if (!context || typeof globalThis.Image !== "function") return;
+  const image = new globalThis.Image();
+  image.onload = () => {
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (current.maskDataUrl !== maskDataUrl || !canvas.isConnected) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  };
+  image.src = maskDataUrl;
+}
+
+function resolveToolboxVideoWatermarkMaskTarget(eventTarget, event) {
+  const video = eventTarget?.closest?.("[data-toolbox-watermark-video-preview] video");
+  if (!video) return null;
+  const rect = video.getBoundingClientRect?.();
+  if (!rect?.width || !rect.height) return null;
+  const controlsHeight = Math.min(64, Math.max(36, rect.height * 0.16));
+  if (Number(event.clientY) >= rect.bottom - controlsHeight) return null;
+  return video.closest("[data-toolbox-watermark-video-preview]")?.querySelector?.("[data-toolbox-watermark-mask]") ?? null;
+}
+
+function startToolboxWatermarkRemovalMaskPaint(workbench, event, canvas) {
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  if (
+    !state.file ||
+    ["loading", "processing"].includes(state.status) ||
+    (event.button !== undefined && event.button !== 0) ||
+    event.isPrimary === false ||
+    Number(canvas.width ?? 0) <= 1 ||
+    Number(canvas.height ?? 0) <= 1
+  ) return false;
+  const point = resolveToolboxWatermarkRemovalMaskPoint(event, canvas);
+  if (!point) return false;
+  const context = canvas.getContext?.("2d");
+  if (!context?.getImageData) return false;
+  let snapshot;
+  try {
+    snapshot = context.getImageData(0, 0, canvas.width, canvas.height);
+  } catch {
+    return false;
+  }
+  event.preventDefault();
+  canvas.setPointerCapture?.(event.pointerId);
+  workbench.toolboxWatermarkRemovalPaint = {
+    pointerId: event.pointerId,
+    canvas,
+    tool: resolveToolboxWatermarkRemovalMaskTool(state.maskTool),
+    brushSize: Number(state.brushSize) || 32,
+    startPoint: point,
+    point,
+    points: [point],
+    snapshot,
+    previousMaskDataUrl: String(state.maskDataUrl ?? ""),
+  };
+  if (workbench.toolboxWatermarkRemovalPaint.tool === "brush") {
+    drawToolboxWatermarkRemovalMaskBrush(canvas, point, point, workbench.toolboxWatermarkRemovalPaint.brushSize);
+  }
+  return true;
+}
+
+function updateToolboxWatermarkRemovalMaskPaint(workbench, event) {
+  const paint = workbench.toolboxWatermarkRemovalPaint;
+  if (!paint || paint.pointerId !== event.pointerId) return false;
+  const point = resolveToolboxWatermarkRemovalMaskPoint(event, paint.canvas);
+  if (!point) return false;
+  event.preventDefault();
+  if (paint.tool === "brush") {
+    drawToolboxWatermarkRemovalMaskBrush(paint.canvas, paint.point, point, paint.brushSize);
+  } else if (paint.tool === "lasso") {
+    paint.points.push(point);
+    drawToolboxWatermarkRemovalMaskLasso(paint.canvas, paint.points, paint.snapshot, false);
+  } else {
+    drawToolboxWatermarkRemovalMaskSelection(paint.canvas, paint.startPoint, point, paint.snapshot);
+  }
+  paint.point = point;
+  return true;
+}
+
+function finishToolboxWatermarkRemovalMaskPaint(workbench, event) {
+  const paint = workbench.toolboxWatermarkRemovalPaint;
+  if (!paint || (event && paint.pointerId !== event.pointerId)) return false;
+  workbench.toolboxWatermarkRemovalPaint = null;
+  paint.canvas.releasePointerCapture?.(paint.pointerId);
+  const finalPoint = event ? resolveToolboxWatermarkRemovalMaskPoint(event, paint.canvas) : paint.point;
+  const point = finalPoint ?? paint.point;
+  let selectionDrawn = false;
+  if (paint.tool === "brush") {
+    selectionDrawn = drawToolboxWatermarkRemovalMaskBrush(paint.canvas, paint.point, point, paint.brushSize);
+  } else if (paint.tool === "lasso") {
+    if (point !== paint.point) paint.points.push(point);
+    selectionDrawn = drawToolboxWatermarkRemovalMaskLasso(paint.canvas, paint.points, paint.snapshot, true);
+  } else {
+    selectionDrawn = drawToolboxWatermarkRemovalMaskSelection(
+      paint.canvas,
+      paint.startPoint,
+      point,
+      paint.snapshot,
+    );
+  }
+  if (!selectionDrawn) return false;
+  revokeToolboxWatermarkRemovalResult(workbench.ui);
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  const history = Array.isArray(state.maskHistory) ? state.maskHistory : [];
+  updateToolboxWatermarkRemovalState(workbench.ui, {
+    maskDataUrl: paint.canvas.toDataURL("image/png"),
+    maskDirty: true,
+    maskHistory: [...history, paint.previousMaskDataUrl].slice(-12),
+    maskRevision: Number(state.maskRevision ?? 0) + 1,
+    autoMaskApplied: false,
+    result: null,
+    error: "",
+  });
+  return true;
+}
+
+function finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, event) {
+  if (!finishToolboxWatermarkRemovalMaskPaint(workbench, event)) return false;
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  const isLoading = state.status === "loading" || state.status === "processing";
+  const pluginBusy = ["checking", "installing"].includes(state.pluginStatus);
+  const runButton = workbench.root?.querySelector?.('[data-action="run-toolbox-watermark-removal"]');
+  const clearButton = workbench.root?.querySelector?.('[data-action="clear-toolbox-watermark-removal-mask"]');
+  const undoButton = workbench.root?.querySelector?.('[data-action="undo-toolbox-watermark-removal-mask"]');
+  if (runButton) {
+    runButton.disabled = !(
+      state.previewUrl &&
+      state.maskDirty &&
+      state.pluginStatus === "ready" &&
+      !isLoading &&
+      !pluginBusy
+    );
+  }
+  if (clearButton) {
+    clearButton.disabled = !(state.previewUrl && state.maskDirty && !isLoading);
+  }
+  if (undoButton) {
+    undoButton.disabled = !(state.previewUrl && Array.isArray(state.maskHistory) && state.maskHistory.length && !isLoading);
+  }
+  return true;
+}
+
+function resolveToolboxWatermarkRemovalMaskPoint(event, canvas) {
+  const rect = canvas.getBoundingClientRect?.();
+  if (!rect?.width || !rect.height) return null;
+  return {
+    x: Math.max(0, Math.min(canvas.width, ((event.clientX - rect.left) / rect.width) * canvas.width)),
+    y: Math.max(0, Math.min(canvas.height, ((event.clientY - rect.top) / rect.height) * canvas.height)),
+  };
+}
+
+function drawToolboxWatermarkRemovalMaskSelection(canvas, from, to, snapshot) {
+  const context = canvas.getContext?.("2d");
+  if (!context || !from || !to || !snapshot) return false;
+  const left = Math.min(from.x, to.x);
+  const top = Math.min(from.y, to.y);
+  const width = Math.abs(to.x - from.x);
+  const height = Math.abs(to.y - from.y);
+  context.putImageData(snapshot, 0, 0);
+  if (width < 1 || height < 1) return false;
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "#ffffff";
+  context.fillRect(left, top, width, height);
+  context.restore();
+  return true;
+}
+
+function resolveToolboxWatermarkRemovalMaskTool(tool) {
+  return ["rectangle", "brush", "lasso"].includes(String(tool)) ? String(tool) : "rectangle";
+}
+
+function drawToolboxWatermarkRemovalMaskBrush(canvas, from, to, brushSize) {
+  const context = canvas.getContext?.("2d");
+  if (!context || !from || !to) return false;
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.strokeStyle = "#ffffff";
+  context.fillStyle = "#ffffff";
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.lineWidth = Math.max(1, Number(brushSize) || 32);
+  context.beginPath();
+  context.moveTo(from.x, from.y);
+  context.lineTo(to.x, to.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(to.x, to.y, context.lineWidth / 2, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+  return true;
+}
+
+function drawToolboxWatermarkRemovalMaskLasso(canvas, points, snapshot, closePath) {
+  const context = canvas.getContext?.("2d");
+  if (!context || !snapshot || !Array.isArray(points) || points.length < 3) return false;
+  context.putImageData(snapshot, 0, 0);
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "#ffffff";
+  const outerLineWidth = Math.max(10, Math.round(Math.max(canvas.width || 0, canvas.height || 0) * 0.006));
+  const innerLineWidth = Math.max(5, Math.round(outerLineWidth / 2));
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+  if (closePath) context.closePath();
+  context.strokeStyle = "rgba(0, 0, 0, 0.88)";
+  context.lineWidth = outerLineWidth;
+  context.stroke();
+  context.strokeStyle = "#ffffff";
+  context.lineWidth = innerLineWidth;
+  context.stroke();
+  if (closePath) context.fill();
+  context.restore();
+  return closePath;
+}
+
 async function checkToolboxVideoDepthPlugin(workbench) {
   const current = workbench.ui.toolboxVideoDepth ?? {};
   workbench.ui.toolboxVideoDepth = { ...current, pluginStatus: "checking", error: "" };
@@ -543,26 +1186,36 @@ function updateToolboxVideoDepthGenerationProgress(workbench) {
   return true;
 }
 
+function updateToolboxWatermarkRemovalProgress(workbench) {
+  const state = workbench.ui.toolboxWatermarkRemoval ?? {};
+  const modal = workbench.root?.querySelector?.(".toolbox-watermark-modal");
+  const message = modal?.querySelector?.("[data-toolbox-watermark-progress-message]");
+  const progress = modal?.querySelector?.("[data-toolbox-watermark-progress]");
+  const bar = progress?.querySelector?.("[data-toolbox-watermark-progress-bar]");
+  const label = progress?.querySelector?.("[data-toolbox-watermark-progress-label]");
+  if (!message || !progress || !bar || !label) return false;
+  const percent = Math.round(Math.max(0, Math.min(100, Number(state.progress ?? 0))));
+  message.textContent = String(state.statusMessage || "正在修复涂抹区域");
+  progress.hidden = false;
+  bar.style.width = `${percent}%`;
+  label.textContent = `${percent}%`;
+  return true;
+}
+
 function updateToolboxPromptReverseProgress(workbench) {
   const state = workbench.ui.toolboxPromptReverse ?? {};
   const modal = workbench.root?.querySelector?.(".toolbox-reverse-modal");
   const loading = modal?.querySelector?.("[data-toolbox-prompt-reverse-loading]");
   const title = loading?.querySelector?.("[data-toolbox-prompt-reverse-loading-title]");
-  const copy = loading?.querySelector?.("[data-toolbox-prompt-reverse-loading-copy]");
   const button = modal?.querySelector?.("[data-toolbox-prompt-reverse-progress-button]");
-  if (!loading || !title || !copy || !button) return false;
+  if (!loading || !title || !button) return false;
   const percent = Math.round(Math.max(0, Math.min(99, Number(state.progress ?? 0))));
   if (state.status === "decoding") {
     title.textContent = `本机正在解析视频 ${percent}%`;
-    copy.textContent = "解码与逐帧提取只在当前电脑进行，源视频不会上传服务器。";
   } else if (state.status === "preparing") {
     title.textContent = `正在整理 6 FPS 时间轴 ${percent}%`;
-    copy.textContent = "正在将全部 6 FPS 时间轴画面按时间顺序整理为模型输入。";
   } else if (state.status === "loading") {
     title.textContent = state.activeKind === "video" ? "正在反推视频提示词" : "正在分析参考图";
-    copy.textContent = state.activeKind === "video"
-      ? "工具箱视频反推消耗积分，多模态模型正在分析完整时间轴的动作、场景与镜头信息。"
-      : "工具箱图片反推消耗积分，模型正在提炼画面信息，请稍候。";
   } else {
     return false;
   }
@@ -665,12 +1318,43 @@ function normalizeToolboxPromptReverseModels(payload) {
 
 function normalizeToolboxPromptReverseResult(payload) {
   const source = payload?.result && typeof payload.result === "object" ? payload.result : payload ?? {};
+  const usage = payload?.usage && typeof payload.usage === "object" ? payload.usage : {};
+  const credit = payload?.credit && typeof payload.credit === "object" ? payload.credit : {};
   return {
     description: String(source.description ?? source.summary ?? "").trim(),
     positivePrompt: String(source.positivePrompt ?? source.prompt ?? "").trim(),
     tags: Array.isArray(source.tags) ? source.tags.map((tag) => String(tag).trim()).filter(Boolean) : source.tags ?? "",
     negativePrompt: String(source.negativePrompt ?? "").trim(),
+    usage: {
+      promptTokens: Math.max(0, Number(usage.promptTokens ?? usage.prompt_tokens ?? 0) || 0),
+      completionTokens: Math.max(0, Number(usage.completionTokens ?? usage.completion_tokens ?? 0) || 0),
+      cachedTokens: Math.max(0, Number(usage.cachedTokens ?? usage.cached_tokens ?? 0) || 0),
+      totalTokens: Math.max(0, Number(usage.totalTokens ?? usage.total_tokens ?? 0) || 0),
+    },
+    credit: {
+      consumed: Math.max(0, Number(credit.consumed ?? 0) || 0),
+      released: Math.max(0, Number(credit.released ?? 0) || 0),
+    },
+    segments: Array.isArray(source.segments) ? source.segments.map((segment, index) => ({
+      index: Number(segment?.index) || index + 1,
+      startMs: Math.max(0, Number(segment?.startMs) || 0),
+      endMs: Math.max(0, Number(segment?.endMs) || 0),
+      description: String(segment?.description ?? "").trim(),
+      positivePrompt: String(segment?.positivePrompt ?? segment?.prompt ?? "").trim(),
+      negativePrompt: String(segment?.negativePrompt ?? "").trim(),
+      continuity: String(segment?.continuity ?? segment?.transition ?? "").trim(),
+      characters: normalizeToolboxPromptReverseAssets(segment?.characters),
+      props: normalizeToolboxPromptReverseAssets(segment?.props),
+      scenes: normalizeToolboxPromptReverseAssets(segment?.scenes),
+    })) : [],
   };
+}
+
+function normalizeToolboxPromptReverseAssets(value) {
+  return Array.isArray(value) ? value.map((asset) => ({
+    name: String(asset?.name ?? asset?.id ?? "未命名资产").trim(),
+    prompt: String(asset?.prompt ?? asset?.description ?? "").trim(),
+  })).filter((asset) => asset.prompt) : [];
 }
 
 function formatToolboxPromptReverseResult(result = {}) {
@@ -679,7 +1363,31 @@ function formatToolboxPromptReverseResult(result = {}) {
     result.positivePrompt ? `正向提示词\n${result.positivePrompt}` : "",
     result.tags?.length ? `标签\n${Array.isArray(result.tags) ? result.tags.join(", ") : result.tags}` : "",
     result.negativePrompt ? `负向提示词\n${result.negativePrompt}` : "",
+    result.usage?.totalTokens ? `Token 消耗\n输入 ${formatTokenCount(Number(result.usage.promptTokens || 0) + Number(result.usage.cachedTokens || 0))} · 输出 ${formatTokenCount(result.usage.completionTokens)} · 总计 ${formatTokenCount(result.usage.totalTokens)} · 消耗积分 ${result.credit?.consumed ?? 0}` : "",
+    ...(Array.isArray(result.segments) ? result.segments.map((segment) => [
+      `分镜 ${segment.index}（${formatMilliseconds(segment.startMs)}-${formatMilliseconds(segment.endMs)}）`,
+      segment.description ? `分镜分析\n${segment.description}` : "",
+      segment.positivePrompt ? `分镜视频提示词\n${segment.positivePrompt}` : "",
+      formatToolboxPromptReverseAssets("人物", segment.characters),
+      formatToolboxPromptReverseAssets("道具", segment.props),
+      formatToolboxPromptReverseAssets("场景", segment.scenes),
+      segment.continuity ? `衔接\n${segment.continuity}` : "",
+    ].filter(Boolean).join("\n\n")) : []),
   ].filter(Boolean).join("\n\n");
+}
+
+function formatTokenCount(value) {
+  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString("zh-CN");
+}
+
+function formatToolboxPromptReverseAssets(label, assets) {
+  if (!Array.isArray(assets) || !assets.length) return "";
+  return `${label}资产提示词\n${assets.map((asset) => `${asset.name}: ${asset.prompt}`).join("\n")}`;
+}
+
+function formatMilliseconds(value) {
+  const seconds = Math.max(0, Math.round(Number(value) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function readToolboxPromptReverseFileAsDataUrl(file) {
@@ -731,6 +1439,12 @@ async function loadToolboxPromptReverseModels(workbench) {
   } catch (error) {
     const current = workbench.ui.toolboxPromptReverse ?? {};
     if (!current.open) return;
+    if (isUnauthenticatedError(error)) {
+      closeToolboxPromptReverse(workbench.ui);
+      renderWorkbenchChrome(workbench);
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
     workbench.ui.toolboxPromptReverse = {
       ...current,
       loadingModels: false,
@@ -2062,6 +2776,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("pointerdown", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const watermarkMask = eventTarget?.closest?.("[data-toolbox-watermark-mask]")
+      ?? resolveToolboxVideoWatermarkMaskTarget(eventTarget, event);
+    if (watermarkMask && startToolboxWatermarkRemovalMaskPaint(workbench, event, watermarkMask)) {
+      return;
+    }
     trackCanvasRightPanGesture(workbench, eventTarget, event);
     if (isCanvasX6InteractionTarget(eventTarget)) {
       return;
@@ -2117,12 +2836,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     }
   });
   root.addEventListener("pointermove", (event) => {
+    if (updateToolboxWatermarkRemovalMaskPaint(workbench, event)) return;
     updateCanvasRightPanGesture(workbench, event);
     updateEpisodeWorkbenchResizeHover(workbench, event);
     updateHomeHeroPointerAura(workbench, event);
   });
-  root.addEventListener("pointerup", (event) => finishCanvasRightPanGesture(workbench, event));
-  root.addEventListener("pointercancel", () => { workbench.canvasRightPanGesture = null; });
+  root.addEventListener("pointerup", (event) => {
+    finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, event);
+    finishCanvasRightPanGesture(workbench, event);
+  });
+  root.addEventListener("pointercancel", (event) => {
+    finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, event);
+    workbench.canvasRightPanGesture = null;
+  });
   window.addEventListener("resize", () => {
     scheduleProjectGalleryMeasurement(workbench);
     syncEpisodeWorkbenchLayoutVars(workbench);
@@ -2830,8 +3556,21 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
+    if (target?.matches?.("#toolbox-watermark-file")) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (file) applyToolboxWatermarkRemovalFile(workbench, file);
+      return;
+    }
+
     if (target?.matches?.("[data-toolbox-prompt-reverse-model]")) {
       setToolboxPromptReverseModel(workbench.ui, target.value);
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-toolbox-prompt-reverse-segment-duration]")) {
+      setToolboxPromptReverseSegmentDuration(workbench.ui, target.value);
       renderWorkbenchChrome(workbench);
       return;
     }
@@ -4947,6 +5686,45 @@ function isActiveMembershipStatus(membershipStatus) {
 
 function hasActiveMembershipAccess(workbench) {
   return isActiveMembershipStatus(workbench.ui?.membershipStatus);
+}
+
+const TOOLBOX_PROMPT_REVERSE_MINIMUM_CREDITS = 200;
+
+async function ensureToolboxPromptReverseAccess(workbench) {
+  if (!hasActiveSessionUser(workbench.session)) {
+    await requireWorkbenchLogin(workbench, "login");
+    return false;
+  }
+  if (typeof workbench.api?.getMembershipStatus !== "function" || typeof workbench.api?.getCreditBalance !== "function") {
+    updateToolboxPromptReverseActiveView(workbench.ui, { error: "提示词反推服务尚未配置。" });
+    return false;
+  }
+  try {
+    const [membershipPayload, creditPayload] = await Promise.all([
+      workbench.api.getMembershipStatus({ fresh: true }),
+      workbench.api.getCreditBalance(),
+    ]);
+    const membership = normalizeMembershipStatus(membershipPayload);
+    workbench.ui.membershipStatus = membership;
+    const creditValue = creditPayload?.availableCredits ?? creditPayload?.creditBalance ?? creditPayload?.user?.availableCredits ?? creditPayload?.user?.creditBalance;
+    setWorkbenchCreditBalance(workbench, creditValue, { syncGenerationConfig: false });
+    if (!isActiveMembershipStatus(membership)) {
+      updateToolboxPromptReverseActiveView(workbench.ui, { error: "请先开通会员后再使用提示词反推。" });
+      return false;
+    }
+    if (Number(creditValue ?? 0) < TOOLBOX_PROMPT_REVERSE_MINIMUM_CREDITS) {
+      updateToolboxPromptReverseActiveView(workbench.ui, { error: "积分余额预留不足，请前往充值" });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if (isUnauthenticatedError(error)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return false;
+    }
+    updateToolboxPromptReverseActiveView(workbench.ui, { error: `校验失败：${friendlyError(error)}` });
+    return false;
+  }
 }
 
 export async function ensureDirectorDeskCreationAllowed(workbench, options = {}) {
@@ -7286,6 +8064,7 @@ function renderWorkbenchChrome(workbench) {
     render(workbench);
     return false;
   }
+  restoreToolboxWatermarkRemovalMask(workbench);
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") persistWorkbenchState(workbench);
   return true;
 }
@@ -7410,7 +8189,6 @@ const NEW_CANVAS_NODE_LOCAL_ACTIONS = new Set([
   "toggle-canvas-storyboard-edit",
   "toggle-canvas-image-fullscreen",
   "toggle-canvas-video-fullscreen",
-  "close-canvas-image-fullscreen",
   "close-canvas-video-fullscreen",
   "adjust-canvas-storyboard-grid-axis",
   "select-canvas-storyboard-cell",
@@ -7785,6 +8563,7 @@ function render(workbench, options = {}) {
     disposeHomeLightfall(workbench);
     return;
   }
+  restoreToolboxWatermarkRemovalMask(workbench);
   applyPostRenderEffects(workbench);
   void syncEpisodePromptEditor(workbench);
   void syncStoryboardGeneratorPromptEditor(workbench);
@@ -10745,10 +11524,11 @@ const WORKBENCH_CHROME_ACTIONS = new Set([
   "set-task-center-kind", "search-task-center", "change-task-center-page", "select-task-center-task",
   "copy-task-center-id", "toggle-workbench-theme-menu", "select-workbench-theme",
   "open-credit-ledger", "close-credit-ledger", "refresh-credit-ledger", "change-credit-ledger-page",
-  "open-toolbox-prompt-reverse", "close-toolbox-prompt-reverse",
+  "open-toolbox-prompt-reverse", "close-toolbox-prompt-reverse", "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide",
   "set-toolbox-prompt-reverse-kind", "check-toolbox-prompt-reverse-plugin", "install-toolbox-prompt-reverse-plugin", "uninstall-toolbox-prompt-reverse-plugin",
   "clear-toolbox-prompt-reverse-file", "run-toolbox-prompt-reverse", "copy-toolbox-prompt-reverse",
-  "open-toolbox-video-depth", "close-toolbox-video-depth", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
+  "open-toolbox-video-depth", "close-toolbox-video-depth", "open-toolbox-video-depth-guide", "close-toolbox-video-depth-guide", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
+  "open-toolbox-watermark-removal", "close-toolbox-watermark-removal", "open-toolbox-watermark-removal-guide", "close-toolbox-watermark-removal-guide", "check-toolbox-watermark-removal-plugin", "install-toolbox-watermark-removal-plugin", "uninstall-toolbox-watermark-removal-plugin", "clear-toolbox-watermark-removal-file", "clear-toolbox-watermark-removal-mask", "set-toolbox-watermark-removal-media", "set-toolbox-watermark-removal-tool", "set-toolbox-watermark-removal-brush", "undo-toolbox-watermark-removal-mask", "run-toolbox-watermark-removal",
   "open-pricing", "close-pricing", "switch-pricing-tab", "close-membership-payment",
   "open-announcements", "close-announcements", "open-account-settings", "close-account-settings",
   "open-invite-gift", "close-invite-gift", "toggle-account-settings-password",
@@ -10837,7 +11617,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-member-confirm-modal",
     "confirm-script-reader-delete",
     "confirm-member-action",
-    "open-toolbox-video-depth", "close-toolbox-video-depth", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
+    "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide", "open-toolbox-video-depth", "close-toolbox-video-depth", "open-toolbox-video-depth-guide", "close-toolbox-video-depth-guide", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
+    "open-toolbox-watermark-removal", "close-toolbox-watermark-removal", "open-toolbox-watermark-removal-guide", "close-toolbox-watermark-removal-guide", "check-toolbox-watermark-removal-plugin", "install-toolbox-watermark-removal-plugin", "uninstall-toolbox-watermark-removal-plugin", "clear-toolbox-watermark-removal-file", "clear-toolbox-watermark-removal-mask", "set-toolbox-watermark-removal-media", "set-toolbox-watermark-removal-tool", "set-toolbox-watermark-removal-brush", "undo-toolbox-watermark-removal-mask", "run-toolbox-watermark-removal",
     "save-manual-script-analysis",
     "regenerate-manual-script-analysis",
     "toggle-canvas-add-menu",
@@ -10982,6 +11763,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (!WORKBENCH_CHROME_ACTIONS.has(action)) clearWorkbenchToast(workbench);
 
   if (action === "open-toolbox-prompt-reverse") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
     openToolboxPromptReverse(workbench.ui);
     renderWorkbenchChrome(workbench);
     await loadToolboxPromptReverseModels(workbench);
@@ -10990,6 +11775,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-toolbox-prompt-reverse") {
     closeToolboxPromptReverse(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-prompt-reverse-guide" || action === "close-toolbox-prompt-reverse-guide") {
+    setToolboxPromptReverseGuideOpen(workbench.ui, action === "open-toolbox-prompt-reverse-guide");
     renderWorkbenchChrome(workbench);
     return;
   }
@@ -11022,6 +11813,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-toolbox-video-depth") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
     openToolboxVideoDepth(workbench.ui);
     void checkToolboxVideoDepthPlugin(workbench);
     return;
@@ -11030,6 +11825,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "close-toolbox-video-depth") {
     revokeToolboxVideoDepthPreview(workbench.ui);
     closeToolboxVideoDepth(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-video-depth-guide" || action === "close-toolbox-video-depth-guide") {
+    setToolboxVideoDepthGuideOpen(workbench.ui, action === "open-toolbox-video-depth-guide");
     renderWorkbenchChrome(workbench);
     return;
   }
@@ -11067,7 +11868,112 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "run-toolbox-video-depth") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
     await runToolboxVideoDepth(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-watermark-removal") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
+    openToolboxWatermarkRemoval(workbench.ui, "image");
+    renderWorkbenchChrome(workbench);
+    void checkToolboxWatermarkRemovalPlugin(workbench);
+    return;
+  }
+
+  if (action === "close-toolbox-watermark-removal") {
+    finishToolboxWatermarkRemovalMaskPaint(workbench);
+    revokeToolboxWatermarkRemovalPreview(workbench.ui);
+    revokeToolboxWatermarkRemovalResult(workbench.ui);
+    clearToolboxWatermarkRemovalFile(workbench.ui);
+    closeToolboxWatermarkRemoval(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-watermark-removal-guide" || action === "close-toolbox-watermark-removal-guide") {
+    setToolboxWatermarkRemovalGuideOpen(workbench.ui, action === "open-toolbox-watermark-removal-guide");
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "check-toolbox-watermark-removal-plugin") {
+    await checkToolboxWatermarkRemovalPlugin(workbench);
+    return;
+  }
+
+  if (action === "install-toolbox-watermark-removal-plugin") {
+    await installToolboxWatermarkRemovalPlugin(workbench);
+    return;
+  }
+
+  if (action === "uninstall-toolbox-watermark-removal-plugin") {
+    await uninstallToolboxWatermarkRemovalPlugin(workbench);
+    return;
+  }
+
+  if (action === "clear-toolbox-watermark-removal-file") {
+    finishToolboxWatermarkRemovalMaskPaint(workbench);
+    revokeToolboxWatermarkRemovalPreview(workbench.ui);
+    revokeToolboxWatermarkRemovalResult(workbench.ui);
+    clearToolboxWatermarkRemovalFile(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "clear-toolbox-watermark-removal-mask") {
+    finishToolboxWatermarkRemovalMaskPaint(workbench);
+    revokeToolboxWatermarkRemovalResult(workbench.ui);
+    clearToolboxWatermarkRemovalMask(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "set-toolbox-watermark-removal-media") {
+    const nextMediaKind = target.dataset.toolboxWatermarkMedia === "video" ? "video" : "image";
+    const current = workbench.ui.toolboxWatermarkRemoval ?? {};
+    if (current.mediaKind === nextMediaKind) return;
+    finishToolboxWatermarkRemovalMaskPaint(workbench);
+    revokeToolboxWatermarkRemovalPreview(workbench.ui);
+    revokeToolboxWatermarkRemovalResult(workbench.ui);
+    updateToolboxWatermarkRemovalState(workbench.ui, { mediaKind: nextMediaKind });
+    clearToolboxWatermarkRemovalFile(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "set-toolbox-watermark-removal-brush") {
+    setToolboxWatermarkRemovalBrushSize(workbench.ui, target.dataset.toolboxWatermarkBrush);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "set-toolbox-watermark-removal-tool") {
+    setToolboxWatermarkRemovalTool(workbench.ui, target.dataset.toolboxWatermarkTool);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "undo-toolbox-watermark-removal-mask") {
+    finishToolboxWatermarkRemovalMaskPaint(workbench);
+    revokeToolboxWatermarkRemovalResult(workbench.ui);
+    undoToolboxWatermarkRemovalMask(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "run-toolbox-watermark-removal") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
+    await runToolboxWatermarkRemoval(workbench);
     return;
   }
 
@@ -11109,6 +12015,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     if (isVideo && reverse.pluginStatus !== "ready") {
       updateToolboxPromptReverseActiveView(workbench.ui, { error: "请先加载浏览器视频解析插件。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    if (!await ensureToolboxPromptReverseAccess(workbench)) {
       renderWorkbenchChrome(workbench);
       return;
     }
@@ -11170,6 +12080,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             columns: 8,
             rows: 6,
             framesPerSheet: 48,
+            segmentDurationMs: Math.round(Number(reverse.segmentDurationSeconds || 15) * 1000),
           },
         });
       } else {
@@ -11195,7 +12106,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       updateToolboxPromptReverseActiveView(workbench.ui, {
         status: "idle",
         progress: 0,
-        error: `反推失败：${friendlyError(error)}`,
+        error: `反推失败：${friendlyToolboxPromptReverseError(error)}`,
       });
     }
     renderWorkbenchChrome(workbench);
@@ -23754,6 +24665,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   });
 }
 
+function friendlyToolboxPromptReverseError(error) {
+  const message = String(error?.message ?? error?.errorCode ?? "").trim();
+  if (message === "request_timeout" || String(error?.errorCode ?? "").trim() === "request_timeout") {
+    return "请求超时，请稍后重试；请勿立即重复提交。";
+  }
+  return friendlyError(error);
+}
+
 function buildPromptMarketplacePublishInput(data) {
   return {
     title: String(data.get("title") ?? "").trim(),
@@ -30926,6 +31845,12 @@ export function applyCanvasPromptMentionSelectionForTest(workbench, itemId) {
   return applyCanvasPromptMentionSelection(workbench, itemId);
 }
 
+export function applyToolboxWatermarkRemovalSelectionForTest(workbench, canvas, startEvent, endEvent) {
+  if (!startToolboxWatermarkRemovalMaskPaint(workbench, startEvent, canvas)) return false;
+  updateToolboxWatermarkRemovalMaskPaint(workbench, endEvent);
+  return finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, endEvent);
+}
+
 export function handleNewCanvasHostChangeForTest(workbench, target) {
   return handleNewCanvasHostChange(workbench, target);
 }
@@ -30956,6 +31881,10 @@ export function updateToolboxPromptReverseProgressForTest(workbench) {
 
 export function updateToolboxPromptReversePluginProgressForTest(workbench) {
   return updateToolboxPromptReversePluginProgress(workbench);
+}
+
+export function updateToolboxWatermarkRemovalProgressForTest(workbench) {
+  return updateToolboxWatermarkRemovalProgress(workbench);
 }
 
 export function scheduleGenerationPollingForTest(workbench, storyboardId, mediaKind, options = {}) {
@@ -53766,6 +54695,7 @@ function modelGenerationErrorMessage(value) {
       model_task_mode_unsupported: "当前模型不支持该生成方式",
       model_media_type_mismatch: "当前模型类型不匹配",
       insufficient_credits: "积分余额不足，请充值。",
+      prompt_reverse_credit_reserve_insufficient: "积分余额预留不足，请前往充值",
       generation_queue_unavailable: "生成队列未启动，请先启动 Redis、generation-outbox 和 generation-worker。",
       cumob_image_failed: "酷模返回生成失败，任务没有拿到可用图片，请稍后重试。",
       cumob_image_invalid_response: "酷模响应中没有可用图片地址，请稍后重试。",
