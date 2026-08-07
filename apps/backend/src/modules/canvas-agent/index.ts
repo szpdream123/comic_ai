@@ -7,6 +7,7 @@ export * from "./canvas-agent-executor.ts";
 export * from "./canvas-agent-http.routes.ts";
 export * from "./canvas-agent-knowledge.service.ts";
 export * from "./canvas-agent-outbox.service.ts";
+export * from "./canvas-agent-outbox-wakeup.ts";
 export * from "./canvas-agent-policy.service.ts";
 export * from "./canvas-agent-repair.service.ts";
 export * from "./canvas-agent-runtime-config.service.ts";

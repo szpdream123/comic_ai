@@ -1,7 +1,7 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 
 const REQUIRED_FRAME_RATE = 6;
-const FRAME_MAX_EDGE = 360;
+const FRAME_MAX_EDGE = 1920;
 
 export async function probeBrowserVideoWasmRuntime(options = {}) {
   const ffmpeg = new FFmpeg();
@@ -45,7 +45,7 @@ export async function decodeBrowserVideoTimelineWithWasm(file, options = {}) {
       "-threads", "1",
       "-i", inputPath,
       "-vf", filter,
-      "-q:v", "5",
+      "-q:v", "2",
       "-f", "image2",
       `${outputDirectory}/frame-%06d.jpg`,
     ]);

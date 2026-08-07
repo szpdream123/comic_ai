@@ -61,7 +61,7 @@ export async function decodeBrowserVideoTimeline(file, options = {}) {
     const sourceWidth = await videoTrack.getDisplayWidth();
     const sourceHeight = await videoTrack.getDisplayHeight();
     if (!sourceWidth || !sourceHeight) throw new Error("所选视频没有可读取的画面");
-    const outputSize = constrainFrameSize(sourceWidth, sourceHeight, Number(options.maxEdge) || 480);
+    const outputSize = constrainFrameSize(sourceWidth, sourceHeight, Number(options.maxEdge) || 1920);
     const sink = new CanvasSink(videoTrack, {
       width: outputSize.width,
       height: outputSize.height,
@@ -108,7 +108,7 @@ export async function decodeBrowserVideoTimeline(file, options = {}) {
 }
 
 function constrainFrameSize(width, height, maxEdge) {
-  const edge = Math.max(240, Math.min(720, Math.round(maxEdge)));
+  const edge = Math.max(240, Math.min(1920, Math.round(maxEdge)));
   const scale = Math.min(1, edge / Math.max(width, height));
   return {
     width: Math.max(2, Math.round((width * scale) / 2) * 2),

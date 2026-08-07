@@ -31320,7 +31320,10 @@ export const __phoneAuthDevServerTestUtils = {
   validateGenerationQueueReplay,
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.env.CREATOR_DEV_STACK_MANAGED !== "true"
+  && import.meta.url === `file://${process.argv[1]}`
+) {
   const server = createPhoneAuthDevServer();
   const port = Number(process.env.PORT ?? "4310");
 

@@ -2,7 +2,9 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { buildProductionRuntime } from "./build-production-runtime.mjs";
 import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
+import { acquireProcessInstanceLock } from "./process-instance-lock.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
 const runtime = findNodeRuntime(18);
@@ -15,6 +17,7 @@ const serverEntrypoint = join(
   "phone-auth-dev-server.ts",
 );
 const envFilePath = join(process.cwd(), ".env");
+const productionLockPath = join(process.cwd(), ".local", "run", "comic-ai-production.pid");
 
 if (!existsSync(serverEntrypoint)) {
   console.error(`Unable to find production server entrypoint at ${serverEntrypoint}`);
@@ -22,7 +25,9 @@ if (!existsSync(serverEntrypoint)) {
 }
 
 loadDotEnvFile(envFilePath);
+acquireProcessInstanceLock(productionLockPath, { label: "production_stack" });
 process.env.NODE_ENV = "production";
+const productionRuntime = await buildProductionRuntime({ cwd: process.cwd() });
 runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
 
 const listenHost = (process.env.HOST ?? "0.0.0.0").trim() || "0.0.0.0";
@@ -64,8 +69,7 @@ const supervisor = createCreatorDevServiceSupervisor({
     console.error(
       `[production] ${name} restart limit reached after ${attempts} attempts (code=${code ?? "null"} signal=${signal ?? "null"}); stopping supervised services.`,
     );
-    stopping = true;
-    supervisor.stop("SIGTERM");
+    requestStop("SIGTERM");
     process.exitCode = 1;
   },
   onSpawnError(name, error) {
@@ -76,22 +80,18 @@ const supervisor = createCreatorDevServiceSupervisor({
   },
 });
 
-supervisor.start("phone-auth", productionApiArgs(), { restartOnFailure: true });
+supervisor.start("phone-auth", productionApiArgs(productionRuntime.phoneAuth), { restartOnFailure: true });
 supervisor.start("generation-outbox", [
-  ...resolveTsxRuntimeArgs(runtime),
-  "scripts/run-generation-outbox-dispatcher.mjs",
+  productionRuntime.generationOutbox,
 ], { restartOnFailure: true });
 supervisor.start("generation-repair", [
-  ...resolveTsxRuntimeArgs(runtime),
-  "scripts/run-generation-queue-maintenance.mjs",
+  productionRuntime.generationRepair,
 ], { restartOnFailure: true });
 supervisor.start("generation-worker", [
-  ...resolveTsxRuntimeArgs(runtime),
-  "scripts/run-generation-video-worker.mjs",
+  productionRuntime.generationWorker,
 ], { restartOnFailure: true });
 supervisor.start("canvas-agent", [
-  ...resolveTsxRuntimeArgs(runtime),
-  "scripts/run-canvas-agent-worker.mjs",
+  productionRuntime.canvasAgent,
 ], { restartOnFailure: true });
 console.info(
   "[production] API, generation-outbox, generation-repair, generation-worker, and canvas-agent are supervised.",
@@ -99,16 +99,25 @@ console.info(
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
-    if (stopping) return;
-    stopping = true;
-    console.info(`[production] Received ${signal}; stopping API and generation services...`);
-    supervisor.stop(signal);
+    requestStop(signal);
   });
 }
 
-function productionApiArgs() {
+function requestStop(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.info(`[production] Received ${signal}; stopping API and generation services...`);
+  supervisor.stop(signal);
+  const forceStopTimer = setTimeout(() => {
+    console.error("[production] Graceful shutdown exceeded 10s; forcing remaining services to stop.");
+    supervisor.forceStop(signal);
+    process.exit(1);
+  }, 10_000);
+  forceStopTimer.unref?.();
+}
+
+function productionApiArgs(serverEntrypoint) {
   return [
-    ...resolveTsxRuntimeArgs(runtime),
     "--input-type=module",
     "--eval",
     `import(${JSON.stringify(pathToFileUrl(serverEntrypoint))}).then(async ({ createPhoneAuthDevServer }) => {
@@ -196,29 +205,6 @@ function findNodeRuntime(minMajor) {
     seen.add(candidate);
     candidates.push(candidate);
   }
-}
-
-function resolveTsxRuntimeArgs(runtimePath) {
-  const version = spawnSync(runtimePath, ["--version"], {
-    encoding: "utf8",
-  });
-
-  if (version.status !== 0) {
-    return ["--loader", "tsx"];
-  }
-
-  const match = version.stdout.trim().match(/^v(\d+)\.(\d+)\.(\d+)/);
-  if (!match) {
-    return ["--loader", "tsx"];
-  }
-
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  if (major > 18 || (major === 18 && minor >= 19)) {
-    return ["--import", "tsx"];
-  }
-
-  return ["--loader", "tsx"];
 }
 
 function isEnabled(value) {

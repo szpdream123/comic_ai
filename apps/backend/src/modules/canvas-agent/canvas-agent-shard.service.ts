@@ -24,15 +24,18 @@ export async function assignCanvasAgentConversationShard(
   if (existing.shard_id !== null) return Number(existing.shard_id);
 
   await db.query("SELECT pg_advisory_xact_lock(hashtext('canvas_agent_shard_assignment_v1'))");
-  const loads = await db.query<ShardLoadRow>(
-    `
-      WITH shard_ids AS (
-        SELECT generate_series(0, $1 - 1)::integer AS shard_id
+  const shardIdsSql = input.config.enabled
+    ? `
+        SELECT 0::integer AS shard_id
         UNION
         SELECT shard_id
         FROM canvas_agent_conversations
         WHERE shard_id IS NOT NULL
-      )
+      `
+    : "SELECT 0::integer AS shard_id";
+  const loads = await db.query<ShardLoadRow>(
+    `
+      WITH shard_ids AS (${shardIdsSql})
       SELECT shard.shard_id,
              COUNT(task.id) FILTER (WHERE task.status IN ('queued','running')) AS active_task_count
       FROM shard_ids shard
@@ -41,7 +44,6 @@ export async function assignCanvasAgentConversationShard(
       GROUP BY shard.shard_id
       ORDER BY active_task_count ASC, shard.shard_id ASC
     `,
-    [input.config.enabled ? input.config.minimumShardCount : 1],
   );
   const normalized = loads.rows.map((row) => ({
     shardId: Number(row.shard_id),
@@ -76,20 +78,21 @@ export function selectCanvasAgentShardId(
     : ordered[0]?.shardId ?? 0;
 }
 
-export async function listCanvasAgentShardIds(db: SqlDatabase, minimumShardCount: number) {
+export async function listCanvasAgentShardIds(db: SqlDatabase) {
   const result = await db.query<{ shard_id: number | string }>(
     `
       SELECT shard_id
       FROM (
-        SELECT generate_series(0, $1 - 1)::integer AS shard_id
+        SELECT 0::integer AS shard_id
         UNION
-        SELECT shard_id
-        FROM canvas_agent_conversations
-        WHERE shard_id IS NOT NULL
+        SELECT DISTINCT conversation.shard_id
+        FROM canvas_agent_conversations conversation
+        JOIN canvas_agent_tasks task ON task.conversation_id = conversation.id
+        WHERE conversation.shard_id IS NOT NULL
+          AND task.status IN ('queued','running','cancel_requested')
       ) shards
       ORDER BY shard_id ASC
     `,
-    [minimumShardCount],
   );
   return result.rows.map((row) => Number(row.shard_id));
 }

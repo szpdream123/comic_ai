@@ -98,6 +98,7 @@ const migrations = [
   ["20260826-converge-provider-protocol-constraint.sql", "packages/db/migrations/20260826-converge-provider-protocol-constraint.sql"],
   ["20260827-converge-canvas-agent-shard-constraint.sql", "packages/db/migrations/20260827-converge-canvas-agent-shard-constraint.sql"],
   ["20260828-bananarouter-image-async-config-convergence.sql", "packages/db/migrations/20260828-bananarouter-image-async-config-convergence.sql"],
+  ["20260831-canvas-agent-outbox-wakeup.sql", "packages/db/migrations/20260831-canvas-agent-outbox-wakeup.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -112,6 +113,7 @@ const runtimeSafeMigrationNames = new Set([
   "20260824-z-task-center-provider-diagnostics-index.sql",
   "20260826-converge-provider-protocol-constraint.sql",
   "20260804-z-redact-sms-send-record-secrets.sql",
+  "20260831-canvas-agent-outbox-wakeup.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

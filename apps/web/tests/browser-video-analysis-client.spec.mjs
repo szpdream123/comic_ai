@@ -12,6 +12,7 @@ import {
   isBrowserVideoAnalysisInstalled,
   uninstallBrowserVideoAnalysis,
 } from "../src/features/toolbox/browser-video-analysis-client.js";
+import { __videoAnalysisPluginTestUtils } from "../src/features/toolbox/video-analysis-plugin-client.js";
 
 test("browser video analysis creates a complete ordered timeline at no less than 6 FPS", () => {
   const minimum = createBrowserVideoAnalysisFramePlan(13.033, 1);
@@ -26,6 +27,50 @@ test("browser video analysis creates a complete ordered timeline at no less than
   assert.equal(higher.frameRate, 8);
   assert.equal(higher.frames.length, 16);
   assert.throws(() => createBrowserVideoAnalysisFramePlan(300.01, 6), /300 秒/);
+});
+
+test("video prompt key frames follow visual similarity and never repeat", () => {
+  const timelineFrames = Array.from({ length: 14 }, (_, index) => ({
+    index,
+    timestampMs: index * 1_000,
+    fileName: `frame-${index}.jpg`,
+    url: `blob:frame-${index}`,
+  }));
+  timelineFrames.push({ ...timelineFrames[5], fileName: "duplicate-frame.jpg" });
+  const frameSignatures = timelineFrames.map((frame) => ({
+    timestampMs: frame.timestampMs,
+    signature: Array(3).fill(frame.timestampMs < 5_000 ? 0.2 : frame.timestampMs < 10_000 ? 0.91 : 0.2),
+  }));
+  const selected = __videoAnalysisPluginTestUtils.selectSimilarityKeyFrames({
+    source: { durationMs: 13_000 },
+    timelineFrames,
+  }, {
+    frameSignatures,
+    maxIntervalMs: 8_000,
+  });
+
+  assert.deepEqual(selected.map((frame) => frame.timestampMs), [0, 5_000, 10_000]);
+  assert.equal(new Set(selected.map((frame) => frame.timestampMs)).size, selected.length);
+  assert.equal(__videoAnalysisPluginTestUtils.calculateSignatureDifference([0, 0.5], [0.5, 1]), 0.5);
+
+  const blackFiltered = __videoAnalysisPluginTestUtils.selectSimilarityKeyFrames({
+    timelineFrames: [
+      { timestampMs: 0, url: "blob:black" },
+      { timestampMs: 1_000, url: "blob:visible-1" },
+      { timestampMs: 2_000, url: "blob:visible-2" },
+    ],
+  }, {
+    frameSignatures: [
+      { timestampMs: 0, signature: Array(27).fill(0.01) },
+      { timestampMs: 1_000, signature: Array(27).fill(0.2) },
+      { timestampMs: 2_000, signature: Array(27).fill(0.91) },
+    ],
+  });
+  assert.deepEqual(blackFiltered.map((frame) => frame.timestampMs), [1_000, 2_000]);
+  assert.equal(__videoAnalysisPluginTestUtils.isMostlyBlackSignature(Array(27).fill(0.01)), true);
+  assert.equal(__videoAnalysisPluginTestUtils.isObscuredSignature(Array(27).fill(0.99)), true);
+  assert.equal(__videoAnalysisPluginTestUtils.isObscuredSignature(Array(27).fill(0.5)), true);
+  assert.equal(__videoAnalysisPluginTestUtils.isMostlyBlackSignature(Array.from({ length: 27 }, (_, index) => Math.floor(index / 3) % 2 ? 0.6 : 0.2)), false);
 });
 
 test("browser video analysis decoder uses Mediabunny capability probing and ordered canvas extraction", async () => {
@@ -73,7 +118,7 @@ test("browser video analysis installs its decoder bundle into browser storage an
     ready: true,
     installed: false,
     plugin: "video-analysis",
-    version: "browser-2-wasm",
+    version: "browser-3-hd",
     frameRate: 6,
     device: "浏览器本地解析",
   });
@@ -114,7 +159,7 @@ test("browser video analysis keeps the WASM path available without WebCodecs", a
   const health = await checkBrowserVideoAnalysis();
   assert.equal(health.ready, true);
   assert.equal(health.installed, false);
-  assert.equal(health.version, "browser-2-wasm");
+  assert.equal(health.version, "browser-3-hd");
 });
 
 function installSupportedBrowserMocks() {

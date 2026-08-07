@@ -11,6 +11,10 @@ test("Canvas Agent assigns new conversations to the least loaded shard below cap
   ], { shardCapacity: 100, maxActiveShards: 256 }), 1);
 });
 
+test("Canvas Agent starts at shard zero when there are no existing loads", () => {
+  assert.equal(selectCanvasAgentShardId([], { shardCapacity: 100, maxActiveShards: 16 }), 0);
+});
+
 test("Canvas Agent creates the next shard after all current shards reach 100 active tasks", () => {
   assert.equal(selectCanvasAgentShardId([
     { shardId: 0, activeTaskCount: 100 },

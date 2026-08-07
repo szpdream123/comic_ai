@@ -106,12 +106,15 @@ describe("Canvas Agent runtime composition", () => {
     const launcher = readFileSync(launcherPath, "utf8");
     assert.match(launcher, /createCanvasAgentWorkerRuntime/);
     assert.match(launcher, /canvas_agent_task_deferred/);
-    assert.match(launcher, /CANVAS_AGENT_OUTBOX_DISPATCH_INTERVAL_MS[\s\S]*?1_000/);
+    assert.match(launcher, /CANVAS_AGENT_OUTBOX_DISPATCH_INTERVAL_MS[\s\S]*?60_000/);
     assert.match(launcher, /CANVAS_AGENT_FALLBACK_SCAN_INTERVAL_MS, 5_000/);
     assert.match(launcher, /loadCanvasAgentRuntimeConfiguration/);
     assert.match(launcher, /webSearchModelCode: runtimeConfiguration\.webSearchModelCode/);
     assert.match(launcher, /new Worker\(/);
     assert.match(launcher, /CanvasAgentOutboxService/);
+    assert.match(launcher, /createCanvasAgentOutboxWakeSignal/);
+    assert.match(launcher, /LISTEN.*canvasAgentOutboxWakeChannel/);
+    assert.match(launcher, /outboxWakeSignal\.wait/);
     assert.match(launcher, /runMaintenanceOnce/);
     assert.match(launcher, /runQueuedOnce/);
     assert.doesNotMatch(launcher, /runUntilStopped/);

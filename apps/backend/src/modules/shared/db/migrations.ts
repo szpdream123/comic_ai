@@ -85,6 +85,7 @@ const CANVAS_AGENT_SHARD_CONSTRAINT_CONVERGENCE_RELATIVE_PATH = ["packages", "db
 const BANANAROUTER_IMAGE_ASYNC_CONFIG_CONVERGENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20260828-bananarouter-image-async-config-convergence.sql"];
 const PROMPT_REVERSE_TOOL_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260829-enable-prompt-reverse-tool-model.sql"];
 const MODELFLARE_RESPONSES_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260830-add-modelflare-responses-model.sql"];
+const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
@@ -464,6 +465,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260830-add-modelflare-responses-model.sql",
       sql: await readFile(join(rootDir, ...MODELFLARE_RESPONSES_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260831-canvas-agent-outbox-wakeup.sql",
+      sql: await readFile(join(rootDir, ...CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

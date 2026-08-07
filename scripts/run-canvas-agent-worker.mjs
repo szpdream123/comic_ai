@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { Worker } from "bullmq";
+import { Client } from "pg";
 
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
@@ -20,6 +21,8 @@ const [{ createDevDb, runWithDatabaseContext }, {
   canvasAgentRedisConnectionFromUrl,
   createBullMQCanvasAgentPublisher,
   createCanvasAgentWorkerRuntime,
+  createCanvasAgentOutboxWakeSignal,
+  canvasAgentOutboxWakeChannel,
   listCanvasAgentShardIds,
   loadCanvasAgentShardConfig,
   loadCanvasAgentRuntimeConfiguration,
@@ -36,10 +39,10 @@ const workerId = process.env.CANVAS_AGENT_WORKER_ID?.trim()
 const queueConfig = loadGenerationQueueConfig(process.env);
 const shardConfig = loadCanvasAgentShardConfig(process.env);
 const queueName = assertCanvasAgentQueueName(shardConfig.baseQueueName);
-const dispatchIntervalMs = positiveInteger(
+const outboxFallbackIntervalMs = positiveInteger(
   process.env.CANVAS_AGENT_OUTBOX_DISPATCH_INTERVAL_MS
     ?? process.env.CANVAS_AGENT_WORKER_POLL_INTERVAL_MS,
-  1_000,
+  60_000,
 );
 const maintenanceIntervalMs = positiveInteger(process.env.CANVAS_AGENT_MAINTENANCE_INTERVAL_MS, 60_000);
 const fallbackScanIntervalMs = positiveInteger(process.env.CANVAS_AGENT_FALLBACK_SCAN_INTERVAL_MS, 5_000);
@@ -63,6 +66,8 @@ const publisher = createBullMQCanvasAgentPublisher({
   shardingEnabled: shardConfig.enabled,
 });
 const outbox = new CanvasAgentOutboxService({ db, publisher, workerId });
+const outboxWakeSignal = createCanvasAgentOutboxWakeSignal();
+const notificationClient = new Client({ connectionString: process.env.DATABASE_URL });
 const redisErrorReporter = createRedisErrorReporter();
 const executionGate = createConcurrencyGate(shardConfig.workerTotalConcurrency);
 const workers = new Map();
@@ -78,73 +83,106 @@ process.on("message", (message) => {
 function requestStop(signal) {
   if (abortController.signal.aborted) return;
   console.info(`[canvas-agent] Received ${signal}, draining current cycle...`);
+  outboxWakeSignal.close();
   abortController.abort();
 }
+
+notificationClient.on("error", (error) => {
+  console.error(`[canvas-agent] PostgreSQL LISTEN failed for DATABASE_URL: ${error instanceof Error ? error.message : String(error)}`);
+  requestStop("PostgreSQL LISTEN error");
+});
 
 console.info(
   `[canvas-agent] Worker started. workerId=${workerId} queue=${queueName} shards=${workers.size} `
   + `concurrencyPerShard=${concurrency} capacityPerShard=${shardConfig.shardCapacity} `
   + `totalConcurrency=${shardConfig.workerTotalConcurrency} `
-  + `dispatchIntervalMs=${dispatchIntervalMs} maintenanceIntervalMs=${maintenanceIntervalMs} `
+  + `outboxFallbackIntervalMs=${outboxFallbackIntervalMs} maintenanceIntervalMs=${maintenanceIntervalMs} `
   + `fallbackScanIntervalMs=${fallbackScanIntervalMs}`,
 );
-const scheduledLoops = [
-  ...(shardConfig.enabled ? [runScheduledLoop({
-    signal: abortController.signal,
-    intervalMs: shardConfig.discoveryIntervalMs,
-    run: discoverCanvasAgentShardWorkers,
-  })] : []),
-  runScheduledLoop({
-    signal: abortController.signal,
-    intervalMs: dispatchIntervalMs,
-    run: () => runWithDatabaseContext(async () => {
-      await outbox.releaseStaleLocks();
-      const result = await outbox.dispatchBatch(outboxBatchSize);
-      if (result.claimed || result.dispatched) {
-        console.info(`[canvas-agent] outbox claimed=${result.claimed} dispatched=${result.dispatched}`);
-      }
-    }),
-  }),
-  runScheduledLoop({
-    signal: abortController.signal,
-    intervalMs: maintenanceIntervalMs,
-    run: () => runWithDatabaseContext(async () => {
-      const result = await runtime.worker.runMaintenanceOnce(batchSize);
-      if (result.inspected || result.repaired) {
-        console.info(`[canvas-agent] maintenance inspected=${result.inspected} repaired=${result.repaired}`);
-      }
-    }),
-  }),
-  runScheduledLoop({
-    signal: abortController.signal,
-    intervalMs: fallbackScanIntervalMs,
-    run: () => runWithDatabaseContext(async () => {
-      const processed = await runtime.worker.runQueuedOnce(batchSize);
-      if (processed.length) {
-        console.info(`[canvas-agent] fallback processed=${processed.length}`);
-      }
-    }),
-  }),
-];
+let scheduledLoops = [];
 try {
+  await notificationClient.connect();
+  await notificationClient.query(`LISTEN ${canvasAgentOutboxWakeChannel}`);
+  notificationClient.on("notification", (message) => {
+    if (message.channel === canvasAgentOutboxWakeChannel) outboxWakeSignal.notify();
+  });
+  scheduledLoops = [
+    runCanvasAgentOutboxDispatchLoop(),
+    ...(shardConfig.enabled ? [runScheduledLoop({
+      signal: abortController.signal,
+      intervalMs: shardConfig.discoveryIntervalMs,
+      run: discoverCanvasAgentShardWorkers,
+    })] : []),
+    runScheduledLoop({
+      signal: abortController.signal,
+      intervalMs: maintenanceIntervalMs,
+      run: () => runWithDatabaseContext(async () => {
+        const result = await runtime.worker.runMaintenanceOnce(batchSize);
+        if (result.inspected || result.repaired) {
+          console.info(`[canvas-agent] maintenance inspected=${result.inspected} repaired=${result.repaired}`);
+        }
+      }),
+    }),
+    runScheduledLoop({
+      signal: abortController.signal,
+      intervalMs: fallbackScanIntervalMs,
+      run: () => runWithDatabaseContext(async () => {
+        const processed = await runtime.worker.runQueuedOnce(batchSize);
+        if (processed.length) {
+          console.info(`[canvas-agent] fallback processed=${processed.length}`);
+        }
+      }),
+    }),
+  ];
   await Promise.all(scheduledLoops);
 } catch (error) {
   abortController.abort(error);
   await Promise.allSettled(scheduledLoops);
   throw error;
 } finally {
+  outboxWakeSignal.close();
   await Promise.allSettled([
     ...[...workers.values()].map((worker) => worker.close()),
+    notificationClient.query(`UNLISTEN ${canvasAgentOutboxWakeChannel}`).catch(() => undefined),
     publisher.close(),
   ]);
+  await notificationClient.end().catch(() => undefined);
   await db.close();
   console.info("[canvas-agent] Worker stopped.");
 }
 
+async function runCanvasAgentOutboxDispatchLoop() {
+  while (!abortController.signal.aborted) {
+    const startedAt = Date.now();
+    const result = await runWithDatabaseContext(async () => {
+      await outbox.releaseStaleLocks();
+      return outbox.dispatchBatch(outboxBatchSize);
+    });
+    if (result.claimed || result.dispatched) {
+      console.info(`[canvas-agent] outbox claimed=${result.claimed} dispatched=${result.dispatched}`);
+    }
+    if (abortController.signal.aborted) break;
+    const retryDelayMs = result.nextRetryAt
+      ? Math.max(0, result.nextRetryAt.getTime() - Date.now())
+      : outboxFallbackIntervalMs;
+    await outboxWakeSignal.wait(Math.min(
+      Math.max(0, outboxFallbackIntervalMs - (Date.now() - startedAt)),
+      retryDelayMs,
+    ));
+  }
+}
+
 async function discoverCanvasAgentShardWorkers() {
   const shardIds = shardConfig.enabled
-    ? await listCanvasAgentShardIds(db, shardConfig.minimumShardCount)
+    ? await listCanvasAgentShardIds(db)
     : [0];
+  const desiredShardIds = new Set(shardIds);
+  for (const [shardId, worker] of workers) {
+    if (shardId === 0 || desiredShardIds.has(shardId)) continue;
+    await worker.close();
+    workers.delete(shardId);
+    console.info(`[canvas-agent] Stopped idle shard=${shardId}`);
+  }
   for (const shardId of shardIds) {
     if (workers.has(shardId)) continue;
     const shardQueueName = assertCanvasAgentQueueName(

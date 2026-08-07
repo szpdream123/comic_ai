@@ -1,7 +1,6 @@
 export interface CanvasAgentShardConfig {
   enabled: boolean;
   baseQueueName: string;
-  minimumShardCount: number;
   shardCapacity: number;
   maxActiveShards: number;
   workerConcurrency: number;
@@ -10,13 +9,19 @@ export interface CanvasAgentShardConfig {
 }
 
 export function loadCanvasAgentShardConfig(env: NodeJS.ProcessEnv): CanvasAgentShardConfig {
-  const minimumShardCount = readInteger(env, "CANVAS_AGENT_SHARD_COUNT", 16, 1, 256);
+  const maxShardCount = readInteger(env, "CANVAS_AGENT_SHARD_COUNT", 16, 1, 16);
+  const configuredMaxActiveShards = readInteger(
+    env,
+    "CANVAS_AGENT_MAX_ACTIVE_SHARDS",
+    maxShardCount,
+    1,
+    16,
+  );
   return {
     enabled: readBoolean(env, "CANVAS_AGENT_SHARDING_ENABLED", true),
     baseQueueName: readQueueName(env.CANVAS_AGENT_QUEUE_NAME?.trim() || "canvas-agent"),
-    minimumShardCount,
     shardCapacity: readInteger(env, "CANVAS_AGENT_SHARD_CAPACITY", 100, 1, 100_000),
-    maxActiveShards: readInteger(env, "CANVAS_AGENT_MAX_ACTIVE_SHARDS", 32, minimumShardCount, 1_024),
+    maxActiveShards: Math.min(maxShardCount, configuredMaxActiveShards),
     workerConcurrency: readInteger(env, "CANVAS_AGENT_WORKER_CONCURRENCY", 20, 1, 1_000),
     workerTotalConcurrency: readInteger(env, "CANVAS_AGENT_WORKER_TOTAL_CONCURRENCY", 320, 1, 10_000),
     discoveryIntervalMs: readInteger(env, "CANVAS_AGENT_SHARD_DISCOVERY_INTERVAL_MS", 10_000, 1_000, 600_000),

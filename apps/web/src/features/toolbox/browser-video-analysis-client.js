@@ -1,10 +1,10 @@
 const REQUIRED_FRAME_RATE = 6;
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
-const FRAME_MAX_EDGE = 720;
-const INSTALL_CACHE_KEY = "comic-ai-browser-video-analysis";
+const FRAME_MAX_EDGE = 1920;
+const INSTALL_CACHE_KEY = "comic-ai-browser-video-analysis-v3";
 const INSTALL_DB_NAME = "comic-ai-browser-video-analysis";
 const INSTALL_DB_STORE = "resources";
-const INSTALL_VERSION = "browser-2-wasm";
+const INSTALL_VERSION = "browser-3-hd";
 const UNSUPPORTED_MESSAGE = "当前电脑浏览器不支持本地视频解析，请升级或更换浏览器";
 const SUPPORTED_VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 
@@ -277,7 +277,7 @@ function canvasToJpegBlob(canvas) {
     canvas.toBlob(
       (blob) => blob ? resolve(blob) : reject(new Error("浏览器无法保存视频画面")),
       "image/jpeg",
-      0.68,
+      0.86,
     );
   });
 }
@@ -357,23 +357,29 @@ async function deleteIndexedDbInstallMarker() {
 }
 
 function resolveDecoderBundleUrl() {
-  return new URL("./browser-video-analysis-decoder.bundle.js", import.meta.url).href;
+  return resolveVersionedDecoderResourceUrl("./browser-video-analysis-decoder.bundle.js");
 }
 
 function resolveWasmDecoderBundleUrl() {
-  return new URL("./browser-video-analysis-wasm.bundle.js", import.meta.url).href;
+  return resolveVersionedDecoderResourceUrl("./browser-video-analysis-wasm.bundle.js");
 }
 
 function resolveWasmWorkerUrl() {
-  return new URL("./browser-video-analysis-ffmpeg-worker.js", import.meta.url).href;
+  return resolveVersionedDecoderResourceUrl("./browser-video-analysis-ffmpeg-worker.js");
 }
 
 function resolveWasmCoreUrl() {
-  return new URL("./browser-video-analysis-ffmpeg-core.js", import.meta.url).href;
+  return resolveVersionedDecoderResourceUrl("./browser-video-analysis-ffmpeg-core.js");
 }
 
 function resolveWasmBinaryUrl() {
-  return new URL("./browser-video-analysis-ffmpeg-core.wasm", import.meta.url).href;
+  return resolveVersionedDecoderResourceUrl("./browser-video-analysis-ffmpeg-core.wasm");
+}
+
+function resolveVersionedDecoderResourceUrl(path) {
+  const url = new URL(path, import.meta.url);
+  url.searchParams.set("v", INSTALL_VERSION);
+  return url.href;
 }
 
 function decoderResourceUrls() {

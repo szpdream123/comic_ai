@@ -24,6 +24,24 @@ describe("runtime schema migration launchers", () => {
     }
   });
 
+  it("locks the production launcher before migrations or child services start", async () => {
+    const source = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
+    const lockOffset = source.indexOf("acquireProcessInstanceLock(");
+    const migrationOffset = source.indexOf("runRuntimeSchemaMigrations(");
+    const firstSpawnOffset = source.indexOf("supervisor.start(");
+
+    assert.ok(lockOffset >= 0, "production launcher must acquire an instance lock");
+    assert.ok(lockOffset < migrationOffset, "production launcher must lock before migrations");
+    assert.ok(lockOffset < firstSpawnOffset, "production launcher must lock before child services");
+  });
+
+  it("bounds production shutdown so a stuck worker cannot block a restart forever", async () => {
+    const source = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
+    assert.match(source, /function requestStop\(signal\)/);
+    assert.match(source, /supervisor\.forceStop\(signal\)/);
+    assert.match(source, /Graceful shutdown exceeded 10s/);
+  });
+
   it("rejects the development launcher in production before touching the schema", async () => {
     const source = await readFile(new URL("run-phone-auth-dev-server.mjs", import.meta.url), "utf8");
     const productionGuardOffset = source.indexOf('if (process.env.NODE_ENV === "production")');
@@ -84,6 +102,37 @@ describe("runtime schema migration launchers", () => {
 
     const productionSource = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
     assert.match(productionSource, /CREATOR_DEV_STACK_MANAGED:\s*"true"/);
+  });
+
+  it("does not auto-start the HTTP entrypoint from a supervised worker bundle", async () => {
+    const source = await readFile(
+      new URL("../apps/backend/src/entrypoints/phone-auth-dev-server.ts", import.meta.url),
+      "utf8",
+    );
+    const directExecutionBlock = source.slice(source.lastIndexOf("if (\n  process.env.CREATOR_DEV_STACK_MANAGED"));
+
+    assert.match(directExecutionBlock, /CREATOR_DEV_STACK_MANAGED !== "true"/);
+    assert.match(directExecutionBlock, /import\.meta\.url === `file:\/\/\$\{process\.argv\[1\]\}`/);
+  });
+
+  it("builds production runtime entries once and starts children with Node directly", async () => {
+    const productionSource = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
+    const buildSource = await readFile(new URL("build-production-runtime.mjs", import.meta.url), "utf8");
+
+    assert.match(productionSource, /buildProductionRuntime/);
+    assert.match(productionSource, /productionRuntime\.generationWorker/);
+    assert.doesNotMatch(productionSource, /resolveTsxRuntimeArgs\(runtime\)/);
+    assert.match(buildSource, /bundle:\s*true/);
+    assert.match(buildSource, /packages:\s*"external"/);
+    assert.match(buildSource, /target:\s*"node18"/);
+    assert.match(buildSource, /Reusing cached production runtime/);
+    assert.match(buildSource, /metafile:\s*true/);
+    assert.match(buildSource, /package-lock\.json/);
+    assert.match(buildSource, /split\(sep\)\.join\("\/"\)/);
+    assert.match(buildSource, /run-generation-outbox-dispatcher\.mjs/);
+    assert.match(buildSource, /run-generation-queue-maintenance\.mjs/);
+    assert.match(buildSource, /run-generation-video-worker\.mjs/);
+    assert.match(buildSource, /run-canvas-agent-worker\.mjs/);
   });
 
   it("retries only a transient generation maintenance database connection timeout", async () => {

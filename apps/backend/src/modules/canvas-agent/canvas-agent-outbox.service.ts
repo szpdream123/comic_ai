@@ -31,6 +31,7 @@ export class CanvasAgentOutboxService {
     const now = (this.deps.now ?? (() => new Date()))();
     const rows = await this.claim(Math.min(Math.max(limit, 1), 200), now);
     let dispatched = 0;
+    let nextRetryAt: Date | undefined;
     for (const row of rows) {
       try {
         await this.deps.publisher.publish({
@@ -50,6 +51,7 @@ export class CanvasAgentOutboxService {
         );
         dispatched += 1;
       } catch (error) {
+        const availableAt = new Date(now.getTime() + retryDelayMs(row));
         await this.deps.db.query(
           `
             UPDATE canvas_agent_outbox
@@ -60,14 +62,15 @@ export class CanvasAgentOutboxService {
           [
             row.id,
             now,
-            new Date(now.getTime() + retryDelayMs(row)),
+            availableAt,
             redactError(error),
             this.deps.workerId,
           ],
         );
+        if (!nextRetryAt || availableAt < nextRetryAt) nextRetryAt = availableAt;
       }
     }
-    return { claimed: rows.length, dispatched };
+    return { claimed: rows.length, dispatched, nextRetryAt };
   }
 
   async releaseStaleLocks(lockTimeoutMs = 60_000) {
@@ -98,7 +101,7 @@ export class CanvasAgentOutboxService {
           FOR UPDATE OF outbox, conversation SKIP LOCKED
         ), assigned_conversations AS (
           UPDATE canvas_agent_conversations conversation
-          SET shard_id = ((hashtextextended(conversation.id::text, 0) % 16 + 16) % 16)::integer,
+          SET shard_id = 0,
               updated_at = $1
           FROM (
             SELECT DISTINCT conversation_id
