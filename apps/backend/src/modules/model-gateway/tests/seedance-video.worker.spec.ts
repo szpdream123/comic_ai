@@ -7,6 +7,7 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import {
   buildLingdongArtifactDownloadInit,
+  buildSeedanceUserModelRequestLogBody,
   cancelGenerationTask,
   expireSeedanceVideoPollJob,
   fetchSeedanceVideoArtifactJob,
@@ -19,6 +20,43 @@ import {
 } from "../seedance-video.worker.ts";
 
 describe("Seedance video worker user ownership", () => {
+  it("records the SanBao video request in the same shape sent upstream", () => {
+    const request = buildSeedanceUserModelRequestLogBody({
+      prompt: "use all references",
+      motionPrompt: "use all references",
+      parameters: {
+        aspectRatio: "16:9",
+        resolution: "720p",
+        durationSec: 5,
+        count: 2,
+        reference: "all",
+        filePaths: ["https://cdn.example.com/reference.png"],
+        videoFilePaths: ["https://cdn.example.com/reference.mp4"],
+        audioFilePaths: ["https://cdn.example.com/reference.mp3"],
+      },
+      targetType: "episode",
+    }, {
+      providerName: "三宝影像",
+      providerProtocol: "san_bao",
+      providerModel: "sd2_9img_full",
+    });
+
+    assert.equal(request.requestFormat, "san_bao_video");
+    assert.deepEqual(request.requestBody, {
+      model: "sd2_9img_full",
+      prompt: "use all references",
+      ratio: "16:9",
+      resolution: "720p",
+      duration: 5,
+      concurrency: 2,
+      reference: "all",
+      images: ["https://cdn.example.com/reference.png"],
+      videos: ["https://cdn.example.com/reference.mp4"],
+      audios: ["https://cdn.example.com/reference.mp3"],
+    });
+    assert.doesNotMatch(request.requestText, /targetType|parameters/);
+  });
+
   it("uses a thirty-minute video download timeout and independent upload timeout", () => {
     assert.equal(
       readGenerationArtifactUploadConfig({}).downloadTimeoutMs,
@@ -408,6 +446,57 @@ describe("Seedance video worker user ownership", () => {
         { status: "rate_limited", retryAfterMs: 1200, reason: "test-poll-limit" },
         { status: "rate_limited", retryAfterMs: 1200, reason: "test-poll-limit" },
       ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("persists SanBao video poll ModelError failure codes from the error factory", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await db.query("UPDATE ai_model_configs SET status = 'active' WHERE model_code = 'sanbao-sd2-fast-4img'");
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "203",
+        userId: "70000000-0000-4000-8000-000000000203",
+        status: "running",
+      });
+      await db.query(
+        `
+          UPDATE tasks
+          SET input_snapshot_json = jsonb_set(input_snapshot_json, '{model}', '"sanbao-sd2-fast-4img"'::jsonb)
+          WHERE id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      const result = await processSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: { SAN_BAO_API_KEY: "san-bao-test-key" },
+        fetchImpl: (async () => new Response(JSON.stringify({ error: "bad gateway" }), {
+          status: 502,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch,
+        now: new Date("2026-08-07T05:10:00.000Z"),
+      });
+      const stored = await db.query<{
+        task_failure_code: string | null;
+        provider_failure_code: string | null;
+      }>(
+        `
+          SELECT t.failure_code AS task_failure_code,
+                 pr.failure_code AS provider_failure_code
+          FROM tasks t
+          JOIN provider_requests pr ON pr.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, { status: "failed", failureCode: "san_bao_service_unavailable" });
+      assert.equal(stored.rows[0]?.task_failure_code, "san_bao_service_unavailable");
+      assert.equal(stored.rows[0]?.provider_failure_code, "san_bao_service_unavailable");
     } finally {
       await db.close();
     }

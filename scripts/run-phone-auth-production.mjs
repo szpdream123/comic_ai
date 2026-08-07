@@ -18,6 +18,7 @@ const serverEntrypoint = join(
 );
 const envFilePath = join(process.cwd(), ".env");
 const productionLockPath = join(process.cwd(), ".local", "run", "comic-ai-production.pid");
+const productionFoundationSchemaTimeoutMs = 20 * 60_000;
 
 if (!existsSync(serverEntrypoint)) {
   console.error(`Unable to find production server entrypoint at ${serverEntrypoint}`);
@@ -29,6 +30,12 @@ acquireProcessInstanceLock(productionLockPath, { label: "production_stack" });
 process.env.NODE_ENV = "production";
 const productionRuntime = await buildProductionRuntime({ cwd: process.cwd() });
 runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
+runProductionFoundationSchema({
+  runtime,
+  cwd: process.cwd(),
+  env: process.env,
+  entrypoint: productionRuntime.foundationSchema,
+});
 
 const listenHost = (process.env.HOST ?? "0.0.0.0").trim() || "0.0.0.0";
 const publicHost = (process.env.PUBLIC_HOST ?? listenHost).trim() || listenHost;
@@ -51,6 +58,7 @@ const supervisor = createCreatorDevServiceSupervisor({
       env: {
         ...process.env,
         CREATOR_DEV_STACK_MANAGED: "true",
+        CREATOR_DEV_SCHEMA_READY: "true",
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -79,6 +87,27 @@ const supervisor = createCreatorDevServiceSupervisor({
     console.error(`[production] ${name} stopped code=${code ?? "null"} signal=${signal ?? "null"}.`);
   },
 });
+
+function runProductionFoundationSchema({ runtime, cwd, env, entrypoint }) {
+  console.info("[schema] Preparing foundation schema before service startup...");
+  const result = spawnSync(runtime, [entrypoint], {
+    cwd,
+    env: {
+      ...env,
+      CREATOR_DEV_STACK_MANAGED: "false",
+      CREATOR_DEV_SCHEMA_READY: "false",
+    },
+    stdio: "inherit",
+    timeout: productionFoundationSchemaTimeoutMs,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`production_foundation_schema_failed:${result.status ?? "unknown"}`);
+  }
+  console.info("[schema] Foundation schema is ready.");
+}
 
 supervisor.start("phone-auth", productionApiArgs(productionRuntime.phoneAuth), { restartOnFailure: true });
 supervisor.start("generation-outbox", [

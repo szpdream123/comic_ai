@@ -678,9 +678,12 @@ function generationCredits(
   const resolution = readString(parameters.resolution ?? parameters.quality ?? parameters.ratio ?? parameters.aspectRatio);
   const resolutionCredits = asRecord(pricing.resolutionCredits);
   const configured = resolution ? Number(resolutionCredits[resolution]) : Number.NaN;
-  const unitCredits = Number.isFinite(configured) && configured >= 0 ? configured : baseCredits;
+  const billingMode = readString(pricing.billingMode);
+  const unitCredits = mediaType === "image" && billingMode !== "duration"
+    ? baseCredits
+    : Number.isFinite(configured) && configured >= 0 ? configured : baseCredits;
   const duration = Number(parameters.durationSec ?? 1);
-  const cost = readString(pricing.billingMode) === "duration" && mediaType === "video"
+  const cost = billingMode === "duration" && mediaType === "video"
     ? unitCredits * (Number.isFinite(duration) && duration > 0 ? duration : 1)
     : unitCredits;
   return cost > 0 && cost < 1 ? 1 : Math.max(1, Math.round(cost));

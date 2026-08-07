@@ -895,6 +895,38 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       });
       const asyncMissingPayload = await asyncMissingResponse.json();
 
+      const sanBaoInvalidResponse = await fetch(`${server.origin}/api/admin/models/validate-draft`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          modelCode: "sanbao-invalid-config",
+          displayName: "三宝错误配置测试",
+          providerName: "三宝影像",
+          providerModel: "gpt-image2",
+          providerProtocol: "san_bao",
+          invocationMode: "async_polling",
+          mediaType: "image",
+          taskModes: ["image.generate"],
+          parameterSchema: { prompt: { label: "提示词", type: "string", required: true } },
+          pricing: { unit: "image", baseCredits: 90 },
+          providerConfig: {
+            baseURL: "https://provider.example.test",
+            requestPath: "/openapi/v1/videos",
+            createTaskEndpoint: "/openapi/v1/videos",
+            queryTaskEndpoint: "/openapi/v1/images/task-id",
+            apiKeyEnv: "OTHER_API_KEY",
+          },
+          dispatchPolicy: {
+            submitQueueName: "generation-submit-image",
+            pollQueueName: "generation-poll-image",
+          },
+        }),
+      });
+      const sanBaoInvalidPayload = await sanBaoInvalidResponse.json();
+
       assert.equal(templatesResponse.status, 200);
       assert.ok(templatesPayload.data.length >= 14);
       for (const expectedId of [
@@ -927,6 +959,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           .filter((item: { field: string }) => item.field === "queryTaskEndpoint")
           .every((item: { message: string }) => !item.message.includes("视频模型")),
       );
+      assert.equal(sanBaoInvalidResponse.status, 200);
+      assert.equal(sanBaoInvalidPayload.data.ok, false);
+      for (const field of ["apiKeyEnv", "baseURL", "requestPath", "createTaskEndpoint", "queryTaskEndpoint"]) {
+        assert.ok(
+          sanBaoInvalidPayload.data.failedItems.some((item: { field: string }) => item.field === field),
+          `missing SanBao validation for ${field}`,
+        );
+      }
     } finally {
       await server.close();
     }

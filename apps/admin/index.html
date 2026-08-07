@@ -8441,7 +8441,7 @@
               <label class="field"><span>供应商</span><input name="providerName" value="${escapeAttribute(defaults.providerName)}" required /></label>
               <label class="field"><span>真实模型名</span><input name="providerModel" value="${escapeAttribute(defaults.providerModel)}" required /></label>
               <label class="field"><span>请求路径</span><input name="requestPath" value="${escapeAttribute(selectedRequestPath)}" placeholder="/v1/images/generations" /></label>
-              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"], defaults.providerProtocol)}</select></label>
+              <label class="field"><span>协议</span><select name="providerProtocol">${optionList(["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_video", "aliyun_bailian_video", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"], defaults.providerProtocol)}</select></label>
               <label class="field"><span>调用方式</span><select name="invocationMode">${optionList(["sync", "async_polling", "stream", "webhook"], defaults.invocationMode)}</select></label>
               <label class="field"><span>媒体类型</span><select name="mediaType">${optionList(["text", "image", "video", "audio", "multimodal"], defaults.mediaType)}</select></label>
               <label class="field"><span>状态</span><select name="status">${optionList(["active", "disabled", "archived"], defaults.status)}</select></label>
@@ -11885,6 +11885,7 @@
         { value: "extra_token_video", label: "Extra Token 视频适配器", mediaTypes: ["video"] },
         { value: "saier_video", label: "塞尔视频适配器", mediaTypes: ["video"] },
         { value: "banana_router", label: "BananaRouter 模型适配器", mediaTypes: ["image", "video"] },
+        { value: "san_bao", label: "三宝影像图片 / 视频适配器", mediaTypes: ["image", "video"] },
         { value: "openai_compatible_chat", label: "OpenAI 兼容文本适配器", mediaTypes: ["text"] },
         { value: "cumob_chat", label: "酷模文本适配器", mediaTypes: ["text"] },
         { value: "modelflare_responses", label: "ModelFlare Responses 适配器", mediaTypes: ["text"] },
@@ -11901,6 +11902,8 @@
           ? (
             isBananaRouterProviderName(providerName)
               ? "banana_router"
+              : provider.includes("sanbao") || provider.includes("三宝")
+              ? "san_bao"
               : isLingdongProviderName(providerName)
               ? "lingdong_api"
               : provider.includes("aliyun") || provider.includes("bailian")
@@ -11916,6 +11919,8 @@
           : (
             isBananaRouterProviderName(providerName)
               ? "banana_router"
+              : provider.includes("sanbao") || provider.includes("三宝")
+              ? "san_bao"
               : provider === "openai"
               ? "openai_images"
               : isLingdongProviderName(providerName)
@@ -11963,13 +11968,14 @@
         const isVideo = mediaType === "video";
         const isText = mediaType === "text";
         const isBananaRouterImage = mediaType === "image" && protocol === "banana_router";
+        const isSanBaoMedia = protocol === "san_bao" && (mediaType === "image" || mediaType === "video");
         return {
           providerProtocol: protocol,
-          invocationMode: isText ? "stream" : isVideo || isBananaRouterImage ? "async_polling" : "sync",
+          invocationMode: isText ? "stream" : isVideo || isBananaRouterImage || isSanBaoMedia ? "async_polling" : "sync",
           taskModes: isText ? ["text.script"] : isVideo ? ["video.text_to_video", "video.image_to_video"] : ["image.generate", "image.edit", "image.reference_generate"],
           status: "disabled",
           sortOrder: 100,
-          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"] } : { input: ["prompt", "image"], output: ["image"], ...(isBananaRouterImage ? { asyncPolling: true } : {}) },
+          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"], ...(isSanBaoMedia ? { asyncPolling: true } : {}) } : { input: ["prompt", "image"], output: ["image"], ...((isBananaRouterImage || isSanBaoMedia) ? { asyncPolling: true } : {}) },
           defaultParams: {},
           providerConfig: isText
             ? (protocol === "cumob_chat"
@@ -11981,6 +11987,8 @@
             ? (
               protocol === "banana_router"
                 ? { baseURL: "https://api.bananarouter.com", requestPath: "/api/v3/contents/generations/tasks", createTaskEndpoint: "/api/v3/contents/generations/tasks", queryTaskEndpoint: "/api/v3/contents/generations/tasks/{taskId}", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_seedance_video" }
+                : protocol === "san_bao"
+                ? { baseURL: "https://sanbaobeauty.com", requestPath: "/openapi/v1/videos", createTaskEndpoint: "/openapi/v1/videos", queryTaskEndpoint: "/openapi/v1/videos/{taskId}", apiKeyEnv: "SAN_BAO_API_KEY", requestFormat: "san_bao_video" }
                 : protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "video", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "", requestFormat: "lingdong_video" }
                 : protocol === "saier_video"
@@ -11998,6 +12006,8 @@
             : (
               protocol === "banana_router"
                 ? { baseURL: "https://api.bananarouter.com", requestPath: "/v1/images/generations/async", endpoint: "/v1/images/generations/async", createTaskEndpoint: "/v1/images/generations/async", editEndpoint: "/v1/images/edits/async", queryTaskEndpoint: "/v1/async-tasks/{taskId}", apiKeyEnv: "BananaRouter_API_KEY", requestFormat: "banana_router_openai_images", resultFormat: "url" }
+                : protocol === "san_bao"
+                ? { baseURL: "https://sanbaobeauty.com", requestPath: "/openapi/v1/images", endpoint: "/openapi/v1/images", createTaskEndpoint: "/openapi/v1/images", queryTaskEndpoint: "/openapi/v1/images/{taskId}", apiKeyEnv: "SAN_BAO_API_KEY", requestFormat: "san_bao_image", resultFormat: "url" }
                 : protocol === "lingdong_api"
                 ? { baseURL: "https://www.lingdongapi.com", mediaType: "image", requestPath: "/v1/images/generations", endpoint: "/v1/images/generations", apiKeyEnv: "", requestFormat: "lingdong_image", resultFormat: "url" }
                 : protocol === "global_ai_opc_image"
@@ -12013,7 +12023,7 @@
           uiConfig: isText ? { modelKind: "text.script", modelKindLabel: "\u5267\u672c\u6a21\u578b", supportedModes: ["script"] } : isVideo ? { videoCategory: "first_frame", videoCategoryLabel: "\u9996\u5e27\u89c6\u9891" } : {},
           dispatchPolicy: {
             submitQueueName: isText ? "generation-submit-text" : isVideo ? "generation-submit-video" : "generation-submit-image",
-            pollQueueName: isVideo ? "generation-poll-video" : isBananaRouterImage ? "generation-poll-image" : null,
+            pollQueueName: isVideo ? "generation-poll-video" : isBananaRouterImage || isSanBaoMedia ? "generation-poll-image" : null,
             providerRpmLimit: 60,
             providerConcurrentLimit: 5,
             submitConcurrencyLimit: 5,
@@ -12025,9 +12035,16 @@
       function schemaFromSelectedParameterTemplates(form, existingSchema = {}, existingDefaults = {}) {
         const schema = {};
         const defaults = {};
-        const editableKeys = new Set(parameterTemplates().map((template) => template.key));
+        const mediaType = modelKindOption(String(form.get("modelKind") || "")).mediaType;
+        const editableTemplates = editableModelParameterTemplates(mediaType, existingSchema);
+        const editableKeys = new Set(editableTemplates.map((template) => template.key));
         Object.entries(existingSchema || {}).forEach(([key, value]) => {
-          if (!editableKeys.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+          if (value?.visible === false && value && typeof value === "object" && !Array.isArray(value)) {
+            schema[key] = { ...value };
+            if (Object.prototype.hasOwnProperty.call(existingDefaults || {}, key)) {
+              defaults[key] = existingDefaults[key];
+            }
+          } else if (!editableKeys.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
             schema[key] = { ...value };
             if (Object.prototype.hasOwnProperty.call(existingDefaults || {}, key)) {
               defaults[key] = existingDefaults[key];
@@ -12036,16 +12053,19 @@
             schema[key] = { ...value, visible: false };
           }
         });
-        parameterTemplates().forEach((template) => {
+        editableTemplates.forEach((template) => {
           if (!form.get(`parameterSupported:${template.key}`)) return;
           const required = Boolean(form.get(`parameterRequired:${template.key}`));
           const selectedOptionValues = form.getAll(`parameterOptions:${template.key}`).map(String).filter(Boolean);
           const options = selectedOptionValues.length ? selectedOptionValues : splitCsv(form.get(`parameterOptions:${template.key}`));
           const defaultValue = String(form.get(`parameterDefault:${template.key}`) || "").trim();
+          const existingParameter = existingSchema[template.key] && typeof existingSchema[template.key] === "object"
+            ? existingSchema[template.key]
+            : {};
           const parameter = {
-            ...(existingSchema[template.key] && typeof existingSchema[template.key] === "object" ? existingSchema[template.key] : {}),
-            label: template.label,
-            type: template.type,
+            ...existingParameter,
+            label: String(existingParameter.label || template.label || template.key),
+            type: String(existingParameter.type || template.type || "string"),
             required,
             visible: true,
           };
@@ -12055,9 +12075,9 @@
           }
           schema[template.key] = parameter;
           if (defaultValue !== "") {
-            if (template.type === "integer" || template.type === "number") {
+            if (parameter.type === "integer" || parameter.type === "number") {
               defaults[template.key] = Number(defaultValue);
-            } else if (template.type === "boolean") {
+            } else if (parameter.type === "boolean") {
               defaults[template.key] = defaultValue === "true";
             } else {
               defaults[template.key] = defaultValue;
@@ -12102,11 +12122,40 @@
         return `<select name="parameterDefault:${escapeAttribute(template.key)}" data-parameter-default-select="${escapeAttribute(template.key)}">${options.join("")}</select>`;
       }
 
-      function editableModelParameterTemplates(mediaType) {
-        return parameterTemplates()
+      function editableModelParameterTemplates(mediaType, schema = {}) {
+        const templates = new Map(parameterTemplates()
           .filter((template) => template.mediaTypes.includes(mediaType))
           .filter((template) => !MODEL_CANONICAL_MEDIA_PARAMETER_KEYS.has(template.key))
-          .filter((template) => !MODEL_HIDDEN_PARAMETER_BINDING_KEYS.has(template.key));
+          .filter((template) => !MODEL_HIDDEN_PARAMETER_BINDING_KEYS.has(template.key))
+          .map((template) => [template.key, template]));
+        Object.entries(schema || {}).forEach(([key, parameter]) => {
+          if (
+            !parameter ||
+            typeof parameter !== "object" ||
+            Array.isArray(parameter) ||
+            parameter.visible === false ||
+            MODEL_CANONICAL_MEDIA_PARAMETER_KEYS.has(key) ||
+            MODEL_HIDDEN_PARAMETER_BINDING_KEYS.has(key)
+          ) {
+            return;
+          }
+          const template = templates.get(key) || normalizeParameterTemplate({
+            key,
+            mediaTypes: [mediaType],
+            sortOrder: 1000,
+          });
+          templates.set(key, normalizeParameterTemplate({
+            ...template,
+            key,
+            label: parameter.label || template.label || key,
+            type: parameter.type || template.type || "string",
+            mediaTypes: template.mediaTypes.length ? template.mediaTypes : [mediaType],
+            options: Array.isArray(parameter.options) ? parameter.options : template.options,
+          }));
+        });
+        return [...templates.values()]
+          .filter((template) => schema?.[template.key]?.visible !== false)
+          .sort((left, right) => Number(left.sortOrder || 100) - Number(right.sortOrder || 100) || left.key.localeCompare(right.key));
       }
 
       function defaultModelParameterKeys(mediaType, useDefaultSelections = false) {
@@ -12116,22 +12165,34 @@
         return ["aspectRatio", "quality", "count", "size", "responseFormat"];
       }
 
-      function parameterCreditInputsMarkup(template, options, pricing = {}) {
+      function parameterCreditInputsMarkup(template, options, pricing = {}, billingMode = "fixed", mediaType = "") {
         if (template.key !== "resolution") return `<span class="metric-note">-</span>`;
         const table = pricing?.resolutionCredits && typeof pricing.resolutionCredits === "object" && !Array.isArray(pricing.resolutionCredits)
           ? pricing.resolutionCredits
           : {};
         const values = options.filter(Boolean);
-        if (!values.length) return `<span class="metric-note">先选择分辨率</span>`;
-        return `<div class="parameter-selected-values" data-parameter-credit-values="${escapeAttribute(template.key)}">${values.map((resolution) => {
+        if (mediaType === "image" && billingMode !== "duration") {
+          const preservedInputs = values.map((resolution) => {
+            const value = table[resolution];
+            return value === undefined || value === null || value === ""
+              ? ""
+              : `<input name="resolutionCredit:${escapeAttribute(resolution)}" type="hidden" value="${escapeAttribute(String(value))}" />`;
+          }).join("");
+          return `<div data-parameter-credit-slot="resolution"><span class="metric-note">固定计费使用上方积分</span>${preservedInputs}</div>`;
+        }
+        if (!values.length) return `<div data-parameter-credit-slot="resolution"><span class="metric-note">先选择清晰度</span></div>`;
+        const placeholder = billingMode === "duration"
+          ? (mediaType === "image" ? "清晰度积分" : "积分/秒")
+          : "积分/次";
+        return `<div class="parameter-selected-values" data-parameter-credit-slot="resolution" data-parameter-credit-values="${escapeAttribute(template.key)}">${values.map((resolution) => {
           const value = table[resolution] ?? "";
-          return `<label class="parameter-value-chip" style="gap:6px;"><span>${escapeHtml(resolution)}</span><input name="resolutionCredit:${escapeAttribute(resolution)}" type="number" min="0" step="0.01" value="${escapeAttribute(value === "" ? "" : String(value))}" placeholder="积分" style="width:84px;height:26px;padding:2px 6px;" /></label>`;
+          return `<label class="parameter-value-chip" style="gap:6px;"><span>${escapeHtml(resolution)}</span><input name="resolutionCredit:${escapeAttribute(resolution)}" type="number" min="0" step="0.01" value="${escapeAttribute(value === "" ? "" : String(value))}" placeholder="${placeholder}" style="width:84px;height:26px;padding:2px 6px;" /></label>`;
         }).join("")}</div>`;
       }
 
       function parameterTemplateSelectionRows(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false, pricing = {}) {
         const defaultSupportedKeys = defaultModelParameterKeys(mediaType, useDefaultSelections);
-        const rows = editableModelParameterTemplates(mediaType)
+        const rows = editableModelParameterTemplates(mediaType, schema)
           .map((template) => {
             const current = schema[template.key] || {};
             const supported = Object.prototype.hasOwnProperty.call(schema, template.key) || defaultSupportedKeys.includes(template.key);
@@ -12144,7 +12205,7 @@
               <td>${parameterOptionSelectMarkup(template, options)}</td>
               <td>${parameterSelectedValuesMarkup(template.key, options)}</td>
               <td>${parameterDefaultSelectMarkup(template, options, defaultValue)}</td>
-              <td>${parameterCreditInputsMarkup(template, options, pricing)}</td>
+              <td>${parameterCreditInputsMarkup(template, options, pricing, pricing?.billingMode || "fixed", mediaType)}</td>
             </tr>`;
           }).join("");
         return rows || `<tr><td colspan="6">\u53c2\u6570\u6a21\u677f\u5e93\u6682\u65e0\u53ef\u9009\u53c2\u6570</td></tr>`;
@@ -12163,7 +12224,7 @@
 
       function frontendParameterPreviewControls(mediaType, schema = {}, defaultParams = {}, useDefaultSelections = false) {
         const defaultSupportedKeys = defaultModelParameterKeys(mediaType, useDefaultSelections);
-        return editableModelParameterTemplates(mediaType)
+        return editableModelParameterTemplates(mediaType, schema)
           .map((template) => {
             const current = schema[template.key] || {};
             const supported = Object.prototype.hasOwnProperty.call(schema, template.key) || defaultSupportedKeys.includes(template.key);
@@ -12229,12 +12290,19 @@
       function updateParameterCreditOptions(parameterKey, values) {
         if (parameterKey !== "resolution") return;
         const form = document.getElementById("model-editor-form");
-        const target = document.querySelector(`[data-parameter-credit-values="${cssAttributeValue(parameterKey)}"]`);
+        const target = document.querySelector(`[data-parameter-credit-slot="${cssAttributeValue(parameterKey)}"]`);
         if (!form || !target) return;
         const pricing = {
           resolutionCredits: resolutionCreditsFromForm(new FormData(form)),
         };
-        target.outerHTML = parameterCreditInputsMarkup({ key: "resolution" }, values, pricing);
+        const mediaType = modelKindOption(String(new FormData(form).get("modelKind") || "")).mediaType;
+        target.outerHTML = parameterCreditInputsMarkup(
+          { key: "resolution" },
+          values,
+          pricing,
+          String(form.elements.billingMode?.value || "fixed"),
+          mediaType,
+        );
       }
 
       function updateParameterDefaultOptions(parameterKey, values) {
@@ -12540,6 +12608,12 @@
         });
         form.addEventListener("change", (event) => {
           const name = event.target?.name || "";
+          if (name === "billingMode") {
+            updateParameterCreditOptions(
+              "resolution",
+              new FormData(form).getAll("parameterOptions:resolution").map(String).filter(Boolean),
+            );
+          }
           if (name.startsWith("parameterOptions:")) {
             updateParameterSelectedPreview(name.slice("parameterOptions:".length));
           }
@@ -12659,6 +12733,19 @@
         );
       }
 
+      function preservedUneditedModelDefaults(existing) {
+        const schema = existing?.parameterSchema && typeof existing.parameterSchema === "object" && !Array.isArray(existing.parameterSchema)
+          ? existing.parameterSchema
+          : {};
+        const defaults = existing?.defaultParams && typeof existing.defaultParams === "object" && !Array.isArray(existing.defaultParams)
+          ? existing.defaultParams
+          : {};
+        return Object.fromEntries(Object.entries(defaults).filter(([key]) => {
+          const parameter = schema[key];
+          return !parameter || parameter?.visible === false;
+        }));
+      }
+
       function simplifiedModelPayloadFromForm(form, existing) {
         const kind = modelKindOption(String(form.get("modelKind") || ""));
         const mediaType = kind.mediaType;
@@ -12746,7 +12833,7 @@
           status: existing?.status || fixed.status,
           sortOrder: Number(existing?.sortOrder || fixed.sortOrder),
           parameterSchema: selected.schema,
-          defaultParams: { ...fixed.defaultParams, ...selected.defaults },
+          defaultParams: { ...fixed.defaultParams, ...preservedUneditedModelDefaults(existing), ...selected.defaults },
           capabilities: transport.capabilities,
           pricing,
           providerConfig,

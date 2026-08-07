@@ -5,8 +5,9 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const productionRuntimeManifestName = ".production-runtime-manifest.json";
-const productionRuntimeCacheVersion = 1;
+const productionRuntimeCacheVersion = 2;
 const runtimeEntrySources = {
+  foundationSchema: join("apps", "backend", "src", "entrypoints", "production-foundation-schema.ts"),
   phoneAuth: join("apps", "backend", "src", "entrypoints", "phone-auth-dev-server.ts"),
   generationOutbox: join("scripts", "run-generation-outbox-dispatcher.mjs"),
   generationRepair: join("scripts", "run-generation-queue-maintenance.mjs"),

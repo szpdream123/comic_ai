@@ -98,6 +98,11 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
     displayMessage: "提示词过长，请缩短后重试。",
     retryable: false,
   },
+  model_parameter_invalid: {
+    code: "model_parameter_invalid",
+    displayMessage: "模型参数不合法，请重新选择后再试。",
+    retryable: false,
+  },
   provider_api_key_env_required: {
     code: "provider_api_key_env_required",
     displayMessage: "模型服务密钥配置缺失，请联系管理员检查模型配置。",
@@ -112,6 +117,61 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
     code: "provider_adapter_missing",
     displayMessage: "模型服务执行器未配置，请联系管理员处理。",
     retryable: false,
+  },
+  san_bao_bad_request: {
+    code: "san_bao_bad_request",
+    displayMessage: "三宝影像请求参数不符合模型要求，请检查提示词、比例和参考素材。",
+    retryable: false,
+  },
+  san_bao_authentication_failed: {
+    code: "san_bao_authentication_failed",
+    displayMessage: "三宝影像鉴权失败，请联系管理员检查 API 密钥。",
+    retryable: false,
+  },
+  san_bao_insufficient_balance: {
+    code: "san_bao_insufficient_balance",
+    displayMessage: "三宝影像账户积分不足，请联系管理员充值后重试。",
+    retryable: false,
+  },
+  san_bao_account_restricted: {
+    code: "san_bao_account_restricted",
+    displayMessage: "三宝影像账户当前受限，请联系管理员处理。",
+    retryable: false,
+  },
+  san_bao_payload_too_large: {
+    code: "san_bao_payload_too_large",
+    displayMessage: "参考素材文件过大，请压缩后重试。",
+    retryable: false,
+  },
+  san_bao_rate_limited: {
+    code: "san_bao_rate_limited",
+    displayMessage: "三宝影像请求过于频繁，请稍后重试。",
+    retryable: true,
+  },
+  san_bao_service_unavailable: {
+    code: "san_bao_service_unavailable",
+    displayMessage: "三宝影像模型服务暂不可用，请稍后重试。",
+    retryable: true,
+  },
+  san_bao_network_error: {
+    code: "san_bao_network_error",
+    displayMessage: "无法连接三宝影像服务，请稍后重试。",
+    retryable: true,
+  },
+  san_bao_invalid_response: {
+    code: "san_bao_invalid_response",
+    displayMessage: "三宝影像返回结果异常，请稍后重试。",
+    retryable: true,
+  },
+  san_bao_artifact_url_invalid: {
+    code: "san_bao_artifact_url_invalid",
+    displayMessage: "三宝影像返回的生成链接无效，请稍后重试。",
+    retryable: true,
+  },
+  san_bao_provider_failed: {
+    code: "san_bao_provider_failed",
+    displayMessage: "三宝影像生成失败，请调整参数或稍后重试。",
+    retryable: true,
   },
   provider_circuit_open: {
     code: "provider_circuit_open",

@@ -37,6 +37,7 @@ import { ModelError, translateProviderErrorMessage } from "./provider-error-mess
 import { attachProviderRawResponse, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
 import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
+import { buildSanBaoImagePayload } from "./san-bao.provider-adapter.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
 import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
@@ -1233,10 +1234,12 @@ export async function processGptImagePollJob(
       return { status: "waiting" };
     }
     if (poll.status === "failed") {
+      const failureCode = readString(poll.redactedResponse.failureCode)
+        || "provider_failed";
       return failGptImagePollJob(db, {
         row,
         snapshot,
-        failureCode: "provider_failed",
+        failureCode,
         providerStatus: poll.redactedResponse,
         now: input.now,
       });
@@ -1281,6 +1284,17 @@ export async function processGptImagePollJob(
       now: input.now,
     });
     return { status: "succeeded" };
+  } catch (error) {
+    if (modelConfig?.providerProtocol === "san_bao" && error instanceof ModelError) {
+      return failGptImagePollJob(db, {
+        row,
+        snapshot,
+        failureCode: error.failureCode || "provider_failed",
+        providerStatus: error.toRedactedProviderRecord(),
+        now: input.now,
+      });
+    }
+    throw error;
   } finally {
     if (permit?.granted) await permit.release();
   }
@@ -2602,7 +2616,7 @@ export function buildGptImageRequestLogBody(input: {
 }) {
   const providerConfig = readObject(input.modelConfig?.providerConfig);
   const adapterKey = resolveImageProviderAdapterKey(input.modelConfig?.providerProtocol ?? "", providerConfig);
-  if (adapterKey !== "cumob_image" && adapterKey !== "global_ai_opc_image") {
+  if (adapterKey !== "cumob_image" && adapterKey !== "global_ai_opc_image" && adapterKey !== "san_bao") {
     return {
       requestFormat: undefined,
       requestBody: input.requestBody,
@@ -2624,14 +2638,16 @@ export function buildGptImageRequestLogBody(input: {
         model: input.providerModel,
         defaultRequestParams: readObject(providerConfig.defaultRequestParams),
       })
-    : buildGlobalAiOpcImagePayload(requestInput, {
+    : adapterKey === "global_ai_opc_image"
+      ? buildGlobalAiOpcImagePayload(requestInput, {
         model: input.providerModel,
         requestFormat: readString(providerConfig.requestFormat) ?? undefined,
         defaultRequestParams: readObject(providerConfig.defaultRequestParams),
-      });
+      })
+      : buildSanBaoImagePayload(requestInput, input.providerModel, readObject(providerConfig.modelVariants));
 
   return {
-    requestFormat: adapterKey,
+    requestFormat: adapterKey === "san_bao" ? "san_bao_image" : adapterKey,
     requestBody,
     requestText: JSON.stringify(requestBody, null, 2),
   };

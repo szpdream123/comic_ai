@@ -8,6 +8,21 @@ import {
 } from "../generation-model-execution.resolver.ts";
 
 describe("generation model execution resolver", () => {
+  it("routes SanBao image and video models through the existing async executors", () => {
+    const image = resolveGenerationModelExecution({
+      kind: "image", modelCode: "sanbao-gpt-image2",
+      modelConfig: imageModelConfig({ modelCode: "sanbao-gpt-image2", providerProtocol: "san_bao" }),
+      dispatchPolicy: undefined, parameters: {}, fallbackQueueName: "generation-submit-image",
+    });
+    const video = resolveGenerationModelExecution({
+      kind: "video", modelCode: "sanbao-sd2-9img-full",
+      modelConfig: videoModelConfig({ modelCode: "sanbao-sd2-9img-full", providerProtocol: "san_bao" }),
+      dispatchPolicy: undefined, parameters: {}, fallbackQueueName: "generation-submit-video",
+    });
+    assert.equal(image.providerExecutor, "gpt-image-2");
+    assert.equal(video.providerExecutor, "seedance");
+  });
+
   it("routes BananaRouter image models through the image executor", () => {
     const execution = resolveGenerationModelExecution({
       kind: "image",
@@ -129,6 +144,27 @@ describe("generation model execution resolver", () => {
       resolution: "2k",
       size: "16:9",
     });
+  });
+
+  it("keeps SanBao image resolution and quality as independent parameters", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "image",
+      modelCode: "sanbao-gpt-image2",
+      modelConfig: imageModelConfig({
+        modelCode: "sanbao-gpt-image2",
+        providerProtocol: "san_bao",
+        parameterSchema: {
+          resolution: { options: ["普通", "1K", "2K", "4K"] },
+          quality: { options: ["high", "medium", "low"] },
+        },
+        defaultParams: { resolution: "普通", quality: "high" },
+      }),
+      dispatchPolicy: undefined,
+      parameters: { resolution: "4k", quality: "low" },
+      fallbackQueueName: "generation-submit-image",
+    });
+
+    assert.deepEqual(execution.parameters, { resolution: "4K", quality: "low" });
   });
 
   it("resolves configured video models to the video provider executor and mapped task mode", () => {

@@ -4,6 +4,7 @@ export type ImageProviderAdapterKey =
   | "cumob_image"
   | "global_ai_opc_image"
   | "volcengine_ark_image"
+  | "san_bao"
   | "custom_http";
 
 interface ProviderAdapterRoute {
@@ -34,6 +35,10 @@ const imageProviderRoutes: ProviderAdapterRoute[] = [
     adapterKey: "volcengine_ark_image",
     protocols: ["volcengine_ark_image"],
     requestFormats: ["volcengine_ark_image", "volcengine_ark_images_generation"],
+  },
+  {
+    adapterKey: "san_bao",
+    protocols: ["san_bao"],
   },
   {
     adapterKey: "custom_http",

@@ -91,7 +91,7 @@ function validateGenerationSchemaParameters(
     if (shouldSkipGenerationParameterValidation(key)) {
       continue;
     }
-    const value = readGenerationParameterValue(parameters, key);
+    const value = readGenerationParameterValue(parameters, key, parameterSchema);
     validateGenerationEnumParameter(schema, value);
     validateGenerationNumericParameter(schema, value);
   }
@@ -102,15 +102,29 @@ function validateLegacyGenerationParameterAliases(
   parameterSchema: Record<string, unknown>,
   parameters: Record<string, unknown>,
 ) {
-  if (kind === "image" && parameters.quality == null && parameters.resolution != null) {
+  if (
+    kind === "image" &&
+    !("resolution" in parameterSchema) &&
+    parameters.quality == null &&
+    parameters.resolution != null
+  ) {
     validateGenerationEnumParameter(parameterSchema.quality, parameters.resolution);
   }
-  if (kind === "video" && parameters.resolution == null && parameters.quality != null) {
+  if (
+    kind === "video" &&
+    !("quality" in parameterSchema) &&
+    parameters.resolution == null &&
+    parameters.quality != null
+  ) {
     validateGenerationEnumParameter(parameterSchema.resolution, parameters.quality);
   }
 }
 
-function readGenerationParameterValue(parameters: Record<string, unknown>, key: string) {
+function readGenerationParameterValue(
+  parameters: Record<string, unknown>,
+  key: string,
+  parameterSchema: Record<string, unknown>,
+) {
   const directValue = parameters[key];
   if (directValue != null && directValue !== "") {
     return directValue;
@@ -122,7 +136,7 @@ function readGenerationParameterValue(parameters: Record<string, unknown>, key: 
     return parameters.ratio ?? parameters.imageAspectRatio;
   }
   if (key === "resolution") {
-    return parameters.videoResolution ?? parameters.quality;
+    return parameters.videoResolution ?? ("quality" in parameterSchema ? undefined : parameters.quality);
   }
   if (key === "durationSec") {
     return parameters.videoDurationSec ?? parameters.duration;

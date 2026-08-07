@@ -35,6 +35,24 @@ describe("runtime schema migration launchers", () => {
     assert.ok(lockOffset < firstSpawnOffset, "production launcher must lock before child services");
   });
 
+  it("prepares the foundation schema once before every managed production child starts", async () => {
+    const source = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
+    const databaseSource = await readFile(
+      new URL("../apps/backend/src/modules/shared/db/dev-db.ts", import.meta.url),
+      "utf8",
+    );
+    const migrationOffset = source.indexOf("runRuntimeSchemaMigrations(");
+    const foundationOffset = source.indexOf("runProductionFoundationSchema({");
+    const firstSpawnOffset = source.indexOf("supervisor.start(");
+
+    assert.ok(foundationOffset > migrationOffset, "foundation preparation must follow runtime migrations");
+    assert.ok(foundationOffset < firstSpawnOffset, "foundation preparation must finish before child services start");
+    assert.match(source, /CREATOR_DEV_STACK_MANAGED:\s*"true",\s*CREATOR_DEV_SCHEMA_READY:\s*"true"/);
+    assert.doesNotMatch(source, /name === "phone-auth"[^\n]*CREATOR_DEV_SCHEMA_READY/);
+    assert.match(source, /timeout:\s*productionFoundationSchemaTimeoutMs/);
+    assert.match(databaseSource, /CREATOR_DEV_STACK_MANAGED === "true"[\s\S]*CREATOR_DEV_SCHEMA_READY === "true"/);
+  });
+
   it("bounds production shutdown so a stuck worker cannot block a restart forever", async () => {
     const source = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
     assert.match(source, /function requestStop\(signal\)/);
@@ -133,6 +151,7 @@ describe("runtime schema migration launchers", () => {
     assert.match(buildSource, /run-generation-queue-maintenance\.mjs/);
     assert.match(buildSource, /run-generation-video-worker\.mjs/);
     assert.match(buildSource, /run-canvas-agent-worker\.mjs/);
+    assert.match(buildSource, /production-foundation-schema\.ts/);
   });
 
   it("retries only a transient generation maintenance database connection timeout", async () => {

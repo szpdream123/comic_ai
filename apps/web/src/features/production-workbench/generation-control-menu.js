@@ -300,8 +300,10 @@ function resolveModelPricingCost(mediaMode, generationControls = {}, selectedMod
   );
   if (baseCredits === null) return null;
   const parameters = resolveGenerationPricingParameters(mediaMode, generationControls, selectedModel);
-  const unitCredits = readParameterUnitCredits(pricing, parameters) ?? baseCredits;
   const billingMode = normalizePricingBillingMode(pricing.billingMode ?? pricing.billing_mode ?? pricing.mode);
+  const unitCredits = mediaMode === "image" && billingMode !== "duration"
+    ? baseCredits
+    : readParameterUnitCredits(pricing, parameters) ?? baseCredits;
   const cost = billingMode === "duration" && mediaMode === "video"
     ? unitCredits * (readPositiveCredit(parameters.durationSec) ?? 1)
     : unitCredits;

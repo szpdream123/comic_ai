@@ -18,7 +18,11 @@ import {
   createUserPasswordHash,
   defaultPasswordFromPhone,
 } from "../../modules/identity/team-account-credentials.service.ts";
-import { createPhoneAuthDevServer as createPhoneAuthDevServerBase } from "../phone-auth-dev-server.ts";
+import {
+  createPhoneAuthDevServer as createPhoneAuthDevServerBase,
+  generationFailureDisplayMessage,
+  shouldSyncSeedanceVideoTaskOnRead,
+} from "../phone-auth-dev-server.ts";
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
@@ -102,6 +106,26 @@ function fetchProjectShotImageBatch(origin: string, init: RequestInit = {}) {
 }
 
 describe("phone auth dev server", { concurrency: false }, () => {
+  it("polls SanBao video tasks on read without the unrelated Seedance feature flag", () => {
+    assert.equal(shouldSyncSeedanceVideoTaskOnRead("san_bao", {}), true);
+    assert.equal(shouldSyncSeedanceVideoTaskOnRead("volcengine_ark_video", {}), false);
+    assert.equal(
+      shouldSyncSeedanceVideoTaskOnRead("volcengine_ark_video", { SEEDANCE_PROVIDER_ENABLED: "true" }),
+      true,
+    );
+  });
+
+  it("uses the error factory message for SanBao read-time poll failures", () => {
+    assert.equal(
+      generationFailureDisplayMessage({
+        failureCode: "san_bao_insufficient_balance",
+        providerMessage: "余额不足",
+        providerResponse: { providerMessage: "余额不足" },
+      }),
+      "三宝影像账户积分不足，请联系管理员充值后重试。",
+    );
+  });
+
   it("serves the app shell when database initialization is unavailable", async () => {
     const dbFailure = Promise.reject(new Error("db_unavailable"));
     const server = createPhoneAuthDevServer({ db: dbFailure as never });
@@ -11097,7 +11121,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("records a failed generation task with the recharge prompt when fixed resolution credits exceed the balance", async () => {
+  it("uses image base credits for fixed billing and resolution credits for duration billing", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -11105,7 +11129,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         SET provider_model = 'gpt-image-2',
             provider_config_json = provider_config_json
               || '{"baseURL":"https://relay.example.test","endpoint":"/v1/images/generations","apiKeyEnv":"GPT_IMAGE2_API_KEY","resultFormat":"b64_json"}'::jsonb,
-            pricing_json = pricing_json || '{"baseCredits":45,"billingMode":"fixed","resolutionCredits":{"1080p":120}}'::jsonb
+            pricing_json = pricing_json || '{"baseCredits":45,"billingMode":"duration","resolutionCredits":{"1080p":120}}'::jsonb
         WHERE model_code = 'gpt-image-2-cn'
       `,
     );
@@ -11137,7 +11161,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await db.query("DELETE FROM credit_lots WHERE user_id = $1", [userId]);
       await grantCredits(db, {
         userId,
-        amount: 100,
+        amount: 200,
         sourceType: "test_credit_seed",
         sourceId: randomUUID(),
         reason: "test credit seed",
@@ -11189,25 +11213,54 @@ describe("phone auth dev server", { concurrency: false }, () => {
               aspectRatio: "16:9",
               resolution: "1080p",
               quality: "standard",
+              durationSec: 10,
             },
           }),
         },
       );
       const imageTaskEnvelope = await imageTaskResponse.json();
-      const reservationRows = await db.query<{ count: number | string }>(
-        "SELECT count(*) AS count FROM credit_reservations WHERE user_id = $1",
-        [userId],
-      );
-      const providerRequests = await db.query<{ count: number | string }>(
-        "SELECT count(*) AS count FROM provider_requests",
+      const durationReservation = await db.query<{ amount_reserved: number | string; status: string }>(
+        "SELECT amount_reserved, status FROM credit_reservations WHERE task_id = $1",
+        [imageTaskEnvelope.data.taskId],
       );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.equal(imageTaskEnvelope.data.status, "failed");
-      assert.equal(imageTaskEnvelope.data.failureCode, "insufficient_credits");
-      assert.match(imageTaskEnvelope.data.failure.displayMessage, /积分余额不足/);
-      assert.equal(Number(reservationRows.rows[0]?.count ?? -1), 0);
-      assert.equal(Number(providerRequests.rows[0]?.count ?? -1), 0);
+      assert.equal(imageTaskEnvelope.data.status, "queued");
+      assert.equal(Number(durationReservation.rows[0]?.amount_reserved ?? -1), 120);
+      assert.equal(durationReservation.rows[0]?.status, "active");
+
+      await db.query(
+        `
+          UPDATE ai_model_configs
+          SET pricing_json = pricing_json || '{"baseCredits":45,"billingMode":"fixed","resolutionCredits":{"1080p":120}}'::jsonb
+          WHERE model_code = 'gpt-image-2-cn'
+        `,
+      );
+      const fixedResponse = await fetchEpisodeImageTask(server.origin, episodeId, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `generation-fixed-base-credit-task-${idempotencySuffix}`,
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "episode",
+          targetId: episodeId,
+          prompt: "fixed credit gate",
+          model: "gpt-image-2-cn",
+          parameters: { aspectRatio: "16:9", quality: "standard" },
+        }),
+      });
+      const fixedEnvelope = await fixedResponse.json();
+      const fixedReservation = await db.query<{ amount_reserved: number | string; status: string }>(
+        "SELECT amount_reserved, status FROM credit_reservations WHERE task_id = $1",
+        [fixedEnvelope.data.taskId],
+      );
+
+      assert.equal(fixedResponse.status, 200);
+      assert.equal(fixedEnvelope.data.status, "queued");
+      assert.equal(Number(fixedReservation.rows[0]?.amount_reserved ?? -1), 45);
+      assert.equal(fixedReservation.rows[0]?.status, "active");
     } finally {
       await server.close();
     }

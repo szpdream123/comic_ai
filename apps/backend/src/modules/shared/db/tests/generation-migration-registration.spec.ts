@@ -20,6 +20,56 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     assert.match(productionMigrationScript, /20260828-bananarouter-image-async-config-convergence\.sql/);
   });
 
+  it("preserves administrator SanBao image pricing while filling missing resolution defaults", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const defaults = await db.query<{ pricing_json: Record<string, unknown> }>(`
+        SELECT pricing_json
+        FROM ai_model_configs
+        WHERE model_code = 'sanbao-gpt-image2'
+      `);
+      assert.deepEqual(defaults.rows[0]?.pricing_json, {
+        unit: "image",
+        billingMode: "fixed",
+        baseCredits: 90,
+        resolutionCredits: { "普通": 90, "1K": 110, "2K": 130, "4K": 130 },
+      });
+
+      await db.query(`
+        UPDATE ai_model_configs
+        SET pricing_json = '{
+          "unit":"image",
+          "billingMode":"duration",
+          "baseCredits":135,
+          "resolutionCredits":{"普通":95,"4K":260},
+          "administratorNote":"keep"
+        }'::jsonb
+        WHERE model_code = 'sanbao-gpt-image2'
+      `);
+
+      await applySqlMigration(
+        db,
+        process.cwd(),
+        "20260902-merge-san-bao-gpt-image2-variants.sql",
+      );
+
+      const result = await db.query<{ pricing_json: Record<string, unknown> }>(`
+        SELECT pricing_json
+        FROM ai_model_configs
+        WHERE model_code = 'sanbao-gpt-image2'
+      `);
+      assert.deepEqual(result.rows[0]?.pricing_json, {
+        unit: "image",
+        billingMode: "duration",
+        baseCredits: 135,
+        resolutionCredits: { "普通": 95, "1K": 110, "2K": 130, "4K": 260 },
+        administratorNote: "keep",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("converges an existing mixed BananaRouter image config without a synchronous rollback", async () => {
     const db = await createMigratedTestDb();
     try {

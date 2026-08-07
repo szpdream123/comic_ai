@@ -13,6 +13,7 @@ import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { ModelError } from "./model-error.ts";
 import { OpenAIImagesProviderAdapter } from "./openai-images.provider-adapter.ts";
 import { SaierVideoProviderAdapter } from "./saier-video.provider-adapter.ts";
+import { SanBaoProviderAdapter } from "./san-bao.provider-adapter.ts";
 import { SeedanceVideoProviderAdapter } from "./seedance-video.provider-adapter.ts";
 import { VolcengineArkImageProviderAdapter } from "./volcengine-ark-image.provider-adapter.ts";
 import {
@@ -71,6 +72,43 @@ export function createProviderAdapterFromModelConfig(
 ): ProviderAdapter {
   const providerProtocol = normalizeProviderProtocol(modelConfig.providerProtocol);
   const providerConfig = modelConfig.providerConfig ?? {};
+  if (providerProtocol === "san_bao") {
+    const mediaType = modelConfig.mediaType?.trim();
+    if (mediaType !== "image" && mediaType !== "video") {
+      throw ModelError.fromUnknown(new Error("provider_media_type_required"), {
+        failureCode: "provider_adapter_missing",
+      });
+    }
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint")
+      ?? resolveProviderEndpoint(providerConfig);
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!createTaskEndpoint || !queryTaskEndpoint) {
+      throw ModelError.fromUnknown(new Error("provider_endpoint_required"), {
+        failureCode: "provider_adapter_missing",
+      });
+    }
+    let apiKey: string;
+    try {
+      apiKey = resolveProviderApiKey(providerConfig, env);
+    } catch (error) {
+      throw ModelError.fromUnknown(error, {
+        failureCode: error && typeof error === "object" && typeof (error as { failureCode?: unknown }).failureCode === "string"
+          ? (error as { failureCode: string }).failureCode
+          : "provider_api_key_missing",
+        mediaType,
+        phase: "prepare",
+      });
+    }
+    return new SanBaoProviderAdapter({
+      apiKey,
+      model: modelConfig.providerModel?.trim() || undefined,
+      modelVariants: readRecord(providerConfig.modelVariants),
+      mediaType,
+      createTaskEndpoint,
+      queryTaskEndpoint,
+      fetchImpl,
+    });
+  }
   if (providerProtocol === "banana_router") {
     const configError = validateBananaRouterProviderConfig(modelConfig);
     if (configError) {

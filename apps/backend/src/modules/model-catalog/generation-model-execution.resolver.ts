@@ -92,7 +92,8 @@ function providerExecutorFromProtocol(
       adapterKey === "lingdong_api" ||
       adapterKey === "cumob_image" ||
       adapterKey === "global_ai_opc_image" ||
-      adapterKey === "volcengine_ark_image"
+      adapterKey === "volcengine_ark_image" ||
+      adapterKey === "san_bao"
     ) {
       return "gpt-image-2";
     }
@@ -111,6 +112,7 @@ function providerExecutorFromProtocol(
       protocol === "extra_token_video" ||
       protocol === "saier_video" ||
       protocol === "banana_router" ||
+      protocol === "san_bao" ||
       (protocol === "custom_http" && isVolcengineArkVideoCustomHttp(providerConfig))
     )
   ) {
@@ -202,7 +204,13 @@ function generationParameterAliases(
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "ratio", ["aspectRatio", "imageAspectRatio"]);
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "aspectRatio", ["ratio", "imageAspectRatio"]);
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "size", ["aspectRatio", "ratio", "imageAspectRatio"]);
-  copyGenerationParameterAlias(aliases, parameters, parameterSchema, "resolution", ["videoResolution", "quality"]);
+  copyGenerationParameterAlias(
+    aliases,
+    parameters,
+    parameterSchema,
+    "resolution",
+    "quality" in parameterSchema ? ["videoResolution"] : ["videoResolution", "quality"],
+  );
   copyGenerationParameterAlias(aliases, parameters, parameterSchema, "durationSec", ["videoDurationSec", "duration"]);
   return aliases;
 }

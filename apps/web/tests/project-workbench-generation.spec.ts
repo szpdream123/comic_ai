@@ -115,6 +115,25 @@ import {
   videoModels,
 } from "../src/features/production-workbench/video-generation-panel.js";
 import { getLibraryAssetsForImport } from "../src/features/library-team/asset-library-page.js";
+import { resolveGenerationCreditCost } from "../src/features/production-workbench/generation-control-menu.js";
+
+it("keeps image billing modes distinct without changing video billing", () => {
+  const pricing = {
+    baseCredits: 90,
+    resolutionCredits: { "普通": 90, "1K": 110, "2K": 130, "4K": 160 },
+  };
+  const controls = {
+    imageResolution: "4K",
+    videoResolution: "4K",
+    videoDurationSec: 5,
+    parameterValues: { resolution: "4K", durationSec: 5 },
+  };
+
+  assert.equal(resolveGenerationCreditCost("image", controls, { pricing: { ...pricing, billingMode: "fixed" } }), 90);
+  assert.equal(resolveGenerationCreditCost("image", controls, { pricing: { ...pricing, billingMode: "duration" } }), 160);
+  assert.equal(resolveGenerationCreditCost("video", controls, { pricing: { ...pricing, billingMode: "fixed" } }), 160);
+  assert.equal(resolveGenerationCreditCost("video", controls, { pricing: { ...pricing, billingMode: "duration" } }), 800);
+});
 
 describe("production workbench home shell", () => {
   it("never falls back to a real model code in conversation metadata", () => {
@@ -13158,6 +13177,74 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /id="asset-generator-reference-input"/);
   });
 
+  it("renders GPT Image 2 as one model with resolution pricing and hidden fixed quality", () => {
+    const html = renderProductionWorkbench({
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorModelCode: "sanbao-gpt-image2",
+        assetGeneratorResolution: "4K",
+        openGenerationSelectMenu: "asset-generator:image-settings-panel",
+        episodeGenerationConfig: {
+          creditBalance: 512,
+          defaultImageModelCode: "sanbao-gpt-image2",
+          models: [{
+            modelCode: "sanbao-gpt-image2",
+            modelLabel: "GPT Image 2",
+            mediaType: "image",
+            supportedModes: ["multi_reference", "image_to_image"],
+            parameterSchema: {
+              resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+              quality: { label: "质量", type: "string", visible: false },
+              aspectRatio: { label: "画面比例", type: "enum", options: ["auto", "1:1"] },
+            },
+            defaultParams: { resolution: "普通", quality: "high", aspectRatio: "auto" },
+            pricing: { baseCredits: 90, billingMode: "duration", resolutionCredits: { "普通": 90, "1K": 110, "2K": 130, "4K": 130 } },
+          }],
+        },
+      }),
+    });
+
+    assert.match(html, />GPT Image 2<\/button>/);
+    assert.match(html, /<span>130<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+    assert.match(html, /<strong>清晰度<\/strong>[\s\S]*data-field="resolution"[\s\S]*data-value="普通"[\s\S]*data-value="4K"/);
+    assert.doesNotMatch(html, /<strong>质量<\/strong>|data-field="quality"|data-value="medium"|data-value="low"/);
+  });
+
+  it("uses the base image credits when GPT Image 2 is fixed billing", () => {
+    const html = renderProductionWorkbench({
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        projectAssetTab: "scene",
+        assetGeneratorModal: "scene",
+        assetGeneratorModelCode: "sanbao-gpt-image2",
+        assetGeneratorResolution: "4K",
+        episodeGenerationConfig: {
+          creditBalance: 512,
+          defaultImageModelCode: "sanbao-gpt-image2",
+          models: [{
+            modelCode: "sanbao-gpt-image2",
+            modelLabel: "GPT Image 2",
+            mediaType: "image",
+            supportedModes: ["multi_reference", "image_to_image"],
+            parameterSchema: {
+              resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+              aspectRatio: { label: "画面比例", type: "enum", options: ["auto", "1:1"] },
+            },
+            defaultParams: { resolution: "普通", quality: "high", aspectRatio: "auto" },
+            pricing: { baseCredits: 90, billingMode: "fixed", resolutionCredits: { "普通": 90, "1K": 110, "2K": 130, "4K": 160 } },
+          }],
+        },
+      }),
+    });
+
+    assert.match(html, /<span>90<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+    assert.doesNotMatch(html, /<span>160<\/span>\s*<strong class="episode-replica-generate-label">生成<\/strong>/);
+  });
+
   it("renders an upload modal while the asset reference image is uploading", () => {
     const html = renderProductionWorkbench({
       state: buildModalState(),
@@ -19183,10 +19270,11 @@ describe("production workbench project tab", () => {
               supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
               parameterSchema: {
                 aspectRatio: { label: "比例", type: "enum", options: ["16:9", "9:16"] },
-                quality: { label: "清晰度", type: "enum", options: ["1K", "2K"], visible: false },
+                resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+                quality: { label: "质量", type: "string", visible: false },
                 count: { label: "生成数量", type: "integer", minimum: 1, maximum: 4, visible: false },
               },
-              defaultParams: { aspectRatio: "16:9", quality: "2K", count: 1 },
+              defaultParams: { aspectRatio: "16:9", resolution: "普通", quality: "high", count: 1 },
               displayBaseCost: 90,
             },
           ],
@@ -19195,9 +19283,11 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /data-field="aspectRatio"/);
+    assert.match(html, /data-field="resolution"/);
     assert.doesNotMatch(html, /data-field="quality"/);
     assert.doesNotMatch(html, /data-field="count"/);
-    assert.doesNotMatch(html, /清晰度/);
+    assert.match(html, /清晰度/);
+    assert.doesNotMatch(html, />质量</);
     assert.doesNotMatch(html, /生成数量/);
   });
 
@@ -33217,6 +33307,48 @@ describe("production workbench project tab", () => {
         ports: { inputs: [{ id: "in_image" }], outputs: [{ id: "out_video" }] },
       },
     });
+    const imageSettingsHtml = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasNodeId: "image-send",
+        canvasEditorOpen: true,
+        openGenerationSelectMenu: "canvas:image-settings-panel",
+        episodeGenerationConfig: {
+          models: [{
+            modelCode: "admin-image-a",
+            modelLabel: "后台图片 A",
+            mediaType: "image",
+            supportedModes: ["image.generate"],
+            parameterSchema: {
+              resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+              quality: { label: "质量", type: "string", visible: false },
+            },
+            defaultParams: { resolution: "普通", quality: "high" },
+          }],
+        },
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "episode-primary",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [{
+            id: "image-send",
+            type: "send",
+            position: { x: 520, y: 116 },
+            data: {
+              mediaKind: "image",
+              modelCode: "admin-image-a",
+              prompt: "生成图片",
+              ports: { inputs: [{ id: "in_text" }], outputs: [{ id: "out_image" }] },
+            },
+          }],
+          edges: [],
+        },
+      }),
+    });
     const videoSettingsHtml = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
@@ -33264,6 +33396,8 @@ describe("production workbench project tab", () => {
     assert.match(imageHtml, />后台图片 A<\/button>/);
     assert.match(imageHtml, /class="episode-replica-video-settings-trigger[^\"]*"/);
     assert.match(imageHtml, /data-field="image-settings-panel"\s+data-scope="canvas"\s+data-node-id="image-send"/);
+    assert.match(imageSettingsHtml, /data-field="resolution"[\s\S]*data-scope="canvas" data-node-id="image-send"/);
+    assert.doesNotMatch(imageSettingsHtml, /data-field="quality"[\s\S]*data-scope="canvas" data-node-id="image-send"/);
     assert.doesNotMatch(imageHtml, /data-field="quality" data-scope="canvas" data-node-id="image-send"/);
     assert.doesNotMatch(imageHtml, /data-field="aspectRatio" data-scope="canvas" data-node-id="image-send"/);
     assert.doesNotMatch(imageHtml, /data-canvas-model-select/);

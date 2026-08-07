@@ -3748,7 +3748,7 @@ function buildImageSettingsState(selectedModel, generationControls = {}) {
 }
 
 function resolveImageResolutionField(schema = {}) {
-  return ["quality", "resolution", "imageResolution", "size"].find((key) => isImageResolutionField(schema, key)) ?? "imageResolution";
+  return ["resolution", "imageResolution", "quality", "size"].find((key) => isImageResolutionField(schema, key)) ?? "imageResolution";
 }
 
 function resolveImageRatioField(schema = {}) {
@@ -3758,6 +3758,9 @@ function resolveImageRatioField(schema = {}) {
 function isImageResolutionField(schema = {}, key = "") {
   const parameter = schema[key];
   if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) {
+    return false;
+  }
+  if (parameter.visible === false) {
     return false;
   }
   if (key !== "size") {
@@ -4491,7 +4494,12 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
   const imageModelOptions = normalizeBatchImageModelOptions(modal.imageModelOptions);
   const imageModel = resolveBatchImageModelLabel(modal.imageModelId, imageModelOptions);
   const selectedImageModel = imageModelOptions.find((option) => option.value === String(modal.imageModelId ?? "").trim()) ?? imageModelOptions[0] ?? null;
-  const batchImageSettings = buildBatchImageSettingsState(selectedImageModel);
+  const batchImageSettings = buildBatchImageSettingsState(selectedImageModel, {
+    aspectRatio: modal.imageAspectRatio,
+    imageAspectRatio: modal.imageAspectRatio,
+    resolution: modal.imageClarity,
+    ...(modal.imageParameterValues ?? {}),
+  });
   const hasAspectRatioParameter = batchImageSettings.ratioOptions.length > 0;
   const ratioOptions = batchImageSettings.ratioOptions;
   const clarityOptions = batchImageSettings.clarityOptions;
@@ -4527,6 +4535,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
             aspectRatio: hasAspectRatioParameter ? modal.imageAspectRatio ?? "" : "",
             clarityOptions,
             ratioOptions: hasAspectRatioParameter ? ratioOptions : [],
+            sections: batchImageSettings.sections,
           })}
           <span class="episode-batch-footer-summary">已选 ${selectedCount} 项素材</span>
         </div>
@@ -4674,8 +4683,12 @@ function renderEpisodeBatchImageSettingsControl({
   aspectRatio = "",
   clarityOptions = [],
   ratioOptions = [],
+  sections = [],
 } = {}) {
-  const triggerLabel = [String(clarity ?? "").trim().toUpperCase(), String(aspectRatio ?? "").trim()]
+  const configuredSections = Array.isArray(sections) ? sections.filter((section) => section?.options?.length) : [];
+  const triggerLabel = (configuredSections.length
+    ? configuredSections.slice(0, 2).map((section) => String(section.currentValue ?? "").trim().toUpperCase())
+    : [String(clarity ?? "").trim().toUpperCase(), String(aspectRatio ?? "").trim()])
     .filter(Boolean)
     .join("  ");
   return `
@@ -4697,8 +4710,10 @@ function renderEpisodeBatchImageSettingsControl({
       ${
         open
           ? `<div class="episode-batch-settings-panel" role="dialog" aria-label="批量生图参数设置">
-              ${renderEpisodeBatchSettingsSection("清晰度", "imageClarity", clarityOptions, clarity)}
-              ${renderEpisodeBatchSettingsSection("尺寸", "imageAspectRatio", ratioOptions, aspectRatio)}
+              ${configuredSections.length
+                ? configuredSections.map((section) => renderEpisodeBatchSettingsSection(section.title, section.field, section.options, section.currentValue)).join("")
+                : `${renderEpisodeBatchSettingsSection("清晰度", "imageClarity", clarityOptions, clarity)}
+                   ${renderEpisodeBatchSettingsSection("尺寸", "imageAspectRatio", ratioOptions, aspectRatio)}`}
             </div>`
           : ""
       }
@@ -4736,10 +4751,24 @@ function renderEpisodeBatchSettingsSection(title, field, options = [], currentVa
   `;
 }
 
-function buildBatchImageSettingsState(selectedImageModel) {
+function buildBatchImageSettingsState(selectedImageModel, parameterValues = {}) {
   const schema = selectedImageModel?.parameterSchema && typeof selectedImageModel.parameterSchema === "object" && !Array.isArray(selectedImageModel.parameterSchema)
     ? selectedImageModel.parameterSchema
     : {};
+  const defaults = selectedImageModel?.defaultParams && typeof selectedImageModel.defaultParams === "object" && !Array.isArray(selectedImageModel.defaultParams)
+    ? selectedImageModel.defaultParams
+    : {};
+  const supportsIndependentResolutionAndQuality = Boolean(schema.resolution && schema.quality);
+  const sections = supportsIndependentResolutionAndQuality
+    ? buildConfiguredGenerationSettingsSections({
+        schema,
+        parameterValues,
+        defaultParams: defaults,
+      }).map((section) => ({
+        ...section,
+        options: buildBatchImageOptionItemsFromPairs(section.options),
+      }))
+    : [];
   const clarityField = resolveImageResolutionField(schema);
   const ratioField = resolveImageRatioField(schema);
   const clarityPairs = optionPairsFromParameter(
@@ -4753,6 +4782,7 @@ function buildBatchImageSettingsState(selectedImageModel) {
     ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"],
   );
   return {
+    sections,
     clarityOptions: buildBatchImageOptionItemsFromPairs(clarityPairs),
     ratioOptions: schema[ratioField] || selectedImageModel?.supportedRatios?.length
       ? buildBatchImageOptionItemsFromPairs(ratioPairs)

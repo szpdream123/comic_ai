@@ -410,7 +410,7 @@ import {
   createGenerationModelConfigSnapshotForTask,
   createGenerationProviderRouteIdentity,
 } from "../modules/model-gateway/generation-model-config-snapshot.ts";
-import { translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
+import { ModelError, translateProviderErrorMessage } from "../modules/model-gateway/provider-error-message.ts";
 import { SeedanceVideoProviderAdapter } from "../modules/model-gateway/seedance-video.provider-adapter.ts";
 import { cancelGenerationTask, processSeedanceVideoSubmitJob } from "../modules/model-gateway/seedance-video.worker.ts";
 import { OpenAICompatibleTextAdapter } from "../modules/model-gateway/openai-compatible-text.adapter.ts";
@@ -3614,7 +3614,9 @@ function generationCostFromModelConfig(
   const durationSec = readPositiveNumber(parameters.durationSec) ??
     readPositiveNumber(modelConfig?.defaultParams.durationSec) ??
     1;
-  const unitCredits = resolutionCreditsFromModelConfig(modelConfig, parameters, baseCredits);
+  const unitCredits = modelConfig?.mediaType === "image" && billingMode !== "duration"
+    ? baseCredits
+    : resolutionCreditsFromModelConfig(modelConfig, parameters, baseCredits);
   const cost = billingMode === "duration" && modelConfig?.mediaType === "video"
     ? unitCredits * durationSec
     : unitCredits;
@@ -3647,10 +3649,9 @@ async function estimateCanvasGenerationBatchItemCredits(
         ? queueConfig.queues.submitVideo
         : queueConfig.queues.submitImage,
     });
-    itemCredits[node.nodeKey] = generationCostFromModelConfig(config.cost, modelConfig, {
-      ...execution.parameters,
-      ...rawParameters,
-    });
+    itemCredits[node.nodeKey] = generationCostFromModelConfig(config.cost, modelConfig, modelConfig?.mediaType === "image"
+      ? { ...rawParameters, ...execution.parameters }
+      : { ...execution.parameters, ...rawParameters });
   }
   return itemCredits;
 }
@@ -4754,8 +4755,14 @@ function createSeedancePollAdapterFromModelConfig(
     if (isLingdongModelConfig(modelConfig) && isVideoPollProviderAdapter(adapter)) {
       return adapter;
     }
+    if (modelConfig.providerProtocol === "san_bao" && isVideoPollProviderAdapter(adapter)) {
+      return adapter;
+    }
     if (isLingdongModelConfig(modelConfig)) {
       throw new Error("lingdong_video_poll_adapter_unsupported");
+    }
+    if (modelConfig.providerProtocol === "san_bao") {
+      throw new Error("san_bao_video_poll_adapter_unsupported");
     }
   }
 
@@ -6936,7 +6943,7 @@ export function generationFailureDisplayMessage(input: {
     ].some((value) => typeof value === "string" && value.trim());
   const canUseDetailedProviderFailure =
     failureCode === "provider_failed" ||
-    /^(?:cumob_image|image_provider|openai_images|global_ai_opc|volcengine_ark_image|video_provider|audio_provider|lingdong_api|provider_submission_failed)(?:_|$)/i.test(failureCode);
+    /^(?:san_bao|cumob_image|image_provider|openai_images|global_ai_opc|volcengine_ark_image|video_provider|audio_provider|lingdong_api|provider_submission_failed)(?:_|$)/i.test(failureCode);
   if (hasDetailedProviderFailure && canUseDetailedProviderFailure) {
     const diagnosticMessage =
       readString(input.providerResponse?.providerRawResponse) ||
@@ -7770,10 +7777,6 @@ async function syncSeedanceVideoTaskOnRead(
     now: Date;
   },
 ) {
-  if (!isEnabled(input.env.SEEDANCE_PROVIDER_ENABLED)) {
-    return false;
-  }
-
   const row = await queryOne<{
     task_id: string;
     workflow_id: string;
@@ -7785,6 +7788,7 @@ async function syncSeedanceVideoTaskOnRead(
     external_request_id: string | null;
     reservation_id: string | null;
     amount_reserved: number | string | null;
+    provider_protocol: string | null;
   }>(
     db,
     `
@@ -7798,7 +7802,8 @@ async function syncSeedanceVideoTaskOnRead(
         pr.id AS provider_request_id,
         pr.external_request_id,
         r.id AS reservation_id,
-        r.amount_reserved
+        r.amount_reserved,
+        task_model_config.provider_protocol
       FROM tasks t
       JOIN projects project ON project.id = t.project_id
       LEFT JOIN ai_model_configs task_model_config
@@ -7827,6 +7832,9 @@ async function syncSeedanceVideoTaskOnRead(
   if (!row?.provider_request_id || !row.external_request_id) {
     return false;
   }
+  if (!shouldSyncSeedanceVideoTaskOnRead(row.provider_protocol, input.env)) {
+    return false;
+  }
 
   const snapshot =
     typeof row.input_snapshot_json === "string"
@@ -7835,7 +7843,18 @@ async function syncSeedanceVideoTaskOnRead(
   const snapshotModelCode = readString(snapshot.modelCode) || readString(snapshot.model);
   const modelConfig = await findActiveAiModelConfigByCode(db, snapshotModelCode || "seedance-i2v-pro");
   const adapter = createSeedancePollAdapterFromModelConfig(modelConfig, input.env, input.fetchImpl);
-  const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+  let poll: Awaited<ReturnType<typeof adapter.poll>>;
+  try {
+    poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+  } catch (error) {
+    poll = {
+      status: "failed",
+      redactedResponse: ModelError.fromUnknown(error, {
+        mediaType: "video",
+        phase: "poll",
+      }).toRedactedProviderRecord(),
+    };
+  }
 
   if (poll.status === "running" || poll.status === "accepted") {
     await markGenerationTaskSnapshotRunning(db, {
@@ -7850,9 +7869,10 @@ async function syncSeedanceVideoTaskOnRead(
   }
 
   if (poll.status === "failed") {
+    const failureCode = readString(poll.redactedResponse.failureCode) || "provider_failed";
     await markProviderRequestFailed(db, {
       providerRequestId: row.provider_request_id,
-      failureCode: "provider_failed",
+      failureCode,
       redactedResponse: poll.redactedResponse,
       now: input.now,
     });
@@ -7860,7 +7880,7 @@ async function syncSeedanceVideoTaskOnRead(
       taskId: row.task_id,
       attemptId: row.attempt_id!,
       status: "failed",
-      failureCode: "provider_failed",
+      failureCode,
       now: input.now,
     });
     await aggregateWorkflowStatus(db, row.workflow_id);
@@ -7884,14 +7904,15 @@ async function syncSeedanceVideoTaskOnRead(
       providerRequestId: row.provider_request_id,
       providerStatus: poll.redactedResponse,
       failure: {
-        failureCode: "provider_failed",
+        failureCode,
         providerStatus: readString(poll.redactedResponse.providerStatus),
         providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
         providerMessage: generationProviderMessageForClient(readString(poll.redactedResponse.providerMessage)),
         displayMessage: generationFailureDisplayMessage({
-          failureCode: "provider_failed",
+          failureCode,
           providerMessage: readString(poll.redactedResponse.providerMessage),
           providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
+          providerResponse: poll.redactedResponse,
         }),
       },
       creditSummary: {
@@ -8071,6 +8092,13 @@ async function syncSeedanceVideoTaskOnRead(
     });
   }
   return true;
+}
+
+export function shouldSyncSeedanceVideoTaskOnRead(
+  providerProtocol: string | null | undefined,
+  env: NodeJS.ProcessEnv,
+) {
+  return providerProtocol === "san_bao" || isEnabled(env.SEEDANCE_PROVIDER_ENABLED);
 }
 
 async function runCreatorRepairMaintenance(
@@ -8927,10 +8955,9 @@ async function createGenerationTask(
       "音频生成队列未启动。",
     );
   }
-  const modelEstimatedCost = generationCostFromModelConfig(config.cost, modelConfig, {
-    ...executionParameters,
-    ...rawParameters,
-  });
+  const modelEstimatedCost = generationCostFromModelConfig(config.cost, modelConfig, modelConfig?.mediaType === "image"
+    ? { ...rawParameters, ...executionParameters }
+    : { ...executionParameters, ...rawParameters });
   const promptSkills = Array.isArray(context.promptSkills) && context.promptSkills.length
     ? context.promptSkills
     : context.promptSkill ? [context.promptSkill] : [];

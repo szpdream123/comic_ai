@@ -87,6 +87,26 @@ describe("generation model request validator", () => {
     });
   });
 
+  it("validates image resolution and quality independently when both are configured", () => {
+    assert.doesNotThrow(() => {
+      validateGenerationModelRequest({
+        kind: "image",
+        modelCode: "sanbao-gpt-image2",
+        modelConfig: imageModelConfig({
+          modelCode: "sanbao-gpt-image2",
+          providerProtocol: "san_bao",
+          parameterSchema: {
+            resolution: { options: ["普通", "1K", "2K", "4K"] },
+            quality: { options: ["high", "medium", "low"] },
+          },
+          defaultParams: { resolution: "普通", quality: "high" },
+        }),
+        parameters: { resolution: "4K", quality: "low" },
+        prompt: "panel concept art",
+      });
+    });
+  });
+
   it("rejects parameters outside admin options", () => {
     assertValidationError(
       () => validateGenerationModelRequest({

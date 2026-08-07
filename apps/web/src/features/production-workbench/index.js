@@ -15471,7 +15471,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       const creditCost = preview.plainTextTranscription
         ? 0
-        : resolveCanvasRunCreditCost(model, preview.mediaKind)
+        : resolveCanvasRunCreditCost(
+            model,
+            preview.mediaKind,
+            buildCanvasGenerationParameters(
+              workbench,
+              normalizedCanvasDocument.nodes?.find?.((item) => item.id === nodeId),
+              preview,
+            ),
+          )
           + resolveCanvasTextSkillCredits(workbench.ui, canvasDocument.nodes.find((item) => item.id === nodeId));
       const balance = resolveWorkbenchCreditBalance(workbench);
       if (Number.isFinite(balance) && balance < creditCost) {
@@ -19862,10 +19870,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           return String(option?.value ?? "").trim() === String(workbench.ui.episodeBatchModal.videoModelId ?? "").trim();
         }) ?? null
       : null;
+    const selectedBatchImageModel = workbench.ui.episodeBatchModal.mode === "image"
+      ? (workbench.ui.episodeBatchModal.imageModelOptions ?? []).find((option) => {
+          return String(option?.value ?? "").trim() === String(workbench.ui.episodeBatchModal.imageModelId ?? "").trim();
+        }) ?? null
+      : null;
     const videoParameterSchema = selectedBatchVideoModel?.parameterSchema && typeof selectedBatchVideoModel.parameterSchema === "object" && !Array.isArray(selectedBatchVideoModel.parameterSchema)
       ? selectedBatchVideoModel.parameterSchema
       : {};
     const isConfiguredVideoParameter = Object.prototype.hasOwnProperty.call(videoParameterSchema, field);
+    const imageParameterSchema = selectedBatchImageModel?.parameterSchema && typeof selectedBatchImageModel.parameterSchema === "object" && !Array.isArray(selectedBatchImageModel.parameterSchema)
+      ? selectedBatchImageModel.parameterSchema
+      : {};
+    const isConfiguredImageParameter = Object.prototype.hasOwnProperty.call(imageParameterSchema, field);
     const selectedValue = coerceGenerationControlValue(value);
     workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
       ...workbench.ui.episodeBatchModal,
@@ -19879,8 +19896,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             ...(field === "resolution" || field === "quality" || field === "videoResolution" ? { videoResolution: value } : {}),
             ...(field === "durationSec" || field === "videoDurationSec" || field === "duration" ? { videoDurationSec: value } : {}),
           }
+        : isConfiguredImageParameter
+        ? {
+            imageParameterValues: {
+              ...(workbench.ui.episodeBatchModal.imageParameterValues ?? {}),
+              [field]: selectedValue,
+            },
+            ...(field === "aspectRatio" || field === "ratio" || field === "imageAspectRatio" ? { imageAspectRatio: value } : {}),
+            ...(field === resolveEpisodeBatchClarityField(selectedBatchImageModel) ? { imageClarity: value } : {}),
+          }
         : {
             [field]: value,
+            ...(field === "imageModelId" ? { imageParameterValues: {} } : {}),
             ...(field === "videoModelId" ? { videoParameterValues: {} } : {}),
           }),
       openField: target.dataset.keepMenuOpen === "true"
@@ -30583,7 +30610,7 @@ function installCreditBalanceRefresh(workbench) {
   }
 }
 
-function resolveCanvasRunCreditCost(model, mediaKind = "image") {
+function resolveCanvasRunCreditCost(model, mediaKind = "image", parameterValues = {}) {
   const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
     ? model.pricing
     : {};
@@ -30593,6 +30620,18 @@ function resolveCanvasRunCreditCost(model, mediaKind = "image") {
   const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
     ? model.pricing_json
     : {};
+  const billingMode = String(
+    pricing.billingMode ?? pricing.billing_mode ??
+    pricingJson.billingMode ?? pricingJson.billing_mode ??
+    pricingSnakeJson.billingMode ?? pricingSnakeJson.billing_mode ??
+    model?.billingMode ?? model?.billing_mode ?? "fixed",
+  ).trim().toLowerCase();
+  if (mediaKind === "image" && billingMode === "duration") {
+    return resolveGenerationCreditCost("image", {
+      parameterValues,
+      imageResolution: parameterValues.resolution ?? parameterValues.imageResolution ?? parameterValues.quality,
+    }, model);
+  }
   const candidates = [
     pricing.baseCredits,
     pricing.credits,
@@ -37654,7 +37693,8 @@ function applyGenerationModelDefaults(workbench, model, mediaKind = "") {
   const durations = normalizeGenerationOptionValues(model.supportedDurations);
   const resolvedMediaKind = mediaKind || (String(model.mediaType ?? "") === "video" ? "video" : "image");
   const aspectRatio = firstGenerationValue(defaults.aspectRatio, ratios[0]);
-  const quality = firstGenerationValue(defaults.quality, defaults.resolution, defaults.size, defaults.imageSize, qualities[0]);
+  const quality = firstGenerationValue(defaults.quality, qualities[0]);
+  const resolution = firstGenerationValue(defaults.resolution, defaults.imageResolution, defaults.size, defaults.imageSize, quality);
   const count = Number(defaults.count);
 
   workbench.ui.generationParameterValues = { ...defaults };
@@ -37666,10 +37706,10 @@ function applyGenerationModelDefaults(workbench, model, mediaKind = "") {
   }
   if (resolvedMediaKind === "video") {
     const duration = firstGenerationValue(defaults.durationSec, durations[0]);
-    if (quality) {
-      workbench.ui.videoResolution = quality;
-      workbench.ui.generationParameterValues.videoResolution = quality;
-      workbench.ui.generationParameterValues.resolution = quality;
+    if (resolution) {
+      workbench.ui.videoResolution = resolution;
+      workbench.ui.generationParameterValues.videoResolution = resolution;
+      workbench.ui.generationParameterValues.resolution = resolution;
     }
     if (duration) {
       workbench.ui.videoDurationSec = duration;
@@ -37682,10 +37722,14 @@ function applyGenerationModelDefaults(workbench, model, mediaKind = "") {
     }
     return;
   }
-  if (quality) {
-    workbench.ui.imageResolution = quality;
-    workbench.ui.generationParameterValues.imageResolution = quality;
-    workbench.ui.generationParameterValues.quality = quality;
+  if (resolution) {
+    workbench.ui.imageResolution = resolution;
+    workbench.ui.generationParameterValues.imageResolution = resolution;
+    if (defaults.resolution !== undefined) {
+      workbench.ui.generationParameterValues.resolution = resolution;
+    } else {
+      workbench.ui.generationParameterValues.quality = resolution;
+    }
   }
   if (Number.isFinite(count) && count > 0) {
     workbench.ui.imageCount = Math.floor(count);
@@ -37715,7 +37759,7 @@ function applyAssetGeneratorModelSelection(workbench, modelCode) {
   workbench.ui.assetGeneratorParameterValues = {
     ...(defaults.parameterValues ?? {}),
   };
-  workbench.ui.assetGeneratorCreditCost = resolveCanvasRunCreditCost(model, "image");
+  workbench.ui.assetGeneratorCreditCost = resolveCanvasRunCreditCost(model, "image", defaults.parameterValues ?? {});
 }
 
 function applyAssetGeneratorGenerationFieldChange(workbench, field, value) {
@@ -37723,13 +37767,33 @@ function applyAssetGeneratorGenerationFieldChange(workbench, field, value) {
     ...(workbench.ui.assetGeneratorParameterValues ?? {}),
     [field]: value,
   };
-  if (["quality", "resolution", "imageResolution", "size"].includes(field)) {
+  const model = findConfiguredGenerationModel(workbench, workbench.ui.assetGeneratorModelCode);
+  const refreshCreditCost = () => {
+    if (model) {
+      workbench.ui.assetGeneratorCreditCost = resolveCanvasRunCreditCost(
+        model,
+        "image",
+        workbench.ui.assetGeneratorParameterValues,
+      );
+    }
+  };
+  if (["resolution", "imageResolution", "size"].includes(field)) {
     workbench.ui.assetGeneratorResolution = value || "2K";
+    refreshCreditCost();
+    return;
+  }
+  if (field === "quality") {
+    const schema = model?.parameterSchema && typeof model.parameterSchema === "object" ? model.parameterSchema : {};
+    if (!("resolution" in schema) && !("imageResolution" in schema)) {
+      workbench.ui.assetGeneratorResolution = value || "2K";
+    }
+    refreshCreditCost();
     return;
   }
   if (["aspectRatio", "imageAspectRatio", "ratio"].includes(field)) {
     workbench.ui.assetGeneratorAspectRatio = value || "16:9";
   }
+  refreshCreditCost();
 }
 
 function syncAssetGeneratorModelDefaults(workbench) {
@@ -37841,9 +37905,9 @@ function buildAssetGeneratorImageTaskPayload(workbench, input) {
       }
     : null;
   const generationParameterValues = {
+    ...configuredParameters,
     ...(workbench.ui.assetGeneratorParameterValues ?? {}),
     count,
-    quality: resolution,
     resolution,
     aspectRatio,
     imageAspectRatio: aspectRatio,
@@ -38199,7 +38263,6 @@ async function submitStoryboardImageGenerator(workbench, prompt) {
   workbench.ui.generationParameterValues = {
     ...(workbench.ui.assetGeneratorParameterValues ?? {}),
     count,
-    quality: resolution,
     resolution,
     aspectRatio,
     imageAspectRatio: aspectRatio,
@@ -38542,7 +38605,9 @@ async function submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextNam
     styleLabel: selectedStyle?.label ?? selectedStyle?.name ?? selectedStyle?.title ?? null,
     resolution: workbench.ui.assetGeneratorResolution ?? "2K",
     aspectRatio: workbench.ui.assetGeneratorAspectRatio ?? workbench.state?.project?.aspectRatio ?? "16:9",
-    creditCost: selectedModel ? resolveCanvasRunCreditCost(selectedModel, "image") : workbench.ui.assetGeneratorCreditCost,
+    creditCost: selectedModel
+      ? resolveCanvasRunCreditCost(selectedModel, "image", workbench.ui.assetGeneratorParameterValues ?? {})
+      : workbench.ui.assetGeneratorCreditCost,
     createdAt: new Date().toISOString(),
     status: "running",
   };
@@ -38766,7 +38831,8 @@ function buildGenerationModelDefaultsPatch(model, mediaKind = "") {
   const durations = normalizeGenerationOptionValues(model?.supportedDurations);
   const resolvedMediaKind = mediaKind || (String(model?.mediaType ?? "") === "video" ? "video" : "image");
   const aspectRatio = firstGenerationValue(defaults.aspectRatio, ratios[0]);
-  const quality = firstGenerationValue(defaults.quality, defaults.resolution, defaults.size, defaults.imageSize, qualities[0]);
+  const quality = firstGenerationValue(defaults.quality, qualities[0]);
+  const resolution = firstGenerationValue(defaults.resolution, defaults.imageResolution, defaults.size, defaults.imageSize, quality);
   const count = Number(defaults.count);
   const parameterValues = { ...defaults };
   const patch = { parameterValues };
@@ -38778,10 +38844,10 @@ function buildGenerationModelDefaultsPatch(model, mediaKind = "") {
   }
   if (resolvedMediaKind === "video") {
     const duration = firstGenerationValue(defaults.durationSec, durations[0]);
-    if (quality) {
-      patch.videoResolution = quality;
-      parameterValues.videoResolution = quality;
-      parameterValues.resolution = quality;
+    if (resolution) {
+      patch.videoResolution = resolution;
+      parameterValues.videoResolution = resolution;
+      parameterValues.resolution = resolution;
     }
     if (duration) {
       patch.videoDurationSec = duration;
@@ -38794,10 +38860,14 @@ function buildGenerationModelDefaultsPatch(model, mediaKind = "") {
     }
     return patch;
   }
-  if (quality) {
-    patch.imageResolution = quality;
-    parameterValues.imageResolution = quality;
-    parameterValues.quality = quality;
+  if (resolution) {
+    patch.imageResolution = resolution;
+    parameterValues.imageResolution = resolution;
+    if (defaults.resolution !== undefined) {
+      parameterValues.resolution = resolution;
+    } else {
+      parameterValues.quality = resolution;
+    }
   }
   if (Number.isFinite(count) && count > 0) {
     patch.imageCount = Math.floor(count);
@@ -44346,7 +44416,7 @@ function createGenerationSubmissionSnapshot(workbench, storyboard, mediaKind) {
             }, selectedVideoModel)
           : 4500
         : selectedImageModel
-          ? resolveCanvasRunCreditCost(selectedImageModel, "image")
+          ? resolveCanvasRunCreditCost(selectedImageModel, "image", imageParameters)
           : 4500,
     generatedAudioItems,
     createdAt: new Date().toISOString(),
@@ -44423,7 +44493,7 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
     ) || null,
     creditCost:
       mediaKind === "image"
-        ? (selectedImageModel ? resolveCanvasRunCreditCost(selectedImageModel, "image") : 50)
+        ? (selectedImageModel ? resolveCanvasRunCreditCost(selectedImageModel, "image", imageParameters) : 50)
         : 90,
     createdAt: new Date().toISOString(),
     status: "running",
@@ -45933,6 +46003,7 @@ function buildEpisodeBatchModal(workbench, {
       ? String(workbench.ui.imageAspectRatio ?? resolveEpisodeBatchVideoModelRatio(defaultVideoModel) ?? "")
       : resolveEpisodeBatchModelRatio(defaultImageModel) ?? "",
     imageClarity: resolveEpisodeBatchModelClarity(defaultImageModel) ?? "2K",
+    imageParameterValues: {},
     styleTab: selectedImageStyleSkill?.source === "private" ? "custom" : "public",
     projectStyle: projectStyleOption,
     publicStyles,
@@ -46003,6 +46074,7 @@ function syncEpisodeBatchModal(modal) {
       null;
     modal = {
       ...modal,
+      imageParameterValues: resolveEpisodeBatchImageParameterValues(modal, imageModel),
       imageAspectRatio: resolveEpisodeBatchAllowedValue(
         modal?.imageAspectRatio,
         resolveEpisodeBatchModelRatioOptions(imageModel),
@@ -46043,6 +46115,41 @@ function syncEpisodeBatchModal(modal) {
     ...modal,
     totalCredits: resolveEpisodeBatchTotalCredits(modal),
   };
+}
+
+function resolveEpisodeBatchImageParameterValues(modal, imageModel) {
+  const schema = imageModel?.parameterSchema && typeof imageModel.parameterSchema === "object" && !Array.isArray(imageModel.parameterSchema)
+    ? imageModel.parameterSchema
+    : {};
+  const defaults = imageModel?.defaultParams && typeof imageModel.defaultParams === "object" && !Array.isArray(imageModel.defaultParams)
+    ? imageModel.defaultParams
+    : {};
+  const current = modal?.imageParameterValues && typeof modal.imageParameterValues === "object" && !Array.isArray(modal.imageParameterValues)
+    ? modal.imageParameterValues
+    : {};
+  const hasDedicatedResolution = Boolean(schema.resolution || schema.imageResolution);
+  const next = {};
+  for (const [key, parameter] of Object.entries(schema)) {
+    if (parameter?.visible === false || ["prompt", "negativePrompt", "referenceImages", "editInstruction", "count"].includes(key)) {
+      continue;
+    }
+    const fallback = key === "aspectRatio" || key === "ratio" || key === "imageAspectRatio"
+      ? modal?.imageAspectRatio
+      : key === "resolution" || key === "imageResolution" || key === "size"
+        ? modal?.imageClarity
+        : key === "quality" && !hasDedicatedResolution
+          ? modal?.imageClarity
+          : undefined;
+    const resolved = resolveConfiguredGenerationParameterValue(
+      parameter,
+      firstGenerationParameterCandidate(current[key], defaults[key], fallback),
+      defaults[key],
+    );
+    if (resolved !== undefined && resolved !== null && resolved !== "") {
+      next[key] = resolved;
+    }
+  }
+  return next;
 }
 
 function resolveEpisodeBatchVideoParameterValues(modal, videoModel) {
@@ -46126,11 +46233,20 @@ function resolveEpisodeBatchUnitCredit(modal) {
     return 30;
   }
   const selectedModelId = String(modal?.imageModelId ?? "").trim();
-  const configuredCredit = resolveEpisodeBatchConfiguredModelCredit(
-    (modal?.imageModelOptions ?? []).find((option) => {
-      return String(option?.value ?? option?.id ?? "").trim() === selectedModelId;
-    }),
-  );
+  const selectedModel = (modal?.imageModelOptions ?? []).find((option) => {
+    return String(option?.value ?? option?.id ?? "").trim() === selectedModelId;
+  });
+  const configuredCredit = selectedModel
+    ? resolveGenerationCreditCost("image", {
+        imageResolution: modal?.imageClarity,
+        imageAspectRatio: modal?.imageAspectRatio,
+        parameterValues: {
+          resolution: modal?.imageClarity,
+          aspectRatio: modal?.imageAspectRatio,
+          ...(modal?.imageParameterValues ?? {}),
+        },
+      }, selectedModel)
+    : null;
   const selectedSkillId = String(modal?.selectedStyleId ?? "").trim();
   const selectedSkill = [
     ...(Array.isArray(modal?.publicStyles) ? modal.publicStyles : []),
@@ -46297,7 +46413,7 @@ function resolveEpisodeBatchClarityField(model) {
   const schema = model?.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
     ? model.parameterSchema
     : {};
-  return ["quality", "resolution", "imageResolution", "size"].find((key) => {
+  return ["resolution", "imageResolution", "quality", "size"].find((key) => {
     const parameter = schema[key];
     if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) {
       return false;
@@ -46520,7 +46636,9 @@ function buildEpisodeBatchAssetImageSubmission(workbench, modal, item, assetKind
     selectedModel ? configuredGenerationParametersForModel(workbench, String(selectedModel.value ?? selectedModel.id ?? "")) : {};
   const selectedModelCode = String(selectedModel?.value ?? selectedModel?.id ?? modal?.imageModelId ?? "gpt-image-2-cn").trim();
   const selectedModelConfig = findConfiguredGenerationModel(workbench, selectedModelCode);
-  const imageResolutionFallback = modal?.imageClarity ?? selectedModelConfig?.defaultParams?.quality ?? selectedModelConfig?.defaultParams?.resolution;
+  const modalParameters = filterParametersForConfiguredModel(modal?.imageParameterValues ?? {}, selectedModelConfig);
+  Object.assign(configuredParameters, modalParameters);
+  const imageResolutionFallback = modalParameters.resolution ?? modalParameters.imageResolution ?? modal?.imageClarity ?? selectedModelConfig?.defaultParams?.resolution ?? selectedModelConfig?.defaultParams?.quality;
   const imageAspectRatioFallback = selectedModelConfig?.defaultParams?.aspectRatio;
   const selectedSkillId = String(modal?.selectedStyleId ?? "").trim();
   const selectedSkill = [
@@ -46573,7 +46691,11 @@ function normalizeEpisodeBatchImagePrompt(prompt, imageReferences = []) {
 
 function buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission) {
   const model = String(modal?.imageModelId ?? "gpt-image-2-cn").trim() || "gpt-image-2-cn";
-  const configuredParameters = configuredGenerationParametersForModel(workbench, model);
+  const selectedModelConfig = findConfiguredGenerationModel(workbench, model);
+  const configuredParameters = {
+    ...configuredGenerationParametersForModel(workbench, model),
+    ...filterParametersForConfiguredModel(modal?.imageParameterValues ?? {}, selectedModelConfig),
+  };
   const qualityVisible = isConfiguredGenerationParameterVisible(workbench, model, "quality");
   const resolutionVisible = isConfiguredGenerationParameterVisible(workbench, model, "resolution");
   const aspectRatioVisible = isConfiguredGenerationParameterVisible(workbench, model, "aspectRatio");

@@ -2287,6 +2287,9 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
   } else if (apiKeyEnv && looksLikeSecretValue(apiKeyEnv)) {
     failedItems.push({ step: "business", field: "apiKeyEnv", message: "密钥引用只能保存环境变量名，不能填写明文密钥。" });
   }
+  for (const issue of validateAdminSanBaoProviderConfig(input)) {
+    failedItems.push({ step: "template", field: issue.field, message: issue.message });
+  }
   if (input.invocationMode === "async_polling" && !isValidOptionalProviderEndpoint(providerConfig.queryTaskEndpoint)) {
     failedItems.push({ step: "template", field: "queryTaskEndpoint", message: "异步轮询模型必须配置合法的轮询接口。" });
   }
@@ -2306,7 +2309,7 @@ function validateModelDraftFailedItems(input: AdminModelWriteInput) {
 }
 
 function hasSupportedAdapter(providerProtocol: string) {
-  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(providerProtocol);
+  return ["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"].includes(providerProtocol);
 }
 
 function providerRequiresApiKey(providerProtocol: string | undefined) {
@@ -2333,7 +2336,7 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
       return error(400, "admin_model_required", "请填写模型基础信息");
     }
   }
-  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "custom_http"].includes(input.providerProtocol)) {
+  if (input.providerProtocol && !["creator_dev", "openai_images", "openai_compatible_chat", "cumob_chat", "modelflare_responses", "volcengine_ark_image", "volcengine_ark_video", "aliyun_bailian_video", "aliyun_bailian_audio", "apimart_audio", "globalaiopc_video", "lingdong_api", "cumob_image", "global_ai_opc_image", "extra_token_video", "saier_video", "banana_router", "san_bao", "custom_http"].includes(input.providerProtocol)) {
     return error(400, "invalid_provider_protocol", "供应商协议不支持");
   }
   if (input.invocationMode && !["sync", "async_polling", "stream", "webhook"].includes(input.invocationMode)) {
@@ -2368,6 +2371,10 @@ function validateModelWriteInput(input: AdminModelWriteInput, requireAll: boolea
   const apiKeyEnv = readString(input.providerConfig?.apiKeyEnv);
   if (apiKeyEnv && looksLikeSecretValue(apiKeyEnv)) {
     return error(400, "api_key_env_must_be_reference", "密钥引用不能保存明文密钥");
+  }
+  const sanBaoProviderConfigIssue = validateAdminSanBaoProviderConfig(input)[0];
+  if (sanBaoProviderConfigIssue) {
+    return error(400, sanBaoProviderConfigIssue.code, sanBaoProviderConfigIssue.message);
   }
   if (input.dispatchPolicy && !readString(input.dispatchPolicy.submitQueueName)) {
     return error(400, "dispatch_submit_queue_required", "请配置提交队列");
@@ -2407,6 +2414,13 @@ function modelLaunchCheck(model: AdminModelConfigView) {
       key: "pollQueueName",
       label: "轮询队列",
       message: "异步轮询模型必须配置 pollQueueName，用于调度任务结果查询。",
+    });
+  }
+  for (const issue of validateAdminSanBaoProviderConfig(model)) {
+    failedItems.push({
+      key: issue.field,
+      label: "三宝影像配置",
+      message: issue.message,
     });
   }
   const bananaRouterError = validateBananaRouterProviderConfig(model);
@@ -2456,6 +2470,55 @@ function validateAdminBananaRouterProviderConfig(input: AdminModelWriteInput | A
     mediaType: input.mediaType ?? null,
     invocationMode: input.invocationMode ?? null,
   });
+}
+
+function validateAdminSanBaoProviderConfig(input: AdminModelWriteInput | AdminModelConfigView) {
+  if (input.providerProtocol !== "san_bao") return [];
+  const issues: Array<{ field: string; code: string; message: string }> = [];
+  const providerConfig = input.providerConfig ?? {};
+  if (readString(providerConfig.apiKeyEnv) !== "SAN_BAO_API_KEY") {
+    issues.push({
+      field: "apiKeyEnv",
+      code: "san_bao_api_key_env_invalid",
+      message: "三宝影像密钥引用必须使用 SAN_BAO_API_KEY。",
+    });
+  }
+  const baseURL = readString(providerConfig.baseURL)?.replace(/\/+$/, "");
+  if (baseURL !== "https://sanbaobeauty.com") {
+    issues.push({
+      field: "baseURL",
+      code: "san_bao_base_url_invalid",
+      message: "三宝影像 Base URL 必须使用 https://sanbaobeauty.com。",
+    });
+  }
+  const mediaPath = input.mediaType === "image"
+    ? "/openapi/v1/images"
+    : input.mediaType === "video"
+      ? "/openapi/v1/videos"
+      : null;
+  if (!mediaPath || readString(providerConfig.createTaskEndpoint) !== mediaPath) {
+    issues.push({
+      field: "createTaskEndpoint",
+      code: "san_bao_create_endpoint_invalid",
+      message: "三宝影像创建接口必须使用与媒体类型对应的官方路径。",
+    });
+  }
+  const requestPath = readString(providerConfig.requestPath);
+  if (requestPath && requestPath !== mediaPath) {
+    issues.push({
+      field: "requestPath",
+      code: "san_bao_request_path_invalid",
+      message: "三宝影像请求路径必须与媒体类型对应。",
+    });
+  }
+  if (!mediaPath || readString(providerConfig.queryTaskEndpoint) !== `${mediaPath}/{taskId}`) {
+    issues.push({
+      field: "queryTaskEndpoint",
+      code: "san_bao_query_endpoint_invalid",
+      message: "三宝影像轮询接口必须使用与媒体类型对应且包含 {taskId} 的官方路径。",
+    });
+  }
+  return issues;
 }
 
 function hasValidProviderEndpoint(providerConfig: Record<string, unknown>) {

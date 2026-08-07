@@ -98,7 +98,11 @@ const migrations = [
   ["20260826-converge-provider-protocol-constraint.sql", "packages/db/migrations/20260826-converge-provider-protocol-constraint.sql"],
   ["20260827-converge-canvas-agent-shard-constraint.sql", "packages/db/migrations/20260827-converge-canvas-agent-shard-constraint.sql"],
   ["20260828-bananarouter-image-async-config-convergence.sql", "packages/db/migrations/20260828-bananarouter-image-async-config-convergence.sql"],
+  ["20260829-enable-prompt-reverse-tool-model.sql", "packages/db/migrations/20260829-enable-prompt-reverse-tool-model.sql"],
+  ["20260830-add-modelflare-responses-model.sql", "packages/db/migrations/20260830-add-modelflare-responses-model.sql"],
   ["20260831-canvas-agent-outbox-wakeup.sql", "packages/db/migrations/20260831-canvas-agent-outbox-wakeup.sql"],
+  ["20260901-add-san-bao-media-models.sql", "packages/db/migrations/20260901-add-san-bao-media-models.sql"],
+  ["20260902-merge-san-bao-gpt-image2-variants.sql", "packages/db/migrations/20260902-merge-san-bao-gpt-image2-variants.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);

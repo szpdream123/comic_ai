@@ -43,7 +43,7 @@ import {
   readGenerationProviderRouteReferences,
   resolveGenerationModelConfigForTask,
 } from "./generation-model-config-snapshot.ts";
-import { translateProviderErrorMessage } from "./provider-error-message.ts";
+import { ModelError, translateProviderErrorMessage } from "./provider-error-message.ts";
 import { attachProviderRawResponse, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
@@ -60,6 +60,7 @@ import {
 } from "./user-model-request-log.service.ts";
 import { buildGlobalAiOpcVideoPayload } from "./global-ai-opc-video.provider-adapter.ts";
 import { buildLingdongVideoPayload } from "./lingdong-api.provider-adapter.ts";
+import { buildSanBaoVideoPayload } from "./san-bao.provider-adapter.ts";
 import {
   markGenerationTaskSnapshotFailed,
   markGenerationTaskSnapshotCanceled,
@@ -829,7 +830,16 @@ export async function processSeedanceVideoPollJob(
     resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
   ) as unknown as SeedancePollAdapter;
   try {
-    const poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+    let poll: Awaited<ReturnType<SeedancePollAdapter["poll"]>>;
+    try {
+      poll = await adapter.poll({ externalRequestId: row.external_request_id, redactedPayload: snapshot });
+    } catch (error) {
+      if (modelConfig?.providerProtocol !== "san_bao" || !(error instanceof ModelError)) throw error;
+      poll = {
+        status: "failed",
+        redactedResponse: error.toRedactedProviderRecord(),
+      };
+    }
 
     if (poll.status === "accepted" || poll.status === "running") {
       await markGenerationTaskSnapshotRunning(db, {
@@ -844,14 +854,16 @@ export async function processSeedanceVideoPollJob(
     }
 
     if (poll.status === "failed") {
+      const failureCode = readString(poll.redactedResponse.failureCode)
+        || "provider_failed";
       const providerErrorMessage = translateProviderErrorMessage(poll.redactedResponse, {
-        failureCode: "provider_failed",
+        failureCode,
         mediaType: "video",
         phase: "poll",
       });
       await markProviderRequestFailed(db, {
         providerRequestId: row.provider_request_id,
-        failureCode: "provider_failed",
+        failureCode,
         redactedResponse: poll.redactedResponse,
         now: input.now,
       });
@@ -859,18 +871,18 @@ export async function processSeedanceVideoPollJob(
         providerRequestId: row.provider_request_id,
         status: "failed",
         responseText: buildSeedanceFailureResponseText({
-          failureCode: "provider_failed",
+          failureCode,
           errorMessage: providerErrorMessage,
           providerResponse: poll.redactedResponse,
         }),
         responseUsage: null,
         finishReasons: [],
-        failureCode: "provider_failed",
+        failureCode,
         now: input.now,
       });
       await failSeedanceTask(db, {
         row,
-        failureCode: "provider_failed",
+        failureCode,
         providerRequestId: row.provider_request_id,
         redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
           billingEvent: "released",
@@ -878,7 +890,7 @@ export async function processSeedanceVideoPollJob(
           provider: "model-gateway",
           providerRequestId: row.provider_request_id,
           externalRequestId: row.external_request_id,
-          failureCode: "provider_failed",
+          failureCode,
           errorMessage: providerErrorMessage,
           providerResponse: poll.redactedResponse,
           settledAt: input.now,
@@ -891,7 +903,7 @@ export async function processSeedanceVideoPollJob(
         providerRequestId: row.provider_request_id,
         providerStatus: poll.redactedResponse,
         failure: {
-          failureCode: "provider_failed",
+          failureCode,
           providerStatus: readString(poll.redactedResponse.providerStatus),
           providerErrorCode: readString(poll.redactedResponse.providerErrorCode),
           providerMessage: providerErrorMessage,
@@ -903,7 +915,7 @@ export async function processSeedanceVideoPollJob(
         },
         now: input.now,
       });
-      return { status: "failed", failureCode: "provider_failed" };
+      return { status: "failed", failureCode };
     }
 
     if (!poll.videoUrl) {
@@ -3274,7 +3286,7 @@ type SeedanceRequestBodyForLog = {
   targetId?: string;
 };
 
-function buildSeedanceUserModelRequestLogBody(
+export function buildSeedanceUserModelRequestLogBody(
   requestBody: SeedanceRequestBodyForLog,
   input: {
     providerName: string;
@@ -3283,6 +3295,22 @@ function buildSeedanceUserModelRequestLogBody(
     providerConfig?: Record<string, unknown>;
   },
 ) {
+  if (input.providerProtocol === "san_bao") {
+    const providerBody = buildSanBaoVideoPayload({
+      providerRequestId: "request-log-preview",
+      providerName: input.providerName,
+      providerOperation: operationNames.episodeVideoGenerate,
+      requestKey: "request-log-preview",
+      payloadRef: "request-log-preview",
+      payloadHash: "request-log-preview",
+      redactedPayload: requestBody,
+    }, input.providerModel?.trim() || undefined);
+    return {
+      requestFormat: "san_bao_video",
+      requestBody: providerBody,
+      requestText: JSON.stringify(providerBody, null, 2),
+    };
+  }
   if (input.providerName === "GlobalAiOpc") {
     const providerBody = buildGlobalAiOpcVideoPayload({
       providerRequestId: "request-log-preview",

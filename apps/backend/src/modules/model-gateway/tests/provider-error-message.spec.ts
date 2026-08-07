@@ -112,6 +112,13 @@ describe("provider error message", () => {
     );
   });
 
+  it("translates documented SanBao account-balance errors through the error factory", () => {
+    assert.equal(
+      translateProviderErrorMessage(new Error("san_bao_402"), { failureCode: "san_bao_insufficient_balance" }),
+      "三宝影像账户积分不足，请联系管理员充值后重试。",
+    );
+  });
+
   it("reads OpenAI-compatible SDK status and request identifiers", () => {
     const error = ModelError.fromUnknown({
       status: 429,

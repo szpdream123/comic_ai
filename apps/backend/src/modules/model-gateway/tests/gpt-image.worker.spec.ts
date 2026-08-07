@@ -16,7 +16,9 @@ import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
+  buildGptImageRequestLogBody,
   finalizeGptImageArtifactJob,
+  processGptImagePollJob,
   processGptImageSubmitJob,
 } from "../gpt-image.worker.ts";
 import { upsertQueuedGenerationTaskSnapshot } from "../generation-task-snapshot.service.ts";
@@ -60,6 +62,228 @@ function fetchEpisodeImageTask(origin: string, episodeId: string, init: RequestI
 }
 
 describe("GPT Image 2 BullMQ worker service", () => {
+  it("records the SanBao image request in the same shape sent upstream", () => {
+    const request = buildGptImageRequestLogBody({
+      requestBody: {
+        prompt: "use uploaded reference",
+        model: "sanbao-gpt-image2",
+        parameters: {
+          aspectRatio: "16:9",
+          resolution: "2K",
+          filePaths: ["https://cdn.example.com/reference.png"],
+        },
+        targetType: "episode",
+      },
+      modelConfig: {
+        providerProtocol: "san_bao",
+        providerConfig: {
+          modelVariants: {
+            "普通": "gpt-image2",
+            "1K": "gpt-image2-1K",
+            "2K": "gpt-image2-2K",
+            "4K": "gpt-image2-4K",
+          },
+        },
+      },
+      providerName: "三宝影像",
+      providerOperation: "shot.image.generate",
+      providerModel: "gpt-image2",
+      requestKey: "sanbao-log-key",
+      payloadRef: "creator://sanbao-log",
+      payloadHash: "sanbao-log-hash",
+    });
+
+    assert.equal(request.requestFormat, "san_bao_image");
+    assert.deepEqual(request.requestBody, {
+      model: "gpt-image2-2K",
+      prompt: "use uploaded reference",
+      aspect_ratio: "16:9",
+      images: ["https://cdn.example.com/reference.png"],
+      quality: "high",
+    });
+    assert.doesNotMatch(request.requestText, /targetType|parameters/);
+  });
+
+  it("preserves the missing SanBao API key error before provider submission", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET status = 'active',
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'sanbao-gpt-image2'
+      `,
+    );
+    const env = {
+      NODE_ENV: "test",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+    };
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl: (async () => {
+        throw new Error("provider fetch must not be called without SAN_BAO_API_KEY");
+      }) as typeof fetch,
+      storageRuntime: {} as UploadSessionRuntime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const created = await createProjectAndEpisode(server.origin, cookie, "sanbao-missing-api-key");
+      const taskResponse = await fetchEpisodeImageTask(server.origin, created.episodeId, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "sanbao-missing-api-key",
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "episode",
+          targetId: created.episodeId,
+          prompt: "draw without a configured SanBao key",
+          model: "sanbao-gpt-image2",
+          parameters: { aspectRatio: "1:1", resolution: "普通" },
+        }),
+      });
+      const task = (await taskResponse.json()).data;
+
+      const submitted = await processGptImageSubmitJob(db, {
+        taskId: task.taskId,
+        runtime: {} as UploadSessionRuntime,
+        env,
+        now: new Date("2026-08-07T06:00:00.000Z"),
+      });
+      const stored = await db.query<{
+        request_format: string;
+        log_failure_code: string | null;
+        provider_status: string;
+        provider_failure_code: string | null;
+        external_submission_started_at: Date | string | null;
+        task_failure_code: string | null;
+      }>(
+        `
+          SELECT logs.request_format,
+                 logs.failure_code AS log_failure_code,
+                 requests.status AS provider_status,
+                 requests.failure_code AS provider_failure_code,
+                 requests.external_submission_started_at,
+                 tasks.failure_code AS task_failure_code
+          FROM user_model_request_logs logs
+          JOIN provider_requests requests ON requests.id = logs.provider_request_id
+          JOIN tasks ON tasks.id = logs.task_id
+          WHERE logs.task_id = $1
+        `,
+        [task.taskId],
+      );
+
+      assert.deepEqual(submitted, { status: "failed", failureCode: "provider_api_key_missing" });
+      assert.equal(stored.rows[0]?.request_format, "san_bao_image");
+      assert.equal(stored.rows[0]?.log_failure_code, "provider_api_key_missing");
+      assert.equal(stored.rows[0]?.provider_status, "created");
+      assert.equal(stored.rows[0]?.provider_failure_code, null);
+      assert.equal(stored.rows[0]?.external_submission_started_at, null);
+      assert.equal(stored.rows[0]?.task_failure_code, "provider_api_key_missing");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("persists SanBao poll ModelError failure codes from the error factory", async () => {
+    const db = await createMigratedTestDb();
+    await db.query(
+      `
+        UPDATE ai_model_configs
+        SET status = 'active',
+            pricing_json = pricing_json || '{"baseCredits":77}'::jsonb
+        WHERE model_code = 'sanbao-gpt-image2'
+      `,
+    );
+    const env = {
+      NODE_ENV: "test",
+      SAN_BAO_API_KEY: "san-bao-test-key",
+      BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
+    };
+    const fetchImpl = (async (_url, init) => {
+      if (init?.method === "POST") {
+        return new Response(JSON.stringify({ data: { id: "sanbao-image-poll-error", status: "queued" } }));
+      }
+      return new Response(JSON.stringify({ error: "insufficient balance" }), {
+        status: 402,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const server = createPhoneAuthDevServer({
+      db,
+      env,
+      fetchImpl,
+      storageRuntime: {} as UploadSessionRuntime,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const created = await createProjectAndEpisode(server.origin, cookie, "sanbao-poll-model-error");
+      const taskResponse = await fetchEpisodeImageTask(server.origin, created.episodeId, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "sanbao-poll-model-error",
+          cookie,
+        },
+        body: JSON.stringify({
+          targetType: "episode",
+          targetId: created.episodeId,
+          prompt: "draw a SanBao poll error test image",
+          model: "sanbao-gpt-image2",
+          parameters: { aspectRatio: "1:1", resolution: "普通" },
+        }),
+      });
+      const task = (await taskResponse.json()).data;
+
+      const submitted = await processGptImageSubmitJob(db, {
+        taskId: task.taskId,
+        runtime: {} as UploadSessionRuntime,
+        env,
+        fetchImpl,
+        now: new Date("2026-08-07T05:00:00.000Z"),
+      });
+      const polled = await processGptImagePollJob(db, {
+        taskId: task.taskId,
+        env,
+        fetchImpl,
+        now: new Date("2026-08-07T05:00:05.000Z"),
+      });
+      const stored = await db.query<{
+        task_failure_code: string | null;
+        provider_failure_code: string | null;
+        snapshot_failure_code: string | null;
+      }>(
+        `
+          SELECT t.failure_code AS task_failure_code,
+                 pr.failure_code AS provider_failure_code,
+                 snapshot.failure_json->>'failureCode' AS snapshot_failure_code
+          FROM tasks t
+          JOIN provider_requests pr ON pr.task_id = t.id
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [task.taskId],
+      );
+
+      assert.equal(taskResponse.status, 200);
+      assert.deepEqual(submitted, { status: "submitted", providerStatus: "waiting" });
+      assert.deepEqual(polled, { status: "failed", failureCode: "san_bao_insufficient_balance" });
+      assert.equal(stored.rows[0]?.task_failure_code, "san_bao_insufficient_balance");
+      assert.equal(stored.rows[0]?.provider_failure_code, "san_bao_insufficient_balance");
+      assert.equal(stored.rows[0]?.snapshot_failure_code, "san_bao_insufficient_balance");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("passes the task owner user id to the image submit limiter", async () => {
     const db = await createMigratedTestDb();
 

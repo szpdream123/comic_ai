@@ -34,7 +34,9 @@ export async function createDevDb(): Promise<DevDatabase> {
       await prepareSchema(pool, schemaName);
     }
     const db = createPostgresDatabase(pool, schemaName);
-    await ensureFoundationSchema(db);
+    if (!isManagedProductionWorkerSchemaReady()) {
+      await ensureFoundationSchema(db);
+    }
     return db;
   } catch (error) {
     await pool.end().catch(() => undefined);
@@ -42,6 +44,11 @@ export async function createDevDb(): Promise<DevDatabase> {
       `PostgreSQL database initialization failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+function isManagedProductionWorkerSchemaReady() {
+  return process.env.CREATOR_DEV_STACK_MANAGED === "true"
+    && process.env.CREATOR_DEV_SCHEMA_READY === "true";
 }
 
 function readConfiguredInteger(

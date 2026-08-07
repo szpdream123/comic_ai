@@ -936,7 +936,6 @@ export function renderStoryboardGeneratorTaskOverview(ui) {
     generatorSettings: buildCanvasImageSettingsState(generatorConfig.selected?.raw ?? null, {
       ...(ui.assetGeneratorParameterValues ?? {}),
       imageResolution: generatorConfig.resolution,
-      quality: generatorConfig.resolution,
       resolution: generatorConfig.resolution,
       imageAspectRatio: generatorConfig.aspectRatio,
       aspectRatio: generatorConfig.aspectRatio,
@@ -7032,6 +7031,7 @@ function resolveAssetGeneratorModelConfig(ui = {}) {
     null;
   const raw = selected?.raw ?? {};
   const defaultParams = raw?.defaultParams && typeof raw.defaultParams === "object" ? raw.defaultParams : {};
+  const hasDedicatedResolution = assetGeneratorParameterExists(raw, "resolution") || assetGeneratorParameterExists(raw, "imageResolution");
   const aspectRatioOptions = dedupeAssetGeneratorOptionPairs([
     ...assetGeneratorOptionPairsFromSource(raw?.supportedRatios),
     ...assetGeneratorOptionPairsFromSource(raw?.ratios),
@@ -7042,10 +7042,12 @@ function resolveAssetGeneratorModelConfig(ui = {}) {
     ...assetGeneratorOptionPairsFromSource(raw?.supportedResolutions),
     ...assetGeneratorOptionPairsFromSource(raw?.qualities),
     ...assetGeneratorOptionPairsFromSource(raw?.resolutions),
-    ...assetGeneratorParameterOptionPairs(raw, ["quality", "resolution", "imageResolution"]),
+    ...assetGeneratorParameterOptionPairs(raw, hasDedicatedResolution ? ["resolution", "imageResolution"] : ["quality", "imageResolution"]),
   ]);
   const resolution = resolveAssetGeneratorSelectedOption({
-    candidates: [ui.assetGeneratorResolution, defaultParams.quality, defaultParams.resolution],
+    candidates: hasDedicatedResolution
+      ? [ui.assetGeneratorResolution, defaultParams.resolution, defaultParams.imageResolution]
+      : [ui.assetGeneratorResolution, defaultParams.quality, defaultParams.imageResolution],
     options: resolutionOptions,
     fallback: "2K",
   });
@@ -7066,9 +7068,14 @@ function resolveAssetGeneratorModelConfig(ui = {}) {
     aspectRatioOptions: aspectRatioOptions.length ? aspectRatioOptions : [[aspectRatio, aspectRatio || "默认"]],
     count: Number(defaultParams.count ?? ui.assetGeneratorCount ?? 1) || 1,
     countVisible,
-    credits: resolveAssetGeneratorModelCredits(raw),
+    credits: resolveAssetGeneratorModelCredits(raw, resolution),
     creditBalance: resolveDisplayedCreditBalance(ui, {}),
   };
+}
+
+function assetGeneratorParameterExists(model = {}, key = "") {
+  return [model?.parameterSchema, model?.parametersSchema, model?.parameter_schema]
+    .some((schema) => schema && typeof schema === "object" && !Array.isArray(schema) && Object.prototype.hasOwnProperty.call(schema, key));
 }
 
 function assetGeneratorParameterVisibility(model = {}, key = "") {
@@ -7147,7 +7154,7 @@ function resolveAssetGeneratorSelectedOption({ candidates = [], options = [], fa
   return String(options[0]?.[0] ?? fallback ?? "").trim();
 }
 
-function resolveAssetGeneratorModelCredits(model = {}) {
+function resolveAssetGeneratorModelCredits(model = {}, resolution = "") {
   const pricing = model?.pricing && typeof model.pricing === "object" && !Array.isArray(model.pricing)
     ? model.pricing
     : {};
@@ -7157,6 +7164,19 @@ function resolveAssetGeneratorModelCredits(model = {}) {
   const pricingSnakeJson = model?.pricing_json && typeof model.pricing_json === "object" && !Array.isArray(model.pricing_json)
     ? model.pricing_json
     : {};
+  const billingMode = String(
+    pricing.billingMode ?? pricing.billing_mode ??
+    pricingJson.billingMode ?? pricingJson.billing_mode ??
+    pricingSnakeJson.billingMode ?? pricingSnakeJson.billing_mode ??
+    model?.billingMode ?? model?.billing_mode ?? "fixed",
+  ).trim().toLowerCase();
+  const resolutionCredits = pricing.resolutionCredits ?? pricingJson.resolutionCredits ?? pricingSnakeJson.resolutionCredits ?? model?.resolutionCredits;
+  if (billingMode === "duration" && resolutionCredits && typeof resolutionCredits === "object" && !Array.isArray(resolutionCredits)) {
+    const configured = Number(resolutionCredits[resolution]);
+    if (Number.isFinite(configured) && configured >= 0) {
+      return Math.round(configured);
+    }
+  }
   const candidates = [
     pricing.baseCredits,
     pricing.credits,
@@ -7224,7 +7244,6 @@ function renderAssetGeneratorModal(ui) {
   const generatorSettings = buildCanvasImageSettingsState(selectedGeneratorModel, {
     ...(ui.assetGeneratorParameterValues ?? {}),
     imageResolution: generatorConfig.resolution,
-    quality: generatorConfig.resolution,
     resolution: generatorConfig.resolution,
     imageAspectRatio: generatorConfig.aspectRatio,
     aspectRatio: generatorConfig.aspectRatio,
@@ -11018,13 +11037,10 @@ function buildCanvasImageSettingsState(selectedModel = null, parameterValues = {
       : schema.ratio
         ? "ratio"
         : "aspectRatio";
-  const resolutionField = schema.quality
-    ? "quality"
-    : schema.resolution
-      ? "resolution"
-      : schema.imageResolution
-        ? "imageResolution"
-        : "size";
+  const resolutionField = ["resolution", "imageResolution", "quality", "size"].find((key) => {
+    const parameter = schema[key];
+    return parameter && typeof parameter === "object" && !Array.isArray(parameter) && parameter.visible !== false;
+  }) ?? "size";
   const ratioOptions = canvasOptionPairsFromParameter(schema[ratioField]).length
     ? canvasOptionPairsFromParameter(schema[ratioField])
     : canvasOptionPairsFromValues(selectedModel?.supportedRatios, ["1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"]);

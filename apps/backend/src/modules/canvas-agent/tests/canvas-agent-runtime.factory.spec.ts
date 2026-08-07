@@ -14,6 +14,19 @@ import {
 } from "../canvas-agent-runtime-config.service.ts";
 
 describe("Canvas Agent runtime composition", () => {
+  it("keeps image billing modes distinct without changing video billing", () => {
+    const pricing = {
+      baseCredits: 90,
+      resolutionCredits: { "4K": 160 },
+    };
+    const parameters = { resolution: "4K", durationSec: 10 };
+
+    assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "fixed" }, parameters, "image"), 90);
+    assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "duration" }, parameters, "image"), 160);
+    assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "fixed" }, parameters, "video"), 160);
+    assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "duration" }, parameters, "video"), 1600);
+  });
+
   it("applies bounded JSON patch operations without mutating the input", () => {
     const document = {
       version: 1,

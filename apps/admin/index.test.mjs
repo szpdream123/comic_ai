@@ -46,6 +46,14 @@ test("admin shell keeps the final Chinese page contract and standalone branding"
   assert.doesNotMatch(html, /模型参数详情|参数详情|model-workbench/);
 });
 
+test("admin model editor exposes the SanBao image and video adapter", () => {
+  assert.match(script, /san_bao/);
+  assert.match(script, /三宝影像图片 \/ 视频适配器/);
+  assert.match(script, /SAN_BAO_API_KEY/);
+  assert.match(script, /\/openapi\/v1\/images/);
+  assert.match(script, /\/openapi\/v1\/videos/);
+});
+
 test("admin shell wires final design actions to real admin APIs", () => {
   for (const apiPath of [
     "/api/admin/auth/login",
@@ -558,6 +566,12 @@ test("model editor exposes base credit pricing and billing mode as dedicated fie
   assert.match(script, /resolutionCreditsFromForm/);
   assert.match(script, /固定计费|\\u56fa\\u5b9a\\u8ba1\\u8d39/);
   assert.match(script, /时长计费|\\u65f6\\u957f\\u8ba1\\u8d39/);
+  assert.match(script, /data-parameter-credit-slot="resolution"/);
+  assert.match(script, /name === "billingMode"/);
+  assert.match(script, /积分\/秒/);
+  assert.match(script, /积分\/次/);
+  assert.match(script, /固定计费使用上方积分/);
+  assert.match(script, /清晰度积分/);
   assert.match(script, /name="pricingUnit"/);
   assert.match(script, /syncModelEditorPricingJson/);
   assert.match(script, /pricing\.baseCredits = baseCredits/);
@@ -913,10 +927,141 @@ test("admin image models can configure provider-backed resolution values", () =>
 
 test("admin model edits preserve provider-specific schema fields and option values", () => {
   assert.match(script, /function schemaFromSelectedParameterTemplates\(form, existingSchema = \{\}, existingDefaults = \{\}\)/);
-  assert.match(script, /if \(!editableKeys\.has\(key\)[\s\S]*?schema\[key\] = \{ \.\.\.value \};/);
+  assert.match(script, /value\?\.visible === false[\s\S]*?schema\[key\] = \{ \.\.\.value \};/);
+  assert.match(script, /editableModelParameterTemplates\(mediaType, existingSchema\)/);
+  assert.match(script, /label: String\(existingParameter\.label \|\| template\.label \|\| template\.key\)/);
+  assert.match(script, /options: Array\.isArray\(parameter\.options\) \? parameter\.options : template\.options/);
   assert.match(script, /defaults\[key\] = existingDefaults\[key\]/);
   assert.match(script, /const availableOptions = \[\.\.\.new Set\(\[\.\.\.\(template\.options \|\| \[\]\), \.\.\.\(selectedOptions \|\| \[\]\)\]/);
   assert.match(script, /schemaFromSelectedParameterTemplates\(form, existing\?\.parameterSchema \|\| \{\}, existing\?\.defaultParams \|\| \{\}\)/);
+});
+
+test("SanBao model parameters show only configured clarity and preserve hidden quality", () => {
+  const start = script.indexOf("function editableModelParameterTemplates");
+  const end = script.indexOf("function formatFrontendParameterPreviewValue", start);
+  const context = {
+    MODEL_CANONICAL_MEDIA_PARAMETER_KEYS: new Set(),
+    MODEL_HIDDEN_PARAMETER_BINDING_KEYS: new Set(),
+    parameterTemplates: () => [
+      { key: "quality", label: "质量", type: "enum", mediaTypes: ["image"], options: ["high", "medium", "low"], sortOrder: 60 },
+      { key: "resolution", label: "分辨率", type: "enum", mediaTypes: ["image"], options: ["720p", "1080p"], sortOrder: 80 },
+    ],
+    normalizeParameterTemplate: (template) => ({
+      key: String(template.key || ""),
+      label: String(template.label || template.key || ""),
+      type: String(template.type || "string"),
+      mediaTypes: Array.isArray(template.mediaTypes) ? template.mediaTypes.map(String) : ["image"],
+      required: template.required === true,
+      visible: template.visible !== false,
+      options: Array.isArray(template.options) ? template.options.map(String) : [],
+      defaultValue: template.defaultValue ?? "",
+      sortOrder: Number(template.sortOrder || 100),
+    }),
+    escapeAttribute: String,
+    escapeHtml: String,
+    parameterTypeLabel: (value) => value,
+    parameterOptionSelectMarkup: (_template, options) => options.join("|"),
+    parameterSelectedValuesMarkup: (_key, options) => options.join("|"),
+    parameterDefaultSelectMarkup: () => "default",
+    result: null,
+  };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    const schema = {
+      resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+      quality: { label: "质量", type: "string", visible: false },
+      vendorMode: { label: "供应商模式", type: "enum", options: ["safe"] },
+    };
+    result = {
+      templates: editableModelParameterTemplates("image", schema),
+      fixedMarkup: parameterTemplateSelectionRows("image", schema, { resolution: "普通", quality: "high" }, false, {
+        billingMode: "fixed",
+        resolutionCredits: { "普通": 90, "1K": 110, "2K": 130, "4K": 130 },
+      }),
+      durationMarkup: parameterTemplateSelectionRows("image", schema, { resolution: "普通", quality: "high" }, false, {
+        billingMode: "duration",
+        resolutionCredits: { "普通": 90, "1K": 110, "2K": 130, "4K": 130 },
+      }),
+    };
+  `, context);
+
+  const result = JSON.parse(JSON.stringify(context.result));
+  assert.deepEqual(result.templates.map((template) => template.key), ["resolution", "vendorMode"]);
+  assert.equal(result.templates[0].label, "清晰度");
+  assert.deepEqual(result.templates[0].options, ["普通", "1K", "2K", "4K"]);
+  assert.match(result.fixedMarkup, /parameterSupported:resolution/);
+  assert.match(result.fixedMarkup, /清晰度/);
+  assert.match(result.fixedMarkup, /普通\|1K\|2K\|4K/);
+  assert.match(result.fixedMarkup, /固定计费使用上方积分/);
+  assert.match(result.fixedMarkup, /resolutionCredit:普通[^>]*type="hidden"/);
+  assert.doesNotMatch(result.fixedMarkup, /resolutionCredit:普通[^>]*type="number"/);
+  assert.match(result.durationMarkup, /resolutionCredit:普通/);
+  assert.match(result.durationMarkup, /清晰度积分/);
+  assert.doesNotMatch(result.durationMarkup, /parameterSupported:quality|high|medium|low/);
+});
+
+test("hidden fixed quality survives simplified parameter saving", () => {
+  const start = script.indexOf("function schemaFromSelectedParameterTemplates");
+  const end = script.indexOf("function parameterOptionSelectMarkup", start);
+  const context = {
+    MODEL_CANONICAL_MEDIA_PARAMETER_KEYS: new Set(),
+    modelKindOption: () => ({ mediaType: "image" }),
+    editableModelParameterTemplates: () => [
+      { key: "resolution", label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+    ],
+    splitCsv: () => [],
+    result: null,
+  };
+  const values = new Map([
+    ["modelKind", "image.text_to_image"],
+    ["parameterSupported:resolution", "on"],
+    ["parameterDefault:resolution", "2K"],
+  ]);
+  const form = {
+    get: (key) => values.get(key) ?? "",
+    getAll: (key) => key === "parameterOptions:resolution" ? ["普通", "1K", "2K", "4K"] : [],
+  };
+  context.form = form;
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = schemaFromSelectedParameterTemplates(form, {
+      resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+      quality: { label: "质量", type: "string", visible: false },
+    }, { resolution: "普通", quality: "high" });
+  `, context);
+
+  const result = JSON.parse(JSON.stringify(context.result));
+  assert.deepEqual(result.schema.quality, { label: "质量", type: "string", visible: false });
+  assert.equal(result.defaults.quality, "high");
+  assert.deepEqual(result.schema.resolution.options, ["普通", "1K", "2K", "4K"]);
+  assert.equal(result.schema.resolution.label, "清晰度");
+  assert.equal(result.defaults.resolution, "2K");
+});
+
+test("existing fixed quality survives when it is absent from the editable schema", () => {
+  const start = script.indexOf("function preservedUneditedModelDefaults");
+  const end = script.indexOf("function simplifiedModelPayloadFromForm", start);
+  const context = { result: null };
+
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = preservedUneditedModelDefaults({
+      parameterSchema: {
+        resolution: { label: "清晰度", type: "enum", options: ["普通", "1K", "2K", "4K"] },
+        internalMode: { type: "enum", options: ["safe"], visible: false },
+      },
+      defaultParams: {
+        resolution: "普通",
+        quality: "high",
+        internalMode: "safe",
+      },
+    });
+  `, context);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.result)), {
+    quality: "high",
+    internalMode: "safe",
+  });
+  assert.match(script, /defaultParams: \{ \.\.\.fixed\.defaultParams, \.\.\.preservedUneditedModelDefaults\(existing\), \.\.\.selected\.defaults \}/);
 });
 
 test("admin model management uses parameter templates and a simplified model editor", () => {
