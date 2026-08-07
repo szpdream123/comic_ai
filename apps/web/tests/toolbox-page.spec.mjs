@@ -26,6 +26,7 @@ import { __browserVideoWatermarkRemovalTestUtils } from "../src/features/toolbox
 
 const toolboxCss = readFileSync(new URL("../src/features/toolbox/toolbox-page.css", import.meta.url), "utf8");
 const workbenchSource = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+const videoAnalysisSource = readFileSync(new URL("../src/features/toolbox/video-analysis-plugin-client.js", import.meta.url), "utf8");
 const videoWatermarkSource = readFileSync(new URL("../src/features/toolbox/browser-video-watermark-removal-client.js", import.meta.url), "utf8");
 
 test("toolbox page renders as an independent built-in tool directory", () => {
@@ -155,6 +156,100 @@ test("watermark removal keeps video in the same workspace through the media tabs
   assert.match(videoWatermarkSource, /readBrowserVideoSourceFrameRate\(file\)/);
   assert.match(videoWatermarkSource, /fps: outputFrameRate/);
   assert.match(toolboxCss, /\.toolbox-watermark-header-center\s*\{[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translateX\(-50%\)/);
+});
+
+test("video prompt reverse displays unique similarity-based key frames", () => {
+  const html = renderToolboxPage({ toolboxPromptReverse: {
+    open: true,
+    activeKind: "video",
+    pluginStatus: "ready",
+    keyFramePreviews: [
+      { timestampMs: 0, dataUrl: "data:image/webp;base64,first" },
+      { timestampMs: 5_000, dataUrl: "data:image/webp;base64,middle" },
+      { timestampMs: 5_000, dataUrl: "data:image/webp;base64,duplicate" },
+      { timestampMs: 12_000, dataUrl: "data:image/webp;base64,last" },
+    ],
+  } });
+
+  assert.match(html, /关键帧/);
+  assert.match(html, /画面差异达到 30% 才保留，黑白屏和蒙层自动排除 · 3 张/);
+  assert.equal((html.match(/<figure>/g) ?? []).length, 3);
+  assert.equal((html.match(/data-action="open-toolbox-prompt-reverse-keyframe"/g) ?? []).length, 3);
+  assert.match(html, /data-toolbox-prompt-reverse-keyframe-index="2"/);
+  assert.match(html, /data:image\/webp;base64,first/);
+  assert.match(html, /data:image\/webp;base64,middle/);
+  assert.doesNotMatch(html, /data:image\/webp;base64,duplicate/);
+  assert.match(html, /class="toolbox-reverse-keyframe-lightbox"[^>]*hidden/);
+  assert.match(toolboxCss, /\.toolbox-reverse-keyframe-list\s*\{[\s\S]*?overflow-x:\s*auto/);
+
+  const enlarged = renderToolboxPage({ toolboxPromptReverse: {
+    open: true,
+    activeKind: "video",
+    pluginStatus: "ready",
+    activeKeyFrameIndex: 1,
+    keyFramePreviews: [
+      { timestampMs: 0, dataUrl: "data:image/webp;base64,first" },
+      { timestampMs: 5_000, dataUrl: "data:image/webp;base64,middle" },
+    ],
+  } });
+
+  assert.match(enlarged, /class="toolbox-reverse-keyframe-lightbox"/);
+  assert.match(enlarged, /<img src="data:image\/webp;base64,middle" alt="视频关键帧 2"/);
+  assert.match(enlarged, /关键帧 2 · 0:05/);
+  assert.equal((enlarged.match(/data-action="close-toolbox-prompt-reverse-keyframe"/g) ?? []).length, 2);
+  assert.match(toolboxCss, /\.toolbox-reverse-keyframe-lightbox-content img\s*\{[\s\S]*?object-fit:\s*contain/);
+  assert.match(videoAnalysisSource, /renderKeyFramePreview\(keyFrames\[index\]\)/);
+  assert.match(videoAnalysisSource, /keyFrameSheets\.push\(preview\.dataUrl\)/);
+  assert.match(videoAnalysisSource, /canvas\.width = Math\.max\(1, Math\.round\(sourceWidth \* scale\)\)/);
+  assert.match(workbenchSource, /open-toolbox-prompt-reverse-keyframe/);
+  assert.match(workbenchSource, /close-toolbox-prompt-reverse-keyframe/);
+});
+
+test("key frame lightbox opens and closes without rerendering the workbench", async () => {
+  const image = {
+    src: "",
+    alt: "",
+    getAttribute(name) { return name === "src" ? this.src : null; },
+    setAttribute(name, value) { this[name] = value; },
+  };
+  const caption = { textContent: "" };
+  const lightbox = {
+    hidden: true,
+    querySelector(selector) {
+      if (selector.endsWith(" img")) return image;
+      if (selector.endsWith(" figcaption")) return caption;
+      return null;
+    },
+  };
+  const root = { querySelector() { return lightbox; } };
+  const workbench = {
+    ui: {
+      toolboxPromptReverse: {
+        open: true,
+        activeKind: "video",
+        keyFramePreviews: [{ dataUrl: "data:image/webp;base64,frame" }],
+      },
+    },
+    root,
+    session: { authenticated: true, user: { id: "user-1" } },
+  };
+  const thumbnail = {
+    dataset: { action: "open-toolbox-prompt-reverse-keyframe", toolboxPromptReverseKeyframeIndex: "0" },
+    querySelector(selector) {
+      if (selector === "img") return { src: "data:image/webp;base64,frame", getAttribute() { return this.src; } };
+      return { textContent: "0:00" };
+    },
+  };
+
+  await handleWorkbenchActionForTest(workbench, thumbnail);
+  assert.equal(lightbox.hidden, false);
+  assert.equal(image.src, "data:image/webp;base64,frame");
+  assert.equal(caption.textContent, "关键帧 1 · 0:00");
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "close-toolbox-prompt-reverse-keyframe" },
+  });
+  assert.equal(lightbox.hidden, true);
 });
 
 test("video watermark tracker follows a marked region between frames", () => {

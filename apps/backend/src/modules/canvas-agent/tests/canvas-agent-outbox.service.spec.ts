@@ -40,7 +40,7 @@ test("Canvas Agent outbox publishes a claimed wakeup and marks it dispatched", a
 
   const result = await service.dispatchBatch(10);
 
-  assert.deepEqual(result, { claimed: 1, dispatched: 1 });
+  assert.deepEqual(result, { claimed: 1, dispatched: 1, nextRetryAt: undefined });
   assert.deepEqual(published, [{
     taskId: "20000000-0000-4000-8000-000000000001",
     eventKey: "canvas-agent:task-created",
@@ -48,4 +48,26 @@ test("Canvas Agent outbox publishes a claimed wakeup and marks it dispatched", a
     payload: { reason: "task_created" },
   }]);
   assert.equal(updates.some((sql) => sql.includes("status='dispatched'")), true);
+});
+
+test("Canvas Agent outbox assigns missing legacy conversations to shard zero instead of fixed shard fanout", async () => {
+  let claimSql = "";
+  const db: SqlDatabase = {
+    async query<T>(sql: string) {
+      if (sql.includes("WITH candidates AS")) {
+        claimSql = sql;
+      }
+      return { rows: [] as T[] };
+    },
+  };
+  const service = new CanvasAgentOutboxService({
+    db,
+    workerId: "canvas-agent-test",
+    publisher: { async publish() {} },
+  });
+
+  await service.dispatchBatch();
+
+  assert.match(claimSql, /SET shard_id = 0/);
+  assert.doesNotMatch(claimSql, /hashtextextended|% 16/);
 });

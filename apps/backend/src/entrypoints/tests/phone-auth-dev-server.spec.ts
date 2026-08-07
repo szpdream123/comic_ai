@@ -13863,6 +13863,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       new URL("../../../../../scripts/run-phone-auth-production.mjs", import.meta.url),
       "utf8",
     );
+    const productionRuntimeBuildScript = await readFile(
+      new URL("../../../../../scripts/build-production-runtime.mjs", import.meta.url),
+      "utf8",
+    );
     const packageJson = await readFile(
       new URL("../../../../../package.json", import.meta.url),
       "utf8",
@@ -13896,11 +13900,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(productionLauncherScript, /NODE_ENV\s*=\s*"production"/);
     assert.match(productionLauncherScript, /createCreatorDevServiceSupervisor/);
     assert.match(productionLauncherScript, /generation-outbox/);
-    assert.match(productionLauncherScript, /run-generation-outbox-dispatcher\.mjs/);
+    assert.match(productionRuntimeBuildScript, /run-generation-outbox-dispatcher\.mjs/);
     assert.match(productionLauncherScript, /generation-repair/);
-    assert.match(productionLauncherScript, /run-generation-queue-maintenance\.mjs/);
+    assert.match(productionRuntimeBuildScript, /run-generation-queue-maintenance\.mjs/);
     assert.match(productionLauncherScript, /generation-worker/);
-    assert.match(productionLauncherScript, /run-generation-video-worker\.mjs/);
+    assert.match(productionRuntimeBuildScript, /run-generation-video-worker\.mjs/);
+    assert.match(productionRuntimeBuildScript, /run-canvas-agent-worker\.mjs/);
+    assert.match(productionRuntimeBuildScript, /bundle:\s*true/);
     assert.match(productionLauncherScript, /restartOnFailure:\s*true/);
     assert.match(productionLauncherScript, /server\.close\(\)/);
     assert.doesNotMatch(productionLauncherScript, /npm\s+(start|run)/);

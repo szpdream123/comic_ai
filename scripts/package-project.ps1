@@ -13,6 +13,9 @@ if (-not (Test-Path (Join-Path $repoRoot "apps\backend\vendor\yt-dlp.exe"))) {
   if ($LASTEXITCODE -ne 0) { throw "Unable to prepare the backend video batch resolver" }
 }
 
+& node (Join-Path $repoRoot "scripts\build-production-runtime.mjs")
+if ($LASTEXITCODE -ne 0) { throw "Unable to build the production runtime" }
+
 if (-not $OutputPath) {
   $OutputPath = Join-Path $repoRoot "dist\release\comic-ai-package-$timestamp.zip"
 }

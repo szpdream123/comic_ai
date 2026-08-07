@@ -6,13 +6,12 @@ import {
   loadCanvasAgentShardConfig,
 } from "../canvas-agent-shard.config.ts";
 
-test("Canvas Agent shard configuration uses the 300-concurrency baseline", () => {
+test("Canvas Agent shard configuration keeps a 16-shard ceiling", () => {
   assert.deepEqual(loadCanvasAgentShardConfig({}), {
     enabled: true,
     baseQueueName: "canvas-agent",
-    minimumShardCount: 16,
     shardCapacity: 100,
-    maxActiveShards: 32,
+    maxActiveShards: 16,
     workerConcurrency: 20,
     workerTotalConcurrency: 320,
     discoveryIntervalMs: 10_000,
@@ -33,6 +32,10 @@ test("Canvas Agent shard configuration rejects invalid values", () => {
   assert.throws(
     () => loadCanvasAgentShardConfig({ CANVAS_AGENT_SHARDING_ENABLED: "yes" }),
     /CANVAS_AGENT_SHARDING_ENABLED/,
+  );
+  assert.throws(
+    () => loadCanvasAgentShardConfig({ CANVAS_AGENT_SHARD_COUNT: "17" }),
+    /CANVAS_AGENT_SHARD_COUNT/,
   );
   assert.throws(() => canvasAgentShardQueueName("canvas-agent", -1), /invalid_canvas_agent_shard_id/);
 });

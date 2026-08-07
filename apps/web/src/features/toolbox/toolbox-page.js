@@ -125,6 +125,7 @@ export function closeToolboxPromptReverse(ui = {}) {
     ...resolvePromptReverseState(ui),
     open: false,
     guideOpen: false,
+    activeKeyFrameIndex: -1,
     error: "",
   };
   return ui.toolboxPromptReverse;
@@ -392,7 +393,8 @@ export function setToolboxPromptReverseFile(ui = {}, input = {}) {
     progress: 0,
     error: "",
     result: null,
-    ...(activeKind === "video" ? { pluginOutput: null } : {}),
+    ...(activeKind === "video" ? { pluginOutput: null, keyFramePreviews: [] } : {}),
+    ...(activeKind === "video" ? { activeKeyFrameIndex: -1 } : {}),
   });
 }
 
@@ -407,6 +409,8 @@ export function clearToolboxPromptReverseFile(ui = {}) {
     error: "",
     result: null,
     pluginOutput: null,
+    keyFramePreviews: [],
+    activeKeyFrameIndex: -1,
   });
 }
 
@@ -419,6 +423,19 @@ function renderPromptReverseModal(state) {
   const pluginReady = state.pluginStatus === "ready";
   const pluginBusy = ["checking", "installing", "uninstalling"].includes(state.pluginStatus);
   const result = state.result && typeof state.result === "object" ? state.result : null;
+  const seenKeyFrameTimestamps = new Set();
+  const keyFramePreviews = isVideo && Array.isArray(state.keyFramePreviews)
+    ? state.keyFramePreviews.filter((frame) => {
+      const timestampMs = Math.round(Number(frame?.timestampMs) || 0);
+      if (seenKeyFrameTimestamps.has(timestampMs)) return false;
+      seenKeyFrameTimestamps.add(timestampMs);
+      return true;
+    })
+    : [];
+  const activeKeyFrameIndex = Number.isInteger(state.activeKeyFrameIndex)
+    ? state.activeKeyFrameIndex
+    : -1;
+  const activeKeyFrame = keyFramePreviews[activeKeyFrameIndex] ?? null;
   const loadingTitle = state.status === "decoding"
     ? `本机正在解析视频 ${Math.round(state.progress || 0)}%`
     : state.status === "preparing"
@@ -476,6 +493,13 @@ function renderPromptReverseModal(state) {
             `}
             <input id="toolbox-prompt-reverse-file" class="toolbox-reverse-file-input" type="file" accept="${isVideo ? "video/mp4,video/webm,video/quicktime" : "image/png,image/jpeg,image/webp"}" ${isVideo && !pluginReady ? "disabled" : ""} />
 
+            ${keyFramePreviews.length ? `<section class="toolbox-reverse-keyframes" aria-label="视频关键帧">
+              <header><strong>关键帧</strong><span>画面差异达到 30% 才保留，黑白屏和蒙层自动排除 · ${keyFramePreviews.length} 张</span></header>
+              <div class="toolbox-reverse-keyframe-list">
+                ${keyFramePreviews.map((frame, index) => `<figure><button type="button" class="toolbox-reverse-keyframe-trigger" data-action="open-toolbox-prompt-reverse-keyframe" data-toolbox-prompt-reverse-keyframe-index="${index}" aria-label="放大查看视频关键帧 ${index + 1}"><img src="${escapeAttr(frame.dataUrl)}" alt="视频关键帧 ${index + 1}" /><span class="toolbox-reverse-keyframe-caption">${formatMilliseconds(frame.timestampMs)}</span></button></figure>`).join("")}
+              </div>
+            </section>` : ""}
+
             <div class="toolbox-reverse-notes">
               ${isVideo ? `<label class="toolbox-reverse-segment-setting" for="toolbox-prompt-reverse-segment-duration"><span>分段时长</span><span class="toolbox-reverse-segment-input"><input id="toolbox-prompt-reverse-segment-duration" data-toolbox-prompt-reverse-segment-duration type="number" min="1" max="300" step="1" value="${Math.round(state.segmentDurationSeconds || 15)}" ${isLoading ? "disabled" : ""} /><em>秒/段</em></span><small>按固定时长分境，并分析段间衔接</small></label>` : ""}
               <div><span>提炼内容</span><p>${isVideo ? "主体动作、场景、光影、运镜、风格与画质" : "主体、场景、光影、构图与画面风格"}</p></div>
@@ -505,6 +529,14 @@ function renderPromptReverseModal(state) {
         </div>
         ${state.guideOpen ? renderToolboxGuide("prompt-reverse") : ""}
       </section>
+      ${keyFramePreviews.length ? `<div class="toolbox-reverse-keyframe-lightbox" role="dialog" aria-modal="true" aria-label="放大查看视频关键帧" ${activeKeyFrame ? "" : "hidden"}>
+        <button type="button" class="toolbox-reverse-keyframe-lightbox-backdrop" data-action="close-toolbox-prompt-reverse-keyframe" aria-label="关闭关键帧预览"></button>
+        <figure class="toolbox-reverse-keyframe-lightbox-content">
+          <img ${activeKeyFrame ? `src="${escapeAttr(activeKeyFrame.dataUrl)}"` : ""} alt="${activeKeyFrame ? `视频关键帧 ${activeKeyFrameIndex + 1}` : "视频关键帧"}" />
+          <figcaption>${activeKeyFrame ? `关键帧 ${activeKeyFrameIndex + 1} · ${formatMilliseconds(activeKeyFrame.timestampMs)}` : ""}</figcaption>
+          <button type="button" class="toolbox-reverse-keyframe-lightbox-close" data-action="close-toolbox-prompt-reverse-keyframe" aria-label="关闭关键帧预览" title="关闭">×</button>
+        </figure>
+      </div>` : ""}
     </div>
   `;
 }
@@ -930,6 +962,8 @@ function resolvePromptReverseView(state = {}, kind = "image") {
     result: null,
     error: "",
     pluginOutput: null,
+    keyFramePreviews: [],
+    activeKeyFrameIndex: -1,
     segmentDurationSeconds: kind === "video" ? 15 : 0,
     ...(kind === "video" ? { pluginStatus: "unknown", pluginVersion: "", installProgress: 0, installMessage: "", uninstallPending: false } : {}),
   };
@@ -948,6 +982,8 @@ function resolvePromptReverseView(state = {}, kind = "image") {
     result: state.result ?? null,
     error: String(state.error ?? ""),
     pluginOutput: state.pluginOutput ?? null,
+    keyFramePreviews: Array.isArray(state.keyFramePreviews) ? state.keyFramePreviews : [],
+    activeKeyFrameIndex: Number.isInteger(state.activeKeyFrameIndex) ? state.activeKeyFrameIndex : -1,
     segmentDurationSeconds: Number(state.segmentDurationSeconds ?? 15) || 15,
     ...(kind === "video" ? {
       pluginStatus: String(state.pluginStatus ?? "unknown"),

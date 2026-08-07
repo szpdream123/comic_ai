@@ -11433,6 +11433,7 @@ const WORKBENCH_CHROME_ACTIONS = new Set([
   "copy-task-center-id", "toggle-workbench-theme-menu", "select-workbench-theme",
   "open-credit-ledger", "close-credit-ledger", "refresh-credit-ledger", "change-credit-ledger-page",
   "open-toolbox-prompt-reverse", "close-toolbox-prompt-reverse", "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide",
+  "open-toolbox-prompt-reverse-keyframe", "close-toolbox-prompt-reverse-keyframe",
   "set-toolbox-prompt-reverse-kind", "check-toolbox-prompt-reverse-plugin", "install-toolbox-prompt-reverse-plugin", "uninstall-toolbox-prompt-reverse-plugin",
   "clear-toolbox-prompt-reverse-file", "run-toolbox-prompt-reverse", "copy-toolbox-prompt-reverse",
   "open-toolbox-video-depth", "close-toolbox-video-depth", "open-toolbox-video-depth-guide", "close-toolbox-video-depth-guide", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
@@ -11450,6 +11451,28 @@ const WORKBENCH_CHROME_ACTIONS = new Set([
   "set-canvas-text-skill-source", "set-canvas-text-skill-category", "set-canvas-text-skill-page", "select-canvas-text-skill-draft",
   "clear-canvas-text-skill-draft", "confirm-canvas-text-skill",
 ]);
+
+function syncToolboxPromptReverseKeyFrameLightbox(workbench, target, index = -1) {
+  const lightbox = workbench.root?.querySelector?.(".toolbox-reverse-keyframe-lightbox");
+  const image = lightbox?.querySelector?.(".toolbox-reverse-keyframe-lightbox-content img");
+  const caption = lightbox?.querySelector?.(".toolbox-reverse-keyframe-lightbox-content figcaption");
+  if (!lightbox || !image || !caption) return false;
+  if (index < 0) {
+    lightbox.hidden = true;
+    return true;
+  }
+  const thumbnail = target?.querySelector?.("img");
+  const source = thumbnail?.getAttribute?.("src") || thumbnail?.src || "";
+  const frame = workbench.ui.toolboxPromptReverse?.keyFramePreviews?.[index];
+  const dataUrl = source || String(frame?.dataUrl ?? "");
+  if (!dataUrl) return false;
+  if (image.getAttribute("src") !== dataUrl) image.setAttribute("src", dataUrl);
+  const thumbnailCaption = target?.querySelector?.(".toolbox-reverse-keyframe-caption")?.textContent?.trim();
+  image.alt = `视频关键帧 ${index + 1}`;
+  caption.textContent = `关键帧 ${index + 1}${thumbnailCaption ? ` · ${thumbnailCaption}` : ""}`;
+  lightbox.hidden = false;
+  return true;
+}
 
 export async function handleProductionWorkbenchAction(workbench, target) {
   let action = target.dataset.action;
@@ -11524,7 +11547,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-member-confirm-modal",
     "confirm-script-reader-delete",
     "confirm-member-action",
-    "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide", "open-toolbox-video-depth", "close-toolbox-video-depth", "open-toolbox-video-depth-guide", "close-toolbox-video-depth-guide", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
+    "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide", "open-toolbox-prompt-reverse-keyframe", "close-toolbox-prompt-reverse-keyframe", "open-toolbox-video-depth", "close-toolbox-video-depth", "open-toolbox-video-depth-guide", "close-toolbox-video-depth-guide", "check-toolbox-video-depth-plugin", "install-toolbox-video-depth-plugin", "uninstall-toolbox-video-depth-plugin", "clear-toolbox-video-depth-file", "run-toolbox-video-depth",
     "open-toolbox-watermark-removal", "close-toolbox-watermark-removal", "open-toolbox-watermark-removal-guide", "close-toolbox-watermark-removal-guide", "check-toolbox-watermark-removal-plugin", "install-toolbox-watermark-removal-plugin", "uninstall-toolbox-watermark-removal-plugin", "clear-toolbox-watermark-removal-file", "clear-toolbox-watermark-removal-mask", "set-toolbox-watermark-removal-media", "set-toolbox-watermark-removal-tool", "set-toolbox-watermark-removal-brush", "undo-toolbox-watermark-removal-mask", "run-toolbox-watermark-removal",
     "save-manual-script-analysis",
     "regenerate-manual-script-analysis",
@@ -11681,6 +11704,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "close-toolbox-prompt-reverse") {
+    updateToolboxPromptReverseActiveView(workbench.ui, { activeKeyFrameIndex: -1 });
     closeToolboxPromptReverse(workbench.ui);
     renderWorkbenchChrome(workbench);
     return;
@@ -11689,6 +11713,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "open-toolbox-prompt-reverse-guide" || action === "close-toolbox-prompt-reverse-guide") {
     setToolboxPromptReverseGuideOpen(workbench.ui, action === "open-toolbox-prompt-reverse-guide");
     renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-prompt-reverse-keyframe") {
+    const index = Number.parseInt(target.dataset.toolboxPromptReverseKeyframeIndex ?? "", 10);
+    const keyFrames = workbench.ui.toolboxPromptReverse?.keyFramePreviews;
+    if (!Number.isInteger(index) || index < 0 || !Array.isArray(keyFrames) || index >= keyFrames.length) return;
+    updateToolboxPromptReverseActiveView(workbench.ui, { activeKeyFrameIndex: index });
+    syncToolboxPromptReverseKeyFrameLightbox(workbench, target, index);
+    return;
+  }
+
+  if (action === "close-toolbox-prompt-reverse-keyframe") {
+    updateToolboxPromptReverseActiveView(workbench.ui, { activeKeyFrameIndex: -1 });
+    syncToolboxPromptReverseKeyFrameLightbox(workbench, target, -1);
     return;
   }
 
@@ -11934,6 +11973,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       progress: 0,
       error: "",
       result: null,
+      ...(isVideo ? { keyFramePreviews: [], activeKeyFrameIndex: -1 } : {}),
     });
     renderWorkbenchChrome(workbench);
     let browserAnalysisResult = null;
@@ -11969,6 +12009,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             if (!updateToolboxPromptReverseProgress(workbench)) renderWorkbenchChrome(workbench);
           },
         });
+        updateToolboxPromptReverseActiveView(workbench.ui, {
+          keyFramePreviews: modelInput.keyFramePreviews,
+        });
+        renderWorkbenchChrome(workbench);
         disposeBrowserVideoAnalysisResult(browserAnalysisResult);
         browserAnalysisResult = null;
         updateToolboxPromptReverseActiveView(workbench.ui, { status: "loading", progress: 96 });

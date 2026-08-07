@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "package:zip": "powershell -ExecutionPolicy Bypass -File scripts/package-project.ps1",
+    "build:production-runtime": "node scripts/build-production-runtime.mjs",
     "start": "node scripts/run-phone-auth-production.mjs",
     "test": "node scripts/run-tests.mjs",
     "build:prompt-editor": "esbuild apps/web/src/features/production-workbench/prompt-editor.js --bundle --format=esm --platform=browser --target=es2022 --minify --outfile=apps/web/vendor/prompt-editor.js",

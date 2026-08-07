@@ -5,6 +5,7 @@ node_modules
 tmp-ui-screenshots/
 artifacts/worker-c-preview/
 .local/
+apps/backend/vendor/production-runtime/
 .tmp/
 .tmp-logs/
 .logs/
