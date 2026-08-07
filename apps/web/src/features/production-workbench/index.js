@@ -213,6 +213,7 @@ import {
 } from "./canvas/canvas-state.js";
 
 const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
+const STORYBOARD_IMAGE_PREVIEW_FALLBACK_WINDOW_MS = 800;
 const MEMBERSHIP_PAYMENT_QR_TTL_MS = 10 * 60 * 1000;
 const MEMBERSHIP_PAYMENT_FAST_POLL_MS = 2000;
 const MEMBERSHIP_PAYMENT_SLOW_POLL_MS = 5000;
@@ -2165,6 +2166,33 @@ const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WID
 const EPISODE_QUICK_ASSET_TOGGLE_VIEWPORT_MARGIN = 8;
 const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
+function openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget) {
+  const imageUrl = String(imagePreviewTarget?.dataset?.imagePreviewUrl ?? "").trim();
+  if (!imagePreviewTarget || !imageUrl) {
+    return false;
+  }
+  const imageName = String(imagePreviewTarget.dataset.imagePreviewName ?? "故事板图片");
+  const imageKey = String(imagePreviewTarget.dataset.imagePreviewKey ?? "");
+  workbench.storyboardImagePreviewFocus = { imageUrl, imageName, imageKey };
+  if (
+    workbench.ui.assetInspector?.viewerOnly === true
+    && workbench.ui.assetInspector?.url === imageUrl
+  ) {
+    return true;
+  }
+  void handleProductionWorkbenchAction(workbench, {
+    dataset: {
+      action: "open-storyboard-image-preview",
+      imageUrl,
+      imageName,
+    },
+  }).catch((error) => {
+    workbench.ui.toast = friendlyError(error);
+    render(workbench);
+  });
+  return true;
+}
+
 export async function initProductionWorkbench({ root, session, api, onLogout, onRequireLogin, deferInitialRender = false }) {
   const initialCommunityData = readLingxiCommunityData();
   const workbench = {
@@ -2177,6 +2205,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     librarySearchTimer: null,
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
+    projectLibraryRequestId: 0,
     toastDismissTimers: new Map(),
     toastSequence: 0,
     persistentToastId: null,
@@ -2246,6 +2275,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       selectedProjectIds: [],
       deleteProjectMode: "single",
       deleteProjectIds: [],
+      deleteProjectSubmitting: false,
       projectInteriorSection: deriveInitialProjectInteriorSection(readWorkbenchRouteToken(window.location)),
       projectAssetTab: "character",
       selectedEpisodeAssetKind: null,
@@ -2923,6 +2953,27 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     if (event.__newCanvasHandled === true) return;
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     const actionTarget = eventTarget?.closest?.("[data-action]");
+    const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
+    if (imagePreviewTarget) {
+      const imageUrl = String(imagePreviewTarget.dataset.imagePreviewUrl ?? "").trim();
+      const imageName = String(imagePreviewTarget.dataset.imagePreviewName ?? "").trim();
+      const clickKey = `${imageUrl}\n${imageName}`;
+      const clickedAt = Date.now();
+      const previousClick = workbench.storyboardImagePreviewClickHistory;
+      const isRepeatedClick = Boolean(
+        clickKey.trim()
+        && previousClick?.key === clickKey
+        && clickedAt - previousClick.clickedAt <= STORYBOARD_IMAGE_PREVIEW_FALLBACK_WINDOW_MS
+      );
+      workbench.storyboardImagePreviewClickHistory = { key: clickKey, clickedAt };
+      if ((event.detail >= 2 || isRepeatedClick) && openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)) {
+        workbench.storyboardImagePreviewClickHistory = null;
+        event.preventDefault();
+        if (actionTarget?.dataset?.action !== "toggle-episode-workbench-attachment-selection") {
+          return;
+        }
+      }
+    }
     if (isNativeMediaControlInteraction(eventTarget, event)) {
       return;
     }
@@ -3242,6 +3293,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dblclick", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
+    if (openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)) {
+      event.preventDefault();
+      return;
+    }
     if (eventTarget?.matches?.('[data-role="script-reader-title-input"]')) {
       return;
     }
@@ -3264,6 +3320,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("keydown", (event) => {
     const searchTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (workbench.ui.assetInspector?.viewerOnly === true && event.key === "Tab") {
+      event.preventDefault();
+      workbench.root?.querySelector?.(".asset-image-lightbox-close")?.focus?.();
+      return;
+    }
+    const imagePreviewTarget = searchTarget?.closest?.('[data-image-preview-url]');
+    if (
+      (event.key === "Enter" || event.key === " ")
+      && openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)
+    ) {
+      event.preventDefault();
+      return;
+    }
     if (searchTarget?.matches?.("[data-canvas-zoom-value-input]") && event.key === "Enter") {
       event.preventDefault();
       void handleAction(workbench, {
@@ -3320,6 +3389,25 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") {
+      return;
+    }
+    if (workbench.ui.assetInspector?.viewerOnly === true) {
+      event.preventDefault();
+      const previewFocus = workbench.storyboardImagePreviewFocus;
+      workbench.storyboardImagePreviewClickHistory = null;
+      workbench.storyboardImagePreviewFocus = null;
+      workbench.ui.assetInspector = null;
+      render(workbench);
+      queueMicrotask(() => {
+        const previewTarget = [...(workbench.root?.querySelectorAll?.('[data-image-preview-url]') ?? [])]
+          .find((element) => (
+            previewFocus?.imageKey
+              ? element.dataset.imagePreviewKey === previewFocus.imageKey
+              : element.dataset.imagePreviewUrl === previewFocus?.imageUrl
+                && element.dataset.imagePreviewName === previewFocus?.imageName
+          ));
+        previewTarget?.focus?.();
+      });
       return;
     }
     if (
@@ -4739,6 +4827,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       const assetId = target.dataset.assetId ?? "";
       const assetKind = target.dataset.assetKind ?? "character";
       await saveEpisodeAssetDescription(workbench, assetKind, assetId, target.value);
+      return;
+    }
+    if (target?.matches?.(".episode-replica-asset-name-input")) {
+      const assetId = target.dataset.assetId ?? "";
+      const assetKind = target.dataset.assetKind ?? "character";
+      await saveEpisodeAssetName(workbench, assetKind, assetId, target.value);
       return;
     }
     if (
@@ -11489,6 +11583,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "close-delete-storyboard-image-modal",
     "confirm-delete-storyboard-image",
     "open-generation-image-preview",
+    "open-storyboard-image-preview",
     "close-asset-inspector",
     "open-episode-batch-actions",
     "close-episode-batch-modal",
@@ -15669,23 +15764,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "add-script-reader-section") {
+    if (workbench.scriptReaderSectionCreatePending) {
+      return;
+    }
     const currentSections = Array.isArray(workbench.ui.scriptReaderSections)
       ? workbench.ui.scriptReaderSections
       : [];
     const nextIndex = currentSections.length + 1;
     const draftSection = {
       id: `script-reader-added-${Date.now()}-${nextIndex}`,
-      title: `新增剧情 ${nextIndex}`,
+      title: getNextEpisodeTitle(currentSections),
       text: "请输入新的剧情文本。",
     };
     const scriptId = resolveSelectedScriptId(workbench);
     let nextSection = draftSection;
-    if (scriptId && typeof workbench.api?.createScriptReaderSection === "function") {
-      const response = await workbench.api.createScriptReaderSection(scriptId, {
-        title: draftSection.title,
-        body: draftSection.text,
-      });
-      nextSection = normalizeScriptReaderSection(response?.section ?? response, draftSection);
+    workbench.scriptReaderSectionCreatePending = true;
+    try {
+      if (scriptId && typeof workbench.api?.createScriptReaderSection === "function") {
+        const response = await workbench.api.createScriptReaderSection(scriptId, {
+          title: draftSection.title,
+          body: draftSection.text,
+        });
+        nextSection = normalizeScriptReaderSection(response?.section ?? response, draftSection);
+      }
+    } finally {
+      workbench.scriptReaderSectionCreatePending = false;
     }
     workbench.ui.scriptReaderSections = [...currentSections, nextSection];
     workbench.ui.scriptReaderSectionsLoaded = true;
@@ -15698,13 +15801,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       [nextSection.id]: nextSection.title,
     };
     workbench.ui.selectedScriptEpisodeId = nextSection.id;
-    workbench.ui.editingScriptReaderSectionId = "";
+    workbench.ui.editingScriptReaderSectionId = nextSection.id;
     render(workbench);
     queueMicrotask(() => {
-      const editor = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-editor"]') ?? [])]
+      const titleInput = [...(workbench.root?.querySelectorAll?.('[data-role="script-reader-title-input"]') ?? [])]
         .find((element) => element.dataset.episodeId === nextSection.id);
-      editor?.focus?.();
-      editor?.select?.();
+      titleInput?.focus?.();
+      titleInput?.select?.();
     });
     return;
   }
@@ -18793,7 +18896,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
-  if (action === "open-generation-image-preview") {
+  if (action === "open-generation-image-preview" || action === "open-storyboard-image-preview") {
     const imageUrl = String(target.dataset.imageUrl ?? "").trim();
     if (!imageUrl) {
       return;
@@ -18801,17 +18904,47 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     openAssetInspector(workbench, {
       type: "image",
       viewerOnly: true,
-      name: target.dataset.imageName ?? "生成图片",
+      name: target.dataset.imageName ?? (action === "open-storyboard-image-preview" ? "故事板图片" : "生成图片"),
       url: imageUrl,
       status: "ready",
     });
     render(workbench);
+    queueMicrotask(() => {
+      const lightboxImage = workbench.root?.querySelector?.(".asset-image-lightbox-content img");
+      const syncImageAspectRatio = () => {
+        if (lightboxImage?.naturalWidth > 0 && lightboxImage?.naturalHeight > 0) {
+          lightboxImage.style.setProperty(
+            "--asset-image-lightbox-aspect-ratio",
+            String(lightboxImage.naturalWidth / lightboxImage.naturalHeight),
+          );
+        }
+      };
+      if (lightboxImage?.complete) {
+        syncImageAspectRatio();
+      } else {
+        lightboxImage?.addEventListener?.("load", syncImageAspectRatio, { once: true });
+      }
+      workbench.root?.querySelector?.(".asset-image-lightbox-close")?.focus?.();
+    });
     return;
   }
 
   if (action === "close-asset-inspector") {
+    const previewFocus = workbench.storyboardImagePreviewFocus;
+    workbench.storyboardImagePreviewClickHistory = null;
+    workbench.storyboardImagePreviewFocus = null;
     workbench.ui.assetInspector = null;
     render(workbench);
+    queueMicrotask(() => {
+      const previewTarget = [...(workbench.root?.querySelectorAll?.('[data-image-preview-url]') ?? [])]
+        .find((element) => (
+          previewFocus?.imageKey
+            ? element.dataset.imagePreviewKey === previewFocus.imageKey
+            : element.dataset.imagePreviewUrl === previewFocus?.imageUrl
+              && element.dataset.imagePreviewName === previewFocus?.imageName
+        ));
+      previewTarget?.focus?.();
+    });
     return;
   }
 
@@ -24057,6 +24190,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteProjectId = target.dataset.projectId ?? null;
     workbench.ui.deleteProjectMode = "single";
     workbench.ui.deleteProjectIds = [];
+    workbench.ui.deleteProjectSubmitting = false;
     workbench.ui.projectCardMenuId = null;
     render(workbench);
     return;
@@ -24066,6 +24200,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteProjectId = null;
     workbench.ui.deleteProjectMode = "single";
     workbench.ui.deleteProjectIds = [];
+    workbench.ui.deleteProjectSubmitting = false;
     render(workbench);
     return;
   }
@@ -24075,6 +24210,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.deleteProjectId = null;
       workbench.ui.deleteProjectMode = "single";
       workbench.ui.deleteProjectIds = [];
+      workbench.ui.deleteProjectSubmitting = false;
       workbench.ui.toast = { tone: "error", message: "子账户无法删除项目。" };
       render(workbench);
       return;
@@ -24085,37 +24221,55 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       if (!uniqueProjectIds.length) {
         workbench.ui.deleteProjectMode = "single";
         workbench.ui.deleteProjectIds = [];
+        workbench.ui.deleteProjectSubmitting = false;
         render(workbench);
         return;
       }
+      workbench.ui.deleteProjectSubmitting = true;
       await runAction(workbench, "正在删除所选项目...", async () => {
-        for (const projectId of uniqueProjectIds) {
-          await workbench.api.deleteProject({ projectId });
+        const deletedProjectIds = [];
+        try {
+          for (const projectId of uniqueProjectIds) {
+            await deleteProjectIfPresent(workbench, projectId);
+            deletedProjectIds.push(projectId);
+          }
+        } catch (error) {
+          applyDeletedProjectsToWorkbench(workbench, deletedProjectIds);
+          const deletedIdSet = new Set(deletedProjectIds);
+          workbench.ui.deleteProjectIds = uniqueProjectIds.filter((projectId) => !deletedIdSet.has(projectId));
+          refreshProjectLibraryAfterDelete(workbench);
+          throw error;
         }
-        await refreshProjectLibraryIfAvailable(workbench);
-        if (uniqueProjectIds.includes(workbench.ui.selectedProjectCardId)) {
-          workbench.ui.selectedProjectCardId = null;
-          workbench.ui.projectPanelMode = "library";
-        }
+        applyDeletedProjectsToWorkbench(workbench, uniqueProjectIds);
         workbench.ui.selectedProjectIds = [];
         workbench.ui.deleteProjectId = null;
         workbench.ui.deleteProjectMode = "single";
         workbench.ui.deleteProjectIds = [];
+        workbench.ui.deleteProjectSubmitting = false;
+        refreshProjectLibraryAfterDelete(workbench);
+      }, {
+        successToast: `已删除 ${uniqueProjectIds.length} 个项目。`,
+        onError() {
+          workbench.ui.deleteProjectSubmitting = false;
+        },
       });
       return;
     }
     const projectId = workbench.ui.deleteProjectId;
+    workbench.ui.deleteProjectSubmitting = true;
     await runAction(workbench, "正在删除项目...", async () => {
-      await workbench.api.deleteProject({ projectId });
-      await refreshProjectLibraryIfAvailable(workbench);
+      await deleteProjectIfPresent(workbench, projectId);
+      applyDeletedProjectsToWorkbench(workbench, [projectId]);
       workbench.ui.deleteProjectId = null;
       workbench.ui.deleteProjectMode = "single";
       workbench.ui.deleteProjectIds = [];
-      workbench.ui.selectedProjectIds = (workbench.ui.selectedProjectIds ?? []).filter((id) => id !== projectId);
-      if (workbench.ui.selectedProjectCardId === projectId) {
-        workbench.ui.selectedProjectCardId = null;
-        workbench.ui.projectPanelMode = "library";
-      }
+      workbench.ui.deleteProjectSubmitting = false;
+      refreshProjectLibraryAfterDelete(workbench);
+    }, {
+      successToast: "项目已删除。",
+      onError() {
+        workbench.ui.deleteProjectSubmitting = false;
+      },
     });
     return;
   }
@@ -32050,6 +32204,10 @@ export function saveEpisodeAssetDescriptionForTest(workbench, assetKind, assetId
   return saveEpisodeAssetDescription(workbench, assetKind, assetId, value);
 }
 
+export function saveEpisodeAssetNameForTest(workbench, assetKind, assetId, value) {
+  return saveEpisodeAssetName(workbench, assetKind, assetId, value);
+}
+
 export function isNativeMediaControlInteractionForTest(eventTarget, event) {
   return isNativeMediaControlInteraction(eventTarget, event);
 }
@@ -38855,6 +39013,64 @@ function getProjectCoverUploadLimits() {
   };
 }
 
+const projectCoverCompressionThresholdBytes = 1024 * 1024;
+const projectCoverMaxDimension = 1920;
+const projectCoverWebpQuality = 0.85;
+
+async function prepareProjectCoverUploadFile(file) {
+  const originalSize = Number(file?.size ?? 0);
+  if (
+    !Number.isFinite(originalSize) ||
+    originalSize <= projectCoverCompressionThresholdBytes ||
+    typeof globalThis.createImageBitmap !== "function" ||
+    typeof globalThis.File !== "function"
+  ) {
+    return file;
+  }
+
+  let bitmap = null;
+  try {
+    bitmap = await globalThis.createImageBitmap(file, { imageOrientation: "from-image" });
+    const sourceWidth = Number(bitmap?.width ?? 0);
+    const sourceHeight = Number(bitmap?.height ?? 0);
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+      return file;
+    }
+
+    const scale = Math.min(1, projectCoverMaxDimension / Math.max(sourceWidth, sourceHeight));
+    const canvas = globalThis.document?.createElement?.("canvas");
+    const context = canvas?.getContext?.("2d");
+    if (!canvas || !context || typeof canvas.toBlob !== "function") {
+      return file;
+    }
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    const compressed = await new Promise((resolve) => {
+      canvas.toBlob(resolve, "image/webp", projectCoverWebpQuality);
+    });
+    if (
+      !compressed ||
+      compressed.type !== "image/webp" ||
+      compressed.size <= 0 ||
+      compressed.size >= originalSize
+    ) {
+      return file;
+    }
+
+    const baseName = String(file?.name ?? "project-cover").replace(/\.[^.\\/]+$/, "") || "project-cover";
+    return new File([compressed], `${baseName}.webp`, {
+      type: "image/webp",
+      lastModified: Number.isFinite(Number(file?.lastModified)) ? Number(file.lastModified) : Date.now(),
+    });
+  } catch {
+    return file;
+  } finally {
+    bitmap?.close?.();
+  }
+}
+
 function openBatchEpisodeFlow(workbench) {
   workbench.ui.projectInteriorSection = "episodes";
   workbench.ui.isSingleEpisodeModalOpen = false;
@@ -40640,9 +40856,12 @@ function buildTeamAssetLocalUploadToast(acceptedCount, skippedCount, suffix) {
 }
 
 export async function uploadProjectCoverFile(workbench, file, projectId) {
-  const upload = await uploadLocalFile(workbench, file, "project-covers", {
+  const uploadLimits = getProjectCoverUploadLimits();
+  validateUploadFile(file, uploadLimits);
+  const uploadFile = await prepareProjectCoverUploadFile(file);
+  const upload = await uploadLocalFile(workbench, uploadFile, "project-covers", {
     projectId,
-    uploadLimits: getProjectCoverUploadLimits(),
+    uploadLimits,
   });
   const result = await workbench.api.updateProjectCover({
     projectId,
@@ -41900,7 +42119,7 @@ function resolveEpisodeAssetSelectionContextFromDom(workbench) {
   return {
     assetTab,
     selectedAssetId,
-    selectedAssetName: nameNode?.textContent?.trim() ?? null,
+    selectedAssetName: nameNode?.value?.trim() ?? nameNode?.textContent?.trim() ?? null,
     selectedAssetDescription: descriptionInput?.value?.trim() ?? null,
     selectedAssetPreview: previewImage?.getAttribute("src")?.trim() ?? null,
     selectedAssetPreviewMarkup: previewMarkup,
@@ -52545,6 +52764,48 @@ async function saveEpisodeAssetDescription(workbench, assetKind, assetId, value)
   render(workbench);
 }
 
+async function saveEpisodeAssetName(workbench, assetKind, assetId, value) {
+  const name = String(value ?? "").trim();
+  const currentAssets = assetKind === "other"
+    ? workbench.ui.importedAssets?.other?.[normalizeProjectOtherAssetMediaType(workbench.ui.projectOtherAssetMediaType, "audio")] ?? []
+    : workbench.ui.importedAssets?.[assetKind] ?? [];
+  const targetAsset =
+    currentAssets.find((item) => matchesAssetRecordId(item, assetId)) ??
+    collectEpisodeAssetCandidates(workbench, assetKind).find((item) => matchesAssetRecordId(item, assetId)) ??
+    null;
+  if (!targetAsset) {
+    return;
+  }
+  if (!name) {
+    workbench.ui.toast = "资产名称不能为空。";
+    render(workbench);
+    return;
+  }
+
+  const shouldPersist =
+    isRealEpisodeWorkbench(workbench) &&
+    typeof workbench.api.updateEpisodeAsset === "function" &&
+    workbench.ui.selectedEpisodeId &&
+    (targetAsset.assetId || isUuidLike(assetId));
+  if (shouldPersist) {
+    try {
+      await workbench.api.updateEpisodeAsset(
+        workbench.ui.selectedEpisodeId,
+        targetAsset.assetId ?? assetId,
+        { name },
+      );
+    } catch (_error) {
+      workbench.ui.toast = "资产名称保存失败。";
+      render(workbench);
+      return;
+    }
+  }
+
+  syncProjectAssetNameState(workbench, assetKind, assetId, name);
+  workbench.ui.toast = "修改成功";
+  render(workbench);
+}
+
 async function saveStoryboardDescriptionInline(workbench, storyboardId, value) {
   const description = String(value ?? "").trim();
   const storyboards = getActiveStoryboards(workbench);
@@ -54343,7 +54604,16 @@ function getEpisodeTimestamp(episode) {
 }
 
 function getNextEpisodeTitle(episodes) {
-  const nextIndex = (Array.isArray(episodes) ? episodes.length : 0) + 1;
+  const normalizedEpisodes = Array.isArray(episodes) ? episodes : [];
+  const highestIndex = normalizedEpisodes.reduce((currentMax, episode) => {
+    const sequence = Number(episode?.sequence);
+    const titleMatch = String(episode?.title ?? "").match(/^第\s*(\d+|[一二三四五六七八九十百千两零〇]+)\s*集/);
+    const titleIndex = titleMatch
+      ? (/^\d+$/.test(titleMatch[1]) ? Number(titleMatch[1]) : parseSingleEpisodeAiChineseNumber(titleMatch[1]))
+      : 0;
+    return Math.max(currentMax, Number.isInteger(sequence) && sequence > 0 ? sequence : 0, titleIndex);
+  }, normalizedEpisodes.length);
+  const nextIndex = highestIndex + 1;
   return `第 ${nextIndex} 集`;
 }
 
@@ -56146,6 +56416,8 @@ async function buildOfficialAssetImportPayload(workbench, record, assetKind) {
 }
 
 async function syncProjectLibraryFromApi(workbench, options = {}) {
+  const requestId = (workbench.projectLibraryRequestId ?? 0) + 1;
+  workbench.projectLibraryRequestId = requestId;
   const requestedPage = Math.max(1, Math.floor(Number(options.page ?? workbench.ui.projectLibraryPage ?? 1)));
   const keyword = String(options.keyword ?? workbench.ui.projectSearchQuery ?? "").trim();
   const pageSize = normalizeProjectLibraryPageSize(options.pageSize ?? workbench.ui.projectLibraryPagination?.pageSize);
@@ -56154,6 +56426,9 @@ async function syncProjectLibraryFromApi(workbench, options = {}) {
     pageSize,
     keyword,
   });
+  if (workbench.projectLibraryRequestId !== requestId) {
+    return false;
+  }
   const projects = Array.isArray(payload.projects)
     ? payload.projects.map((project) => mapProjectRecordToCard(project))
     : [];
@@ -56169,6 +56444,7 @@ async function syncProjectLibraryFromApi(workbench, options = {}) {
   if (options.includeAssets !== false) {
     await syncProjectLibraryAssets(workbench);
   }
+  return true;
 }
 
 function normalizeProjectLibraryPagination(value, fallback = {}) {
@@ -56225,6 +56501,73 @@ async function refreshProjectLibraryIfAvailable(workbench) {
     return;
   }
   await syncProjectLibraryFromApi(workbench);
+}
+
+function removeDeletedProjectsFromLibrary(workbench, projectIds) {
+  const deletedIds = new Set(projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean));
+  const currentProjects = Array.isArray(workbench.ui.projectLibrary) ? workbench.ui.projectLibrary : [];
+  const nextProjects = currentProjects.filter((project) => !deletedIds.has(String(project?.id ?? "")));
+  const removedCount = currentProjects.length - nextProjects.length;
+  workbench.ui.projectLibrary = nextProjects;
+
+  if (removedCount <= 0) {
+    return;
+  }
+  const currentPagination = workbench.ui.projectLibraryPagination ?? {};
+  const pageSize = normalizeProjectLibraryPageSize(currentPagination.pageSize);
+  const total = Math.max(0, Number(currentPagination.total ?? currentProjects.length) - removedCount);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(totalPages, Math.max(1, Number(currentPagination.page ?? workbench.ui.projectLibraryPage ?? 1)));
+  workbench.ui.projectLibraryPagination = {
+    ...currentPagination,
+    page,
+    pageSize,
+    total,
+    totalPages,
+  };
+  workbench.ui.projectLibraryPage = page;
+}
+
+async function deleteProjectIfPresent(workbench, projectId) {
+  try {
+    await workbench.api.deleteProject({ projectId });
+  } catch (error) {
+    const errorText = [
+      error?.errorCode,
+      error?.code,
+      error?.details?.reason,
+      error instanceof Error ? error.message : error,
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (!errorText.includes("project_not_found")) {
+      throw error;
+    }
+  }
+}
+
+function applyDeletedProjectsToWorkbench(workbench, projectIds) {
+  const deletedIds = new Set(projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean));
+  removeDeletedProjectsFromLibrary(workbench, [...deletedIds]);
+  workbench.ui.selectedProjectIds = (workbench.ui.selectedProjectIds ?? [])
+    .filter((projectId) => !deletedIds.has(String(projectId ?? "")));
+  if (deletedIds.has(String(workbench.ui.selectedProjectCardId ?? ""))) {
+    workbench.ui.selectedProjectCardId = null;
+    workbench.ui.projectPanelMode = "library";
+  }
+}
+
+function refreshProjectLibraryAfterDelete(workbench) {
+  if (typeof workbench.api?.getProjects !== "function") {
+    return;
+  }
+  runLazyWorkbenchTask(workbench, "project library after delete", async () => {
+    const refreshed = await syncProjectLibraryFromApi(workbench, {
+      page: workbench.ui.projectLibraryPage,
+      includeAssets: false,
+    });
+    if (refreshed) {
+      render(workbench);
+    }
+  });
 }
 
 async function syncCanvasProjectsFromApi(workbench) {

@@ -1341,7 +1341,7 @@ describe("episode workbench asset list layout", () => {
   });
 
 
-  it("renders asset selection and hover tools as compact top-corner controls", () => {
+  it("renders asset selection and action tools in stable header rows", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
@@ -1358,11 +1358,14 @@ describe("episode workbench asset list layout", () => {
 
     assert.match(pickBlock, /width:\s*1rem/);
     assert.match(pickBlock, /height:\s*1rem/);
+    assert.match(pickBlock, /position:\s*static/);
     assert.match(hoverToolsBlock, /display:\s*inline-flex/);
-    assert.match(hoverToolsBlock, /top:\s*0\.42rem/);
-    assert.match(hoverToolsBlock, /right:\s*0\.42rem/);
+    assert.match(hoverToolsBlock, /position:\s*static/);
+    assert.match(hoverToolsBlock, /margin-left:\s*auto/);
     assert.match(hoverToolsBlock, /grid-auto-flow:\s*column/);
-    assert.match(hoverVisibleBlock, /transform:\s*translateY\(0\)/);
+    assert.match(hoverToolsBlock, /opacity:\s*1/);
+    assert.match(hoverToolsBlock, /pointer-events:\s*auto/);
+    assert.match(hoverVisibleBlock, /transform:\s*none/);
   });
 
   it("aligns storyboard selection and add delete controls with asset card controls", () => {
@@ -1528,7 +1531,7 @@ describe("episode workbench asset list layout", () => {
     assert.match(referenceBlock, /\.episode-replica-result-panel\s*\{[\s\S]*?max-width:\s*28\.75rem/);
   });
 
-  it("keeps storyboard and asset cards compact while exposing floating controls", () => {
+  it("keeps storyboard cards compact while giving asset actions enough room", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
@@ -1538,11 +1541,12 @@ describe("episode workbench asset list layout", () => {
     )?.groups?.body ?? "";
 
     assert.match(compactBlock, /\.episode-replica-asset-grid,\s*\.episode-replica-storyboard-grid\s*\{[\s\S]*?overflow:\s*visible/);
-    assert.match(compactBlock, /\.episode-replica-asset-card\s*\{[\s\S]*?height:\s*14\.2rem/);
+    assert.match(compactBlock, /\.episode-replica-asset-card\s*\{[\s\S]*?height:\s*16\.5rem/);
     assert.match(compactBlock, /\.episode-replica-asset-card\s*\{[\s\S]*?overflow:\s*visible/);
     assert.match(compactBlock, /\.episode-replica-layout\.storyboard-mode \.episode-replica-shot-card\s*\{[\s\S]*?height:\s*13\.2rem/);
     assert.match(compactBlock, /\.episode-replica-shot-card\s*\{[\s\S]*?overflow:\s*visible/);
     assert.match(compactBlock, /\.episode-replica-shot-card-body\s*\{[\s\S]*?overflow:\s*hidden/);
+    assert.match(compactBlock, /\.episode-replica-asset-card \.episode-replica-asset-hover-tools\s*\{[\s\S]*?position:\s*static/);
     assert.match(compactBlock, /\.episode-replica-asset-card \.episode-replica-asset-hover-tools\s*\{[\s\S]*?z-index:\s*8/);
     assert.match(compactBlock, /\.episode-replica-shot-shell \.episode-replica-shot-hover-tools\s*\{[\s\S]*?z-index:\s*8/);
   });
@@ -2815,6 +2819,162 @@ describe("workbench generation payloads and inspectors", () => {
       dataset: { action: "close-asset-inspector" },
     });
     assert.equal(workbench.ui.assetInspector, null);
+  });
+
+  it("marks storyboard and composer image thumbnails for double-click preview", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const storyboard = {
+      ...addStoryboard([])[0],
+      displayTitle: "云海剑阵",
+      previewImageUrl: "/uploads/storyboards/cloud-sword-grid.png",
+      generationState: {
+        quickReferenceItems: [
+          {
+            id: "quick-storyboard-image",
+            kind: "image",
+            name: "故事板参考图",
+            url: "/uploads/references/storyboard-reference.png",
+          },
+        ],
+      },
+    };
+    const cardHtml = renderStoryboardCard(storyboard, true, false, {}, "storyboard");
+    const promptDockHtml = renderPromptDock({
+      selectedStoryboard: storyboard,
+      selectedModelId: "vidu-q3-pro",
+      prompt: "",
+      busy: false,
+      generationControls: {},
+      generationUiState: {},
+      mediaMode: "video",
+      videoMode: "reference-video",
+      attachments: [
+        {
+          id: "uploaded-storyboard-image",
+          kind: "image",
+          type: "image",
+          name: "上传故事板.png",
+          url: "/uploads/references/uploaded-storyboard.png",
+        },
+        {
+          id: "reference-video",
+          kind: "video",
+          type: "video",
+          name: "参考视频.mp4",
+          url: "/uploads/references/reference-video.mp4",
+        },
+      ],
+      selectedAttachmentIds: [],
+      scopeMode: "storyboard",
+    });
+
+    assert.match(
+      cardHtml,
+      /data-image-preview-url="\/uploads\/storyboards\/cloud-sword-grid\.png"[^>]*data-image-preview-name="分镜 1: 云海剑阵"[^>]*data-image-preview-key="storyboard:[^"]+"[^>]*role="button"[^>]*tabindex="0"/,
+    );
+    assert.match(
+      promptDockHtml,
+      /data-image-preview-url="\/uploads\/references\/storyboard-reference\.png"[^>]*data-image-preview-name="故事板参考图"/,
+    );
+    assert.match(
+      promptDockHtml,
+      /data-image-preview-url="\/uploads\/references\/uploaded-storyboard\.png"[^>]*data-image-preview-name="上传故事板\.png"[^>]*data-image-preview-key="attachment:uploaded-storyboard-image"/,
+    );
+    assert.doesNotMatch(promptDockHtml, /data-image-preview-url="\/uploads\/references\/reference-video\.mp4"/);
+    const lightboxContentBlock = css.match(/\.asset-image-lightbox-content\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const lightboxImageBlock = css.match(/\.asset-image-lightbox-content img\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    assert.match(lightboxContentBlock, /width:\s*calc\(100vw - 3rem\)/);
+    assert.match(lightboxContentBlock, /height:\s*calc\(100vh - 3rem\)/);
+    assert.match(lightboxContentBlock, /pointer-events:\s*none/);
+    assert.match(lightboxImageBlock, /width:\s*min\(/);
+    assert.match(lightboxImageBlock, /--asset-image-lightbox-aspect-ratio/);
+    assert.match(lightboxImageBlock, /height:\s*auto/);
+    assert.match(lightboxImageBlock, /max-width:\s*100%/);
+    assert.match(lightboxImageBlock, /max-height:\s*100%/);
+    assert.match(lightboxImageBlock, /object-fit:\s*contain/);
+    assert.match(lightboxImageBlock, /pointer-events:\s*auto/);
+  });
+
+  it("opens storyboard image previews through the delegated double-click action", async () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const doubleClickBlock = source.match(/root\.addEventListener\("dblclick"[\s\S]*?root\.addEventListener\("keydown"/)?.[0] ?? "";
+    const clickBlock = source.match(/root\.addEventListener\("click"[\s\S]*?root\.addEventListener\("contextmenu"/)?.[0] ?? "";
+    assert.match(clickBlock, /storyboardImagePreviewClickHistory/);
+    assert.match(clickBlock, /event\.detail >= 2/);
+    assert.match(clickBlock, /storyboardImagePreviewClickHistory = null/);
+    assert.match(clickBlock, /toggle-episode-workbench-attachment-selection/);
+    assert.match(doubleClickBlock, /closest\?\.\('\[data-image-preview-url\]'\)/);
+    assert.match(doubleClickBlock, /openStoryboardImagePreviewFromTarget/);
+    assert.match(source, /action:\s*"open-storyboard-image-preview"/);
+
+    const workbench = {
+      state: {
+        project: {
+          id: "project-1",
+          name: "try",
+          phase: "asset_review",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        },
+        assetReview: { readyForGeneration: false },
+        assetCandidates: { characters: [], scenes: [], props: [] },
+        calibration: null,
+        shots: [],
+        exportPreview: null,
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      root: { innerHTML: "", querySelector: () => null },
+      ui: {
+        activeNavTab: "project",
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        selectedEpisodeId: "episode-new",
+        episodeMediaMode: "image",
+        storyboards: [],
+        episodeStoryboardMap: { "episode-new": [] },
+        busy: true,
+      },
+    };
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: {
+        action: "open-storyboard-image-preview",
+        imageUrl: "/uploads/storyboards/cloud-sword-grid.png",
+        imageName: "分镜 1: 云海剑阵",
+      },
+    });
+
+    assert.deepEqual(workbench.ui.assetInspector, {
+      type: "image",
+      viewerOnly: true,
+      name: "分镜 1: 云海剑阵",
+      url: "/uploads/storyboards/cloud-sword-grid.png",
+      status: "ready",
+    });
+    assert.match(workbench.root.innerHTML, /class="modal-backdrop storyboard-description-backdrop asset-image-lightbox"/);
+    assert.match(workbench.root.innerHTML, /class="asset-image-lightbox-close"/);
+  });
+
+  it("closes the storyboard image preview with Escape", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const keydownBlock = source.match(/root\.addEventListener\("keydown"[\s\S]*?root\.addEventListener\("input"/)?.[0] ?? "";
+
+    assert.match(keydownBlock, /event\.key === "Escape"/);
+    assert.match(keydownBlock, /event\.key === "Enter" \|\| event\.key === " "/);
+    assert.match(keydownBlock, /event\.key === "Tab"/);
+    assert.match(keydownBlock, /asset-image-lightbox-close/);
+    assert.match(keydownBlock, /workbench\.ui\.assetInspector\?\.viewerOnly === true/);
+    assert.match(keydownBlock, /workbench\.ui\.assetInspector = null/);
+    assert.match(source, /storyboardImagePreviewFocus/);
+    assert.match(source, /\.focus\?\.\(\)/);
   });
 
   it("builds image generation payload with visible controls and references", () => {
@@ -21403,6 +21563,130 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.state.project.coverStorageObjectId, "storage-1");
   });
 
+  it("compresses a large project cover before uploading it", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const previousDocument = globalThis.document;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+      lastModified: 123,
+    });
+    const bitmap = { width: 4000, height: 2000, closeCalled: false, close() { this.closeCalled = true; } };
+    const drawCalls = [];
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage: (...args) => drawCalls.push(args) }),
+      toBlob: (callback, type, quality) => {
+        assert.equal(type, "image/webp");
+        assert.equal(quality, 0.85);
+        callback(new Blob([new Uint8Array(400 * 1024)], { type }));
+      },
+    };
+    let uploadedFile = null;
+    globalThis.createImageBitmap = async () => bitmap;
+    globalThis.document = { createElement: (tagName) => tagName === "canvas" ? canvas : null };
+
+    try {
+      await uploadProjectCoverFile({
+        state: {},
+        ui: {},
+        api: {
+          uploadFile: async (file) => {
+            uploadedFile = file;
+            return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+          },
+          updateProjectCover: async () => ({}),
+        },
+      }, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+      globalThis.document = previousDocument;
+    }
+
+    assert.equal(canvas.width, 1920);
+    assert.equal(canvas.height, 960);
+    assert.equal(drawCalls.length, 1);
+    assert.equal(uploadedFile.name, "cover.webp");
+    assert.equal(uploadedFile.type, "image/webp");
+    assert.equal(uploadedFile.size, 400 * 1024);
+    assert.equal(uploadedFile.lastModified, 123);
+    assert.equal(bitmap.closeCalled, true);
+  });
+
+  it("falls back to the original project cover when browser compression fails", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+    });
+    let uploadedFile = null;
+    let decodeAttempts = 0;
+    globalThis.createImageBitmap = async () => {
+      decodeAttempts += 1;
+      throw new Error("decode_failed");
+    };
+
+    try {
+      await uploadProjectCoverFile({
+        state: {},
+        ui: {},
+        api: {
+          uploadFile: async (file) => {
+            uploadedFile = file;
+            return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+          },
+          updateProjectCover: async () => ({}),
+        },
+      }, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+    }
+
+    assert.equal(decodeAttempts, 1);
+    assert.equal(uploadedFile, original);
+  });
+
+  it("keeps the original project cover when WebP encoding is not smaller", async () => {
+    const previousCreateImageBitmap = globalThis.createImageBitmap;
+    const previousDocument = globalThis.document;
+    const original = new File([new Uint8Array(2 * 1024 * 1024)], "cover.png", {
+      type: "image/png",
+    });
+    const bitmap = { width: 2000, height: 1000, close() {} };
+    let encodedBlob = new Blob([new Uint8Array(original.size)], { type: "image/webp" });
+    const canvas = {
+      getContext: () => ({ drawImage() {} }),
+      toBlob: (callback) => callback(encodedBlob),
+    };
+    let uploadedFile = null;
+    globalThis.createImageBitmap = async () => bitmap;
+    globalThis.document = { createElement: (tagName) => tagName === "canvas" ? canvas : null };
+    const workbench = {
+      state: {},
+      ui: {},
+      api: {
+        uploadFile: async (file) => {
+          uploadedFile = file;
+          return { upload: { uploadSessionId: "session-1", storageObjectId: "storage-1" } };
+        },
+        updateProjectCover: async () => ({}),
+      },
+    };
+
+    try {
+      await uploadProjectCoverFile(workbench, original, "project-1");
+      assert.equal(uploadedFile, original);
+
+      encodedBlob = new Blob([new Uint8Array(400 * 1024)], { type: "image/png" });
+      uploadedFile = null;
+      await uploadProjectCoverFile(workbench, original, "project-1");
+    } finally {
+      globalThis.createImageBitmap = previousCreateImageBitmap;
+      globalThis.document = previousDocument;
+    }
+
+    assert.equal(uploadedFile, original);
+  });
+
   it("renders the rename modal when renaming a project", () => {
     const state = buildProjectState();
     const html = renderProductionWorkbench({
@@ -27651,9 +27935,9 @@ describe("production workbench project tab", () => {
     assert.equal((html.match(/episode-replica-frame-slot selected/g) ?? []).length, 0);
     assert.equal((html.match(/episode-replica-ref-card quick-reference/g) ?? []).length, 2);
     assert.equal((html.match(/episode-replica-ref-card attachment/g) ?? []).length, 1);
-    assert.equal((html.match(/\/uploads\/quick-ref-1\.png/g) ?? []).length, 1);
-    assert.equal((html.match(/\/uploads\/quick-ref-2\.png/g) ?? []).length, 1);
-    assert.equal((html.match(/\/uploads\/quick-ref-3\.png/g) ?? []).length, 1);
+    assert.equal((html.match(/<img[^>]*src="\/uploads\/quick-ref-1\.png"/g) ?? []).length, 1);
+    assert.equal((html.match(/<img[^>]*src="\/uploads\/quick-ref-2\.png"/g) ?? []).length, 1);
+    assert.equal((html.match(/<img[^>]*src="\/uploads\/quick-ref-3\.png"/g) ?? []).length, 1);
   });
 
   it("renders image result actions with set-storyboard-image and timeout failure copy", () => {
@@ -42697,7 +42981,7 @@ describe("production workbench project tab", () => {
     );
     assert.match(
       css,
-      /@media \(min-width:\s*961px\)[\s\S]*?\.episode-replica-asset-empty\s*\{[^}]*height:\s*14\.2rem[^}]*min-height:\s*14\.2rem[^}]*max-height:\s*14\.2rem/,
+      /@media \(min-width:\s*961px\)[\s\S]*?\.episode-replica-asset-empty\s*\{[^}]*height:\s*16\.5rem[^}]*min-height:\s*16\.5rem[^}]*max-height:\s*16\.5rem/,
     );
     assert.match(
       css,
@@ -42778,12 +43062,18 @@ describe("production workbench project tab", () => {
       /episode-replica-asset-dialog-import[^>]*data-action="quick-append-selected-asset"[^>]*data-asset-id="episode-prop-1"[^>]*data-asset-kind="prop"[^>]*>引入到对话框<\/button>/,
     );
     assert.doesNotMatch(html, /class="episode-replica-mini"[^>]*data-action="quick-append-selected-asset"/);
+    assert.match(html, /episode-replica-asset-title-row[\s\S]*episode-replica-asset-name-input/);
+    assert.match(html, /episode-replica-asset-actions-row[\s\S]*episode-replica-asset-dialog-import/);
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    assert.match(css, /\.episode-replica-asset-dialog-import\s*\{[^}]*position:\s*absolute[^}]*left:\s*50%[^}]*transform:\s*translateX\(-50%\)/);
-    assert.match(css, /\.episode-replica-asset-card \.name\s*\{[^}]*padding-right:\s*10\.75rem/);
+    assert.match(css, /\.episode-replica-asset-card-head\s*\{[^}]*display:\s*grid/);
+    assert.match(css, /\.episode-replica-asset-title-row\s*\{[^}]*grid-template-columns:\s*1rem\s+minmax\(0,\s*1fr\)/);
+    assert.match(css, /\.episode-replica-asset-actions-row\s*\{[^}]*display:\s*flex[^}]*justify-content:\s*space-between/);
+    assert.match(css, /@media \(max-width:\s*960px\)[\s\S]*?\.episode-replica-asset-actions-row\s*\{[^}]*flex-wrap:\s*wrap/);
+    assert.doesNotMatch(css, /\.episode-replica-asset-dialog-import\s*\{[^}]*position:\s*absolute/);
+    assert.doesNotMatch(css, /\.episode-replica-asset-card \.name\s*\{[^}]*padding-right:\s*10\.75rem/);
     const assetCreateButtons = [...html.matchAll(/class="episode-replica-asset-empty"[^>]*data-asset-kind="([^"]+)"/g)];
     assert.deepEqual(assetCreateButtons.map((match) => match[1]), ["character", "scene", "prop"]);
     assert.ok(assetCreateButtons[0].index > html.indexOf('data-asset-card-id="episode-character-1"'));
@@ -48481,6 +48771,182 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-deepseek-new-1");
   });
 
+  it("adds script reader sections as the next numbered episodes and opens title editing", async () => {
+    const createCalls = [];
+    const focusedTitleIds = [];
+    const selectedTitleIds = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(scriptId, input) {
+          createCalls.push({ scriptId, input });
+          return {
+            section: {
+              id: `script-section-${createCalls.length + 1}`,
+              title: input.title,
+              body: input.body,
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "script",
+        scriptDetailOpen: true,
+        selectedScriptId: "script-1",
+        selectedScriptEpisodeId: "script-section-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [{ id: "script-section-1", title: "第 1 集", text: "第一集正文" }],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll(selector) {
+          if (selector === '[data-role="script-reader-title-input"]') {
+            return workbench.ui.scriptReaderSections.map((section) => ({
+              dataset: { episodeId: section.id },
+              focus() {
+                focusedTitleIds.push(section.id);
+              },
+              select() {
+                selectedTitleIds.push(section.id);
+              },
+            }));
+          }
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.deepEqual(createCalls.map((call) => call.input.title), ["第 2 集", "第 3 集"]);
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), [
+      "第 1 集",
+      "第 2 集",
+      "第 3 集",
+    ]);
+    assert.equal(workbench.ui.selectedScriptEpisodeId, "script-section-3");
+    assert.equal(workbench.ui.editingScriptReaderSectionId, "script-section-3");
+    assert.deepEqual(focusedTitleIds, ["script-section-2", "script-section-3"]);
+    assert.deepEqual(selectedTitleIds, ["script-section-2", "script-section-3"]);
+  });
+
+  it("continues script reader numbering after a middle episode is deleted", async () => {
+    const createTitles = [];
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createScriptReaderSection(_scriptId, input) {
+          createTitles.push(input.title);
+          return {
+            section: { id: "script-section-4", title: input.title, body: input.body },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        selectedScriptId: "script-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [
+          { id: "script-section-1", title: "第 1 集", text: "第一集正文" },
+          { id: "script-section-3", title: "第三集终局", text: "第三集正文" },
+        ],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.deepEqual(createTitles, ["第 4 集"]);
+  });
+
+  it("ignores repeated script reader add actions while creation is pending", async () => {
+    const createCalls = [];
+    let resolveCreate;
+    const createResult = new Promise((resolve) => {
+      resolveCreate = resolve;
+    });
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createScriptReaderSection(scriptId, input) {
+          createCalls.push({ scriptId, input });
+          return createResult;
+        },
+      },
+      ui: buildProjectUi({
+        selectedScriptId: "script-1",
+        scriptReaderSectionsLoaded: true,
+        scriptReaderSections: [{ id: "script-section-1", title: "第 1 集", text: "第一集正文" }],
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    const firstAdd = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    const repeatedAdd = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+
+    assert.equal(createCalls.length, 1);
+    resolveCreate({
+      section: { id: "script-section-2", title: "第 2 集", body: "请输入新的剧情文本。" },
+    });
+    await Promise.all([firstAdd, repeatedAdd]);
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), ["第 1 集", "第 2 集"]);
+
+    workbench.api.createScriptReaderSection = async () => {
+      throw new Error("create_failed");
+    };
+    await assert.rejects(
+      handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "add-script-reader-section" },
+      }),
+      /create_failed/,
+    );
+    assert.equal(workbench.scriptReaderSectionCreatePending, false);
+
+    workbench.api.createScriptReaderSection = async (_scriptId, input) => ({
+      section: { id: "script-section-3", title: input.title, body: input.body },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "add-script-reader-section" },
+    });
+    assert.deepEqual(workbench.ui.scriptReaderSections.map((section) => section.title), [
+      "第 1 集",
+      "第 2 集",
+      "第 3 集",
+    ]);
+  });
+
   it("regenerates manual DeepSeek script analysis with the previous text and skill", async () => {
     const previewCalls = [];
     const workbench = {
@@ -53869,6 +54335,56 @@ describe("asset import modal", () => {
     assert.match(createModalBlock, /min-height:\s*0/);
     assert.match(createPreviewBlock, /display:\s*none/);
     assert.match(createPromptBlock, /min-height:\s*15rem/);
+  });
+
+  it("keeps storyboard generator footer controls readable", () => {
+    const projectDetailSource = readFileSync(
+      new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
+      "utf8",
+    );
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(
+      projectDetailSource,
+      /asset-generator-modal asset-generator-modal-create \$\{isStoryboardGenerator \? "is-storyboard-generator" : ""\}/,
+    );
+
+    const storyboardModalBlock = css.match(
+      /\.asset-generator-modal-create\.is-storyboard-generator:not\(\.has-task-overview\)\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardControlsBlock = css.match(
+      /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-composer-controls\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const storyboardStyleTriggerBlock = css.match(
+      /\.asset-generator-modal-create\.is-storyboard-generator \.episode-image-style-skill-trigger\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const responsiveStoryboardControlsBlock = [
+      ...css.matchAll(
+        /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-composer-controls\s*\{(?<body>[^}]*)\}/g,
+      ),
+    ].at(-1)?.groups?.body ?? "";
+    const responsiveStoryboardPromptShellBlock = [
+      ...css.matchAll(
+        /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-prompt-shell\s*\{(?<body>[^}]*)\}/g,
+      ),
+    ].at(-1)?.groups?.body ?? "";
+    const responsiveStoryboardPromptCountBlock = [
+      ...css.matchAll(
+        /\.asset-generator-modal-create\.is-storyboard-generator \.asset-generator-prompt small\s*\{(?<body>[^}]*)\}/g,
+      ),
+    ].at(-1)?.groups?.body ?? "";
+
+    assert.match(storyboardModalBlock, /width:\s*min\(56rem,\s*calc\(100vw - 3rem\)\)/);
+    assert.match(storyboardControlsBlock, /display:\s*grid/);
+    assert.match(storyboardControlsBlock, /grid-template-columns:\s*minmax\(8\.5rem,\s*1\.2fr\)\s+minmax\(8rem,\s*auto\)\s+repeat\(2,\s*minmax\(8rem,\s*1fr\)\)/);
+    assert.match(storyboardStyleTriggerBlock, /width:\s*100%/);
+    assert.match(storyboardStyleTriggerBlock, /max-width:\s*none/);
+    assert.match(responsiveStoryboardControlsBlock, /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    assert.match(responsiveStoryboardPromptShellBlock, /padding-bottom:\s*10rem/);
+    assert.match(responsiveStoryboardPromptCountBlock, /bottom:\s*10\.2rem/);
   });
 
   it("keeps storyboard generator scrolling inside the prompt editor", () => {

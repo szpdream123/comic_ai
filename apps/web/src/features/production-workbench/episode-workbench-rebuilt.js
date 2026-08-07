@@ -745,15 +745,19 @@ function renderAssetCard(asset, assetKind, active, checked) {
       data-asset-kind="${escapeAttr(assetKind)}"
     >
       <div class="episode-replica-asset-card-head">
-        <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
-        <button class="episode-replica-asset-select" type="button" data-action="set-episode-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">
-          <strong class="name">${escapeHtml(asset?.name ?? "测试素材")}</strong>
-        </button>
-        <button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button" data-action="quick-append-selected-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">引入到对话框</button>
-        <span class="episode-replica-asset-hover-tools" aria-hidden="true">
-          <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
-          <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
-        </span>
+        <div class="episode-replica-asset-title-row">
+          <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
+          <label class="episode-replica-asset-select">
+            <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题" />
+          </label>
+        </div>
+        <div class="episode-replica-asset-actions-row">
+          <button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button" data-action="quick-append-selected-asset" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}">引入到对话框</button>
+          <span class="episode-replica-asset-hover-tools">
+            <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
+            <button type="button" data-action="open-delete-episode-asset-modal" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" data-asset-name="${escapeAttr(asset?.name ?? "素材")}" aria-label="删除" title="删除">×</button>
+          </span>
+        </div>
       </div>
       <span class="toolbar">
         <button type="button" data-action="save-episode-asset-to-library" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="${escapeAttr(saveLabel)}" title="${escapeAttr(saveLabel)}">+</button>
@@ -964,7 +968,7 @@ export function renderStoryboardImageColumn(storyboard, storyboardName = "") {
         <span class="preview-title">故事板</span>
       </span>
       <span class="preview episode-replica-storyboard-image-preview">
-        ${renderStoryboardImageThumb(resolveSelectedImageSource(storyboard))}
+        ${renderStoryboardImageThumb(resolveSelectedImageSource(storyboard), resolvedStoryboardName, `storyboard:${storyboard.id}`)}
         <span class="episode-replica-storyboard-image-actions">
           <button type="button" data-action="pick-local-storyboard-image" data-storyboard-id="${escapeAttr(storyboard.id)}">上传</button>
           <button type="button" data-action="open-storyboard-image-generator" data-storyboard-id="${escapeAttr(storyboard.id)}" data-storyboard-name="${escapeAttr(resolvedStoryboardName)}">生成</button>
@@ -1129,9 +1133,9 @@ function renderStoryboardVideoThumb(storyboard, previewVideo) {
   return renderStoryboardMediaPlaceholder();
 }
 
-function renderStoryboardImageThumb(previewImage) {
+function renderStoryboardImageThumb(previewImage, imageName = "故事板", imageKey = "") {
   if (previewImage) {
-    return `<span class="episode-replica-shot-media-thumb has-image-preview active"><img src="${escapeAttr(previewImage)}" alt="" /></span>`;
+    return `<span class="episode-replica-shot-media-thumb has-image-preview active" data-image-preview-url="${escapeAttr(previewImage)}" data-image-preview-name="${escapeAttr(imageName)}" data-image-preview-key="${escapeAttr(imageKey)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(imageName)}" title="双击查看大图"><img src="${escapeAttr(previewImage)}" alt="${escapeAttr(imageName)}" /></span>`;
   }
   return `
     <span class="episode-replica-shot-media-placeholder storyboard-image-placeholder" aria-label="暂无故事板">
@@ -3293,7 +3297,7 @@ function renderAttachment(item, index, selected) {
   return `
     <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(mediaType)}">${preview}</span>
+      <span class="episode-replica-ref-art ${escapeAttr(mediaType)}"${mediaType === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? title)}" data-image-preview-key="attachment:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? title)}" title="双击查看大图"` : ""}>${preview}</span>
       ${mediaType === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
       ${mediaType === "audio" || mediaType === "video" ? `<strong>${escapeHtml(title)}</strong>` : ""}
     </article>
@@ -3376,7 +3380,7 @@ function renderQuickReferenceItem(item, index = 0) {
   return `
     <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured " : ""}${escapeAttr(kind)}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
-      <span class="episode-replica-ref-art ${escapeAttr(kind)}">
+      <span class="episode-replica-ref-art ${escapeAttr(kind)}"${kind === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? "参考图片")}" data-image-preview-key="quick-reference:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? "参考图片")}" title="双击查看大图"` : ""}>
         ${storyboardReferences.length
           ? renderStoryboardPreviewThumb(storyboardReferences)
           : kind === "audio"
@@ -4400,6 +4404,7 @@ function renderAssetInspectorModal(inspector) {
       <section class="modal-backdrop storyboard-description-backdrop asset-image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览">
         <button class="modal-backdrop-hit" type="button" data-action="close-asset-inspector" aria-label="关闭图片预览"></button>
         <div class="asset-image-lightbox-content">
+          <button class="asset-image-lightbox-close" type="button" data-action="close-asset-inspector" aria-label="关闭图片预览">×</button>
           <img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "生成图片")}" />
         </div>
       </section>

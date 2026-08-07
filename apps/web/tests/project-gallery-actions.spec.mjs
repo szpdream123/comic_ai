@@ -38,6 +38,16 @@ function createWorkbench() {
   };
 }
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 test("project gallery pagination does not show a success toast", async () => {
   const workbench = createWorkbench();
   workbench.ui.projectLibrary = createProjectLibrary(18);
@@ -95,6 +105,211 @@ test("team member project delete action is blocked before the api call", async (
   assert.equal(deleteCalls, 0);
   assert.equal(workbench.ui.deleteProjectId, null);
   assert.deepEqual(workbench.ui.toast, { tone: "error", message: "子账户无法删除项目。" });
+});
+
+test("project delete modal shows a non-interactive progress state while the request is pending", async () => {
+  const workbench = createWorkbench();
+  const deletion = createDeferred();
+  workbench.api.deleteProject = () => deletion.promise;
+  workbench.api.getProjects = async () => ({
+    projects: createProjectLibrary(23).map((project, index) => ({
+      ...project,
+      id: `project-${index + 2}`,
+    })),
+    pagination: { page: 1, pageSize: 18, total: 23, totalPages: 2 },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  const deleting = handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+  await Promise.resolve();
+
+  assert.equal(workbench.ui.deleteProjectSubmitting, true);
+  assert.match(workbench.root.innerHTML, /aria-busy="true"/);
+  assert.match(workbench.root.innerHTML, /aria-label="正在删除"/);
+  assert.match(workbench.root.innerHTML, /tabindex="-1"[^>]*autofocus/);
+  assert.match(workbench.root.innerHTML, /role="status" aria-live="polite"/);
+  assert.match(workbench.root.innerHTML, /删除中…/);
+  assert.match(workbench.root.innerHTML, /data-action="close-delete-project-modal"[^>]*disabled/);
+  assert.match(workbench.root.innerHTML, /data-action="confirm-delete-project-card"[^>]*disabled/);
+
+  deletion.resolve({ deleted: true, projectId: "project-1" });
+  await deleting;
+});
+
+test("project delete closes immediately after api success without waiting for list refresh", async () => {
+  const workbench = createWorkbench();
+  const deletion = createDeferred();
+  const refresh = createDeferred();
+  let refreshStarted = false;
+  let assetLibraryCalls = 0;
+  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 18, total: 24, totalPages: 2 };
+  workbench.api.deleteProject = () => deletion.promise;
+  workbench.api.getProjects = () => {
+    refreshStarted = true;
+    return refresh.promise;
+  };
+  workbench.api.getAssetLibrary = async () => {
+    assetLibraryCalls += 1;
+    return { assets: [] };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  const deleting = handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+  deletion.resolve({ deleted: true, projectId: "project-1" });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  let actionReturned = false;
+  void deleting.then(() => {
+    actionReturned = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(actionReturned, true);
+  assert.equal(refreshStarted, true);
+  assert.equal(workbench.ui.deleteProjectId, null);
+  assert.equal(workbench.ui.deleteProjectSubmitting, false);
+  assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-1"), false);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="confirm-delete-project-card"/);
+
+  refresh.resolve({
+    projects: createProjectLibrary(23).map((project, index) => ({
+      ...project,
+      id: `project-${index + 2}`,
+    })),
+    pagination: { page: 1, pageSize: 18, total: 23, totalPages: 2 },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(assetLibraryCalls, 0);
+});
+
+test("project delete failure restores an interactive modal without removing the card", async () => {
+  const workbench = createWorkbench();
+  const deletion = createDeferred();
+  workbench.api.deleteProject = () => deletion.promise;
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  const deleting = handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+  await Promise.resolve();
+  deletion.reject(new Error("network unavailable"));
+  await deleting;
+
+  assert.equal(workbench.ui.deleteProjectId, "project-1");
+  assert.equal(workbench.ui.deleteProjectSubmitting, false);
+  assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-1"), true);
+  assert.match(String(workbench.ui.toast), /network unavailable/);
+  assert.match(workbench.root.innerHTML, /data-action="confirm-delete-project-card"/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="confirm-delete-project-card"[^>]*disabled/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="close-delete-project-modal"[^>]*disabled/);
+});
+
+test("an already missing project is treated as an idempotent delete success", async () => {
+  const workbench = createWorkbench();
+  workbench.api.deleteProject = async () => {
+    const error = new Error("project not found");
+    error.errorCode = "project_not_found";
+    throw error;
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+
+  assert.equal(workbench.ui.deleteProjectId, null);
+  assert.equal(workbench.ui.deleteProjectSubmitting, false);
+  assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-1"), false);
+  assert.equal(workbench.ui.toast, "项目已删除。");
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="confirm-delete-project-card"/);
+});
+
+test("bulk project delete keeps only failed items retryable after a partial failure", async () => {
+  const workbench = createWorkbench();
+  let deleteCalls = 0;
+  workbench.ui.deleteProjectMode = "bulk";
+  workbench.ui.deleteProjectIds = ["project-1", "project-2"];
+  workbench.ui.selectedProjectIds = ["project-1", "project-2"];
+  workbench.api.deleteProject = async () => {
+    deleteCalls += 1;
+    if (deleteCalls === 2) {
+      throw new Error("second delete failed");
+    }
+    return { deleted: true };
+  };
+  workbench.api.getProjects = async () => ({
+    projects: createProjectLibrary(23).map((project, index) => ({
+      ...project,
+      id: `project-${index + 2}`,
+    })),
+    pagination: { page: 1, pageSize: 18, total: 23, totalPages: 2 },
+  });
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+
+  assert.equal(deleteCalls, 2);
+  assert.equal(workbench.ui.deleteProjectSubmitting, false);
+  assert.deepEqual(workbench.ui.deleteProjectIds, ["project-2"]);
+  assert.deepEqual(workbench.ui.selectedProjectIds, ["project-2"]);
+  assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-1"), false);
+  assert.equal(workbench.ui.projectLibrary.some((project) => project.id === "project-2"), true);
+  assert.match(String(workbench.ui.toast), /second delete failed/);
+  assert.doesNotMatch(workbench.root.innerHTML, /data-action="confirm-delete-project-card"[^>]*disabled/);
+});
+
+test("a stale delete refresh cannot overwrite a newer project page", async () => {
+  const workbench = createWorkbench();
+  const deleteRefresh = createDeferred();
+  const pageRefresh = createDeferred();
+  let projectRequests = 0;
+  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 18, total: 24, totalPages: 2 };
+  workbench.api.deleteProject = async () => ({ deleted: true, projectId: "project-1" });
+  workbench.api.getProjects = () => {
+    projectRequests += 1;
+    return projectRequests === 1 ? deleteRefresh.promise : pageRefresh.promise;
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const changingPage = handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "change-project-page", page: "2" },
+  });
+  pageRefresh.resolve({
+    projects: [{ id: "project-page-2", name: "第二页项目", status: "进行中" }],
+    pagination: { page: 2, pageSize: 18, total: 24, totalPages: 2 },
+  });
+  await changingPage;
+  assert.equal(workbench.ui.projectLibraryPage, 2);
+  assert.equal(workbench.ui.projectLibrary[0]?.id, "project-page-2");
+
+  deleteRefresh.resolve({
+    projects: [{ id: "project-stale-page-1", name: "旧第一页项目", status: "进行中" }],
+    pagination: { page: 1, pageSize: 18, total: 23, totalPages: 2 },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(workbench.ui.projectLibraryPage, 2);
+  assert.equal(workbench.ui.projectLibrary[0]?.id, "project-page-2");
 });
 
 test("project status filter controls do not show a success toast", async () => {

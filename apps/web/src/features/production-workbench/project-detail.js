@@ -1240,6 +1240,7 @@ export function renderProjectDetail(context = {}) {
       show: Boolean(ui.deleteProjectId) || ui.deleteProjectMode === "bulk",
       mode: ui.deleteProjectMode === "bulk" ? "bulk" : "single",
       count: Array.isArray(ui.deleteProjectIds) ? ui.deleteProjectIds.length : 0,
+      submitting: ui.deleteProjectSubmitting === true,
       projectName:
         ui.projectLibrary?.find((project) => project.id === ui.deleteProjectId)?.name ?? "",
     })}
@@ -7283,7 +7284,7 @@ function renderAssetGeneratorModal(ui) {
       : "";
     return `
       <section class="asset-generator-backdrop" role="dialog" aria-modal="true" aria-label="生成${escapeHtml(label)}">
-        <div class="asset-generator-modal asset-generator-modal-create ${storyboardTaskOverview ? "has-task-overview" : ""}">
+        <div class="asset-generator-modal asset-generator-modal-create ${isStoryboardGenerator ? "is-storyboard-generator" : ""} ${storyboardTaskOverview ? "has-task-overview" : ""}">
           <button class="asset-modal-close" type="button" data-action="close-asset-generator-modal" aria-label="关闭">×</button>
           <aside class="asset-generator-form ${isStoryboardGenerator ? "storyboard-generator-form" : ""}">
             <h2>生成${escapeHtml(label)}</h2>
@@ -12702,7 +12703,7 @@ function renderProjectRenameModal({ show, value, notice }) {
   `;
 }
 
-function renderProjectDeleteModal({ show, projectName, mode = "single", count = 0 }) {
+function renderProjectDeleteModal({ show, projectName, mode = "single", count = 0, submitting = false }) {
   if (!show) {
     return "";
   }
@@ -12712,19 +12713,19 @@ function renderProjectDeleteModal({ show, projectName, mode = "single", count = 
     : `所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？`;
 
   return `
-    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除">
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="${submitting ? "正在删除" : "确认删除"}" aria-busy="${submitting ? "true" : "false"}" tabindex="-1" ${submitting ? "autofocus" : ""}>
       <div class="delete-project-modal">
         <div class="delete-project-head">
           <div class="delete-project-icon">×</div>
           <div>
-            <h2>确认删除</h2>
-            <p>${message}</p>
+            <h2>${submitting ? "正在删除" : "确认删除"}</h2>
+            <p ${submitting ? 'role="status" aria-live="polite" aria-atomic="true"' : ""}>${submitting ? "正在删除项目及其关联内容，请稍候。" : message}</p>
           </div>
-          <button class="modal-close" type="button" data-action="close-delete-project-modal" aria-label="关闭">×</button>
+          <button class="modal-close" type="button" data-action="close-delete-project-modal" aria-label="关闭" ${submitting ? "disabled" : ""}>×</button>
         </div>
         <div class="delete-project-actions">
-          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-project-modal">取消</button>
-          <button class="delete-confirm-button" type="button" data-action="confirm-delete-project-card">确定</button>
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-project-modal" ${submitting ? "disabled" : ""}>取消</button>
+          <button class="delete-confirm-button${submitting ? " is-loading" : ""}" type="button" data-action="confirm-delete-project-card" ${submitting ? "disabled" : ""}>${submitting ? '<span class="delete-project-spinner" aria-hidden="true"></span>删除中…' : "确定"}</button>
         </div>
       </div>
     </section>

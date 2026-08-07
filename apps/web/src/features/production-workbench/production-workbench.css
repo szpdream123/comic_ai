@@ -6392,6 +6392,40 @@
   font-weight: 700;
 }
 
+.delete-project-modal button:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.delete-confirm-button.is-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  cursor: wait;
+}
+
+.delete-project-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 9999px;
+  animation: delete-project-spin 750ms linear infinite;
+}
+
+@keyframes delete-project-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .delete-project-spinner {
+    animation: none;
+  }
+}
+
 .project-gallery-meta h2 {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -24448,6 +24482,10 @@ button.canvas-upload-meta:hover {
   min-height: 0;
 }
 
+.asset-generator-modal-create.is-storyboard-generator:not(.has-task-overview) {
+  width: min(56rem, calc(100vw - 3rem));
+}
+
 .asset-generator-modal-create.has-task-overview {
   grid-template-columns: minmax(0, 1fr) minmax(22rem, 25rem);
   width: min(78rem, calc(100vw - 5rem));
@@ -25133,6 +25171,29 @@ button.canvas-upload-meta:hover {
 .asset-generator-composer .asset-generator-composer-footer {
   justify-content: space-between;
   min-width: 0;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-footer {
+  gap: 0.65rem;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, 1.2fr) minmax(8rem, auto) repeat(2, minmax(8rem, 1fr));
+  gap: 0.5rem;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-control-wrap,
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-video-settings-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-control,
+.asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls .episode-replica-video-settings-trigger,
+.asset-generator-modal-create.is-storyboard-generator .episode-image-style-skill-trigger {
+  width: 100%;
+  max-width: none;
 }
 
 .asset-generator-composer .episode-replica-video-settings-wrap {
@@ -29364,11 +29425,9 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-dialog-import {
-  position: absolute;
-  top: 0.02rem;
-  left: 50%;
-  z-index: 2;
-  transform: translateX(-50%);
+  position: static;
+  flex: 0 0 auto;
+  transform: none;
 }
 
 .episode-replica-shot-card-head .episode-replica-shot-status-badge {
@@ -32212,18 +32271,58 @@ body.is-episode-layout-resizing {
 .episode-replica-asset-card-head {
   grid-column: 1 / -1;
   position: relative;
-  min-height: 2.05rem;
+  display: grid;
+  gap: 0.52rem;
+  min-height: 4.35rem;
+}
+
+.episode-replica-asset-title-row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.58rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.episode-replica-asset-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  min-width: 0;
 }
 
 .episode-replica-asset-card .name {
-  margin-left: 1.8rem;
-  padding-right: 10.75rem;
+  margin-left: 0;
+  padding: 0.18rem 0.3rem;
   font-size: 0.94rem;
   font-weight: 900;
   line-height: 1.22;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.episode-replica-asset-name-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: inherit;
+  outline: none;
+  cursor: text;
+}
+
+.episode-replica-asset-name-input:hover {
+  background: var(--theme-control-hover-background, rgba(255, 255, 255, 0.04));
+}
+
+.episode-replica-asset-name-input:focus {
+  border-color: var(--theme-control-active-border, rgba(145, 214, 255, 0.48));
+  background: var(--theme-control-active-background, rgba(145, 214, 255, 0.08));
+  box-shadow: 0 0 0 1px var(--theme-control-active-border, rgba(145, 214, 255, 0.48));
 }
 
 .episode-replica-asset-card .title {
@@ -32741,6 +32840,15 @@ body.is-episode-layout-resizing {
   outline-offset: -2px;
 }
 
+[data-image-preview-url] {
+  cursor: zoom-in;
+}
+
+[data-image-preview-url]:focus-visible {
+  outline: 2px solid var(--theme-accent, #ffbf4b);
+  outline-offset: 2px;
+}
+
 .asset-image-lightbox {
   align-items: center;
   padding: 1.5rem;
@@ -32754,21 +32862,50 @@ body.is-episode-layout-resizing {
   position: relative;
   z-index: 1;
   display: flex;
+  width: calc(100vw - 3rem);
+  height: calc(100vh - 3rem);
   max-width: calc(100vw - 3rem);
   max-height: calc(100vh - 3rem);
   align-items: center;
   justify-content: center;
+  pointer-events: none;
 }
 
 .asset-image-lightbox-content img {
   display: block;
-  width: auto;
+  width: min(
+    calc(100vw - 3rem),
+    calc((100vh - 3rem) * var(--asset-image-lightbox-aspect-ratio, 1))
+  );
   height: auto;
-  max-width: calc(100vw - 3rem);
-  max-height: calc(100vh - 3rem);
+  max-width: 100%;
+  max-height: 100%;
   border-radius: 8px;
   object-fit: contain;
+  pointer-events: auto;
   box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.5);
+}
+
+.asset-image-lightbox-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(8, 18, 24, 0.78);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.asset-image-lightbox-close:focus-visible {
+  outline: 2px solid var(--theme-accent, #ffbf4b);
+  outline-offset: 2px;
 }
 
 .episode-replica-fixed-video-card video {
@@ -33265,9 +33402,29 @@ body.is-episode-layout-resizing {
   .episode-replica-prompt-selects {
     flex-wrap: wrap;
   }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt-shell {
+    padding-bottom: 7.5rem;
+  }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt small {
+    bottom: 7.7rem;
+  }
 }
 
 @media (max-width: 640px) {
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-composer-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt-shell {
+    padding-bottom: 10rem;
+  }
+
+  .asset-generator-modal-create.is-storyboard-generator .asset-generator-prompt small {
+    bottom: 10.2rem;
+  }
+
   .episode-workbench-screen {
     min-height: auto;
     height: auto;
@@ -33758,8 +33915,9 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-card .episode-replica-asset-card-head .pick {
-  top: 0.36rem;
-  left: 0.18rem;
+  position: static;
+  top: auto;
+  left: auto;
   width: 1rem;
   height: 1rem;
   padding: 0;
@@ -33779,17 +33937,19 @@ body.is-episode-layout-resizing {
 }
 
 .episode-replica-asset-card .episode-replica-asset-hover-tools {
-  top: -2.75rem;
-  right: 0.45rem;
+  position: static;
   display: inline-flex;
   align-items: center;
+  margin-left: auto;
   grid-auto-flow: column;
-  transform: translateY(-0.28rem);
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .episode-replica-asset-card:hover .episode-replica-asset-hover-tools,
 .episode-replica-asset-card.active .episode-replica-asset-hover-tools {
-  transform: translateY(0);
+  transform: none;
 }
 
 .episode-replica-shot-shell {
@@ -34153,10 +34313,11 @@ body.is-episode-layout-resizing {
   }
 
   .episode-replica-asset-card-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.45rem;
-    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .episode-replica-asset-actions-row {
+    flex-wrap: wrap;
   }
 
   .episode-replica-asset-stage-frame {
@@ -37351,9 +37512,9 @@ body.is-episode-quick-asset-toggle-dragging {
   }
 
   .episode-replica-asset-card {
-    height: 14.2rem;
-    min-height: 14.2rem;
-    max-height: 14.2rem;
+    height: 16.5rem;
+    min-height: 16.5rem;
+    max-height: 16.5rem;
     overflow: visible;
   }
 
@@ -37370,10 +37531,10 @@ body.is-episode-quick-asset-toggle-dragging {
   }
 
   .episode-replica-asset-card .episode-replica-asset-hover-tools {
-    top: 0.42rem;
-    right: 0.42rem;
+    position: static;
     display: inline-flex;
     align-items: center;
+    margin-left: auto;
     grid-auto-flow: column;
     z-index: 8;
     opacity: 1;
@@ -38456,9 +38617,9 @@ body.is-episode-quick-asset-toggle-dragging {
 
 @media (min-width: 961px) {
   .episode-replica-asset-empty {
-    height: 14.2rem;
-    min-height: 14.2rem;
-    max-height: 14.2rem;
+    height: 16.5rem;
+    min-height: 16.5rem;
+    max-height: 16.5rem;
   }
 }
 
