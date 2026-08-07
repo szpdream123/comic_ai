@@ -2573,6 +2573,7 @@ export const creatorApi = {
     return postJson(
       `/api/creator/projects/${encodeURIComponent(projectId)}/ai-storyboard-preview/commit`,
       input,
+      { timeoutMs: 60000 },
     );
   },
 
