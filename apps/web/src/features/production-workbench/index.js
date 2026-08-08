@@ -19971,6 +19971,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "close-episode-batch-modal") {
+    if (workbench.ui.episodeBatchModal?.isSubmitting === true) {
+      return;
+    }
     workbench.ui.episodeBatchModal = null;
     if (!syncEpisodeBatchModalOnly(workbench)) {
       render(workbench);
@@ -19980,6 +19983,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "submit-episode-batch-modal") {
     const modal = workbench.ui.episodeBatchModal;
+    if (modal?.isSubmitting === true) {
+      return;
+    }
     const items = Array.isArray(modal?.items) ? modal.items : [];
     if (!items.length) {
       workbench.ui.toast = "请先选择需要批量处理的素材。";
@@ -20024,7 +20030,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
     }
     if (scope === "storyboard" && mode === "video" && typeof workbench.api?.createVideoTask === "function") {
-      await submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, now);
+      workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
+        ...modal,
+        isSubmitting: true,
+        openField: null,
+      });
+      syncEpisodeBatchModalOnly(workbench);
+      try {
+        await submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, now);
+      } catch (error) {
+        workbench.ui.episodeBatchModal = syncEpisodeBatchModal({
+          ...modal,
+          isSubmitting: false,
+        });
+        syncEpisodeBatchModalOnly(workbench);
+        throw error;
+      }
       return;
     }
     if (scope === "storyboard") {

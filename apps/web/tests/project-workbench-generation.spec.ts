@@ -31529,6 +31529,15 @@ describe("production workbench project tab", () => {
     const generationConfigCalls = [];
     const createVideoTaskCalls = [];
     const updateShotCalls = [];
+    let rejectNextVideoTask = false;
+    let markFirstVideoTaskStarted;
+    let releaseFirstVideoTask;
+    const firstVideoTaskStarted = new Promise((resolve) => {
+      markFirstVideoTaskStarted = resolve;
+    });
+    const firstVideoTaskPending = new Promise((resolve) => {
+      releaseFirstVideoTask = resolve;
+    });
     const workbench = {
       state: {
         ...buildProjectState(),
@@ -31588,6 +31597,14 @@ describe("production workbench project tab", () => {
         },
         async createVideoTask(episodeId, payload) {
           createVideoTaskCalls.push({ episodeId, payload });
+          if (createVideoTaskCalls.length === 1) {
+            markFirstVideoTaskStarted();
+            await firstVideoTaskPending;
+          }
+          if (rejectNextVideoTask) {
+            rejectNextVideoTask = false;
+            throw new Error("batch video task failed");
+          }
           return {
             taskId: `batch-video-task-${createVideoTaskCalls.length}`,
             status: "succeeded",
@@ -31682,9 +31699,30 @@ describe("production workbench project tab", () => {
       });
       assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 2000);
       assert.match(renderProductionWorkbench(workbench), />生成<\/button>/);
+      const submitPromise = handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "submit-episode-batch-modal" },
+      });
+      await firstVideoTaskStarted;
+
+      assert.equal(workbench.ui.episodeBatchModal?.isSubmitting, true);
+      const submittingHtml = renderProductionWorkbench(workbench);
+      assert.match(
+        submittingHtml,
+        /class="episode-batch-submit"[^>]*disabled[^>]*aria-busy="true"[^>]*>提交中\.\.\.<\/button>/,
+      );
+      assert.match(submittingHtml, /class="modal-backdrop-hit"[^>]*disabled/);
+      assert.match(submittingHtml, /class="modal-close"[^>]*disabled[^>]*>×<\/button>/);
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "close-episode-batch-modal" },
+      });
+      assert.equal(workbench.ui.episodeBatchModal?.isSubmitting, true);
       await handleWorkbenchActionForTest(workbench, {
         dataset: { action: "submit-episode-batch-modal" },
       });
+      assert.equal(createVideoTaskCalls.length, 1);
+
+      releaseFirstVideoTask();
+      await submitPromise;
 
       assert.deepEqual(generationConfigCalls, [
         { episodeId: "episode-new", options: { fresh: true, mediaType: "video" } },
@@ -31724,6 +31762,23 @@ describe("production workbench project tab", () => {
       assert.deepEqual(workbench.ui.selectedStoryboardIds, []);
       assert.equal(workbench.ui.toast, "已为 2 条分镜创建视频任务。");
       assert.equal(workbench.ui.videoGenerationResult.selectedModelId, "seedance-2");
+
+      workbench.ui.selectedStoryboardIds = ["storyboard-batch-video-1", "storyboard-batch-video-2"];
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "open-episode-batch-actions" },
+      });
+      rejectNextVideoTask = true;
+      await assert.rejects(
+        handleWorkbenchActionForTest(workbench, {
+          dataset: { action: "submit-episode-batch-modal" },
+        }),
+        /batch video task failed/,
+      );
+      assert.equal(workbench.ui.episodeBatchModal?.isSubmitting, false);
+      assert.match(
+        renderProductionWorkbench(workbench),
+        /class="episode-batch-submit"[^>]*aria-busy="false"[^>]*>生成<\/button>/,
+      );
     } finally {
       globalThis.document = previousDocument;
     }
