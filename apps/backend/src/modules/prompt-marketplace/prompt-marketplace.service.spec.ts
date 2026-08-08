@@ -16,6 +16,38 @@ import {
 } from "./prompt-skill-default.service.ts";
 
 describe("prompt marketplace service", { concurrency: false }, () => {
+  it("starts catalog count and ranking queries in parallel", async () => {
+    const started: string[] = [];
+    let releaseCount!: () => void;
+    const countGate = new Promise<void>((resolve) => {
+      releaseCount = resolve;
+    });
+    const service = createPromptMarketplaceService({
+      db: {
+        async query<T>(sql: string) {
+          if (/SELECT COUNT\(\*\) AS count/.test(sql)) {
+            started.push("count");
+            await countGate;
+            return { rows: [{ count: 0 }] as T[] };
+          }
+          if (/LIMIT 20/.test(sql)) {
+            started.push("ranking");
+            return { rows: [] as T[] };
+          }
+          started.push("page");
+          return { rows: [] as T[] };
+        },
+      },
+    });
+
+    const catalogPromise = service.listCatalog({ userId: null });
+    await Promise.resolve();
+
+    assert.deepEqual(started, ["count", "ranking"]);
+    releaseCount();
+    await catalogPromise;
+  });
+
   it("does not select non-owner prompt bodies for catalog cards, rankings, or private libraries", async () => {
     const marketplaceQueries: string[] = [];
     const service = createPromptMarketplaceService({
