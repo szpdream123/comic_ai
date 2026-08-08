@@ -41764,14 +41764,25 @@ function clearStoryboardBoardModeComposer(workbench, nextBoardMode) {
   const nextDraft = draftMap[
     storyboardBoardModeComposerDraftKey(storyboardId, workbench.ui.episodeMediaMode, targetBoardMode)
   ] ?? null;
-  const shouldCleanStoryboardReferences = targetBoardMode === "storyboard" && !nextDraft;
+  const shouldCleanStoryboardReferences = targetBoardMode === "storyboard";
   const nextPrompt = nextDraft
-    ? String(nextDraft.prompt ?? "")
+    ? shouldCleanStoryboardReferences
+      ? stripStoryboardQuickReferenceMentions(nextDraft.prompt)
+      : String(nextDraft.prompt ?? "")
     : shouldCleanStoryboardReferences
       ? stripStoryboardQuickReferenceMentions(getCurrentScopePrompt(workbench, { allowPromptFallback: false }))
       : String(getCurrentScopePrompt(workbench, { allowPromptFallback: false }) ?? "");
   const nextState = nextDraft?.generationState
-    ? { ...nextDraft.generationState, prompt: nextPrompt }
+    ? shouldCleanStoryboardReferences
+      ? {
+          ...nextDraft.generationState,
+          prompt: nextPrompt,
+          imagePrompt: stripStoryboardQuickReferenceMentions(nextDraft.generationState.imagePrompt),
+          videoPrompt: stripStoryboardQuickReferenceMentions(nextDraft.generationState.videoPrompt),
+          quickReferenceItems: [],
+          mentionReferences: [],
+        }
+      : { ...nextDraft.generationState, prompt: nextPrompt }
     : shouldCleanStoryboardReferences
       ? {
         ...generationState,
