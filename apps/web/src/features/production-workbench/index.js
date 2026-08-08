@@ -41750,7 +41750,7 @@ function snapshotStoryboardBoardModeComposer(workbench, generationState) {
 function stripStoryboardQuickReferenceMentions(prompt) {
   return String(prompt ?? "")
     .replace(/【@[^】]+】(?:的(?:场景|角色|道具)形象)?/gu, "")
-    .replace(/(^|[\s（(：:，,；;])@[^\s【】,，。；;：:（）()]+/gmu, "$1")
+    .replace(/(^|[\s（(=：:，,；;、|])@[^\s【】,，。；;：:（）()]+/gmu, "$1")
     .replace(/[ \t]{2,}/gu, " ");
 }
 
