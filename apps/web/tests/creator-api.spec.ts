@@ -244,7 +244,7 @@ test("prompt reverse allows image models enough time to complete", async () => {
       mode: "image",
       imageDataUrl: "data:image/png;base64,AAAA",
     });
-    assert.ok(timeoutCalls.includes(180000));
+    assert.ok(timeoutCalls.includes(600000));
   } finally {
     globalThis.setTimeout = previousSetTimeout;
     globalThis.clearTimeout = previousClearTimeout;
@@ -467,6 +467,36 @@ test("getPromptMarketplace forwards filters and backend pagination", async () =>
     "/api/creator/prompt-marketplace?category=storyboard&query=%E9%AB%98%E7%87%83+%E5%88%86%E9%95%9C&page=3&pageSize=12",
   );
   assert.deepEqual(payload.pagination, { page: 3, pageSize: 12, total: 40, totalPages: 4 });
+});
+
+test("getPromptMarketplace deduplicates concurrent identical requests", async () => {
+  const calls: Array<{ url: string }> = [];
+  let releaseFetch!: () => void;
+  const fetchGate = new Promise<void>((resolve) => {
+    releaseFetch = resolve;
+  });
+  globalThis.fetch = async (url) => {
+    calls.push({ url: String(url) });
+    await fetchGate;
+    return {
+      ok: true,
+      text: async () => JSON.stringify({
+        items: [],
+        ranking: [],
+        pagination: { page: 1, pageSize: 12, total: 0, totalPages: 0 },
+      }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  const input = { category: "scene_extract", query: "并发请求去重", page: 1, pageSize: 12 };
+  const first = creatorApi.getPromptMarketplace(input);
+  const second = creatorApi.getPromptMarketplace(input);
+  await Promise.resolve();
+
+  assert.equal(calls.length, 1);
+  releaseFetch();
+  await Promise.all([first, second]);
 });
 
 test("importEpisodeAsset targets the episode-scoped import route", async () => {

@@ -87,23 +87,26 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
     const keyword = input.query?.trim() ? `%${input.query.trim().toLowerCase()}%` : null;
     const requestedPage = normalizePage(input.page);
     const pageSize = normalizePageSize(input.pageSize);
-    const total = await queryOne<{ count: string | number }>(
-      deps.db,
-      `
-        SELECT COUNT(*) AS count
-        FROM prompts item
-        WHERE item.deleted_at IS NULL
-          AND item.status = 'enabled'
-          AND item.is_published = true
-          AND ($1::text IS NULL OR item.prompt_category = $1)
-          AND (
-            $2::text IS NULL
-            OR lower(item.name) LIKE $2
-            OR lower(item.summary) LIKE $2
-          )
-      `,
-      [category, keyword],
-    );
+    const [total, rankingRows] = await Promise.all([
+      queryOne<{ count: string | number }>(
+        deps.db,
+        `
+          SELECT COUNT(*) AS count
+          FROM prompts item
+          WHERE item.deleted_at IS NULL
+            AND item.status = 'enabled'
+            AND item.is_published = true
+            AND ($1::text IS NULL OR item.prompt_category = $1)
+            AND (
+              $2::text IS NULL
+              OR lower(item.name) LIKE $2
+              OR lower(item.summary) LIKE $2
+            )
+        `,
+        [category, keyword],
+      ),
+      loadRankingRows(),
+    ]);
     const count = Number(total?.count || 0);
     const totalPages = Math.ceil(count / pageSize);
     const page = totalPages === 0 ? 1 : Math.min(requestedPage, totalPages);
@@ -174,9 +177,10 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
       `,
       [input.userId, category, keyword, pageSize, offset],
     );
-    const rankingRows = await deps.db.query<PromptMarketplaceRow>(
-      `
-        SELECT
+    async function loadRankingRows() {
+      return deps.db.query<PromptMarketplaceRow>(
+        `
+          SELECT
           item.id,
           item.prompt_category,
           item.name,
@@ -229,10 +233,11 @@ export function createPromptMarketplaceService(deps: { db: SqlDatabase }) {
           AND item.status = 'enabled'
           AND item.is_published = true
         ORDER BY item.usage_count DESC, item.rating_score DESC, item.rating_count DESC, item.id ASC
-        LIMIT 20
-      `,
-      [input.userId],
-    );
+          LIMIT 20
+        `,
+        [input.userId],
+      );
+    }
     return {
       items: rows.rows.map((row) => marketplaceItemFromRow(row, input.userId)),
       pagination: {
