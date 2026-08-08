@@ -5493,6 +5493,14 @@ async function deleteProjectRecord(
   await db.query("DELETE FROM workflows WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM shot_reference_assets WHERE project_id = $1", [input.projectId]);
   await db.query("DELETE FROM project_upload_records WHERE project_id = $1", [input.projectId]);
+  await db.query(
+    `UPDATE project_upload_records
+     SET upload_session_id = NULL
+     WHERE upload_session_id IN (
+       SELECT id FROM storage_upload_sessions WHERE project_id = $1
+     )`,
+    [input.projectId],
+  );
   await db.query("DELETE FROM storage_upload_sessions WHERE project_id = $1", [input.projectId]);
   await detachCanvasArtifactsFromProjectAssets(db, input.projectId);
   await db.query(

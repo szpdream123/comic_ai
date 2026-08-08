@@ -11,6 +11,18 @@ const projectServiceUrl = new URL("../creator-application.service.ts", import.me
 const migrationDirectoryUrl = new URL("../../../../../../packages/db/migrations/", import.meta.url);
 
 describe("resource decoupling safety", () => {
+  it("detaches surviving upload records before deleting project upload sessions", async () => {
+    const source = await readFile(projectServiceUrl, "utf8");
+    const start = source.indexOf("async function deleteProjectRecord(");
+    const end = source.indexOf("async function listDeletableProjectStorageObjects(", start);
+    const deleteProjectSource = source.slice(start, end < 0 ? undefined : end);
+    const detachIndex = deleteProjectSource.indexOf("UPDATE project_upload_records\n     SET upload_session_id = NULL");
+    const deleteSessionIndex = deleteProjectSource.indexOf("DELETE FROM storage_upload_sessions WHERE project_id = $1");
+
+    assert.ok(detachIndex >= 0);
+    assert.ok(deleteSessionIndex > detachIndex);
+  });
+
   it("runs shell cleanup after generation rebinding and before canvas columns are dropped", async () => {
     const names = (await loadSqlMigrations()).map((migration) => migration.name);
     const scopeIndex = names.indexOf("20260722-canvas-generation-scope.sql");

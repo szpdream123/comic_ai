@@ -95,6 +95,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
           () => upload.abort(),
         );
       } else {
+        const abortController = new AbortController();
         result = await withTimeout(
           this.client.send(
             new PutObjectCommand({
@@ -104,9 +105,11 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
               ContentType: input.contentType ?? undefined,
               ContentLength: body.contentLength ?? undefined,
             }),
+            { abortSignal: abortController.signal },
           ),
           timeoutMs,
           "storage_put_object_timeout",
+          () => abortController.abort(),
         );
       }
     } catch (error) {

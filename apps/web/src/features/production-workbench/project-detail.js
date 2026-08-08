@@ -818,11 +818,29 @@ function renderAssetGeneratorTaskOverview(asset, fallbackPreviewUrl = "", placeh
           <span>任务 ${escapeHtml(summary.taskId || "未记录")}</span>
           <strong>${reviewRequired ? "复核说明" : "失败原因"}：${escapeHtml(failureMessage || helperText)}</strong>
         </div>
-        ${previewUrl ? `<div class="asset-generator-task-preview has-image"><img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" /></div>` : ""}
+        ${previewUrl ? `
+          <button
+            class="asset-generator-task-preview has-image"
+            type="button"
+            data-action="open-generation-image-preview"
+            data-image-url="${escapeAttr(resolveApiUrl(previewUrl))}"
+            data-image-name="故事板预览图"
+            aria-label="放大查看故事板预览图"
+          ><img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" /></button>
+        ` : ""}
       ` : `
         <div class="asset-generator-task-preview ${previewStateClass}">
           ${previewUrl
-            ? `<img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" />`
+            ? `
+              <button
+                class="asset-generator-task-preview-trigger"
+                type="button"
+                data-action="open-generation-image-preview"
+                data-image-url="${escapeAttr(resolveApiUrl(previewUrl))}"
+                data-image-name="故事板预览图"
+                aria-label="放大查看故事板预览图"
+              ><img src="${escapeHtml(resolveApiUrl(previewUrl))}" alt="任务返回图片" /></button>
+            `
             : summary.status
               ? '<div class="asset-generating-placeholder large" aria-hidden="true"><span></span><span></span><span></span><strong>图片生成中</strong></div>'
               : `<img src="${escapeHtml(placeholderArt)}" alt="任务等待中" />`}

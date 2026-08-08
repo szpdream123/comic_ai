@@ -2287,6 +2287,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       episodeWorkbenchAttachments: [],
       episodeWorkbenchSelectedAttachmentIds: [],
       storyboardMediaComposerDrafts: {},
+      storyboardBoardModeComposerDrafts: {},
       episodeWorkbenchScrollTarget: null,
       episodeWorkbenchConversationScrollMode: null,
       episodeWorkbenchCenterWidthRatio: EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH,
@@ -19097,7 +19098,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-muse-board-mode") {
-    workbench.ui.museBoardMode = target.dataset.mode ?? "operation";
+    const nextBoardMode = target.dataset.mode === "storyboard" ? "storyboard" : "operation";
+    if (
+      (workbench.ui.museScopeMode ?? "storyboard") === "storyboard" &&
+      nextBoardMode !== (workbench.ui.museBoardMode ?? "operation")
+    ) {
+      clearStoryboardBoardModeComposer(workbench, nextBoardMode);
+    }
+    workbench.ui.museBoardMode = nextBoardMode;
     workbench.ui.musePromptMenu = null;
     render(workbench);
     return;
@@ -20517,11 +20525,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       (workbench.ui.museScopeMode ?? "storyboard") === "storyboard" &&
       (workbench.ui.episodeMediaMode ?? "image") === nextMediaMode
     ) {
+      if (boardModeChanged) {
+        clearStoryboardBoardModeComposer(workbench, nextBoardMode);
+      }
       workbench.ui.museBoardMode = nextBoardMode;
       workbench.ui.musePromptMenu = null;
-      if (boardModeChanged) {
-        clearStoryboardBoardModeComposer(workbench);
-      }
       syncEpisodeStoryboardBoardModeOnly(workbench);
       if (boardModeChanged && workbench.root?.querySelector?.(".episode-replica-prompt")) {
         renderEpisodeWorkbenchPromptDockOnly(workbench, {
@@ -20530,16 +20538,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       return;
     }
-    if (nextBoardMode) {
-      workbench.ui.museBoardMode = nextBoardMode;
-    }
     const previousMediaMode = workbench.ui.episodeMediaMode ?? "image";
     if (previousMediaMode !== nextMediaMode) {
       switchStoryboardComposerMediaMode(workbench, previousMediaMode, nextMediaMode);
     }
     workbench.ui.episodeMediaMode = nextMediaMode;
     if (boardModeChanged) {
-      clearStoryboardBoardModeComposer(workbench);
+      clearStoryboardBoardModeComposer(workbench, nextBoardMode);
+    }
+    if (nextBoardMode) {
+      workbench.ui.museBoardMode = nextBoardMode;
     }
     if (workbench.ui.episodeMediaMode === "image") {
       workbench.ui.selectedModelId = resolveConfiguredImageModelCode(
@@ -36383,6 +36391,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
       : candidateEpisodeId;
   if (String(workbench.ui.selectedEpisodeId ?? "") !== String(resolvedEpisodeId ?? "")) {
     workbench.ui.storyboardMediaComposerDrafts = {};
+    workbench.ui.storyboardBoardModeComposerDrafts = {};
   }
   const requestedScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
@@ -41725,19 +41734,94 @@ function clearStoredStoryboardComposerDraft(workbench, storyboardId, mediaMode) 
   workbench.ui.storyboardMediaComposerDrafts = nextDrafts;
 }
 
-function clearStoryboardBoardModeComposer(workbench) {
+function storyboardBoardModeComposerDraftKey(storyboardId, mediaMode, boardMode) {
+  const normalizedBoardMode = boardMode === "storyboard" ? "storyboard" : "operation";
+  return `${String(storyboardId ?? "").trim()}:${normalizeStoryboardComposerMediaMode(mediaMode)}:${normalizedBoardMode}`;
+}
+
+function snapshotStoryboardBoardModeComposer(workbench, generationState) {
+  return {
+    prompt: String(
+      generationState?.videoPrompt ?? generationState?.prompt ?? generationState?.imagePrompt ?? workbench.ui.prompt ?? "",
+    ),
+    generationState: {
+      ...generationState,
+      quickReferenceItems: [...(generationState.quickReferenceItems ?? [])],
+      referenceUploads: [...(generationState.referenceUploads ?? [])],
+      localReferenceRoles: [...(generationState.localReferenceRoles ?? [])],
+      referenceSelections: [...(generationState.referenceSelections ?? [])],
+      mentionReferences: [...(generationState.mentionReferences ?? [])],
+    },
+    attachmentItems: [...(workbench.ui.episodeWorkbenchAttachments ?? [])],
+    selectedAttachmentIds: [...(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [])],
+    lipSyncAudioItems: [...(workbench.ui.lipSyncAudioItems ?? [])],
+  };
+}
+
+function stripStoryboardQuickReferenceMentions(prompt) {
+  return String(prompt ?? "")
+    .replace(/【@[^】]+】(?:的(?:场景|角色|道具)形象)?/gu, "")
+    .replace(/(^|[\s（(=：:，,；;、|])@[^\s【】,，。；;：:（）()]+/gmu, "$1")
+    .replace(/[ \t]{2,}/gu, " ");
+}
+
+function clearStoryboardBoardModeComposer(workbench, nextBoardMode) {
   const storyboardId = String(workbench?.ui?.selectedStoryboardId ?? "").trim();
   if (!storyboardId || isAssetScope(workbench)) {
     return;
   }
-  clearStoryboardComposerForSelection(workbench, storyboardId);
-  updateStoryboardGenerationState(workbench, storyboardId, (generationState) => ({
-    ...generationState,
-    prompt: "",
-    imagePrompt: "",
-    videoPrompt: "",
-  }));
-  clearStoryboardPromptForSelection(workbench, storyboardId);
+  const currentBoardMode = workbench.ui.museBoardMode === "storyboard" ? "storyboard" : "operation";
+  const targetBoardMode = nextBoardMode === "storyboard" ? "storyboard" : "operation";
+  if (currentBoardMode === targetBoardMode) {
+    return;
+  }
+  const selectedStoryboard = getSelectedStoryboard(getActiveStoryboards(workbench), storyboardId);
+  const generationState = selectedStoryboard?.generationState ?? createEmptyGenerationState();
+  const draftMap = {
+    ...(workbench.ui.storyboardBoardModeComposerDrafts ?? {}),
+    [storyboardBoardModeComposerDraftKey(storyboardId, workbench.ui.episodeMediaMode, currentBoardMode)]: snapshotStoryboardBoardModeComposer(workbench, generationState),
+  };
+  const nextDraft = draftMap[
+    storyboardBoardModeComposerDraftKey(storyboardId, workbench.ui.episodeMediaMode, targetBoardMode)
+  ] ?? null;
+  const shouldCleanStoryboardReferences = targetBoardMode === "storyboard";
+  const currentPrompt = String(
+    generationState?.videoPrompt ?? generationState?.prompt ?? generationState?.imagePrompt ?? workbench.ui.prompt ?? "",
+  );
+  const nextPrompt = nextDraft
+    ? shouldCleanStoryboardReferences
+      ? stripStoryboardQuickReferenceMentions(nextDraft.prompt)
+      : String(nextDraft.prompt ?? "")
+    : shouldCleanStoryboardReferences
+      ? stripStoryboardQuickReferenceMentions(currentPrompt)
+      : currentPrompt;
+  const nextState = nextDraft?.generationState
+    ? shouldCleanStoryboardReferences
+      ? {
+          ...nextDraft.generationState,
+          prompt: nextPrompt,
+          imagePrompt: stripStoryboardQuickReferenceMentions(nextDraft.generationState.imagePrompt),
+          videoPrompt: stripStoryboardQuickReferenceMentions(nextDraft.generationState.videoPrompt),
+          quickReferenceItems: [],
+          mentionReferences: [],
+        }
+      : { ...nextDraft.generationState, prompt: nextPrompt }
+    : shouldCleanStoryboardReferences
+      ? {
+        ...generationState,
+        prompt: stripStoryboardQuickReferenceMentions(generationState.prompt),
+        imagePrompt: stripStoryboardQuickReferenceMentions(generationState.imagePrompt),
+        videoPrompt: stripStoryboardQuickReferenceMentions(generationState.videoPrompt),
+        quickReferenceItems: [],
+        mentionReferences: [],
+      }
+      : generationState;
+  updateStoryboardGenerationState(workbench, storyboardId, () => nextState);
+  workbench.ui.storyboardBoardModeComposerDrafts = draftMap;
+  workbench.ui.prompt = nextPrompt;
+  workbench.ui.episodeWorkbenchAttachments = nextDraft?.attachmentItems ?? workbench.ui.episodeWorkbenchAttachments ?? [];
+  workbench.ui.episodeWorkbenchSelectedAttachmentIds = nextDraft?.selectedAttachmentIds ?? workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [];
+  workbench.ui.lipSyncAudioItems = nextDraft?.lipSyncAudioItems ?? workbench.ui.lipSyncAudioItems ?? [];
   clearPromptMentionUi(workbench);
 }
 

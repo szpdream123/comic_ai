@@ -103,4 +103,50 @@ describe("S3 compatible storage adapter", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it("aborts a timed-out known-length upload request", async () => {
+    let requestSocket: import("node:net").Socket | null = null;
+    let resolveConnectionClosed: (() => void) | null = null;
+    const connectionClosed = new Promise<void>((resolve) => {
+      resolveConnectionClosed = resolve;
+    });
+    const server = createServer((request) => {
+      requestSocket = request.socket;
+      request.socket.once("close", () => resolveConnectionClosed?.());
+      request.resume();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.equal(typeof address, "object");
+
+    try {
+      const adapter = new S3CompatibleStorageAdapter({
+        endpoint: `http://127.0.0.1:${address!.port}`,
+        region: "ap-guangzhou",
+        accessKeyId: "test-access-key",
+        secretAccessKey: "test-secret-key",
+        forcePathStyle: true,
+      });
+
+      await assert.rejects(
+        adapter.putObject({
+          bucket: "creator-test",
+          objectKey: "generated/timeout.txt",
+          body: new Uint8Array([1]),
+          contentType: "application/octet-stream",
+          timeoutMs: 100,
+        }),
+        /storage_put_object_timeout/,
+      );
+      await Promise.race([
+        connectionClosed,
+        new Promise((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+      assert.equal(requestSocket?.destroyed, true);
+    } finally {
+      requestSocket?.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 });

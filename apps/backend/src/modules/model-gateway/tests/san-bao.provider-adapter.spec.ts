@@ -132,6 +132,26 @@ describe("san bao provider adapter", () => {
     assert.deepEqual(poll?.redactedResponse.resultPending, true);
   });
 
+  it("keeps polling while SanBao reports a preparing video task", async () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "sd2_fast_9img_line2",
+      mediaType: "video",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/videos",
+        queryTaskEndpoint: "/openapi/v1/videos/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async () => (
+      new Response(JSON.stringify({ data: { id: "task-preparing", status: "preparing", progress: 1 } }))
+    )) as typeof fetch);
+
+    const poll = await adapter.poll?.({ externalRequestId: "task-preparing" });
+
+    assert.equal(poll?.status, "running");
+    assert.equal(poll?.redactedResponse.providerStatus, "preparing");
+  });
+
   it("uses the SanBao error factory when a failed submission has no task id", async () => {
     const adapter = createProviderAdapterFromModelConfig({
       ...sharedConfig,

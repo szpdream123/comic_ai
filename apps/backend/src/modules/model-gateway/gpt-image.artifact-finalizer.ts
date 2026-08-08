@@ -715,8 +715,8 @@ function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {
     retryAttempts: parsePositiveInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS, 10, 10),
     retryDelayMs: parseNonNegativeInteger(env.GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS, 3000, 60_000),
     uploadTimeoutMs: parsePositiveInteger(
-      env.GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS,
-      30 * 60_000,
+      env.GENERATION_IMAGE_ARTIFACT_UPLOAD_TIMEOUT_MS,
+      parsePositiveInteger(env.GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS, 30 * 60_000, 30 * 60_000),
       30 * 60_000,
     ),
   };
