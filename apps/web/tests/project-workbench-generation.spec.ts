@@ -22976,6 +22976,9 @@ describe("production workbench project tab", () => {
     assert.match(html, /storyboard-generator-completed-task/);
     assert.match(html, /storyboard-generator-completed\.png/);
     assert.match(html, /已返回预览图/);
+    assert.match(html, /data-action="open-generation-image-preview"/);
+    assert.match(html, /data-image-url="\/uploads\/storyboard-generator-completed\.png"/);
+    assert.match(html, /aria-label="放大查看故事板预览图"/);
     assert.match(html, /data-action="set-storyboard-generator-image"/);
     assert.match(html, />设为故事板<\/button>/);
   });

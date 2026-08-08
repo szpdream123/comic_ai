@@ -22,7 +22,7 @@ describe("gpt-image artifact finalizer", () => {
     );
   });
 
-  it("uses a thirty-minute generation artifact upload timeout by default", () => {
+  it("uses the image-specific generation artifact upload timeout", () => {
     assert.equal(
       __gptImageArtifactFinalizerTestUtils.readGenerationArtifactUploadConfig({}).retryAttempts,
       10,
@@ -40,6 +40,13 @@ describe("gpt-image artifact finalizer", () => {
         GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS: "900000",
       }).uploadTimeoutMs,
       900_000,
+    );
+    assert.equal(
+      __gptImageArtifactFinalizerTestUtils.readGenerationArtifactUploadConfig({
+        GENERATION_ARTIFACT_UPLOAD_TIMEOUT_MS: "1800000",
+        GENERATION_IMAGE_ARTIFACT_UPLOAD_TIMEOUT_MS: "300000",
+      }).uploadTimeoutMs,
+      300_000,
     );
   });
 

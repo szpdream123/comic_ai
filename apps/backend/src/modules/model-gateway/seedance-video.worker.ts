@@ -1545,6 +1545,12 @@ export async function finalizeSeedanceVideoArtifactJob(
     status: "uploaded",
     now: input.now,
   });
+  await writeSeedanceVideoBackToStoryboard(db, {
+    snapshot,
+    projectId: row.project_id,
+    assetVersionId: persisted.assetVersionId,
+    now: input.now,
+  });
 
   const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
   await finalizeTaskAttempt(db, {
@@ -1738,6 +1744,12 @@ export async function recoverSeedanceVideoAfterPollTimeout(
     sourceAction: "generate_video",
     publicUrl: platformUrl,
     status: "uploaded",
+    now: input.now,
+  });
+  await writeSeedanceVideoBackToStoryboard(db, {
+    snapshot,
+    projectId: row.project_id,
+    assetVersionId: persisted.assetVersionId,
     now: input.now,
   });
 
@@ -1943,15 +1955,28 @@ export async function persistSeedanceVideoArtifactJob(
     sourceUrl: platformUrl,
     downloadUrl: platformUrl,
   };
+  await writeSeedanceVideoBackToStoryboard(db, {
+    snapshot,
+    projectId: row.project_id,
+    assetVersionId: persisted.assetVersionId,
+    now: input.now,
+  });
 
   const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
+  const billingAlreadyReleased = row.reservation_id && amount > 0
+    ? await isSeedanceBillingAlreadyReleasedAfterInvalidResponse(db, {
+        reservationId: row.reservation_id,
+        providerRequestId: row.provider_request_id,
+        amount,
+      })
+    : false;
   await finalizeTaskAttempt(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
     status: "succeeded",
     now: input.now,
     finalize: async () => {
-      if (row.reservation_id && amount > 0) {
+      if (row.reservation_id && amount > 0 && !billingAlreadyReleased) {
         await reopenManualReviewReservationForSettlement(db, {
           reservationId: row.reservation_id,
           now: input.now,
@@ -1986,7 +2011,8 @@ export async function persistSeedanceVideoArtifactJob(
           externalRequestId: row.external_request_id,
         },
         creditSummary: {
-          consumed: amount,
+          consumed: billingAlreadyReleased ? 0 : amount,
+          ...(billingAlreadyReleased ? { released: amount } : {}),
           settledAt: input.now.toISOString(),
         },
         now: input.now,
@@ -3670,6 +3696,83 @@ async function reopenManualReviewReservationForSettlement(
     `,
     [input.reservationId, input.now],
   );
+}
+
+async function writeSeedanceVideoBackToStoryboard(
+  db: SqlDatabase,
+  input: {
+    snapshot: Record<string, unknown>;
+    projectId: string | null;
+    assetVersionId: string | null;
+    now: Date;
+  },
+) {
+  if (!input.assetVersionId || readString(input.snapshot.targetType) !== "storyboard" || !input.projectId) {
+    return;
+  }
+  const storyboardId = readString(input.snapshot.targetId) ?? readString(input.snapshot.shotId);
+  const episodeId = readString(input.snapshot.episodeId);
+  if (!storyboardId || !episodeId) return;
+  await db.query(
+    `
+      UPDATE shots
+      SET current_video_asset_version_id = $4,
+          video_status = 'completed',
+          updated_at = $5
+      WHERE id = $1
+        AND episode_id = $2
+        AND project_id = $3
+    `,
+    [storyboardId, episodeId, input.projectId, input.assetVersionId, input.now],
+  );
+}
+
+async function isSeedanceBillingAlreadyReleasedAfterInvalidResponse(
+  db: SqlDatabase,
+  input: { reservationId: string; providerRequestId: string | null; amount: number },
+) {
+  const row = await queryOne<{
+    reservation_status: string;
+    amount_total: number | string;
+    amount_reserved: number | string;
+    amount_released: number | string;
+    allocation_status: string | null;
+    allocation_amount: number | string | null;
+    failure_code: string | null;
+    provider_status: string | null;
+  }>(
+    db,
+    `
+      SELECT
+        reservation.status AS reservation_status,
+        reservation.amount_total,
+        reservation.amount_reserved,
+        reservation.amount_released,
+        allocation.status AS allocation_status,
+        allocation.amount AS allocation_amount,
+        allocation.metadata_json->>'failureCode' AS failure_code,
+        provider.status AS provider_status
+      FROM credit_reservations reservation
+      LEFT JOIN credit_reservation_allocations allocation
+        ON allocation.reservation_id = reservation.id
+       AND allocation.status = 'released'
+      LEFT JOIN provider_requests provider
+        ON provider.id = $2
+      WHERE reservation.id = $1
+      ORDER BY allocation.updated_at DESC NULLS LAST
+      LIMIT 1
+    `,
+    [input.reservationId, input.providerRequestId],
+  );
+  if (!row) return false;
+  return row.reservation_status === "released"
+    && Number(row.amount_total) === input.amount
+    && Number(row.amount_reserved) === 0
+    && Number(row.amount_released) === input.amount
+    && row.allocation_status === "released"
+    && Number(row.allocation_amount) === input.amount
+    && row.failure_code === "san_bao_invalid_response"
+    && row.provider_status === "succeeded";
 }
 
 function parseSnapshot(value: Record<string, unknown> | string) {

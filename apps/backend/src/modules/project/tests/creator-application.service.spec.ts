@@ -1262,6 +1262,9 @@ describe("creator application user ownership", { concurrency: false }, () => {
       const historicalStorageObjectId = "00000000-0000-4000-8000-000000000113";
       const sourceOnlyStorageObjectId = "00000000-0000-4000-8000-000000000114";
       const artifactStorageObjectId = "00000000-0000-4000-8000-000000000115";
+      const canvasStorageObjectId = "00000000-0000-4000-8000-000000000120";
+      const canvasUploadSessionId = "00000000-0000-4000-8000-000000000121";
+      const canvasUploadRecordId = "00000000-0000-4000-8000-000000000122";
 
       await db.query(
         `
@@ -1311,6 +1314,44 @@ describe("creator application user ownership", { concurrency: false }, () => {
         userId: user.id,
         now: new Date("2026-07-21T09:04:00.000Z"),
       });
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, canvas_project_id, bucket, object_key, content_type,
+            provider, status, created_by_user_id
+          )
+          VALUES ($1, $2, 'creator-test', 'project-delete/canvas.png',
+                  'image/png', 'test', 'available', $3)
+        `,
+        [canvasStorageObjectId, survivingCanvas.canvasProjectId, user.id],
+      );
+      await db.query(
+        `
+          INSERT INTO storage_upload_sessions (
+            id, project_id, storage_object_id, purpose, status, content_type,
+            original_file_name, idempotency_key, expires_at, created_by_user_id
+          )
+          VALUES ($1, $2, $3, 'canvas-image', 'completed', 'image/png',
+                  'canvas.png', 'project-delete-canvas-upload', $4, $5)
+        `,
+        [
+          canvasUploadSessionId,
+          sourceProjectId,
+          canvasStorageObjectId,
+          new Date("2026-07-21T10:04:00.000Z"),
+          user.id,
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO project_upload_records (
+            id, canvas_project_id, storage_object_id, upload_session_id,
+            actor_user_id, page_key, source_action, file_name, status
+          )
+          VALUES ($1, $2, $3, $4, $5, 'canvas', 'upload', 'canvas.png', 'completed')
+        `,
+        [canvasUploadRecordId, survivingCanvas.canvasProjectId, canvasStorageObjectId, canvasUploadSessionId, user.id],
+      );
       const withBothReferences = await saveCanvasByCanvasProjectId(db, {
         canvasProjectId: survivingCanvas.canvasProjectId,
         userId: user.id,
@@ -1388,6 +1429,20 @@ describe("creator application user ownership", { concurrency: false }, () => {
         `,
         [survivingCanvas.canvasProjectId],
       );
+      const preservedCanvasUpload = await db.query<{
+        canvas_project_id: string | null;
+        storage_object_id: string | null;
+        upload_session_id: string | null;
+      }>(
+        `SELECT canvas_project_id, storage_object_id, upload_session_id
+         FROM project_upload_records
+         WHERE id = $1`,
+        [canvasUploadRecordId],
+      );
+      const deletedUploadSession = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM storage_upload_sessions WHERE id = $1",
+        [canvasUploadSessionId],
+      );
       assert.equal(deleted.status, 200);
       assert.deepEqual(deletedObjectKeys, ["project-delete/source-only.png"]);
       assert.deepEqual(storageRows.rows, [
@@ -1396,6 +1451,12 @@ describe("creator application user ownership", { concurrency: false }, () => {
         { id: artifactStorageObjectId, project_id: null, status: "available" },
       ]);
       assert.deepEqual(projectRows.rows.map((row) => row.id), [survivingProjectId]);
+      assert.deepEqual(preservedCanvasUpload.rows, [{
+        canvas_project_id: survivingCanvas.canvasProjectId,
+        storage_object_id: canvasStorageObjectId,
+        upload_session_id: null,
+      }]);
+      assert.equal(deletedUploadSession.rows[0]?.count, 0);
       assert.deepEqual(detachedArtifact.rows, [
         {
           asset_id: null,

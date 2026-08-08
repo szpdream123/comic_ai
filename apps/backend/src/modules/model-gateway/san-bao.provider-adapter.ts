@@ -522,6 +522,7 @@ function normalizeStatus(status: string | undefined): "accepted" | "running" | "
   if (!normalized) return null;
   if (normalized === "succeeded") return "succeeded";
   if (normalized === "failed") return "failed";
+  if (normalized === "preparing") return "running";
   if (normalized === "processing") return "running";
   if (normalized === "queued") return "accepted";
   return null;
