@@ -2473,7 +2473,12 @@ export const creatorApi = {
     params.set("pageSize", String(pageSize));
     if (input.includeRanking === false) params.set("includeRanking", "false");
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
-    return fetchJson(`/api/creator/prompt-marketplace${suffix}`, { cache: "no-store", unwrapEnvelope: false });
+    const url = `/api/creator/prompt-marketplace${suffix}`;
+    return fetchJson(url, {
+      cache: "no-store",
+      unwrapEnvelope: false,
+      dedupeKey: `GET ${url}`,
+    });
   },
 
   getPromptMarketplaceLibrary(input = {}) {

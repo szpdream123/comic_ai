@@ -4448,7 +4448,9 @@ export function renderEpisodeBatchModal(modal) {
   const skillCredits = mode === "image" ? resolveEpisodeBatchSkillCredits(modal) * selectedCount : 0;
   const modelCredits = Math.max(0, Number(totalCredits) - skillCredits);
   const primaryLabel =
-    mode === "video"
+    modal.isSubmitting === true
+      ? "提交中..."
+      : mode === "video"
       ? "生成"
       : mode === "upscale"
         ? `处理 ${selectedCount} 项素材 | ${totalCredits} 积分`
@@ -4457,11 +4459,11 @@ export function renderEpisodeBatchModal(modal) {
           : `生成 ${totalCredits} 积分`;
   return `
     <section class="modal-backdrop storyboard-description-backdrop" role="dialog" aria-modal="true" data-episode-batch-modal-layer>
-      <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal"></button>
+      <button class="modal-backdrop-hit" type="button" data-action="close-episode-batch-modal" ${modal.isSubmitting === true ? "disabled" : ""}></button>
       <div class="episode-batch-modal" style="--episode-batch-anchor-top:${escapeAttr(String(modal.anchorTop ?? 80))}px;">
         <div class="single-episode-modal-head storyboard-description-head">
           <h2>${escapeHtml(title)}</h2>
-          <button class="modal-close" type="button" data-action="close-episode-batch-modal">×</button>
+          <button class="modal-close" type="button" data-action="close-episode-batch-modal" ${modal.isSubmitting === true ? "disabled" : ""}>×</button>
         </div>
         ${
           showModeTabs
@@ -4539,7 +4541,7 @@ function renderEpisodeBatchImagePanel(modal, selectedCount, primaryLabel) {
           })}
           <span class="episode-batch-footer-summary">已选 ${selectedCount} 项素材</span>
         </div>
-        <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
+        <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal" ${modal.isSubmitting === true ? 'disabled aria-busy="true"' : 'aria-busy="false"'}>${escapeHtml(primaryLabel)}</button>
       </footer>
     </div>
   `;
@@ -4627,7 +4629,7 @@ function renderEpisodeBatchVideoPanel(modal, selectedCount, primaryLabel, scope)
           })}
           ${styleOptions.length ? renderEpisodeBatchSelectField("selectedStyleId", "", selectedStyleLabel, modal.openField === "selectedStyleId", styleOptions, { compact: true, menuDirection: "up", hideIndicator: true, selectedPreview: selectedStyle?.preview }) : ""}
         </div>
-        <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal">${escapeHtml(primaryLabel)}</button>
+        <button class="episode-batch-submit" type="button" data-action="submit-episode-batch-modal" ${modal.isSubmitting === true ? 'disabled aria-busy="true"' : 'aria-busy="false"'}>${escapeHtml(primaryLabel)}</button>
       </footer>
     </div>
   `;
