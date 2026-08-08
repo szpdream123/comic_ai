@@ -2775,6 +2775,17 @@ export const creatorApi = {
     });
   },
 
+  getAssetConversationFullHistory(episodeId, assetId, mediaMode = "image") {
+    const query = new URLSearchParams();
+    query.set("mediaMode", mediaMode === "video" ? "video" : "image");
+    query.set("includeMessages", "1");
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation?${query}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
+  },
+
   saveAssetConversationMessages(episodeId, assetId, input) {
     return postJson(
       `/api/episodes/${encodeURIComponent(episodeId)}/assets/${encodeURIComponent(assetId)}/conversation/messages`,
@@ -2786,6 +2797,17 @@ export const creatorApi = {
     const query = new URLSearchParams();
     query.set("mediaMode", mediaMode === "video" ? "video" : "image");
     query.set("includeMessages", "0");
+    const path = `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation?${query}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 15000,
+    });
+  },
+
+  getStoryboardConversationFullHistory(episodeId, storyboardId, mediaMode = "image") {
+    const query = new URLSearchParams();
+    query.set("mediaMode", mediaMode === "video" ? "video" : "image");
+    query.set("includeMessages", "1");
     const path = `/api/episodes/${encodeURIComponent(episodeId)}/storyboards/${encodeURIComponent(storyboardId)}/conversation?${query}`;
     return fetchJsonWithTtl(path, {
       cacheKey: `GET ${path}`,

@@ -278,7 +278,8 @@ export function renderEpisodeWorkbench({
     ? `${resolveAssetLabel(normalizedActiveAssetTab)}${selectedAsset?.name ?? ""}`
     : "";
   const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
-  const batchSelectionActions = renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled);
+  const selectedCount = scopeMode === "storyboard" ? selectedStoryboardIds.length : selectedEpisodeAssetIds.length;
+  const batchSelectionActions = renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled, selectedCount);
   const quickAssetRailToggleLabel = isQuickAssetRailCollapsed ? "展开资产快捷栏" : "收起资产快捷栏";
   return `
     <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台" data-episode-id="${escapeAttr(episodeId)}" data-episode-title="${escapeAttr(episodeTitle)}">
@@ -576,9 +577,10 @@ function renderAssetPanel(
   `;
 }
 
-export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled) {
+export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled, selectedCount = 0) {
   return `
     <div class="episode-replica-batch-actions">
+      <button class="episode-replica-stage-tab" type="button" data-action="set-selected-latest-media" ${disabled(selectedCount === 0)} aria-disabled="${selectedCount === 0 ? "true" : "false"}">一键设置</button>
       <button class="episode-replica-stage-tab episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
       <button class="episode-replica-stage-tab" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
     </div>
