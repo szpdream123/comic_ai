@@ -12357,12 +12357,12 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.match(html, /data-action="open-storyboard-image-generator"/);
   });
 
-  it("switches storyboard board views in place and clears composer content and materials", async () => {
+  it("clears only storyboard quick mentions while preserving the operation composer", async () => {
     const storyboard = { ...addStoryboard([])[0], id: "storyboard-board-toggle" };
     storyboard.generationState = {
       ...(storyboard.generationState ?? {}),
-      prompt: "切换前内容",
-      videoPrompt: "切换前内容",
+      prompt: "切换前内容\n角色：【@角色素材】",
+      videoPrompt: "切换前内容\n角色：【@角色素材】",
       quickReferenceItems: [{ id: "quick-ref-1", kind: "image", url: "/uploads/ref-1.png" }],
       firstFrame: { id: "first-frame", kind: "image", url: "/uploads/first-frame.png" },
     };
@@ -12444,7 +12444,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
         museScopeMode: "storyboard",
         museBoardMode: "operation",
         episodeMediaMode: "video",
-        prompt: "切换前内容",
+        prompt: "切换前内容\n角色：【@角色素材】",
         episodeWorkbenchAttachments: [{ id: "audio-1", kind: "audio", url: "/uploads/audio-1.mp3" }],
         episodeWorkbenchSelectedAttachmentIds: ["audio-1"],
       },
@@ -12470,11 +12470,11 @@ it("does not duplicate image mention suffixes when adding another prompt mention
       assert.equal(workbench.ui.museBoardMode, "storyboard");
       assert.equal(storyboardColumn, createdStoryboardColumn);
       assert.equal(body.classList.contains("storyboard-board-mode"), true);
-      assert.equal(workbench.ui.prompt, "");
-      assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
-      assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, []);
+      assert.equal(workbench.ui.prompt, "切换前内容\n角色：");
+      assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, [{ id: "audio-1", kind: "audio", url: "/uploads/audio-1.mp3" }]);
+      assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, ["audio-1"]);
       assert.deepEqual(workbench.ui.episodeStoryboardMap["episode-board-toggle"][0].generationState.quickReferenceItems, []);
-      assert.equal(workbench.ui.episodeStoryboardMap["episode-board-toggle"][0].generationState.firstFrame, null);
+      assert.deepEqual(workbench.ui.episodeStoryboardMap["episode-board-toggle"][0].generationState.firstFrame, { id: "first-frame", kind: "image", url: "/uploads/first-frame.png" });
 
       workbench.ui.prompt = "再次切换前内容";
       workbench.ui.episodeWorkbenchAttachments = [{ id: "image-2", kind: "image", url: "/uploads/image-2.png" }];
@@ -12492,9 +12492,9 @@ it("does not duplicate image mention suffixes when adding another prompt mention
       assert.equal(workbench.ui.museBoardMode, "operation");
       assert.equal(storyboardColumn, null);
       assert.equal(body.classList.contains("operation-board-mode"), true);
-      assert.equal(workbench.ui.prompt, "");
-      assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
-      assert.deepEqual(workbench.ui.episodeStoryboardMap["episode-board-toggle"][0].generationState.quickReferenceItems, []);
+      assert.equal(workbench.ui.prompt, "切换前内容\n角色：【@角色素材】");
+      assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, [{ id: "audio-1", kind: "audio", url: "/uploads/audio-1.mp3" }]);
+      assert.deepEqual(workbench.ui.episodeStoryboardMap["episode-board-toggle"][0].generationState.quickReferenceItems, [{ id: "quick-ref-1", kind: "image", url: "/uploads/ref-1.png" }]);
 
       await handleWorkbenchActionForTest(workbench, {
         dataset: { action: "set-episode-media-mode", mode: "video", boardMode: "storyboard" },
@@ -12503,7 +12503,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
       assert.equal(workbench.ui.museBoardMode, "storyboard");
       assert.equal(storyboardColumn, createdStoryboardColumn);
       assert.equal(storyboardColumnInsertions, 2);
-      assert.equal(workbench.ui.prompt, "");
+      assert.equal(workbench.ui.prompt, "再次切换前内容");
       assert.deepEqual(requests, []);
       assert.equal(fullRenderCount, 0);
     } finally {

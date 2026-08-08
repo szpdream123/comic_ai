@@ -359,6 +359,51 @@ export async function upsertAssetConversationMessages(
   return result.rows.map(assetConversationMessageFromRow);
 }
 
+export async function markAssetConversationGenerationSucceeded(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    result: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  const assetVersionId = input.result.assetVersionId ?? null;
+  const storageObjectId = input.result.storageObjectId ?? null;
+  const url = input.result.url ?? input.result.previewUrl ?? input.result.sourceUrl ?? null;
+  const fixedVideo = {
+    id: assetVersionId ?? storageObjectId ?? input.taskId,
+    label: "分镜视频",
+    src: url,
+    url,
+    storageObjectId,
+    assetVersionId,
+  };
+  const patch = {
+    status: "completed",
+    taskId: input.taskId,
+    returnedAt: input.now.toISOString(),
+    assetVersionId,
+    storageObjectId,
+    url,
+    previewUrl: input.result.previewUrl ?? url,
+    sourceUrl: input.result.sourceUrl ?? url,
+    downloadUrl: input.result.downloadUrl ?? url,
+    fixedVideos: [fixedVideo],
+  };
+  await db.query(
+    `
+      UPDATE episode_asset_conversation_messages
+      SET status = 'completed',
+          payload_json = (payload_json - 'failure' - 'failureCode' - 'noticeType') || $2::jsonb,
+          updated_at = $3
+      WHERE turn_id = $1
+         OR task_id = $1
+         OR payload_json->>'taskId' = $1
+    `,
+    [input.taskId, JSON.stringify(patch), input.now],
+  );
+}
+
 export async function listAssetConversationMessages(
   db: SqlDatabase,
   input: {

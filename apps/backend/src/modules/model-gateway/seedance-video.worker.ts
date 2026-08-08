@@ -13,6 +13,7 @@ import {
   resolveGenerationBillingAmount,
 } from "../credit-billing/team-member-generation-credit.service.ts";
 import { createAssetVersionSnapshot } from "../project/asset-version-record.service.ts";
+import { markAssetConversationGenerationSucceeded } from "../project/asset-conversation-record.service.ts";
 import { ensureProjectUploadRecordForStorageObject } from "../project/project-upload-record.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -1594,6 +1595,11 @@ export async function finalizeSeedanceVideoArtifactJob(
         },
         now: input.now,
       });
+      await markAssetConversationGenerationSucceeded(db, {
+        taskId: row.task_id,
+        result: persisted,
+        now: input.now,
+      });
     },
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
@@ -2015,6 +2021,11 @@ export async function persistSeedanceVideoArtifactJob(
           ...(billingAlreadyReleased ? { released: amount } : {}),
           settledAt: input.now.toISOString(),
         },
+        now: input.now,
+      });
+      await markAssetConversationGenerationSucceeded(db, {
+        taskId: row.task_id,
+        result: persisted,
         now: input.now,
       });
     },
