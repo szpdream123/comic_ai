@@ -19087,7 +19087,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "set-muse-board-mode") {
-    workbench.ui.museBoardMode = target.dataset.mode ?? "operation";
+    const nextBoardMode = target.dataset.mode === "storyboard" ? "storyboard" : "operation";
+    if (
+      (workbench.ui.museScopeMode ?? "storyboard") === "storyboard" &&
+      nextBoardMode !== (workbench.ui.museBoardMode ?? "operation")
+    ) {
+      clearStoryboardBoardModeComposer(workbench, nextBoardMode);
+    }
+    workbench.ui.museBoardMode = nextBoardMode;
     workbench.ui.musePromptMenu = null;
     render(workbench);
     return;
@@ -41723,7 +41730,9 @@ function storyboardBoardModeComposerDraftKey(storyboardId, mediaMode, boardMode)
 
 function snapshotStoryboardBoardModeComposer(workbench, generationState) {
   return {
-    prompt: String(getCurrentScopePrompt(workbench, { allowPromptFallback: false }) ?? ""),
+    prompt: String(
+      generationState?.videoPrompt ?? generationState?.prompt ?? generationState?.imagePrompt ?? workbench.ui.prompt ?? "",
+    ),
     generationState: {
       ...generationState,
       quickReferenceItems: [...(generationState.quickReferenceItems ?? [])],
@@ -41765,13 +41774,16 @@ function clearStoryboardBoardModeComposer(workbench, nextBoardMode) {
     storyboardBoardModeComposerDraftKey(storyboardId, workbench.ui.episodeMediaMode, targetBoardMode)
   ] ?? null;
   const shouldCleanStoryboardReferences = targetBoardMode === "storyboard";
+  const currentPrompt = String(
+    generationState?.videoPrompt ?? generationState?.prompt ?? generationState?.imagePrompt ?? workbench.ui.prompt ?? "",
+  );
   const nextPrompt = nextDraft
     ? shouldCleanStoryboardReferences
       ? stripStoryboardQuickReferenceMentions(nextDraft.prompt)
       : String(nextDraft.prompt ?? "")
     : shouldCleanStoryboardReferences
-      ? stripStoryboardQuickReferenceMentions(getCurrentScopePrompt(workbench, { allowPromptFallback: false }))
-      : String(getCurrentScopePrompt(workbench, { allowPromptFallback: false }) ?? "");
+      ? stripStoryboardQuickReferenceMentions(currentPrompt)
+      : currentPrompt;
   const nextState = nextDraft?.generationState
     ? shouldCleanStoryboardReferences
       ? {
