@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { CreatorDevStorageAdapter } from "../creator-dev.storage-adapter.ts";
 
 describe("creator dev storage adapter", () => {
-  it("creates deterministic signed read urls for stored objects", async () => {
+  it("creates deterministic permanent read urls for stored objects", async () => {
     const adapter = new CreatorDevStorageAdapter();
     const expiresAt = new Date("2026-05-18T12:00:00.000Z");
 
@@ -15,9 +15,9 @@ describe("creator dev storage adapter", () => {
     });
 
     assert.equal(result.expiresAt.toISOString(), expiresAt.toISOString());
-    assert.match(
+    assert.equal(
       result.url,
-      /^\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2Fobject-file-file\.png\?expiresAt=/,
+      "/uploads/storage/creator-dev/AIManhuaDrama%2F20260518%2Fobject-file-file.png",
     );
   });
 });

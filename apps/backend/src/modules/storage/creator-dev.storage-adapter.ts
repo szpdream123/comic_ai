@@ -9,7 +9,7 @@ export class CreatorDevStorageAdapter implements StorageAdapter {
     expiresAt: Date;
   }): Promise<{ url: string; expiresAt: Date }> {
     return {
-      url: `${this.basePath}/${encodeURIComponent(input.bucket)}/${encodeURIComponent(input.objectKey)}?expiresAt=${encodeURIComponent(input.expiresAt.toISOString())}`,
+      url: `${this.basePath}/${encodeURIComponent(input.bucket)}/${encodeURIComponent(input.objectKey)}`,
       expiresAt: input.expiresAt,
     };
   }

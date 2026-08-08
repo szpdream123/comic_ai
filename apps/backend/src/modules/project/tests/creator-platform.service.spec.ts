@@ -224,7 +224,7 @@ describe("creator platform service", { concurrency: false }, () => {
       );
       assert.match(
         result.signedUrl,
-        /^(?:https:\/\/.*\.json\?|\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2F.*\.json\?expiresAt=)/,
+        /^(?:https:\/\/.*\.json|\/uploads\/storage\/creator-dev\/AIManhuaDrama%2F20260518%2F.*\.json)$/,
       );
       assert.equal(result.exportRecord.manifestStatus, "ready");
       assert.deepEqual(counts.rows[0], {
@@ -375,7 +375,7 @@ describe("creator platform service", { concurrency: false }, () => {
       );
       assert.match(
         exportResult.signedUrl,
-        /^https:\/\/cdn\.example\.test\/assets\/creator-prod\/AIManhuaDrama%2F20260518%2F.*\.json\?expiresAt=/,
+        /^https:\/\/cdn\.example\.test\/assets\/creator-prod\/AIManhuaDrama%2F20260518%2F.*\.json$/,
       );
       assert.equal(
         exportResult.expiresAt.toISOString(),

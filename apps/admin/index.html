@@ -738,6 +738,32 @@
         border-radius: 10px;
         background: #fbfdff;
       }
+      .resource-retention-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 2px 0 12px;
+        padding: 12px 0;
+        border-top: 1px solid #e2eaf4;
+        border-bottom: 1px solid #e2eaf4;
+      }
+      .resource-retention-copy {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+      }
+      .resource-retention-copy strong { color: #1b324b; font-size: 13px; }
+      .resource-retention-copy span { color: #667d95; font-size: 12px; line-height: 1.45; }
+      .resource-retention-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+        text-align: right;
+      }
+      .resource-retention-metric { color: #405976; font-size: 12px; white-space: nowrap; }
       .resource-pagination {
         display: flex;
         align-items: center;
@@ -2101,6 +2127,8 @@
         .toolbar > .btn {
           width: 100%;
         }
+        .resource-retention-bar { align-items: flex-start; flex-direction: column; }
+        .resource-retention-actions { width: 100%; justify-content: space-between; text-align: left; }
         .actions-row {
           justify-content: flex-end;
         }
@@ -2267,6 +2295,8 @@
           imageBytes: 0,
           videoBytes: 0,
         },
+        resourceRetention: null,
+        resourceRetentionRunning: false,
         resourceLoadError: "",
         resourceMediaFilter: "all",
         resourceRangeFilter: "all",
@@ -3088,9 +3118,10 @@
           if (String(state.resourceSearch || "").trim()) {
             params.set("keyword", String(state.resourceSearch || "").trim());
           }
-          const [listResult, statsResult] = await Promise.all([
+          const [listResult, statsResult, retentionResult] = await Promise.all([
             api(`/api/admin/resources?${params.toString()}`),
             api(`/api/admin/resources/summary?media=${encodeURIComponent(state.resourceMediaFilter || "all")}&range=${encodeURIComponent(state.resourceRangeFilter || "all")}${String(state.resourceSearch || "").trim() ? `&keyword=${encodeURIComponent(String(state.resourceSearch || "").trim())}` : ""}`),
+            api("/api/admin/resources/retention/summary"),
           ]);
           const statsPayload = statsResult?.data && typeof statsResult.data === "object"
             ? statsResult.data
@@ -3104,6 +3135,10 @@
             imageBytes: Number(statsPayload?.imageBytes || 0),
             videoBytes: Number(statsPayload?.videoBytes || 0),
           };
+          const retentionPayload = retentionResult?.data && typeof retentionResult.data === "object"
+            ? retentionResult.data
+            : retentionResult;
+          state.resourceRetention = retentionPayload || null;
           state.resourcePage = Math.max(1, Number(listResult.meta?.page || state.resourcePage || 1));
           state.resourceLoadError = "";
           if (!state.resourceSelectedId || !state.resources.some((item) => item.id === state.resourceSelectedId)) {
@@ -3122,6 +3157,7 @@
             imageBytes: 0,
             videoBytes: 0,
           };
+          state.resourceRetention = null;
           state.resourceSelectedId = null;
         } finally {
           setPageLoading("resources", false);
@@ -6032,6 +6068,48 @@
         }
       }
 
+      async function runMediaRetention() {
+        if (state.resourceRetentionRunning) return;
+        const retention = state.resourceRetention;
+        if (!retention) {
+          showToast("正在获取过期资源清单");
+          await loadResources();
+          renderShell();
+          return;
+        }
+        const eligibleCount = Number(retention.eligibleCount || 0);
+        if (!eligibleCount) {
+          showToast("当前没有可清理的过期图片或视频");
+          return;
+        }
+        const cutoff = retention.cutoffAt ? formatAdminDateTime(retention.cutoffAt) : "45天前";
+        if (!window.confirm(`确认清理 ${eligibleCount} 个过期图片或视频（${formatBytes(Number(retention.eligibleBytes || 0))}）吗？团队资产、封面、品牌素材和官方资源会保留。截止时间：${cutoff}。`)) {
+          return;
+        }
+        state.resourceRetentionRunning = true;
+        renderShell();
+        try {
+          const response = await api("/api/admin/resources/retention/run", {
+            method: "POST",
+            headers: { "idempotency-key": `admin-ui-media-retention-${Date.now()}` },
+            body: JSON.stringify({ reason: "后台主动清理45天前图片和视频" }),
+          });
+          const result = response?.data || response || {};
+          const deletedCount = Number(result.deletedCount || 0);
+          const failedCount = Number(result.failedCount || 0);
+          await loadResources();
+          renderShell();
+          showToast(failedCount
+            ? `已删除 ${deletedCount} 个资源，${failedCount} 个删除失败，将在下次自动任务重试`
+            : `已删除 ${deletedCount} 个过期资源`);
+        } catch (error) {
+          showToast(error.payload?.error?.message || "过期资源清理失败");
+        } finally {
+          state.resourceRetentionRunning = false;
+          renderShell();
+        }
+      }
+
       function resourcePreviewCell(item) {
         const previewUrl = storagePreviewUrl(item);
         const label = resourceKindLabel(item);
@@ -6108,6 +6186,8 @@
           ? `<div class="resource-table-wrap"><table class="resource-table"><thead><tr><th class="preview-col">图片/视频</th><th>链接</th><th class="size-col">大小</th><th class="type-col">类型</th><th class="user-col">用户</th><th class="phone-col">手机</th><th class="time-col">创建时间</th><th class="actions">操作</th></tr></thead><tbody>${items.map((item) => resourceTableRow(item)).join("")}</tbody></table></div>`
           : `<div class="resource-inspector-empty">${state.resourceLoadError || "暂无资源"}</div>`;
         const stats = state.resourceStats || {};
+        const retention = state.resourceRetention || {};
+        const eligibleCount = Number(retention.eligibleCount || 0);
         return `<div class="section-stack resources-layout">
           <section class="card">
             <div class="toolbar">
@@ -6120,6 +6200,16 @@
                 <select onchange="updateResourceMediaFilter(this.value)">${resourceFilterOptions(state.resourceMediaFilter || "all", [{ value: "all", label: "全部资源" }, { value: "image", label: "图片" }, { value: "video", label: "视频" }])}</select>
                 <select onchange="updateResourceRangeFilter(this.value)">${resourceFilterOptions(state.resourceRangeFilter || "all", [{ value: "all", label: "全部时间" }, { value: "day", label: "今日" }, { value: "month", label: "本月" }])}</select>
                 <button class="btn ghost" onclick="loadResources().then(renderShell)">刷新</button>
+              </div>
+            </div>
+            <div class="resource-retention-bar">
+              <div class="resource-retention-copy">
+                <strong>过期媒体清理</strong>
+                <span>每日 00:05（上海时间）自动删除满 ${Number(retention.retentionDays || 45)} 天的用户图片和视频，团队资产、封面、品牌素材及官方资源不受影响。</span>
+              </div>
+              <div class="resource-retention-actions">
+                <span class="resource-retention-metric">待清理 ${eligibleCount} 个 · ${formatBytes(Number(retention.eligibleBytes || 0))}</span>
+                <button class="btn primary" type="button" onclick="runMediaRetention()" ${permissionAttrs("audit.read")} ${state.resourceRetentionRunning || !eligibleCount ? "disabled" : ""}>${state.resourceRetentionRunning ? "正在清理..." : "清理过期媒体"}</button>
               </div>
             </div>
             <div class="resource-stat-grid" style="margin-bottom:12px;">

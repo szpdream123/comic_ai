@@ -5,7 +5,9 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   ProviderRequestConflictError,
   createOrReuseProviderRequest,
+  submitProviderRequest,
 } from "../provider-request.service.ts";
+import { ModelError } from "../model-error.ts";
 
 describe("provider request deterministic upsert", { concurrency: false }, () => {
   it("reuses the same request key under concurrent duplicate callers", async () => {
@@ -45,6 +47,70 @@ describe("provider request deterministic upsert", { concurrency: false }, () => 
         }),
         ProviderRequestConflictError,
       );
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("treats a SanBao invalid response as a definitive submission failure", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await assert.rejects(
+        submitProviderRequest(db, {
+          ...providerInput(),
+          providerName: "san-bao",
+          requestKey: "san-bao-invalid-response",
+          adapter: {
+            async submit() {
+              throw ModelError.fromUnknown("invalid response", {
+                failureCode: "san_bao_invalid_response",
+                mediaType: "video",
+                phase: "submit",
+              });
+            },
+          },
+        }),
+      );
+
+      const result = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE request_key = $1",
+        ["san-bao-invalid-response"],
+      );
+      assert.equal(result.rows[0]?.status, "failed");
+      assert.equal(result.rows[0]?.failure_code, "san_bao_invalid_response");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("treats a SanBao HTTP parameter error as a definitive submission failure", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await assert.rejects(
+        submitProviderRequest(db, {
+          ...providerInput(),
+          providerName: "san-bao",
+          requestKey: "san-bao-bad-request",
+          adapter: {
+            async submit() {
+              throw ModelError.fromUnknown("invalid reference asset", {
+                failureCode: "san_bao_bad_request",
+                mediaType: "image",
+                phase: "submit",
+              });
+            },
+          },
+        }),
+      );
+
+      const result = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE request_key = $1",
+        ["san-bao-bad-request"],
+      );
+      assert.equal(result.rows[0]?.status, "failed");
+      assert.equal(result.rows[0]?.failure_code, "san_bao_bad_request");
     } finally {
       await db.close();
     }

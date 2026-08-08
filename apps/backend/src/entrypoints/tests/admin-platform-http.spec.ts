@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
+import sharp from "sharp";
 
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
@@ -829,6 +830,107 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(payload.data.deleted, true);
       assert.equal(storageObject.rows[0]?.status, "deleted");
       assert.equal(audit.rows[0]?.event_type, "admin.resource.deleted");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets admins run the 45-day media retention task while preserving protected resources", async () => {
+    const db = await createMigratedTestDb();
+    const deletedKeys: string[] = [];
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      serverOptions: {
+        mediaRetentionScheduler: { enabled: false },
+        storageRuntime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket: "creator-test",
+          adapter: {
+            async createSignedReadUrl(input) {
+              return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+            },
+            async deleteObject(input) {
+              deletedKeys.push(input.objectKey);
+            },
+          },
+        },
+      },
+    });
+    const oldImageId = "60000000-0000-4000-8000-000000000301";
+    const oldVideoId = "60000000-0000-4000-8000-000000000302";
+    const protectedCoverId = "60000000-0000-4000-8000-000000000303";
+    const recentImageId = "60000000-0000-4000-8000-000000000304";
+
+    await db.query(
+      `
+        INSERT INTO storage_objects (
+          id, project_id, bucket, object_key, content_type,
+          size_bytes, checksum, provider, status, etag, version_id, last_verified_at,
+          deleted_at, metadata_json, created_by_user_id, created_at
+        ) VALUES
+          ($1, NULL, 'creator-test', 'retention/old-image.png', 'image/png', 100, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{"taskId":"generation-old-image"}'::jsonb, NULL, now() - interval '46 days'),
+          ($2, NULL, 'creator-test', 'retention/old-video.mp4', 'video/mp4', 200, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{"taskId":"generation-old-video"}'::jsonb, NULL, now() - interval '46 days'),
+          ($3, NULL, 'creator-test', 'retention/old-cover.png', 'image/png', 300, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now() - interval '46 days'),
+          ($4, NULL, 'creator-test', 'retention/recent-image.png', 'image/png', 400, NULL, 'creator-dev', 'available', NULL, NULL, now(), NULL, '{}'::jsonb, NULL, now() - interval '3 days')
+      `,
+      [oldImageId, oldVideoId, protectedCoverId, recentImageId],
+    );
+    await db.query(
+      `
+        INSERT INTO project_upload_records (
+          id, project_id, storage_object_id, upload_session_id,
+          actor_user_id, actor_display_name, actor_phone_e164, project_name, page_key, page_url,
+          source_action, file_name, object_key, bucket, provider, content_type, size_bytes,
+          public_url, status, error_message, created_at, completed_at
+        ) VALUES ($1, NULL, $2, NULL, NULL, NULL, NULL, NULL, 'project', NULL,
+          'project-covers', 'old-cover.png', 'retention/old-cover.png', 'creator-test', 'creator-dev', 'image/png', 300,
+          NULL, 'uploaded', NULL, now() - interval '46 days', now() - interval '46 days')
+      `,
+      [randomUUID(), protectedCoverId],
+    );
+
+    try {
+      const summaryResponse = await fetch(`${server.origin}/api/admin/resources/retention/summary`, {
+        headers: { cookie },
+      });
+      const summary = await summaryResponse.json();
+      assert.equal(summaryResponse.status, 200, JSON.stringify(summary));
+      assert.equal(summary.data.eligibleCount, 2);
+      assert.equal(summary.data.eligibleImageCount, 1);
+      assert.equal(summary.data.eligibleVideoCount, 1);
+      assert.equal(summary.data.protectedCount, 1);
+
+      const runResponse = await fetch(`${server.origin}/api/admin/resources/retention/run`, {
+        method: "POST",
+        headers: {
+          cookie,
+          "content-type": "application/json",
+          "idempotency-key": `test-media-retention-${randomUUID()}`,
+        },
+        body: JSON.stringify({ reason: "test media retention" }),
+      });
+      const result = await runResponse.json();
+      assert.equal(runResponse.status, 200, JSON.stringify(result));
+      assert.equal(result.data.deletedCount, 2);
+      assert.equal(result.data.deletedImageCount, 1);
+      assert.equal(result.data.deletedVideoCount, 1);
+      assert.equal(result.data.failedCount, 0);
+      assert.deepEqual(deletedKeys.sort(), ["retention/old-image.png", "retention/old-video.mp4"]);
+
+      const states = await db.query<{ id: string; status: string }>(
+        `SELECT id, status FROM storage_objects WHERE id = ANY($1::uuid[]) ORDER BY id`,
+        [[oldImageId, oldVideoId, protectedCoverId, recentImageId]],
+      );
+      assert.deepEqual(states.rows, [
+        { id: oldImageId, status: "deleted" },
+        { id: oldVideoId, status: "deleted" },
+        { id: protectedCoverId, status: "available" },
+        { id: recentImageId, status: "available" },
+      ]);
+      const audit = await db.query<{ event_type: string }>(
+        `SELECT event_type FROM audit_events WHERE event_type = 'admin.resource.retention.completed'`,
+      );
+      assert.equal(audit.rows.length, 1);
     } finally {
       await server.close();
     }
@@ -6163,6 +6265,15 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
   it("uploads official asset images through the admin cloud storage route", async () => {
     const db = await createMigratedTestDb();
+    const opaqueAvifBytes = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: { r: 30, g: 60, b: 90 } },
+    }).avif().toBuffer();
+    const transparentPngBytes = await sharp({
+      create: { width: 2, height: 2, channels: 4, background: { r: 30, g: 60, b: 90, alpha: 0.5 } },
+    }).png().toBuffer();
+    const opaqueWebpBytes = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: { r: 90, g: 60, b: 30 } },
+    }).webp().toBuffer();
     const uploadedObjects: Array<{
       bucket: string;
       objectKey: string;
@@ -6208,46 +6319,57 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
     try {
       const uploadResponse = await fetch(
-        `${server.origin}/api/admin/official-assets/uploads?fileName=alchemist.png`,
+        `${server.origin}/api/admin/official-assets/uploads?fileName=alchemist.avif`,
         {
           method: "POST",
           headers: {
-            "content-type": "image/png",
+            "content-type": "image/avif",
             cookie,
           },
-          body: Buffer.from([1, 2, 3, 4]),
+          body: opaqueAvifBytes,
         },
       );
       const uploadPayload = await uploadResponse.json();
 
       assert.equal(uploadResponse.status, 200);
       assert.equal(uploadPayload.data.bucket, "official-assets-bucket");
-      assert.match(uploadPayload.data.storageObjectKey, /^officialAssets\/\d{8}\/[0-9a-f-]+-alchemist\.png$/);
+      assert.match(uploadPayload.data.storageObjectKey, /^officialAssets\/\d{8}\/[0-9a-f-]+-alchemist\.jpg$/);
       assert.equal(uploadPayload.data.previewUrl, `https://cdn.example.test/${uploadPayload.data.storageObjectKey}`);
+      assert.equal(uploadPayload.data.mimeType, "image/jpeg");
       assert.equal(uploadedObjects.length, 1);
       assert.equal(uploadedObjects[0].bucket, "official-assets-bucket");
       assert.equal(uploadedObjects[0].objectKey, uploadPayload.data.storageObjectKey);
-      assert.equal(uploadedObjects[0].contentType, "image/png");
-      assert.equal(uploadedObjects[0].contentLength, 4);
+      assert.equal(uploadedObjects[0].contentType, "image/jpeg");
+      assert.equal(uploadedObjects[0].contentLength, uploadedObjects[0].body.byteLength);
+      assert.equal((await sharp(uploadedObjects[0].body).metadata()).format, "jpeg");
 
       const promptCoverResponse = await fetch(
         `${server.origin}/api/admin/prompt-covers/uploads?fileName=cinematic.png`,
         {
           method: "POST",
           headers: { "content-type": "image/png", cookie },
-          body: Buffer.from([5, 6, 7]),
+          body: transparentPngBytes,
         },
       );
       const promptCoverPayload = await promptCoverResponse.json();
       const settingsAssetResponse = await fetch(
-        `${server.origin}/api/admin/settings/assets/uploads?fileName=support-qr.png`,
+        `${server.origin}/api/admin/settings/assets/uploads?fileName=support-qr.webp`,
         {
           method: "POST",
-          headers: { "content-type": "image/png", cookie },
-          body: Buffer.from([8, 9]),
+          headers: { "content-type": "image/webp", cookie },
+          body: opaqueWebpBytes,
         },
       );
       const settingsAssetPayload = await settingsAssetResponse.json();
+      const invalidImageResponse = await fetch(
+        `${server.origin}/api/admin/prompt-covers/uploads?fileName=broken.png`,
+        {
+          method: "POST",
+          headers: { "content-type": "image/png", cookie },
+          body: Buffer.from([1, 2, 3, 4]),
+        },
+      );
+      const invalidImagePayload = await invalidImageResponse.json();
       const trackedUploads = await db.query<{
         source_action: string;
         status: string;
@@ -6269,8 +6391,14 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       assert.equal(promptCoverResponse.status, 200, JSON.stringify(promptCoverPayload));
       assert.match(promptCoverPayload.data.storageObjectKey, /^officialAssets\/promptCovers\/\d{8}\/[0-9a-f-]+-cinematic\.png$/);
+      assert.equal(promptCoverPayload.data.mimeType, "image/png");
+      assert.equal((await sharp(uploadedObjects[1].body).metadata()).format, "png");
       assert.equal(settingsAssetResponse.status, 200, JSON.stringify(settingsAssetPayload));
-      assert.match(settingsAssetPayload.data.storageObjectKey, /^officialAssets\/settingsAssets\/\d{8}\/[0-9a-f-]+-support-qr\.png$/);
+      assert.match(settingsAssetPayload.data.storageObjectKey, /^officialAssets\/settingsAssets\/\d{8}\/[0-9a-f-]+-support-qr\.jpg$/);
+      assert.equal(settingsAssetPayload.data.mimeType, "image/jpeg");
+      assert.equal((await sharp(uploadedObjects[2].body).metadata()).format, "jpeg");
+      assert.equal(invalidImageResponse.status, 400, JSON.stringify(invalidImagePayload));
+      assert.equal(invalidImagePayload.errorCode, "admin_asset_upload_image_invalid");
       assert.equal(uploadedObjects.length, 3);
       assert.deepEqual(
         trackedUploads.rows.map((row) => ({

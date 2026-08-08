@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { ModelError } from "../model-error.ts";
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
+import { buildSanBaoImagePayload } from "../san-bao.provider-adapter.ts";
 
 const sharedConfig = {
   providerProtocol: "san_bao",
@@ -50,6 +51,259 @@ describe("san bao provider adapter", () => {
     assert.equal(new Headers(requests[0]?.init?.headers).get("idempotency-key"), "request-image");
     assert.equal(requests[1]?.url, "https://sanbaobeauty.com/openapi/v1/images/image-task");
     assert.equal(poll?.artifacts?.[0]?.url, "https://cdn.example.com/image.png");
+  });
+
+  it("accepts a documented data.id without requiring a submission status", async () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "gpt-image2",
+      mediaType: "image",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/images",
+        queryTaskEndpoint: "/openapi/v1/images/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async () => (
+      new Response(JSON.stringify({ data: { id: "image-task-without-status" } }))
+    )) as typeof fetch);
+
+    const submission = await adapter.submit({
+      providerRequestId: "request-without-status",
+      providerName: "三宝影像",
+      providerOperation: "shot.image.generate",
+      requestKey: "image-key-without-status",
+      payloadRef: "creator://image-without-status",
+      payloadHash: "image-hash-without-status",
+      redactedPayload: { prompt: "product photo" },
+    });
+
+    assert.equal(submission.externalRequestId, "image-task-without-status");
+    assert.equal(submission.status, "accepted");
+  });
+
+  it("accepts a task id even when the submission status says failed", async () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "sd2_9img_full",
+      mediaType: "video",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/videos",
+        queryTaskEndpoint: "/openapi/v1/videos/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async () => (
+      new Response(JSON.stringify({ data: { id: "video-task-with-failed-status", status: "failed", error: "temporary state" } }))
+    )) as typeof fetch);
+
+    const submission = await adapter.submit({
+      providerRequestId: "request-with-failed-status",
+      providerName: "三宝影像",
+      providerOperation: "shot.video.generate",
+      requestKey: "video-key-with-failed-status",
+      payloadRef: "creator://video-with-failed-status",
+      payloadHash: "video-hash-with-failed-status",
+      redactedPayload: { prompt: "cinematic shot" },
+    });
+
+    assert.equal(submission.externalRequestId, "video-task-with-failed-status");
+    assert.equal(submission.status, "accepted");
+  });
+
+  it("keeps polling when SanBao reports success before publishing the video URL", async () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "sd2_fast_9img_line2",
+      mediaType: "video",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/videos",
+        queryTaskEndpoint: "/openapi/v1/videos/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async () => (
+      new Response(JSON.stringify({
+        data: { status: "succeeded", progress: 100, video_url: "", download_url: "" },
+      }))
+    )) as typeof fetch);
+
+    const poll = await adapter.poll?.({ externalRequestId: "task-msjs86z2" });
+
+    assert.equal(poll?.status, "running");
+    assert.equal(poll?.videoUrl, undefined);
+    assert.deepEqual(poll?.redactedResponse.resultPending, true);
+  });
+
+  it("uses the SanBao error factory when a failed submission has no task id", async () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "gpt-image2",
+      mediaType: "image",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/images",
+        queryTaskEndpoint: "/openapi/v1/images/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async () => (
+      new Response(JSON.stringify({ data: { status: "failed", error: "积分余额不足" } }))
+    )) as typeof fetch);
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "request-failed-without-id",
+        providerName: "三宝影像",
+        providerOperation: "shot.image.generate",
+        requestKey: "image-key-failed-without-id",
+        payloadRef: "creator://image-failed-without-id",
+        payloadHash: "image-hash-failed-without-id",
+        redactedPayload: { prompt: "product photo" },
+      }),
+      (error: unknown) => error instanceof ModelError && error.code === "san_bao_insufficient_balance",
+    );
+  });
+
+  it("rejects a non-failed submission status when no task id exists", async () => {
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "gpt-image2",
+      mediaType: "image",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/images",
+        queryTaskEndpoint: "/openapi/v1/images/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async () => (
+      new Response(JSON.stringify({ data: { status: "queued" } }))
+    )) as typeof fetch);
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "request-queued-without-id",
+        providerName: "三宝影像",
+        providerOperation: "shot.image.generate",
+        requestKey: "image-key-queued-without-id",
+        payloadRef: "creator://image-queued-without-id",
+        payloadHash: "image-hash-queued-without-id",
+        redactedPayload: { prompt: "product photo" },
+      }),
+      (error: unknown) => error instanceof ModelError && error.code === "san_bao_invalid_response",
+    );
+  });
+
+  it("deduplicates image references and sends documented image URL arrays", async () => {
+    let request: Record<string, unknown> = {};
+    const firstUrl = "https://cdn.example.com/first.png";
+    const secondUrl = "https://cdn.example.com/second.png";
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "gpt-image2",
+      mediaType: "image",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/images",
+        queryTaskEndpoint: "/openapi/v1/images/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async (_url, init) => {
+      request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: { id: "ordinal-image-task", status: "queued" } }));
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "request-ordinal-image",
+      providerName: "三宝影像",
+      providerOperation: "shot.image.generate",
+      requestKey: "ordinal-image-key",
+      payloadRef: "creator://ordinal-image",
+      payloadHash: "ordinal-image-hash",
+      redactedPayload: {
+        prompt: "结合【@图1】与【@图片2】生成封面",
+        referenceImages: [{ url: secondUrl }, { url: firstUrl }],
+        parameters: {
+          referenceImages: [{ url: secondUrl }, { url: firstUrl }],
+          filePaths: [firstUrl, secondUrl],
+          quickReferences: [
+            { name: "原始文件一.png", url: firstUrl },
+            { name: "原始文件二.png", url: secondUrl },
+          ],
+        },
+      },
+    });
+
+    assert.equal(request.prompt, "结合@图片1与@图片2生成封面");
+    assert.deepEqual(request.images, [firstUrl, secondUrl]);
+  });
+
+  it("preserves image tag references in the provider prompt", async () => {
+    let request: Record<string, unknown> = {};
+    const characterUrl = "https://cdn.example.com/character.png";
+    const sceneUrl = "https://cdn.example.com/scene.png";
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "gpt-image2",
+      mediaType: "image",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/images",
+        queryTaskEndpoint: "/openapi/v1/images/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async (_url, init) => {
+      request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: { id: "explicit-tag-image-task", status: "queued" } }));
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "request-explicit-tag-image",
+      providerName: "三宝影像",
+      providerOperation: "shot.image.generate",
+      requestKey: "explicit-tag-image-key",
+      payloadRef: "creator://explicit-tag-image",
+      payloadHash: "explicit-tag-image-hash",
+      redactedPayload: {
+        prompt: "让【@图片1号】出现在【@图2】中",
+        parameters: {
+          filePaths: [characterUrl, sceneUrl],
+          quickReferences: [
+            { tag: "图片1号", url: characterUrl },
+            { name: "场景原图.png", url: sceneUrl },
+          ],
+        },
+      },
+    });
+
+    assert.equal(request.prompt, "让@图片1号出现在@图片2中");
+    assert.deepEqual(request.images, [characterUrl, sceneUrl]);
+  });
+
+  it("serializes canvas two-image prompts with the documented image schema", async () => {
+    const firstUrl = "https://cdn.example.com/canvas-first.png";
+    const secondUrl = "https://cdn.example.com/canvas-second.jpg";
+    const request = buildSanBaoImagePayload({
+      providerRequestId: "request-canvas-two-image",
+      providerName: "三宝影像",
+      providerOperation: "episode.image.generate",
+      requestKey: "canvas-two-image-key",
+      payloadRef: "creator://canvas-two-image",
+      payloadHash: "canvas-two-image-hash",
+      redactedPayload: {
+        prompt: "【@图1】 【@图2】 做到一起",
+        parameters: {
+          quality: "high",
+          resolution: "普通",
+          aspectRatio: "1:1",
+          filePaths: [firstUrl, secondUrl],
+          quickReferences: [
+            { name: "first.png", url: firstUrl },
+            { name: "second.jpg", url: secondUrl },
+          ],
+        },
+      },
+    }, "gpt-image2", { "普通": "gpt-image2" });
+
+    assert.deepEqual(request, {
+      model: "gpt-image2",
+      prompt: "@图片1 @图片2 做到一起",
+      aspect_ratio: "1:1",
+      images: [firstUrl, secondUrl],
+      quality: "high",
+    });
   });
 
   it("maps each image resolution to its configured upstream model and fixes quality at high", async () => {
@@ -287,6 +541,101 @@ describe("san bao provider adapter", () => {
       { tag: "图片1", url: "https://cdn.example.com/reference.png" },
       { tag: "图片2", base64: "aW1hZ2U=", mimeType: "image/png", fileName: "reference.png" },
     ]);
+  });
+
+  it("deduplicates SanBao video media and aligns documented image, video, and audio aliases", async () => {
+    let request: Record<string, unknown> = {};
+    const imageUrl = "https://cdn.example.com/reference.png";
+    const videoUrl = "https://cdn.example.com/reference.mp4";
+    const audioUrl = "https://cdn.example.com/reference.mp3";
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "sd2_9img_full",
+      mediaType: "video",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/videos",
+        queryTaskEndpoint: "/openapi/v1/videos/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async (_url, init) => {
+      request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: { id: "ordinal-video-task", status: "queued" } }));
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "request-ordinal-video",
+      providerName: "三宝影像",
+      providerOperation: "shot.video.generate",
+      requestKey: "ordinal-video-key",
+      payloadRef: "creator://ordinal-video",
+      payloadHash: "ordinal-video-hash",
+      redactedPayload: {
+        motionPrompt: "参考【@图1】、【@视频1】和【@音频1】生成视频",
+        parameters: {
+          filePaths: [imageUrl],
+          quickReferences: [
+            { name: "参考图.png", url: imageUrl, kind: "image" },
+            { name: "参考视频.mp4", url: videoUrl, kind: "video" },
+            { name: "参考音频.mp3", url: audioUrl, kind: "audio" },
+          ],
+          videos: [{ name: "参考视频.mp4", url: videoUrl }],
+          videoFilePaths: [videoUrl],
+          audios: [{ name: "参考音频.mp3", url: audioUrl }],
+          audioFilePaths: [audioUrl],
+        },
+      },
+    });
+
+    assert.equal(request.prompt, "参考@图片1、@视频1和@音频1生成视频");
+    assert.deepEqual(request.images, [{ tag: "图片1", url: imageUrl }]);
+    assert.deepEqual(request.videos, [{ tag: "视频1", url: videoUrl }]);
+    assert.deepEqual(request.audios, [{ tag: "音频1", url: audioUrl }]);
+  });
+
+  it("does not misclassify video and audio quick references as SanBao images", async () => {
+    let request: Record<string, unknown> = {};
+    const videoUrl = "https://cdn.example.com/reference-only.mp4";
+    const audioUrl = "https://cdn.example.com/reference-only.mp3";
+    const adapter = createProviderAdapterFromModelConfig({
+      ...sharedConfig,
+      providerModel: "sd2_9img_full",
+      mediaType: "video",
+      providerConfig: {
+        ...sharedConfig.providerConfig,
+        createTaskEndpoint: "/openapi/v1/videos",
+        queryTaskEndpoint: "/openapi/v1/videos/{taskId}",
+      },
+    }, { SAN_BAO_API_KEY: "san-bao-key" }, (async (_url, init) => {
+      request = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ data: { id: "media-only-video-task", status: "queued" } }));
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "request-media-only-video",
+      providerName: "三宝影像",
+      providerOperation: "shot.video.generate",
+      requestKey: "media-only-video-key",
+      payloadRef: "creator://media-only-video",
+      payloadHash: "media-only-video-hash",
+      redactedPayload: {
+        motionPrompt: "使用【@视频1】和【@音频1】生成视频",
+        parameters: {
+          quickReferences: [
+            { name: "参考视频.mp4", url: videoUrl, kind: "video" },
+            { name: "参考音频.mp3", url: audioUrl, kind: "audio" },
+          ],
+          videos: [{ name: "参考视频.mp4", url: videoUrl }],
+          videoFilePaths: [videoUrl],
+          audios: [{ name: "参考音频.mp3", url: audioUrl }],
+          audioFilePaths: [audioUrl],
+        },
+      },
+    });
+
+    assert.equal(request.prompt, "使用@视频1和@音频1生成视频");
+    assert.equal(request.images, undefined);
+    assert.deepEqual(request.videos, [{ tag: "视频1", url: videoUrl }]);
+    assert.deepEqual(request.audios, [{ tag: "音频1", url: audioUrl }]);
   });
 
   it("maps failed task messages to stable SanBao error-factory codes", async () => {

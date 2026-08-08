@@ -16,13 +16,13 @@ describe("storage adapter factory", () => {
       expiresAt: new Date("2026-05-18T13:00:00.000Z"),
     });
 
-    assert.match(
+    assert.equal(
       result.url,
-      /^https:\/\/storage\.example\.com\/root\/bucket-1\/objects%2Ffile\.png\?expiresAt=/,
+      "https://storage.example.com/root/bucket-1/objects%2Ffile.png",
     );
   });
 
-  it("keeps COS signed urls on a single bucket host when endpoint already includes the bucket", async () => {
+  it("creates permanent COS urls on a single bucket host", async () => {
     const adapter = createStorageAdapterFromEnv({
       STORAGE_ADAPTER_MODE: "cos",
       STORAGE_BUCKET: "aimanhuadrama-1310122982",
@@ -38,9 +38,9 @@ describe("storage adapter factory", () => {
       expiresAt: new Date(Date.now() + 60_000),
     });
 
-    assert.match(
+    assert.equal(
       result.url,
-      /^https:\/\/aimanhuadrama-1310122982\.cos\.ap-guangzhou\.myqcloud\.com\/AIManhuaDrama\/20260602\/test\.png\?/,
+      "https://aimanhuadrama-1310122982.cos.ap-guangzhou.myqcloud.com/AIManhuaDrama/20260602/test.png",
     );
     assert.doesNotMatch(
       result.url,

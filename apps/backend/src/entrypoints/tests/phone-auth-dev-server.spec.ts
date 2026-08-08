@@ -126,6 +126,136 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
   });
 
+  it("settles a historical no-task-id submission as failed when Task Center is read", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const user = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+        [normalizeCnPhone("13800138000")],
+      );
+      const userId = user.rows[0]!.id;
+      const workflowId = randomUUID();
+      const taskId = randomUUID();
+      const now = new Date("2026-08-08T03:00:00.000Z");
+      await db.query(
+        `
+          INSERT INTO workflows (
+            id, workflow_type, status, input_snapshot_json, created_by_user_id,
+            created_at, updated_at
+          )
+          VALUES ($1, 'episode_video_generation', 'running', $2::jsonb, $3, $4, $4)
+        `,
+        [workflowId, JSON.stringify({ kind: "video", requestedAt: now.toISOString() }), userId, now],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+            target_entity_type, target_entity_id, created_at, updated_at
+          )
+          VALUES ($1, $2, 'episode_generate_video', 'running', 'generation-submit-video', $3::jsonb,
+            'episode', $1, $4, $4)
+        `,
+        [taskId, workflowId, JSON.stringify({ kind: "video", requestedAt: now.toISOString() }), now],
+      );
+      await grantCredits(db, {
+        userId,
+        amount: 20,
+        sourceType: "test_credit_seed",
+        sourceId: randomUUID(),
+        reason: "test credit seed",
+        createdByUserId: userId,
+        now,
+      });
+      const reservation = await reserveCredits(db, {
+        userId,
+        projectId: null,
+        workflowId,
+        taskId,
+        amount: 20,
+        sourceType: "episode_generation_task",
+        sourceId: taskId,
+        reason: "video generation",
+        createdByUserId: userId,
+        now,
+      });
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            model_code, media_type, task_mode, status, progress_stage, progress_percent,
+            request_summary_json, provider_status_json, submitted_at, started_at,
+            created_at, updated_at
+          )
+          VALUES ($1, $2, NULL, 'episode', $3, $4, $3, 'sanbao-sd2-fast-4img', 'video',
+            'video.image_to_video', 'running', 'provider_result_unknown', 20,
+            '{}'::jsonb, '{"failureCode":"provider_submission_ambiguous"}'::jsonb,
+            $5, $5, $5, $5)
+        `,
+        [randomUUID(), userId, taskId, workflowId, now],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, provider_name, provider_operation,
+            request_key, request_hash, payload_ref, payload_hash, payload_redacted_json,
+            status, external_submission_started_at, external_request_id,
+            response_redacted_json, failure_code, created_by_user_id, created_at, updated_at
+          )
+          VALUES ($1, NULL, $2, $3, 'san-bao', 'episode.video.generate', $4, $4, $4, $4,
+            '{}'::jsonb, 'result_unknown', $5, NULL,
+            '{"providerErrorCode":"san_bao_invalid_response"}'::jsonb,
+            'provider_submission_ambiguous', $6, $5, $5)
+        `,
+        [randomUUID(), workflowId, taskId, `historical-no-task-id:${taskId}`, now, userId],
+      );
+
+      const response = await fetch(
+        `${server.origin}/api/task-center/tasks?status=failed&taskIds=${taskId}`,
+        { headers: { cookie } },
+      );
+      const envelope = await response.json();
+      const state = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        provider_status: string;
+        provider_failure_code: string | null;
+        snapshot_status: string;
+        reservation_status: string;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 task.failure_code AS task_failure_code,
+                 provider.status AS provider_status,
+                 provider.failure_code AS provider_failure_code,
+                 snapshot.status AS snapshot_status,
+                 reservation.status AS reservation_status
+          FROM tasks task
+          JOIN provider_requests provider ON provider.task_id = task.id
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+          JOIN credit_reservations reservation ON reservation.id = $2
+          WHERE task.id = $1
+        `,
+        [taskId, reservation.reservation.id],
+      );
+
+      assert.equal(response.status, 200, JSON.stringify(envelope));
+      assert.equal(envelope.data.items[0]?.status, "failed");
+      assert.equal(state.rows[0]?.task_status, "failed");
+      assert.equal(state.rows[0]?.task_failure_code, "san_bao_invalid_response");
+      assert.equal(state.rows[0]?.provider_status, "failed");
+      assert.equal(state.rows[0]?.provider_failure_code, "san_bao_invalid_response");
+      assert.equal(state.rows[0]?.snapshot_status, "failed");
+      assert.equal(state.rows[0]?.reservation_status, "released");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("serves the app shell when database initialization is unavailable", async () => {
     const dbFailure = Promise.reject(new Error("db_unavailable"));
     const server = createPhoneAuthDevServer({ db: dbFailure as never });

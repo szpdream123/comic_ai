@@ -65,12 +65,15 @@ describe("GPT Image 2 BullMQ worker service", () => {
   it("records the SanBao image request in the same shape sent upstream", () => {
     const request = buildGptImageRequestLogBody({
       requestBody: {
-        prompt: "use uploaded reference",
+        prompt: "【@图1】和【@图2】做到一起",
         model: "sanbao-gpt-image2",
         parameters: {
           aspectRatio: "16:9",
           resolution: "2K",
-          filePaths: ["https://cdn.example.com/reference.png"],
+          filePaths: [
+            "https://cdn.example.com/reference-1.png",
+            "https://cdn.example.com/reference-2.png",
+          ],
         },
         targetType: "episode",
       },
@@ -96,9 +99,12 @@ describe("GPT Image 2 BullMQ worker service", () => {
     assert.equal(request.requestFormat, "san_bao_image");
     assert.deepEqual(request.requestBody, {
       model: "gpt-image2-2K",
-      prompt: "use uploaded reference",
+      prompt: "@图片1和@图片2做到一起",
       aspect_ratio: "16:9",
-      images: ["https://cdn.example.com/reference.png"],
+      images: [
+        "https://cdn.example.com/reference-1.png",
+        "https://cdn.example.com/reference-2.png",
+      ],
       quality: "high",
     });
     assert.doesNotMatch(request.requestText, /targetType|parameters/);

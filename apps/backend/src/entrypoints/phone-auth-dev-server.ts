@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { brotliCompress as brotliCompressCallback, constants as zlibConstants, gzip as gzipCallback } from "node:zlib";
 import mammoth from "mammoth";
+import sharp from "sharp";
 import { transform as transformStaticAsset } from "esbuild";
 
 import { maskCnPhone, shanghaiDayWindow, shanghaiMonthWindow } from "../modules/identity/phone-auth.utils.ts";
@@ -308,6 +309,11 @@ import {
   StorageAccessError,
   type StorageObjectRecord,
 } from "../modules/storage/storage.service.ts";
+import {
+  inspectMediaRetention,
+  runMediaRetention,
+  type MediaRetentionRunResult,
+} from "../modules/storage/media-retention.service.ts";
 import {
   abortUploadSession,
   buildStorageObjectPublicUrl,
@@ -749,11 +755,18 @@ export interface PhoneAuthDevServerRepairSchedulerOptions {
   limit?: number;
 }
 
+export interface PhoneAuthDevServerMediaRetentionSchedulerOptions {
+  enabled?: boolean;
+  limit?: number;
+  startMinute?: number;
+}
+
 export interface PhoneAuthDevServerOptions {
   db?: Awaited<ReturnType<typeof createDevDb>>;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   repairScheduler?: PhoneAuthDevServerRepairSchedulerOptions;
+  mediaRetentionScheduler?: PhoneAuthDevServerMediaRetentionSchedulerOptions;
   storageRuntime?: Partial<UploadSessionRuntime>;
   seedTeamEntitlements?: boolean;
   generationQueueHealthService?: {
@@ -3117,6 +3130,28 @@ function normalizeUploadFileName(value: unknown) {
 function normalizeUploadContentType(value: unknown) {
   const raw = Array.isArray(value) ? value[0] : value;
   return String(raw ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase() || "application/octet-stream";
+}
+
+export async function normalizeAdminManagedImageUpload(input: {
+  bytes: Uint8Array;
+  fileName: string;
+}) {
+  const image = sharp(Buffer.from(input.bytes), { failOn: "error" }).rotate();
+  const metadata = await image.metadata();
+  const usePng = metadata.hasAlpha === true;
+  const extension = usePng ? ".png" : ".jpg";
+  const originalExtension = extname(input.fileName);
+  const fileNameStem = originalExtension
+    ? input.fileName.slice(0, -originalExtension.length)
+    : input.fileName;
+  const bytes = usePng
+    ? await image.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer()
+    : await image.jpeg({ quality: 92, mozjpeg: true }).toBuffer();
+  return {
+    bytes,
+    contentType: usePng ? "image/png" as const : "image/jpeg" as const,
+    fileName: `${fileNameStem || "image"}${extension}`,
+  };
 }
 
 function buildManagedUploadObjectKey(input: {
@@ -5654,6 +5689,10 @@ async function listTaskCenterTasks(
     cursor?: { updatedAt: string; taskId: string } | null;
   },
 ) {
+  await reconcileDefinitiveProviderSubmissionFailures(db, {
+    userId: input.userId,
+    now: new Date(),
+  });
   const diagnosticsSchema = await taskCenterDiagnosticsSchemaForDb(db);
   const offset = input.cursor ? 0 : Math.max(0, (input.page - 1) * input.pageSize);
   const normalizedStatus = readString(input.status) || null;
@@ -7465,6 +7504,7 @@ async function settleTimedOutEpisodeGenerationTask(
   input: {
     taskId: string;
     now: Date;
+    failureCode?: string;
   },
 ) {
   await db.query("BEGIN");
@@ -7521,11 +7561,11 @@ async function settleTimedOutEpisodeGenerationTask(
       ? null
       : new Date(requestedAt.getTime() + fallbackTimeoutMs);
     const effectiveTimeoutAt = timeoutAt && !Number.isNaN(timeoutAt.getTime()) ? timeoutAt : createdAtTimeout;
-    if (!effectiveTimeoutAt || input.now.getTime() <= effectiveTimeoutAt.getTime()) {
+    if (!input.failureCode && (!effectiveTimeoutAt || input.now.getTime() <= effectiveTimeoutAt.getTime())) {
       await db.query("COMMIT");
       return false;
     }
-    if (row.status === "result_unknown" && row.failure_code === "provider_poll_timeout") {
+    if (!input.failureCode && row.status === "result_unknown" && row.failure_code === "provider_poll_timeout") {
       await db.query("COMMIT");
       return false;
     }
@@ -7541,19 +7581,19 @@ async function settleTimedOutEpisodeGenerationTask(
         SELECT id, status, external_submission_started_at, external_request_id
         FROM provider_requests
         WHERE task_id = $1
-          AND (
+          AND ($2::boolean OR (
             external_submission_started_at IS NOT NULL
             OR external_request_id IS NOT NULL
-          )
+          ))
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
       `,
-      [row.task_id],
+      [row.task_id, Boolean(input.failureCode)],
     );
-    const providerResultIsUnclear = Boolean(
+    const providerResultIsUnclear = !input.failureCode && Boolean(
       providerRequest && !["failed", "canceled"].includes(providerRequest.status),
     );
-    const failureCode = providerResultIsUnclear ? "provider_poll_timeout" : "task_timeout";
+    const failureCode = input.failureCode ?? (providerResultIsUnclear ? "provider_poll_timeout" : "task_timeout");
     const nextStatus = providerResultIsUnclear ? "result_unknown" : "failed";
     const claimed = await queryOne<{ id: string }>(
       db,
@@ -7596,21 +7636,22 @@ async function settleTimedOutEpisodeGenerationTask(
     }
     await db.query(
       `
-        UPDATE provider_requests
-        SET status = $2,
+      UPDATE provider_requests
+      SET status = $2,
             failure_code = $3,
             updated_at = $4
         WHERE task_id = $1
           AND status NOT IN ('succeeded', 'failed', 'canceled')
           AND (
-            $2 = 'result_unknown'
+            $5::boolean
+            OR $2 = 'result_unknown'
             OR (
               external_submission_started_at IS NULL
               AND external_request_id IS NULL
             )
           )
       `,
-      [row.task_id, nextStatus, failureCode, input.now],
+      [row.task_id, nextStatus, failureCode, input.now, Boolean(input.failureCode)],
     );
 
     const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
@@ -7698,6 +7739,42 @@ async function settleTimedOutEpisodeGenerationTask(
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
+  }
+}
+
+async function reconcileDefinitiveProviderSubmissionFailures(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { userId: string; now: Date },
+) {
+  const rows = await db.query<{ task_id: string; failure_code: string }>(
+    `
+      SELECT task.id AS task_id,
+        COALESCE(
+          provider_request.response_redacted_json->>'providerErrorCode',
+          'san_bao_invalid_response'
+        ) AS failure_code
+      FROM tasks task
+      JOIN workflows workflow ON workflow.id = task.workflow_id
+      JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+      JOIN provider_requests provider_request ON provider_request.task_id = task.id
+      WHERE workflow.created_by_user_id = $1
+        AND snapshot.user_id = $1
+        AND task.status IN ('queued', 'running', 'result_unknown')
+        AND task.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
+        AND provider_request.status = 'result_unknown'
+        AND provider_request.external_request_id IS NULL
+        AND provider_request.response_redacted_json->>'providerErrorCode' LIKE 'san_bao_%'
+        AND provider_request.response_redacted_json->>'providerErrorCode' <> 'san_bao_network_error'
+      ORDER BY task.updated_at ASC
+    `,
+    [input.userId],
+  );
+  for (const row of rows.rows) {
+    await settleTimedOutEpisodeGenerationTask(db, {
+      taskId: row.task_id,
+      now: input.now,
+      failureCode: row.failure_code,
+    });
   }
 }
 
@@ -16819,6 +16896,63 @@ function parseRepairSchedulerOptions(
   return { enabled, intervalMs, limit };
 }
 
+function parseMediaRetentionSchedulerOptions(
+  input: PhoneAuthDevServerMediaRetentionSchedulerOptions | undefined,
+  env: NodeJS.ProcessEnv,
+): Required<PhoneAuthDevServerMediaRetentionSchedulerOptions> {
+  const limitFromEnv = Number(env.MEDIA_RETENTION_TASK_LIMIT ?? 1_000);
+  const startMinuteFromEnv = Number(env.MEDIA_RETENTION_START_MINUTE ?? 5);
+  const enabledFromEnv = env.MEDIA_RETENTION_SCHEDULER_ENABLED;
+  const enabled = input?.enabled ?? (
+    enabledFromEnv == null
+      ? env.NODE_ENV !== "test"
+      : !["0", "false", "off", "no"].includes(enabledFromEnv.trim().toLowerCase())
+  );
+  const limit = Math.max(
+    1,
+    Math.min(
+      10_000,
+      Math.floor(
+        Number.isFinite(input?.limit)
+          ? Number(input?.limit)
+          : Number.isFinite(limitFromEnv)
+            ? limitFromEnv
+            : 1_000,
+      ),
+    ),
+  );
+  const startMinute = Math.min(
+    59,
+    Math.max(
+      0,
+      Math.floor(
+        Number.isFinite(input?.startMinute)
+          ? Number(input?.startMinute)
+          : Number.isFinite(startMinuteFromEnv)
+            ? startMinuteFromEnv
+            : 5,
+      ),
+    ),
+  );
+  return { enabled, limit, startMinute };
+}
+
+function shanghaiScheduleState(now: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  const date = `${value("year")}-${value("month")}-${value("day")}`;
+  const minute = Number(value("hour")) * 60 + Number(value("minute"));
+  return { date, minute };
+}
+
 function isTeamAssetUploadPurpose(value: unknown): boolean {
   return String(value ?? "").trim().startsWith("team-assets/");
 }
@@ -16952,6 +17086,13 @@ export function createPhoneAuthDevServer(
   const repairSchedulerOptions = parseRepairSchedulerOptions(options.repairScheduler);
   let repairSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   let repairSchedulerPromise: Promise<void> | null = null;
+  const mediaRetentionSchedulerOptions = parseMediaRetentionSchedulerOptions(
+    options.mediaRetentionScheduler,
+    runtimeEnv,
+  );
+  let mediaRetentionSchedulerTimer: ReturnType<typeof setTimeout> | null = null;
+  let mediaRetentionPromise: Promise<MediaRetentionRunResult> | null = null;
+  let lastScheduledMediaRetentionDate: string | null = null;
   const debugChallengeCodes = new Map<string, string>();
   const wechatLoginStates = new Map<string, { createdAt: number }>();
   const lingxiCommunity = createDefaultLingxiCommunityBoard();
@@ -19926,9 +20067,19 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        let normalizedImage: Awaited<ReturnType<typeof normalizeAdminManagedImageUpload>>;
+        try {
+          normalizedImage = await normalizeAdminManagedImageUpload({ bytes, fileName });
+        } catch {
+          return writeJson(
+            response,
+            envelopedError(400, "admin_asset_upload_image_invalid", "Admin asset upload image is invalid"),
+          );
+        }
+
         const now = new Date();
         const objectKey = buildManagedUploadObjectKey({
-          fileName,
+          fileName: normalizedImage.fileName,
           rootPrefix: adminUploadConfig.rootPrefix,
           subfolder: adminUploadConfig.subfolder,
           now,
@@ -19937,9 +20088,9 @@ export function createPhoneAuthDevServer(
         const uploaded = await uploadTrackedCloudObject(db, {
           runtime: storageRuntime,
           objectKey,
-          bytes,
-          contentType,
-          fileName,
+          bytes: normalizedImage.bytes,
+          contentType: normalizedImage.contentType,
+          fileName: normalizedImage.fileName,
           actorUserId: null,
           actorDisplayName: adminRoute.session.display_name,
           pageKey: "admin",
@@ -19963,8 +20114,8 @@ export function createPhoneAuthDevServer(
               storageObjectKey: objectKey,
               previewUrl: uploaded.sourceUrl,
               sourceUrl: uploaded.sourceUrl,
-              mimeType: contentType,
-              byteSize: bytes.byteLength,
+              mimeType: normalizedImage.contentType,
+              byteSize: normalizedImage.bytes.byteLength,
               originalFileName: fileName,
               eTag: uploaded.eTag,
               versionId: uploaded.versionId,
@@ -20826,6 +20977,42 @@ export function createPhoneAuthDevServer(
             videoBytes: Number(totals?.video_bytes ?? 0),
           },
         });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/resources/retention/summary") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const summary = await inspectMediaRetention(db, { now: new Date() });
+        return writeJson(response, enveloped(200, summary));
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/resources/retention/run") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) {
+          return writeIdempotencyKeyRequired(response);
+        }
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["audit.read"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const body = (await readJsonBody(request)) as { reason?: string };
+        const result = await runMediaRetentionNow({
+          trigger: "manual",
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          reason: String(body.reason ?? "后台主动清理45天前图片和视频"),
+          idempotencyKey,
+        });
+        return writeJson(response, enveloped(200, result));
       }
 
       if (request.method === "GET" && pathname === "/api/admin/resources") {
@@ -31245,6 +31432,110 @@ export function createPhoneAuthDevServer(
     }), request);
   });
 
+  function runMediaRetentionNow(input: {
+    trigger: "scheduled" | "manual";
+    actorAdminAccountId?: string | null;
+    reason: string;
+    idempotencyKey: string;
+  }) {
+    if (mediaRetentionPromise) {
+      return mediaRetentionPromise;
+    }
+    mediaRetentionPromise = (async () => {
+      const db = await getDb();
+      return runWithDatabaseContext(async () => {
+        const result = await runMediaRetention(db, {
+          runtime: {
+            adapter: storageRuntime.adapter,
+            localObjectStore: storageRuntime.localObjectStore,
+          },
+          now: new Date(),
+          limit: mediaRetentionSchedulerOptions.limit,
+        });
+        await appendAuditEvent(db, {
+          actorAdminAccountId: input.actorAdminAccountId ?? null,
+          eventType: input.trigger === "scheduled"
+            ? "system.resource.retention.completed"
+            : "admin.resource.retention.completed",
+          targetType: "storage_retention",
+          targetId: randomUUID(),
+          reason: input.reason,
+          metadata: {
+            trigger: input.trigger,
+            idempotencyKey: input.idempotencyKey,
+            retentionDays: result.retentionDays,
+            cutoffAt: result.cutoffAt,
+            scannedCount: result.scannedCount,
+            deletedCount: result.deletedCount,
+            deletedBytes: result.deletedBytes,
+            failedCount: result.failedCount,
+            failedBytes: result.failedBytes,
+            remainingCount: result.remainingCount,
+          },
+        });
+        return result;
+      });
+    })().finally(() => {
+      mediaRetentionPromise = null;
+    });
+    return mediaRetentionPromise;
+  }
+
+  async function runScheduledMediaRetentionIfDue() {
+    if (!mediaRetentionSchedulerOptions.enabled) {
+      return;
+    }
+    const schedule = shanghaiScheduleState(new Date());
+    if (schedule.minute < mediaRetentionSchedulerOptions.startMinute) {
+      return;
+    }
+    if (lastScheduledMediaRetentionDate === schedule.date) {
+      return;
+    }
+    try {
+      await runMediaRetentionNow({
+        trigger: "scheduled",
+        reason: "每日自动清理45天前图片和视频",
+        idempotencyKey: `scheduled-media-retention-${schedule.date}`,
+      });
+      lastScheduledMediaRetentionDate = schedule.date;
+    } catch (error) {
+      console.warn(
+        `[storage] Scheduled media retention failed. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  function startMediaRetentionScheduler() {
+    if (!mediaRetentionSchedulerOptions.enabled || mediaRetentionSchedulerTimer) {
+      return;
+    }
+    const now = new Date();
+    const schedule = shanghaiScheduleState(now);
+    const targetMinute = mediaRetentionSchedulerOptions.startMinute;
+    const minuteDelta = schedule.minute < targetMinute
+      ? targetMinute - schedule.minute
+      : 24 * 60 - schedule.minute + targetMinute;
+    const millisecondsUntilRun = Math.max(
+      1_000,
+      minuteDelta * 60_000 - now.getSeconds() * 1_000 - now.getMilliseconds(),
+    );
+    mediaRetentionSchedulerTimer = setTimeout(async () => {
+      mediaRetentionSchedulerTimer = null;
+      await runScheduledMediaRetentionIfDue();
+      startMediaRetentionScheduler();
+    }, millisecondsUntilRun);
+    mediaRetentionSchedulerTimer.unref?.();
+  }
+
+  async function stopMediaRetentionScheduler() {
+    if (mediaRetentionSchedulerTimer) {
+      clearTimeout(mediaRetentionSchedulerTimer);
+      mediaRetentionSchedulerTimer = null;
+    }
+    await mediaRetentionPromise;
+  }
+
   function runScheduledRepair() {
     if (repairSchedulerPromise) {
       return repairSchedulerPromise;
@@ -31303,9 +31594,11 @@ export function createPhoneAuthDevServer(
 
       this.origin = `http://${originHost}:${address.port}`;
       startRepairScheduler();
+      startMediaRetentionScheduler();
     },
     async close() {
       await stopRepairScheduler();
+      await stopMediaRetentionScheduler();
       await canvasLiveHub.close();
       if (httpServer.listening) {
         await new Promise<void>((resolve, reject) => {

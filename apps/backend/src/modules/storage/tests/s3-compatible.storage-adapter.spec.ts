@@ -6,6 +6,28 @@ import { describe, it } from "node:test";
 import { S3CompatibleStorageAdapter } from "../s3-compatible.storage-adapter.ts";
 
 describe("S3 compatible storage adapter", () => {
+  it("returns permanent public object urls without signing parameters", async () => {
+    const adapter = new S3CompatibleStorageAdapter({
+      endpoint: "https://storage.example.com/root",
+      region: "ap-guangzhou",
+      accessKeyId: "test-access-key",
+      secretAccessKey: "test-secret-key",
+      forcePathStyle: true,
+    });
+
+    const result = await adapter.createSignedReadUrl({
+      bucket: "creator-test",
+      objectKey: "generated/file name.png",
+      expiresAt: new Date("2026-08-08T12:00:00.000Z"),
+    });
+
+    assert.equal(
+      result.url,
+      "https://storage.example.com/root/creator-test/generated/file%20name.png",
+    );
+    assert.doesNotMatch(result.url, /X-Amz-|expires/i);
+  });
+
   it("treats an empty 404 HeadObject response as a missing object", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(404, { "content-length": "0" });

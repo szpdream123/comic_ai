@@ -10,7 +10,7 @@ export class PublicBaseUrlStorageAdapter implements StorageAdapter {
   }): Promise<{ url: string; expiresAt: Date }> {
     const normalizedBase = this.baseUrl.replace(/\/+$/, "");
     return {
-      url: `${normalizedBase}/${encodeURIComponent(input.bucket)}/${encodeURIComponent(input.objectKey)}?expiresAt=${encodeURIComponent(input.expiresAt.toISOString())}`,
+      url: `${normalizedBase}/${encodeURIComponent(input.bucket)}/${encodeURIComponent(input.objectKey)}`,
       expiresAt: input.expiresAt,
     };
   }

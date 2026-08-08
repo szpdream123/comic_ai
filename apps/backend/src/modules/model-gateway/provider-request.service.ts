@@ -459,6 +459,10 @@ function serializeTaskCenterProviderDiagnostics(value: Record<string, unknown> |
 
 function hasDefinitiveProviderResponse(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
+  const failureCode = readProviderFailureCode(error);
+  if (failureCode.startsWith("san_bao_") && failureCode !== "san_bao_network_error") {
+    return true;
+  }
   const diagnostics = (error as { providerDiagnostics?: unknown }).providerDiagnostics;
   if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return false;
   const httpStatus = Number((diagnostics as { httpStatus?: unknown }).httpStatus);

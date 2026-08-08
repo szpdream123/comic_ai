@@ -1,11 +1,9 @@
 import {
   DeleteObjectCommand,
-  GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Upload } from "@aws-sdk/lib-storage";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { Readable } from "node:stream";
@@ -15,6 +13,9 @@ import type { StorageAdapter } from "./storage.service.ts";
 export class S3CompatibleStorageAdapter implements StorageAdapter {
   private readonly client: S3Client;
   private readonly uploadTimeoutMs: number;
+  private readonly publicEndpoint: URL | null;
+  private readonly region: string;
+  private readonly forcePathStyle: boolean;
 
   constructor(input: {
     endpoint?: string | null;
@@ -26,6 +27,9 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     requestTimeoutMs?: number | null;
   }) {
     this.uploadTimeoutMs = normalizeTimeoutMs(input.uploadTimeoutMs, 60_000);
+    this.publicEndpoint = input.endpoint?.trim() ? new URL(input.endpoint) : null;
+    this.region = input.region;
+    this.forcePathStyle = Boolean(input.forcePathStyle);
     const requestTimeoutMs = normalizeTimeoutMs(input.requestTimeoutMs, this.uploadTimeoutMs);
     this.client = new S3Client({
       endpoint: input.endpoint ?? undefined,
@@ -47,31 +51,16 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     objectKey: string;
     expiresAt: Date;
   }): Promise<{ url: string; expiresAt: Date }> {
-    const expiresIn = Math.max(
-      1,
-      Math.round((input.expiresAt.getTime() - Date.now()) / 1000),
-    );
-    let url: string;
-    try {
-      url = await getSignedUrl(
-        this.client,
-        new GetObjectCommand({
-          Bucket: input.bucket,
-          Key: input.objectKey,
-        }),
-        { expiresIn },
-      );
-    } catch (error) {
-      console.error("[storage][s3-compatible] createSignedReadUrl failed", {
+    return {
+      url: buildPublicObjectUrl({
+        endpoint: this.publicEndpoint,
+        region: this.region,
+        forcePathStyle: this.forcePathStyle,
         bucket: input.bucket,
         objectKey: input.objectKey,
-        expiresAt: input.expiresAt.toISOString(),
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-
-    return { url, expiresAt: input.expiresAt };
+      }),
+      expiresAt: input.expiresAt,
+    };
   }
 
   async putObject(input: {
@@ -184,6 +173,35 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       throw error;
     }
   }
+}
+
+function buildPublicObjectUrl(input: {
+  endpoint: URL | null;
+  region: string;
+  forcePathStyle: boolean;
+  bucket: string;
+  objectKey: string;
+}) {
+  const encodedBucket = encodeURIComponent(input.bucket);
+  const encodedObjectKey = input.objectKey.split("/").map(encodeURIComponent).join("/");
+  if (!input.endpoint) {
+    return `https://${input.bucket}.s3.${input.region}.amazonaws.com/${encodedObjectKey}`;
+  }
+
+  const url = new URL(input.endpoint.toString());
+  const basePath = url.pathname.replace(/\/+$/g, "");
+  if (input.forcePathStyle) {
+    url.pathname = `${basePath}/${encodedBucket}/${encodedObjectKey}`;
+  } else {
+    const normalizedHost = url.hostname.toLowerCase();
+    if (!normalizedHost.startsWith(`${input.bucket.toLowerCase()}.`)) {
+      url.hostname = `${input.bucket}.${url.hostname}`;
+    }
+    url.pathname = `${basePath}/${encodedObjectKey}`;
+  }
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function isNotFoundError(error: unknown, message: string): boolean {
