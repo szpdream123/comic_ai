@@ -69,6 +69,62 @@ describe("upload session service", () => {
     }
   });
 
+  it("scopes Canvas Agent uploads to an authorized canvas", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedUploadUsers(db);
+      const actor = createActor("00000000-0000-4000-8000-000000000001");
+      const canvasId = "70000000-0000-4000-8000-000000000010";
+      const foreignCanvasId = "70000000-0000-4000-8000-000000000011";
+      await db.query(`
+        INSERT INTO creator_canvas_projects (
+          id, title, status, server_revision, created_by_user_id, updated_by_user_id
+        ) VALUES
+          ($1, 'Attachment canvas', 'active', 1, $3, $3),
+          ($2, 'Foreign canvas', 'active', 1, $4, $4)
+      `, [canvasId, foreignCanvasId, actor.userId, "00000000-0000-4000-8000-000000000002"]);
+
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        canvasProjectId: canvasId,
+        purpose: "canvas-agent-attachments",
+        fileName: "notes.txt",
+        contentType: "text/plain",
+        sizeBytes: 128,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:canvas-agent:canvas-1:notes.txt",
+        now: new Date("2026-05-27T02:00:00.000Z"),
+        runtime: createRuntime(localObjectStore),
+      });
+      const object = await findStorageObject(db, prepared.storageObjectId);
+      assert.equal(object?.canvasProjectId, canvasId);
+
+      await assert.rejects(
+        createUploadSession(db, {
+          actor,
+          sessionToken: "owner-token",
+          canvasProjectId: foreignCanvasId,
+          purpose: "canvas-agent-attachments",
+          fileName: "foreign.txt",
+          contentType: "text/plain",
+          sizeBytes: 128,
+          checksum: null,
+          multipart: false,
+          idempotencyKey: "upload:canvas-agent:foreign:notes.txt",
+          now: new Date("2026-05-27T02:00:00.000Z"),
+          runtime: createRuntime(localObjectStore),
+        }),
+        /canvas_not_found/,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("completes a local upload and marks the object available", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();

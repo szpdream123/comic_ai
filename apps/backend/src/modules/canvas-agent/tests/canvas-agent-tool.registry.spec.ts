@@ -75,7 +75,7 @@ test("media tool resolves authorized file grants into reference images", async (
         assert.equal(input.grantId, "grant-1");
         assert.equal(input.canvasId, "canvas-1");
         assert.equal(input.conversationId, "conversation-1");
-        return { storageObjectId: "storage-1", purpose: "角色参考" };
+        return { storageObjectId: "storage-1", purpose: "角色参考", contentType: "image/png" };
       },
     },
     generationIntake: {
@@ -97,7 +97,7 @@ test("media tool resolves authorized file grants into reference images", async (
   assert.equal(targetNodeId, null);
 });
 
-test("media tool reuses the one explicitly referenced Canvas node as its generation target", async () => {
+test("media tool does not reuse a referenced input node as its generation target", async () => {
   let targetNodeId: string | null | undefined;
   const registry = createDefaultCanvasAgentToolRegistry({
     readCanvas: async () => ({}),
@@ -116,7 +116,7 @@ test("media tool reuses the one explicitly referenced Canvas node as its generat
     canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-target",
     referencedNodeIds: ["referenced-image-node"],
   });
-  assert.equal(targetNodeId, "referenced-image-node");
+  assert.equal(targetNodeId, null);
 });
 
 test("executor persists referenced Canvas media on a generation step before approval", () => {
@@ -130,7 +130,6 @@ test("executor persists referenced Canvas media on a generation step before appr
     ),
     {
       ...input,
-      targetNodeId: "referenced-image-node",
       fileGrantIds: ["referenced-file-grant"],
     },
   );
@@ -309,19 +308,53 @@ test("Canvas Agent executor preserves conversation history while removing duplic
   );
 });
 
-test("media tool requires a target selection when multiple Canvas nodes are explicitly referenced", async () => {
+test("media tool can use multiple referenced inputs while creating a new node", async () => {
+  let targetNodeId: string | null | undefined;
   const registry = createDefaultCanvasAgentToolRegistry({
     readCanvas: async () => ({}),
     patchCanvas: async () => ({ revision: 2 }),
-    generationIntake: { create: async () => ({ generationTaskId: "unexpected" }) },
+    generationIntake: { create: async (input) => {
+      targetNodeId = input.targetNodeId;
+      return { generationTaskId: "generation-multiple-references" };
+    } },
   });
-  await assert.rejects(registry.execute("generation.create", {
+  await registry.execute("generation.create", {
     kind: "image",
-    request: { model: "image-model", prompt: "重新生成" },
+    request: { model: "image-model", prompt: "结合两张参考图生成新图" },
   }, {
     canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-target-required",
     referencedNodeIds: ["image-one", "image-two"],
-  }), /canvas_agent_generation_target_node_required/);
+  });
+  assert.equal(targetNodeId, null);
+});
+
+test("media tool keeps document grants out of image references", async () => {
+  let request: Record<string, unknown> | undefined;
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    context: {
+      resolveFileGrant: async () => ({
+        storageObjectId: "storage-document",
+        purpose: "剧情文档",
+        contentType: "application/pdf",
+      }),
+    },
+    generationIntake: {
+      create: async (input) => {
+        request = input.request;
+        return { generationTaskId: "generation-from-document" };
+      },
+    },
+  });
+  await registry.execute("generation.create", {
+    kind: "image",
+    fileGrantIds: ["grant-document"],
+    request: { model: "image-model", prompt: "根据文档内容生成场景" },
+  }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-document",
+  });
+  assert.equal((request?.parameters as Record<string, unknown> | undefined)?.referenceImages, undefined);
 });
 
 test("media tool resolves an authorized video grant into sourceVideo", async () => {
@@ -586,4 +619,77 @@ test("expert mode only exposes read tools and denies every side effect", () => {
     policy.evaluate({ mode: "c", actor, effect: "canvas_write", requiredCapability: "canvas:edit" }),
     { decision: "allow", reason: "canvas_write_policy" },
   );
+});
+
+test("Canvas Agent adds granted visual attachments only for compatible model capabilities", async () => {
+  const resolvedGrantIds: string[] = [];
+  const messages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+    modelInput: { protocol: { version: 1 }, context: {} },
+    context: {
+      messages: [{
+        role: "user",
+        content: {
+          text: "analyze attachments",
+          attachments: [
+            { fileGrantId: "grant-image", kind: "image" },
+            { fileGrantId: "grant-video", kind: "video" },
+          ],
+        },
+      }],
+    },
+    modelCapabilities: { vision: true, videoInput: false },
+    resolveFileAttachment: async ({ fileGrantId }) => {
+      resolvedGrantIds.push(fileGrantId);
+      return fileGrantId === "grant-image"
+        ? { url: "https://media.example.test/reference.png", contentType: "image/png" }
+        : { url: "https://media.example.test/reference.mp4", contentType: "video/mp4" };
+    },
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor: {
+      ownerUserId: "00000000-0000-4000-8000-000000000001",
+      actorTeamMemberId: null,
+    },
+  });
+
+  assert.deepEqual(resolvedGrantIds, ["grant-image", "grant-video"]);
+  const userMessage = messages[1];
+  assert.equal(userMessage.role, "user");
+  assert.ok(Array.isArray(userMessage.content));
+  assert.equal(userMessage.content.filter((part) => part.type === "image_url").length, 1);
+  assert.equal(userMessage.content.filter((part) => part.type === "video_url").length, 0);
+});
+
+test("Canvas Agent recognizes array-based model input capabilities", async () => {
+  const messages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+    modelInput: { protocol: { version: 1 }, context: {} },
+    context: {
+      messages: [{
+        role: "user",
+        content: {
+          text: "analyze attachments",
+          attachments: [
+            { fileGrantId: "grant-image", kind: "image" },
+            { fileGrantId: "grant-video", kind: "video" },
+          ],
+        },
+      }],
+    },
+    modelCapabilities: { input: ["prompt", "image_url", "input_file"], output: ["text", "json"] },
+    resolveFileAttachment: async ({ fileGrantId }) => fileGrantId === "grant-image"
+      ? { url: "https://media.example.test/reference.png", contentType: "image/png" }
+      : { url: "https://media.example.test/reference.mp4", contentType: "video/mp4" },
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor: {
+      ownerUserId: "00000000-0000-4000-8000-000000000001",
+      actorTeamMemberId: null,
+    },
+  });
+
+  const userMessage = messages[1];
+  assert.equal(userMessage.role, "user");
+  assert.ok(Array.isArray(userMessage.content));
+  assert.equal(userMessage.content.filter((part) => part.type === "image_url").length, 1);
+  assert.equal(userMessage.content.filter((part) => part.type === "video_url").length, 1);
 });

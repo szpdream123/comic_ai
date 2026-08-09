@@ -69,6 +69,7 @@ import {
   CanvasAgentKnowledgeService,
   CanvasAgentBillingService,
   CanvasAgentCheckpointService,
+  CanvasAgentContextService,
   createCanvasAgentFileGrantHttpService,
   createCanvasAgentConversation,
   createCanvasAgentTask,
@@ -1510,6 +1511,147 @@ function normalizeCanvasAgentMessage(value: unknown, fallback: unknown): Record<
     return value as Record<string, unknown>;
   }
   return { text: String(value ?? fallback ?? "") };
+}
+
+async function enrichCanvasAgentMessageAttachments(
+  db: SqlDatabase,
+  input: {
+    canvasId: string;
+    conversationId: string;
+    actor: CanvasAgentActor;
+    message: Record<string, unknown>;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const attachments = Array.isArray(input.message.attachments) ? input.message.attachments : [];
+  if (!attachments.length) return input.message;
+  if (attachments.length > 8) throw new Error("canvas_agent_attachment_limit_exceeded");
+  const context = new CanvasAgentContextService({
+    db,
+    loadCanvasContext: async () => ({}),
+  });
+  const enriched = [];
+  const seenGrantIds = new Set<string>();
+  for (const rawAttachment of attachments) {
+    if (!rawAttachment || typeof rawAttachment !== "object" || Array.isArray(rawAttachment)) {
+      throw new Error("canvas_agent_attachment_invalid");
+    }
+    const attachment = rawAttachment as Record<string, unknown>;
+    const fileGrantId = String(attachment.fileGrantId ?? "").trim();
+    if (!fileGrantId || seenGrantIds.has(fileGrantId)) throw new Error("canvas_agent_attachment_invalid");
+    seenGrantIds.add(fileGrantId);
+    const grant = await context.resolveFileGrant({
+      grantId: fileGrantId,
+      canvasId: input.canvasId,
+      conversationId: input.conversationId,
+      actor: input.actor,
+      now: input.now,
+    });
+    const object = await findStorageObject(db, grant.storageObjectId);
+    if (!object || object.status !== "available" || object.canvasProjectId !== input.canvasId) {
+      throw new Error("canvas_agent_attachment_not_found");
+    }
+    const contentType = String(object.contentType ?? grant.contentType ?? "application/octet-stream").toLowerCase();
+    const name = String(attachment.name ?? object.metadata?.originalFileName ?? "附件").trim().slice(0, 160) || "附件";
+    const kind = contentType.startsWith("image/")
+      ? "image"
+      : contentType.startsWith("video/") ? "video" : "document";
+    const maxSizeBytes = kind === "video" ? 500 * 1024 * 1024 : 20 * 1024 * 1024;
+    if (Number(object.sizeBytes ?? 0) > maxSizeBytes) {
+      throw new Error("canvas_agent_attachment_too_large");
+    }
+    const analysisText = kind === "document"
+      ? await extractCanvasAgentDocumentText(db, {
+          object,
+          name,
+          sessionToken: input.sessionToken,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        })
+      : "";
+    enriched.push({
+      fileGrantId,
+      name,
+      contentType,
+      sizeBytes: Math.max(0, Number(object.sizeBytes ?? 0) || 0),
+      kind,
+      ...(analysisText ? { analysisText } : {}),
+    });
+  }
+  const fileGrantIds = [...new Set([
+    ...(Array.isArray(input.message.fileGrantIds) ? input.message.fileGrantIds : []).map((value) => String(value ?? "").trim()).filter(Boolean),
+    ...enriched.map((attachment) => attachment.fileGrantId),
+  ])].slice(0, 16);
+  return { ...input.message, attachments: enriched, fileGrantIds };
+}
+
+async function extractCanvasAgentDocumentText(
+  db: SqlDatabase,
+  input: {
+    object: StorageObjectRecord;
+    name: string;
+    sessionToken: string;
+    runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
+  },
+) {
+  const contentType = String(input.object.contentType ?? "").toLowerCase();
+  const extension = extname(input.name).toLowerCase();
+  const isPlainText = contentType.startsWith("text/")
+    || [".txt", ".md", ".markdown", ".csv", ".json"].includes(extension);
+  const isDocx = contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    || extension === ".docx";
+  const isPdf = contentType === "application/pdf" || extension === ".pdf";
+  if (!isPlainText && !isDocx && !isPdf) return "";
+  const bytes = await readUploadedStorageObjectBytes(db, {
+    sessionToken: input.sessionToken,
+    storageObjectId: input.object.id,
+    bucket: input.object.bucket,
+    objectKey: input.object.objectKey,
+    runtime: input.runtime,
+    signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+    now: input.now,
+    fetchImpl: fetch,
+  });
+  const text = isDocx
+    ? (await mammoth.extractRawText({ buffer: bytes })).value ?? ""
+    : isPdf ? await extractPdfText(bytes) : bytes.toString("utf8");
+  return text.replace(/^\uFEFF/, "").replace(/\u0000/g, "").trim().slice(0, 80_000);
+}
+
+async function extractPdfText(bytes: Buffer) {
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const loadingTask = getDocument({
+    data: new Uint8Array(bytes),
+    disableFontFace: true,
+    isEvalSupported: false,
+    useSystemFonts: true,
+  });
+  const document = await loadingTask.promise;
+  const pages: string[] = [];
+  let extractedLength = 0;
+  try {
+    const pageCount = Math.min(document.numPages, 200);
+    for (let pageNumber = 1; pageNumber <= pageCount && extractedLength < 80_000; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((item) => "str" in item ? item.str : "")
+        .filter(Boolean)
+        .join(" ");
+      pages.push(text);
+      extractedLength += text.length;
+      page.cleanup();
+    }
+  } finally {
+    await document.destroy();
+  }
+  return pages.join("\n\n");
 }
 
 function canvasActorScopeFromAgentActor(canvasId: string, actor: CanvasAgentActor): CanvasActorScope {
@@ -22883,6 +23025,7 @@ export function createPhoneAuthDevServer(
             actor,
             sessionToken: authenticated.sessionToken,
             projectId: body.projectId?.trim() || null,
+            canvasProjectId: body.canvasProjectId?.trim() || null,
             purpose: body.purpose,
             fileName: body.fileName,
             contentType: body.contentType,
@@ -24064,6 +24207,16 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(400, "agent_model_required", "modelCode is required"));
           }
           const model = await new AdminBackedTextModelResolver(db).resolve(modelCode);
+          const userMessage = await enrichCanvasAgentMessageAttachments(db, {
+            canvasId: canvasProjectId,
+            conversationId,
+            actor: agentActor,
+            message: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+            sessionToken: authenticated.sessionToken,
+            runtime: storageRuntime,
+            signedUrlExpiresInSeconds,
+            now: new Date(),
+          });
           const task = await createCanvasAgentTask(db, {
             canvasId: canvasProjectId,
             conversationId,
@@ -24073,7 +24226,7 @@ export function createPhoneAuthDevServer(
             modelConfigSnapshot: model.snapshot,
             budget: readJsonRecord(body.budget),
             baseRevision: canvas.serverRevision,
-            userMessage: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+            userMessage,
             now: new Date(),
           });
           return writeJson(response, enveloped(202, { task }));
@@ -24224,11 +24377,21 @@ export function createPhoneAuthDevServer(
               now: new Date(),
             });
           } else if (action === "interject") {
+            const content = await enrichCanvasAgentMessageAttachments(db, {
+              canvasId: canvasProjectId,
+              conversationId: context.task.conversationId,
+              actor: context.actor,
+              message: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+              sessionToken: authenticated.sessionToken,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+              now: new Date(),
+            });
             result = await interjectCanvasAgentTask(db, {
               taskId,
               conversationId: context.task.conversationId,
               actor: context.actor,
-              content: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+              content,
               now: new Date(),
             });
           } else if (action === "rewind") {
