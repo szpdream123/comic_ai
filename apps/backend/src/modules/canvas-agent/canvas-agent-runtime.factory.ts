@@ -12,6 +12,8 @@ import { OpenAICompatibleTextAdapter } from "../model-gateway/openai-compatible-
 import { ModelflareResponsesAdapter } from "../model-gateway/modelflare-responses.adapter.ts";
 import { TextModelGatewayService } from "../model-gateway/text-model-gateway.service.ts";
 import { upsertQueuedGenerationTaskSnapshot } from "../model-gateway/generation-task-snapshot.service.ts";
+import { createStorageAdapterFromEnv } from "../storage/storage-adapter.factory.ts";
+import { buildSignedObjectUrls } from "../storage/storage.service.ts";
 import {
   CanvasConflictError,
   createCanvasNodeRun,
@@ -114,6 +116,33 @@ export function createCanvasAgentWorkerRuntime(input: {
     promptPreferences,
     now,
   });
+  const resolveFileAttachment = async (request: {
+    canvasId: string;
+    conversationId: string;
+    actor: CanvasAgentActor;
+    fileGrantId: string;
+  }) => {
+    const grant = await context.resolveFileGrant({
+      grantId: request.fileGrantId,
+      canvasId: request.canvasId,
+      conversationId: request.conversationId,
+      actor: request.actor,
+      now: now(),
+    });
+    const urls = await buildSignedObjectUrls(input.db, {
+      actorScope: actorScope(request.canvasId, request.actor),
+      storageObjectId: grant.storageObjectId,
+      adapter: createStorageAdapterFromEnv(env),
+      now: now(),
+      expiresInSeconds: Math.max(60, Math.min(3_600, Number(env.STORAGE_SIGNED_URL_EXPIRES_SECONDS ?? 900))),
+      publicBaseUrl: env.STORAGE_PUBLIC_BASE_URL ?? env.STORAGE_ENDPOINT ?? null,
+      region: env.STORAGE_REGION ?? null,
+    });
+    return {
+      url: urls.sourceUrl ?? urls.previewUrl ?? urls.downloadUrl,
+      contentType: grant.contentType,
+    };
+  };
   const tools = createDefaultCanvasAgentToolRegistry({
     readCanvas,
     patchCanvas,
@@ -218,6 +247,7 @@ export function createCanvasAgentWorkerRuntime(input: {
       ownerUserId: task.ownerUserId,
       actorTeamMemberId: task.actorTeamMemberId,
     }),
+    resolveFileAttachment,
     now,
     maxRounds: input.maxRounds,
     maxToolCalls: input.maxToolCalls,

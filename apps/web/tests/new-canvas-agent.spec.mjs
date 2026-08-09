@@ -1535,7 +1535,7 @@ test("Canvas Agent reuses the video-node prompt editor for inline @ node referen
       },
     }),
   });
-  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-prompt-surface episode-prompt-editor-host" data-agent-prompt-editor/);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor/);
   await controller.syncPromptEditor();
   assert.equal(mounted.length, 1);
   assert.equal(mounted[0].prompt, "【@角色图】 继续生成");
@@ -2092,4 +2092,21 @@ test("Canvas Agent resumes a waiting task after skipping and hides the stale app
   assert.equal(workbench.ui.canvasAgent.status, "queued");
   assert.doesNotMatch(renderCanvasAgentPanel(workbench.ui), /data-approval-id="approval-waiting"/);
   controller.dispose();
+});
+
+test("Canvas Agent renders removable attachment previews outside the rich editor mount", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      promptAttachments: [
+        { id: "image-1", fileGrantId: "grant-1", name: "character.png", kind: "image", previewUrl: "/image.png" },
+        { id: "document-1", fileGrantId: "grant-2", name: "notes.md", kind: "document" },
+      ],
+    },
+  });
+
+  assert.match(html, /class="canvas-agent-attachment-chips"/);
+  assert.match(html, /character\.png/);
+  assert.match(html, /notes\.md/);
+  assert.equal((html.match(/data-agent-action="remove-agent-attachment"/g) ?? []).length, 2);
+  assert.ok(html.indexOf("canvas-agent-attachment-chips") < html.indexOf("data-agent-prompt-editor"));
 });

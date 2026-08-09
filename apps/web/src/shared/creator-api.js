@@ -757,7 +757,7 @@ export const defaultUploadLimits = {
 function buildUploadId(file, options = {}) {
   return [
     "upload",
-    asciiSafeToken(options.projectId ?? "user", "user"),
+    asciiSafeToken(options.projectId ?? options.canvasProjectId ?? "user", "user"),
     asciiSafeToken(options.purpose ?? options.category ?? "misc", "misc"),
     asciiSafeToken(file?.name ?? "file", "file"),
     Number(file?.size ?? 0),
@@ -831,7 +831,7 @@ export function validateUploadFile(file, limits = defaultUploadLimits) {
 function buildUploadIdFromInput(input = {}) {
   return [
     "upload",
-    asciiSafeToken(input.projectId ?? "user", "user"),
+    asciiSafeToken(input.projectId ?? input.canvasProjectId ?? "user", "user"),
     asciiSafeToken(input.purpose ?? "misc", "misc"),
     asciiSafeToken(input.fileName ?? "file", "file"),
     Number(input.sizeBytes ?? 0),
@@ -2185,6 +2185,7 @@ export const creatorApi = {
     const fallbackIdempotencyKey = options.file
       ? buildUploadId(options.file, {
           projectId: input?.projectId ?? null,
+          canvasProjectId: input?.canvasProjectId ?? null,
           purpose: input?.purpose ?? null,
         })
       : buildUploadIdFromInput(input);
@@ -2225,6 +2226,7 @@ export const creatorApi = {
     return this.prepareUpload(
       {
         projectId: options.projectId ?? null,
+        canvasProjectId: options.canvasProjectId ?? null,
         purpose: options.purpose ?? options.category ?? "misc",
         fileName: file.name,
         contentType: file.type || "application/octet-stream",

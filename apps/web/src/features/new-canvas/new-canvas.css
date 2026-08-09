@@ -1943,6 +1943,106 @@
   margin-bottom: 8px;
 }
 
+.canvas-agent-prompt-surface > .canvas-agent-attachment-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.canvas-agent-attachment-chip {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 5px 4px 4px;
+  border: 1px solid #3c5661;
+  border-radius: 5px;
+  background: #101a1e;
+  color: #d8e8ed;
+}
+
+.canvas-agent-attachment-chip[data-attachment-kind="document"] {
+  border-color: #5a5a48;
+  background: #181914;
+}
+
+.canvas-agent-attachment-thumb {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #23353b;
+  color: #8dd8eb;
+  font-size: 9px;
+}
+
+.canvas-agent-attachment-chip[data-attachment-kind="document"] .canvas-agent-attachment-thumb {
+  background: #393829;
+  color: #f1d17d;
+}
+
+.canvas-agent-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.canvas-agent-attachment-chip > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.canvas-agent-attachment-chip strong,
+.canvas-agent-attachment-chip small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-agent-attachment-chip strong {
+  max-width: 154px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.canvas-agent-attachment-chip small {
+  color: #829aa3;
+  font-size: 9px;
+}
+
+.canvas-agent-attachment-chip button,
+.canvas-agent-attachment-button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  padding: 0;
+  place-items: center;
+}
+
+.canvas-agent-attachment-chip button {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
+  border: 0;
+  color: #9db2ba;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.canvas-agent-attachment-chip button:hover,
+.canvas-agent-attachment-chip button:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, .12);
+}
+
 .canvas-agent-reference-chip {
   display: inline-flex;
   min-width: 0;
@@ -2071,6 +2171,39 @@
 
 .canvas-agent-event[data-event-role="user"] p {
   color: var(--new-canvas-foreground);
+}
+
+.canvas-agent-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.canvas-agent-message-attachments span {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 190px;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  border: 1px solid rgba(118, 180, 197, .36);
+  border-radius: 4px;
+  background: rgba(8, 23, 29, .48);
+}
+
+.canvas-agent-message-attachments b {
+  color: #8dd8eb;
+  font-size: 8px;
+}
+
+.canvas-agent-message-attachments em {
+  overflow: hidden;
+  color: #d5e4e8;
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .canvas-agent-thinking {
@@ -2413,6 +2546,11 @@
   background: #171c22;
 }
 
+.canvas-agent-prompt-editor-host {
+  min-height: 0;
+  flex: 1 0 92px;
+}
+
 .canvas-agent-prompt-surface:focus-within {
   border-color: #46b9ce;
   box-shadow: 0 0 0 2px rgba(70, 185, 206, .14);
@@ -2439,7 +2577,7 @@
   max-height: 1.6rem;
 }
 
-.canvas-agent-prompt-surface[data-prompt-editor-status="fallback"] textarea {
+.canvas-agent-prompt-editor-host[data-prompt-editor-status="fallback"] textarea {
   display: block;
   width: 100%;
   min-height: 142px;
@@ -2583,6 +2721,7 @@
 
 /* Keep the Agent panel readable at the default desktop width. */
 .canvas-agent-panel {
+  container: canvas-agent-panel / inline-size;
   font-size: 16px;
 }
 
@@ -2687,6 +2826,26 @@
   display: block;
   min-width: 0;
   text-overflow: ellipsis;
+}
+
+@container canvas-agent-panel (max-width: 390px) {
+  .canvas-agent-composer-footer {
+    flex-wrap: wrap;
+  }
+
+  .canvas-agent-composer-left,
+  .canvas-agent-composer-actions {
+    width: 100%;
+  }
+
+  .canvas-agent-composer-actions {
+    justify-content: flex-end;
+  }
+
+  .canvas-agent-model-picker {
+    flex: 1 1 112px;
+    min-width: 0;
+  }
 }
 
 .canvas-agent-context-usage {

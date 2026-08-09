@@ -507,7 +507,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   });
   registry.register({
     id: "generation.create",
-    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass fileGrantIds to use files explicitly authorized in the current conversation as image or video references; never invent grant IDs. When the user explicitly references a Canvas node to regenerate, pass it as targetNodeId so the result updates that node. Do not change Canvas provider defaults merely to run this tool.",
+    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass fileGrantIds to use image or video files explicitly authorized in the current conversation as generation references; document grants remain prompt context and are not media references. Pass targetNodeId only when the user explicitly asks to regenerate or replace that compatible existing node. A referenced input node does not automatically become the output target. Do not change Canvas provider defaults merely to run this tool.",
     effect: "media_generation",
     requiredCapability: "canvas:run",
     inputSchema: {
@@ -563,7 +563,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
           throw new Error("canvas_agent_file_grant_media_kind_unsupported");
         }
         if (videoReferences.length > 1) throw new Error("canvas_agent_video_reference_limit_exceeded");
-        const imageReferences = grantedFiles.filter((file) => !file.contentType.startsWith("video/") && !file.contentType.startsWith("audio/"));
+        const imageReferences = grantedFiles.filter((file) => file.contentType.startsWith("image/"));
         const existingReferences = Array.isArray(parameters.referenceImages) ? parameters.referenceImages : [];
         request.parameters = {
           ...parameters,
@@ -578,13 +578,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
           } : {}),
         };
       }
-      const referencedNodeIds = context.referencedNodeIds ?? [];
-      if (!input.targetNodeId && referencedNodeIds.length > 1) {
-        throw new Error("canvas_agent_generation_target_node_required");
-      }
-      const targetNodeId = String(
-        input.targetNodeId ?? (referencedNodeIds.length === 1 ? referencedNodeIds[0] : ""),
-      ).trim() || null;
+      const targetNodeId = String(input.targetNodeId ?? "").trim() || null;
       const created = await deps.generationIntake.create({
         canvasId: context.canvasId,
         conversationId: context.conversationId,

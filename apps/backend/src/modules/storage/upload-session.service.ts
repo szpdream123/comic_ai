@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import qcloudCosSts from "qcloud-cos-sts";
 
+import { authorizeCanvasActor } from "../identity/canvas-actor-scope.service.ts";
 import type { UserActorContext } from "../identity/user-actor-context.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -110,6 +111,7 @@ export async function createUploadSession(
     actor: UserActorContext;
     sessionToken: string;
     projectId?: string | null;
+    canvasProjectId?: string | null;
     purpose: string;
     fileName: string;
     contentType: string;
@@ -121,8 +123,17 @@ export async function createUploadSession(
     runtime: UploadSessionRuntime;
   },
 ) {
+  const canvasActorScope = input.canvasProjectId
+    ? await authorizeCanvasActor(db, {
+        sessionToken: input.sessionToken,
+        canvasId: input.canvasProjectId,
+        action: "edit",
+        now: input.now,
+      })
+    : undefined;
   const existing = await findUploadSessionByIdempotencyKey(db, {
     userId: input.actor.userId,
+    actorScope: canvasActorScope,
     idempotencyKey: input.idempotencyKey,
   });
   if (existing) {
@@ -136,6 +147,7 @@ export async function createUploadSession(
   const storageObject = await createScopedStorageObject(db, {
     userId: input.actor.userId,
     projectId: input.projectId ?? null,
+    canvasProjectId: input.canvasProjectId ?? null,
     bucket: input.runtime.bucket,
     objectName: `${input.purpose}/${input.fileName}`,
     contentType: input.contentType,

@@ -32,6 +32,34 @@ const LEGACY_CANVAS_AGENT_PANEL_WIDTH = 480;
 const DEFAULT_CANVAS_AGENT_PANEL_WIDTH = 600;
 const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
 const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260729-4";
+const AGENT_ATTACHMENT_UPLOAD_LIMITS = {
+  image: {
+    label: "图片",
+    maxBytes: 20 * 1024 * 1024,
+    mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
+    extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
+  },
+  video: {
+    label: "视频",
+    maxBytes: 500 * 1024 * 1024,
+    mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
+    extensions: [".mp4", ".webm", ".mov"],
+  },
+  document: {
+    label: "文档",
+    maxBytes: 20 * 1024 * 1024,
+    mimeTypes: [
+      "text/plain",
+      "text/markdown",
+      "text/csv",
+      "application/json",
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ],
+    extensions: [".txt", ".md", ".markdown", ".csv", ".json", ".pdf", ".docx"],
+  },
+  blockedExtensions: [".7z", ".bat", ".cmd", ".com", ".dmg", ".exe", ".gz", ".html", ".js", ".msi", ".ps1", ".rar", ".sh", ".tar", ".zip"],
+};
 
 const AGENT_HEADER_ICON_PATHS = {
   new: '<path d="M12 5v14M5 12h14" />',
@@ -70,6 +98,8 @@ export function ensureCanvasAgentState(ui = {}) {
     promptDraft: "",
     promptMention: null,
     promptNodeReferences: [],
+    promptAttachments: [],
+    attachmentUploading: false,
     interjectionDraft: "",
     status: "idle",
     events: [],
@@ -182,8 +212,11 @@ export function renderCanvasAgentPanel(ui = {}) {
       </div>` : ""}
 
       <footer class="canvas-agent-composer">
-        <div class="canvas-agent-prompt-surface episode-prompt-editor-host" data-agent-prompt-editor>
-          <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
+        <div class="canvas-agent-prompt-surface">
+          ${renderAgentPromptAttachmentChips(agent)}
+          <div class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor>
+            <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
+          </div>
         </div>
         <div class="canvas-agent-composer-footer">
           <div class="canvas-agent-composer-left">
@@ -202,6 +235,8 @@ export function renderCanvasAgentPanel(ui = {}) {
             <span class="canvas-agent-status ${escapeAttr(agent.status)}">${escapeHtml(agentStatusLabel(agent))}</span>
           </div>
           <span class="canvas-agent-composer-actions">
+            <button type="button" class="canvas-agent-attachment-button" data-agent-action="pick-attachments" aria-label="添加图片、视频或文件" title="添加图片、视频或文件" ${busy || conversationArchived || agent.attachmentUploading ? "disabled" : ""}>${renderAgentAttachmentIcon("add")}</button>
+            <input type="file" data-agent-attachment-input accept="image/*,video/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" multiple hidden />
             <label class="canvas-agent-model-picker">
               <select data-agent-field="modelCode" ${modelSelectDisabled ? "disabled" : ""} aria-label="文本模型">
                 ${models.length
@@ -768,6 +803,7 @@ export function createCanvasAgentController({
       messages: [],
       sequence: 0,
       messagesStatus: conversationId ? "loading" : "idle",
+      promptAttachments: [],
       error: "",
     });
     syncPanel();
@@ -861,9 +897,14 @@ export function createCanvasAgentController({
       }
     }
     if (fileGrantIds.length) await loadFileGrants(conversationId);
+    const attachments = Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [];
+    const attachmentGrantIds = attachments
+      .map((attachment) => String(attachment?.fileGrantId ?? "").trim())
+      .filter(Boolean);
     return {
       references,
-      fileGrantIds,
+      attachments,
+      fileGrantIds: [...new Set([...fileGrantIds, ...attachmentGrantIds])],
       messageNodeReferences: references.map((reference) => ({
         nodeId: reference.nodeId,
         title: reference.title,
@@ -873,6 +914,61 @@ export function createCanvasAgentController({
           : {}),
       })),
     };
+  };
+
+  const uploadAgentAttachments = async (files) => {
+    const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+    const candidates = Array.from(files ?? []).filter(Boolean).slice(0, 8);
+    if (!canvasId || !candidates.length) return;
+    if (typeof workbench.api?.uploadFile !== "function" || typeof workbench.api?.createCanvasAgentFileGrant !== "function") {
+      throw new Error("canvas_agent_attachment_upload_unavailable");
+    }
+    const conversationId = await ensureConversation();
+    const current = Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [];
+    const remaining = Math.max(0, 8 - current.length);
+    if (!remaining) throw new Error("最多可添加 8 个附件。");
+    agent.attachmentUploading = true;
+    syncPanel();
+    const uploaded = [];
+    try {
+      for (const file of candidates.slice(0, remaining)) {
+        const kind = resolveAgentAttachmentKind(file);
+        if (!kind) throw new Error(`不支持的附件类型：${file.name || "文件"}`);
+        const result = await workbench.api.uploadFile(file, {
+          category: "canvas-agent-attachments",
+          projectId: null,
+          canvasProjectId: canvasId,
+          uploadLimits: AGENT_ATTACHMENT_UPLOAD_LIMITS,
+        });
+        const upload = result?.upload ?? result ?? {};
+        const storageObjectId = String(upload.storageObjectId ?? result?.storageObject?.id ?? "").trim();
+        if (!storageObjectId) throw new Error("canvas_agent_attachment_upload_missing");
+        const grant = await workbench.api.createCanvasAgentFileGrant(canvasId, conversationId, {
+          storageObjectId,
+          purpose: `Canvas Agent attachment: ${String(file.name ?? "attachment").slice(0, 120)}`,
+          expiresInSeconds: 3_600,
+        });
+        const fileGrantId = String(grant?.grant?.id ?? "").trim();
+        if (!fileGrantId) throw new Error("canvas_agent_attachment_grant_missing");
+        uploaded.push({
+          id: storageObjectId,
+          storageObjectId,
+          fileGrantId,
+          name: String(file.name ?? "附件").slice(0, 160),
+          contentType: String(file.type ?? "application/octet-stream").toLowerCase(),
+          sizeBytes: Number(file.size ?? 0),
+          kind,
+          previewUrl: kind === "image" || kind === "video"
+            ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+            : "",
+        });
+      }
+      await loadFileGrants(conversationId);
+    } finally {
+      if (uploaded.length) agent.promptAttachments = [...current, ...uploaded];
+      agent.attachmentUploading = false;
+      syncPanel();
+    }
   };
 
   const loadMemories = async (conversationId = agent.conversationId) => {
@@ -1054,6 +1150,12 @@ export function createCanvasAgentController({
       return true;
     },
     handleInput(target) {
+      if (target?.matches?.("[data-agent-attachment-input]")) {
+        const files = target.files;
+        target.value = "";
+        void run("upload-agent-attachments", () => uploadAgentAttachments(files));
+        return true;
+      }
       const field = String(target?.dataset?.agentField ?? "");
       if (field === "conversationTitle") {
         agent.titleDraft = Array.from(String(target.value ?? "")).slice(0, 10).join("");
@@ -1183,6 +1285,25 @@ export function createCanvasAgentController({
           .filter((reference) => reference.nodeId !== nodeId);
         syncPanel();
         queueMicrotask(() => surface.querySelector?.('[data-agent-field="promptDraft"]')?.focus?.());
+        return true;
+      }
+      if (action === "pick-attachments") {
+        surface.querySelector?.("[data-agent-attachment-input]")?.click?.();
+        return true;
+      }
+      if (action === "remove-agent-attachment") {
+        const attachmentId = String(target.dataset.attachmentId ?? "");
+        await run(action, async () => {
+          const attachment = (Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [])
+            .find((item) => String(item?.id ?? "") === attachmentId);
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          if (attachment?.fileGrantId && canvasId && agent.conversationId
+            && typeof workbench.api?.revokeCanvasAgentFileGrant === "function") {
+            await workbench.api.revokeCanvasAgentFileGrant(canvasId, agent.conversationId, attachment.fileGrantId);
+          }
+          agent.promptAttachments = (Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [])
+            .filter((item) => String(item?.id ?? "") !== attachmentId);
+        });
         return true;
       }
       if (action === "open-agent-history") {
@@ -1397,7 +1518,7 @@ export function createCanvasAgentController({
       }
       if (action === "new-conversation") {
         stopPolling();
-        Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], sequence: 0, error: "", panelView: "timeline", panelOpen: true, historyOpen: false, titleEditing: false, titleDraft: "" });
+        Object.assign(agent, { conversationId: "", taskId: "", status: "idle", events: [], messages: [], fileGrants: [], memoryRecords: [], promptAttachments: [], sequence: 0, error: "", panelView: "timeline", panelOpen: true, historyOpen: false, titleEditing: false, titleDraft: "" });
         persistCanvasAgentUiState(workbench.ui, agent);
         void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
         await run(action, async () => {
@@ -1547,6 +1668,10 @@ export function createCanvasAgentController({
                 nodeReferences: messageNodeReferences,
                 fileGrantIds,
               } : {}),
+              ...(agent.promptAttachments.length ? {
+                attachments: agent.promptAttachments.map(serializeAgentAttachment),
+                fileGrantIds,
+              } : {}),
             },
           });
           const task = payload?.task ?? payload;
@@ -1563,11 +1688,13 @@ export function createCanvasAgentController({
             taskId,
             createdAt: new Date().toISOString(),
             nodeReferences: messageNodeReferences,
+            attachments: agent.promptAttachments.map(serializeAgentAttachment),
           }].slice(-200);
           syncCurrentAgentTaskItem(agent, { goal: text, conversationId });
           agent.promptDraft = "";
           agent.promptMention = null;
           agent.promptNodeReferences = [];
+          agent.promptAttachments = [];
           schedulePoll(0);
         });
         return true;
@@ -1620,6 +1747,10 @@ export function createCanvasAgentController({
             message: {
               text,
               ...(references.length ? { nodeReferences: messageNodeReferences, fileGrantIds } : {}),
+              ...(agent.promptAttachments.length ? {
+                attachments: agent.promptAttachments.map(serializeAgentAttachment),
+                fileGrantIds,
+              } : {}),
             },
           });
           agent.messages = [...agent.messages, {
@@ -1627,11 +1758,13 @@ export function createCanvasAgentController({
             text,
             interjection: true,
             nodeReferences: messageNodeReferences,
+            attachments: agent.promptAttachments.map(serializeAgentAttachment),
           }].slice(-20);
           if (fromPrompt) {
             agent.promptDraft = "";
             agent.promptMention = null;
             agent.promptNodeReferences = [];
+            agent.promptAttachments = [];
           }
           else agent.interjectionDraft = "";
         });
@@ -2174,6 +2307,65 @@ function renderAgentPromptReferenceChips(agent) {
   </div>`;
 }
 
+function renderAgentPromptAttachmentChips(agent) {
+  const attachments = Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [];
+  if (!attachments.length) return "";
+  return `<div class="canvas-agent-attachment-chips" aria-label="已添加附件">
+    ${attachments.map((attachment) => `<span class="canvas-agent-attachment-chip" data-attachment-kind="${escapeAttr(attachment.kind)}">
+      <span class="canvas-agent-attachment-thumb">${renderAgentAttachmentPreview(attachment)}</span>
+      <span><strong>${escapeHtml(attachment.name || "附件")}</strong><small>${escapeHtml(formatAgentAttachmentMeta(attachment))}</small></span>
+      <button type="button" data-agent-action="remove-agent-attachment" data-attachment-id="${escapeAttr(attachment.id)}" aria-label="移除 ${escapeAttr(attachment.name || "附件")}" title="移除附件">×</button>
+    </span>`).join("")}
+  </div>`;
+}
+
+function renderAgentAttachmentPreview(attachment = {}) {
+  if (attachment.kind === "image" && attachment.previewUrl) {
+    return `<img src="${escapeAttr(attachment.previewUrl)}" alt="" loading="lazy" />`;
+  }
+  if (attachment.kind === "video") return '<b aria-hidden="true">VID</b>';
+  return `<b aria-hidden="true">${escapeHtml(agentAttachmentKindLabel(attachment.kind))}</b>`;
+}
+
+function renderAgentAttachmentIcon(name) {
+  if (name === "add") {
+    return '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
+  }
+  return "";
+}
+
+function resolveAgentAttachmentKind(file = {}) {
+  const type = String(file.type ?? "").toLowerCase();
+  const name = String(file.name ?? "").toLowerCase();
+  if (type.startsWith("image/")) return "image";
+  if (type.startsWith("video/")) return "video";
+  if (type.startsWith("text/") || [".txt", ".md", ".markdown", ".csv", ".json", ".docx", ".pdf"].some((extension) => name.endsWith(extension))) return "document";
+  return "";
+}
+
+function serializeAgentAttachment(attachment = {}) {
+  return {
+    fileGrantId: String(attachment.fileGrantId ?? "").trim(),
+    name: String(attachment.name ?? "附件").trim().slice(0, 160),
+    contentType: String(attachment.contentType ?? "application/octet-stream").trim().toLowerCase(),
+    sizeBytes: Math.max(0, Number(attachment.sizeBytes ?? 0) || 0),
+    kind: ["image", "video", "document"].includes(attachment.kind) ? attachment.kind : "document",
+  };
+}
+
+function agentAttachmentKindLabel(kind) {
+  return kind === "video" ? "VID" : kind === "image" ? "IMG" : "DOC";
+}
+
+function formatAgentAttachmentMeta(attachment = {}) {
+  const size = Number(attachment.sizeBytes ?? 0);
+  const sizeLabel = size > 1024 * 1024
+    ? `${(size / (1024 * 1024)).toFixed(1)} MB`
+    : size > 1024 ? `${Math.ceil(size / 1024)} KB`
+      : size ? `${size} B` : "";
+  return [agentAttachmentKindLabel(attachment.kind), sizeLabel].filter(Boolean).join(" · ");
+}
+
 function renderAgentMentionPreview(item = {}) {
   const mediaKind = String(item.mediaKind ?? "").trim().toLowerCase();
   if (mediaKind === "video") {
@@ -2388,6 +2580,7 @@ function renderAgentTimeline(agent, canvasDocument = null, active = false) {
       type: message.interjection ? "用户追加" : agentMessageLabel(message.role),
       summary: message.text,
       nodeReferences: message.nodeReferences,
+      attachments: message.attachments,
       status: "message",
       kind: message.role === "assistant" ? "answer" : "message",
       citations: normalizeAgentCitations(message.citations),
@@ -2426,6 +2619,7 @@ function renderAgentTimeline(agent, canvasDocument = null, active = false) {
       <div>
         <span class="canvas-agent-event-title"><strong>${escapeHtml(entry.type)}</strong>${entry.kind && !["message", "answer"].includes(entry.kind) ? `<em>${escapeHtml(agentEventKindLabel(entry.kind))}</em>` : ""}</span>
         ${entry.summary ? `<p>${renderAgentMessageSummary(entry, canvasDocument)}</p>` : ""}
+        ${entry.attachments?.length ? renderAgentMessageAttachments(entry.attachments) : ""}
         ${entry.media ? renderAgentMedia(entry.media, entry.messageId, entry.canvasNodeId) : ""}
         ${entry.metadata?.length ? `<div class="canvas-agent-event-meta">${entry.metadata.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
         ${entry.citations?.length ? `<ol class="canvas-agent-citations" aria-label="引用来源">${entry.citations.map((citation) => renderAgentCitation(citation)).join("")}</ol>` : ""}
@@ -2499,11 +2693,29 @@ export function normalizeAgentMessage(message = {}) {
     role,
     text,
     nodeReferences: normalizeAgentNodeReferences(content.nodeReferences ?? message.nodeReferences),
+    attachments: normalizeAgentAttachments(content.attachments ?? message.attachments),
     interjection: Boolean(message.interjection),
     citations: normalizeAgentCitations(content.citations),
     generationTaskId: String(content.generationTaskId ?? output.generationTaskId ?? ""),
     canvasNodeId: String(content.canvasNodeId ?? output.canvasNodeId ?? ""),
   };
+}
+
+function normalizeAgentAttachments(value) {
+  return (Array.isArray(value) ? value : []).map((attachment) => ({
+    id: String(attachment?.storageObjectId ?? attachment?.fileGrantId ?? ""),
+    fileGrantId: String(attachment?.fileGrantId ?? ""),
+    name: String(attachment?.name ?? "附件"),
+    contentType: String(attachment?.contentType ?? "application/octet-stream"),
+    sizeBytes: Math.max(0, Number(attachment?.sizeBytes ?? 0) || 0),
+    kind: ["image", "video", "document"].includes(attachment?.kind) ? attachment.kind : "document",
+  })).filter((attachment) => attachment.fileGrantId);
+}
+
+function renderAgentMessageAttachments(attachments) {
+  return `<div class="canvas-agent-message-attachments" aria-label="消息附件">${normalizeAgentAttachments(attachments)
+    .map((attachment) => `<span><b>${escapeHtml(agentAttachmentKindLabel(attachment.kind))}</b><em>${escapeHtml(attachment.name)}</em></span>`)
+    .join("")}</div>`;
 }
 
 function normalizeAgentNodeReferences(value) {
