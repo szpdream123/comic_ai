@@ -6,6 +6,21 @@ import test from "node:test";
 
 import { buildProductionWeb } from "./build-production-web.mjs";
 
+test("production workbench entry URL stays within the portable filename limit", async () => {
+  const appSource = await readFile(new URL("../apps/web/app.js", import.meta.url), "utf8");
+  const appTemplate = await readFile(new URL("../apps/web/app.html", import.meta.url), "utf8");
+  const importMatch = appSource.match(/import\("(\.\/src\/features\/production-workbench\/index\.js[^\"]*)"\)/);
+  const preloadMatch = appTemplate.match(/<link\s+rel="modulepreload"\s+href="(\/src\/features\/production-workbench\/index\.js[^\"]*)"\s*\/>/);
+
+  assert.ok(importMatch, "production workbench dynamic import is missing");
+  assert.ok(preloadMatch, "production workbench module preload is missing");
+  assert.equal(importMatch[1].replace(/^\./, ""), preloadMatch[1]);
+  assert.ok(
+    Buffer.byteLength(importMatch[1].split("/").at(-1), "utf8") <= 255,
+    "production workbench module filename must fit Linux NAME_MAX",
+  );
+});
+
 test("buildProductionWeb emits a hashed bundled entry and manifest", async (context) => {
   const cwd = await mkdtemp(join(tmpdir(), "comic-ai-production-web-"));
   context.after(() => rm(cwd, { recursive: true, force: true }));
