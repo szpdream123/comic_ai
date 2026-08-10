@@ -2442,6 +2442,44 @@ test("new episode helpers unwrap envelopes and target v2 workbench routes", asyn
   assert.equal(calls[8].options.headers["idempotency-key"], "export-key");
 });
 
+test("jianying export waits for archive build without changing other export timeouts", async () => {
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousFetch = globalThis.fetch;
+  const scheduledDelays = [];
+  globalThis.setTimeout = ((callback, delay) => {
+    scheduledDelays.push(delay);
+    return 1;
+  });
+  globalThis.fetch = async () => ({
+    ok: true,
+    text: async () => JSON.stringify({
+      requestId: "request-export",
+      data: { exportTask: { status: "succeeded" } },
+    }),
+  });
+
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.createEpisodeExportTask("episode-1", {
+      storyboardIds: ["storyboard-1"],
+      exportType: "jianying",
+    });
+    await creatorApi.createEpisodeExportTask("episode-1", {
+      storyboardIds: ["storyboard-1"],
+      exportType: "mp4",
+    });
+    await creatorApi.createEpisodeExportTask("episode-1", {
+      storyboardIds: ["storyboard-1"],
+      exportType: "jianying",
+    }, { timeoutMs: 123_456 });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.deepEqual(scheduledDelays, [600_000, 10_000, 123_456]);
+});
+
 test("new envelope errors expose status code, error code, details, and request id", async () => {
   globalThis.fetch = async () => ({
     ok: false,

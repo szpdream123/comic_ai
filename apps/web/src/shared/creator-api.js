@@ -3047,6 +3047,11 @@ export const creatorApi = {
       {
         action: "episode.export.original-video",
         idempotencyKey: options.idempotencyKey,
+        timeoutMs: Number.isFinite(options.timeoutMs)
+          ? options.timeoutMs
+          : input?.exportType === "jianying"
+            ? 600000
+            : undefined,
       },
     );
   },
