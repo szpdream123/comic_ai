@@ -502,6 +502,11 @@ import { runIdempotentCommand } from "../modules/shared/command/platform-command
 import { capabilities, p0Capabilities } from "../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 import { PUBLIC_SEO_PAGES } from "../../../web/src/shared/public-seo-content.js";
+import {
+  isProductionWebAssetPath,
+  productionWebAssetCacheControl,
+  renderProductionWebAppShell,
+} from "./production-web-assets.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
 const webRootPrefix = `${resolve(webRoot)}${sep}`;
@@ -15229,6 +15234,7 @@ async function serveStatic(
   request: Parameters<typeof createServer>[0],
   pathname: string,
   response: ServerResponse,
+  runtimeEnv: NodeJS.ProcessEnv,
 ) {
   if (pathname === "/favicon.ico") {
     response.statusCode = 204;
@@ -15269,6 +15275,7 @@ async function serveStatic(
   }
 
   const normalizedPath = pathname === "/" ? "/app.html" : pathname;
+  const productionWebAsset = isProductionWebAssetPath(normalizedPath);
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
   let file: Buffer;
   try {
@@ -15292,12 +15299,17 @@ async function serveStatic(
       ? renderPublicSeoAppShell(file.toString("utf8"), seoRoute, serverOriginFromRequest(request))
       : renderPrivateAppShell(file.toString("utf8"));
     file = Buffer.from(
-      seoRoute ? markPublicSeoSessionPending(appShell, request.headers.cookie) : appShell,
+      renderProductionWebAppShell(
+        seoRoute ? markPublicSeoSessionPending(appShell, request.headers.cookie) : appShell,
+        runtimeEnv.PRODUCTION_WEB_ENTRY_URL,
+      ),
       "utf8",
     );
   }
 
-  file = await minifyStaticAsset(filePath, file);
+  if (!productionWebAsset) {
+    file = await minifyStaticAsset(filePath, file);
+  }
 
   response.setHeader(
     "content-type",
@@ -15319,7 +15331,10 @@ async function serveStatic(
   }
   const etag = staticAssetEtag(encoded.file);
   response.setHeader("etag", etag);
-  response.setHeader("cache-control", "public, max-age=0, must-revalidate");
+  response.setHeader(
+    "cache-control",
+    productionWebAssetCacheControl(normalizedPath),
+  );
   if (requestMatchesEtag(request, etag)) {
     response.statusCode = 304;
     response.end();
@@ -15419,7 +15434,7 @@ async function prewarmStaticAssets(directory = webRoot): Promise<void> {
   await Promise.all(entries.map(async (entry) => {
     const filePath = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name !== "assets") {
+      if (entry.name !== "assets" && entry.name !== ".production") {
         await prewarmStaticAssets(filePath);
       }
       return;
@@ -17394,7 +17409,7 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && !pathname.startsWith("/api/")) {
-          return await serveStatic(request, pathname, response);
+          return await serveStatic(request, pathname, response, runtimeEnv);
         }
 
         const db = await getDb();
@@ -31571,7 +31586,7 @@ export function createPhoneAuthDevServer(
           }
           return redirect(response, target.toString());
         }
-        return await serveStatic(request, pathname, response);
+        return await serveStatic(request, pathname, response, runtimeEnv);
       }
 
       response.statusCode = 404;
