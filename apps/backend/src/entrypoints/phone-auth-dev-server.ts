@@ -15738,6 +15738,47 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
   return `${protocol}://${host}`;
 }
 
+function redirectInsecureProductionRequest(
+  request: Parameters<typeof createServer>[0],
+  response: Parameters<typeof createServer>[1],
+  httpsOrigin: string | undefined,
+) {
+  const forwardedProtocols = String(request.headers["x-forwarded-proto"] ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (!httpsOrigin || forwardedProtocols.at(-1) === "https") {
+    return false;
+  }
+
+  const requestTarget = new URL(request.url ?? "/", "http://request.invalid");
+  const target = new URL(httpsOrigin);
+  target.pathname = requestTarget.pathname;
+  target.search = requestTarget.search;
+  response.statusCode = 308;
+  response.setHeader("location", target.toString());
+  response.setHeader("cache-control", "no-store");
+  response.end();
+  return true;
+}
+
+function productionHttpsOrigin(env: NodeJS.ProcessEnv) {
+  const publicHost = env.PUBLIC_HOST?.trim() || "www.lingxiyunai.com";
+  const origin = new URL(`https://${publicHost}`);
+  if (
+    origin.username ||
+    origin.password ||
+    !origin.hostname ||
+    origin.pathname !== "/" ||
+    origin.search ||
+    origin.hash
+  ) {
+    throw new Error("invalid_public_host");
+  }
+  origin.port = "";
+  return origin.origin;
+}
+
 function firstRequestHeader(value: string | string[] | undefined) {
   return String(Array.isArray(value) ? value[0] ?? "" : value ?? "")
     .split(",")[0]
@@ -17205,6 +17246,9 @@ export function createPhoneAuthDevServer(
   if (runtimeEnv.NODE_ENV === "production" && options.allowProduction !== true) {
     throw new Error("phone_auth_dev_server_forbidden_in_production");
   }
+  const secureProductionOrigin = useSecureSessionCookies
+    ? productionHttpsOrigin(runtimeEnv)
+    : undefined;
   if (!options.db && options.allowLocalDatabaseUrl !== true) {
     assertRemoteDevServerDatabaseUrl(runtimeEnv);
   }
@@ -17370,6 +17414,9 @@ export function createPhoneAuthDevServer(
   const httpServer = createServer((request, response) => {
     void runWithUserAuthRequestContext(() => runWithDatabaseContext(async () => {
       try {
+        if (redirectInsecureProductionRequest(request, response, secureProductionOrigin)) {
+          return;
+        }
         applyCrossOriginIsolationHeaders(response);
         applyDevCorsHeaders(request, response);
         const url = new URL(request.url ?? "/", "http://127.0.0.1");

@@ -2240,6 +2240,89 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("redirects production HTTP requests to HTTPS before serving pages or APIs", async () => {
+    const server = createPhoneAuthDevServer({
+      db: {} as Awaited<ReturnType<typeof createDevDb>>,
+      allowProduction: true,
+      env: {
+        NODE_ENV: "production",
+        PUBLIC_HOST: "www.lingxiyunai.com",
+      },
+    });
+    const proxyHeaders = {
+      host: "www.lingxiyunai.com:80",
+      "x-forwarded-host": "www.lingxiyunai.com:80",
+      "x-forwarded-proto": "http",
+    };
+
+    try {
+      await server.listen(0);
+
+      const pageResponse = await fetch(`${server.origin}/projects?tab=active`, {
+        headers: proxyHeaders,
+        redirect: "manual",
+      });
+      assert.equal(pageResponse.status, 308);
+      assert.equal(
+        pageResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/projects?tab=active",
+      );
+
+      const untrustedTargetResponse = await fetch(
+        `${server.origin}//attacker.example/collect?source=http`,
+        {
+          headers: {
+            ...proxyHeaders,
+            host: "attacker-host.example",
+            "x-forwarded-host": "attacker.example",
+          },
+          redirect: "manual",
+        },
+      );
+      assert.equal(untrustedTargetResponse.status, 308);
+      assert.equal(
+        untrustedTargetResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/collect?source=http",
+      );
+
+      const appendedProxyProtocolResponse = await fetch(`${server.origin}/projects`, {
+        headers: {
+          host: "www.lingxiyunai.com:443",
+          "x-forwarded-proto": "https, http",
+        },
+        redirect: "manual",
+      });
+      assert.equal(appendedProxyProtocolResponse.status, 308);
+      assert.equal(
+        appendedProxyProtocolResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/projects",
+      );
+
+      const misleadingPortResponse = await fetch(`${server.origin}/projects`, {
+        headers: { host: "www.lingxiyunai.com:443" },
+        redirect: "manual",
+      });
+      assert.equal(misleadingPortResponse.status, 308);
+      assert.equal(
+        misleadingPortResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/projects",
+      );
+
+      const apiResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: proxyHeaders,
+        redirect: "manual",
+      });
+      assert.equal(apiResponse.status, 308);
+      assert.equal(
+        apiResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/api/auth/password/login",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("marks user session cookies secure in production", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
@@ -2254,7 +2337,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       const response = await fetch(`${server.origin}/api/auth/password/login`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-host": "www.lingxiyunai.com:443",
+          "x-forwarded-proto": "https",
+        },
         body: JSON.stringify({ account: "18571521874", password: "521874" }),
       });
 
