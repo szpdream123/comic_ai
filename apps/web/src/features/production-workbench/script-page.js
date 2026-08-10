@@ -72,7 +72,7 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
   return `
     <section class="script-management-page" aria-label="剧本管理">
       <header class="script-management-seo page-seo-heading" aria-label="剧本关键词">
-        <h1>剧本转分镜</h1>
+        <h1>小说转剧本</h1>
         <div class="page-seo-tags" aria-label="剧本能力">
           <b>小说改短剧</b>
           <b>AI分镜生成</b>
