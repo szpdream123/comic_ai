@@ -2206,6 +2206,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
     projectLibraryRequestId: 0,
+    scriptLibraryRequestId: 0,
     toastDismissTimers: new Map(),
     toastSequence: 0,
     persistentToastId: null,
@@ -2503,9 +2504,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       renameScriptId: null,
       renameScriptTitle: "",
       renameScriptNotice: "",
+      renameScriptSubmitting: false,
       deleteScriptId: null,
       deleteScriptMode: "single",
       deleteScriptIds: [],
+      deleteScriptSubmitting: false,
       selectedProjectCardId: null,
       canvasProjectView: deriveInitialCanvasProjectView(readWorkbenchRouteToken(window.location)),
       canvasProjects: null,
@@ -15708,10 +15711,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     let pageLoadFailed = false;
     if (typeof workbench.api?.getUserScripts === "function") {
       try {
-        await syncScriptLibraryFromApi(workbench, {
+        const refreshed = await syncScriptLibraryFromApi(workbench, {
           page: nextPage,
           pageSize: pagination.pageSize,
         });
+        if (!refreshed) {
+          return;
+        }
       } catch (error) {
         pageLoadFailed = true;
         workbench.ui.singleEpisodeScriptLibraryPagination = pagination;
@@ -15752,6 +15758,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteScriptMode = "bulk";
     workbench.ui.deleteScriptIds = scripts.map((script) => String(script.id ?? "")).filter(Boolean);
     workbench.ui.deleteScriptId = workbench.ui.deleteScriptIds[0] ?? null;
+    workbench.ui.deleteScriptSubmitting = false;
     workbench.ui.scriptCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
@@ -24092,6 +24099,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.projectDetail?.project?.name ??
       "";
     workbench.ui.renameScriptNotice = "";
+    workbench.ui.renameScriptSubmitting = false;
     workbench.ui.scriptCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
@@ -24102,6 +24110,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.renameScriptId = null;
     workbench.ui.renameScriptTitle = "";
     workbench.ui.renameScriptNotice = "";
+    workbench.ui.renameScriptSubmitting = false;
     render(workbench);
     return;
   }
@@ -24114,14 +24123,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
+    workbench.ui.renameScriptSubmitting = true;
     await runAction(workbench, "正在重命名剧本...", async () => {
       const result = await workbench.api.updateScriptCard(scriptId, {
         title: nextTitle,
       });
-      mergeScriptCardUpdate(workbench, result?.script);
       workbench.ui.renameScriptId = null;
       workbench.ui.renameScriptTitle = "";
       workbench.ui.renameScriptNotice = "";
+      workbench.ui.renameScriptSubmitting = false;
+      mergeScriptCardUpdate(workbench, result?.script);
+    }, {
+      successToast: "剧本已重命名。",
+      onError() {
+        workbench.ui.renameScriptSubmitting = false;
+      },
     });
     return;
   }
@@ -24136,6 +24152,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteScriptId = target.dataset.scriptId ?? null;
     workbench.ui.deleteScriptMode = "single";
     workbench.ui.deleteScriptIds = [];
+    workbench.ui.deleteScriptSubmitting = false;
     workbench.ui.scriptCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
@@ -24146,6 +24163,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteScriptId = null;
     workbench.ui.deleteScriptMode = "single";
     workbench.ui.deleteScriptIds = [];
+    workbench.ui.deleteScriptSubmitting = false;
     render(workbench);
     return;
   }
@@ -24155,6 +24173,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.deleteScriptId = null;
       workbench.ui.deleteScriptMode = "single";
       workbench.ui.deleteScriptIds = [];
+      workbench.ui.deleteScriptSubmitting = false;
       workbench.ui.toast = "子账户无法删除剧本。";
       render(workbench);
       return;
@@ -24171,38 +24190,65 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         render(workbench);
         return;
       }
+      workbench.ui.deleteScriptSubmitting = true;
       await runAction(workbench, `正在删除 ${scripts.length} 个剧本...`, async () => {
-        for (const script of scripts) {
-          if (!script?.id) {
-            throw new Error("缺少剧本信息，无法删除。");
+        const deletedScriptIds = [];
+        try {
+          for (const script of scripts) {
+            if (!script?.id) {
+              throw new Error("缺少剧本信息，无法删除。");
+            }
+            await deleteScriptIfPresent(workbench, script.id);
+            deletedScriptIds.push(String(script.id));
+            clearDeletedScriptCard(workbench, script.id);
           }
-          await workbench.api.deleteScriptCard(script.id);
-          clearDeletedScriptCard(workbench, script.id);
+        } catch (error) {
+          const deletedIdSet = new Set(deletedScriptIds);
+          const remainingScriptIds = scripts
+            .map((script) => String(script?.id ?? ""))
+            .filter((scriptId) => scriptId && !deletedIdSet.has(scriptId));
+          workbench.ui.deleteScriptId = remainingScriptIds[0] ?? null;
+          workbench.ui.deleteScriptMode = remainingScriptIds.length ? "bulk" : "single";
+          workbench.ui.deleteScriptIds = remainingScriptIds;
+          workbench.ui.selectedScriptIds = remainingScriptIds;
+          refreshScriptLibraryAfterDelete(workbench);
+          throw error;
         }
-        await refreshScriptLibraryIfAvailable(workbench);
         workbench.ui.selectedScriptIds = [];
         workbench.ui.scriptCardMenuId = null;
         workbench.ui.deleteScriptId = null;
         workbench.ui.deleteScriptMode = "single";
         workbench.ui.deleteScriptIds = [];
+        workbench.ui.deleteScriptSubmitting = false;
         workbench.ui.scriptDetailOpen = false;
+        refreshScriptLibraryAfterDelete(workbench);
       }, {
         successToast: `已删除 ${scripts.length} 个剧本。`,
+        onError() {
+          workbench.ui.deleteScriptSubmitting = false;
+        },
       });
       return;
     }
     const scriptId = workbench.ui.deleteScriptId;
+    workbench.ui.deleteScriptSubmitting = true;
     await runAction(workbench, "正在删除剧本...", async () => {
       if (!scriptId) {
         throw new Error("缺少剧本信息，无法删除。");
       }
-      await workbench.api.deleteScriptCard(scriptId);
+      await deleteScriptIfPresent(workbench, scriptId);
       clearDeletedScriptCard(workbench, scriptId);
-      await refreshScriptLibraryIfAvailable(workbench);
       workbench.ui.deleteScriptId = null;
       workbench.ui.deleteScriptMode = "single";
       workbench.ui.deleteScriptIds = [];
+      workbench.ui.deleteScriptSubmitting = false;
       workbench.ui.scriptDetailOpen = false;
+      refreshScriptLibraryAfterDelete(workbench);
+    }, {
+      successToast: "剧本已删除。",
+      onError() {
+        workbench.ui.deleteScriptSubmitting = false;
+      },
     });
     return;
   }
@@ -41064,6 +41110,13 @@ function mergeScriptCardUpdate(workbench, script) {
         : candidate,
     );
   }
+  if (Array.isArray(workbench.ui?.singleEpisodeScriptLibrary)) {
+    workbench.ui.singleEpisodeScriptLibrary = workbench.ui.singleEpisodeScriptLibrary.map((candidate) =>
+      String(candidate?.id ?? "") === String(script.id)
+        ? { ...candidate, ...script }
+        : candidate,
+    );
+  }
   const mergeIntoDetail = (detail) => {
     if (!detail) {
       return detail;
@@ -41086,7 +41139,9 @@ function mergeScriptCardUpdate(workbench, script) {
     return nextDetail;
   };
 
-  workbench.state.projectDetail = mergeIntoDetail(workbench.state.projectDetail);
+  if (workbench.state) {
+    workbench.state.projectDetail = mergeIntoDetail(workbench.state.projectDetail);
+  }
   workbench.ui.projectDetail = mergeIntoDetail(workbench.ui.projectDetail);
   if (workbench.state?.script && String(workbench.state.script.id) === String(script.id)) {
     workbench.state.script = {
@@ -41097,11 +41152,40 @@ function mergeScriptCardUpdate(workbench, script) {
 }
 
 function clearDeletedScriptCard(workbench, scriptId) {
+  const scriptLibraryRecords = Array.isArray(workbench.ui?.scriptLibraryRecords)
+    ? workbench.ui.scriptLibraryRecords
+    : [];
+  const nextScriptLibraryRecords = scriptLibraryRecords.filter(
+    (candidate) => String(candidate?.id ?? "") !== String(scriptId),
+  );
+  const removedCount = scriptLibraryRecords.length - nextScriptLibraryRecords.length;
   if (Array.isArray(workbench.ui?.scriptLibraryRecords)) {
-    workbench.ui.scriptLibraryRecords = workbench.ui.scriptLibraryRecords.filter(
+    workbench.ui.scriptLibraryRecords = nextScriptLibraryRecords;
+  }
+  if (Array.isArray(workbench.ui?.singleEpisodeScriptLibrary)) {
+    workbench.ui.singleEpisodeScriptLibrary = workbench.ui.singleEpisodeScriptLibrary.filter(
       (candidate) => String(candidate?.id ?? "") !== String(scriptId),
     );
   }
+  if (removedCount > 0) {
+    for (const paginationKey of ["scriptLibraryPagination", "singleEpisodeScriptLibraryPagination"]) {
+      const pagination = workbench.ui?.[paginationKey];
+      if (!pagination || typeof pagination !== "object") {
+        continue;
+      }
+      const pageSize = Math.max(1, Number(pagination.pageSize ?? 10) || 10);
+      const total = Math.max(0, Number(pagination.total ?? scriptLibraryRecords.length) - removedCount);
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      workbench.ui[paginationKey] = {
+        ...pagination,
+        page: Math.min(totalPages, Math.max(1, Number(pagination.page ?? 1) || 1)),
+        total,
+        totalPages,
+      };
+    }
+  }
+  workbench.ui.selectedScriptIds = (workbench.ui.selectedScriptIds ?? [])
+    .filter((selectedId) => String(selectedId) !== String(scriptId));
   const clearDetail = (detail) => {
     if (!detail) {
       return detail;
@@ -41118,7 +41202,9 @@ function clearDeletedScriptCard(workbench, scriptId) {
     return nextDetail;
   };
 
-  workbench.state.projectDetail = clearDetail(workbench.state.projectDetail);
+  if (workbench.state) {
+    workbench.state.projectDetail = clearDetail(workbench.state.projectDetail);
+  }
   workbench.ui.projectDetail = clearDetail(workbench.ui.projectDetail);
   if (workbench.state?.script && String(workbench.state.script.id) === String(scriptId)) {
     workbench.state.script = null;
@@ -57346,15 +57432,28 @@ async function loadSelectedStandaloneCanvasDocument(workbench) {
 
 async function syncScriptLibraryFromApi(workbench, options = {}) {
   if (typeof workbench.api?.getUserScripts !== "function") {
-    return;
+    return false;
   }
+  const requestId = (workbench.scriptLibraryRequestId ?? 0) + 1;
+  workbench.scriptLibraryRequestId = requestId;
   const currentPagination = workbench.ui.singleEpisodeScriptLibraryPagination ?? { page: 1, pageSize: 10 };
   const requestedPage = Math.max(1, Math.floor(Number(options.page ?? currentPagination.page ?? 1)) || 1);
   const requestedPageSize = Math.max(1, Math.floor(Number(options.pageSize ?? currentPagination.pageSize ?? 10)) || 10);
-  const payload = await workbench.api.getUserScripts({
-    page: requestedPage,
-    pageSize: requestedPageSize,
-  });
+  let payload;
+  try {
+    payload = await workbench.api.getUserScripts({
+      page: requestedPage,
+      pageSize: requestedPageSize,
+    });
+  } catch (error) {
+    if (workbench.scriptLibraryRequestId !== requestId) {
+      return false;
+    }
+    throw error;
+  }
+  if (workbench.scriptLibraryRequestId !== requestId) {
+    return false;
+  }
   if (Array.isArray(payload?.scripts)) {
     workbench.ui.scriptLibraryRecords = payload.scripts;
     workbench.ui.scriptLibraryLoaded = true;
@@ -57379,6 +57478,7 @@ async function syncScriptLibraryFromApi(workbench, options = {}) {
       mode: "server",
     };
   }
+  return true;
 }
 
 async function refreshScriptLibraryIfAvailable(workbench) {
@@ -57390,6 +57490,35 @@ async function refreshScriptLibraryIfAvailable(workbench) {
   } catch (error) {
     console.warn("[script-library] refresh failed", error);
   }
+}
+
+async function deleteScriptIfPresent(workbench, scriptId) {
+  try {
+    await workbench.api.deleteScriptCard(scriptId);
+  } catch (error) {
+    const errorCodes = [
+      error?.errorCode,
+      error?.code,
+      error?.details?.reason,
+      error?.data?.error,
+      error?.data?.errorCode,
+    ].map((value) => String(value ?? "").trim().toLowerCase());
+    if (!errorCodes.includes("script_not_found")) {
+      throw error;
+    }
+  }
+}
+
+function refreshScriptLibraryAfterDelete(workbench) {
+  if (typeof workbench.api?.getUserScripts !== "function") {
+    return;
+  }
+  runLazyWorkbenchTask(workbench, "script library after delete", async () => {
+    const refreshed = await syncScriptLibraryFromApi(workbench);
+    if (refreshed) {
+      render(workbench);
+    }
+  });
 }
 
 async function preloadTeamMemberAssignableResources(workbench) {
