@@ -22,6 +22,35 @@ import {
 } from "../generation-task-snapshot.service.ts";
 
 describe("generation Redis dispatch repair", () => {
+  it("requires durable video and audio artifacts before finalize repair", async () => {
+    const queries: string[] = [];
+    await repairRunningSeedancePollJobs({
+      async query(sql: string) {
+        queries.push(sql);
+        return { rows: [] };
+      },
+    } as never, {
+      now: new Date("2026-06-03T06:00:00.000Z"),
+      limit: 10,
+      config: loadGenerationQueueConfig({}),
+      publisher: { async add() {} },
+    });
+
+    const finalizeCandidateQuery = queries.find((sql) => sql.includes("artifact_recovery_json"));
+    assert.ok(finalizeCandidateQuery);
+    assert.match(finalizeCandidateQuery, /response_redacted_json->>'videoUrl'/);
+    assert.match(finalizeCandidateQuery, /response_redacted_json#>>'\{artifact,mediaType\}' = 'audio'/);
+    assert.match(finalizeCandidateQuery, /response_redacted_json#>>'\{artifact,url\}'/);
+    assert.match(
+      finalizeCandidateQuery,
+      /t\.task_type = 'episode_generate_video'[\s\S]*t\.current_attempt_id IS NOT NULL/,
+    );
+    assert.match(
+      finalizeCandidateQuery,
+      /t\.task_type = 'episode_generate_audio'[\s\S]*t\.current_attempt_id IS NOT NULL/,
+    );
+  });
+
   it("releases only terminal-task assignments absent from Redis live states", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -1003,7 +1032,7 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
-  it("recreates finalize outbox events for provider-succeeded Seedance tasks waiting on local persistence", async () => {
+  it("recreates finalize outbox events after artifact-not-ready queue exhaustion", async () => {
     const db = await createMigratedTestDb();
     const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
 
@@ -1014,6 +1043,7 @@ describe("generation Redis dispatch repair", () => {
         `
           UPDATE tasks
           SET status = 'manual_review_required',
+              failure_code = 'generation_queue_error',
               locked_until = NULL,
               last_dispatched_at = '2026-06-03T05:50:00.000Z'
           WHERE id = '50000000-0000-4000-8000-000000000104'
@@ -1069,6 +1099,97 @@ describe("generation Redis dispatch repair", () => {
         finalizeMode: "retry_finalize",
         artifactStage: "fetch",
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not loop finalize recovery while a succeeded video artifact is still missing", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'manual_review_required',
+              failure_code = 'generation_queue_error',
+              locked_until = NULL,
+              last_dispatched_at = '2026-06-03T05:50:00.000Z'
+          WHERE id = '50000000-0000-4000-8000-000000000104'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              response_redacted_json = '{}'::jsonb
+          WHERE id = '52000000-0000-4000-8000-000000000104'
+        `,
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add() {} },
+      });
+      const outbox = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM outbox_events
+          WHERE event_type = 'generation.task.finalize_requested'
+        `,
+      );
+
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(outbox.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not loop video finalize recovery without a durable current attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedRunningSeedanceTask(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'manual_review_required',
+              failure_code = 'generation_queue_error',
+              current_attempt_id = NULL,
+              locked_until = NULL,
+              last_dispatched_at = '2026-06-03T05:50:00.000Z'
+          WHERE id = '50000000-0000-4000-8000-000000000104'
+        `,
+      );
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              response_redacted_json = '{"videoUrl":"https://cdn.example.test/result.mp4"}'::jsonb
+          WHERE id = '52000000-0000-4000-8000-000000000104'
+        `,
+      );
+
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add() {} },
+      });
+      const outbox = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM outbox_events
+          WHERE event_type = 'generation.task.finalize_requested'
+        `,
+      );
+
+      assert.deepEqual(repaired.repairedTaskIds, []);
+      assert.equal(outbox.rows[0]?.count, 0);
     } finally {
       await db.close();
     }
@@ -1535,61 +1656,7 @@ describe("generation Redis dispatch repair", () => {
     const db = await createMigratedTestDb();
     try {
       await seedGenerationRepairTasks(db);
-      await db.query(
-        `
-          INSERT INTO workflows (
-            id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id
-          ) VALUES (
-            '40000000-0000-4000-8000-000000000106',
-            '30000000-0000-4000-8000-000000000101',
-            'episode_audio_generation', 'running', '{}'::jsonb,
-            '00000000-0000-4000-8000-000000000101'
-          );
-          INSERT INTO tasks (
-            id, project_id, workflow_id, task_type, status, failure_code,
-            queue_name, scheduled_at, last_dispatched_at, input_snapshot_json,
-            target_entity_type, target_entity_id
-          ) VALUES (
-            '50000000-0000-4000-8000-000000000106',
-            '30000000-0000-4000-8000-000000000101',
-            '40000000-0000-4000-8000-000000000106',
-            'episode_generate_audio', 'failed', 'generation_queue_error',
-            'generation-submit-audio', '2026-06-03T05:55:00.000Z',
-            '2026-06-03T05:50:00.000Z',
-            '{"kind":"audio","model":"suno-v4","providerExecutor":"apimart-audio","targetType":"episode","targetId":"60000000-0000-4000-8000-000000000106"}'::jsonb,
-            'episode', '60000000-0000-4000-8000-000000000106'
-          );
-          INSERT INTO task_attempts (
-            id, project_id, workflow_id, task_id, attempt_number, status,
-            failure_code, started_at, finished_at
-          ) VALUES (
-            '51000000-0000-4000-8000-000000000106',
-            '30000000-0000-4000-8000-000000000101',
-            '40000000-0000-4000-8000-000000000106',
-            '50000000-0000-4000-8000-000000000106', 1, 'failed',
-            'generation_queue_error', '2026-06-03T05:56:00.000Z', '2026-06-03T05:57:00.000Z'
-          );
-          UPDATE tasks
-          SET current_attempt_id = '51000000-0000-4000-8000-000000000106'
-          WHERE id = '50000000-0000-4000-8000-000000000106';
-          INSERT INTO provider_requests (
-            id, project_id, workflow_id, task_id, attempt_id,
-            provider_name, provider_operation, request_key, request_hash,
-            payload_ref, payload_hash, payload_redacted_json, status,
-            external_submission_started_at, external_request_id, response_redacted_json
-          ) VALUES (
-            '52000000-0000-4000-8000-000000000106',
-            '30000000-0000-4000-8000-000000000101',
-            '40000000-0000-4000-8000-000000000106',
-            '50000000-0000-4000-8000-000000000106',
-            '51000000-0000-4000-8000-000000000106',
-            'apimart', 'episode.audio.generate', 'workflow-106:task-106',
-            'request-hash-106', 'creator://payload-106', 'payload-hash-106',
-            '{}'::jsonb, 'succeeded', '2026-06-03T05:56:00.000Z',
-            'audio-external-106', '{"artifact":{"url":"https://cdn.example.test/result.mp3","mediaType":"audio"}}'::jsonb
-          )
-        `,
-      );
+      await seedFailedApiMartAudioTask(db);
 
       const repaired = await repairRunningSeedancePollJobs(db, {
         now: new Date("2026-06-03T06:00:00.000Z"),
@@ -1615,6 +1682,96 @@ describe("generation Redis dispatch repair", () => {
         task_status: "manual_review_required",
         attempt_status: "manual_review_required",
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not loop audio finalize recovery until its durable artifact is complete", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedGenerationRepairTasks(db);
+      await seedFailedApiMartAudioTask(db);
+      const invalidStates = [
+        {
+          currentAttemptId: null,
+          response: { artifact: { mediaType: "audio", url: "https://cdn.example.test/result.mp3" } },
+        },
+        {
+          currentAttemptId: "51000000-0000-4000-8000-000000000106",
+          response: { artifact: { mediaType: "video", url: "https://cdn.example.test/result.mp3" } },
+        },
+        {
+          currentAttemptId: "51000000-0000-4000-8000-000000000106",
+          response: { artifact: { mediaType: "audio", url: "   " } },
+        },
+      ];
+
+      for (const invalid of invalidStates) {
+        await db.query(
+          "UPDATE tasks SET current_attempt_id = $2 WHERE id = $1",
+          ["50000000-0000-4000-8000-000000000106", invalid.currentAttemptId],
+        );
+        await db.query(
+          "UPDATE provider_requests SET response_redacted_json = $2::jsonb WHERE id = $1",
+          ["52000000-0000-4000-8000-000000000106", JSON.stringify(invalid.response)],
+        );
+        for (const minute of [0, 1]) {
+          const repaired = await repairRunningSeedancePollJobs(db, {
+            now: new Date(`2026-06-03T06:0${minute}:00.000Z`),
+            limit: 10,
+            config: loadGenerationQueueConfig({}),
+            publisher: { async add() {} },
+          });
+          assert.equal(
+            repaired.repairedTaskIds.includes("50000000-0000-4000-8000-000000000106"),
+            false,
+          );
+        }
+      }
+
+      const beforeRecovery = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.finalize_requested'
+          AND payload_json->>'taskId' = '50000000-0000-4000-8000-000000000106'
+      `);
+      assert.equal(beforeRecovery.rows[0]?.count, 0);
+
+      await db.query(
+        "UPDATE tasks SET current_attempt_id = $2 WHERE id = $1",
+        [
+          "50000000-0000-4000-8000-000000000106",
+          "51000000-0000-4000-8000-000000000106",
+        ],
+      );
+      await db.query(
+        "UPDATE provider_requests SET response_redacted_json = $2::jsonb WHERE id = $1",
+        [
+          "52000000-0000-4000-8000-000000000106",
+          JSON.stringify({
+            artifact: { mediaType: "audio", url: "https://cdn.example.test/result.mp3" },
+          }),
+        ],
+      );
+      const repaired = await repairRunningSeedancePollJobs(db, {
+        now: new Date("2026-06-03T06:02:00.000Z"),
+        limit: 10,
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add() {} },
+      });
+      const afterRecovery = await db.query<{ count: number }>(`
+        SELECT count(*)::int AS count
+        FROM outbox_events
+        WHERE event_type = 'generation.task.finalize_requested'
+          AND payload_json->>'taskId' = '50000000-0000-4000-8000-000000000106'
+      `);
+
+      assert.equal(
+        repaired.repairedTaskIds.includes("50000000-0000-4000-8000-000000000106"),
+        true,
+      );
+      assert.equal(afterRecovery.rows[0]?.count, 1);
     } finally {
       await db.close();
     }
@@ -1790,6 +1947,65 @@ async function seedGenerationRepairTasks(
         )
     `,
   );
+}
+
+async function seedFailedApiMartAudioTask(
+  db: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+) {
+  await db.query(`
+    INSERT INTO workflows (
+      id, project_id, workflow_type, status, input_snapshot_json, created_by_user_id
+    ) VALUES (
+      '40000000-0000-4000-8000-000000000106',
+      '30000000-0000-4000-8000-000000000101',
+      'episode_audio_generation', 'running', '{}'::jsonb,
+      '00000000-0000-4000-8000-000000000101'
+    );
+    INSERT INTO tasks (
+      id, project_id, workflow_id, task_type, status, failure_code,
+      queue_name, scheduled_at, last_dispatched_at, input_snapshot_json,
+      target_entity_type, target_entity_id
+    ) VALUES (
+      '50000000-0000-4000-8000-000000000106',
+      '30000000-0000-4000-8000-000000000101',
+      '40000000-0000-4000-8000-000000000106',
+      'episode_generate_audio', 'failed', 'generation_queue_error',
+      'generation-submit-audio', '2026-06-03T05:55:00.000Z',
+      '2026-06-03T05:50:00.000Z',
+      '{"kind":"audio","model":"suno-v4","providerExecutor":"apimart-audio","targetType":"episode","targetId":"60000000-0000-4000-8000-000000000106"}'::jsonb,
+      'episode', '60000000-0000-4000-8000-000000000106'
+    );
+    INSERT INTO task_attempts (
+      id, project_id, workflow_id, task_id, attempt_number, status,
+      failure_code, started_at, finished_at
+    ) VALUES (
+      '51000000-0000-4000-8000-000000000106',
+      '30000000-0000-4000-8000-000000000101',
+      '40000000-0000-4000-8000-000000000106',
+      '50000000-0000-4000-8000-000000000106', 1, 'failed',
+      'generation_queue_error', '2026-06-03T05:56:00.000Z', '2026-06-03T05:57:00.000Z'
+    );
+    UPDATE tasks
+    SET current_attempt_id = '51000000-0000-4000-8000-000000000106'
+    WHERE id = '50000000-0000-4000-8000-000000000106';
+    INSERT INTO provider_requests (
+      id, project_id, workflow_id, task_id, attempt_id,
+      provider_name, provider_operation, request_key, request_hash,
+      payload_ref, payload_hash, payload_redacted_json, status,
+      external_submission_started_at, external_request_id, response_redacted_json
+    ) VALUES (
+      '52000000-0000-4000-8000-000000000106',
+      '30000000-0000-4000-8000-000000000101',
+      '40000000-0000-4000-8000-000000000106',
+      '50000000-0000-4000-8000-000000000106',
+      '51000000-0000-4000-8000-000000000106',
+      'apimart', 'episode.audio.generate', 'workflow-106:task-106',
+      'request-hash-106', 'creator://payload-106', 'payload-hash-106',
+      '{}'::jsonb, 'succeeded', '2026-06-03T05:56:00.000Z',
+      'audio-external-106',
+      '{"artifact":{"url":"https://cdn.example.test/result.mp3","mediaType":"audio"}}'::jsonb
+    )
+  `);
 }
 
 async function seedRunningGptImageSubmitTask(

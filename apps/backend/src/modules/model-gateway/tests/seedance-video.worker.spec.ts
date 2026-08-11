@@ -5,6 +5,9 @@ import { describe, it } from "node:test";
 import type { AiModelConfigRecord } from "../../model-catalog/ai-model-config.store.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
+import { handleGenerationFetchArtifactJob } from "../generation-bullmq.worker.ts";
+import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import { GENERATION_ARTIFACT_FETCH_NOT_READY } from "../generation-skipped-coordinator.ts";
 import {
   buildLingdongArtifactDownloadInit,
   buildSeedanceUserModelRequestLogBody,
@@ -98,7 +101,7 @@ describe("Seedance video worker user ownership", () => {
 
   it("allows provider-succeeded result-unknown tasks to resume finalization", async () => {
     const source = await readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8");
-    assert.match(source, /t\.status IN \('queued', 'running', 'manual_review_required', 'result_unknown'\)/);
+    assert.match(source, /t\.status IN \('running', 'manual_review_required', 'result_unknown'\)/);
     assert.match(source, /status = 'running',[\s\S]*failure_code = NULL[\s\S]*status IN \('running', 'manual_review_required', 'result_unknown'\)/);
     assert.match(source, /t\.failure_code IN \('provider_output_persist_failed', 'generation_queue_error'\)/);
   });
@@ -994,6 +997,263 @@ describe("Seedance video worker user ownership", () => {
 
       assert.deepEqual(result, { status: "failed", failureCode: "provider_output_download_failed" });
       assert.deepEqual(uncaughtErrors, []);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("retries when a durable provider result still needs video finalization", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "309",
+        userId: "70000000-0000-4000-8000-000000000309",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/recoverable-seedance.mp4",
+      });
+      const durable = await db.query<{
+        task_status: string;
+        attempt_id: string | null;
+        provider_status: string;
+        external_request_id: string | null;
+        video_url: string | null;
+      }>(
+        `
+          SELECT t.status AS task_status,
+                 t.current_attempt_id AS attempt_id,
+                 pr.status AS provider_status,
+                 pr.external_request_id,
+                 pr.response_redacted_json->>'videoUrl' AS video_url
+          FROM tasks t
+          JOIN provider_requests pr ON pr.id = $2
+          WHERE t.id = $1
+        `,
+        [seeded.taskId, seeded.providerRequestId],
+      );
+      assert.deepEqual(durable.rows[0], {
+        task_status: "running",
+        attempt_id: seeded.attemptId,
+        provider_status: "succeeded",
+        external_request_id: "external-309",
+        video_url: "https://cdn.example.test/recoverable-seedance.mp4",
+      });
+
+      const fetchJob = {
+        data: {
+          taskId: seeded.taskId,
+          workflowId: seeded.workflowId,
+          mediaType: "video" as const,
+          modelCode: "seedance-i2v-pro",
+          providerExecutor: "seedance",
+          artifactKind: "video" as const,
+          artifactStage: "fetch" as const,
+        },
+      };
+      const assertFetchRetries = async (database: typeof db) => {
+        await assert.rejects(() => handleGenerationFetchArtifactJob({
+          job: {
+            data: fetchJob.data,
+          },
+          config: loadGenerationQueueConfig({}),
+          publisher: { async add() { throw new Error("not-ready fetch must not enqueue persist"); } },
+          processors: {
+            async submitSeedanceVideo() { return { status: "settled" }; },
+            async pollSeedanceVideo() { return { status: "waiting" }; },
+            async expireSeedanceVideo() {
+              return { status: "failed", failureCode: "generation_timeout" };
+            },
+            async fetchSeedanceVideoArtifact({ taskId, now }) {
+              return fetchSeedanceVideoArtifactJob(database, {
+                taskId,
+                runtime: seedanceStorageRuntime,
+                env: {},
+                fetchImpl: (async () => {
+                  throw new Error("a not-ready fetch must retry before downloading");
+                }) as typeof fetch,
+                now,
+              });
+            },
+          },
+          now: new Date("2026-07-13T02:29:00.000Z"),
+        }), (error: unknown) => {
+          assert.equal(
+            (error as { failureCode?: string }).failureCode,
+            GENERATION_ARTIFACT_FETCH_NOT_READY,
+          );
+          return true;
+        });
+      };
+      for (const mutateFirstFinalizeRead of [
+        () => [],
+        (rows: Array<Record<string, unknown>>) => rows.map((row) => ({
+          ...row,
+          provider_response_redacted_json: {},
+        })),
+        (rows: Array<Record<string, unknown>>) => rows.map((row) => ({
+          ...row,
+          attempt_id: null,
+          current_attempt_id: null,
+          provider_attempt_id: null,
+        })),
+      ]) {
+        let interceptedFirstFinalizeRead = false;
+        const racingDb = {
+          ...db,
+          async query(sql: string, params: unknown[] = []) {
+            const result = await db.query<Record<string, unknown>>(sql, params);
+            if (
+              !interceptedFirstFinalizeRead
+              && sql.includes("t.task_type = 'episode_generate_video'")
+              && sql.includes("pr.status = 'succeeded'")
+            ) {
+              interceptedFirstFinalizeRead = true;
+              return { rows: mutateFirstFinalizeRead(result.rows) };
+            }
+            return result;
+          },
+        } as typeof db;
+
+        await assertFetchRetries(racingDb);
+        assert.equal(interceptedFirstFinalizeRead, true);
+      }
+
+      await db.query(
+        "UPDATE provider_requests SET status = 'running', response_redacted_json = '{}'::jsonb WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+      await assertFetchRetries(db);
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'created',
+              external_request_id = NULL,
+              external_submission_started_at = NULL
+          WHERE id = $1
+        `,
+        [seeded.providerRequestId],
+      );
+      await assertFetchRetries(db);
+
+      await db.query("UPDATE tasks SET status = 'succeeded' WHERE id = $1", [seeded.taskId]);
+      assert.deepEqual(await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        now: new Date("2026-07-13T02:30:00.000Z"),
+      }), { status: "skipped" });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not silently complete a video fetch while durable work is still nonterminal", async () => {
+    const result = await fetchSeedanceVideoArtifactJob({
+      async query(sql: string) {
+        return {
+          rows: sql.includes("t.status AS task_status") && sql.includes("t.failure_code")
+            ? [{ task_status: "running", failure_code: null }]
+            : [],
+        };
+      },
+    } as never, {
+      taskId: "50000000-0000-4000-8000-000000000310",
+      runtime: seedanceStorageRuntime,
+      env: {},
+      now: new Date("2026-07-13T02:29:00.000Z"),
+    });
+
+    assert.deepEqual(result, {
+      status: "failed",
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  });
+
+  it("does not revive a queued video task from a historical succeeded provider attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "311",
+        userId: "70000000-0000-4000-8000-000000000311",
+        status: "queued",
+      });
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            failure_code, started_at, finished_at
+          ) VALUES ($1, $2, $3, $4, 1, 'failed', 'provider_poll_timeout', $5, $6)
+        `,
+        [
+          seeded.attemptId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          new Date("2026-07-13T01:00:00.000Z"),
+          new Date("2026-07-13T01:10:00.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, external_submission_started_at, external_request_id,
+            response_redacted_json, created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'volcengine', 'episode.video.generate',
+            $6, $6, $6, $6, 'succeeded', $7, $8, $9::jsonb, $10
+          )
+        `,
+        [
+          seeded.providerRequestId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          seeded.attemptId,
+          "seedance-stale-provider-311",
+          new Date("2026-07-13T01:00:00.000Z"),
+          "external-stale-311",
+          JSON.stringify({
+            status: "succeeded",
+            videoUrl: "https://cdn.example.test/stale-result.mp4",
+          }),
+          seeded.userId,
+        ],
+      );
+
+      const result = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        fetchImpl: (async () => {
+          throw new Error("queued stale artifact must not be downloaded");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:29:00.000Z"),
+      });
+      const state = await db.query<{
+        status: string;
+        current_attempt_id: string | null;
+        has_artifact_handoff: boolean;
+      }>(
+        `
+          SELECT t.status,
+                 t.current_attempt_id,
+                 COALESCE(snapshot.provider_status_json ? 'artifactHandoff', false)
+                   AS has_artifact_handoff
+          FROM tasks t
+          LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, { status: "skipped" });
+      assert.deepEqual(state.rows[0], {
+        status: "queued",
+        current_attempt_id: null,
+        has_artifact_handoff: false,
+      });
     } finally {
       await db.close();
     }

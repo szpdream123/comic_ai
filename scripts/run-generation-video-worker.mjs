@@ -35,6 +35,7 @@ const [
   { scheduleGenerationProviderPoll },
   { generationTimeoutMsFor },
   { runGenerationQueueJobWithRetryPolicy, shouldSettleGenerationTaskAfterQueueError },
+  { resolveGenerationArtifactQueueExhaustionFailureCode },
   { recordGenerationSkippedSuccessor },
 ] = await Promise.all([
   import("../apps/backend/src/modules/shared/db/dev-db.ts"),
@@ -57,6 +58,7 @@ const [
   import("../apps/backend/src/modules/model-gateway/generation-due-poll.service.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-timeout.policy.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-queue-retry.policy.ts"),
+  import("../apps/backend/src/modules/model-gateway/generation-skipped-coordinator.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-stage-successor.store.ts"),
 ]);
 
@@ -665,7 +667,9 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
       taskId,
       ...(sourceAssignmentKey ? { sourceAssignmentKey } : {}),
       failureCode: artifactQueueFailure
-        ? "provider_output_storage_failed"
+        ? resolveGenerationArtifactQueueExhaustionFailureCode(
+            typeof error?.failureCode === "string" ? error.failureCode : error.message,
+          )
         : "generation_queue_error",
       displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
       creditOutcome: "manual_review_required",

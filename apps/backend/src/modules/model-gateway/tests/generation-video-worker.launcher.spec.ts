@@ -36,6 +36,7 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /withDefaultStorageBucket\(job, storageRuntime\.bucket\)/);
     assert.match(launcherScript, /failGenerationTaskAfterQueueError/);
     assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion/);
+    assert.match(launcherScript, /resolveGenerationArtifactQueueExhaustionFailureCode/);
     assert.match(launcherScript, /artifactQueueFailure && job\?\.data\?\.mediaType === "image"/);
     assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion\(db, \{[\s\S]*taskId,[\s\S]*error,[\s\S]*now: failedAt/);
     assert.match(launcherScript, /if \(imageRecoveryOutcome !== "skipped"\) return/);
@@ -57,6 +58,10 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /hasReleasedGenerationQueueStageAssignment/);
     assert.match(launcherScript, /sourceAssignmentKey/);
     assert.match(launcherScript, /failGenerationTaskAfterQueueError\(db, \{[\s\S]*sourceAssignmentKey/);
+    assert.match(
+      launcherScript,
+      /failureCode: artifactQueueFailure[\s\S]*resolveGenerationArtifactQueueExhaustionFailureCode/,
+    );
     assert.match(launcherScript, /requireProviderSubmissionNotStarted: true/);
     assert.match(launcherScript, /generation_queue_assignment_already_released/);
     assert.match(launcherScript, /publishReservedGenerationJob\(\{[\s\S]*?\}\)\.catch\(async \(error\) => \{[\s\S]*?generation_queue_assignment_already_released[\s\S]*?hasReleasedGenerationQueueStageAssignment/);

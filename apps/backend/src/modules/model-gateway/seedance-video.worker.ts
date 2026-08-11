@@ -39,7 +39,11 @@ import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assi
 import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
-import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
+import {
+  GENERATION_ARTIFACT_FETCH_NOT_READY,
+  resolveGenerationArtifactStageUnavailable,
+  resolveGenerationSkippedNextAction,
+} from "./generation-skipped-coordinator.ts";
 import {
   readGenerationProviderRouteReferences,
   resolveGenerationModelConfigForTask,
@@ -1390,20 +1394,29 @@ export async function finalizeSeedanceVideoArtifactJob(
 > {
   let row = await findSeedanceTaskForFinalize(db, input.taskId);
   if (!row?.provider_request_id || !row.external_request_id) {
-    return { status: "skipped" };
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const providerResponse = parseProviderResponse(row.provider_response_redacted_json);
   const videoUrl = readString(providerResponse.videoUrl);
   if (!videoUrl) {
-    return { status: "skipped" };
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
   }
   row = await ensureSeedanceFinalizeAttempt(db, {
     row,
     now: input.now,
   });
   if (!row.attempt_id) {
-    return { status: "skipped" };
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
   }
   await markSeedanceFinalizeLease(db, {
     taskId: row.task_id,
@@ -1841,12 +1854,14 @@ export async function fetchSeedanceVideoArtifactJob(
   | { status: "skipped" }
 > {
   let row = await findSeedanceTaskForFinalize(db, input.taskId);
-  if (!row?.provider_request_id || !row.external_request_id) return { status: "skipped" };
+  if (!row?.provider_request_id || !row.external_request_id) {
+    return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
+  }
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const videoUrl = readString(parseProviderResponse(row.provider_response_redacted_json).videoUrl);
-  if (!videoUrl) return { status: "skipped" };
+  if (!videoUrl) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   row = await ensureSeedanceFinalizeAttempt(db, { row, now: input.now });
-  if (!row.attempt_id) return { status: "skipped" };
+  if (!row.attempt_id) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
     attemptId: row.attempt_id,
@@ -1886,6 +1901,16 @@ export async function fetchSeedanceVideoArtifactJob(
   return { status: "succeeded" };
 }
 
+async function resolveSeedanceVideoFetchUnavailable(
+  db: SqlDatabase,
+  taskId: string,
+): Promise<{ status: "failed"; failureCode: string } | { status: "skipped" }> {
+  return resolveGenerationArtifactStageUnavailable(db, {
+    taskId,
+    failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+  });
+}
+
 export async function persistSeedanceVideoArtifactJob(
   db: SqlDatabase,
   input: {
@@ -1901,7 +1926,10 @@ export async function persistSeedanceVideoArtifactJob(
 > {
   const row = await findSeedanceTaskForPersist(db, input.taskId);
   if (!row?.attempt_id) {
-    return { status: "skipped" };
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: "provider_output_persist_failed",
+    });
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
@@ -2732,7 +2760,7 @@ async function findSeedanceTaskForFinalize(db: SqlDatabase, taskId: string) {
         ON r.task_id = t.id
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
-        AND t.status IN ('queued', 'running', 'manual_review_required', 'result_unknown')
+        AND t.status IN ('running', 'manual_review_required', 'result_unknown')
         AND NOT (
           t.status = 'manual_review_required'
           AND t.failure_code = 'provider_output_storage_failed'

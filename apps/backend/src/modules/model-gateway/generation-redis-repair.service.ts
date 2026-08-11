@@ -1082,6 +1082,20 @@ export async function repairRunningSeedancePollJobs(
               t.task_type = 'episode_generate_image'
               OR pr.external_request_id IS NOT NULL
             )
+            AND (
+              t.task_type = 'episode_generate_image'
+              OR (
+                t.task_type = 'episode_generate_video'
+                AND t.current_attempt_id IS NOT NULL
+                AND NULLIF(btrim(pr.response_redacted_json->>'videoUrl'), '') IS NOT NULL
+              )
+              OR (
+                t.task_type = 'episode_generate_audio'
+                AND t.current_attempt_id IS NOT NULL
+                AND pr.response_redacted_json#>>'{artifact,mediaType}' = 'audio'
+                AND NULLIF(btrim(pr.response_redacted_json#>>'{artifact,url}'), '') IS NOT NULL
+              )
+            )
           LIMIT 1
         )
         AND NOT EXISTS (

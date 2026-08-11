@@ -5,6 +5,7 @@ import {
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import { isGenerationArtifactStageNotReadyFailure } from "./generation-skipped-coordinator.ts";
 import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
 
 type SubmitVideoResult =
@@ -404,6 +405,7 @@ export async function handleGenerationFinalizeArtifactJob(
       });
       if (result.status === "failed") {
         throwIfRetryableArtifactTransferFailure(result.failureCode);
+        throwIfArtifactStageNotReady(result.failureCode);
         return { status: "failed", failureCode: result.failureCode };
       }
       return { status: result.status };
@@ -424,6 +426,9 @@ export async function handleGenerationFinalizeArtifactJob(
     if (isAudioProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "audio") {
       if (!input.processors.finalizeAudioArtifact) throw new Error("audio_finalize_processor_missing");
       const result = await input.processors.finalizeAudioArtifact({ taskId: input.job.data.taskId, now: input.now });
+      if (result.status === "failed") {
+        throwIfArtifactStageNotReady(result.failureCode);
+      }
       return result.status === "failed"
         ? { status: "failed", failureCode: result.failureCode }
         : { status: result.status };
@@ -1294,6 +1299,12 @@ function throwIfRetryableArtifactTransferFailure(failureCode: string) {
     || failureCode === "provider_output_upload_failed"
   ) {
     throw new Error(failureCode);
+  }
+}
+
+function throwIfArtifactStageNotReady(failureCode: string) {
+  if (isGenerationArtifactStageNotReadyFailure(failureCode)) {
+    throw Object.assign(new Error(failureCode), { failureCode });
   }
 }
 

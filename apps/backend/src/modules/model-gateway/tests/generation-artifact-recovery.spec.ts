@@ -10,13 +10,240 @@ import {
   handleGenerationPersistArtifactJob,
 } from "../generation-bullmq.worker.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import { GENERATION_ARTIFACT_FETCH_NOT_READY } from "../generation-skipped-coordinator.ts";
 import { dispatchClaimedGenerationOutboxEvents } from "../generation-outbox.dispatcher.ts";
 import {
   handleGptImageArtifactQueueExhaustion,
 } from "../gpt-image-artifact-recovery.service.ts";
-import { fetchGptImageArtifactJob, persistGptImageArtifactJob } from "../gpt-image.worker.ts";
+import {
+  fetchAudioGenerationArtifactJob,
+  finalizeAudioGenerationArtifactJob,
+  persistAudioGenerationArtifactJob,
+} from "../audio-generation.worker.ts";
+import {
+  fetchGptImageArtifactJob,
+  finalizeGptImageArtifactJob,
+  persistGptImageArtifactJob,
+} from "../gpt-image.worker.ts";
+import {
+  fetchSeedanceVideoArtifactJob,
+  finalizeSeedanceVideoArtifactJob,
+  persistSeedanceVideoArtifactJob,
+} from "../seedance-video.worker.ts";
+
+function artifactStageTaskDb(
+  taskStatus: string,
+  failureCode: string | null = null,
+  resolveOtherRows: (sql: string) => Record<string, unknown>[] = () => [],
+) {
+  return {
+    async query(sql: string) {
+      if (sql.includes("t.status AS task_status") && sql.includes("t.failure_code")) {
+        return { rows: [{ task_status: taskStatus, failure_code: failureCode }] };
+      }
+      return { rows: resolveOtherRows(sql) };
+    },
+  } as never;
+}
 
 describe("generation artifact recovery", () => {
+  it("retries every artifact stage when its durable task is still nonterminal", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000390";
+    const now = new Date("2026-08-11T06:00:00.000Z");
+    const runtime = {} as never;
+    const nonterminalTaskDb = () => artifactStageTaskDb("running");
+    const cases = [
+      {
+        name: "image legacy finalize",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+        run: () => finalizeGptImageArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "image fetch",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+        run: () => fetchGptImageArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "image persist",
+        failureCode: "provider_output_persist_failed",
+        run: () => persistGptImageArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "video legacy finalize",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+        run: () => finalizeSeedanceVideoArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "video fetch",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+        run: () => fetchSeedanceVideoArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "video persist",
+        failureCode: "provider_output_persist_failed",
+        run: () => persistSeedanceVideoArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "audio legacy finalize",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+        run: () => finalizeAudioGenerationArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "audio fetch",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+        run: () => fetchAudioGenerationArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+      {
+        name: "audio persist",
+        failureCode: "provider_output_persist_failed",
+        run: () => persistAudioGenerationArtifactJob(nonterminalTaskDb(), { taskId, runtime, env: {}, now }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      assert.deepEqual(await testCase.run(), {
+        status: "failed",
+        failureCode: testCase.failureCode,
+      }, testCase.name);
+    }
+  });
+
+  it("still skips duplicate artifact work after the durable task is terminal", async () => {
+    const result = await fetchGptImageArtifactJob(artifactStageTaskDb("succeeded"), {
+      taskId: "50000000-0000-4000-8000-000000000390",
+      runtime: {} as never,
+      env: {},
+      now: new Date("2026-08-11T06:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "skipped" });
+  });
+
+  it("settles stale artifact fetch jobs without disturbing queued or canceling tasks", async () => {
+    for (const taskStatus of ["queued", "cancel_requested"]) {
+      let persistJobs = 0;
+      const result = await handleGenerationFetchArtifactJob({
+        job: {
+          data: {
+            taskId: `task-stale-artifact-${taskStatus}`,
+            workflowId: "workflow-stale-artifact",
+            mediaType: "image",
+            modelCode: "gpt-image-2",
+            providerExecutor: "gpt-image-2",
+            artifactKind: "image",
+            artifactStage: "fetch",
+          },
+        },
+        config: loadGenerationQueueConfig({}),
+        publisher: {
+          async add() {
+            persistJobs += 1;
+          },
+        },
+        processors: {
+          async fetchGptImageArtifact({ taskId, now }) {
+            return fetchGptImageArtifactJob(artifactStageTaskDb(taskStatus), {
+              taskId,
+              runtime: {} as never,
+              env: {},
+              now,
+            });
+          },
+        },
+        now: new Date("2026-08-11T06:00:00.000Z"),
+      } as never);
+
+      assert.deepEqual(result, { status: "skipped", queuedPersist: false }, taskStatus);
+      assert.equal(persistJobs, 0, taskStatus);
+    }
+  });
+
+  it("retries non-ready legacy media finalizers at the BullMQ boundary", async () => {
+    for (const media of [
+      { mediaType: "image" as const, providerExecutor: "gpt-image-2", artifactKind: "image" as const },
+      { mediaType: "video" as const, providerExecutor: "seedance", artifactKind: "video" as const },
+      { mediaType: "audio" as const, providerExecutor: "aliyun-bailian-audio", artifactKind: "audio" as const },
+    ]) {
+      await assert.rejects(() => handleGenerationFinalizeArtifactJob({
+        job: {
+          data: {
+            taskId: "50000000-0000-4000-8000-000000000390",
+            workflowId: "workflow-artifact-stage-guard",
+            modelCode: null,
+            ...media,
+          },
+        },
+        config: loadGenerationQueueConfig({}),
+        publisher: { async add() {} },
+        processors: {
+          async finalizeGptImageArtifact() {
+            return { status: "failed" as const, failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY };
+          },
+          async finalizeSeedanceVideoArtifact() {
+            return { status: "failed" as const, failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY };
+          },
+          async finalizeAudioArtifact() {
+            return { status: "failed" as const, failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY };
+          },
+        },
+        now: new Date("2026-08-11T06:00:00.000Z"),
+      } as never), (error: unknown) => {
+        assert.equal((error as { failureCode?: string }).failureCode, GENERATION_ARTIFACT_FETCH_NOT_READY);
+        assert.notEqual((error as Error).name, "UnrecoverableError");
+        return true;
+      });
+    }
+  });
+
+  it("retries nonterminal media rows whose provider artifact is not durable yet", async () => {
+    const taskId = "50000000-0000-4000-8000-000000000391";
+    const now = new Date("2026-08-11T06:05:00.000Z");
+    const runtime = {} as never;
+    const row = {
+      task_id: taskId,
+      workflow_id: "workflow-artifact-missing",
+      attempt_id: "attempt-artifact-missing",
+      user_id: "user-artifact-missing",
+      project_id: null,
+      created_by_user_id: "user-artifact-missing",
+      input_snapshot_json: {},
+      provider_request_id: "provider-artifact-missing",
+      external_request_id: "external-artifact-missing",
+      provider_response_redacted_json: {},
+      reservation_id: null,
+      amount_reserved: null,
+    };
+    const dbFor = (taskType: "episode_generate_audio" | "episode_generate_video") =>
+      artifactStageTaskDb("running", null, (sql) =>
+        sql.includes(`t.task_type = '${taskType}'`) ? [row] : []);
+
+    for (const testCase of [
+      {
+        name: "audio fetch",
+        run: () => fetchAudioGenerationArtifactJob(dbFor("episode_generate_audio"), {
+          taskId, runtime, env: {}, now,
+        }),
+      },
+      {
+        name: "audio legacy finalize",
+        run: () => finalizeAudioGenerationArtifactJob(dbFor("episode_generate_audio"), {
+          taskId, runtime, env: {}, now,
+        }),
+      },
+      {
+        name: "video legacy finalize",
+        run: () => finalizeSeedanceVideoArtifactJob(dbFor("episode_generate_video"), {
+          taskId, runtime, env: {}, now,
+        }),
+      },
+    ]) {
+      assert.deepEqual(await testCase.run(), {
+        status: "failed",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+      }, testCase.name);
+    }
+  });
+
   it("keeps a transient exhausted image finalize wave running with a durable next retry", async () => {
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     const db = createArtifactRecoveryDb({ taskStatus: "running", providerStatus: {}, queries });

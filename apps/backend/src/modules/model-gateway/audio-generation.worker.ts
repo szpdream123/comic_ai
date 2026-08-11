@@ -25,7 +25,11 @@ import {
 } from "./generation-model-config-snapshot.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
-import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
+import {
+  GENERATION_ARTIFACT_FETCH_NOT_READY,
+  resolveGenerationArtifactStageUnavailable,
+  resolveGenerationSkippedNextAction,
+} from "./generation-skipped-coordinator.ts";
 import {
   markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotManualReviewRequired,
@@ -384,7 +388,12 @@ export async function fetchAudioGenerationArtifactJob(
   | { status: "skipped" }
 > {
   const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
-  if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
+  if (!row?.attempt_id || !row.provider_request_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
     attemptId: row.attempt_id,
@@ -393,7 +402,12 @@ export async function fetchAudioGenerationArtifactJob(
   });
   if (existing) return { status: "succeeded" };
   const artifact = parseStoredAudioArtifact(parseRecord(row.provider_response_redacted_json).artifact);
-  if (!artifact) return { status: "skipped" };
+  if (!artifact) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const snapshot = parseRecord(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
@@ -448,10 +462,20 @@ export async function finalizeAudioGenerationArtifactJob(
   | { status: "skipped" }
 > {
   const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
-  if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
+  if (!row?.attempt_id || !row.provider_request_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const providerResponse = parseRecord(row.provider_response_redacted_json);
   const artifact = parseStoredAudioArtifact(providerResponse.artifact);
-  if (!artifact) return { status: "skipped" };
+  if (!artifact) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const snapshot = parseRecord(row.input_snapshot_json);
 
   try {
@@ -594,7 +618,12 @@ export async function persistAudioGenerationArtifactJob(
   | { status: "skipped" }
 > {
   const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
-  if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
+  if (!row?.attempt_id || !row.provider_request_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: "provider_output_persist_failed",
+    });
+  }
   const handoff = await findGenerationArtifactHandoff(db, row.task_id);
   if (!handoff || handoff.mediaType !== "audio" || handoff.attemptId !== row.attempt_id) {
     return { status: "failed", failureCode: "provider_output_persist_failed" };

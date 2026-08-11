@@ -40,7 +40,11 @@ import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-ada
 import { buildSanBaoImagePayload } from "./san-bao.provider-adapter.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
-import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
+import {
+  GENERATION_ARTIFACT_FETCH_NOT_READY,
+  resolveGenerationArtifactStageUnavailable,
+  resolveGenerationSkippedNextAction,
+} from "./generation-skipped-coordinator.ts";
 import {
   readGenerationProviderRouteReferences,
   resolveGenerationModelConfigForTask,
@@ -1375,7 +1379,10 @@ export async function finalizeGptImageArtifactJob(
 > {
   const row = await findGptImageTaskForFinalize(db, input.taskId);
   if (!row?.provider_request_id || !row.attempt_id) {
-    return { status: "skipped" };
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
   }
 
   const snapshot = parseSnapshot(row.input_snapshot_json);
@@ -1642,7 +1649,12 @@ export async function fetchGptImageArtifactJob(
   | { status: "skipped" }
 > {
   const row = await findGptImageTaskForFinalize(db, input.taskId);
-  if (!row?.provider_request_id || !row.attempt_id) return { status: "skipped" };
+  if (!row?.provider_request_id || !row.attempt_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
     attemptId: row.attempt_id,
@@ -1707,7 +1719,10 @@ export async function persistGptImageArtifactJob(
 > {
   const row = await findGptImageTaskForPersist(db, input.taskId);
   if (!row?.attempt_id) {
-    return { status: "skipped" };
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: "provider_output_persist_failed",
+    });
   }
   const snapshot = parseSnapshot(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
