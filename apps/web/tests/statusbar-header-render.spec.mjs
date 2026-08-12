@@ -112,6 +112,10 @@ test("home renders the AI creation hub without changing the workbench navigation
   assert.match(html, /home-capability-grid/);
   assert.match(html, /data-action="set-nav-tab" data-tab="tools"/);
   assert.match(html, /我的项目/);
+  assert.match(html, /home-tv-grid/);
+  assert.match(html, /灵曦 TV/);
+  assert.match(html, /推荐/);
+  assert.match(html, /scene-3d-neon-street\.png/);
   assert.doesNotMatch(html, /home-cinematic-sky/);
 });
 

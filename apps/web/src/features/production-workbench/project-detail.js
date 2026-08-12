@@ -11755,6 +11755,43 @@ function renderHomeHero({ detailState, session, ui = {} }) {
             </button>
           `}
         </section>
+
+        <section class="home-tv" aria-label="灵曦 TV">
+          <header class="home-tv-heading">
+            <h2>灵曦 TV</h2>
+            <nav class="home-tv-tabs" aria-label="视频分类">
+              <span class="active" aria-current="page">推荐</span>
+              <span>热门</span>
+              <span>新晋</span>
+            </nav>
+          </header>
+          <div class="home-tv-grid">
+            <article class="home-tv-card">
+              <div class="home-tv-cover">
+                <img src="/assets/library/official/scenes/scene-3d-neon-street.png" alt="霓虹城市夜景作品封面" loading="lazy" />
+                <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
+                <small>00:32</small>
+              </div>
+              <div class="home-tv-copy"><strong>霓虹夜行</strong><span>都市幻想 · AI 短片</span></div>
+            </article>
+            <article class="home-tv-card">
+              <div class="home-tv-cover">
+                <img src="/assets/library/official/scenes/scene-3d-star-cliff.png" alt="星空仙境作品封面" loading="lazy" />
+                <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
+                <small>00:48</small>
+              </div>
+              <div class="home-tv-copy"><strong>云巅星河</strong><span>东方玄幻 · AI 漫剧</span></div>
+            </article>
+            <article class="home-tv-card">
+              <div class="home-tv-cover">
+                <img src="/assets/library/official/scenes/scene-2d-lotus.png" alt="荷塘仙境作品封面" loading="lazy" />
+                <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
+                <small>01:06</small>
+              </div>
+              <div class="home-tv-copy"><strong>莲境春深</strong><span>国风动画 · AI 短片</span></div>
+            </article>
+          </div>
+        </section>
       </div>
     </section>
   `;
