@@ -8,6 +8,41 @@ import { expireGptImagePollJob } from "../gpt-image.worker.ts";
 import { expireSeedanceVideoPollJob } from "../seedance-video.worker.ts";
 
 describe("generation poll expiration", { concurrency: false }, () => {
+  it("does not let an old audio expiration job fail a requeued task", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedIncompletePollTasks(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'queued', failure_code = NULL,
+              current_attempt_id = NULL, locked_by = NULL,
+              locked_until = NULL, heartbeat_at = NULL
+          WHERE id = $1
+        `,
+        [seeded.audioTaskId],
+      );
+
+      const result = await expireAudioGenerationPollJob(db, {
+        taskId: seeded.audioTaskId,
+        now: new Date("2026-07-22T12:00:00.000Z"),
+      });
+      const task = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM tasks WHERE id = $1",
+        [seeded.audioTaskId],
+      );
+
+      assert.deepEqual(result, {
+        status: "failed",
+        failureCode: "audio_provider_poll_timeout",
+      });
+      assert.deepEqual(task.rows[0], { status: "queued", failure_code: null });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("fails active image, video, and audio tasks even when poll identifiers are missing", async () => {
     const db = await createMigratedTestDb();
     const now = new Date("2026-07-22T12:00:00.000Z");
@@ -105,6 +140,72 @@ describe("generation poll expiration", { concurrency: false }, () => {
       assert.deepEqual(projectAsset.rows[0], {
         generation_status: "failed",
         failure_code: "provider_poll_timeout",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps a legacy accepted image request in result_unknown when timeout does not prove a terminal result", async () => {
+    const db = await createMigratedTestDb();
+    const now = new Date("2026-07-22T12:00:00.000Z");
+
+    try {
+      const seeded = await seedIncompletePollTasks(db);
+      const attemptId = "61000000-0000-4000-8000-000000000401";
+      const providerRequestId = "62000000-0000-4000-8000-000000000401";
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status, started_at
+          ) VALUES ($1, $2, $3, $4, 1, 'result_unknown', $5)
+        `,
+        [attemptId, seeded.projectId, seeded.imageWorkflowId, seeded.imageTaskId, new Date("2026-07-22T10:00:00.000Z")],
+      );
+      await db.query(
+        "UPDATE tasks SET current_attempt_id = $2, attempt_count = 1 WHERE id = $1",
+        [seeded.imageTaskId, attemptId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            payload_redacted_json, status, external_submission_started_at,
+            external_request_id, created_by_user_id
+          ) VALUES ($1::uuid, $2, $3, $4, $5, 'image-provider', 'image.generate',
+            $1::text, $1::text, $1::text, $1::text, '{}'::jsonb, 'accepted', NULL,
+            NULL, $6)
+        `,
+        [providerRequestId, seeded.projectId, seeded.imageWorkflowId, seeded.imageTaskId, attemptId, seeded.userId],
+      );
+
+      await expireGptImagePollJob(db, { taskId: seeded.imageTaskId, now });
+      const state = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        provider_status: string;
+        snapshot_status: string;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 attempt.status AS attempt_status,
+                 provider.status AS provider_status,
+                 snapshot.status AS snapshot_status
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          JOIN provider_requests provider ON provider.id = $2
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+          WHERE task.id = $1
+        `,
+        [seeded.imageTaskId, providerRequestId],
+      );
+
+      assert.deepEqual(state.rows[0], {
+        task_status: "result_unknown",
+        attempt_status: "result_unknown",
+        provider_status: "result_unknown",
+        snapshot_status: "result_unknown",
       });
     } finally {
       await db.close();

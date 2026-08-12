@@ -25,10 +25,15 @@ import {
 } from "./generation-model-config-snapshot.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
-import { resolveGenerationSkippedNextAction } from "./generation-skipped-coordinator.ts";
+import {
+  GENERATION_ARTIFACT_FETCH_NOT_READY,
+  resolveGenerationArtifactStageUnavailable,
+  resolveGenerationSkippedNextAction,
+} from "./generation-skipped-coordinator.ts";
 import {
   markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotManualReviewRequired,
+  markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotSucceeded,
 } from "./generation-task-snapshot.service.ts";
 import { failGenerationTaskAfterQueueError } from "./generation-redis-repair.service.ts";
@@ -60,6 +65,7 @@ interface AudioTaskRow {
   created_by_user_id: string | null;
   input_snapshot_json: Record<string, unknown> | string;
   provider_request_id: string | null;
+  external_submission_started_at: Date | string | null;
   external_request_id: string | null;
   provider_request_status: string | null;
   provider_response_redacted_json: Record<string, unknown> | string | null;
@@ -80,17 +86,25 @@ export async function processAudioGenerationSubmitJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     now: Date;
   },
 ): Promise<
-  | { status: "submitted"; providerStatus: "waiting" | "succeeded" }
+  | { status: "submitted"; providerStatus: "waiting" | "succeeded"; attemptId: string }
   | { status: "failed"; failureCode: string }
-  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop" }
+  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop"; attemptId?: string }
 > {
   const row = await findAudioTask(db, input.taskId, ["queued"]);
-  if (!row) return { status: "skipped" };
+  if (!row) {
+    const attemptId = await findCurrentAudioAttemptId(db, input.taskId);
+    return {
+      status: "skipped",
+      ...(attemptId ? { attemptId } : {}),
+      nextAction: await resolveGenerationSkippedNextAction(db, { taskId: input.taskId }),
+    };
+  }
 
   const claim = await claimQueuedTask(db, {
     taskId: row.task_id,
@@ -123,6 +137,35 @@ export async function processAudioGenerationSubmitJob(
       attemptId: claim.attempt.id,
       adapter: context.adapter,
     });
+    if (submitted.kind === "stale_attempt") {
+      const failureCode = "provider_request_attempt_conflict";
+      const marked = await failAudioTask(db, {
+        taskId: row.task_id,
+        expectedAttemptId: claim.attempt.id,
+        failureCode,
+        displayMessage: "检测到历史供应商请求仍在执行，当前任务已停止自动处理并等待后台复核。",
+        creditOutcome: "manual_review_required",
+        now: input.now,
+      });
+      if (marked) {
+        await markGenerationTaskSnapshotManualReviewRequired(db, {
+          taskId: row.task_id,
+          attemptId: claim.attempt.id,
+          progressStage: "provider_attempt_conflict",
+          failure: {
+            failureCode,
+            historicalProviderRequestId: submitted.request.id,
+            displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+          },
+          creditSummary: {
+            reserved: Number(row.amount_reserved ?? 0),
+            settledAt: input.now.toISOString(),
+          },
+          now: input.now,
+        });
+      }
+      return { status: "failed", failureCode };
+    }
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
       ...context.auditLogInput,
@@ -159,7 +202,7 @@ export async function processAudioGenerationSubmitJob(
         },
         now: input.now,
       });
-      return { status: "submitted", providerStatus: "waiting" };
+      return { status: "submitted", providerStatus: "waiting", attemptId: claim.attempt.id };
     }
 
     const artifact = findAudioArtifact(submitted.artifacts);
@@ -173,7 +216,7 @@ export async function processAudioGenerationSubmitJob(
         providerStatus: submitted.request.redactedResponse ?? {},
         now: input.now,
       });
-      return { status: "submitted", providerStatus: "succeeded" };
+      return { status: "submitted", providerStatus: "succeeded", attemptId: claim.attempt.id };
     }
 
     await markGenerationTaskSnapshotRunning(db, {
@@ -188,7 +231,7 @@ export async function processAudioGenerationSubmitJob(
       },
       now: input.now,
     });
-    return { status: "submitted", providerStatus: "waiting" };
+    return { status: "submitted", providerStatus: "waiting", attemptId: claim.attempt.id };
   } catch (error) {
     const failureCode = readFailureCode(error) ?? "audio_provider_submission_failed";
     const displayMessage = translateProviderErrorMessage(error, {
@@ -197,7 +240,11 @@ export async function processAudioGenerationSubmitJob(
       mediaType: "audio",
       phase: "submit",
     });
-    const latestProviderRequest = await findLatestAudioProviderRequest(db, row.task_id);
+    const latestProviderRequest = await findLatestAudioProviderRequest(
+      db,
+      row.task_id,
+      claim.attempt.id,
+    );
     await recordAudioRequestFailureAudit(db, {
       row: claimedRow,
       snapshot,
@@ -224,6 +271,7 @@ export async function processAudioGenerationSubmitJob(
     }
     await failAudioTask(db, {
       taskId: row.task_id,
+      expectedAttemptId: claim.attempt.id,
       failureCode,
       displayMessage,
       now: input.now,
@@ -249,20 +297,40 @@ async function keepAudioTaskWaitingForExternalId(
   );
 }
 
-async function findLatestAudioProviderRequest(db: SqlDatabase, taskId: string) {
+async function findCurrentAudioAttemptId(db: SqlDatabase, taskId: string) {
+  const row = await queryOne<{ current_attempt_id: string | null }>(
+    db,
+    "SELECT current_attempt_id FROM tasks WHERE id = $1",
+    [taskId],
+  );
+  return row?.current_attempt_id ?? null;
+}
+
+async function findLatestAudioProviderRequest(
+  db: SqlDatabase,
+  taskId: string,
+  attemptId: string,
+) {
   return queryOne<{ id: string; status: string; failure_code: string | null }>(db, `
-    SELECT id, status, failure_code
-    FROM provider_requests
-    WHERE task_id = $1
-    ORDER BY updated_at DESC, created_at DESC
+    SELECT request.id, request.status, request.failure_code
+    FROM provider_requests request
+    JOIN tasks task ON task.id = request.task_id
+    WHERE request.task_id = $1
+      AND task.current_attempt_id = $2
+      AND (
+        request.attempt_id = $2
+        OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+      )
+    ORDER BY request.updated_at DESC, request.created_at DESC
     LIMIT 1
-  `, [taskId]);
+  `, [taskId, attemptId]);
 }
 
 export async function processAudioGenerationPollJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     now: Date;
@@ -271,10 +339,26 @@ export async function processAudioGenerationPollJob(
   | { status: "waiting" }
   | { status: "succeeded" }
   | { status: "failed"; failureCode: string }
-  | { status: "skipped" }
+  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop" }
 > {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown"]);
+  const row = await findAudioTask(
+    db,
+    input.taskId,
+    ["running", "result_unknown"],
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"),
+    input.expectedAttemptId ?? null,
+  );
   if (!row?.attempt_id || !row.provider_request_id || !row.external_request_id) {
+    return {
+      status: "skipped",
+      nextAction: await resolveGenerationSkippedNextAction(db, { taskId: input.taskId }),
+    };
+  }
+  if (!await claimAudioPollLease(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  })) {
     return {
       status: "skipped",
       nextAction: await resolveGenerationSkippedNextAction(db, { taskId: input.taskId }),
@@ -339,6 +423,7 @@ export async function processAudioGenerationPollJob(
     });
     await failAudioTask(db, {
       taskId: row.task_id,
+      expectedAttemptId: row.attempt_id,
       failureCode,
       displayMessage,
       now: input.now,
@@ -351,6 +436,7 @@ export async function processAudioGenerationPollJob(
     const failureCode = "audio_provider_artifact_missing";
     await failAudioTask(db, {
       taskId: row.task_id,
+      expectedAttemptId: row.attempt_id,
       failureCode,
       displayMessage: "音频模型未返回可下载结果，积分已返还。",
       now: input.now,
@@ -373,6 +459,7 @@ export async function fetchAudioGenerationArtifactJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -383,8 +470,13 @@ export async function fetchAudioGenerationArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
-  if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
+  const row = await findAttemptScopedAudioTask(db, input, ["running", "result_unknown", "manual_review_required"]);
+  if (!row?.attempt_id || !row.provider_request_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
     attemptId: row.attempt_id,
@@ -393,7 +485,12 @@ export async function fetchAudioGenerationArtifactJob(
   });
   if (existing) return { status: "succeeded" };
   const artifact = parseStoredAudioArtifact(parseRecord(row.provider_response_redacted_json).artifact);
-  if (!artifact) return { status: "skipped" };
+  if (!artifact) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const snapshot = parseRecord(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
@@ -437,6 +534,7 @@ export async function finalizeAudioGenerationArtifactJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -447,11 +545,21 @@ export async function finalizeAudioGenerationArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
-  if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
+  const row = await findAttemptScopedAudioTask(db, input, ["running", "result_unknown", "manual_review_required"]);
+  if (!row?.attempt_id || !row.provider_request_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const providerResponse = parseRecord(row.provider_response_redacted_json);
   const artifact = parseStoredAudioArtifact(providerResponse.artifact);
-  if (!artifact) return { status: "skipped" };
+  if (!artifact) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  }
   const snapshot = parseRecord(row.input_snapshot_json);
 
   try {
@@ -507,6 +615,10 @@ export async function finalizeAudioGenerationArtifactJob(
       now: input.now,
       finalize: async () => {
         if (row.reservation_id && amount > 0) {
+          await reopenAudioManualReviewReservationForSettlement(db, {
+            reservationId: row.reservation_id,
+            now: input.now,
+          });
           await settleReservationAllocationInTransaction(db, {
             reservationId: row.reservation_id,
             allocationKey: "audio-generation-result",
@@ -545,6 +657,13 @@ export async function finalizeAudioGenerationArtifactJob(
       return { status: "skipped" };
     }
     if (failureCode === "provider_output_persist_failed") {
+      await finalizeTaskAttempt(db, {
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        status: "manual_review_required",
+        failureCode,
+        now: input.now,
+      });
       await markGenerationTaskSnapshotManualReviewRequired(db, {
         taskId: row.task_id,
         attemptId: row.attempt_id,
@@ -560,18 +679,12 @@ export async function finalizeAudioGenerationArtifactJob(
         },
         now: input.now,
       });
-      await finalizeTaskAttempt(db, {
-        taskId: row.task_id,
-        attemptId: row.attempt_id,
-        status: "manual_review_required",
-        failureCode,
-        now: input.now,
-      });
       await aggregateWorkflowStatus(db, row.workflow_id);
       return { status: "failed", failureCode };
     }
     await failAudioTask(db, {
       taskId: row.task_id,
+      expectedAttemptId: row.attempt_id,
       failureCode,
       displayMessage: "音频结果归档失败，任务已停止并按结果状态处理。",
       now: input.now,
@@ -584,6 +697,7 @@ export async function persistAudioGenerationArtifactJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     now: Date;
@@ -593,8 +707,13 @@ export async function persistAudioGenerationArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown", "manual_review_required"]);
-  if (!row?.attempt_id || !row.provider_request_id) return { status: "skipped" };
+  const row = await findAttemptScopedAudioTask(db, input, ["running", "result_unknown", "manual_review_required"]);
+  if (!row?.attempt_id || !row.provider_request_id) {
+    return resolveGenerationArtifactStageUnavailable(db, {
+      taskId: input.taskId,
+      failureCode: "provider_output_persist_failed",
+    });
+  }
   const handoff = await findGenerationArtifactHandoff(db, row.task_id);
   if (!handoff || handoff.mediaType !== "audio" || handoff.attemptId !== row.attempt_id) {
     return { status: "failed", failureCode: "provider_output_persist_failed" };
@@ -686,16 +805,16 @@ export async function persistAudioGenerationArtifactJob(
 
 export async function expireAudioGenerationPollJob(
   db: SqlDatabase,
-  input: { taskId: string; now: Date },
+  input: { taskId: string; expectedAttemptId?: string | null; now: Date },
 ) {
-  const row = await findAudioTask(db, input.taskId, ["running", "result_unknown"]);
+  const row = await findAudioTask(
+    db,
+    input.taskId,
+    ["running", "result_unknown"],
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"),
+    input.expectedAttemptId ?? null,
+  );
   if (!row) {
-    await failAudioTask(db, {
-      taskId: input.taskId,
-      failureCode: "audio_provider_poll_timeout",
-      displayMessage: "音频生成超过 1 小时仍未返回结果，已按失败处理并返还积分。请重新发起生成。",
-      now: input.now,
-    });
     return { status: "failed" as const, failureCode: "audio_provider_poll_timeout" as const };
   }
   const failureCode = "audio_provider_poll_timeout";
@@ -703,31 +822,73 @@ export async function expireAudioGenerationPollJob(
     externalRequestId: row.external_request_id ?? null,
     failureCode,
   };
-  if (row.provider_request_id) {
-    await markProviderRequestFailed(db, {
+  const snapshot = parseRecord(row.input_snapshot_json);
+  if (
+    row.provider_request_id
+    && (
+      row.external_submission_started_at
+      || row.external_request_id
+      || ["submitted", "accepted", "running", "result_unknown", "succeeded"].includes(row.provider_request_status ?? "")
+    )
+    && !["failed", "canceled"].includes(row.provider_request_status ?? "")
+  ) {
+    const provider = await markProviderRequestResultUnknown(db, {
       providerRequestId: row.provider_request_id,
       failureCode,
       redactedResponse: timeoutResponse,
       now: input.now,
     });
-    await completeUserModelRequestLog(db, {
-      providerRequestId: row.provider_request_id,
-      status: "failed",
-      responseText: JSON.stringify(timeoutResponse),
-      responseUsage: null,
-      finishReasons: [],
-      failureCode,
-      now: input.now,
-    });
+    if (provider.status === "result_unknown") {
+      await markAudioTaskResultUnknown(db, {
+        row,
+        failureCode,
+        providerRequestId: row.provider_request_id,
+        metadata: timeoutResponse,
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotResultUnknown(db, {
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        providerRequestId: row.provider_request_id,
+        providerStatus: timeoutResponse,
+        failure: {
+          failureCode,
+          displayMessage: "音频生成已超过自动轮询窗口，但供应商终态尚未确认。系统将继续后台复核，积分保持预留。",
+        },
+        creditSummary: {
+          reserved: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+      return { status: "failed" as const, failureCode: "audio_provider_poll_timeout" as const };
+    }
+    if (provider.status === "succeeded") {
+      return { status: "failed" as const, failureCode: "audio_provider_poll_timeout" as const };
+    }
   }
-  if (row.reservation_id) {
-    await reopenAudioManualReviewReservationForSettlement(db, {
-      reservationId: row.reservation_id,
-      now: input.now,
-    });
+  if (row.provider_request_id) {
+    if (!["failed", "canceled"].includes(row.provider_request_status ?? "")) {
+      await markProviderRequestFailed(db, {
+        providerRequestId: row.provider_request_id,
+        failureCode,
+        redactedResponse: timeoutResponse,
+        now: input.now,
+      });
+      await completeUserModelRequestLog(db, {
+        providerRequestId: row.provider_request_id,
+        status: "failed",
+        responseText: JSON.stringify(timeoutResponse),
+        responseUsage: null,
+        finishReasons: [],
+        failureCode,
+        now: input.now,
+      });
+    }
   }
   await failAudioTask(db, {
     taskId: row.task_id,
+    expectedAttemptId: row.attempt_id,
     failureCode,
     displayMessage: "音频生成超过 1 小时仍未返回结果，已按失败处理并返还积分。请重新发起生成。",
     now: input.now,
@@ -813,7 +974,6 @@ async function buildAudioProviderContext(
       providerModel: modelConfig.providerModel,
       mediaType: modelConfig.mediaType,
       providerConfig: modelConfig.providerConfig,
-      mediaType: modelConfig.mediaType,
       invocationMode: modelConfig.invocationMode,
     }, input.env, resolveGenerationProviderFetch(input.fetchImpl, "audio")) as AudioPollAdapter,
   };
@@ -830,12 +990,18 @@ async function recordAudioRequestFailureAudit(
   },
 ) {
   const providerRequest = await queryOne<{ id: string }>(db, `
-    SELECT id
-    FROM provider_requests
-    WHERE task_id = $1
-    ORDER BY updated_at DESC, created_at DESC
+    SELECT request.id
+    FROM provider_requests request
+    JOIN tasks task ON task.id = request.task_id
+    WHERE request.task_id = $1
+      AND task.current_attempt_id = $2
+      AND (
+        request.attempt_id = $2
+        OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+      )
+    ORDER BY request.updated_at DESC, request.created_at DESC
     LIMIT 1
-  `, [input.row.task_id]);
+  `, [input.row.task_id, input.row.attempt_id]);
   if (!providerRequest) return;
   const modelCode = readString(input.snapshot.model) ?? "cosyvoice-v2";
   const modelSnapshot = readRecord(readRecord(input.snapshot.modelConfigSnapshot).config);
@@ -933,13 +1099,53 @@ async function failAudioTask(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     failureCode: string;
     displayMessage: string;
     creditOutcome?: "released" | "manual_review_required";
     now: Date;
   },
 ) {
-  await failGenerationTaskAfterQueueError(db, input);
+  return failGenerationTaskAfterQueueError(db, input);
+}
+
+async function markAudioTaskResultUnknown(
+  db: SqlDatabase,
+  input: {
+    row: AudioTaskRow;
+    failureCode: string;
+    providerRequestId: string | null;
+    metadata: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  const snapshot = parseRecord(input.row.input_snapshot_json);
+  const amount = resolveGenerationBillingAmount(input.row.amount_reserved, snapshot);
+  if (!input.row.attempt_id) return false;
+  await finalizeTaskAttempt(db, {
+    taskId: input.row.task_id,
+    attemptId: input.row.attempt_id,
+    status: "result_unknown",
+    failureCode: input.failureCode,
+    now: input.now,
+    finalize: async () => {
+      if (input.row.reservation_id && amount > 0) {
+        await settleReservationAllocationInTransaction(db, {
+          reservationId: input.row.reservation_id,
+          allocationKey: input.failureCode,
+          amount,
+          outcome: "manual_review_required",
+          taskId: input.row.task_id,
+          attemptId: input.row.attempt_id,
+          providerRequestId: input.providerRequestId,
+          metadata: input.metadata,
+          now: input.now,
+        });
+      }
+    },
+  });
+  await aggregateWorkflowStatus(db, input.row.workflow_id);
+  return true;
 }
 
 async function reopenAudioManualReviewReservationForSettlement(
@@ -959,10 +1165,26 @@ async function reopenAudioManualReviewReservationForSettlement(
   );
 }
 
+function findAttemptScopedAudioTask(
+  db: SqlDatabase,
+  input: { taskId: string; expectedAttemptId?: string | null },
+  statuses: string[],
+) {
+  return findAudioTask(
+    db,
+    input.taskId,
+    statuses,
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"),
+    input.expectedAttemptId ?? null,
+  );
+}
+
 async function findAudioTask(
   db: SqlDatabase,
   taskId: string,
   statuses: string[],
+  enforceExpectedAttempt = false,
+  expectedAttemptId: string | null = null,
 ) {
   return queryOne<AudioTaskRow>(db, `
     SELECT
@@ -974,6 +1196,7 @@ async function findAudioTask(
       w.created_by_user_id,
       t.input_snapshot_json,
       pr.id AS provider_request_id,
+      pr.external_submission_started_at,
       pr.external_request_id,
       pr.status AS provider_request_status,
       pr.response_redacted_json AS provider_response_redacted_json,
@@ -985,15 +1208,71 @@ async function findAudioTask(
       SELECT request.*
       FROM provider_requests request
       WHERE request.task_id = t.id
+        AND t.current_attempt_id IS NOT NULL
+        AND (
+          request.attempt_id = t.current_attempt_id
+          OR (request.attempt_id IS NULL AND t.attempt_count = 1)
+        )
       ORDER BY request.updated_at DESC, request.created_at DESC
       LIMIT 1
     ) pr ON true
     LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
     WHERE t.id = $1
+      AND (
+        $3::boolean = false
+        OR ($4::uuid IS NOT NULL AND t.current_attempt_id = $4)
+        OR ($4::uuid IS NULL AND t.attempt_count <= 1)
+      )
       AND t.task_type = 'episode_generate_audio'
       AND t.status = ANY($2::text[])
+      AND (
+        t.status <> 'manual_review_required'
+        OR t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
+      )
     LIMIT 1
-  `, [taskId, statuses]);
+  `, [taskId, statuses, enforceExpectedAttempt, expectedAttemptId]);
+}
+
+async function claimAudioPollLease(
+  db: SqlDatabase,
+  input: { taskId: string; attemptId: string; now: Date },
+) {
+  const lockedUntil = new Date(input.now.getTime() + 15 * 60_000);
+  const claimed = await queryOne<{ id: string }>(db, `
+    WITH claimed_task AS (
+      UPDATE tasks
+      SET status = 'running',
+          failure_code = NULL,
+          locked_by = 'audio-generation-poll-worker',
+          locked_until = $3,
+          heartbeat_at = $4,
+          updated_at = $4
+      WHERE id = $1
+        AND current_attempt_id = $2
+        AND status IN ('running', 'result_unknown')
+        AND EXISTS (
+          SELECT 1 FROM task_attempts attempt
+          WHERE attempt.id = $2
+            AND attempt.task_id = $1
+            AND attempt.status IN ('running', 'result_unknown')
+        )
+      RETURNING id
+    )
+    UPDATE task_attempts
+    SET status = 'running',
+        failure_code = NULL,
+        locked_by = 'audio-generation-poll-worker',
+        locked_until = $3,
+        heartbeat_at = $4,
+        finished_at = NULL,
+        updated_at = $4
+    WHERE id = $2
+      AND task_id = $1
+      AND status IN ('running', 'result_unknown')
+      AND EXISTS (SELECT 1 FROM claimed_task)
+    RETURNING id
+  `, [input.taskId, input.attemptId, lockedUntil, input.now]);
+  return Boolean(claimed);
 }
 
 function findAudioArtifact(artifacts: MediaGenerationArtifact[] | undefined) {

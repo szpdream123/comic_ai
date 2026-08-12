@@ -303,8 +303,6 @@ export async function finalizeTaskAttempt(
       throw new Error("task_finalization_state_conflict");
     }
 
-    await input.finalize?.();
-
     const attempt = await queryOne<{ id: string }>(
       db,
       `
@@ -352,6 +350,7 @@ export async function finalizeTaskAttempt(
     if (!attempt || !task) {
       throw new Error("task_finalization_state_conflict");
     }
+    await input.finalize?.();
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK");

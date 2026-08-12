@@ -28,6 +28,7 @@ export interface GenerationTaskFinalizeRequestedOutboxInput {
   userId?: string | null;
   workflowId: string;
   taskId: string;
+  attemptId?: string | null;
   kind: "image" | "video" | "audio";
   modelCode: string | null;
   providerExecutor: string;
@@ -45,6 +46,7 @@ export interface GenerationTaskPollRequestedOutboxInput {
   userId?: string | null;
   workflowId: string;
   taskId: string;
+  attemptId?: string | null;
   kind?: "image" | "video" | "audio";
   modelCode: string | null;
   providerExecutor: string;
@@ -52,6 +54,7 @@ export interface GenerationTaskPollRequestedOutboxInput {
   providerConfigRevisionId?: string | null;
   credentialVersionRef?: string | null;
   pollAttempt?: number;
+  dispatchToken?: string | null;
   availableAt: Date;
 }
 
@@ -170,9 +173,12 @@ export async function appendGenerationTaskPollRequestedOutboxEvent(
   input: GenerationTaskPollRequestedOutboxInput,
 ) {
   const pollAttempt = Math.max(1, Math.floor(input.pollAttempt ?? 1));
-  const dedupeKey = input.pollAttempt == null
-    ? `${generationTaskPollRequestedEventType}:${input.taskId}`
-    : `${generationTaskPollRequestedEventType}:${input.taskId}:${pollAttempt}`;
+  const attemptKey = input.attemptId?.trim();
+  const dispatchToken = input.dispatchToken?.trim();
+  const baseDedupeKey = input.pollAttempt == null
+    ? `${generationTaskPollRequestedEventType}:${input.taskId}${attemptKey ? `:${attemptKey}` : ""}`
+    : `${generationTaskPollRequestedEventType}:${input.taskId}${attemptKey ? `:${attemptKey}` : ""}:${pollAttempt}`;
+  const dedupeKey = `${baseDedupeKey}${dispatchToken ? `:${dispatchToken}` : ""}`;
   const row = await queryOne<{
     id: string;
     event_type: string;
@@ -219,10 +225,12 @@ export async function appendGenerationTaskPollRequestedOutboxEvent(
       JSON.stringify({
         workflowId: input.workflowId,
         taskId: input.taskId,
+        ...(attemptKey ? { attemptId: attemptKey } : {}),
         mediaType: input.kind ?? "video",
         modelCode: input.modelCode,
         providerExecutor: input.providerExecutor,
         pollAttempt,
+        ...(dispatchToken ? { dispatchToken } : {}),
         ...(input.providerRouteIdentity ? { providerRouteIdentity: input.providerRouteIdentity } : {}),
         ...(input.providerConfigRevisionId ? { providerConfigRevisionId: input.providerConfigRevisionId } : {}),
         ...(input.credentialVersionRef ? { credentialVersionRef: input.credentialVersionRef } : {}),
@@ -242,7 +250,8 @@ export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
   const finalizeMode = input.finalizeMode ?? "retry_finalize";
   const artifactStage = input.artifactStage
     ?? (finalizeMode === "retry_persist_asset" ? "persist" : "fetch");
-  const dedupeKey = `${generationTaskFinalizeRequestedEventType}:${input.taskId}:${finalizeMode}`;
+  const attemptKey = input.attemptId?.trim();
+  const dedupeKey = `${generationTaskFinalizeRequestedEventType}:${input.taskId}${attemptKey ? `:${attemptKey}` : ""}:${finalizeMode}`;
   const row = await queryOne<{
     id: string;
     event_type: string;
@@ -290,6 +299,7 @@ export async function appendGenerationTaskFinalizeRequestedOutboxEvent(
       JSON.stringify({
         workflowId: input.workflowId,
         taskId: input.taskId,
+        ...(attemptKey ? { attemptId: attemptKey } : {}),
         mediaType: input.kind,
         modelCode: input.modelCode,
         providerExecutor: input.providerExecutor,

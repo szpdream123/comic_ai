@@ -20,6 +20,7 @@ import {
 } from "../../modules/identity/team-account-credentials.service.ts";
 import {
   createPhoneAuthDevServer as createPhoneAuthDevServerBase,
+  __phoneAuthDevServerTestUtils,
   generationFailureDisplayMessage,
   shouldSyncSeedanceVideoTaskOnRead,
 } from "../phone-auth-dev-server.ts";
@@ -115,6 +116,35 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
   });
 
+  it("keeps read-time provider recovery and timeout reconciliation on the current attempt", async () => {
+    const source = await readFile(new URL("../phone-auth-dev-server.ts", import.meta.url), "utf8");
+
+    assert.match(
+      source,
+      /async function syncSeedanceVideoTaskOnRead[\s\S]*request\.attempt_id = t\.current_attempt_id[\s\S]*t\.current_attempt_id IS NOT NULL/,
+    );
+    assert.match(
+      source,
+      /async function settleTimedOutEpisodeGenerationTask[\s\S]*attempt_id = \$3[\s\S]*UPDATE provider_requests[\s\S]*attempt_id = \$6/,
+    );
+    assert.match(
+      source,
+      /async function reconcileDefinitiveProviderSubmissionFailures[\s\S]*provider_request\.attempt_id = task\.current_attempt_id/,
+    );
+    assert.match(
+      source,
+      /async function mapGenerationTaskResponse[\s\S]*pr_latest\.attempt_id = t\.current_attempt_id/,
+    );
+    assert.match(
+      source,
+      /async function enqueueVideoFinalizeIfProviderResultReady[\s\S]*t\.status IN \('running', 'result_unknown'\)[\s\S]*last_dispatched_at < \$4/,
+    );
+    assert.match(
+      source,
+      /async function enqueueVideoFinalizeIfProviderResultReady[\s\S]*generation_queue_stage_assignments[\s\S]*assignment\.stage IN \('fetch', 'persist'\)[\s\S]*assignment\.status IN \('publishing', 'admitted'\)/,
+    );
+  });
+
   it("uses the error factory message for SanBao read-time poll failures", () => {
     assert.equal(
       generationFailureDisplayMessage({
@@ -124,6 +154,186 @@ describe("phone auth dev server", { concurrency: false }, () => {
       }),
       "三宝影像账户积分不足，请联系管理员充值后重试。",
     );
+  });
+
+  it("does not settle a newly-created attempt from a stale legacy failure candidate", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "70000000-0000-4000-8000-000000000319";
+      const workflowId = "40000000-0000-4000-8000-000000000319";
+      const taskId = "50000000-0000-4000-8000-000000000319";
+      const attemptId = "60000000-0000-4000-8000-000000000319";
+      const providerRequestId = "62000000-0000-4000-8000-000000000319";
+      const now = new Date("2026-08-11T15:00:00.000Z");
+      await db.query(
+        "INSERT INTO users (id, phone_e164, status) VALUES ($1, '13800138319', 'active')",
+        [userId],
+      );
+      await db.query(
+        `
+          INSERT INTO workflows (id, workflow_type, status, input_snapshot_json, created_by_user_id)
+          VALUES ($1, 'episode_image_generation', 'running', '{}'::jsonb, $2)
+        `,
+        [workflowId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+            target_entity_type, target_entity_id
+          ) VALUES (
+            $1, $2, 'episode_generate_image', 'running', 'generation-submit-image',
+            '{"kind":"image"}'::jsonb, 'episode', $1
+          )
+        `,
+        [taskId, workflowId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, workflow_id, task_id, provider_name, provider_operation,
+            request_key, request_hash, payload_ref, payload_hash, payload_redacted_json,
+            status, failure_code, response_redacted_json, created_by_user_id, created_at, updated_at
+          ) VALUES (
+            $1::uuid, $2, $3, 'san-bao', 'episode.image.generate', $6, $6,
+            $6, $6, '{}'::jsonb, 'result_unknown',
+            'provider_submission_ambiguous', '{"providerErrorCode":"san_bao_invalid_response"}'::jsonb,
+            $4, $5, $5
+          )
+        `,
+        [
+          providerRequestId,
+          workflowId,
+          taskId,
+          userId,
+          new Date("2026-08-11T14:59:00.000Z"),
+          `stale-legacy:${providerRequestId}`,
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, workflow_id, task_id, attempt_number, status, locked_by,
+            locked_until, heartbeat_at, started_at, created_at, updated_at
+          ) VALUES ($1, $2, $3, 1, 'running', 'new-attempt', $4, $5, $5, $5, $5)
+        `,
+        [attemptId, workflowId, taskId, new Date("2026-08-11T15:10:00.000Z"), now],
+      );
+      await db.query(
+        "UPDATE tasks SET current_attempt_id = $2, attempt_count = 1 WHERE id = $1",
+        [taskId, attemptId],
+      );
+
+      const settled = await __phoneAuthDevServerTestUtils.settleTimedOutEpisodeGenerationTask(db as never, {
+        taskId,
+        now: new Date("2026-08-11T15:00:01.000Z"),
+        failureCode: "san_bao_invalid_response",
+        expectedProviderRequestId: providerRequestId,
+        expectedAttemptId: null,
+        expectedAttemptCount: 0,
+      });
+      const state = await db.query<{ task_status: string; attempt_status: string; provider_status: string }>(
+        `
+          SELECT task.status AS task_status,
+                 attempt.status AS attempt_status,
+                 request.status AS provider_status
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          JOIN provider_requests request ON request.id = $2
+          WHERE task.id = $1
+        `,
+        [taskId, providerRequestId],
+      );
+      assert.equal(settled, false);
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        attempt_status: "running",
+        provider_status: "result_unknown",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not settle a task after its stale deterministic provider candidate succeeds", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const userId = "70000000-0000-4000-8000-000000000320";
+      const workflowId = "40000000-0000-4000-8000-000000000320";
+      const taskId = "50000000-0000-4000-8000-000000000320";
+      const providerRequestId = "62000000-0000-4000-8000-000000000320";
+      const now = new Date("2026-08-11T15:20:00.000Z");
+      await db.query(
+        "INSERT INTO users (id, phone_e164, status) VALUES ($1, '13800138320', 'active')",
+        [userId],
+      );
+      await db.query(
+        `
+          INSERT INTO workflows (id, workflow_type, status, input_snapshot_json, created_by_user_id)
+          VALUES ($1, 'episode_image_generation', 'running', '{}'::jsonb, $2)
+        `,
+        [workflowId, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO tasks (
+            id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+            target_entity_type, target_entity_id
+          ) VALUES (
+            $1, $2, 'episode_generate_image', 'running', 'generation-submit-image',
+            '{"kind":"image"}'::jsonb, 'episode', $1
+          )
+        `,
+        [taskId, workflowId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, workflow_id, task_id, provider_name, provider_operation,
+            request_key, request_hash, payload_ref, payload_hash, payload_redacted_json,
+            status, response_redacted_json, created_by_user_id, created_at, updated_at
+          ) VALUES (
+            $1::uuid, $2, $3, 'san-bao', 'episode.image.generate', $6, $6,
+            $6, $6, '{}'::jsonb, 'succeeded',
+            '{"providerErrorCode":"san_bao_invalid_response","artifact":{"mediaType":"image"}}'::jsonb,
+            $4, $5, $5
+          )
+        `,
+        [
+          providerRequestId,
+          workflowId,
+          taskId,
+          userId,
+          now,
+          `provider-succeeded-race:${providerRequestId}`,
+        ],
+      );
+
+      const settled = await __phoneAuthDevServerTestUtils.settleTimedOutEpisodeGenerationTask(db as never, {
+        taskId,
+        now: new Date("2026-08-11T15:20:01.000Z"),
+        failureCode: "san_bao_invalid_response",
+        expectedProviderRequestId: providerRequestId,
+        expectedAttemptId: null,
+        expectedAttemptCount: 0,
+      });
+      const state = await db.query<{ task_status: string; provider_status: string }>(
+        `
+          SELECT task.status AS task_status, request.status AS provider_status
+          FROM tasks task
+          JOIN provider_requests request ON request.id = $2
+          WHERE task.id = $1
+        `,
+        [taskId, providerRequestId],
+      );
+      assert.equal(settled, false);
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        provider_status: "succeeded",
+      });
+    } finally {
+      await db.close();
+    }
   });
 
   it("settles a historical no-task-id submission as failed when Task Center is read", async () => {
@@ -2240,6 +2450,89 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("redirects production HTTP requests to HTTPS before serving pages or APIs", async () => {
+    const server = createPhoneAuthDevServer({
+      db: {} as Awaited<ReturnType<typeof createDevDb>>,
+      allowProduction: true,
+      env: {
+        NODE_ENV: "production",
+        PUBLIC_HOST: "www.lingxiyunai.com",
+      },
+    });
+    const proxyHeaders = {
+      host: "www.lingxiyunai.com:80",
+      "x-forwarded-host": "www.lingxiyunai.com:80",
+      "x-forwarded-proto": "http",
+    };
+
+    try {
+      await server.listen(0);
+
+      const pageResponse = await fetch(`${server.origin}/projects?tab=active`, {
+        headers: proxyHeaders,
+        redirect: "manual",
+      });
+      assert.equal(pageResponse.status, 308);
+      assert.equal(
+        pageResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/projects?tab=active",
+      );
+
+      const untrustedTargetResponse = await fetch(
+        `${server.origin}//attacker.example/collect?source=http`,
+        {
+          headers: {
+            ...proxyHeaders,
+            host: "attacker-host.example",
+            "x-forwarded-host": "attacker.example",
+          },
+          redirect: "manual",
+        },
+      );
+      assert.equal(untrustedTargetResponse.status, 308);
+      assert.equal(
+        untrustedTargetResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/collect?source=http",
+      );
+
+      const appendedProxyProtocolResponse = await fetch(`${server.origin}/projects`, {
+        headers: {
+          host: "www.lingxiyunai.com:443",
+          "x-forwarded-proto": "https, http",
+        },
+        redirect: "manual",
+      });
+      assert.equal(appendedProxyProtocolResponse.status, 308);
+      assert.equal(
+        appendedProxyProtocolResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/projects",
+      );
+
+      const misleadingPortResponse = await fetch(`${server.origin}/projects`, {
+        headers: { host: "www.lingxiyunai.com:443" },
+        redirect: "manual",
+      });
+      assert.equal(misleadingPortResponse.status, 308);
+      assert.equal(
+        misleadingPortResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/projects",
+      );
+
+      const apiResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+        method: "POST",
+        headers: proxyHeaders,
+        redirect: "manual",
+      });
+      assert.equal(apiResponse.status, 308);
+      assert.equal(
+        apiResponse.headers.get("location"),
+        "https://www.lingxiyunai.com/api/auth/password/login",
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("marks user session cookies secure in production", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({
@@ -2254,7 +2547,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       const response = await fetch(`${server.origin}/api/auth/password/login`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-forwarded-host": "www.lingxiyunai.com:443",
+          "x-forwarded-proto": "https",
+        },
         body: JSON.stringify({ account: "18571521874", password: "521874" }),
       });
 

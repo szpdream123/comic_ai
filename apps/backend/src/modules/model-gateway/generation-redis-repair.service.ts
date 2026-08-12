@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import { settleReservationAllocationInTransaction } from "../credit-billing/credit-ledger.service.ts";
@@ -43,6 +45,7 @@ interface GenerationRepairTaskRow {
 
 interface RunningSeedancePollRepairRow {
   task_id: string;
+  current_attempt_id: string;
   user_id: string;
   workflow_id: string;
   task_type: string;
@@ -300,9 +303,9 @@ export async function failStaleGenerationTasksBeforeProviderSubmission(
   input: { now: Date; limit: number; timeoutMs?: number },
 ): Promise<{ failedTaskIds: string[] }> {
   const cutoff = new Date(input.now.getTime() - (input.timeoutMs ?? defaultPreSubmissionTimeoutMs));
-  const candidates = await db.query<{ id: string }>(
+  const candidates = await db.query<{ id: string; current_attempt_id: string }>(
     `
-      SELECT t.id
+      SELECT t.id, t.current_attempt_id
       FROM tasks t
       WHERE (
           t.status = 'running'
@@ -312,10 +315,15 @@ export async function failStaleGenerationTasksBeforeProviderSubmission(
           )
         )
         AND t.task_type = 'episode_generate_video'
+        AND t.current_attempt_id IS NOT NULL
         AND t.updated_at < $1
         AND NOT EXISTS (
           SELECT 1 FROM provider_requests pr
           WHERE pr.task_id = t.id
+            AND (
+              pr.attempt_id = t.current_attempt_id
+              OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+            )
             AND pr.external_submission_started_at IS NOT NULL
         )
       ORDER BY t.updated_at ASC, t.id ASC
@@ -327,6 +335,8 @@ export async function failStaleGenerationTasksBeforeProviderSubmission(
   for (const candidate of candidates.rows) {
     if (await failSeedanceVideoTaskBeforeProviderSubmission(db, {
       taskId: candidate.id,
+      expectedAttemptId: candidate.current_attempt_id,
+      staleBefore: cutoff,
       failureCode: "provider_submission_not_started_timeout",
       now: input.now,
     })) {
@@ -414,6 +424,7 @@ export async function repairQueuedGenerationTaskOutbox(
       targetType: readString(snapshot.targetType) || candidate.target_entity_type,
       targetId: readString(snapshot.targetId) || candidate.target_entity_id,
       providerExecutor: readString(snapshot.providerExecutor) || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance"),
+      dispatchToken: `redis-repair-${randomUUID()}`,
       ...generationPriorityFromSnapshot(snapshot),
       availableAt: input.now,
     });
@@ -454,7 +465,10 @@ export async function repairExpiredGenerationSubmitLeases(
           request.external_request_id
         FROM provider_requests request
         WHERE request.task_id = task.id
-          AND (task.current_attempt_id IS NULL OR request.attempt_id = task.current_attempt_id)
+          AND (
+            request.attempt_id = task.current_attempt_id
+            OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+          )
           AND (
             request.external_submission_started_at IS NOT NULL
             OR request.external_request_id IS NOT NULL
@@ -463,6 +477,7 @@ export async function repairExpiredGenerationSubmitLeases(
         LIMIT 1
       ) provider ON TRUE
       WHERE task.status = 'running'
+        AND task.current_attempt_id IS NOT NULL
         AND task.locked_until IS NOT NULL
         AND task.locked_until < $1
         AND task.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
@@ -508,6 +523,7 @@ export async function repairExpiredGenerationSubmitLeases(
 
     if (await failGenerationTaskAfterQueueError(db, {
       taskId: candidate.id,
+      expectedAttemptId: candidate.current_attempt_id,
       failureCode: "generation_queue_lease_expired",
       displayMessage: "生成队列执行超时，任务已停止自动重试并按失败处理，积分已返还。",
       requireProviderSubmissionNotStarted: true,
@@ -538,13 +554,17 @@ async function clearExpiredGenerationSubmitLease(
           updated_at = $2
       WHERE id = $1
         AND status = 'running'
+        AND current_attempt_id = $3
         AND locked_until IS NOT NULL
         AND locked_until < $2
         AND EXISTS (
           SELECT 1
           FROM provider_requests request
           WHERE request.task_id = tasks.id
-            AND ($3::uuid IS NULL OR request.attempt_id = $3)
+            AND (
+              request.attempt_id = $3
+              OR (request.attempt_id IS NULL AND tasks.attempt_count = 1)
+            )
             AND request.external_submission_started_at IS NOT NULL
             AND request.external_request_id IS NOT NULL
             AND request.status IN ('submitted', 'accepted', 'running', 'result_unknown', 'succeeded')
@@ -599,13 +619,17 @@ async function markExpiredGenerationSubmitLeaseResultUnknown(
             updated_at = $2
         WHERE id = $1
           AND status = 'running'
+          AND current_attempt_id = $3
           AND locked_until IS NOT NULL
           AND locked_until < $2
           AND EXISTS (
             SELECT 1
             FROM provider_requests request
             WHERE request.task_id = tasks.id
-              AND ($3::uuid IS NULL OR request.attempt_id = $3)
+              AND (
+                request.attempt_id = $3
+                OR (request.attempt_id IS NULL AND tasks.attempt_count = 1)
+              )
               AND (
                 request.external_submission_started_at IS NOT NULL
                 OR request.external_request_id IS NOT NULL
@@ -679,11 +703,13 @@ export async function failGenerationTaskAfterQueueError(
     creditOutcome?: "released" | "manual_review_required";
     sourceAssignmentKey?: string;
     requireProviderSubmissionNotStarted?: boolean;
+    expectedAttemptId?: string | null;
     now: Date;
   },
 ): Promise<boolean> {
   await db.query("BEGIN");
   try {
+    const enforceExpectedAttempt = Object.prototype.hasOwnProperty.call(input, "expectedAttemptId");
     const row = await queryOne<GenerationQueueFailureTaskRow>(
       db,
       `
@@ -697,14 +723,19 @@ export async function failGenerationTaskAfterQueueError(
       FROM tasks task
       LEFT JOIN generation_task_credit_reservations reservation
         ON reservation.task_id = task.id
-       AND reservation.status IN ('active', 'partially_settled')
+       AND reservation.status IN ('active', 'partially_settled', 'manual_review_required')
       WHERE task.id = $1
+        AND (
+          $2::boolean = false
+          OR ($3::uuid IS NOT NULL AND task.current_attempt_id = $3)
+          OR ($3::uuid IS NULL AND task.current_attempt_id IS NULL)
+        )
         AND task.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
         AND task.status IN ('queued', 'running', 'result_unknown')
       LIMIT 1
       FOR UPDATE OF task
     `,
-      [input.taskId],
+      [input.taskId, enforceExpectedAttempt, input.expectedAttemptId ?? null],
     );
     if (!row) {
       await db.query("COMMIT");
@@ -723,12 +754,18 @@ export async function failGenerationTaskAfterQueueError(
       const externalSubmission = await queryOne<{ id: string }>(
         db,
         `
-          SELECT id
-          FROM provider_requests
-          WHERE task_id = $1
+          SELECT request.id
+          FROM provider_requests request
+          JOIN tasks task ON task.id = request.task_id
+          WHERE request.task_id = $1
+            AND task.current_attempt_id IS NOT NULL
             AND (
-              external_submission_started_at IS NOT NULL
-              OR external_request_id IS NOT NULL
+              request.attempt_id = task.current_attempt_id
+              OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+            )
+            AND (
+              request.external_submission_started_at IS NOT NULL
+              OR request.external_request_id IS NOT NULL
             )
           LIMIT 1
         `,
@@ -787,6 +824,17 @@ export async function failGenerationTaskAfterQueueError(
     const snapshot = parseSnapshot(row.input_snapshot_json);
     const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
     if (row.reservation_id && amount > 0) {
+      if (creditOutcome === "released") {
+        await db.query(
+          `
+            UPDATE credit_reservations
+            SET status = 'active', updated_at = $2
+            WHERE id = $1
+              AND status = 'manual_review_required'
+          `,
+          [row.reservation_id, input.now],
+        );
+      }
       await settleReservationAllocationInTransaction(db, {
         reservationId: row.reservation_id,
         allocationKey: input.failureCode,
@@ -882,6 +930,7 @@ export async function repairRunningSeedancePollJobs(
     `
       SELECT
         t.id AS task_id,
+        t.current_attempt_id,
         COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.task_type,
@@ -890,7 +939,10 @@ export async function repairRunningSeedancePollJobs(
           SELECT pr.poll_sequence
           FROM provider_requests pr
           WHERE pr.task_id = t.id
-            AND (t.current_attempt_id IS NULL OR pr.attempt_id = t.current_attempt_id)
+            AND (
+              pr.attempt_id = t.current_attempt_id
+              OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+            )
             AND pr.external_submission_started_at IS NOT NULL
             AND pr.external_request_id IS NOT NULL
             AND pr.status IN ('submitted', 'accepted', 'running', 'result_unknown')
@@ -916,11 +968,15 @@ export async function repairRunningSeedancePollJobs(
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
           OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
+        AND t.current_attempt_id IS NOT NULL
         AND EXISTS (
           SELECT 1
           FROM provider_requests pr
           WHERE pr.task_id = t.id
-            AND (t.current_attempt_id IS NULL OR pr.attempt_id = t.current_attempt_id)
+            AND (
+              pr.attempt_id = t.current_attempt_id
+              OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+            )
             AND pr.external_submission_started_at IS NOT NULL
             AND pr.external_request_id IS NOT NULL
             AND pr.status IN ('submitted', 'accepted', 'running', 'result_unknown')
@@ -941,6 +997,7 @@ export async function repairRunningSeedancePollJobs(
     const claimed = await markRunningPollRepairClaimed(db, {
       taskId: candidate.task_id,
       taskType: candidate.task_type,
+      attemptId: candidate.current_attempt_id,
       now: input.now,
       staleCutoff,
     });
@@ -962,6 +1019,7 @@ export async function repairRunningSeedancePollJobs(
     let redisJobId = buildGenerationBullMQJobId(
       `generation.${mediaType}.poll`,
       candidate.task_id,
+      candidate.current_attempt_id,
       pollAttempt,
       "repair",
       repairToken,
@@ -985,11 +1043,14 @@ export async function repairRunningSeedancePollJobs(
           ORDER BY assignment.created_at ASC
           LIMIT 1
         `,
-        [candidate.task_id, `generation.repair.poll:${candidate.task_id}:%`],
+        [
+          candidate.task_id,
+          `generation.repair.poll:${candidate.task_id}:${candidate.current_attempt_id}:%`,
+        ],
       );
       redisJobId = existing?.redis_job_id ?? redisJobId;
       const assignment = existing ? null : await input.shardStore.reserve(db, {
-          assignmentKey: `generation.repair.poll:${candidate.task_id}:${repairToken}`,
+          assignmentKey: `generation.repair.poll:${candidate.task_id}:${candidate.current_attempt_id}:${repairToken}`,
           taskId: candidate.task_id,
           mediaType,
           stage: "poll",
@@ -1011,6 +1072,7 @@ export async function repairRunningSeedancePollJobs(
       `generation.${mediaType}.poll.repair`,
       {
         taskId: candidate.task_id,
+        attemptId: candidate.current_attempt_id,
         workflowId: candidate.workflow_id,
         mediaType,
         modelCode,
@@ -1050,6 +1112,7 @@ export async function repairRunningSeedancePollJobs(
     `
       SELECT
         t.id AS task_id,
+        t.current_attempt_id,
         COALESCE(workflow.created_by_user_id, project.owner_user_id) AS user_id,
         t.workflow_id,
         t.task_type,
@@ -1060,14 +1123,22 @@ export async function repairRunningSeedancePollJobs(
       LEFT JOIN projects project ON project.id = t.project_id
       LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
       WHERE (
-          t.status IN ('running', 'manual_review_required', 'result_unknown')
+          t.status IN ('running', 'result_unknown')
           OR (t.status = 'failed' AND t.failure_code = 'generation_queue_error')
+          OR (
+            t.status = 'manual_review_required'
+            AND (
+              t.task_type = 'episode_generate_image'
+              OR t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
+            )
+          )
         )
         AND (
           (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
           OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
+        AND t.current_attempt_id IS NOT NULL
         AND (
           t.locked_until IS NULL
           OR t.locked_until < $3
@@ -1076,11 +1147,28 @@ export async function repairRunningSeedancePollJobs(
           SELECT 1
           FROM provider_requests pr
           WHERE pr.task_id = t.id
-            AND (t.current_attempt_id IS NULL OR pr.attempt_id = t.current_attempt_id)
+            AND (
+              pr.attempt_id = t.current_attempt_id
+              OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+            )
             AND pr.status = 'succeeded'
             AND (
               t.task_type = 'episode_generate_image'
               OR pr.external_request_id IS NOT NULL
+            )
+            AND (
+              t.task_type = 'episode_generate_image'
+              OR (
+                t.task_type = 'episode_generate_video'
+                AND t.current_attempt_id IS NOT NULL
+                AND NULLIF(btrim(pr.response_redacted_json->>'videoUrl'), '') IS NOT NULL
+              )
+              OR (
+                t.task_type = 'episode_generate_audio'
+                AND t.current_attempt_id IS NOT NULL
+                AND pr.response_redacted_json#>>'{artifact,mediaType}' = 'audio'
+                AND NULLIF(btrim(pr.response_redacted_json#>>'{artifact,url}'), '') IS NOT NULL
+              )
             )
           LIMIT 1
         )
@@ -1090,6 +1178,10 @@ export async function repairRunningSeedancePollJobs(
           WHERE oe.user_id = COALESCE(workflow.created_by_user_id, project.owner_user_id)
             AND oe.event_type = 'generation.task.finalize_requested'
             AND oe.payload_json->>'taskId' = t.id::text
+            AND (
+              oe.payload_json->>'attemptId' = t.current_attempt_id::text
+              OR (NOT (oe.payload_json ? 'attemptId') AND t.attempt_count = 1)
+            )
             AND oe.status IN ('pending', 'processing', 'failed')
           LIMIT 1
         )
@@ -1129,6 +1221,7 @@ export async function repairRunningSeedancePollJobs(
       if (dispatch === "manual_review") {
         const outcome = await handleGptImageArtifactQueueExhaustion(db, {
           taskId: candidate.task_id,
+          expectedAttemptId: candidate.current_attempt_id,
           error: {
             failureCode: "provider_output_upload_failed",
             message: "image_artifact_recovery_deadline_reached",
@@ -1144,6 +1237,7 @@ export async function repairRunningSeedancePollJobs(
     const claim = await markRunningFinalizeRepairClaimed(db, {
       taskId: candidate.task_id,
       taskType: candidate.task_type,
+      attemptId: candidate.current_attempt_id,
       now: input.now,
       staleCutoff,
     });
@@ -1193,6 +1287,7 @@ export async function repairRunningSeedancePollJobs(
       userId: candidate.user_id,
       workflowId: candidate.workflow_id,
       taskId: candidate.task_id,
+      attemptId: candidate.current_attempt_id,
       kind: mediaType,
       modelCode: readString(snapshot.model) || (mediaType === "image" ? "gpt-image-2" : mediaType === "audio" ? "aliyun-bailian-audio" : "seedance-i2v-pro"),
       providerExecutor: readString(snapshot.providerExecutor) || (mediaType === "video" ? "seedance" : mediaType === "image" ? "gpt-image-2" : "aliyun-bailian-audio"),
@@ -1245,6 +1340,7 @@ async function markRunningPollRepairClaimed(
   input: {
     taskId: string;
     taskType: string;
+    attemptId: string;
     now: Date;
     staleCutoff: Date;
   },
@@ -1273,6 +1369,7 @@ async function markRunningPollRepairClaimed(
             END,
             updated_at = $2
       WHERE id = $1
+        AND current_attempt_id = $5
         AND (
           status = 'running'
           OR (
@@ -1319,7 +1416,7 @@ async function markRunningPollRepairClaimed(
       SELECT id
       FROM claimed_task
     `,
-    [input.taskId, input.now, input.staleCutoff, input.taskType],
+    [input.taskId, input.now, input.staleCutoff, input.taskType, input.attemptId],
   );
 
   return Boolean(row);
@@ -1330,6 +1427,7 @@ async function markRunningFinalizeRepairClaimed(
   input: {
     taskId: string;
     taskType: string;
+    attemptId: string;
     now: Date;
     staleCutoff: Date;
   },
@@ -1358,9 +1456,17 @@ async function markRunningFinalizeRepairClaimed(
           ) AS recovered_image_failure
         FROM tasks
         WHERE id = $1
+          AND current_attempt_id = $5
           AND (
-            status IN ('running', 'manual_review_required', 'result_unknown')
+            status IN ('running', 'result_unknown')
             OR (status = 'failed' AND failure_code = 'generation_queue_error')
+            OR (
+              status = 'manual_review_required'
+              AND (
+                task_type = 'episode_generate_image'
+                OR failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
+              )
+            )
           )
           AND task_type = $4
           AND (
@@ -1410,8 +1516,7 @@ async function markRunningFinalizeRepairClaimed(
             updated_at = $2
         FROM generation_task_credit_reservations task_reservation
         JOIN candidate ON candidate.id = task_reservation.task_id
-        WHERE candidate.recovered_image_failure
-          AND reservation.id = task_reservation.id
+        WHERE reservation.id = task_reservation.id
           AND reservation.status = 'manual_review_required'
           AND reservation.amount_reserved > 0
         RETURNING reservation.id
@@ -1438,7 +1543,7 @@ async function markRunningFinalizeRepairClaimed(
         )
       RETURNING task.id, candidate.recovered_queue_failure, candidate.recovered_image_failure
     `,
-    [input.taskId, input.now, input.staleCutoff, input.taskType],
+    [input.taskId, input.now, input.staleCutoff, input.taskType, input.attemptId],
   );
 
   return {

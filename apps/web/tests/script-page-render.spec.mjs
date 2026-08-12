@@ -5,6 +5,13 @@ import test from "node:test";
 import { renderAssetExtractModal } from "../src/features/production-workbench/asset-extract-modal.js";
 import { renderScriptManagementPage } from "../src/features/production-workbench/script-page.js";
 
+test("script management labels the page as novel-to-script", () => {
+  const html = renderScriptManagementPage({ state: {}, ui: {} });
+
+  assert.match(html, /<h1>小说转剧本<\/h1>/);
+  assert.doesNotMatch(html, /<h1>剧本转分镜<\/h1>/);
+});
+
 test("script management shows creation entries when no backend script exists", () => {
   const html = renderScriptManagementPage({ state: {}, ui: {} });
 

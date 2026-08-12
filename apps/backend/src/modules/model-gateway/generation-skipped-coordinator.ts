@@ -2,6 +2,10 @@ import { queryOne } from "../shared/db/sql.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 
 export type GenerationSkippedNextAction = "submit" | "poll" | "finalize" | "stop";
+export const GENERATION_ARTIFACT_FETCH_NOT_READY = "generation_artifact_fetch_not_ready" as const;
+
+const terminalGenerationTaskStatuses = new Set(["succeeded", "failed", "canceled"]);
+const staleGenerationArtifactTaskStatuses = new Set(["queued", "cancel_requested"]);
 
 type GenerationSkippedFacts = {
   task_status: string;
@@ -40,6 +44,11 @@ export async function resolveGenerationSkippedNextAction(
         SELECT request.*
         FROM provider_requests request
         WHERE request.task_id = t.id
+          AND t.current_attempt_id IS NOT NULL
+          AND (
+            request.attempt_id = t.current_attempt_id
+            OR (request.attempt_id IS NULL AND t.attempt_count = 1)
+          )
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
@@ -50,7 +59,7 @@ export async function resolveGenerationSkippedNextAction(
   );
 
   if (!facts) return "stop";
-  if (["succeeded", "failed", "canceled", "manual_review_required"].includes(facts.task_status)) {
+  if (["succeeded", "failed", "cancel_requested", "canceled", "manual_review_required"].includes(facts.task_status)) {
     return "stop";
   }
   if (facts.has_artifact || facts.provider_status === "succeeded") {
@@ -67,4 +76,45 @@ export async function resolveGenerationSkippedNextAction(
     return "submit";
   }
   return "stop";
+}
+
+/**
+ * Artifact jobs are BullMQ terminal when they return skipped. Only let duplicate
+ * or out-of-order work disappear when the durable task is terminal, has not
+ * reached an artifact stage yet, is canceling, or no longer exists.
+ */
+export async function resolveGenerationArtifactStageUnavailable(
+  db: SqlDatabase,
+  input: { taskId: string; failureCode: string },
+): Promise<{ status: "failed"; failureCode: string } | { status: "skipped" }> {
+  const task = await queryOne<{ task_status: string; failure_code: string | null }>(
+    db,
+    `
+      SELECT
+        t.status AS task_status,
+        t.failure_code
+      FROM tasks t
+      WHERE t.id = $1
+      LIMIT 1
+    `,
+    [input.taskId],
+  );
+  const manualReviewCanRetry = task?.task_status === "manual_review_required"
+    && ["provider_output_persist_failed", "generation_queue_error"].includes(task.failure_code ?? "");
+  return !task
+    || terminalGenerationTaskStatuses.has(task.task_status)
+    || staleGenerationArtifactTaskStatuses.has(task.task_status)
+    || (task.task_status === "manual_review_required" && !manualReviewCanRetry)
+    ? { status: "skipped" }
+    : { status: "failed", failureCode: input.failureCode };
+}
+
+export function isGenerationArtifactStageNotReadyFailure(failureCode: string) {
+  return failureCode === GENERATION_ARTIFACT_FETCH_NOT_READY;
+}
+
+export function resolveGenerationArtifactQueueExhaustionFailureCode(failureCode: string) {
+  return isGenerationArtifactStageNotReadyFailure(failureCode)
+    ? "generation_queue_error" as const
+    : "provider_output_storage_failed" as const;
 }

@@ -3,9 +3,13 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import type { AiModelConfigRecord } from "../../model-catalog/ai-model-config.store.ts";
+import { grantCredits, reserveCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { createOrReuseGenerationStorageObject } from "../../storage/storage.service.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
+import { handleGenerationFetchArtifactJob } from "../generation-bullmq.worker.ts";
+import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
+import { GENERATION_ARTIFACT_FETCH_NOT_READY } from "../generation-skipped-coordinator.ts";
 import {
   buildLingdongArtifactDownloadInit,
   buildSeedanceUserModelRequestLogBody,
@@ -99,7 +103,7 @@ describe("Seedance video worker user ownership", () => {
 
   it("allows provider-succeeded result-unknown tasks to resume finalization", async () => {
     const source = await readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8");
-    assert.match(source, /t\.status IN \('queued', 'running', 'manual_review_required', 'result_unknown'\)/);
+    assert.match(source, /t\.status IN \('running', 'manual_review_required', 'result_unknown'\)/);
     assert.match(source, /status = 'running',[\s\S]*failure_code = NULL[\s\S]*status IN \('running', 'manual_review_required', 'result_unknown'\)/);
     assert.match(source, /t\.failure_code IN \('provider_output_persist_failed', 'generation_queue_error'\)/);
   });
@@ -529,7 +533,9 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.deepEqual(result, { status: "already_started", externalRequestId: null });
+      assert.equal(result.status, "already_started");
+      assert.equal(result.externalRequestId, null);
+      assert.ok(result.attemptId);
       assert.equal(task.rows[0]?.status, "running");
       assert.equal(task.rows[0]?.failure_code, null);
       assert.equal(
@@ -645,10 +651,9 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.deepEqual(result, {
-        status: "submitted",
-        externalRequestId: "seedance-task-accepted",
-      });
+      assert.equal(result.status, "submitted");
+      assert.equal(result.externalRequestId, "seedance-task-accepted");
+      assert.match(result.attemptId ?? "", /^[0-9a-f-]{36}$/i);
       assert.deepEqual(state.rows[0], {
         task_status: "running",
         task_failure_code: null,
@@ -777,10 +782,9 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.deepEqual(result, {
-        status: "already_started",
-        externalRequestId: "seedance-task-recovered",
-      });
+      assert.equal(result.status, "already_started");
+      assert.equal(result.externalRequestId, "seedance-task-recovered");
+      assert.match(result.attemptId ?? "", /^[0-9a-f-]{36}$/i);
       assert.deepEqual(state.rows[0], {
         task_status: "running",
         task_failure_code: null,
@@ -794,7 +798,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("fails when provider cancellation is unconfirmed after the three-hour polling window", async () => {
+  it("keeps the result unknown when provider cancellation is unconfirmed after the polling window", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -826,15 +830,15 @@ describe("Seedance video worker user ownership", () => {
 
       assert.deepEqual(result, { status: "failed", failureCode: "provider_poll_timeout" });
       assert.deepEqual(task.rows[0], {
-        status: "failed",
+        status: "result_unknown",
         failure_code: "provider_poll_timeout",
       });
       assert.deepEqual(attempt.rows[0], {
-        status: "failed",
+        status: "result_unknown",
         failure_code: "provider_poll_timeout",
       });
       assert.deepEqual(provider.rows[0], {
-        status: "failed",
+        status: "result_unknown",
         failure_code: "provider_poll_timeout",
       });
     } finally {
@@ -1141,6 +1145,802 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
+  it("cancels a result-unknown video after reopening its manual-review credit reservation", async () => {
+    const db = await createMigratedTestDb();
+    const now = new Date("2026-07-20T10:02:00.000Z");
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "096",
+        userId: "70000000-0000-4000-8000-000000000096",
+        estimatedCredits: 120,
+        status: "running",
+      });
+      await grantCredits(db, {
+        userId: seeded.userId,
+        amount: 120,
+        sourceType: "test_grant",
+        sourceId: seeded.taskId,
+        reason: "result unknown cancellation test grant",
+        now,
+      });
+      const reservation = await reserveCredits(db, {
+        userId: seeded.userId,
+        amount: 120,
+        sourceType: "workflow_task",
+        sourceId: seeded.taskId,
+        reason: "result unknown cancellation test reservation",
+        projectId: seeded.projectId,
+        workflowId: seeded.workflowId,
+        taskId: seeded.taskId,
+        now,
+      });
+      await db.query("UPDATE tasks SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1", [seeded.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1", [seeded.attemptId]);
+      await db.query("UPDATE credit_reservations SET status = 'manual_review_required' WHERE id = $1", [reservation.reservation.id]);
+
+      const result = await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+        now,
+      });
+      const state = await db.query<{
+        task_status: string;
+        attempt_status: string;
+        reservation_status: string;
+        amount_reserved: number | string;
+        amount_released: number | string;
+      }>(`
+        SELECT t.status AS task_status,
+               a.status AS attempt_status,
+               r.status AS reservation_status,
+               r.amount_reserved,
+               r.amount_released
+        FROM tasks t
+        JOIN task_attempts a ON a.id = t.current_attempt_id
+        JOIN credit_reservations r ON r.task_id = t.id
+        WHERE t.id = $1
+      `, [seeded.taskId]);
+
+      assert.equal(result.status, "canceled", JSON.stringify(result));
+      assert.deepEqual(state.rows[0], {
+        task_status: "canceled",
+        attempt_status: "canceled",
+        reservation_status: "released",
+        amount_reserved: 0,
+        amount_released: 120,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not cancel a newer attempt created while provider cancellation is in flight", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "316",
+        userId: "70000000-0000-4000-8000-000000000316",
+        status: "running",
+      });
+      const currentAttemptId = "61000000-0000-4000-8000-000000000316";
+      let providerCancelCalls = 0;
+
+      const result = await cancelGenerationTask(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => {
+          providerCancelCalls += 1;
+          await db.query(
+            `
+              INSERT INTO task_attempts (
+                id, project_id, workflow_id, task_id, attempt_number, status,
+                locked_by, locked_until, heartbeat_at, started_at
+              )
+              VALUES ($1, $2, $3, $4, 2, 'running', 'seedance-retry', $5, $6, $6)
+            `,
+            [
+              currentAttemptId,
+              seeded.projectId,
+              seeded.workflowId,
+              seeded.taskId,
+              new Date("2026-07-20T10:20:00.000Z"),
+              new Date("2026-07-20T10:05:00.000Z"),
+            ],
+          );
+          await db.query(
+            `
+              UPDATE tasks
+              SET current_attempt_id = $2, attempt_count = 2
+              WHERE id = $1
+            `,
+            [seeded.taskId, currentAttemptId],
+          );
+          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+        }) as typeof fetch,
+        now: new Date("2026-07-20T10:10:00.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string;
+        current_attempt_id: string;
+        current_attempt_status: string;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 task.current_attempt_id,
+                 attempt.status AS current_attempt_status
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          WHERE task.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.equal(providerCancelCalls, 1);
+      assert.deepEqual(result, {
+        status: "not_cancelable",
+        taskId: seeded.taskId,
+        taskStatus: "running",
+        reason: "generation_task_state_changed",
+      });
+      assert.deepEqual(state.rows[0], {
+        task_status: "running",
+        current_attempt_id: currentAttemptId,
+        current_attempt_status: "running",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not let a newer video attempt fail an externally-started historical request", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "315",
+        userId: "70000000-0000-4000-8000-000000000315",
+        status: "queued",
+      });
+      const first = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => {
+          throw new Error("ambiguous provider submission");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:00:00.000Z"),
+      });
+      const firstAttempt = await db.query<{ current_attempt_id: string }>(
+        "SELECT current_attempt_id FROM tasks WHERE id = $1",
+        [seeded.taskId],
+      );
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'failed', failure_code = 'test_retry', finished_at = $2
+          WHERE id = $1
+        `,
+        [firstAttempt.rows[0]!.current_attempt_id, new Date("2026-07-13T02:01:00.000Z")],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'queued', current_attempt_id = NULL,
+              max_attempts = 3,
+              locked_by = NULL, locked_until = NULL, heartbeat_at = NULL
+          WHERE id = $1
+        `,
+        [seeded.taskId],
+      );
+      let secondProviderCalls = 0;
+
+      const second = await processSeedanceVideoSubmitJob(db, {
+        taskId: seeded.taskId,
+        env: { VOLCENGINE_ARK_API_KEY: "test-key" },
+        fetchImpl: (async () => {
+          secondProviderCalls += 1;
+          throw new Error("historical request must not be resubmitted");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:02:00.000Z"),
+      });
+      const state = await db.query<{
+        task_status: string;
+        attempt_count: number;
+        attempt_status: string;
+        provider_status: string;
+        provider_failure_code: string | null;
+        provider_attempt_id: string | null;
+        snapshot_status: string | null;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 task.attempt_count,
+                 attempt.status AS attempt_status,
+                 request.status AS provider_status,
+                 request.failure_code AS provider_failure_code,
+                 request.attempt_id AS provider_attempt_id,
+                 snapshot.status AS snapshot_status
+          FROM tasks task
+          JOIN provider_requests request ON request.task_id = task.id
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+          WHERE task.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.equal(first.status, "already_started");
+      assert.equal(first.externalRequestId, null);
+      assert.equal(first.attemptId, firstAttempt.rows[0]!.current_attempt_id);
+      assert.deepEqual(second, {
+        status: "failed",
+        failureCode: "provider_request_attempt_conflict",
+      });
+      assert.equal(secondProviderCalls, 0);
+      assert.equal(state.rows[0]?.task_status, "manual_review_required");
+      assert.equal(state.rows[0]?.attempt_count, 2);
+      assert.equal(state.rows[0]?.attempt_status, "manual_review_required");
+      assert.equal(state.rows[0]?.provider_status, "result_unknown");
+      assert.equal(state.rows[0]?.provider_failure_code, "provider_submission_ambiguous");
+      assert.equal(
+        state.rows[0]?.provider_attempt_id,
+        firstAttempt.rows[0]?.current_attempt_id,
+      );
+      assert.equal(state.rows[0]?.snapshot_status, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("retries when a durable provider result still needs video finalization", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "309",
+        userId: "70000000-0000-4000-8000-000000000309",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/recoverable-seedance.mp4",
+      });
+      const durable = await db.query<{
+        task_status: string;
+        attempt_id: string | null;
+        provider_status: string;
+        external_request_id: string | null;
+        video_url: string | null;
+      }>(
+        `
+          SELECT t.status AS task_status,
+                 t.current_attempt_id AS attempt_id,
+                 pr.status AS provider_status,
+                 pr.external_request_id,
+                 pr.response_redacted_json->>'videoUrl' AS video_url
+          FROM tasks t
+          JOIN provider_requests pr ON pr.id = $2
+          WHERE t.id = $1
+        `,
+        [seeded.taskId, seeded.providerRequestId],
+      );
+      assert.deepEqual(durable.rows[0], {
+        task_status: "running",
+        attempt_id: seeded.attemptId,
+        provider_status: "succeeded",
+        external_request_id: "external-309",
+        video_url: "https://cdn.example.test/recoverable-seedance.mp4",
+      });
+
+      const fetchJob = {
+        data: {
+          taskId: seeded.taskId,
+          workflowId: seeded.workflowId,
+          mediaType: "video" as const,
+          modelCode: "seedance-i2v-pro",
+          providerExecutor: "seedance",
+          artifactKind: "video" as const,
+          artifactStage: "fetch" as const,
+        },
+      };
+      const assertFetchRetries = async (database: typeof db) => {
+        await assert.rejects(() => handleGenerationFetchArtifactJob({
+          job: {
+            data: fetchJob.data,
+          },
+          config: loadGenerationQueueConfig({}),
+          publisher: { async add() { throw new Error("not-ready fetch must not enqueue persist"); } },
+          processors: {
+            async submitSeedanceVideo() { return { status: "settled" }; },
+            async pollSeedanceVideo() { return { status: "waiting" }; },
+            async expireSeedanceVideo() {
+              return { status: "failed", failureCode: "generation_timeout" };
+            },
+            async fetchSeedanceVideoArtifact({ taskId, now }) {
+              return fetchSeedanceVideoArtifactJob(database, {
+                taskId,
+                runtime: seedanceStorageRuntime,
+                env: {},
+                fetchImpl: (async () => {
+                  throw new Error("a not-ready fetch must retry before downloading");
+                }) as typeof fetch,
+                now,
+              });
+            },
+          },
+          now: new Date("2026-07-13T02:29:00.000Z"),
+        }), (error: unknown) => {
+          assert.equal(
+            (error as { failureCode?: string }).failureCode,
+            GENERATION_ARTIFACT_FETCH_NOT_READY,
+          );
+          return true;
+        });
+      };
+      for (const mutateFirstFinalizeRead of [
+        () => [],
+        (rows: Array<Record<string, unknown>>) => rows.map((row) => ({
+          ...row,
+          provider_response_redacted_json: {},
+        })),
+        (rows: Array<Record<string, unknown>>) => rows.map((row) => ({
+          ...row,
+          attempt_id: null,
+          current_attempt_id: null,
+          provider_attempt_id: null,
+        })),
+      ]) {
+        let interceptedFirstFinalizeRead = false;
+        const racingDb = {
+          ...db,
+          async query(sql: string, params: unknown[] = []) {
+            const result = await db.query<Record<string, unknown>>(sql, params);
+            if (
+              !interceptedFirstFinalizeRead
+              && sql.includes("t.task_type = 'episode_generate_video'")
+              && sql.includes("pr.status = 'succeeded'")
+            ) {
+              interceptedFirstFinalizeRead = true;
+              return { rows: mutateFirstFinalizeRead(result.rows) };
+            }
+            return result;
+          },
+        } as typeof db;
+
+        await assertFetchRetries(racingDb);
+        assert.equal(interceptedFirstFinalizeRead, true);
+      }
+
+      await db.query(
+        "UPDATE provider_requests SET status = 'running', response_redacted_json = '{}'::jsonb WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+      await assertFetchRetries(db);
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'created',
+              external_request_id = NULL,
+              external_submission_started_at = NULL
+          WHERE id = $1
+        `,
+        [seeded.providerRequestId],
+      );
+      await assertFetchRetries(db);
+
+      await db.query("UPDATE tasks SET status = 'succeeded' WHERE id = $1", [seeded.taskId]);
+      assert.deepEqual(await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        now: new Date("2026-07-13T02:30:00.000Z"),
+      }), { status: "skipped" });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not silently complete a video fetch while durable work is still nonterminal", async () => {
+    const result = await fetchSeedanceVideoArtifactJob({
+      async query(sql: string) {
+        return {
+          rows: sql.includes("t.status AS task_status") && sql.includes("t.failure_code")
+            ? [{ task_status: "running", failure_code: null }]
+            : [],
+        };
+      },
+    } as never, {
+      taskId: "50000000-0000-4000-8000-000000000310",
+      runtime: seedanceStorageRuntime,
+      env: {},
+      now: new Date("2026-07-13T02:29:00.000Z"),
+    });
+
+    assert.deepEqual(result, {
+      status: "failed",
+      failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+    });
+  });
+
+  it("does not revive a queued video task from a historical succeeded provider attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "311",
+        userId: "70000000-0000-4000-8000-000000000311",
+        status: "queued",
+      });
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            failure_code, started_at, finished_at
+          ) VALUES ($1, $2, $3, $4, 1, 'failed', 'provider_poll_timeout', $5, $6)
+        `,
+        [
+          seeded.attemptId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          new Date("2026-07-13T01:00:00.000Z"),
+          new Date("2026-07-13T01:10:00.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, external_submission_started_at, external_request_id,
+            response_redacted_json, created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'volcengine', 'episode.video.generate',
+            $6, $6, $6, $6, 'succeeded', $7, $8, $9::jsonb, $10
+          )
+        `,
+        [
+          seeded.providerRequestId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          seeded.attemptId,
+          "seedance-stale-provider-311",
+          new Date("2026-07-13T01:00:00.000Z"),
+          "external-stale-311",
+          JSON.stringify({
+            status: "succeeded",
+            videoUrl: "https://cdn.example.test/stale-result.mp4",
+          }),
+          seeded.userId,
+        ],
+      );
+
+      const result = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        fetchImpl: (async () => {
+          throw new Error("queued stale artifact must not be downloaded");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:29:00.000Z"),
+      });
+      const state = await db.query<{
+        status: string;
+        current_attempt_id: string | null;
+        has_artifact_handoff: boolean;
+      }>(
+        `
+          SELECT t.status,
+                 t.current_attempt_id,
+                 COALESCE(snapshot.provider_status_json ? 'artifactHandoff', false)
+                   AS has_artifact_handoff
+          FROM tasks t
+          LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, { status: "skipped" });
+      assert.deepEqual(state.rows[0], {
+        status: "queued",
+        current_attempt_id: null,
+        has_artifact_handoff: false,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not attach a historical provider result to a newer running attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "312",
+        userId: "70000000-0000-4000-8000-000000000312",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/historical-result.mp4",
+      });
+      const currentAttemptId = "61000000-0000-4000-8000-000000000312";
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'failed', failure_code = 'provider_poll_timeout', finished_at = $2
+          WHERE id = $1
+        `,
+        [seeded.attemptId, new Date("2026-07-13T02:00:00.000Z")],
+      );
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            locked_by, locked_until, heartbeat_at, started_at
+          ) VALUES ($1, $2, $3, $4, 2, 'running', 'seedance-test', $5, $6, $6)
+        `,
+        [
+          currentAttemptId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          new Date("2026-07-13T03:00:00.000Z"),
+          new Date("2026-07-13T02:00:00.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET current_attempt_id = $2, attempt_count = 2
+          WHERE id = $1
+        `,
+        [seeded.taskId, currentAttemptId],
+      );
+      let downloadCount = 0;
+
+      const result = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        fetchImpl: (async () => {
+          downloadCount += 1;
+          throw new Error("historical artifact must not be downloaded");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:30:00.000Z"),
+      });
+      await db.query(
+        "UPDATE provider_requests SET attempt_id = NULL WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+      const unboundHistoricalResult = await fetchSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        fetchImpl: (async () => {
+          downloadCount += 1;
+          throw new Error("multi-attempt unbound artifact must not be downloaded");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:31:00.000Z"),
+      });
+      const state = await db.query<{
+        status: string;
+        current_attempt_id: string | null;
+        has_artifact_handoff: boolean;
+      }>(
+        `
+          SELECT t.status,
+                 t.current_attempt_id,
+                 COALESCE(snapshot.provider_status_json ? 'artifactHandoff', false)
+                   AS has_artifact_handoff
+          FROM tasks t
+          LEFT JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+          WHERE t.id = $1
+        `,
+        [seeded.taskId],
+      );
+
+      assert.deepEqual(result, {
+        status: "failed",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+      });
+      assert.deepEqual(unboundHistoricalResult, {
+        status: "failed",
+        failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
+      });
+      assert.equal(downloadCount, 0);
+      assert.deepEqual(state.rows[0], {
+        status: "running",
+        current_attempt_id: currentAttemptId,
+        has_artifact_handoff: false,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not poll a historical provider request for a newer running attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "313",
+        userId: "70000000-0000-4000-8000-000000000313",
+        status: "running",
+      });
+      const currentAttemptId = "61000000-0000-4000-8000-000000000313";
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'failed', failure_code = 'provider_poll_timeout', finished_at = $2
+          WHERE id = $1
+        `,
+        [seeded.attemptId, new Date("2026-07-13T02:00:00.000Z")],
+      );
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            locked_by, locked_until, heartbeat_at, started_at
+          ) VALUES ($1, $2, $3, $4, 2, 'running', 'seedance-test', $5, $6, $6)
+        `,
+        [
+          currentAttemptId,
+          seeded.projectId,
+          seeded.workflowId,
+          seeded.taskId,
+          new Date("2026-07-13T03:00:00.000Z"),
+          new Date("2026-07-13T02:00:00.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET current_attempt_id = $2, attempt_count = 2
+          WHERE id = $1
+        `,
+        [seeded.taskId, currentAttemptId],
+      );
+      let pollPermitCalls = 0;
+
+      const result = await processSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        rateLimiter: {
+          async acquireSubmitPermit() {
+            throw new Error("poll jobs must not acquire submit permits");
+          },
+          async acquirePollPermit() {
+            pollPermitCalls += 1;
+            return { granted: false as const, retryAfterMs: 1200, reason: "unexpected-historical-poll" };
+          },
+        },
+        now: new Date("2026-07-13T02:10:00.000Z"),
+      });
+
+      assert.equal(result.status, "skipped");
+      assert.equal(pollPermitCalls, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("stops polling when the current attempt changes after the provider row was read", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "317",
+        userId: "70000000-0000-4000-8000-000000000317",
+        status: "running",
+      });
+      const currentAttemptId = "61000000-0000-4000-8000-000000000317";
+      let switched = false;
+      const racingDb = {
+        async query(sql: string, params?: unknown[]) {
+          const result = await db.query(sql, params);
+          if (
+            !switched
+            && sql.includes("LEFT JOIN provider_requests pr")
+            && sql.includes("t.current_attempt_id AS attempt_id")
+            && sql.includes("t.input_snapshot_json->>'providerExecutor' = 'seedance'")
+          ) {
+            switched = true;
+            await db.query(
+              `
+                INSERT INTO task_attempts (
+                  id, project_id, workflow_id, task_id, attempt_number, status,
+                  locked_by, locked_until, heartbeat_at, started_at
+                )
+                VALUES ($1, $2, $3, $4, 2, 'running', 'seedance-retry', $5, $6, $6)
+              `,
+              [
+                currentAttemptId,
+                seeded.projectId,
+                seeded.workflowId,
+                seeded.taskId,
+                new Date("2026-07-13T03:00:00.000Z"),
+                new Date("2026-07-13T02:00:00.000Z"),
+              ],
+            );
+            await db.query(
+              `
+                UPDATE tasks
+                SET current_attempt_id = $2, attempt_count = 2
+                WHERE id = $1
+              `,
+              [seeded.taskId, currentAttemptId],
+            );
+          }
+          return result;
+        },
+      };
+      let pollPermitCalls = 0;
+
+      const result = await processSeedanceVideoPollJob(racingDb as never, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        rateLimiter: {
+          async acquireSubmitPermit() {
+            throw new Error("poll jobs must not acquire submit permits");
+          },
+          async acquirePollPermit() {
+            pollPermitCalls += 1;
+            return { granted: false as const, retryAfterMs: 1200, reason: "stale-poll-race" };
+          },
+        },
+        now: new Date("2026-07-13T02:10:00.000Z"),
+      });
+      const task = await db.query<{ status: string; current_attempt_id: string }>(
+        "SELECT status, current_attempt_id FROM tasks WHERE id = $1",
+        [seeded.taskId],
+      );
+
+      assert.equal(switched, true);
+      assert.equal(result.status, "skipped");
+      assert.equal(pollPermitCalls, 0);
+      assert.deepEqual(task.rows[0], { status: "running", current_attempt_id: currentAttemptId });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("continues polling a legacy unbound provider request on the first attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "314",
+        userId: "70000000-0000-4000-8000-000000000314",
+        status: "running",
+      });
+      await db.query(
+        "UPDATE provider_requests SET attempt_id = NULL WHERE id = $1",
+        [seeded.providerRequestId],
+      );
+      let pollPermitCalls = 0;
+
+      const result = await processSeedanceVideoPollJob(db, {
+        taskId: seeded.taskId,
+        runtime: seedanceStorageRuntime,
+        env: {},
+        rateLimiter: {
+          async acquireSubmitPermit() {
+            throw new Error("poll jobs must not acquire submit permits");
+          },
+          async acquirePollPermit() {
+            pollPermitCalls += 1;
+            return { granted: false as const, retryAfterMs: 1200, reason: "legacy-poll-test" };
+          },
+        },
+        now: new Date("2026-07-13T02:10:00.000Z"),
+      });
+
+      assert.deepEqual(result, {
+        status: "rate_limited",
+        retryAfterMs: 1200,
+        reason: "legacy-poll-test",
+      });
+      assert.equal(pollPermitCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("persists a fetched handoff without downloading the provider artifact twice", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -1167,6 +1967,14 @@ describe("Seedance video worker user ownership", () => {
           )
         `,
         [seeded.userId, seeded.projectId, seeded.taskId, seeded.workflowId, seeded.attemptId, seeded.providerRequestId, now],
+      );
+      await db.query(
+        "UPDATE tasks SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1",
+        [seeded.taskId],
+      );
+      await db.query(
+        "UPDATE task_attempts SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1",
+        [seeded.attemptId],
       );
       let downloadCount = 0;
       const runtime: UploadSessionRuntime = {
@@ -1246,6 +2054,14 @@ describe("Seedance video worker user ownership", () => {
       assert.equal(afterFetch.rows[0]?.progress_stage, "artifact_fetched");
       assert.ok(afterFetch.rows[0]?.handoff_key);
       assert.equal(afterFetch.rows[0]?.version_count, 0);
+      await db.query(
+        "UPDATE tasks SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1",
+        [seeded.taskId],
+      );
+      await db.query(
+        "UPDATE task_attempts SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1",
+        [seeded.attemptId],
+      );
 
       const persistResult = await persistSeedanceVideoArtifactJob(db, {
         taskId: seeded.taskId,

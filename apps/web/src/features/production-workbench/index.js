@@ -2323,6 +2323,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
     projectLibraryRequestId: 0,
+    scriptLibraryRequestId: 0,
     toastDismissTimers: new Map(),
     toastSequence: 0,
     persistentToastId: null,
@@ -2620,9 +2621,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       renameScriptId: null,
       renameScriptTitle: "",
       renameScriptNotice: "",
+      renameScriptSubmitting: false,
       deleteScriptId: null,
       deleteScriptMode: "single",
       deleteScriptIds: [],
+      deleteScriptSubmitting: false,
       selectedProjectCardId: null,
       canvasProjectView: deriveInitialCanvasProjectView(readWorkbenchRouteToken(window.location)),
       canvasProjects: null,
@@ -9925,7 +9928,13 @@ function syncEpisodeWorkbenchBatchSelectionOnly(workbench) {
     selectAllButton.setAttribute?.("aria-pressed", isAllSelected ? "true" : "false");
     selectAllButton.textContent = isAllSelected ? "取消全选" : "全选";
   }
-  return buttons.length > 0 || Boolean(selectAllButton);
+  const oneClickSetButton = root.querySelector('[data-action="set-selected-latest-media"]');
+  if (oneClickSetButton) {
+    const disabled = selectedIds.size === 0;
+    oneClickSetButton.disabled = disabled;
+    oneClickSetButton.setAttribute?.("aria-disabled", disabled ? "true" : "false");
+  }
+  return buttons.length > 0 || Boolean(selectAllButton) || Boolean(oneClickSetButton);
 }
 
 function syncEpisodeWorkbenchLayerOnly(workbench, selector, html) {
@@ -15921,10 +15930,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     let pageLoadFailed = false;
     if (typeof workbench.api?.getUserScripts === "function") {
       try {
-        await syncScriptLibraryFromApi(workbench, {
+        const refreshed = await syncScriptLibraryFromApi(workbench, {
           page: nextPage,
           pageSize: pagination.pageSize,
         });
+        if (!refreshed) {
+          return;
+        }
       } catch (error) {
         pageLoadFailed = true;
         workbench.ui.singleEpisodeScriptLibraryPagination = pagination;
@@ -15965,6 +15977,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteScriptMode = "bulk";
     workbench.ui.deleteScriptIds = scripts.map((script) => String(script.id ?? "")).filter(Boolean);
     workbench.ui.deleteScriptId = workbench.ui.deleteScriptIds[0] ?? null;
+    workbench.ui.deleteScriptSubmitting = false;
     workbench.ui.scriptCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
@@ -18576,6 +18589,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (!syncEpisodeWorkbenchBatchSelectionOnly(workbench)) {
       render(workbench);
     }
+    return;
+  }
+
+  if (action === "set-selected-latest-media") {
+    await setSelectedLatestMedia(workbench);
     return;
   }
 
@@ -24300,6 +24318,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.projectDetail?.project?.name ??
       "";
     workbench.ui.renameScriptNotice = "";
+    workbench.ui.renameScriptSubmitting = false;
     workbench.ui.scriptCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
@@ -24310,6 +24329,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.renameScriptId = null;
     workbench.ui.renameScriptTitle = "";
     workbench.ui.renameScriptNotice = "";
+    workbench.ui.renameScriptSubmitting = false;
     render(workbench);
     return;
   }
@@ -24322,14 +24342,21 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
+    workbench.ui.renameScriptSubmitting = true;
     await runAction(workbench, "正在重命名剧本...", async () => {
       const result = await workbench.api.updateScriptCard(scriptId, {
         title: nextTitle,
       });
-      mergeScriptCardUpdate(workbench, result?.script);
       workbench.ui.renameScriptId = null;
       workbench.ui.renameScriptTitle = "";
       workbench.ui.renameScriptNotice = "";
+      workbench.ui.renameScriptSubmitting = false;
+      mergeScriptCardUpdate(workbench, result?.script);
+    }, {
+      successToast: "剧本已重命名。",
+      onError() {
+        workbench.ui.renameScriptSubmitting = false;
+      },
     });
     return;
   }
@@ -24344,6 +24371,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteScriptId = target.dataset.scriptId ?? null;
     workbench.ui.deleteScriptMode = "single";
     workbench.ui.deleteScriptIds = [];
+    workbench.ui.deleteScriptSubmitting = false;
     workbench.ui.scriptCardMenuId = null;
     workbench.ui.toast = "";
     render(workbench);
@@ -24354,6 +24382,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.deleteScriptId = null;
     workbench.ui.deleteScriptMode = "single";
     workbench.ui.deleteScriptIds = [];
+    workbench.ui.deleteScriptSubmitting = false;
     render(workbench);
     return;
   }
@@ -24363,6 +24392,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.deleteScriptId = null;
       workbench.ui.deleteScriptMode = "single";
       workbench.ui.deleteScriptIds = [];
+      workbench.ui.deleteScriptSubmitting = false;
       workbench.ui.toast = "子账户无法删除剧本。";
       render(workbench);
       return;
@@ -24379,38 +24409,65 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         render(workbench);
         return;
       }
+      workbench.ui.deleteScriptSubmitting = true;
       await runAction(workbench, `正在删除 ${scripts.length} 个剧本...`, async () => {
-        for (const script of scripts) {
-          if (!script?.id) {
-            throw new Error("缺少剧本信息，无法删除。");
+        const deletedScriptIds = [];
+        try {
+          for (const script of scripts) {
+            if (!script?.id) {
+              throw new Error("缺少剧本信息，无法删除。");
+            }
+            await deleteScriptIfPresent(workbench, script.id);
+            deletedScriptIds.push(String(script.id));
+            clearDeletedScriptCard(workbench, script.id);
           }
-          await workbench.api.deleteScriptCard(script.id);
-          clearDeletedScriptCard(workbench, script.id);
+        } catch (error) {
+          const deletedIdSet = new Set(deletedScriptIds);
+          const remainingScriptIds = scripts
+            .map((script) => String(script?.id ?? ""))
+            .filter((scriptId) => scriptId && !deletedIdSet.has(scriptId));
+          workbench.ui.deleteScriptId = remainingScriptIds[0] ?? null;
+          workbench.ui.deleteScriptMode = remainingScriptIds.length ? "bulk" : "single";
+          workbench.ui.deleteScriptIds = remainingScriptIds;
+          workbench.ui.selectedScriptIds = remainingScriptIds;
+          refreshScriptLibraryAfterDelete(workbench);
+          throw error;
         }
-        await refreshScriptLibraryIfAvailable(workbench);
         workbench.ui.selectedScriptIds = [];
         workbench.ui.scriptCardMenuId = null;
         workbench.ui.deleteScriptId = null;
         workbench.ui.deleteScriptMode = "single";
         workbench.ui.deleteScriptIds = [];
+        workbench.ui.deleteScriptSubmitting = false;
         workbench.ui.scriptDetailOpen = false;
+        refreshScriptLibraryAfterDelete(workbench);
       }, {
         successToast: `已删除 ${scripts.length} 个剧本。`,
+        onError() {
+          workbench.ui.deleteScriptSubmitting = false;
+        },
       });
       return;
     }
     const scriptId = workbench.ui.deleteScriptId;
+    workbench.ui.deleteScriptSubmitting = true;
     await runAction(workbench, "正在删除剧本...", async () => {
       if (!scriptId) {
         throw new Error("缺少剧本信息，无法删除。");
       }
-      await workbench.api.deleteScriptCard(scriptId);
+      await deleteScriptIfPresent(workbench, scriptId);
       clearDeletedScriptCard(workbench, scriptId);
-      await refreshScriptLibraryIfAvailable(workbench);
       workbench.ui.deleteScriptId = null;
       workbench.ui.deleteScriptMode = "single";
       workbench.ui.deleteScriptIds = [];
+      workbench.ui.deleteScriptSubmitting = false;
       workbench.ui.scriptDetailOpen = false;
+      refreshScriptLibraryAfterDelete(workbench);
+    }, {
+      successToast: "剧本已删除。",
+      onError() {
+        workbench.ui.deleteScriptSubmitting = false;
+      },
     });
     return;
   }
@@ -41066,6 +41123,13 @@ function mergeScriptCardUpdate(workbench, script) {
         : candidate,
     );
   }
+  if (Array.isArray(workbench.ui?.singleEpisodeScriptLibrary)) {
+    workbench.ui.singleEpisodeScriptLibrary = workbench.ui.singleEpisodeScriptLibrary.map((candidate) =>
+      String(candidate?.id ?? "") === String(script.id)
+        ? { ...candidate, ...script }
+        : candidate,
+    );
+  }
   const mergeIntoDetail = (detail) => {
     if (!detail) {
       return detail;
@@ -41088,7 +41152,9 @@ function mergeScriptCardUpdate(workbench, script) {
     return nextDetail;
   };
 
-  workbench.state.projectDetail = mergeIntoDetail(workbench.state.projectDetail);
+  if (workbench.state) {
+    workbench.state.projectDetail = mergeIntoDetail(workbench.state.projectDetail);
+  }
   workbench.ui.projectDetail = mergeIntoDetail(workbench.ui.projectDetail);
   if (workbench.state?.script && String(workbench.state.script.id) === String(script.id)) {
     workbench.state.script = {
@@ -41099,11 +41165,40 @@ function mergeScriptCardUpdate(workbench, script) {
 }
 
 function clearDeletedScriptCard(workbench, scriptId) {
+  const scriptLibraryRecords = Array.isArray(workbench.ui?.scriptLibraryRecords)
+    ? workbench.ui.scriptLibraryRecords
+    : [];
+  const nextScriptLibraryRecords = scriptLibraryRecords.filter(
+    (candidate) => String(candidate?.id ?? "") !== String(scriptId),
+  );
+  const removedCount = scriptLibraryRecords.length - nextScriptLibraryRecords.length;
   if (Array.isArray(workbench.ui?.scriptLibraryRecords)) {
-    workbench.ui.scriptLibraryRecords = workbench.ui.scriptLibraryRecords.filter(
+    workbench.ui.scriptLibraryRecords = nextScriptLibraryRecords;
+  }
+  if (Array.isArray(workbench.ui?.singleEpisodeScriptLibrary)) {
+    workbench.ui.singleEpisodeScriptLibrary = workbench.ui.singleEpisodeScriptLibrary.filter(
       (candidate) => String(candidate?.id ?? "") !== String(scriptId),
     );
   }
+  if (removedCount > 0) {
+    for (const paginationKey of ["scriptLibraryPagination", "singleEpisodeScriptLibraryPagination"]) {
+      const pagination = workbench.ui?.[paginationKey];
+      if (!pagination || typeof pagination !== "object") {
+        continue;
+      }
+      const pageSize = Math.max(1, Number(pagination.pageSize ?? 10) || 10);
+      const total = Math.max(0, Number(pagination.total ?? scriptLibraryRecords.length) - removedCount);
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      workbench.ui[paginationKey] = {
+        ...pagination,
+        page: Math.min(totalPages, Math.max(1, Number(pagination.page ?? 1) || 1)),
+        total,
+        totalPages,
+      };
+    }
+  }
+  workbench.ui.selectedScriptIds = (workbench.ui.selectedScriptIds ?? [])
+    .filter((selectedId) => String(selectedId) !== String(scriptId));
   const clearDetail = (detail) => {
     if (!detail) {
       return detail;
@@ -41120,7 +41215,9 @@ function clearDeletedScriptCard(workbench, scriptId) {
     return nextDetail;
   };
 
-  workbench.state.projectDetail = clearDetail(workbench.state.projectDetail);
+  if (workbench.state) {
+    workbench.state.projectDetail = clearDetail(workbench.state.projectDetail);
+  }
   workbench.ui.projectDetail = clearDetail(workbench.ui.projectDetail);
   if (workbench.state?.script && String(workbench.state.script.id) === String(scriptId)) {
     workbench.state.script = null;
@@ -44698,7 +44795,7 @@ function replaceAssetConversationHistoryEntries(workbench, assetId, entries, med
   return nextEntries;
 }
 
-function mergeAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind = "image") {
+function mergeConversationHistoryEntries(entries, localEntries) {
   const mergedEntries = [];
   const appendOrMerge = (entry) => {
     if (!entry) {
@@ -44720,10 +44817,17 @@ function mergeAssetConversationHistoryEntries(workbench, assetId, entries, media
   for (const entry of Array.isArray(entries) ? entries : []) {
     appendOrMerge(entry);
   }
-  for (const entry of listAssetConversationHistoryEntries(workbench, assetId, mediaKind)) {
+  for (const entry of Array.isArray(localEntries) ? localEntries : []) {
     appendOrMerge(entry);
   }
   return mergedEntries;
+}
+
+function mergeAssetConversationHistoryEntries(workbench, assetId, entries, mediaKind = "image") {
+  return mergeConversationHistoryEntries(
+    entries,
+    listAssetConversationHistoryEntries(workbench, assetId, mediaKind),
+  );
 }
 
 function appendAssetConversationHistoryEntry(workbench, entry) {
@@ -45068,6 +45172,328 @@ function syncSelectedStoryboardConversationResult(workbench, storyboardId, media
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
   workbench.ui[targetKey] = resolveLatestStoryboardConversationResult(workbench, storyboardId, mediaKind);
   return workbench.ui[targetKey];
+}
+
+function mergeStoryboardConversationHistoryEntries(workbench, storyboardId, entries, mediaKind = "image") {
+  return mergeConversationHistoryEntries(
+    entries,
+    listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind),
+  );
+}
+
+function isOneClickConversationSuccessful(entry) {
+  return ["completed", "success"].includes(resolveGenerationTaskDisplayStatus(entry));
+}
+
+function resolveOneClickAssetImage(entry) {
+  if (!entry || !isOneClickConversationSuccessful(entry)) {
+    return null;
+  }
+  const fixedImage = (Array.isArray(entry.fixedImages) ? entry.fixedImages : []).find((item) =>
+    readPublicGenerationMediaUrl(item?.url, item?.previewUrl, item?.src),
+  ) ?? null;
+  const src = readPublicGenerationMediaUrl(
+    fixedImage?.url,
+    fixedImage?.previewUrl,
+    fixedImage?.src,
+    entry?.result?.imageUrl,
+    entry?.result?.previewUrl,
+    entry?.imageUrl,
+    entry?.previewUrl,
+  );
+  if (!src) {
+    return null;
+  }
+  return {
+    id:
+      fixedImage?.assetVersionId ??
+      fixedImage?.id ??
+      entry?.result?.assetVersionId ??
+      entry?.result?.storageObjectId ??
+      entry?.taskId ??
+      src,
+    assetVersionId: fixedImage?.assetVersionId ?? entry?.result?.assetVersionId ?? null,
+    storageObjectId: fixedImage?.storageObjectId ?? entry?.result?.storageObjectId ?? null,
+    src,
+  };
+}
+
+function resolveOneClickStoryboardVideo(entry, storyboard) {
+  if (!entry || !isOneClickConversationSuccessful(entry)) {
+    return null;
+  }
+  const fixedVideo = (Array.isArray(entry.fixedVideos) ? entry.fixedVideos : []).find((item) =>
+    readPublicGenerationMediaUrl(item?.src, item?.url),
+  ) ?? null;
+  const src = readPublicGenerationMediaUrl(
+    fixedVideo?.src,
+    fixedVideo?.url,
+    entry?.result?.videoUrl,
+    entry?.videoUrl,
+  );
+  if (!src) {
+    return null;
+  }
+  const assetVersionId = fixedVideo?.assetVersionId ?? entry?.result?.assetVersionId ?? null;
+  const storageObjectId = fixedVideo?.storageObjectId ?? entry?.result?.storageObjectId ?? null;
+  return {
+    id: assetVersionId ?? fixedVideo?.id ?? storageObjectId ?? entry?.taskId ?? src,
+    assetVersionId,
+    storageObjectId,
+    src,
+    url: src,
+    thumbnailSrc:
+      fixedVideo?.thumbnailSrc ??
+      fixedVideo?.thumbnailUrl ??
+      entry?.result?.thumbnailUrl ??
+      entry?.thumbnailUrl ??
+      storyboard?.previewThumbnailUrl ??
+      null,
+    status: "ready",
+  };
+}
+
+function resolveLatestOneClickMedia(entries, mediaKind, target = null) {
+  const source = Array.isArray(entries) ? entries : [];
+  let latest = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const media = mediaKind === "video"
+      ? resolveOneClickStoryboardVideo(source[index], target)
+      : resolveOneClickAssetImage(source[index]);
+    if (!media) {
+      continue;
+    }
+    const timestamp = Date.parse(
+      source[index]?.createdAt ??
+      source[index]?.submittedAt ??
+      source[index]?.returnedAt ??
+      source[index]?.completedAt ??
+      source[index]?.updatedAt ??
+      "",
+    );
+    const candidate = {
+      index,
+      media,
+      timestamp: Number.isFinite(timestamp) ? timestamp : null,
+    };
+    if (
+      !latest ||
+      (candidate.timestamp != null && latest.timestamp != null
+        ? candidate.timestamp >= latest.timestamp
+        : candidate.index > latest.index)
+    ) {
+      latest = candidate;
+    }
+  }
+  return latest?.media ?? null;
+}
+
+async function setEpisodeAssetFixedImageForOneClick(workbench, assetId, image) {
+  if (isRealEpisodeWorkbench(workbench)) {
+    if (typeof workbench.api?.setFixedImage !== "function") {
+      throw new Error("固定图接口暂不可用。");
+    }
+    const result = await workbench.api.setFixedImage(
+      workbench.ui.selectedEpisodeId,
+      assetId,
+      {
+        assetVersionId: image.assetVersionId ?? null,
+        storageObjectId: image.storageObjectId ?? null,
+        sourceUrl: image.src,
+        previewUrl: image.src,
+      },
+    );
+    const file = result?.file ?? {};
+    const previewUrl = resolvePreferredFixedImageUrl(
+      file.previewUrl,
+      result?.asset?.fixedImageUrl,
+      image.src,
+    );
+    syncEpisodeAssetFixedImageState(workbench, assetId, {
+      previewUrl,
+      sourceUrl: resolvePreferredFixedImageUrl(file.sourceUrl, previewUrl),
+      downloadUrl: resolvePreferredFixedImageUrl(file.downloadUrl, file.sourceUrl, previewUrl),
+      storageObjectId: file.storageObjectId ?? image.storageObjectId ?? null,
+      assetVersionId: result?.asset?.fixedImageFileId ?? image.assetVersionId ?? null,
+      fixedImageFileId: result?.asset?.fixedImageFileId ?? image.assetVersionId ?? null,
+      fixedImageStorageObjectId:
+        result?.asset?.fixedImageStorageObjectId ?? file.storageObjectId ?? image.storageObjectId ?? null,
+      mimeType: file.mimeType ?? null,
+      updatedAt: result?.asset?.updatedAt ?? null,
+    });
+    return;
+  }
+  syncEpisodeAssetFixedImageState(workbench, assetId, {
+    previewUrl: image.src,
+    sourceUrl: image.src,
+    downloadUrl: image.src,
+    storageObjectId: image.storageObjectId ?? null,
+    assetVersionId: image.assetVersionId ?? image.id,
+  });
+}
+
+async function clearEpisodeAssetFixedImageForOneClick(workbench, assetId) {
+  if (isRealEpisodeWorkbench(workbench)) {
+    if (typeof workbench.api?.clearFixedImage !== "function") {
+      throw new Error("固定图解绑接口暂不可用。");
+    }
+    await workbench.api.clearFixedImage(workbench.ui.selectedEpisodeId, assetId);
+  }
+  clearEpisodeAssetFixedImageState(workbench, assetId);
+}
+
+async function setStoryboardVideoForOneClick(workbench, storyboard, video) {
+  if (isRealEpisodeWorkbench(workbench)) {
+    if (typeof workbench.api?.setStoryboardVideo !== "function") {
+      throw new Error("分镜视频设置接口暂不可用。");
+    }
+    const result = await workbench.api.setStoryboardVideo(
+      workbench.ui.selectedEpisodeId,
+      resolveStoryboardConversationApiId(workbench, storyboard.id),
+      {
+        assetVersionId: video.assetVersionId ?? video.id,
+        storageObjectId: video.storageObjectId ?? null,
+        sourceUrl: video.src,
+        thumbnailUrl: video.thumbnailSrc ?? null,
+      },
+    );
+    const file = result?.file ?? {};
+    const savedVideoId = result?.storyboard?.currentVideoFileId ?? video.id;
+    const savedVideoSrc = result?.storyboard?.currentVideoUrl ?? file.sourceUrl ?? video.src;
+    const savedThumbnailSrc =
+      result?.storyboard?.currentVideoThumbnailUrl ?? file.thumbnailUrl ?? video.thumbnailSrc ?? null;
+    updateStoryboardById(workbench, storyboard.id, (currentStoryboard) => {
+      const nextStoryboard = {
+        ...currentStoryboard,
+        selectedUploadedVideoId: savedVideoId,
+        previewVideo: savedVideoSrc,
+        previewThumbnailUrl: savedThumbnailSrc,
+        currentVideoAssetVersionId: savedVideoId,
+        pendingCurrentVideoAssetVersionId: savedVideoId,
+        pendingCurrentVideoSourceUrl: savedVideoSrc,
+        pendingCurrentVideoThumbnailUrl: savedThumbnailSrc,
+        videoStatus: "ready",
+        uploadedVideos: mergeStoryboardUploadedVideos(currentStoryboard.uploadedVideos ?? [], [{
+          ...video,
+          id: savedVideoId,
+          src: savedVideoSrc,
+          storageObjectId: file.storageObjectId ?? video.storageObjectId ?? null,
+          thumbnailSrc: savedThumbnailSrc,
+          status: "ready",
+        }]),
+      };
+      return { ...nextStoryboard, previewUrl: resolveStoryboardCombinedPreviewUrl(nextStoryboard) };
+    });
+    return;
+  }
+  updateStoryboardById(workbench, storyboard.id, (currentStoryboard) => {
+    const nextStoryboard = {
+      ...currentStoryboard,
+      selectedUploadedVideoId: video.id,
+      previewVideo: video.src,
+      previewThumbnailUrl: video.thumbnailSrc ?? null,
+      currentVideoAssetVersionId: video.id,
+      videoStatus: "ready",
+      uploadedVideos: mergeStoryboardUploadedVideos(currentStoryboard.uploadedVideos ?? [], [video]),
+    };
+    return { ...nextStoryboard, previewUrl: resolveStoryboardCombinedPreviewUrl(nextStoryboard) };
+  });
+}
+
+async function clearStoryboardVideoForOneClick(workbench, storyboard) {
+  const shotId = resolveStoryboardConversationApiId(workbench, storyboard?.id);
+  if (isRealEpisodeWorkbench(workbench)) {
+    if (!shotId || typeof workbench.api?.updateShot !== "function") {
+      throw new Error("分镜视频清空接口暂不可用。");
+    }
+    await workbench.api.updateShot({ shotId, currentVideoAssetVersionId: null });
+  }
+  updateStoryboardById(workbench, storyboard.id, (currentStoryboard) => {
+    const nextStoryboard = {
+      ...currentStoryboard,
+      selectedUploadedVideoId: null,
+      previewVideo: null,
+      previewThumbnailUrl: null,
+      currentVideoAssetVersionId: null,
+      pendingCurrentVideoAssetVersionId: null,
+      pendingCurrentVideoSourceUrl: null,
+      pendingCurrentVideoThumbnailUrl: null,
+      videoStatus: "empty",
+    };
+    return { ...nextStoryboard, previewUrl: resolveStoryboardCombinedPreviewUrl(nextStoryboard) };
+  });
+}
+
+function formatOneClickSetSummary({ setCount, clearedCount, failedCount }) {
+  const parts = [`已设置 ${setCount} 项`, `已清空 ${clearedCount} 项`];
+  if (failedCount > 0) {
+    parts.push(`失败 ${failedCount} 项`);
+  }
+  return `一键设置完成：${parts.join("，")}。`;
+}
+
+async function setSelectedLatestMedia(workbench) {
+  const storyboardScope = !isAssetScope(workbench);
+  const selectedIds = storyboardScope
+    ? [...(workbench.ui.selectedStoryboardIds ?? [])]
+    : [...(workbench.ui.selectedEpisodeAssetIds ?? [])];
+  if (!selectedIds.length) {
+    workbench.ui.toast = storyboardScope ? "请先选择要设置的分镜。" : "请先选择要设置的素材。";
+    render(workbench);
+    return;
+  }
+
+  const summary = { setCount: 0, clearedCount: 0, failedCount: 0 };
+  workbench.ui.busy = true;
+  workbench.ui.toast = "正在一键设置...";
+  render(workbench);
+  for (const targetId of selectedIds) {
+    try {
+      if (storyboardScope) {
+        const storyboard = getActiveStoryboards(workbench).find((item) => item.id === targetId);
+        if (!storyboard) {
+          throw new Error("分镜不存在。");
+        }
+        const entries = await loadSelectedStoryboardConversationHistory(workbench, {
+          storyboardId: targetId,
+          mediaKind: "video",
+          force: true,
+          fullHistory: true,
+          throwOnError: true,
+        });
+        const video = resolveLatestOneClickMedia(entries, "video", storyboard);
+        if (video) {
+          await setStoryboardVideoForOneClick(workbench, storyboard, video);
+          summary.setCount += 1;
+        } else {
+          await clearStoryboardVideoForOneClick(workbench, storyboard);
+          summary.clearedCount += 1;
+        }
+      } else {
+        const entries = await loadSelectedAssetConversationHistory(workbench, {
+          assetId: targetId,
+          mediaKind: "image",
+          force: true,
+          fullHistory: true,
+          throwOnError: true,
+        });
+        const image = resolveLatestOneClickMedia(entries, "image");
+        if (image) {
+          await setEpisodeAssetFixedImageForOneClick(workbench, targetId, image);
+          summary.setCount += 1;
+        } else {
+          await clearEpisodeAssetFixedImageForOneClick(workbench, targetId);
+          summary.clearedCount += 1;
+        }
+      }
+    } catch {
+      summary.failedCount += 1;
+    }
+  }
+  workbench.ui.busy = false;
+  workbench.ui.toast = formatOneClickSetSummary(summary);
+  persistWorkbenchState(workbench);
+  render(workbench);
 }
 
 function removeStoryboardConversationHistoryEntry(workbench, storyboardId, taskId, mediaKind = "image") {
@@ -45620,6 +46046,9 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
   const historyKey = buildStoryboardConversationHistoryKey(storyboardId, mediaKind);
   const force = options.force === true;
+  const historyLoader = options.fullHistory === true
+    ? workbench.api?.getStoryboardConversationFullHistory ?? workbench.api?.getStoryboardConversationHistory
+    : workbench.api?.getStoryboardConversationHistory;
   if (!storyboardId) {
     workbench.ui[targetKey] = null;
     return [];
@@ -45649,7 +46078,7 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
   }
   if (
     !isRealEpisodeWorkbench(workbench) ||
-    typeof workbench.api?.getStoryboardConversationHistory !== "function"
+    typeof historyLoader !== "function"
   ) {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
@@ -45661,7 +46090,8 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
       ...(workbench.ui.storyboardConversationHistoryPendingKeys ?? {}),
       [historyKey]: true,
     };
-    activeRequestPromise = workbench.api.getStoryboardConversationHistory(
+    activeRequestPromise = historyLoader.call(
+      workbench.api,
       workbench.ui.selectedEpisodeId,
       resolveStoryboardConversationApiId(workbench, storyboardId),
       mediaKind,
@@ -45672,17 +46102,25 @@ async function loadSelectedStoryboardConversationHistory(workbench, options = {}
     };
     const response = await activeRequestPromise;
     const entries = Array.isArray(response?.entries) ? response.entries : [];
-    replaceStoryboardConversationHistoryEntries(workbench, storyboardId, entries, mediaKind);
+    replaceStoryboardConversationHistoryEntries(
+      workbench,
+      storyboardId,
+      mergeStoryboardConversationHistoryEntries(workbench, storyboardId, entries, mediaKind),
+      mediaKind,
+    );
     workbench.ui.storyboardConversationHistoryLoadedKeys = {
       ...(workbench.ui.storyboardConversationHistoryLoadedKeys ?? {}),
       [historyKey]: true,
     };
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
-    return entries;
-  } catch {
+    return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
+  } catch (error) {
     syncSelectedStoryboardConversationResult(workbench, storyboardId, mediaKind);
     await reconcileSelectedStoryboardPendingGeneration(workbench, storyboardId, mediaKind);
+    if (options.throwOnError === true) {
+      throw error;
+    }
     return listStoryboardConversationHistoryEntries(workbench, storyboardId, mediaKind);
   } finally {
     const currentRequest = workbench.storyboardConversationHistoryRequestPromises?.[historyKey] ?? null;
@@ -45911,6 +46349,9 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
   const historyKey = buildAssetConversationHistoryKey(assetId, mediaKind);
   const force = options.force === true;
+  const historyLoader = options.fullHistory === true
+    ? workbench.api?.getAssetConversationFullHistory ?? workbench.api?.getAssetConversationHistory
+    : workbench.api?.getAssetConversationHistory;
   if (!assetId) {
     workbench.ui[targetKey] = null;
     return [];
@@ -45940,7 +46381,7 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
   }
   if (
     !isRealEpisodeWorkbench(workbench) ||
-    typeof workbench.api?.getAssetConversationHistory !== "function"
+    typeof historyLoader !== "function"
   ) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
@@ -45952,7 +46393,8 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}),
       [historyKey]: true,
     };
-    activeRequestPromise = workbench.api.getAssetConversationHistory(
+    activeRequestPromise = historyLoader.call(
+      workbench.api,
       workbench.ui.selectedEpisodeId,
       assetId,
       mediaKind,
@@ -45979,10 +46421,13 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     };
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
-    return entries;
-  } catch {
+    return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
+  } catch (error) {
     syncSelectedAssetConversationResult(workbench, assetId, mediaKind);
     await reconcileSelectedAssetPendingGeneration(workbench, assetId, mediaKind);
+    if (options.throwOnError === true) {
+      throw error;
+    }
     return listAssetConversationHistoryEntries(workbench, assetId, mediaKind);
   } finally {
     const currentRequest = workbench.assetConversationHistoryRequestPromises?.[historyKey] ?? null;
@@ -54151,6 +54596,89 @@ function syncEpisodeAssetFixedImageState(workbench, assetId, payload = {}) {
   }
 }
 
+function clearEpisodeAssetFixedImageState(workbench, assetId) {
+  if (!assetId) {
+    return;
+  }
+  const applyToAssetRecord = (record) => {
+    const nextLatestVersionMetadata =
+      record?.latestVersion?.metadata && typeof record.latestVersion.metadata === "object"
+        ? { ...record.latestVersion.metadata }
+        : {};
+    for (const key of [
+      "previewUrl",
+      "sourceUrl",
+      "downloadUrl",
+      "fixedImageUrl",
+      "fixedImageFileId",
+      "fixedImageStorageObjectId",
+    ]) {
+      delete nextLatestVersionMetadata[key];
+    }
+    nextLatestVersionMetadata.fixedImageDetached = true;
+    return {
+      ...record,
+      preview: null,
+      previewUrl: null,
+      sourceUrl: null,
+      downloadUrl: null,
+      fixedImageFileId: null,
+      fixedImageStorageObjectId: null,
+      fixedImageUrl: null,
+      status: "draft",
+      isPinned: false,
+      latestVersion: record?.latestVersion
+        ? {
+            ...record.latestVersion,
+            previewUrl: null,
+            metadata: nextLatestVersionMetadata,
+          }
+        : record?.latestVersion,
+    };
+  };
+
+  const nextImportedAssets = cloneImportedAssets(workbench.ui.importedAssets);
+  for (const kind of ["character", "scene", "prop"]) {
+    nextImportedAssets[kind] = updateAssetRecordBucket(nextImportedAssets[kind], assetId, applyToAssetRecord);
+  }
+  workbench.ui.importedAssets = nextImportedAssets;
+
+  const previousContext = workbench.ui.episodeWorkbenchContext;
+  if (previousContext && typeof previousContext === "object") {
+    const nextContext = structuredClone(previousContext);
+    const contextRoots = [nextContext, nextContext?.data].filter((value) => value && typeof value === "object");
+    for (const root of contextRoots) {
+      for (const bucketName of ["assetsByType", "assets", "episodeAssets"]) {
+        const assetsByType = root?.[bucketName];
+        if (!assetsByType || typeof assetsByType !== "object") {
+          continue;
+        }
+        for (const kind of ["character", "characters", "role", "roles", "scene", "scenes", "prop", "props"]) {
+          if (kind in assetsByType) {
+            assetsByType[kind] = updateAssetRecordBucket(assetsByType[kind], assetId, applyToAssetRecord);
+          }
+        }
+      }
+    }
+    workbench.ui.episodeWorkbenchContext = nextContext;
+  }
+
+  const previousProjectDetail = workbench.state?.projectDetail ?? workbench.ui.projectDetail ?? null;
+  if (previousProjectDetail?.assetsByType && typeof previousProjectDetail.assetsByType === "object") {
+    const nextProjectDetail = {
+      ...previousProjectDetail,
+      assetsByType: {
+        ...previousProjectDetail.assetsByType,
+        character: updateAssetRecordBucket(previousProjectDetail.assetsByType.character, assetId, applyToAssetRecord),
+        scene: updateAssetRecordBucket(previousProjectDetail.assetsByType.scene, assetId, applyToAssetRecord),
+        prop: updateAssetRecordBucket(previousProjectDetail.assetsByType.prop, assetId, applyToAssetRecord),
+      },
+    };
+    workbench.state = { ...(workbench.state ?? {}), projectDetail: nextProjectDetail };
+    workbench.ui.projectDetail = nextProjectDetail;
+  }
+}
+
 function findStoryboardImage(storyboard, imageId = "") {
   const uploadedImages = Array.isArray(storyboard?.uploadedImages) ? storyboard.uploadedImages : [];
   if (imageId) {
@@ -56939,15 +57467,28 @@ async function loadSelectedStandaloneCanvasDocument(workbench) {
 
 async function syncScriptLibraryFromApi(workbench, options = {}) {
   if (typeof workbench.api?.getUserScripts !== "function") {
-    return;
+    return false;
   }
+  const requestId = (workbench.scriptLibraryRequestId ?? 0) + 1;
+  workbench.scriptLibraryRequestId = requestId;
   const currentPagination = workbench.ui.singleEpisodeScriptLibraryPagination ?? { page: 1, pageSize: 10 };
   const requestedPage = Math.max(1, Math.floor(Number(options.page ?? currentPagination.page ?? 1)) || 1);
   const requestedPageSize = Math.max(1, Math.floor(Number(options.pageSize ?? currentPagination.pageSize ?? 10)) || 10);
-  const payload = await workbench.api.getUserScripts({
-    page: requestedPage,
-    pageSize: requestedPageSize,
-  });
+  let payload;
+  try {
+    payload = await workbench.api.getUserScripts({
+      page: requestedPage,
+      pageSize: requestedPageSize,
+    });
+  } catch (error) {
+    if (workbench.scriptLibraryRequestId !== requestId) {
+      return false;
+    }
+    throw error;
+  }
+  if (workbench.scriptLibraryRequestId !== requestId) {
+    return false;
+  }
   if (Array.isArray(payload?.scripts)) {
     workbench.ui.scriptLibraryRecords = payload.scripts;
     workbench.ui.scriptLibraryLoaded = true;
@@ -56972,6 +57513,7 @@ async function syncScriptLibraryFromApi(workbench, options = {}) {
       mode: "server",
     };
   }
+  return true;
 }
 
 async function refreshScriptLibraryIfAvailable(workbench) {
@@ -56983,6 +57525,35 @@ async function refreshScriptLibraryIfAvailable(workbench) {
   } catch (error) {
     console.warn("[script-library] refresh failed", error);
   }
+}
+
+async function deleteScriptIfPresent(workbench, scriptId) {
+  try {
+    await workbench.api.deleteScriptCard(scriptId);
+  } catch (error) {
+    const errorCodes = [
+      error?.errorCode,
+      error?.code,
+      error?.details?.reason,
+      error?.data?.error,
+      error?.data?.errorCode,
+    ].map((value) => String(value ?? "").trim().toLowerCase());
+    if (!errorCodes.includes("script_not_found")) {
+      throw error;
+    }
+  }
+}
+
+function refreshScriptLibraryAfterDelete(workbench) {
+  if (typeof workbench.api?.getUserScripts !== "function") {
+    return;
+  }
+  runLazyWorkbenchTask(workbench, "script library after delete", async () => {
+    const refreshed = await syncScriptLibraryFromApi(workbench);
+    if (refreshed) {
+      render(workbench);
+    }
+  });
 }
 
 async function preloadTeamMemberAssignableResources(workbench) {

@@ -183,6 +183,15 @@ export async function markGenerationTaskSnapshotSucceeded(
           completed_at = $8,
           updated_at = $8
       WHERE task_id = $1
+        AND EXISTS (
+          SELECT 1 FROM tasks task
+          WHERE task.id = $1
+            AND task.status = 'succeeded'
+            AND (
+              ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
+              OR ($2::uuid IS NULL AND task.current_attempt_id IS NULL AND task.attempt_count = 0)
+            )
+        )
       RETURNING canvas_project_id, target_type, target_id, media_type, user_id, request_summary_json
     `,
     [
@@ -267,6 +276,26 @@ export async function markGenerationTaskSnapshotRunning(
           updated_at = $8
       WHERE task_id = $1
         AND status IN ('queued', 'running', 'result_unknown', 'manual_review_required')
+        AND (
+          ($2::uuid IS NULL AND EXISTS (
+            SELECT 1 FROM tasks task
+            WHERE task.id = $1
+              AND task.current_attempt_id IS NULL
+              AND task.attempt_count = 0
+              AND task.status IN ('running', 'result_unknown')
+          ))
+          OR EXISTS (
+            SELECT 1
+            FROM tasks task
+            JOIN task_attempts attempt
+              ON attempt.id = $2::uuid
+             AND attempt.task_id = task.id
+            WHERE task.id = $1
+              AND task.current_attempt_id = $2::uuid
+              AND task.status IN ('running', 'result_unknown')
+              AND attempt.status IN ('running', 'result_unknown')
+          )
+        )
     `,
     [
       input.taskId,
@@ -308,6 +337,15 @@ export async function markGenerationTaskSnapshotResultUnknown(
           failed_at = $8,
           updated_at = $8
       WHERE task_id = $1
+        AND EXISTS (
+          SELECT 1 FROM tasks task
+          WHERE task.id = $1
+            AND task.status = 'result_unknown'
+            AND (
+              ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
+              OR ($2::uuid IS NULL AND task.current_attempt_id IS NULL AND task.attempt_count = 0)
+            )
+        )
     `,
     [
       input.taskId,
@@ -350,6 +388,15 @@ export async function markGenerationTaskSnapshotManualReviewRequired(
           failed_at = $9,
           updated_at = $9
       WHERE task_id = $1
+        AND EXISTS (
+          SELECT 1 FROM tasks task
+          WHERE task.id = $1
+            AND task.status = 'manual_review_required'
+            AND (
+              ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
+              OR ($2::uuid IS NULL AND task.current_attempt_id IS NULL AND task.attempt_count = 0)
+            )
+        )
     `,
     [
       input.taskId,
@@ -394,6 +441,15 @@ export async function markGenerationTaskSnapshotFailed(
           failed_at = $9,
           updated_at = $9
       WHERE task_id = $1
+        AND EXISTS (
+          SELECT 1 FROM tasks task
+          WHERE task.id = $1
+            AND task.status = 'failed'
+            AND (
+              ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
+              OR ($2::uuid IS NULL AND task.current_attempt_id IS NULL AND task.attempt_count = 0)
+            )
+        )
     `,
     [
       input.taskId,
@@ -436,6 +492,15 @@ export async function markGenerationTaskSnapshotCanceled(
           failed_at = $8,
           updated_at = $8
       WHERE task_id = $1
+        AND EXISTS (
+          SELECT 1 FROM tasks task
+          WHERE task.id = $1
+            AND task.status = 'canceled'
+            AND (
+              ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
+              OR ($2::uuid IS NULL AND task.current_attempt_id IS NULL AND task.attempt_count = 0)
+            )
+        )
     `,
     [
       input.taskId,

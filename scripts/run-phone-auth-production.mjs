@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildProductionRuntime } from "./build-production-runtime.mjs";
+import { buildProductionWeb } from "./build-production-web.mjs";
 import { createCreatorDevServiceSupervisor } from "./creator-dev-service-supervisor.mjs";
 import { acquireProcessInstanceLock } from "./process-instance-lock.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
@@ -28,6 +29,8 @@ if (!existsSync(serverEntrypoint)) {
 loadDotEnvFile(envFilePath);
 acquireProcessInstanceLock(productionLockPath, { label: "production_stack" });
 process.env.NODE_ENV = "production";
+const productionWeb = await buildProductionWeb({ cwd: process.cwd() });
+process.env.PRODUCTION_WEB_ENTRY_URL = productionWeb.entryUrl;
 const productionRuntime = await buildProductionRuntime({ cwd: process.cwd() });
 runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
 runProductionFoundationSchema({

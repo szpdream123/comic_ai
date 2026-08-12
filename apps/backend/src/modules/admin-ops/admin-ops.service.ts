@@ -37,6 +37,7 @@ import {
   appendGenerationTaskPollRequestedOutboxEvent,
 } from "../model-gateway/generation-outbox.service.ts";
 import { aggregateWorkflowStatus } from "../workflow-task/workflow-task.service.ts";
+import { generationTimeoutMsFor } from "../model-gateway/generation-timeout.policy.ts";
 
 type AdminOpsResponse<T> = {
   status: number;
@@ -373,6 +374,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
           await appendGenerationTaskFinalizeRequestedOutboxEvent(deps.db, {
             workflowId: task.workflowId,
             taskId: task.id,
+            attemptId: await getCurrentAttemptIdForTask(deps.db, task.id),
             kind: mediaType,
             modelCode: snapshot?.model_code ?? null,
             providerExecutor,
@@ -571,7 +573,6 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             if (!task) {
               throw new AdminOpsBusinessError("task_not_found");
             }
-
             const providerRequest = await getLatestProviderRequestForTask(deps.db, {
               taskId: task.id,
             });
@@ -751,6 +752,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             if (!task) {
               throw new AdminOpsBusinessError("task_not_found");
             }
+            const retryTimeoutAt = generationRetryTimeoutAt(task.taskType, input.now);
 
             const updatedTask = await queryOne<{ id: string }>(
               deps.db,
@@ -758,6 +760,11 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 UPDATE tasks
                 SET status = 'queued',
                     failure_code = NULL,
+                    current_attempt_id = NULL,
+                    input_snapshot_json = jsonb_set(
+                      jsonb_set(COALESCE(input_snapshot_json, '{}'::jsonb), '{requestedAt}', to_jsonb($2::timestamptz), true),
+                      '{timeoutAt}', to_jsonb($3::timestamptz), true
+                    ),
                     locked_by = NULL,
                     locked_until = NULL,
                     heartbeat_at = NULL,
@@ -768,7 +775,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                   AND attempt_count < max_attempts
                 RETURNING id
               `,
-              [task.id, input.now],
+              [task.id, input.now, retryTimeoutAt],
             );
             if (!updatedTask) {
               throw new AdminOpsBusinessError("task_not_retryable");
@@ -788,6 +795,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
             await appendRetryGenerationOutboxIfNeeded(deps.db, {
               taskId: task.id,
               availableAt: input.now,
+              dispatchToken: input.idempotencyKey,
             });
 
             const updated = await getTaskForOps(deps.db, {
@@ -883,6 +891,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               if (!canRedispatchTask(task, providerRequest)) {
                 throw new AdminOpsBusinessError("task_recovery_not_allowed");
               }
+              const retryTimeoutAt = generationRetryTimeoutAt(task.taskType, input.now);
               if (task.status !== "queued") {
                 const requeued = await queryOne<{ id: string }>(
                   deps.db,
@@ -890,6 +899,11 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                     UPDATE tasks
                     SET status = 'queued',
                         failure_code = NULL,
+                        current_attempt_id = NULL,
+                        input_snapshot_json = jsonb_set(
+                          jsonb_set(COALESCE(input_snapshot_json, '{}'::jsonb), '{requestedAt}', to_jsonb($2::timestamptz), true),
+                          '{timeoutAt}', to_jsonb($3::timestamptz), true
+                        ),
                         locked_by = NULL,
                         locked_until = NULL,
                         heartbeat_at = NULL,
@@ -900,7 +914,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                       AND attempt_count < max_attempts
                     RETURNING id
                   `,
-                  [task.id, input.now],
+                  [task.id, input.now, retryTimeoutAt],
                 );
                 if (!requeued) {
                   throw new AdminOpsBusinessError("task_recovery_not_allowed");
@@ -910,12 +924,16 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                   `
                     UPDATE tasks
                     SET last_dispatched_at = NULL,
+                        input_snapshot_json = jsonb_set(
+                          jsonb_set(COALESCE(input_snapshot_json, '{}'::jsonb), '{requestedAt}', to_jsonb($2::timestamptz), true),
+                          '{timeoutAt}', to_jsonb($3::timestamptz), true
+                        ),
                         scheduled_at = $2,
                         updated_at = $2
                     WHERE id = $1
                       AND status = 'queued'
                   `,
-                  [task.id, input.now],
+                  [task.id, input.now, retryTimeoutAt],
                 );
               }
               await deps.db.query(
@@ -938,11 +956,16 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               if (!canResumeProviderPoll(task, providerRequest)) {
                 throw new AdminOpsBusinessError("task_recovery_not_allowed");
               }
+              const resumeTimeoutAt = generationRetryTimeoutAt(task.taskType, input.now);
               await deps.db.query(
                 `
                   UPDATE tasks
                   SET status = 'running',
                       failure_code = NULL,
+                      input_snapshot_json = jsonb_set(
+                        jsonb_set(COALESCE(input_snapshot_json, '{}'::jsonb), '{requestedAt}', to_jsonb($2::timestamptz), true),
+                        '{timeoutAt}', to_jsonb($3::timestamptz), true
+                      ),
                       locked_by = NULL,
                       locked_until = NULL,
                       heartbeat_at = NULL,
@@ -951,8 +974,32 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                   WHERE id = $1
                     AND status IN ('running', 'failed', 'result_unknown', 'manual_review_required')
                 `,
-                [task.id, input.now],
+                [task.id, input.now, resumeTimeoutAt],
               );
+              const resumedProviderRequest = await queryOne<{ id: string }>(
+                deps.db,
+                `
+                  UPDATE provider_requests request
+                  SET next_poll_at = NULL,
+                      poll_deadline_at = $3,
+                      poll_sequence = 0,
+                      updated_at = $2
+                  FROM tasks task
+                  WHERE request.id = $1
+                    AND request.task_id = task.id
+                    AND task.id = $4
+                    AND request.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+                    AND (
+                      request.attempt_id = task.current_attempt_id
+                      OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+                    )
+                  RETURNING request.id
+                `,
+                [providerRequest?.id, input.now, resumeTimeoutAt, task.id],
+              );
+              if (!resumedProviderRequest) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
               await deps.db.query(
                 `
                   UPDATE task_attempts
@@ -979,8 +1026,10 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               await appendGenerationTaskPollRequestedOutboxEvent(deps.db, {
                 workflowId: task.workflowId,
                 taskId: task.id,
+                attemptId: providerRequest?.attempt_id ?? null,
                 modelCode: snapshot?.model_code ?? null,
                 providerExecutor: providerExecutorForRetry(task, snapshot) ?? "seedance",
+                dispatchToken: input.idempotencyKey,
                 availableAt: input.now,
               });
             } else {
@@ -995,7 +1044,8 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               await deps.db.query(
                 `
                   UPDATE tasks
-                  SET status = 'manual_review_required',
+                  SET status = 'running',
+                      failure_code = NULL,
                       locked_by = NULL,
                       locked_until = NULL,
                       heartbeat_at = NULL,
@@ -1006,9 +1056,62 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
                 `,
                 [task.id, input.now],
               );
+              const resumedAttempt = await queryOne<{ id: string }>(
+                deps.db,
+                `
+                  UPDATE task_attempts attempt
+                  SET status = 'running',
+                      failure_code = NULL,
+                      locked_by = NULL,
+                      locked_until = NULL,
+                      heartbeat_at = NULL,
+                      finished_at = NULL,
+                      updated_at = $3
+                  FROM tasks task
+                  WHERE task.id = $1
+                    AND task.current_attempt_id IS NOT NULL
+                    AND (
+                      ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
+                      OR ($2::uuid IS NULL AND task.attempt_count = 1)
+                    )
+                    AND attempt.id = task.current_attempt_id
+                    AND attempt.task_id = task.id
+                    AND attempt.status IN ('failed', 'result_unknown', 'manual_review_required', 'running')
+                  RETURNING attempt.id
+                `,
+                [task.id, providerRequest?.attempt_id, input.now],
+              );
+              if (!resumedAttempt) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              await deps.db.query(
+                `
+                  UPDATE workflows
+                  SET status = 'running',
+                      failure_code = NULL,
+                      finished_at = NULL,
+                      updated_at = $2
+                  WHERE id = $1
+                `,
+                [task.workflowId, input.now],
+              );
+              await deps.db.query(
+                `
+                  UPDATE credit_reservations reservation
+                  SET status = 'active',
+                      updated_at = $2
+                  FROM generation_task_credit_reservations task_reservation
+                  WHERE task_reservation.task_id = $1
+                    AND reservation.id = task_reservation.id
+                    AND reservation.status = 'manual_review_required'
+                    AND reservation.amount_reserved > 0
+                `,
+                [task.id, input.now],
+              );
               await appendGenerationTaskFinalizeRequestedOutboxEvent(deps.db, {
                 workflowId: task.workflowId,
                 taskId: task.id,
+                attemptId: resumedAttempt.id,
                 kind: mediaType,
                 modelCode: snapshot?.model_code ?? null,
                 providerExecutor,
@@ -1508,18 +1611,32 @@ async function getLatestProviderRequestForTask(
     db,
     `
       SELECT
-        id,
-        attempt_id,
-        status,
-        external_submission_started_at,
-        external_request_id
-      FROM provider_requests
-      WHERE task_id = $1
-      ORDER BY updated_at DESC, id DESC
+        request.id,
+        COALESCE(request.attempt_id, task.current_attempt_id) AS attempt_id,
+        request.status,
+        request.external_submission_started_at,
+        request.external_request_id
+      FROM provider_requests request
+      JOIN tasks task ON task.id = request.task_id
+      WHERE request.task_id = $1
+        AND (
+          request.attempt_id = task.current_attempt_id
+          OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+        )
+      ORDER BY request.updated_at DESC, request.id DESC
       LIMIT 1
     `,
     [input.taskId],
   );
+}
+
+async function getCurrentAttemptIdForTask(db: SqlDatabase, taskId: string) {
+  const row = await queryOne<{ current_attempt_id: string | null }>(
+    db,
+    "SELECT current_attempt_id FROM tasks WHERE id = $1",
+    [taskId],
+  );
+  return row?.current_attempt_id ?? null;
 }
 
 async function getActiveReservationForTask(
@@ -1946,7 +2063,7 @@ async function appendRetryGenerationOutboxIfNeeded(
       FROM tasks
       WHERE id = $1
         AND status = 'queued'
-        AND task_type IN ('episode_generate_image', 'episode_generate_video')
+        AND task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
       LIMIT 1
     `,
     [input.taskId],
@@ -1983,8 +2100,8 @@ async function appendRetryGenerationOutboxIfNeeded(
 function readGenerationKind(
   value: unknown,
   taskType: string,
-): "image" | "video" | undefined {
-  if (value === "image" || value === "video") {
+): "image" | "video" | "audio" | undefined {
+  if (value === "image" || value === "video" || value === "audio") {
     return value;
   }
   if (taskType === "episode_generate_image") {
@@ -1993,7 +2110,15 @@ function readGenerationKind(
   if (taskType === "episode_generate_video") {
     return "video";
   }
+  if (taskType === "episode_generate_audio") {
+    return "audio";
+  }
   return undefined;
+}
+
+function generationRetryTimeoutAt(taskType: string, now: Date) {
+  const mediaType = readGenerationKind(undefined, taskType) ?? "image";
+  return new Date(now.getTime() + generationTimeoutMsFor(mediaType));
 }
 
 function readNonEmptyString(value: unknown) {

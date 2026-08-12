@@ -5,26 +5,27 @@ import {
   type GenerationBullMQPublisher,
 } from "./generation-bullmq.publisher.ts";
 import type { GenerationQueueConfig } from "./generation-queue.config.ts";
+import { isGenerationArtifactStageNotReadyFailure } from "./generation-skipped-coordinator.ts";
 import { classifyGptImageArtifactRecoveryFailure } from "./gpt-image-artifact-recovery.policy.ts";
 
 type SubmitVideoResult =
-  | { status: "submitted"; externalRequestId: string | null }
-  | { status: "already_started"; externalRequestId: string | null }
+  | { status: "submitted"; externalRequestId: string | null; attemptId?: string }
+  | { status: "already_started"; externalRequestId: string | null; attemptId?: string }
   | { status: "rate_limited"; retryAfterMs: number; reason: string }
   | { status: "retryable"; retryAfterMs: number; reason: string }
   | { status: "failed"; failureCode: string }
   | { status: "settled" };
 
 type SubmitImageResult =
-  | { status: "submitted"; providerStatus?: "waiting" | "succeeded" }
+  | { status: "submitted"; providerStatus?: "waiting" | "succeeded"; attemptId?: string }
   | { status: "rate_limited"; retryAfterMs: number; reason: string }
   | { status: "failed"; failureCode: string }
-  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop" };
+  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop"; attemptId?: string };
 
 type SubmitAudioResult =
-  | { status: "submitted"; providerStatus: "waiting" | "succeeded" }
+  | { status: "submitted"; providerStatus: "waiting" | "succeeded"; attemptId?: string }
   | { status: "failed"; failureCode: string }
-  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop" };
+  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop"; attemptId?: string };
 
 type FinalizeArtifactResult =
   | { status: "succeeded" }
@@ -34,6 +35,7 @@ type FinalizeArtifactResult =
 type GenerationArtifactJobData = {
   outboxEventId?: string;
   taskId: string;
+  attemptId?: string;
   workflowId: string;
   mediaType: "video" | "image" | "audio";
   modelCode: string | null;
@@ -43,6 +45,8 @@ type GenerationArtifactJobData = {
   finalizeMode?: "retry_finalize" | "retry_persist_asset" | null;
   storageBucket?: string | null;
 };
+
+type AttemptScopedProcessorInput = { taskId: string; attemptId?: string; now: Date };
 
 type FinalizeRateLimitGrant =
   | { granted: true; release(): Promise<void> }
@@ -72,23 +76,24 @@ export interface GenerationWorkerProcessors {
   submitGptImage?(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitImageResult>;
   submitSeedanceVideo(input: { taskId: string; userConcurrencyLimit: number; now: Date }): Promise<SubmitVideoResult>;
   submitAudio?(input: { taskId: string; now: Date }): Promise<SubmitAudioResult>;
-  pollGptImage?(input: { taskId: string; now: Date }): Promise<PollVideoResult>;
-  pollAudio?(input: { taskId: string; now: Date }): Promise<PollVideoResult>;
-  pollSeedanceVideo(input: { taskId: string; now: Date }): Promise<PollVideoResult>;
-  finalizeGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  fetchGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  persistGptImageArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  finalizeSeedanceVideoArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  fetchSeedanceVideoArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  finalizeAudioArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  fetchAudioArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  persistAudioArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  persistSeedanceVideoArtifact?(input: { taskId: string; now: Date }): Promise<FinalizeArtifactResult>;
-  expireSeedanceVideo(input: { taskId: string; now: Date }): Promise<Extract<PollVideoResult, { status: "failed" }>>;
-  expireGptImage?(input: { taskId: string; now: Date }): Promise<Extract<PollVideoResult, { status: "failed" }>>;
-  expireAudio?(input: { taskId: string; now: Date }): Promise<Extract<PollVideoResult, { status: "failed" }>>;
+  pollGptImage?(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
+  pollAudio?(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
+  pollSeedanceVideo(input: AttemptScopedProcessorInput): Promise<PollVideoResult>;
+  finalizeGptImageArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  fetchGptImageArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  persistGptImageArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  finalizeSeedanceVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  fetchSeedanceVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  finalizeAudioArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  fetchAudioArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  persistAudioArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  persistSeedanceVideoArtifact?(input: AttemptScopedProcessorInput): Promise<FinalizeArtifactResult>;
+  expireSeedanceVideo(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }>>;
+  expireGptImage?(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }>>;
+  expireAudio?(input: AttemptScopedProcessorInput): Promise<Extract<PollVideoResult, { status: "failed" }>>;
   schedulePoll?(input: {
     taskId: string;
+    attemptId?: string;
     mediaType: "image" | "video" | "audio";
     nextPollAttempt: number;
     delayMs: number;
@@ -98,6 +103,7 @@ export interface GenerationWorkerProcessors {
     taskId: string;
     stage: "submit" | "poll";
     pollAttempt: number;
+    attemptId?: string;
     skipReason: string;
     nextAction: "submit" | "poll" | "finalize" | "stop";
     successorAssignmentKey?: string | null;
@@ -122,6 +128,8 @@ export async function handleGenerationSubmitVideoJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    attemptId?: string;
+    dispatchToken?: string;
   }>,
 ): Promise<{ status: SubmitVideoResult["status"]; queuedPoll: boolean }> {
   if (!isVideoProviderExecutor(input.job.data.providerExecutor)) {
@@ -138,7 +146,7 @@ export async function handleGenerationSubmitVideoJob(
     if (!result.externalRequestId) {
       return { status: result.status, queuedPoll: false };
     }
-    await scheduleVideoPollJob(input, 1);
+    await scheduleVideoPollJob(withAttemptJobData(input, result.attemptId), 1);
     return { status: result.status, queuedPoll: true };
   }
 
@@ -158,6 +166,7 @@ export async function handleGenerationSubmitImageJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    dispatchToken?: string;
   }>,
 ): Promise<{ status: SubmitImageResult["status"]; queuedPoll?: boolean; queuedFinalize?: boolean; failureCode?: string }> {
   if (!isImageProviderExecutor(input.job.data.providerExecutor)) {
@@ -180,21 +189,23 @@ export async function handleGenerationSubmitImageJob(
     return { status: result.status };
   }
   if (result.status === "submitted") {
+    const successorInput = withAttemptJobData(input, result.attemptId);
     if (result.providerStatus === "succeeded") {
-      await enqueueImageFinalizeJob(input);
+      await enqueueImageFinalizeJob(successorInput);
       return { status: "submitted", queuedFinalize: true };
     }
-    await scheduleImagePollJob(input, 1);
+    await scheduleImagePollJob(successorInput, 1);
     return { status: "submitted", queuedPoll: true };
   }
   if (result.status === "skipped") {
+    const successorInput = withAttemptJobData(input, result.attemptId);
     if (result.nextAction === "stop") {
       return { status: "skipped", queuedPoll: false };
     }
-    await enqueueImagePollJob(input, 1);
+    await enqueueImagePollJob(successorInput, 1);
     return { status: "skipped", queuedPoll: true };
   }
-  return { status: result.status };
+  throw new Error("unreachable_image_submit_result");
 }
 
 export async function handleGenerationPollImageJob(
@@ -205,13 +216,14 @@ export async function handleGenerationPollImageJob(
     modelCode: string | null;
     providerExecutor: string;
     pollAttempt: number;
+    outboxEventId?: string;
   }>,
 ): Promise<{ status: PollVideoResult["status"]; queuedPoll: boolean; queuedFinalize?: boolean; queuedSubmit?: boolean; failureCode?: string }> {
   if (!isImageProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_image_provider_executor:${input.job.data.providerExecutor}`);
   }
   if (!input.processors.pollGptImage) throw new Error("gpt_image_poll_processor_missing");
-  const result = await input.processors.pollGptImage({ taskId: input.job.data.taskId, now: input.now });
+  const result = await input.processors.pollGptImage(attemptScopedProcessorInput(input));
   if (result.status === "rate_limited") {
     await enqueueImagePollRateLimitRetryJob(input, result.retryAfterMs);
     return { status: result.status, queuedPoll: true };
@@ -230,7 +242,7 @@ export async function handleGenerationPollImageJob(
     const nextAttempt = Number(input.job.data.pollAttempt) + 1;
     if (nextAttempt > input.config.poll.image.maxAttempts) {
       if (!input.processors.expireGptImage) throw new Error("gpt_image_expire_processor_missing");
-      const expired = await input.processors.expireGptImage({ taskId: input.job.data.taskId, now: input.now });
+      const expired = await input.processors.expireGptImage(attemptScopedProcessorInput(input));
       return { status: "failed", queuedPoll: false, failureCode: expired.failureCode };
     }
     const successorAssignmentKey = await scheduleImagePollJob(input, nextAttempt);
@@ -252,6 +264,7 @@ export async function handleGenerationSubmitAudioJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    dispatchToken?: string;
   }>,
 ): Promise<{ status: SubmitAudioResult["status"]; queuedPoll?: boolean; queuedFinalize?: boolean; failureCode?: string }> {
   if (!isAudioProviderExecutor(input.job.data.providerExecutor)) {
@@ -261,18 +274,18 @@ export async function handleGenerationSubmitAudioJob(
   const result = await input.processors.submitAudio({ taskId: input.job.data.taskId, now: input.now });
   if (result.status === "failed") return { status: "failed", failureCode: result.failureCode };
   if (result.status === "skipped") {
+    const successorInput = withAttemptJobData(input, result.attemptId);
     if (result.nextAction === "stop") {
       return { status: "skipped", queuedPoll: false };
     }
-    await enqueueAudioPollJob(input, 1);
+    await enqueueAudioPollJob(successorInput, 1);
     return { status: "skipped", queuedPoll: true };
   }
-  if (result.status !== "submitted") return { status: result.status };
   if (result.providerStatus === "succeeded") {
-    await enqueueAudioFinalizeJob(input);
+    await enqueueAudioFinalizeJob(withAttemptJobData(input, result.attemptId));
     return { status: "submitted", queuedFinalize: true };
   }
-  await scheduleAudioPollJob(input, 1);
+  await scheduleAudioPollJob(withAttemptJobData(input, result.attemptId), 1);
   return { status: "submitted", queuedPoll: true };
 }
 
@@ -284,6 +297,8 @@ export async function handleGenerationPollVideoJob(
     modelCode: string | null;
     providerExecutor: string;
     pollAttempt: number;
+    attemptId?: string;
+    outboxEventId?: string;
   }>,
 ): Promise<{ status: PollVideoResult["status"]; queuedPoll: boolean; queuedFinalize?: boolean; queuedSubmit?: boolean; failureCode?: string }> {
   if (!isVideoProviderExecutor(input.job.data.providerExecutor)) {
@@ -292,6 +307,7 @@ export async function handleGenerationPollVideoJob(
 
   const result = await input.processors.pollSeedanceVideo({
     taskId: input.job.data.taskId,
+    ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
     now: input.now,
   });
 
@@ -315,6 +331,7 @@ export async function handleGenerationPollVideoJob(
     if (nextAttempt > input.config.poll.video.maxAttempts) {
       const expired = await input.processors.expireSeedanceVideo({
         taskId: input.job.data.taskId,
+        ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
       });
       return { status: "failed", queuedPoll: false, failureCode: expired.failureCode };
@@ -342,13 +359,15 @@ export async function handleGenerationPollAudioJob(
     modelCode: string | null;
     providerExecutor: string;
     pollAttempt: number;
+    outboxEventId?: string;
+    attemptId?: string;
   }>,
 ): Promise<{ status: PollVideoResult["status"]; queuedPoll: boolean; queuedFinalize?: boolean; queuedSubmit?: boolean; failureCode?: string }> {
   if (!isAudioProviderExecutor(input.job.data.providerExecutor)) {
     throw new Error(`unsupported_audio_provider_executor:${input.job.data.providerExecutor}`);
   }
   if (!input.processors.pollAudio) throw new Error("audio_poll_processor_missing");
-  const result = await input.processors.pollAudio({ taskId: input.job.data.taskId, now: input.now });
+  const result = await input.processors.pollAudio(attemptScopedProcessorInput(input));
   if (result.status === "skipped" && result.nextAction === "submit") {
     await enqueueAudioSubmitRetryJob(input, input.config.poll.audio.intervalMs);
     await recordSkippedSuccessor(input, "audio", result, "submit");
@@ -364,7 +383,7 @@ export async function handleGenerationPollAudioJob(
     const maxAttempts = input.config.poll.audio.maxAttempts;
     if (nextAttempt > maxAttempts) {
       if (!input.processors.expireAudio) throw new Error("audio_expire_processor_missing");
-      const expired = await input.processors.expireAudio({ taskId: input.job.data.taskId, now: input.now });
+      const expired = await input.processors.expireAudio(attemptScopedProcessorInput(input));
       return { status: "failed", queuedPoll: false, failureCode: expired.failureCode };
     }
     const successorAssignmentKey = await scheduleAudioPollJob(input, nextAttempt);
@@ -400,10 +419,12 @@ export async function handleGenerationFinalizeArtifactJob(
       }
       const result = await input.processors.finalizeSeedanceVideoArtifact({
         taskId: input.job.data.taskId,
+        ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
       });
       if (result.status === "failed") {
         throwIfRetryableArtifactTransferFailure(result.failureCode);
+        throwIfArtifactStageNotReady(result.failureCode);
         return { status: "failed", failureCode: result.failureCode };
       }
       return { status: result.status };
@@ -414,6 +435,7 @@ export async function handleGenerationFinalizeArtifactJob(
       }
       const result = await input.processors.finalizeGptImageArtifact({
         taskId: input.job.data.taskId,
+        ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
         now: input.now,
       });
       if (result.status === "failed") {
@@ -423,7 +445,10 @@ export async function handleGenerationFinalizeArtifactJob(
     }
     if (isAudioProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "audio") {
       if (!input.processors.finalizeAudioArtifact) throw new Error("audio_finalize_processor_missing");
-      const result = await input.processors.finalizeAudioArtifact({ taskId: input.job.data.taskId, now: input.now });
+      const result = await input.processors.finalizeAudioArtifact(attemptScopedProcessorInput(input));
+      if (result.status === "failed") {
+        throwIfArtifactStageNotReady(result.failureCode);
+      }
       return result.status === "failed"
         ? { status: "failed", failureCode: result.failureCode }
         : { status: result.status };
@@ -496,7 +521,7 @@ export async function handleGenerationPersistArtifactJob(
 async function runFetchArtifactProcessor(
   input: GenerationWorkerHandlerInput<GenerationArtifactJobData>,
 ): Promise<FinalizeArtifactResult> {
-  const task = { taskId: input.job.data.taskId, now: input.now };
+  const task = attemptScopedProcessorInput(input);
   if (isVideoProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "video") {
     if (!input.processors.fetchSeedanceVideoArtifact) throw new Error("seedance_fetch_processor_missing");
     return input.processors.fetchSeedanceVideoArtifact(task);
@@ -521,6 +546,7 @@ async function handlePersistOnlyFinalizeArtifactJob(
     }
     const result = await input.processors.persistSeedanceVideoArtifact({
       taskId: input.job.data.taskId,
+      ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
       now: input.now,
     });
     return result.status === "failed"
@@ -534,6 +560,7 @@ async function handlePersistOnlyFinalizeArtifactJob(
     }
     const result = await input.processors.persistGptImageArtifact({
       taskId: input.job.data.taskId,
+      ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
       now: input.now,
     });
     return result.status === "failed"
@@ -543,7 +570,7 @@ async function handlePersistOnlyFinalizeArtifactJob(
 
   if (isAudioProviderExecutor(input.job.data.providerExecutor) && input.job.data.artifactKind === "audio") {
     if (!input.processors.persistAudioArtifact) throw new Error("audio_persist_processor_missing");
-    const result = await input.processors.persistAudioArtifact({ taskId: input.job.data.taskId, now: input.now });
+    const result = await input.processors.persistAudioArtifact(attemptScopedProcessorInput(input));
     return result.status === "failed"
       ? { status: "failed", failureCode: result.failureCode }
       : { status: result.status };
@@ -588,6 +615,7 @@ async function enqueueVideoPollRateLimitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     pollAttempt: number;
+    outboxEventId?: string;
   }>,
   retryAfterMs: number,
 ) {
@@ -602,14 +630,18 @@ async function enqueueVideoPollRateLimitRetryJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       pollAttempt: input.job.data.pollAttempt,
+      ...(input.job.data.outboxEventId ? { outboxEventId: input.job.data.outboxEventId } : {}),
       retrySequence,
+      ...generationAttemptJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
       jobId: buildGenerationBullMQJobId(
         "generation.video.poll.rate-limit-retry",
         input.job.data.taskId,
+        ...generationAttemptJobIdParts(input.job.data),
         input.job.data.pollAttempt,
+        ...(input.job.data.outboxEventId ? [input.job.data.outboxEventId] : []),
         retrySequence,
       ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
@@ -639,6 +671,7 @@ async function enqueueImagePollRateLimitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     pollAttempt: number;
+    outboxEventId?: string;
   }>,
   retryAfterMs: number,
 ) {
@@ -653,14 +686,18 @@ async function enqueueImagePollRateLimitRetryJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       pollAttempt: input.job.data.pollAttempt,
+      ...(input.job.data.outboxEventId ? { outboxEventId: input.job.data.outboxEventId } : {}),
       retrySequence,
+      ...generationAttemptJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
       jobId: buildGenerationBullMQJobId(
         "generation.image.poll.rate-limit-retry",
         input.job.data.taskId,
+        ...generationAttemptJobIdParts(input.job.data),
         input.job.data.pollAttempt,
+        ...(input.job.data.outboxEventId ? [input.job.data.outboxEventId] : []),
         retrySequence,
       ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
@@ -695,6 +732,7 @@ async function enqueueFinalizeRateLimitRetryJob(
     ...(input.job.data.outboxEventId ? { outboxEventId: input.job.data.outboxEventId } : {}),
     retrySequence,
     ...(input.job.data.storageBucket ? { storageBucket: input.job.data.storageBucket } : {}),
+    ...generationAttemptJobData(input.job.data),
     ...generationPriorityJobData(input.job.data),
   };
 
@@ -706,7 +744,9 @@ async function enqueueFinalizeRateLimitRetryJob(
       jobId: buildGenerationBullMQJobId(
         "generation.artifact.finalize.rate-limit-retry",
         input.job.data.taskId,
+        ...generationAttemptJobIdParts(input.job.data),
         ...(artifactStage ? [artifactStage] : []),
+        ...(input.job.data.outboxEventId ? [input.job.data.outboxEventId] : []),
         retrySequence,
       ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
@@ -752,12 +792,14 @@ async function enqueuePersistArtifactJob(
       finalizeMode: "retry_persist_asset",
       ...(outboxEventId ? { outboxEventId } : {}),
       ...(input.job.data.storageBucket ? { storageBucket: input.job.data.storageBucket } : {}),
+      ...generationAttemptJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
       jobId: buildGenerationBullMQJobId(
         `generation.${mediaType}.persist`,
         input.job.data.taskId,
+        ...generationAttemptJobIdParts(input.job.data),
         ...(recoveryToken ? [recoveryToken] : []),
       ),
       ...generationPriorityJobOptions(input.job.data),
@@ -783,7 +825,7 @@ async function scheduleVideoPollJob(
     return `generation.due-poll:${input.job.data.taskId}:${pollAttempt}`;
   }
   await enqueueVideoPollJob(input, pollAttempt);
-  return buildGenerationBullMQJobId("generation.video.poll", input.job.data.taskId, pollAttempt);
+  return buildGenerationBullMQJobId("generation.video.poll", input.job.data.taskId, ...generationPollWaveJobIdParts(input.job.data), pollAttempt);
 }
 
 async function scheduleImagePollJob(
@@ -800,7 +842,7 @@ async function scheduleImagePollJob(
     return `generation.due-poll:${input.job.data.taskId}:${pollAttempt}`;
   }
   await enqueueImagePollJob(input, pollAttempt);
-  return buildGenerationBullMQJobId("generation.image.poll", input.job.data.taskId, pollAttempt);
+  return buildGenerationBullMQJobId("generation.image.poll", input.job.data.taskId, ...generationPollWaveJobIdParts(input.job.data), pollAttempt);
 }
 
 async function scheduleAudioPollJob(
@@ -817,7 +859,7 @@ async function scheduleAudioPollJob(
     return `generation.due-poll:${input.job.data.taskId}:${pollAttempt}`;
   }
   await enqueueAudioPollJob(input, pollAttempt);
-  return buildGenerationBullMQJobId("generation.audio.poll", input.job.data.taskId, pollAttempt);
+  return buildGenerationBullMQJobId("generation.audio.poll", input.job.data.taskId, ...generationPollWaveJobIdParts(input.job.data), pollAttempt);
 }
 
 async function scheduleDatabasePoll(
@@ -829,6 +871,7 @@ async function scheduleDatabasePoll(
   if (!input.processors.schedulePoll) return false;
   return input.processors.schedulePoll({
     taskId: input.job.data.taskId,
+    ...generationAttemptJobData(input.job.data),
     mediaType,
     nextPollAttempt,
     delayMs,
@@ -853,6 +896,7 @@ async function recordSkippedSuccessor(
         : null);
   await input.processors.recordSkippedSuccessor({
     taskId: input.job.data.taskId,
+    ...generationAttemptJobData(input.job.data),
     stage: "poll",
     pollAttempt,
     skipReason: `durable_state_${result.nextAction ?? nextAction}`,
@@ -882,10 +926,12 @@ async function enqueueVideoPollJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       pollAttempt,
+      ...generationAttemptJobData(input.job.data),
+      ...generationPollWaveJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      ...buildVideoPollJobOptions(input.job.data.taskId, pollAttempt, input.config),
+      ...buildVideoPollJobOptions(input.job.data.taskId, input.job.data, pollAttempt, input.config),
       ...generationPriorityJobOptions(input.job.data),
     },
   );
@@ -911,10 +957,12 @@ async function enqueueImagePollJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       pollAttempt,
+      ...generationAttemptJobData(input.job.data),
+      ...generationPollWaveJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      ...buildImagePollJobOptions(input.job.data.taskId, pollAttempt, input.config),
+      ...buildImagePollJobOptions(input.job.data.taskId, input.job.data, pollAttempt, input.config),
       ...generationPriorityJobOptions(input.job.data),
     },
   );
@@ -928,10 +976,13 @@ async function enqueueVideoSubmitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    attemptId?: string;
+    dispatchToken?: string;
   }>,
   retryAfterMs: number,
 ) {
   const retrySequence = nextRetrySequence(input.job.data);
+  const submitWave = generationSubmitWaveJobData(input.job.data);
   await input.publisher.add(
     input.config.queues.submitVideo,
     "generation.video.submit.retry",
@@ -943,12 +994,15 @@ async function enqueueVideoSubmitRetryJob(
       providerExecutor: input.job.data.providerExecutor,
       outboxEventId: input.job.data.outboxEventId,
       retrySequence,
+      ...generationAttemptJobData(input.job.data),
+      ...submitWave,
       ...generationPriorityJobData(input.job.data),
     },
     {
       jobId: buildGenerationBullMQJobId(
         "generation.video.submit.retry",
         input.job.data.taskId,
+        ...generationSubmitRetryJobIdParts(input.job.data),
         retrySequence,
       ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
@@ -978,6 +1032,7 @@ async function enqueueImageSubmitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    attemptId?: string;
     dispatchToken?: string;
   }>,
   retryAfterMs: number,
@@ -995,22 +1050,17 @@ async function enqueueImageSubmitRetryJob(
       providerExecutor: input.job.data.providerExecutor,
       outboxEventId: input.job.data.outboxEventId,
       retrySequence,
+      ...generationAttemptJobData(input.job.data),
       ...(dispatchToken ? { dispatchToken } : {}),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      jobId: dispatchToken
-        ? buildGenerationBullMQJobId(
-            "generation.image.submit.retry",
-            input.job.data.taskId,
-            dispatchToken,
-            retrySequence,
-          )
-        : buildGenerationBullMQJobId(
-            "generation.image.submit.retry",
-            input.job.data.taskId,
-            retrySequence,
-          ),
+      jobId: buildGenerationBullMQJobId(
+        "generation.image.submit.retry",
+        input.job.data.taskId,
+        ...generationSubmitRetryJobIdParts(input.job.data),
+        retrySequence,
+      ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
       ...generationPriorityJobOptions(input.job.data),
       attempts: input.config.retry.submit.attempts,
@@ -1038,10 +1088,13 @@ async function enqueueAudioSubmitRetryJob(
     modelCode: string | null;
     providerExecutor: string;
     outboxEventId?: string;
+    attemptId?: string;
+    dispatchToken?: string;
   }>,
   retryAfterMs: number,
 ) {
   const retrySequence = nextRetrySequence(input.job.data);
+  const submitWave = generationSubmitWaveJobData(input.job.data);
   await input.publisher.add(
     input.config.queues.submitImage,
     "generation.audio.submit.retry",
@@ -1053,12 +1106,15 @@ async function enqueueAudioSubmitRetryJob(
       providerExecutor: input.job.data.providerExecutor,
       outboxEventId: input.job.data.outboxEventId,
       retrySequence,
+      ...generationAttemptJobData(input.job.data),
+      ...submitWave,
       ...generationPriorityJobData(input.job.data),
     },
     {
       jobId: buildGenerationBullMQJobId(
         "generation.audio.submit.retry",
         input.job.data.taskId,
+        ...generationSubmitRetryJobIdParts(input.job.data),
         retrySequence,
       ),
       delay: Math.max(0, Math.floor(retryAfterMs)),
@@ -1092,6 +1148,7 @@ async function enqueueVideoFinalizeJob(
     providerExecutor: input.job.data.providerExecutor,
     artifactKind: "video",
     artifactStage: "fetch" as const,
+    ...generationAttemptJobData(input.job.data),
     ...generationPriorityJobData(input.job.data),
   };
 
@@ -1100,7 +1157,7 @@ async function enqueueVideoFinalizeJob(
     "generation.video.finalize",
     jobData,
     {
-      jobId: buildGenerationBullMQJobId("generation.video.finalize", input.job.data.taskId),
+      jobId: buildGenerationBullMQJobId("generation.video.finalize", input.job.data.taskId, ...generationAttemptJobIdParts(input.job.data)),
       ...generationPriorityJobOptions(input.job.data),
       attempts: input.config.retry.finalize.attempts,
       backoff: {
@@ -1137,6 +1194,7 @@ async function enqueueImageFinalizeJob(
     providerExecutor: input.job.data.providerExecutor,
     artifactKind: "image",
     artifactStage: "fetch" as const,
+    ...generationAttemptJobData(input.job.data),
     ...generationPriorityJobData(input.job.data),
   };
 
@@ -1145,7 +1203,7 @@ async function enqueueImageFinalizeJob(
     "generation.image.finalize",
     jobData,
     {
-      jobId: buildGenerationBullMQJobId("generation.image.finalize", input.job.data.taskId),
+      jobId: buildGenerationBullMQJobId("generation.image.finalize", input.job.data.taskId, ...generationAttemptJobIdParts(input.job.data)),
       ...generationPriorityJobOptions(input.job.data),
       attempts: input.config.retry.finalize.attempts,
       backoff: {
@@ -1184,11 +1242,12 @@ async function enqueueAudioPollJob(
       modelCode: input.job.data.modelCode,
       providerExecutor: input.job.data.providerExecutor,
       pollAttempt,
+      ...generationAttemptJobData(input.job.data),
+      ...generationPollWaveJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      ...buildAudioPollJobOptions(input.job.data.taskId, pollAttempt, input.config),
-      jobId: buildGenerationBullMQJobId("generation.audio.poll", input.job.data.taskId, pollAttempt),
+      ...buildAudioPollJobOptions(input.job.data.taskId, input.job.data, pollAttempt, input.config),
       ...generationPriorityJobOptions(input.job.data),
     },
   );
@@ -1214,10 +1273,11 @@ async function enqueueAudioFinalizeJob(
       providerExecutor: input.job.data.providerExecutor,
       artifactKind: "audio",
       artifactStage: "fetch" as const,
+      ...generationAttemptJobData(input.job.data),
       ...generationPriorityJobData(input.job.data),
     },
     {
-      jobId: buildGenerationBullMQJobId("generation.audio.finalize", input.job.data.taskId),
+      jobId: buildGenerationBullMQJobId("generation.audio.finalize", input.job.data.taskId, ...generationAttemptJobIdParts(input.job.data)),
       ...generationPriorityJobOptions(input.job.data),
       attempts: input.config.retry.finalize.attempts,
       backoff: {
@@ -1232,11 +1292,12 @@ async function enqueueAudioFinalizeJob(
 
 function buildVideoPollJobOptions(
   taskId: string,
+  jobData: unknown,
   pollAttempt: number,
   config: GenerationQueueConfig,
 ): JobsOptions {
   return {
-    jobId: buildGenerationBullMQJobId("generation.video.poll", taskId, pollAttempt),
+    jobId: buildGenerationBullMQJobId("generation.video.poll", taskId, ...generationPollWaveJobIdParts(jobData), pollAttempt),
     delay: config.poll.video.intervalMs,
     attempts: config.retry.poll.attempts,
     backoff: {
@@ -1256,11 +1317,12 @@ function buildVideoPollJobOptions(
 
 function buildImagePollJobOptions(
   taskId: string,
+  jobData: unknown,
   pollAttempt: number,
   config: GenerationQueueConfig,
 ): JobsOptions {
   return {
-    jobId: buildGenerationBullMQJobId("generation.image.poll", taskId, pollAttempt),
+    jobId: buildGenerationBullMQJobId("generation.image.poll", taskId, ...generationPollWaveJobIdParts(jobData), pollAttempt),
     delay: config.poll.image.intervalMs,
     attempts: config.retry.poll.attempts,
     backoff: {
@@ -1274,11 +1336,12 @@ function buildImagePollJobOptions(
 
 function buildAudioPollJobOptions(
   taskId: string,
+  jobData: unknown,
   pollAttempt: number,
   config: GenerationQueueConfig,
 ): JobsOptions {
   return {
-    jobId: buildGenerationBullMQJobId("generation.audio.poll", taskId, pollAttempt),
+    jobId: buildGenerationBullMQJobId("generation.audio.poll", taskId, ...generationPollWaveJobIdParts(jobData), pollAttempt),
     delay: config.poll.audio.intervalMs,
     attempts: config.retry.poll.attempts,
     backoff: {
@@ -1296,6 +1359,38 @@ function throwIfRetryableArtifactTransferFailure(failureCode: string) {
     || failureCode === "provider_output_upload_failed"
   ) {
     throw new Error(failureCode);
+  }
+}
+
+function attemptScopedProcessorInput(
+  input: GenerationWorkerHandlerInput<Record<string, unknown> & { taskId: string; attemptId?: string }>,
+): AttemptScopedProcessorInput {
+  return {
+    taskId: input.job.data.taskId,
+    ...(input.job.data.attemptId ? { attemptId: input.job.data.attemptId } : {}),
+    now: input.now,
+  };
+}
+
+function withAttemptJobData<TData extends Record<string, unknown>>(
+  input: GenerationWorkerHandlerInput<TData>,
+  attemptId?: string,
+): GenerationWorkerHandlerInput<TData & { attemptId?: string }> {
+  return {
+    ...input,
+    job: {
+      ...input.job,
+      data: {
+        ...input.job.data,
+        ...(attemptId ? { attemptId } : {}),
+      },
+    },
+  };
+}
+
+function throwIfArtifactStageNotReady(failureCode: string) {
+  if (isGenerationArtifactStageNotReadyFailure(failureCode)) {
+    throw Object.assign(new Error(failureCode), { failureCode });
   }
 }
 
@@ -1322,6 +1417,51 @@ function generationPriorityJobData(value: unknown) {
     ...(queuePriority === undefined ? {} : { queuePriority }),
     ...(priorityReason ? { priorityReason } : {}),
   };
+}
+
+function generationAttemptJobData(value: unknown) {
+  const data = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const attemptId = readOptionalJobText(data.attemptId);
+  return attemptId ? { attemptId } : {};
+}
+
+function generationAttemptJobIdParts(value: unknown): string[] {
+  const attemptId = generationAttemptJobData(value).attemptId;
+  return attemptId ? [attemptId] : [];
+}
+
+function generationSubmitWaveJobData(value: unknown) {
+  const data = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const dispatchToken = readOptionalJobText(data.dispatchToken);
+  return dispatchToken ? { dispatchToken } : {};
+}
+
+function generationPollWaveJobData(value: unknown) {
+  const data = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  const outboxEventId = readOptionalJobText(data.outboxEventId);
+  return {
+    ...(outboxEventId ? { outboxEventId } : {}),
+    ...generationSubmitWaveJobData(value),
+  };
+}
+
+function generationPollWaveJobIdParts(value: unknown): string[] {
+  const wave = generationPollWaveJobData(value);
+  if (wave.dispatchToken) return [wave.dispatchToken];
+  if (wave.outboxEventId) return [wave.outboxEventId];
+  return generationAttemptJobIdParts(value);
+}
+
+function generationSubmitRetryJobIdParts(value: unknown): string[] {
+  const dispatchToken = generationSubmitWaveJobData(value).dispatchToken;
+  if (dispatchToken) return [dispatchToken];
+  return generationAttemptJobIdParts(value);
 }
 
 function readOptionalJobText(value: unknown) {

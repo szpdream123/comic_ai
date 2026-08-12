@@ -52,6 +52,353 @@ describe("provider request deterministic upsert", { concurrency: false }, () => 
     }
   });
 
+  it("atomically binds a prepared task request only to the durable current attempt", async () => {
+    const db = await createMigratedTestDb();
+    const workflowId = "40000000-0000-4000-8000-000000000401";
+    const taskId = "50000000-0000-4000-8000-000000000401";
+    const staleAttemptId = "61000000-0000-4000-8000-000000000401";
+    const attemptId = "60000000-0000-4000-8000-000000000401";
+    try {
+      await db.query(`
+        INSERT INTO workflows (id, workflow_type, status, input_snapshot_json)
+        VALUES ('${workflowId}', 'episode_image_generation', 'running', '{}'::jsonb);
+        INSERT INTO tasks (
+          id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+          target_entity_type, target_entity_id
+        ) VALUES (
+          '${taskId}', '${workflowId}', 'episode_generate_image', 'running',
+          'generation-submit-image', '{}'::jsonb, 'asset', '${taskId}'
+        );
+        INSERT INTO task_attempts (
+          id, workflow_id, task_id, attempt_number, status, started_at
+        ) VALUES (
+          '${staleAttemptId}', '${workflowId}', '${taskId}', 1, 'failed',
+          '2026-05-09T09:00:00.000Z'
+        ), (
+          '${attemptId}', '${workflowId}', '${taskId}', 2, 'running',
+          '2026-05-09T10:00:00.000Z'
+        );
+        UPDATE tasks
+        SET current_attempt_id = '${attemptId}', attempt_count = 2
+        WHERE id = '${taskId}';
+      `);
+      const input = {
+        ...providerInput(),
+        workflowId,
+        taskId,
+        requestKey: "prepared-task-request-401",
+      };
+      await createOrReuseProviderRequest(db, { ...input, attemptId: staleAttemptId });
+
+      let staleProviderCalls = 0;
+      const stale = await submitProviderRequest(db, {
+        ...input,
+        attemptId: staleAttemptId,
+        adapter: {
+          async submit() {
+            staleProviderCalls += 1;
+            throw new Error("stale attempt must not submit externally");
+          },
+        },
+      });
+      assert.equal(stale.kind, "stale_attempt");
+      assert.equal(staleProviderCalls, 0);
+
+      await submitProviderRequest(db, {
+        ...input,
+        attemptId,
+        adapter: {
+          async submit() {
+            return {
+              status: "succeeded" as const,
+              externalRequestId: "external-request-401",
+              redactedResponse: {},
+            };
+          },
+        },
+      });
+      const request = await db.query<{ attempt_id: string | null; status: string }>(
+        "SELECT attempt_id, status FROM provider_requests WHERE request_key = $1",
+        [input.requestKey],
+      );
+
+      assert.deepEqual(request.rows[0], { attempt_id: attemptId, status: "succeeded" });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not start a provider request after the durable current attempt became terminal", async () => {
+    const db = await createMigratedTestDb();
+    const workflowId = "40000000-0000-4000-8000-000000000403";
+    const taskId = "50000000-0000-4000-8000-000000000403";
+    const attemptId = "60000000-0000-4000-8000-000000000403";
+    try {
+      await db.query(`
+        INSERT INTO workflows (id, workflow_type, status, input_snapshot_json)
+        VALUES ('${workflowId}', 'episode_image_generation', 'running', '{}'::jsonb);
+        INSERT INTO tasks (
+          id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+          target_entity_type, target_entity_id
+        ) VALUES (
+          '${taskId}', '${workflowId}', 'episode_generate_image', 'running',
+          'generation-submit-image', '{}'::jsonb, 'asset', '${taskId}'
+        );
+        INSERT INTO task_attempts (
+          id, workflow_id, task_id, attempt_number, status, started_at
+        ) VALUES (
+          '${attemptId}', '${workflowId}', '${taskId}', 1, 'running',
+          '2026-05-09T10:00:00.000Z'
+        );
+        UPDATE tasks
+        SET current_attempt_id = '${attemptId}', attempt_count = 1
+        WHERE id = '${taskId}';
+      `);
+      const input = {
+        ...providerInput(),
+        workflowId,
+        taskId,
+        attemptId,
+        requestKey: "terminal-current-attempt-request-403",
+      };
+      const prepared = await createOrReuseProviderRequest(db, input);
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'failed', failure_code = 'lease_expired_before_provider_submission'
+          WHERE id = $1
+        `,
+        [taskId],
+      );
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'failed', failure_code = 'lease_expired_before_provider_submission'
+          WHERE id = $1
+        `,
+        [attemptId],
+      );
+
+      let providerCalls = 0;
+      const result = await submitProviderRequest(db, {
+        ...input,
+        adapter: {
+          async submit() {
+            providerCalls += 1;
+            throw new Error("terminal attempt must not submit externally");
+          },
+        },
+      });
+      const request = await db.query<{
+        status: string;
+        external_submission_started_at: Date | string | null;
+      }>(
+        `
+          SELECT status, external_submission_started_at
+          FROM provider_requests
+          WHERE id = $1
+        `,
+        [prepared.request.id],
+      );
+
+      assert.equal(result.kind, "stale_attempt");
+      assert.equal(providerCalls, 0);
+      assert.equal(request.rows[0]?.status, "created");
+      assert.equal(request.rows[0]?.external_submission_started_at, null);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not recover or reuse an externally-started request from a historical attempt", async () => {
+    const db = await createMigratedTestDb();
+    const workflowId = "40000000-0000-4000-8000-000000000402";
+    const taskId = "50000000-0000-4000-8000-000000000402";
+    const staleAttemptId = "61000000-0000-4000-8000-000000000402";
+    const attemptId = "60000000-0000-4000-8000-000000000402";
+    try {
+      await db.query(`
+        INSERT INTO workflows (id, workflow_type, status, input_snapshot_json)
+        VALUES ('${workflowId}', 'episode_image_generation', 'running', '{}'::jsonb);
+        INSERT INTO tasks (
+          id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+          target_entity_type, target_entity_id
+        ) VALUES (
+          '${taskId}', '${workflowId}', 'episode_generate_image', 'running',
+          'generation-submit-image', '{}'::jsonb, 'asset', '${taskId}'
+        );
+        INSERT INTO task_attempts (
+          id, workflow_id, task_id, attempt_number, status, started_at
+        ) VALUES (
+          '${staleAttemptId}', '${workflowId}', '${taskId}', 1, 'failed',
+          '2026-05-09T09:00:00.000Z'
+        ), (
+          '${attemptId}', '${workflowId}', '${taskId}', 2, 'running',
+          '2026-05-09T10:00:00.000Z'
+        );
+        UPDATE tasks
+        SET current_attempt_id = '${attemptId}', attempt_count = 2
+        WHERE id = '${taskId}';
+      `);
+      const input = {
+        ...providerInput(),
+        workflowId,
+        taskId,
+        requestKey: "started-historical-task-request-402",
+      };
+      const prepared = await createOrReuseProviderRequest(db, {
+        ...input,
+        attemptId: staleAttemptId,
+      });
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'submitted', external_submission_started_at = $2
+          WHERE id = $1
+        `,
+        [prepared.request.id, new Date("2026-05-09T09:01:00.000Z")],
+      );
+
+      let submitCalls = 0;
+      let recoverCalls = 0;
+      const result = await submitProviderRequest(db, {
+        ...input,
+        attemptId,
+        adapter: {
+          async submit() {
+            submitCalls += 1;
+            throw new Error("historical request must not be submitted again");
+          },
+          async recoverSubmission() {
+            recoverCalls += 1;
+            throw new Error("historical request must not be recovered by the current attempt");
+          },
+        },
+      });
+      const request = await db.query<{
+        attempt_id: string | null;
+        status: string;
+        external_submission_started_at: Date | string | null;
+      }>(
+        `
+          SELECT attempt_id, status, external_submission_started_at
+          FROM provider_requests
+          WHERE id = $1
+        `,
+        [prepared.request.id],
+      );
+
+      assert.equal(result.kind, "stale_attempt");
+      assert.equal(submitCalls, 0);
+      assert.equal(recoverCalls, 0);
+      assert.equal(request.rows[0]?.attempt_id, staleAttemptId);
+      assert.equal(request.rows[0]?.status, "submitted");
+      assert.ok(request.rows[0]?.external_submission_started_at);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("creates an attempt-scoped request after a historical provider request definitively failed", async () => {
+    const db = await createMigratedTestDb();
+    const workflowId = "40000000-0000-4000-8000-000000000404";
+    const taskId = "50000000-0000-4000-8000-000000000404";
+    const staleAttemptId = "61000000-0000-4000-8000-000000000404";
+    const attemptId = "60000000-0000-4000-8000-000000000404";
+    try {
+      await db.query(`
+        INSERT INTO workflows (id, workflow_type, status, input_snapshot_json)
+        VALUES ('${workflowId}', 'episode_image_generation', 'running', '{}'::jsonb);
+        INSERT INTO tasks (
+          id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+          target_entity_type, target_entity_id
+        ) VALUES (
+          '${taskId}', '${workflowId}', 'episode_generate_image', 'running',
+          'generation-submit-image', '{}'::jsonb, 'asset', '${taskId}'
+        );
+        INSERT INTO task_attempts (
+          id, workflow_id, task_id, attempt_number, status, started_at
+        ) VALUES (
+          '${staleAttemptId}', '${workflowId}', '${taskId}', 1, 'failed',
+          '2026-05-09T09:00:00.000Z'
+        ), (
+          '${attemptId}', '${workflowId}', '${taskId}', 2, 'running',
+          '2026-05-09T10:00:00.000Z'
+        );
+        UPDATE tasks
+        SET current_attempt_id = '${attemptId}', attempt_count = 2
+        WHERE id = '${taskId}';
+      `);
+      const input = {
+        ...providerInput(),
+        workflowId,
+        taskId,
+        requestKey: "failed-historical-task-request-404",
+      };
+      const historical = await createOrReuseProviderRequest(db, {
+        ...input,
+        attemptId: staleAttemptId,
+      });
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'failed',
+              failure_code = 'provider_failed',
+              external_submission_started_at = $2,
+              external_request_id = 'external-failed-404'
+          WHERE id = $1
+        `,
+        [historical.request.id, new Date("2026-05-09T09:01:00.000Z")],
+      );
+
+      let submitCalls = 0;
+      const result = await submitProviderRequest(db, {
+        ...input,
+        attemptId,
+        adapter: {
+          async submit() {
+            submitCalls += 1;
+            return {
+              status: "accepted" as const,
+              externalRequestId: "external-current-404",
+              redactedResponse: {},
+            };
+          },
+        },
+      });
+      const requests = await db.query<{
+        attempt_id: string | null;
+        request_key: string;
+        status: string;
+      }>(
+        `
+          SELECT attempt_id, request_key, status
+          FROM provider_requests
+          WHERE task_id = $1
+          ORDER BY request_key
+        `,
+        [taskId],
+      );
+
+      assert.equal(result.kind, "submitted");
+      assert.equal(submitCalls, 1);
+      assert.deepEqual(requests.rows, [
+        {
+          attempt_id: staleAttemptId,
+          request_key: input.requestKey,
+          status: "failed",
+        },
+        {
+          attempt_id: attemptId,
+          request_key: `${input.requestKey}:retry:${attemptId}`,
+          status: "accepted",
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("treats a SanBao invalid response as a definitive submission failure", async () => {
     const db = await createMigratedTestDb();
 

@@ -17,7 +17,9 @@ import type { UploadSessionRuntime } from "../../storage/upload-session.service.
 import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
   buildGptImageRequestLogBody,
+  fetchGptImageArtifactJob,
   finalizeGptImageArtifactJob,
+  persistGptImageArtifactJob,
   processGptImagePollJob,
   processGptImageSubmitJob,
 } from "../gpt-image.worker.ts";
@@ -153,7 +155,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
           parameters: { aspectRatio: "1:1", resolution: "普通" },
         }),
       });
-      const task = (await taskResponse.json()).data;
+      const taskPayload = await taskResponse.json();
+      assert.equal(taskResponse.status, 200, JSON.stringify(taskPayload));
+      const task = taskPayload.data;
 
       const submitted = await processGptImageSubmitJob(db, {
         taskId: task.taskId,
@@ -280,13 +284,119 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
 
       assert.equal(taskResponse.status, 200);
-      assert.deepEqual(submitted, { status: "submitted", providerStatus: "waiting" });
+      assert.equal(submitted.status, "submitted");
+      assert.equal(submitted.providerStatus, "waiting");
       assert.deepEqual(polled, { status: "failed", failureCode: "san_bao_insufficient_balance" });
       assert.equal(stored.rows[0]?.task_failure_code, "san_bao_insufficient_balance");
       assert.equal(stored.rows[0]?.provider_failure_code, "san_bao_insufficient_balance");
       assert.equal(stored.rows[0]?.snapshot_failure_code, "san_bao_insufficient_balance");
     } finally {
       await server.close();
+    }
+  });
+
+  it("does not poll a historical image provider request for a newer attempt", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const created = await seedWorkerProjectEpisode(db, "historical-image-poll");
+      const taskSnapshot = {
+        kind: "image",
+        episodeId: created.episodeId,
+        targetType: "asset",
+        targetId: created.episodeId,
+        prompt: "historical image poll isolation",
+        model: "sanbao-gpt-image2",
+        parameters: {},
+        providerExecutor: "gpt-image-2",
+      };
+      const workflow = await createWorkflowWithTasks(db, {
+        userId: created.userId,
+        projectId: created.projectId,
+        workflowType: "episode_image_generation",
+        inputSnapshot: taskSnapshot,
+        tasks: [{
+          taskType: "episode_generate_image",
+          queueName: "generation-submit-image",
+          targetEntityType: "episode",
+          targetEntityId: created.episodeId,
+          inputSnapshot: taskSnapshot,
+        }],
+      });
+      const taskId = workflow.tasks[0]!.id;
+      const staleAttemptId = randomUUID();
+      const currentAttemptId = randomUUID();
+      const providerRequestId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            failure_code, started_at, finished_at
+          ) VALUES ($1, $2, $3, $4, 1, 'failed', 'provider_poll_timeout', $5, $6),
+                   ($7, $2, $3, $4, 2, 'running', NULL, $6, NULL)
+        `,
+        [
+          staleAttemptId,
+          created.projectId,
+          workflow.workflow.id,
+          taskId,
+          new Date("2026-08-07T04:00:00.000Z"),
+          new Date("2026-08-07T04:05:00.000Z"),
+          currentAttemptId,
+        ],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET status = 'running', current_attempt_id = $2, attempt_count = 2
+          WHERE id = $1
+        `,
+        [taskId, currentAttemptId],
+      );
+      await db.query(
+        `
+          INSERT INTO provider_requests (
+            id, project_id, workflow_id, task_id, attempt_id, provider_name,
+            provider_operation, request_key, request_hash, payload_ref, payload_hash,
+            status, external_submission_started_at, external_request_id,
+            created_by_user_id
+          ) VALUES (
+            $1, $2, $3, $4, $5, 'san_bao', 'episode.image.generate',
+            $6, $6, $6, $6, 'running', $7, 'historical-image-request', $8
+          )
+        `,
+        [
+          providerRequestId,
+          created.projectId,
+          workflow.workflow.id,
+          taskId,
+          staleAttemptId,
+          `historical-image-${taskId}`,
+          new Date("2026-08-07T04:00:00.000Z"),
+          created.userId,
+        ],
+      );
+      let pollPermitCalls = 0;
+
+      const result = await processGptImagePollJob(db, {
+        taskId,
+        env: {},
+        rateLimiter: {
+          async acquireSubmitPermit() {
+            throw new Error("poll jobs must not acquire submit permits");
+          },
+          async acquirePollPermit() {
+            pollPermitCalls += 1;
+            return { granted: false as const, retryAfterMs: 1000, reason: "unexpected-history" };
+          },
+        },
+        now: new Date("2026-08-07T05:00:00.000Z"),
+      });
+
+      assert.equal(result.status, "skipped");
+      assert.equal(pollPermitCalls, 0);
+    } finally {
+      await db.close();
     }
   });
 
@@ -728,12 +838,48 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
       const runningTask = (await runningTaskResponse.json()).data;
       assert.equal(uploadedBodies.length, 0);
-      const finalizeResult = await finalizeGptImageArtifactJob(db, {
+      await db.query(
+        "UPDATE tasks SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1",
+        [imageTask.taskId],
+      );
+      await db.query(
+        `
+          UPDATE task_attempts
+          SET status = 'result_unknown', failure_code = 'provider_poll_timeout'
+          WHERE task_id = $1
+        `,
+        [imageTask.taskId],
+      );
+      await db.query(
+        `
+          UPDATE ai_generation_task_snapshots
+          SET status = 'result_unknown', progress_stage = 'provider_result_unknown'
+          WHERE task_id = $1
+        `,
+        [imageTask.taskId],
+      );
+      await db.query(
+        `
+          UPDATE credit_reservations reservation
+          SET status = 'manual_review_required'
+          FROM generation_task_credit_reservations task_reservation
+          WHERE task_reservation.task_id = $1
+            AND reservation.id = task_reservation.id
+        `,
+        [imageTask.taskId],
+      );
+      const fetchArtifactResult = await fetchGptImageArtifactJob(db, {
         taskId: imageTask.taskId,
         runtime,
         env,
         fetchImpl,
         now: new Date("2026-06-03T04:00:05.000Z"),
+      });
+      const persistArtifactResult = await persistGptImageArtifactJob(db, {
+        taskId: imageTask.taskId,
+        runtime,
+        env,
+        now: new Date("2026-06-03T04:00:06.000Z"),
       });
       const completedTaskResponse = await fetch(
         `${server.origin}/api/generation-tasks/${imageTask.taskId}`,
@@ -818,16 +964,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
         model_code: "gpt-image-2-cn",
         media_type: "image",
       });
-      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(submitResult.status, "submitted");
+      assert.equal(submitResult.providerStatus, "succeeded");
       assert.equal(providerCalls[0]?.url, "https://image-gateway.example.test/v1/images/generations");
       assert.match(providerCalls[0]?.body ?? "", /gpt-image-2/);
       assert.equal(runningTaskResponse.status, 200);
       assert.equal(runningTask.status, "running");
-      assert.deepEqual(finalizeResult, { status: "succeeded" });
-      assert.equal(
-        providerCalls.some((call) => call.url.endsWith("/asset/seedance2/assetUpload")),
-        true,
-      );
+      assert.deepEqual(fetchArtifactResult, { status: "succeeded" });
+      assert.deepEqual(persistArtifactResult, { status: "succeeded" });
       assert.equal(uploadedBodies.length, 1);
       assert.equal(uploadedBodies[0] instanceof Uint8Array, true);
       assert.equal(completedTaskResponse.status, 200);
@@ -1021,7 +1165,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       [taskId],
     );
 
-    assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+    assert.equal(submitResult.status, "submitted");
+    assert.equal(submitResult.providerStatus, "succeeded");
     assert.deepEqual(requestLog.rows[0]?.request_body_json, {
       model: "gpt-image-2-pro",
       prompt: "draw the Cumob log format image",
@@ -1184,7 +1329,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       [taskId],
     );
 
-    assert.deepEqual(submitted, { status: "submitted", providerStatus: "succeeded" });
+    assert.equal(submitted.status, "submitted");
+    assert.equal(submitted.providerStatus, "succeeded");
     assert.equal(providerCalls, 2);
     assert.equal(finalTask.rows[0]?.status, "running");
     assert.equal(finalTask.rows[0]?.attempt_count, 2);
@@ -1317,7 +1463,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(submitResult.status, "submitted");
+      assert.equal(submitResult.providerStatus, "succeeded");
       assert.equal(task.rows[0]?.status, "running");
       assert.equal(task.rows[0]?.failure_code, null);
       assert.equal(attempt.rows[0]?.status, "running");
@@ -1637,7 +1784,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(submitResult.status, "submitted");
+      assert.equal(submitResult.providerStatus, "succeeded");
       assert.deepEqual(finalizeResult, { status: "succeeded" });
       assert.equal(artifactDownloadAttempts, 3);
       assert.ok(artifactDownloadSignals.every((signal) => signal instanceof AbortSignal));
@@ -1821,7 +1969,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(submitResult.status, "submitted");
+      assert.equal(submitResult.providerStatus, "succeeded");
       assert.equal(taskRow.rows[0]?.status, "running");
       assert.equal(taskRow.rows[0]?.failure_code, null);
       assert.equal(snapshot.rows[0]?.status, "running");
@@ -1988,7 +2137,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       });
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
+      assert.equal(submitResult.status, "submitted");
+      assert.equal(submitResult.providerStatus, "succeeded");
       assert.equal(providerCalls[0]?.url, "https://image-gateway.example.test/v1/images/edits");
       assert.equal(providerCalls[0]?.body instanceof FormData, true);
       assert.equal((providerCalls[0]?.body as FormData).getAll("image[]").length, 1);

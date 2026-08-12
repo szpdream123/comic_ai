@@ -50,7 +50,7 @@ describe("generation BullMQ publisher", () => {
     assert.deepEqual(job, {
       queueName: "generation-submit-video",
       jobName: "generation.task.created",
-      jobId: "generation.task.created__task-1__submit",
+      jobId: "generation.task.created__task-1__submit__outbox-1",
       data: {
         outboxEventId: "outbox-1",
         taskId: "task-1",
@@ -58,9 +58,10 @@ describe("generation BullMQ publisher", () => {
         mediaType: "video",
         modelCode: "seedance-i2v-pro",
         providerExecutor: "seedance",
+        dispatchToken: "outbox-1",
       },
       options: {
-        jobId: "generation.task.created__task-1__submit",
+        jobId: "generation.task.created__task-1__submit__outbox-1",
         attempts: 3,
         backoff: {
           type: "exponential",
@@ -111,6 +112,7 @@ describe("generation BullMQ publisher", () => {
       mediaType: "video",
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
+      dispatchToken: "outbox-1",
     });
   });
 
@@ -136,6 +138,7 @@ describe("generation BullMQ publisher", () => {
       mediaType: "video",
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
+      dispatchToken: "outbox-1",
       membershipPriority: true,
       queuePriority: 1,
       priorityReason: "professional_membership_model_family_priority",
@@ -143,7 +146,7 @@ describe("generation BullMQ publisher", () => {
     assert.equal(job.options.priority, 1);
   });
 
-  it("builds a stable persist-only finalize job without reusing the submit queue", () => {
+  it("builds a persist-only finalize job isolated by its outbox recovery wave", () => {
     const config = loadGenerationQueueConfig({
       GENERATION_FINALIZE_ARTIFACT_QUEUE: "generation-finalize-artifact",
     });
@@ -161,7 +164,7 @@ describe("generation BullMQ publisher", () => {
 
     assert.equal(job.queueName, "generation-finalize-artifact");
     assert.equal(job.jobName, "generation.task.finalize_requested");
-    assert.equal(job.jobId, "generation.task.finalize_requested__task-3__retry_persist_asset");
+    assert.equal(job.jobId, "generation.task.finalize_requested__task-3__retry_persist_asset__outbox-1");
     assert.deepEqual(job.data, {
       outboxEventId: "outbox-1",
       taskId: "task-3",
@@ -227,7 +230,7 @@ describe("generation BullMQ publisher", () => {
 
     assert.equal(job.queueName, "generation-poll-video");
     assert.equal(job.jobName, "generation.video.poll.repair");
-    assert.equal(job.jobId, "generation.video.poll__task-poll-1__1");
+    assert.equal(job.jobId, "generation.video.poll__task-poll-1__1__outbox-1");
     assert.deepEqual(job.data, {
       outboxEventId: "outbox-1",
       taskId: "task-poll-1",
@@ -258,7 +261,7 @@ describe("generation BullMQ publisher", () => {
 
     assert.equal(job.queueName, "generation-poll-image");
     assert.equal(job.jobName, "generation.image.poll.repair");
-    assert.equal(job.jobId, "generation.image.poll__task-image-poll-1__2");
+    assert.equal(job.jobId, "generation.image.poll__task-image-poll-1__2__outbox-1");
     assert.equal(job.data.mediaType, "image");
     assert.equal(job.data.pollAttempt, 2);
   });
@@ -282,12 +285,12 @@ describe("generation BullMQ publisher", () => {
 
     assert.equal(job.queueName, "generation-poll-audio");
     assert.equal(job.jobName, "generation.audio.poll.repair");
-    assert.equal(job.jobId, "generation.audio.poll__task-audio-poll-1__2");
+    assert.equal(job.jobId, "generation.audio.poll__task-audio-poll-1__2__outbox-1");
     assert.equal(job.data.mediaType, "audio");
     assert.equal(job.data.pollAttempt, 2);
   });
 
-  it("deduplicates poll recovery events by task and poll attempt", () => {
+  it("isolates separate poll recovery waves while keeping each outbox retry stable", () => {
     const config = loadGenerationQueueConfig({});
     const firstEvent = generationTaskCreatedEvent(
       { taskId: "task-poll-dedup", pollAttempt: 3 },
@@ -298,8 +301,10 @@ describe("generation BullMQ publisher", () => {
     const firstJob = buildGenerationBullMQJob(firstEvent, config);
     const secondJob = buildGenerationBullMQJob(secondEvent, config);
 
-    assert.equal(firstJob.jobId, "generation.video.poll__task-poll-dedup__3");
-    assert.equal(secondJob.jobId, firstJob.jobId);
+    assert.equal(firstJob.jobId, "generation.video.poll__task-poll-dedup__3__outbox-1");
+    assert.equal(secondJob.jobId, "generation.video.poll__task-poll-dedup__3__outbox-2");
+    assert.notEqual(secondJob.jobId, firstJob.jobId);
+    assert.equal(buildGenerationBullMQJob(firstEvent, config).jobId, firstJob.jobId);
     assert.equal(secondJob.data.pollAttempt, 3);
   });
 

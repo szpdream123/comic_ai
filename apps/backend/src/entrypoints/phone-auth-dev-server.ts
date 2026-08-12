@@ -499,6 +499,7 @@ import {
 } from "../modules/model-gateway/gpt-image.artifact-finalizer.ts";
 import {
   markGenerationTaskSnapshotFailed,
+  markGenerationTaskSnapshotManualReviewRequired,
   markGenerationTaskSnapshotResultUnknown,
   markGenerationTaskSnapshotRunning,
   markGenerationTaskSnapshotSucceeded,
@@ -508,6 +509,11 @@ import { runIdempotentCommand } from "../modules/shared/command/platform-command
 import { capabilities, p0Capabilities } from "../../../../packages/contracts/domain/capabilities.ts";
 import { operationNames } from "../../../../packages/contracts/domain/operation-names.ts";
 import { PUBLIC_SEO_PAGES } from "../../../web/src/shared/public-seo-content.js";
+import {
+  isProductionWebAssetPath,
+  productionWebAssetCacheControl,
+  renderProductionWebAppShell,
+} from "./production-web-assets.ts";
 
 const webRoot = join(process.cwd(), "apps", "web");
 const webRootPrefix = `${resolve(webRoot)}${sep}`;
@@ -4604,6 +4610,16 @@ async function validateGenerationQueueReplay(
           FROM provider_requests request
           WHERE request.task_id = task.id
             AND (
+              request.attempt_id = task.current_attempt_id
+              OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM task_attempts attempt
+              WHERE attempt.id = task.current_attempt_id
+                AND attempt.status IN ('created', 'running', 'result_unknown')
+            )
+            AND (
               request.external_submission_started_at IS NOT NULL
               OR request.external_request_id IS NOT NULL
             )
@@ -4613,7 +4629,16 @@ async function validateGenerationQueueReplay(
           FROM provider_requests request
           WHERE request.task_id = task.id
             AND task.current_attempt_id IS NOT NULL
-            AND request.attempt_id = task.current_attempt_id
+            AND (
+              request.attempt_id = task.current_attempt_id
+              OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+            )
+            AND EXISTS (
+              SELECT 1
+              FROM task_attempts attempt
+              WHERE attempt.id = task.current_attempt_id
+                AND attempt.status IN ('created', 'running', 'result_unknown')
+            )
             AND request.external_submission_started_at IS NOT NULL
             AND request.external_request_id IS NOT NULL
             AND request.status IN ('submitted', 'accepted', 'running', 'result_unknown')
@@ -5532,6 +5557,7 @@ async function mapGenerationTaskResponse(
 ) {
   const row = await queryOne<{
     task_id: string;
+    attempt_id: string | null;
     workflow_id: string;
     task_type: string;
     status: string;
@@ -5570,6 +5596,7 @@ async function mapGenerationTaskResponse(
     `
       SELECT
         t.id AS task_id,
+        t.current_attempt_id AS attempt_id,
         t.workflow_id,
         t.task_type,
         t.status,
@@ -5621,7 +5648,16 @@ async function mapGenerationTaskResponse(
           pr_latest.failure_code,
           pr_latest.response_redacted_json
         FROM provider_requests pr_latest
-        WHERE pr_latest.task_id = t.id
+          WHERE pr_latest.task_id = t.id
+            AND (
+              pr_latest.attempt_id = t.current_attempt_id
+              OR (pr_latest.attempt_id IS NULL AND t.attempt_count = 1)
+              OR (
+                pr_latest.attempt_id IS NULL
+                AND t.current_attempt_id IS NULL
+                AND t.attempt_count = 0
+              )
+            )
         ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
         LIMIT 1
       ) pr ON true
@@ -5987,6 +6023,15 @@ async function listTaskCenterTasks(
             SELECT 1
             FROM provider_requests succeeded_request
             WHERE succeeded_request.task_id = snapshot.task_id
+              AND (
+                succeeded_request.attempt_id = snapshot.attempt_id
+                OR (succeeded_request.attempt_id IS NULL AND task.attempt_count = 1)
+                OR (
+                  succeeded_request.attempt_id IS NULL
+                  AND task.current_attempt_id IS NULL
+                  AND task.attempt_count = 0
+                )
+              )
               AND succeeded_request.status = 'succeeded'
           ) AS provider_succeeded,
           snapshot.submitted_at,
@@ -6008,6 +6053,15 @@ async function listTaskCenterTasks(
           SELECT request.task_center_diagnostics_json
           FROM provider_requests request
           WHERE request.task_id = snapshot.task_id
+            AND (
+              request.attempt_id = snapshot.attempt_id
+              OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+              OR (
+                request.attempt_id IS NULL
+                AND task.current_attempt_id IS NULL
+                AND task.attempt_count = 0
+              )
+            )
             AND request.task_center_diagnostics_json IS NOT NULL
             AND request.task_center_diagnostics_json <> '{}'::jsonb
           ORDER BY request.updated_at DESC, request.created_at DESC, request.id DESC
@@ -6474,6 +6528,7 @@ async function readGenerationTaskResponseForSession(
   }
   await enqueueVideoFinalizeIfProviderResultReady(db, {
     taskId: input.taskId,
+    staleDispatchMs: generationQueueConfig.repair.staleDispatchMs,
     now: input.now,
   });
   const task = await mapGenerationTaskResponse(db, {
@@ -6507,11 +6562,13 @@ async function enqueueVideoFinalizeIfProviderResultReady(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     taskId: string;
+    staleDispatchMs: number;
     now: Date;
   },
 ) {
   const row = await queryOne<{
     task_id: string;
+    attempt_id: string | null;
     workflow_id: string;
     status: string;
     model_code: string | null;
@@ -6524,6 +6581,7 @@ async function enqueueVideoFinalizeIfProviderResultReady(
     `
       SELECT
         t.id AS task_id,
+        COALESCE(pr.attempt_id, t.current_attempt_id) AS attempt_id,
         t.workflow_id,
         t.status,
         COALESCE(s.model_code, t.input_snapshot_json->>'modelCode', t.input_snapshot_json->>'model') AS model_code,
@@ -6536,9 +6594,14 @@ async function enqueueVideoFinalizeIfProviderResultReady(
         ON s.task_id = t.id
       LEFT JOIN LATERAL (
         SELECT
+          pr_latest.attempt_id,
           pr_latest.response_redacted_json
         FROM provider_requests pr_latest
         WHERE pr_latest.task_id = t.id
+          AND (
+            pr_latest.attempt_id = t.current_attempt_id
+            OR (pr_latest.attempt_id IS NULL AND t.attempt_count = 1)
+          )
           AND pr_latest.status = 'succeeded'
         ORDER BY pr_latest.updated_at DESC NULLS LAST, pr_latest.created_at DESC
         LIMIT 1
@@ -6552,7 +6615,7 @@ async function enqueueVideoFinalizeIfProviderResultReady(
       ) v ON true
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
-        AND t.status IN ('queued', 'running')
+        AND t.status IN ('running', 'result_unknown')
       LIMIT 1
     `,
     [input.taskId],
@@ -6568,46 +6631,102 @@ async function enqueueVideoFinalizeIfProviderResultReady(
   if (snapshotResultAssets.some((asset) => readGenerationPublicAssetUrl(asset.sourceUrl, asset.url, asset.previewUrl, asset.downloadUrl))) {
     return false;
   }
-  if (await hasPendingVideoFinalizeOutboxEvent(db, row.task_id)) {
+  if (await hasPendingVideoFinalizeOutboxEvent(db, row.task_id, row.attempt_id)) {
     return false;
   }
 
-  await appendGenerationTaskFinalizeRequestedOutboxEvent(db, {
-    workflowId: row.workflow_id,
-    taskId: row.task_id,
-    kind: "video",
-    modelCode: row.model_code,
-    providerExecutor: "seedance",
-    finalizeMode: "retry_finalize",
-    availableAt: input.now,
-  });
-  await db.query(
-    `
-      UPDATE ai_generation_task_snapshots
-      SET status = 'running',
-          progress_stage = 'saving_asset',
-          updated_at = $2
-      WHERE task_id = $1
-        AND status <> 'succeeded'
-    `,
-    [row.task_id, input.now],
-  );
-  await db.query(
-    `
-      UPDATE tasks
-      SET status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
-          updated_at = $2
-      WHERE id = $1
-        AND status IN ('queued', 'running')
-    `,
-    [row.task_id, input.now],
-  );
-  return true;
+  await db.query("BEGIN");
+  try {
+    const claimed = await queryOne<{ id: string }>(
+      db,
+      `
+        UPDATE tasks
+        SET status = 'running',
+            failure_code = NULL,
+            last_dispatched_at = $2,
+            updated_at = $2
+        WHERE id = $1
+          AND status IN ('running', 'result_unknown')
+          AND (
+            ($3::uuid IS NULL AND current_attempt_id IS NULL)
+            OR current_attempt_id = $3::uuid
+          )
+          AND (locked_until IS NULL OR locked_until < $2)
+          AND (
+            last_dispatched_at IS NULL
+            OR last_dispatched_at < $4
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM outbox_events event
+            WHERE event.event_type = 'generation.task.finalize_requested'
+              AND event.payload_json->>'taskId' = tasks.id::text
+              AND event.status IN ('pending', 'processing', 'failed')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM generation_queue_stage_assignments assignment
+            WHERE assignment.task_id = tasks.id
+              AND assignment.stage IN ('fetch', 'persist')
+              AND assignment.status IN ('publishing', 'admitted')
+          )
+        RETURNING id
+      `,
+      [
+        row.task_id,
+        input.now,
+        row.attempt_id,
+        new Date(input.now.getTime() - Math.max(1, input.staleDispatchMs)),
+      ],
+    );
+    if (!claimed) {
+      await db.query("ROLLBACK");
+      return false;
+    }
+    await db.query(
+      `
+        UPDATE credit_reservations reservation
+        SET status = 'active',
+            updated_at = $2
+        FROM generation_task_credit_reservations task_reservation
+        WHERE task_reservation.task_id = $1
+          AND reservation.id = task_reservation.id
+          AND reservation.status = 'manual_review_required'
+          AND reservation.amount_reserved > 0
+      `,
+      [row.task_id, input.now],
+    );
+    await db.query(
+      `
+        UPDATE ai_generation_task_snapshots
+        SET status = 'running',
+            progress_stage = 'saving_asset',
+            updated_at = $2
+        WHERE task_id = $1
+          AND status <> 'succeeded'
+      `,
+      [row.task_id, input.now],
+    );
+    await appendGenerationTaskFinalizeRequestedOutboxEvent(db, {
+      workflowId: row.workflow_id,
+      taskId: row.task_id,
+      attemptId: row.attempt_id,
+      kind: "video",
+      modelCode: row.model_code,
+      providerExecutor: "seedance",
+      finalizeMode: "retry_finalize",
+      availableAt: input.now,
+    });
+    await db.query("COMMIT");
+    return true;
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
 }
 
 async function hasPendingVideoFinalizeOutboxEvent(
   db: Awaited<ReturnType<typeof createDevDb>>,
   taskId: string,
+  attemptId: string | null,
 ) {
   const existing = await queryOne<{ id: string }>(
     db,
@@ -6617,11 +6736,15 @@ async function hasPendingVideoFinalizeOutboxEvent(
       WHERE event_type = 'generation.task.finalize_requested'
         AND status IN ('pending', 'processing')
         AND payload_json->>'taskId' = $1
+        AND (
+          payload_json->>'attemptId' = $2
+          OR ($2::uuid IS NULL AND NOT (payload_json ? 'attemptId'))
+        )
         AND payload_json->>'mediaType' = 'video'
         AND payload_json->>'providerExecutor' = 'seedance'
       LIMIT 1
     `,
-    [taskId],
+    [taskId, attemptId],
   );
   return Boolean(existing);
 }
@@ -7711,6 +7834,9 @@ async function settleTimedOutEpisodeGenerationTask(
     taskId: string;
     now: Date;
     failureCode?: string;
+    expectedProviderRequestId?: string;
+    expectedAttemptId?: string | null;
+    expectedAttemptCount?: number;
   },
 ) {
   await db.query("BEGIN");
@@ -7721,6 +7847,7 @@ async function settleTimedOutEpisodeGenerationTask(
       status: string;
       failure_code: string | null;
       current_attempt_id: string | null;
+      attempt_count: number | string;
       input_snapshot_json: Record<string, unknown> | string;
       created_at: Date | string;
       reservation_id: string | null;
@@ -7734,6 +7861,7 @@ async function settleTimedOutEpisodeGenerationTask(
           t.status,
           t.failure_code,
           t.current_attempt_id,
+          t.attempt_count,
           t.input_snapshot_json,
           t.created_at,
           r.id AS reservation_id,
@@ -7750,6 +7878,16 @@ async function settleTimedOutEpisodeGenerationTask(
       [input.taskId],
     );
     if (!row || !["queued", "running", "result_unknown"].includes(row.status)) {
+      await db.query("COMMIT");
+      return false;
+    }
+    if (
+      input.expectedProviderRequestId
+      && (
+        row.current_attempt_id !== (input.expectedAttemptId ?? null)
+        || Number(row.attempt_count) !== input.expectedAttemptCount
+      )
+    ) {
       await db.query("COMMIT");
       return false;
     }
@@ -7781,24 +7919,109 @@ async function settleTimedOutEpisodeGenerationTask(
       status: string;
       external_submission_started_at: Date | string | null;
       external_request_id: string | null;
+      provider_error_code: string | null;
     }>(
       db,
       `
-        SELECT id, status, external_submission_started_at, external_request_id
-        FROM provider_requests
-        WHERE task_id = $1
+        SELECT id,
+               status,
+               external_submission_started_at,
+               external_request_id,
+               response_redacted_json->>'providerErrorCode' AS provider_error_code
+        FROM provider_requests request
+        WHERE request.task_id = $1
+          AND (
+            (
+              $6::uuid IS NOT NULL
+              AND id = $6
+              AND $5::text <> 'queued'
+              AND (
+                request.attempt_id = $3
+                OR (
+                  request.attempt_id IS NULL
+                  AND $4::integer = 1
+                  AND EXISTS (
+                    SELECT 1 FROM task_attempts attempt
+                    WHERE attempt.id = $3
+                      AND request.created_at >= attempt.created_at
+                  )
+                )
+                OR (request.attempt_id IS NULL AND $3::uuid IS NULL AND $4::integer = 0)
+              )
+              AND (
+                ($3::uuid IS NULL AND $4::integer = 0)
+                OR EXISTS (
+                  SELECT 1
+                  FROM task_attempts attempt
+                  WHERE attempt.id = $3
+                    AND attempt.status IN ('created', 'running', 'result_unknown')
+                )
+              )
+            )
+            OR (
+              $6::uuid IS NULL
+              AND $5::text <> 'queued'
+              AND (
+                request.attempt_id = $3
+                OR (
+                  request.attempt_id IS NULL
+                  AND $4::integer = 1
+                  AND EXISTS (
+                    SELECT 1 FROM task_attempts attempt
+                    WHERE attempt.id = $3
+                      AND request.created_at >= attempt.created_at
+                  )
+                )
+                OR (request.attempt_id IS NULL AND $3::uuid IS NULL AND $4::integer = 0)
+              )
+              AND (
+                ($3::uuid IS NULL AND $4::integer = 0)
+                OR EXISTS (
+                  SELECT 1
+                  FROM task_attempts attempt
+                  WHERE attempt.id = $3
+                    AND attempt.status IN ('created', 'running', 'result_unknown')
+                )
+              )
+            )
+          )
           AND ($2::boolean OR (
-            external_submission_started_at IS NOT NULL
-            OR external_request_id IS NOT NULL
+            request.external_submission_started_at IS NOT NULL
+            OR request.external_request_id IS NOT NULL
           ))
-        ORDER BY updated_at DESC, id DESC
+        ORDER BY request.updated_at DESC, request.id DESC
         LIMIT 1
+        FOR UPDATE
       `,
-      [row.task_id, Boolean(input.failureCode)],
+      [
+        row.task_id,
+        Boolean(input.failureCode),
+        row.current_attempt_id,
+        row.attempt_count,
+        row.status,
+        input.expectedProviderRequestId ?? null,
+      ],
     );
+    if (
+      input.expectedProviderRequestId
+      && (
+        !providerRequest
+        || providerRequest.status !== "result_unknown"
+        || providerRequest.external_request_id !== null
+        || providerRequest.provider_error_code !== input.failureCode
+        || !/^san_bao_(?!network_error$)/.test(providerRequest.provider_error_code ?? "")
+      )
+    ) {
+      await db.query("COMMIT");
+      return false;
+    }
     const providerResultIsUnclear = !input.failureCode && Boolean(
-      providerRequest && !["failed", "canceled"].includes(providerRequest.status),
+      providerRequest && !["succeeded", "failed", "canceled"].includes(providerRequest.status),
     );
+    if (!input.failureCode && providerRequest?.status === "succeeded") {
+      await db.query("COMMIT");
+      return false;
+    }
     const failureCode = input.failureCode ?? (providerResultIsUnclear ? "provider_poll_timeout" : "task_timeout");
     const nextStatus = providerResultIsUnclear ? "result_unknown" : "failed";
     const claimed = await queryOne<{ id: string }>(
@@ -7842,11 +8065,46 @@ async function settleTimedOutEpisodeGenerationTask(
     }
     await db.query(
       `
-      UPDATE provider_requests
+      UPDATE provider_requests request
       SET status = $2,
             failure_code = $3,
             updated_at = $4
-        WHERE task_id = $1
+          WHERE task_id = $1
+            AND (
+              (
+                $8::uuid IS NOT NULL
+                AND id = $8
+                AND (
+                  request.attempt_id = $6
+                  OR (
+                    request.attempt_id IS NULL
+                    AND $7::integer = 1
+                    AND EXISTS (
+                      SELECT 1 FROM task_attempts attempt
+                      WHERE attempt.id = $6
+                        AND request.created_at >= attempt.created_at
+                    )
+                  )
+                  OR (request.attempt_id IS NULL AND $6::uuid IS NULL AND $7::integer = 0)
+                )
+              )
+              OR (
+                $8::uuid IS NULL
+                AND (
+                  request.attempt_id = $6
+                  OR (
+                    request.attempt_id IS NULL
+                    AND $7::integer = 1
+                    AND EXISTS (
+                      SELECT 1 FROM task_attempts attempt
+                      WHERE attempt.id = $6
+                        AND request.created_at >= attempt.created_at
+                    )
+                  )
+                  OR (request.attempt_id IS NULL AND $6::uuid IS NULL AND $7::integer = 0)
+                )
+              )
+            )
           AND status NOT IN ('succeeded', 'failed', 'canceled')
           AND (
             $5::boolean
@@ -7857,7 +8115,16 @@ async function settleTimedOutEpisodeGenerationTask(
             )
           )
       `,
-      [row.task_id, nextStatus, failureCode, input.now, Boolean(input.failureCode)],
+      [
+        row.task_id,
+        nextStatus,
+        failureCode,
+        input.now,
+        Boolean(input.failureCode),
+          row.current_attempt_id,
+          row.attempt_count,
+          input.expectedProviderRequestId ?? null,
+        ],
     );
 
     const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
@@ -7952,9 +8219,18 @@ async function reconcileDefinitiveProviderSubmissionFailures(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: { userId: string; now: Date },
 ) {
-  const rows = await db.query<{ task_id: string; failure_code: string }>(
+  const rows = await db.query<{
+    task_id: string;
+    provider_request_id: string;
+    current_attempt_id: string | null;
+    attempt_count: number | string;
+    failure_code: string;
+  }>(
     `
       SELECT task.id AS task_id,
+        provider_request.id AS provider_request_id,
+        task.current_attempt_id,
+        task.attempt_count,
         COALESCE(
           provider_request.response_redacted_json->>'providerErrorCode',
           'san_bao_invalid_response'
@@ -7962,7 +8238,29 @@ async function reconcileDefinitiveProviderSubmissionFailures(
       FROM tasks task
       JOIN workflows workflow ON workflow.id = task.workflow_id
       JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
-      JOIN provider_requests provider_request ON provider_request.task_id = task.id
+      JOIN provider_requests provider_request
+        ON provider_request.task_id = task.id
+       AND (
+         provider_request.attempt_id = task.current_attempt_id
+         OR (
+           provider_request.attempt_id IS NULL
+           AND task.attempt_count = 1
+           AND EXISTS (
+             SELECT 1
+             FROM task_attempts provider_attempt
+             WHERE provider_attempt.id = task.current_attempt_id
+               AND provider_request.created_at >= provider_attempt.created_at
+           )
+         )
+         OR (
+           provider_request.attempt_id IS NULL
+           AND task.current_attempt_id IS NULL
+           AND task.attempt_count = 0
+         )
+       )
+      LEFT JOIN task_attempts current_attempt
+        ON current_attempt.id = task.current_attempt_id
+       AND current_attempt.status IN ('created', 'running', 'result_unknown')
       WHERE workflow.created_by_user_id = $1
         AND snapshot.user_id = $1
         AND task.status IN ('queued', 'running', 'result_unknown')
@@ -7971,6 +8269,14 @@ async function reconcileDefinitiveProviderSubmissionFailures(
         AND provider_request.external_request_id IS NULL
         AND provider_request.response_redacted_json->>'providerErrorCode' LIKE 'san_bao_%'
         AND provider_request.response_redacted_json->>'providerErrorCode' <> 'san_bao_network_error'
+        AND (
+          current_attempt.id IS NOT NULL
+          OR (
+            task.current_attempt_id IS NULL
+            AND task.attempt_count = 0
+            AND provider_request.attempt_id IS NULL
+          )
+        )
       ORDER BY task.updated_at ASC
     `,
     [input.userId],
@@ -7980,6 +8286,9 @@ async function reconcileDefinitiveProviderSubmissionFailures(
       taskId: row.task_id,
       now: input.now,
       failureCode: row.failure_code,
+      expectedProviderRequestId: row.provider_request_id,
+      expectedAttemptId: row.current_attempt_id,
+      expectedAttemptCount: Number(row.attempt_count),
     });
   }
 }
@@ -8095,6 +8404,10 @@ async function syncSeedanceVideoTaskOnRead(
         SELECT request.id, request.external_request_id
         FROM provider_requests request
         WHERE request.task_id = t.id
+          AND (
+            request.attempt_id = t.current_attempt_id
+            OR (request.attempt_id IS NULL AND t.attempt_count = 1)
+          )
         ORDER BY
           (request.external_submission_started_at IS NOT NULL) DESC,
           (request.provider_name = COALESCE(NULLIF(task_model_config.provider_name, ''), 'volcengine')) DESC,
@@ -8107,6 +8420,7 @@ async function syncSeedanceVideoTaskOnRead(
       WHERE t.id = $1
         AND t.task_type = 'episode_generate_video'
         AND t.status = 'running'
+        AND t.current_attempt_id IS NOT NULL
         AND t.input_snapshot_json->>'providerExecutor' = 'seedance'
       LIMIT 1
     `,
@@ -10059,6 +10373,49 @@ async function createGenerationTask(
         adapter,
       });
       providerRequestId = submitted.request.id;
+      if (submitted.kind === "stale_attempt") {
+        const failureCode = "provider_request_attempt_conflict";
+        await finalizeTaskAttempt(db, {
+          taskId: task.id,
+          attemptId: claim.attempt.id,
+          status: "manual_review_required",
+          failureCode,
+          now: input.now,
+        });
+        await markGenerationTaskSnapshotManualReviewRequired(db, {
+          taskId: task.id,
+          attemptId: claim.attempt.id,
+          progressStage: "provider_attempt_conflict",
+          failure: {
+            failureCode,
+            historicalProviderRequestId: submitted.request.id,
+            displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+          },
+          creditSummary: {
+            reserved: estimatedCost,
+            settledAt: input.now.toISOString(),
+          },
+          now: input.now,
+        });
+        await aggregateWorkflowStatus(db, workflow.workflow.id);
+        const responseBody = await mapGenerationTaskResponse(db, {
+          taskId: task.id,
+          sessionToken: input.authenticated.sessionToken,
+          canvasScope: context.canvasActorScope,
+          runtime: input.runtime,
+          signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
+          now: input.now,
+        });
+        await store.update({
+          ...started.record,
+          responseResourceType: "generation_task",
+          responseResourceId: task.id,
+          responseSnapshot: responseBody as Record<string, unknown>,
+          status: "succeeded",
+          updatedAt: input.now,
+        });
+        return { status: 200 as const, body: responseBody };
+      }
       if (!submitted.artifacts?.length && submitted.request.externalRequestId) {
         await markGenerationTaskSnapshotRunning(db, {
           taskId: task.id,
@@ -10077,6 +10434,7 @@ async function createGenerationTask(
         });
         await scheduleGenerationProviderPoll(db, {
           taskId: task.id,
+          expectedAttemptId: claim.attempt.id,
           nextPollAttempt: 1,
           nextPollAt: new Date(input.now.getTime() + generationQueueConfig.poll.image.intervalMs),
           pollDeadlineAt: timeoutAt,
@@ -10379,6 +10737,7 @@ async function createGenerationTask(
     if (submitted.externalRequestId) {
       await scheduleGenerationProviderPoll(db, {
         taskId: task.id,
+        expectedAttemptId: submitted.attemptId ?? null,
         nextPollAttempt: 1,
         nextPollAt: new Date(input.now.getTime() + generationQueueConfig.poll.video.intervalMs),
         pollDeadlineAt: timeoutAt,
@@ -15293,6 +15652,7 @@ async function serveStatic(
   request: Parameters<typeof createServer>[0],
   pathname: string,
   response: ServerResponse,
+  runtimeEnv: NodeJS.ProcessEnv,
 ) {
   if (pathname === "/favicon.ico") {
     response.statusCode = 204;
@@ -15333,6 +15693,7 @@ async function serveStatic(
   }
 
   const normalizedPath = pathname === "/" ? "/app.html" : pathname;
+  const productionWebAsset = isProductionWebAssetPath(normalizedPath);
   let filePath = join(webRoot, normalizedPath.replace(/^\/+/, ""));
   let file: Buffer;
   try {
@@ -15356,12 +15717,17 @@ async function serveStatic(
       ? renderPublicSeoAppShell(file.toString("utf8"), seoRoute, serverOriginFromRequest(request))
       : renderPrivateAppShell(file.toString("utf8"));
     file = Buffer.from(
-      seoRoute ? markPublicSeoSessionPending(appShell, request.headers.cookie) : appShell,
+      renderProductionWebAppShell(
+        seoRoute ? markPublicSeoSessionPending(appShell, request.headers.cookie) : appShell,
+        runtimeEnv.PRODUCTION_WEB_ENTRY_URL,
+      ),
       "utf8",
     );
   }
 
-  file = await minifyStaticAsset(filePath, file);
+  if (!productionWebAsset) {
+    file = await minifyStaticAsset(filePath, file);
+  }
 
   response.setHeader(
     "content-type",
@@ -15383,7 +15749,10 @@ async function serveStatic(
   }
   const etag = staticAssetEtag(encoded.file);
   response.setHeader("etag", etag);
-  response.setHeader("cache-control", "public, max-age=0, must-revalidate");
+  response.setHeader(
+    "cache-control",
+    productionWebAssetCacheControl(normalizedPath),
+  );
   if (requestMatchesEtag(request, etag)) {
     response.statusCode = 304;
     response.end();
@@ -15483,7 +15852,7 @@ async function prewarmStaticAssets(directory = webRoot): Promise<void> {
   await Promise.all(entries.map(async (entry) => {
     const filePath = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name !== "assets") {
+      if (entry.name !== "assets" && entry.name !== ".production") {
         await prewarmStaticAssets(filePath);
       }
       return;
@@ -15785,6 +16154,47 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
     ? rawHost.replace(/:443$/i, "")
     : rawHost.replace(/:80$/i, "");
   return `${protocol}://${host}`;
+}
+
+function redirectInsecureProductionRequest(
+  request: Parameters<typeof createServer>[0],
+  response: Parameters<typeof createServer>[1],
+  httpsOrigin: string | undefined,
+) {
+  const forwardedProtocols = String(request.headers["x-forwarded-proto"] ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (!httpsOrigin || forwardedProtocols.at(-1) === "https") {
+    return false;
+  }
+
+  const requestTarget = new URL(request.url ?? "/", "http://request.invalid");
+  const target = new URL(httpsOrigin);
+  target.pathname = requestTarget.pathname;
+  target.search = requestTarget.search;
+  response.statusCode = 308;
+  response.setHeader("location", target.toString());
+  response.setHeader("cache-control", "no-store");
+  response.end();
+  return true;
+}
+
+function productionHttpsOrigin(env: NodeJS.ProcessEnv) {
+  const publicHost = env.PUBLIC_HOST?.trim() || "www.lingxiyunai.com";
+  const origin = new URL(`https://${publicHost}`);
+  if (
+    origin.username ||
+    origin.password ||
+    !origin.hostname ||
+    origin.pathname !== "/" ||
+    origin.search ||
+    origin.hash
+  ) {
+    throw new Error("invalid_public_host");
+  }
+  origin.port = "";
+  return origin.origin;
 }
 
 function firstRequestHeader(value: string | string[] | undefined) {
@@ -17254,6 +17664,9 @@ export function createPhoneAuthDevServer(
   if (runtimeEnv.NODE_ENV === "production" && options.allowProduction !== true) {
     throw new Error("phone_auth_dev_server_forbidden_in_production");
   }
+  const secureProductionOrigin = useSecureSessionCookies
+    ? productionHttpsOrigin(runtimeEnv)
+    : undefined;
   if (!options.db && options.allowLocalDatabaseUrl !== true) {
     assertRemoteDevServerDatabaseUrl(runtimeEnv);
   }
@@ -17419,6 +17832,9 @@ export function createPhoneAuthDevServer(
   const httpServer = createServer((request, response) => {
     void runWithUserAuthRequestContext(() => runWithDatabaseContext(async () => {
       try {
+        if (redirectInsecureProductionRequest(request, response, secureProductionOrigin)) {
+          return;
+        }
         applyCrossOriginIsolationHeaders(response);
         applyDevCorsHeaders(request, response);
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -17458,7 +17874,7 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && !pathname.startsWith("/api/")) {
-          return await serveStatic(request, pathname, response);
+          return await serveStatic(request, pathname, response, runtimeEnv);
         }
 
         const db = await getDb();
@@ -29819,7 +30235,7 @@ export function createPhoneAuthDevServer(
                       provider_request.payload_redacted_json AS provider_payload
                  FROM team_assets
                  LEFT JOIN LATERAL (
-                   SELECT id, status, failure_code, input_snapshot_json
+                    SELECT id, status, failure_code, input_snapshot_json, current_attempt_id, attempt_count
                    FROM tasks
                    WHERE input_snapshot_json->>'targetType' = 'team_asset'
                      AND input_snapshot_json->>'targetId' = team_assets.id::text
@@ -29829,8 +30245,14 @@ export function createPhoneAuthDevServer(
                  LEFT JOIN LATERAL (
                    SELECT id, status, failure_code, payload_redacted_json
                    FROM provider_requests
-                   WHERE payload_ref = 'creator://team-assets/' || team_assets.id::text
-                      OR task_id = generation_task.id
+                    WHERE payload_ref = 'creator://team-assets/' || team_assets.id::text
+                       OR (
+                         task_id = generation_task.id
+                         AND (
+                           attempt_id = generation_task.current_attempt_id
+                           OR (attempt_id IS NULL AND generation_task.attempt_count = 1)
+                         )
+                       )
                    ORDER BY created_at DESC
                    LIMIT 1
                  ) AS provider_request ON TRUE
@@ -31669,7 +32091,7 @@ export function createPhoneAuthDevServer(
           }
           return redirect(response, target.toString());
         }
-        return await serveStatic(request, pathname, response);
+        return await serveStatic(request, pathname, response, runtimeEnv);
       }
 
       response.statusCode = 404;
@@ -31899,6 +32321,7 @@ export const __phoneAuthDevServerTestUtils = {
   prependCanvasGenerationSkill,
   resolveCanvasGenerationPromptBody,
   validateGenerationQueueReplay,
+  settleTimedOutEpisodeGenerationTask,
 };
 
 if (

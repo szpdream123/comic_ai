@@ -94,6 +94,7 @@ import {
   renderStoryboardGenerationEntryForPolling,
   renderStoryboardPanel,
   renderStoryboardStageForPartialUpdate,
+  renderBatchSelectionActions,
 } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 import {
   addStoryboard,
@@ -29175,6 +29176,13 @@ describe("production workbench project tab", () => {
       setAttribute(name, value) { if (name === "aria-pressed") selectAllState.pressed = value; },
       set textContent(value) { selectAllState.text = value; },
     };
+    const oneClickSetState = { disabled: true, ariaDisabled: "true" };
+    const oneClickSetButton = {
+      set disabled(value) { oneClickSetState.disabled = value; },
+      setAttribute(name, value) {
+        if (name === "aria-disabled") oneClickSetState.ariaDisabled = value;
+      },
+    };
     const workbench = {
       state: buildProjectState(),
       api: {},
@@ -29188,7 +29196,9 @@ describe("production workbench project tab", () => {
       root: {
         set innerHTML(value) { rootRenderCount += 1; this.html = value; },
         querySelector(selector) {
-          return selector === '[data-action="toggle-storyboard-select-all"]' ? selectAllButton : null;
+          if (selector === '[data-action="toggle-storyboard-select-all"]') return selectAllButton;
+          if (selector === '[data-action="set-selected-latest-media"]') return oneClickSetButton;
+          return null;
         },
         querySelectorAll(selector) {
           return selector === '[data-action="toggle-storyboard-selection"]' ? buttons : [];
@@ -29202,6 +29212,7 @@ describe("production workbench project tab", () => {
     assert.equal(rootRenderCount, 0);
     assert.equal(buttonStates.get(storyboards[0].id).checked, true);
     assert.equal(buttonStates.get(storyboards[0].id).label, "取消选择分镜");
+    assert.deepEqual(oneClickSetState, { disabled: false, ariaDisabled: "false" });
 
     await handleWorkbenchActionForTest(workbench, { dataset: { action: "toggle-storyboard-select-all" } });
     assert.equal(rootRenderCount, 0);
@@ -29212,6 +29223,7 @@ describe("production workbench project tab", () => {
     assert.equal(rootRenderCount, 0);
     assert.deepEqual(workbench.ui.selectedStoryboardIds, []);
     assert.deepEqual(selectAllState, { active: false, pressed: "false", text: "全选" });
+    assert.deepEqual(oneClickSetState, { disabled: true, ariaDisabled: "true" });
   });
 
   it("shows video-only batch entry label in storyboard scope", () => {
@@ -29255,6 +29267,351 @@ describe("production workbench project tab", () => {
       /open-episode-batch-actions/,
     );
     assert.doesNotMatch(html, /批量生图\/视频 \| 高清处理/);
+  });
+
+  it("renders one-click set before select-all and disables it without a selection", () => {
+    const emptyHtml = renderBatchSelectionActions("assets", false, false, 0);
+    const selectedHtml = renderBatchSelectionActions("storyboard", false, false, 2);
+
+    assert.match(
+      emptyHtml,
+      /data-action="set-selected-latest-media"[^>]*disabled[^>]*>一键设置<\/button>/,
+    );
+    assert.ok(
+      emptyHtml.indexOf('data-action="set-selected-latest-media"') <
+        emptyHtml.indexOf('data-action="toggle-episode-asset-select-all"'),
+    );
+    assert.match(selectedHtml, /data-action="set-selected-latest-media"[^>]*>一键设置<\/button>/);
+    assert.doesNotMatch(
+      selectedHtml.match(/<button[^>]*data-action="set-selected-latest-media"[^>]*>/)?.[0] ?? "",
+      /\sdisabled(?:\s|>)/,
+    );
+  });
+
+  it("one-click sets asset images from the latest usable success and clears assets without one", async () => {
+    const episodeId = "10000000-0000-4000-8000-000000000001";
+    const imageAssetId = "10000000-0000-4000-8000-000000000101";
+    const emptyAssetId = "10000000-0000-4000-8000-000000000102";
+    const errorAssetId = "10000000-0000-4000-8000-000000000103";
+    const imageVersionId = "20000000-0000-4000-8000-000000000101";
+    const storageObjectId = "30000000-0000-4000-8000-000000000101";
+    const historyCalls = [];
+    const setCalls = [];
+    const clearCalls = [];
+    const importedAssets = {
+      character: [
+        { id: imageAssetId, assetId: imageAssetId, name: "角色一", previewUrl: "/old-1.png" },
+        {
+          id: emptyAssetId,
+          assetId: emptyAssetId,
+          name: "角色二",
+          previewUrl: "/old-2.png",
+          latestVersion: { storageObjectId: "original-asset-storage-object" },
+        },
+        { id: errorAssetId, assetId: errorAssetId, name: "角色三", previewUrl: "/old-3.png" },
+      ],
+      scene: [],
+      prop: [],
+      other: { image: [], video: [] },
+    };
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: episodeId,
+        selectedEpisodeAssetId: imageAssetId,
+        selectedEpisodeCardId: imageAssetId,
+        selectedEpisodeAssetIds: [imageAssetId, errorAssetId, emptyAssetId],
+        projectAssetTab: "character",
+        importedAssets,
+        assetConversationHistory: {
+          [`image:${imageAssetId}`]: [{
+            taskId: "older-local-success-not-persisted",
+            status: "completed",
+            createdAt: "2026-08-08T09:00:00.000Z",
+            selectionContext: { selectedAssetId: imageAssetId, assetTab: "character" },
+            fixedImages: [{ url: "/older-local-success.png" }],
+          }],
+        },
+        assetConversationHistoryLoadedKeys: {},
+        assetConversationHistoryPendingKeys: {},
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: episodeId, title: "真实剧集", status: "draft", storyboardCount: 0 }],
+          assetsByType: { character: structuredClone(importedAssets.character), scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      api: {
+        async getAssetConversationHistory() {
+          return { entries: [{ taskId: "recent-window-only-failure", status: "failed", fixedImages: [] }] };
+        },
+        async getAssetConversationFullHistory(_episodeId, assetId) {
+          historyCalls.push(assetId);
+          if (assetId === imageAssetId) {
+            return {
+              entries: [
+                {
+                  taskId: "older-success",
+                  status: "completed",
+                  selectionContext: { selectedAssetId: assetId, assetTab: "character" },
+                  fixedImages: [{ assetVersionId: imageVersionId, storageObjectId, url: "/latest-success.png" }],
+                },
+                {
+                  taskId: "newer-failure",
+                  status: "failed",
+                  selectionContext: { selectedAssetId: assetId, assetTab: "character" },
+                  fixedImages: [],
+                },
+                {
+                  taskId: "newest-running",
+                  status: "running",
+                  selectionContext: { selectedAssetId: assetId, assetTab: "character" },
+                  fixedImages: [{ url: "/unfinished-preview.png" }],
+                },
+                {
+                  taskId: "newest-success-spelling",
+                  status: "success",
+                  createdAt: "2026-08-08T11:00:00.000Z",
+                  selectionContext: { selectedAssetId: assetId, assetTab: "character" },
+                  fixedImages: [{ assetVersionId: imageVersionId, storageObjectId, url: "/status-success.png" }],
+                },
+                {
+                  taskId: "newest-missing-status",
+                  selectionContext: { selectedAssetId: assetId, assetTab: "character" },
+                  fixedImages: [{ url: "/status-missing-preview.png" }],
+                },
+              ],
+            };
+          }
+          if (assetId === errorAssetId) {
+            return {
+              entries: [{
+                taskId: "write-will-fail",
+                status: "completed",
+                fixedImages: [{ url: "/write-will-fail.png" }],
+              }],
+            };
+          }
+          return { entries: [{ taskId: "only-failure", status: "failed", fixedImages: [] }] };
+        },
+        async setFixedImage(requestEpisodeId, assetId, payload) {
+          setCalls.push({ requestEpisodeId, assetId, payload });
+          if (assetId === errorAssetId) {
+            throw new Error("write unavailable");
+          }
+          return {
+            asset: {
+              fixedImageFileId: imageVersionId,
+              fixedImageStorageObjectId: storageObjectId,
+              fixedImageUrl: payload.sourceUrl,
+            },
+            file: {
+              previewUrl: payload.sourceUrl,
+              sourceUrl: payload.sourceUrl,
+              downloadUrl: payload.sourceUrl,
+              storageObjectId,
+            },
+          };
+        },
+        async clearFixedImage(requestEpisodeId, assetId) {
+          clearCalls.push({ requestEpisodeId, assetId });
+          return { asset: { fixedImageFileId: null, fixedImageUrl: null } };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-selected-latest-media" },
+    });
+
+    assert.deepEqual(historyCalls, [imageAssetId, errorAssetId, emptyAssetId]);
+    assert.deepEqual(setCalls, [
+      {
+        requestEpisodeId: episodeId,
+        assetId: imageAssetId,
+        payload: {
+          assetVersionId: imageVersionId,
+          storageObjectId,
+          sourceUrl: "/status-success.png",
+          previewUrl: "/status-success.png",
+        },
+      },
+      {
+        requestEpisodeId: episodeId,
+        assetId: errorAssetId,
+        payload: {
+          assetVersionId: null,
+          storageObjectId: null,
+          sourceUrl: "/write-will-fail.png",
+          previewUrl: "/write-will-fail.png",
+        },
+      },
+    ]);
+    assert.deepEqual(clearCalls, [{ requestEpisodeId: episodeId, assetId: emptyAssetId }]);
+    assert.equal(
+      workbench.ui.importedAssets.character.find((asset) => asset.id === emptyAssetId)?.latestVersion?.storageObjectId,
+      "original-asset-storage-object",
+    );
+    assert.equal(
+      workbench.ui.importedAssets.character.find((asset) => asset.id === errorAssetId)?.previewUrl,
+      "/old-3.png",
+    );
+    assert.deepEqual(workbench.ui.selectedEpisodeAssetIds, [imageAssetId, errorAssetId, emptyAssetId]);
+    assert.equal(workbench.ui.toast, "一键设置完成：已设置 1 项，已清空 1 项，失败 1 项。");
+  });
+
+  it("one-click sets storyboard videos from the latest usable success and clears storyboards without one", async () => {
+    const episodeId = "10000000-0000-4000-8000-000000000001";
+    const videoStoryboardId = "10000000-0000-4000-8000-000000000201";
+    const emptyStoryboardId = "10000000-0000-4000-8000-000000000202";
+    const videoVersionId = "20000000-0000-4000-8000-000000000201";
+    const storageObjectId = "30000000-0000-4000-8000-000000000201";
+    const storyboards = addStoryboard(addStoryboard([])).map((storyboard, index) => ({
+      ...storyboard,
+      id: index === 0 ? videoStoryboardId : emptyStoryboardId,
+      linkedShotId: index === 0 ? videoStoryboardId : emptyStoryboardId,
+      episodeId,
+      uploadedVideos: [],
+      selectedUploadedVideoId: "old-video",
+      currentVideoAssetVersionId: "old-video",
+      previewVideo: "/old-video.mp4",
+      previewThumbnailUrl: "/old-video.jpg",
+      videoStatus: "ready",
+    }));
+    const historyCalls = [];
+    const setCalls = [];
+    const updateCalls = [];
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: episodeId,
+        selectedStoryboardId: videoStoryboardId,
+        selectedStoryboardIds: [videoStoryboardId, emptyStoryboardId],
+        selectedStoryboard: storyboards[0],
+        storyboards,
+        episodeStoryboardMap: { [episodeId]: storyboards },
+        storyboardConversationHistory: {
+          [`video:${videoStoryboardId}`]: [{
+            taskId: "local-success-not-persisted-yet",
+            status: "completed",
+            createdAt: "2026-08-08T12:00:00.000Z",
+            result: {
+              assetVersionId: videoVersionId,
+              storageObjectId,
+              videoUrl: "/local-latest-success.mp4",
+              thumbnailUrl: "/local-latest-success.jpg",
+            },
+            storyboardId: videoStoryboardId,
+            mediaKind: "video",
+          }],
+        },
+        storyboardConversationHistoryLoadedKeys: {},
+        storyboardConversationHistoryPendingKeys: {},
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: episodeId, title: "真实剧集", status: "draft", storyboardCount: 2 }],
+          assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+          shots: [],
+        },
+      },
+      api: {
+        async getStoryboardConversationHistory() {
+          return { entries: [{ taskId: "recent-window-only-video-failure", status: "failed", result: {} }] };
+        },
+        async getStoryboardConversationFullHistory(_episodeId, storyboardId) {
+          historyCalls.push(storyboardId);
+          if (storyboardId === videoStoryboardId) {
+            return {
+              entries: [
+                {
+                  taskId: "older-video-success",
+                  status: "completed",
+                  createdAt: "2026-08-08T11:00:00.000Z",
+                  result: {
+                    assetVersionId: videoVersionId,
+                    storageObjectId,
+                    videoUrl: "/latest-success.mp4",
+                    thumbnailUrl: "/latest-success.jpg",
+                  },
+                },
+                { taskId: "newer-video-failure", status: "failed", result: {} },
+              ],
+            };
+          }
+          return { entries: [{ taskId: "only-video-failure", status: "failed", result: {} }] };
+        },
+        async setStoryboardVideo(requestEpisodeId, storyboardId, payload) {
+          setCalls.push({ requestEpisodeId, storyboardId, payload });
+          return {
+            storyboard: {
+              currentVideoFileId: videoVersionId,
+              currentVideoUrl: payload.sourceUrl,
+              currentVideoThumbnailUrl: payload.thumbnailUrl,
+            },
+            file: {
+              sourceUrl: "/latest-success.mp4",
+              thumbnailUrl: "/latest-success.jpg",
+              storageObjectId,
+            },
+          };
+        },
+        async updateShot(payload) {
+          updateCalls.push(payload);
+          return {};
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-selected-latest-media" },
+    });
+
+    assert.deepEqual(historyCalls, [videoStoryboardId, emptyStoryboardId]);
+    assert.deepEqual(setCalls, [{
+      requestEpisodeId: episodeId,
+      storyboardId: videoStoryboardId,
+      payload: {
+        assetVersionId: videoVersionId,
+        storageObjectId,
+        sourceUrl: "/local-latest-success.mp4",
+        thumbnailUrl: "/local-latest-success.jpg",
+      },
+    }]);
+    assert.deepEqual(updateCalls, [{ shotId: emptyStoryboardId, currentVideoAssetVersionId: null }]);
+    const updatedStoryboards = workbench.ui.episodeStoryboardMap[episodeId];
+    assert.equal(updatedStoryboards[0].currentVideoAssetVersionId, videoVersionId);
+    assert.equal(updatedStoryboards[0].previewVideo, "/local-latest-success.mp4");
+    assert.equal(updatedStoryboards[1].currentVideoAssetVersionId, null);
+    assert.equal(updatedStoryboards[1].previewVideo, null);
+    assert.deepEqual(workbench.ui.selectedStoryboardIds, [videoStoryboardId, emptyStoryboardId]);
+    assert.equal(workbench.ui.toast, "一键设置完成：已设置 1 项，已清空 1 项。");
   });
 
   it("opens image batch mode for assets scope using only explicitly selected assets", async () => {

@@ -72,7 +72,7 @@ export function renderScriptManagementPage({ state = {}, ui = {}, session = {} }
   return `
     <section class="script-management-page" aria-label="剧本管理">
       <header class="script-management-seo page-seo-heading" aria-label="剧本关键词">
-        <h1>剧本转分镜</h1>
+        <h1>小说转剧本</h1>
         <div class="page-seo-tags" aria-label="剧本能力">
           <b>小说改短剧</b>
           <b>AI分镜生成</b>
@@ -419,12 +419,13 @@ function renderScriptRenameModal(ui = {}) {
     return "";
   }
   const value = String(ui.renameScriptTitle ?? "");
+  const submitting = ui.renameScriptSubmitting === true;
   return `
-    <section class="modal-backdrop rename-project-backdrop" role="dialog" aria-modal="true" aria-label="重命名剧本">
+    <section class="modal-backdrop rename-project-backdrop" role="dialog" aria-modal="true" aria-label="重命名剧本" aria-busy="${submitting ? "true" : "false"}" tabindex="-1" ${submitting ? "autofocus" : ""}>
       <div class="rename-project-modal">
         <div class="rename-project-head">
           <h2>重命名</h2>
-          <button class="modal-close" type="button" data-action="close-rename-script-modal" aria-label="关闭">×</button>
+          <button class="modal-close" type="button" data-action="close-rename-script-modal" aria-label="关闭" ${submitting ? "disabled" : ""}>×</button>
         </div>
         <label class="rename-project-field">
           <input
@@ -433,14 +434,15 @@ function renderScriptRenameModal(ui = {}) {
             maxlength="50"
             value="${escapeHtml(value)}"
             placeholder="请输入剧本名称"
+            ${submitting ? "disabled" : "autofocus"}
           />
           <span class="rename-project-count script-rename-count">${[...value].length}/50</span>
         </label>
         <div class="rename-project-actions">
           <p class="modal-inline-status">${escapeHtml(ui.renameScriptNotice ?? "")}</p>
           <div class="rename-project-button-row">
-            <button class="secondary-action rename-cancel-button" type="button" data-action="close-rename-script-modal">取消</button>
-            <button class="primary-action rename-save-button" type="button" data-action="confirm-rename-script-card">保存</button>
+            <button class="secondary-action rename-cancel-button" type="button" data-action="close-rename-script-modal" ${submitting ? "disabled" : ""}>取消</button>
+            <button class="primary-action rename-save-button${submitting ? " is-loading" : ""}" type="button" data-action="confirm-rename-script-card" ${submitting ? "disabled" : ""}>${submitting ? '<span class="delete-project-spinner" aria-hidden="true"></span>保存中…' : "保存"}</button>
           </div>
         </div>
       </div>
@@ -455,25 +457,26 @@ function renderScriptDeleteModal({ ui = {}, cards = [] } = {}) {
   const deleteMode = ui.deleteScriptMode === "bulk" ? "bulk" : "single";
   const deleteIds = Array.isArray(ui.deleteScriptIds) ? ui.deleteScriptIds.map((id) => String(id)) : [];
   const deleteCount = deleteMode === "bulk" ? deleteIds.length : 1;
+  const submitting = ui.deleteScriptSubmitting === true;
   const script = cards.find((card) => String(card.id) === String(ui.deleteScriptId));
   const message =
     deleteMode === "bulk"
       ? `所选 ${deleteCount} 个剧本将被删除，确定删除吗？`
       : `所选剧本将被删除，确定删除${script?.title ? `“${escapeHtml(script.title)}”` : ""}吗？`;
   return `
-    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除剧本">
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="${submitting ? "正在删除" : "确认删除剧本"}" aria-busy="${submitting ? "true" : "false"}" tabindex="-1" ${submitting ? "autofocus" : ""}>
       <div class="delete-project-modal">
         <div class="delete-project-head">
           <div class="delete-project-icon">×</div>
           <div>
-            <h2>确认删除</h2>
-            <p>${message}</p>
+            <h2>${submitting ? "正在删除" : "确认删除"}</h2>
+            <p ${submitting ? 'role="status" aria-live="polite" aria-atomic="true"' : ""}>${submitting ? "正在删除剧本，请稍候。" : message}</p>
           </div>
-          <button class="modal-close" type="button" data-action="close-delete-script-modal" aria-label="关闭">×</button>
+          <button class="modal-close" type="button" data-action="close-delete-script-modal" aria-label="关闭" ${submitting ? "disabled" : ""}>×</button>
         </div>
         <div class="delete-project-actions">
-          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-script-modal">取消</button>
-          <button class="delete-confirm-button" type="button" data-action="confirm-delete-script-card">确定</button>
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-script-modal" ${submitting ? "disabled" : ""}>取消</button>
+          <button class="delete-confirm-button${submitting ? " is-loading" : ""}" type="button" data-action="confirm-delete-script-card" ${submitting ? "disabled" : "autofocus"}>${submitting ? '<span class="delete-project-spinner" aria-hidden="true"></span>删除中…' : "确定"}</button>
         </div>
       </div>
     </section>

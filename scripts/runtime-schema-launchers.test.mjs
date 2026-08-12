@@ -186,6 +186,17 @@ describe("runtime schema migration launchers", () => {
     assert.match(buildSource, /production-foundation-schema\.ts/);
   });
 
+  it("builds the production web bundle before supervised services start", async () => {
+    const productionSource = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
+    const webBuildOffset = productionSource.indexOf("await buildProductionWeb");
+    const firstServiceStartOffset = productionSource.indexOf('supervisor.start("phone-auth"');
+
+    assert.match(productionSource, /import \{ buildProductionWeb \} from "\.\/build-production-web\.mjs"/);
+    assert.ok(webBuildOffset >= 0);
+    assert.ok(webBuildOffset < firstServiceStartOffset);
+    assert.match(productionSource, /PRODUCTION_WEB_ENTRY_URL\s*=\s*productionWeb\.entryUrl/);
+  });
+
   it("retries only a transient generation maintenance database connection timeout", async () => {
     const source = await readFile(new URL("run-generation-queue-maintenance.mjs", import.meta.url), "utf8");
     const retryHelper = source.slice(

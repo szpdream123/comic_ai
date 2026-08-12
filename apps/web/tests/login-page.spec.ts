@@ -28,7 +28,7 @@ describe("app login modal shell", () => {
       /function resolvePublicSeoContentForSession\(session\) \{\s*document\.querySelector\("\.public-seo-content"\)\?\.remove\(\);\s*document\.body\.classList\.remove\("public-seo-page"\);/,
     );
     assert.match(js, /classList\.remove\("public-seo-session-pending"\)/);
-    assert.doesNotMatch(html, /rel="modulepreload" href="\/src\/features\/production-workbench\/index\.js\?/);
+    assert.match(html, /rel="modulepreload" href="\/src\/features\/production-workbench\/index\.js\?/);
   });
 
   it("contains phone and code steps inside the homepage modal", async () => {

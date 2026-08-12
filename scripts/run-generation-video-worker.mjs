@@ -35,6 +35,7 @@ const [
   { scheduleGenerationProviderPoll },
   { generationTimeoutMsFor },
   { runGenerationQueueJobWithRetryPolicy, shouldSettleGenerationTaskAfterQueueError },
+  { resolveGenerationArtifactQueueExhaustionFailureCode },
   { recordGenerationSkippedSuccessor },
 ] = await Promise.all([
   import("../apps/backend/src/modules/shared/db/dev-db.ts"),
@@ -57,6 +58,7 @@ const [
   import("../apps/backend/src/modules/model-gateway/generation-due-poll.service.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-timeout.policy.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-queue-retry.policy.ts"),
+  import("../apps/backend/src/modules/model-gateway/generation-skipped-coordinator.ts"),
   import("../apps/backend/src/modules/model-gateway/generation-stage-successor.store.ts"),
 ]);
 
@@ -98,9 +100,10 @@ const workerOptions = {
 };
 const generationAssignmentReleases = createGenerationWorkerOperationTracker();
 const processors = {
-  async schedulePoll({ taskId, mediaType, nextPollAttempt, delayMs, now }) {
+  async schedulePoll({ taskId, attemptId, mediaType, nextPollAttempt, delayMs, now }) {
     const scheduled = await scheduleGenerationProviderPoll(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       nextPollAttempt,
       nextPollAt: new Date(now.getTime() + Math.max(0, Math.floor(delayMs))),
       pollDeadlineAt: new Date(now.getTime() + generationTimeoutMsFor(mediaType)),
@@ -118,35 +121,39 @@ const processors = {
       now,
     });
   },
-  async pollAudio({ taskId, now }) {
+  async pollAudio({ taskId, attemptId, now }) {
     return processAudioGenerationPollJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       env: process.env,
       now,
     });
   },
-  async expireAudio({ taskId, now }) {
-    return expireAudioGenerationPollJob(db, { taskId, now });
+  async expireAudio({ taskId, attemptId, now }) {
+    return expireAudioGenerationPollJob(db, { taskId, expectedAttemptId: attemptId ?? null, now });
   },
-  async finalizeAudioArtifact({ taskId, now }) {
+  async finalizeAudioArtifact({ taskId, attemptId, now }) {
     return finalizeAudioGenerationArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
     });
   },
-  async fetchAudioArtifact({ taskId, now }) {
+  async fetchAudioArtifact({ taskId, attemptId, now }) {
     return fetchAudioGenerationArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
     });
   },
-  async persistAudioArtifact({ taskId, now }) {
+  async persistAudioArtifact({ taskId, attemptId, now }) {
     return persistAudioGenerationArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
@@ -162,37 +169,41 @@ const processors = {
       now,
     });
   },
-  async pollGptImage({ taskId, now }) {
+  async pollGptImage({ taskId, attemptId, now }) {
     return processGptImagePollJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       env: process.env,
       fetchImpl: undefined,
       rateLimiter,
       now,
     });
   },
-  async expireGptImage({ taskId, now }) {
-    return expireGptImagePollJob(db, { taskId, now });
+  async expireGptImage({ taskId, attemptId, now }) {
+    return expireGptImagePollJob(db, { taskId, expectedAttemptId: attemptId ?? null, now });
   },
-  async finalizeGptImageArtifact({ taskId, now }) {
+  async finalizeGptImageArtifact({ taskId, attemptId, now }) {
     return finalizeGptImageArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
     });
   },
-  async fetchGptImageArtifact({ taskId, now }) {
+  async fetchGptImageArtifact({ taskId, attemptId, now }) {
     return fetchGptImageArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
     });
   },
-  async persistGptImageArtifact({ taskId, now }) {
+  async persistGptImageArtifact({ taskId, attemptId, now }) {
     return persistGptImageArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
@@ -207,41 +218,46 @@ const processors = {
       now,
     });
   },
-  async pollSeedanceVideo({ taskId, now }) {
+  async pollSeedanceVideo({ taskId, attemptId, now }) {
     return processSeedanceVideoPollJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       rateLimiter,
       now,
     });
   },
-  async expireSeedanceVideo({ taskId, now }) {
+  async expireSeedanceVideo({ taskId, attemptId, now }) {
     return expireSeedanceVideoPollJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       env: process.env,
       now,
     });
   },
-  async finalizeSeedanceVideoArtifact({ taskId, now }) {
+  async finalizeSeedanceVideoArtifact({ taskId, attemptId, now }) {
     return finalizeSeedanceVideoArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
     });
   },
-  async fetchSeedanceVideoArtifact({ taskId, now }) {
+  async fetchSeedanceVideoArtifact({ taskId, attemptId, now }) {
     return fetchSeedanceVideoArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
     });
   },
-  async persistSeedanceVideoArtifact({ taskId, now }) {
+  async persistSeedanceVideoArtifact({ taskId, attemptId, now }) {
     return persistSeedanceVideoArtifactJob(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       runtime: storageRuntime,
       env: process.env,
       now,
@@ -627,6 +643,9 @@ function parseJsonRecord(value) {
 }
 
 async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
+  const attemptId = typeof job?.data?.attemptId === "string" && job.data.attemptId.trim()
+    ? job.data.attemptId.trim()
+    : null;
   const failedAt = new Date();
   try {
     await publishGenerationDeadLetter({
@@ -656,6 +675,7 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
       const imageRecoveryOutcome = await runWithDatabaseContext(() =>
         handleGptImageArtifactQueueExhaustion(db, {
           taskId,
+          expectedAttemptId: attemptId ?? null,
           error,
           now: failedAt,
         }));
@@ -663,9 +683,12 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
     }
     await runWithDatabaseContext(() => failGenerationTaskAfterQueueError(db, {
       taskId,
+      expectedAttemptId: attemptId ?? null,
       ...(sourceAssignmentKey ? { sourceAssignmentKey } : {}),
       failureCode: artifactQueueFailure
-        ? "provider_output_storage_failed"
+        ? resolveGenerationArtifactQueueExhaustionFailureCode(
+            typeof error?.failureCode === "string" ? error.failureCode : error.message,
+          )
         : "generation_queue_error",
       displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
       creditOutcome: "manual_review_required",
