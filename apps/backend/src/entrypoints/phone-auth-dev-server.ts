@@ -20135,6 +20135,38 @@ export function createPhoneAuthDevServer(
         });
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/first-login-onboarding") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.read"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, {
+          status: 200,
+          body: await createAdminSystemSettingsService({ db }).getFirstLoginOnboardingConfig(),
+        });
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/first-login-onboarding") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["settings.write"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as { value?: unknown; reason?: string };
+        return writeJson(response, await createAdminSystemSettingsService({ db }).updateFirstLoginOnboardingConfig({
+          value: body.value,
+          reason: String(body.reason ?? ""),
+          idempotencyKey,
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/batch-image-prompt-presets") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -20983,6 +21015,13 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: await adminSettings.getPublicCustomerSupportConfig(),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/public/first-login-onboarding") {
+        return writeJson(response, {
+          status: 200,
+          body: await createAdminSystemSettingsService({ db }).getFirstLoginOnboardingConfig(),
         });
       }
 
@@ -21961,6 +22000,7 @@ export function createPhoneAuthDevServer(
         return writeJson(response, {
           status: 200,
           body: {
+            isNewUser: verified.isNewUser,
             user: {
               id: verified.user.id,
               phone: verified.user.phone,

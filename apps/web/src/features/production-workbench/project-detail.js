@@ -11,6 +11,7 @@ import { renderExportPanel } from "./export-panel.js";
 import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
+import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-login-onboarding.js";
 import { renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
   EPISODE_PROMPT_SKILL_CATEGORIES,
@@ -1397,6 +1398,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderAnnouncementPanel(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
+    ${renderFirstLoginGuide(ui.firstLoginGuide)}
   </div>`;
 }
 
@@ -3788,7 +3790,7 @@ function renderSingleEpisodeModal(ui, state = {}) {
           </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>创建空白章节</button>
-            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard || !selectedSkillCount || !selectedTextModelCode ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
+            <button class="primary-action single-episode-ai-action ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "generate-storyboard-button" ? "first-login-guide-target" : ""}" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard || !selectedSkillCount || !selectedTextModelCode ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
           </div>
         </div>
       </div>
@@ -12312,7 +12314,7 @@ function renderHomeHero({ detailState, session, ui = {} }) {
           <span>小成本成就大爆款</span>
         </div>
         <div class="hero-actions">
-          ${isTeamMember ? "" : `<button class="hero-cta" type="button" data-action="open-create-modal">创建项目</button>`}
+          ${isTeamMember ? "" : `<button class="hero-cta ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "create-project-button" ? "first-login-guide-target" : ""}" type="button" data-action="open-create-modal">创建项目</button>`}
         </div>
         ${renderHomeSeoKeywordButtons(homeSeo)}
       </div>
@@ -12450,6 +12452,7 @@ function renderProjectGallery({ ui, session }) {
                 ui.projectCardMenuId === project.id,
                 selectedIds.has(String(project.id ?? "")),
                 !isTeamMember,
+                resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "recent-project-card" && ui.selectedProjectCardId === project.id,
               )).join("")
             : isTeamMember && !searchQuery
               ? renderTeamMemberAssignmentEmptyState("项目")
@@ -12596,11 +12599,11 @@ function buildProjectPageItems(currentPage, totalPages) {
   return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
-function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true) {
+function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true, isGuideTarget = false) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
-    <article class="project-gallery-card ${isSelected ? "is-selected" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
+    <article class="project-gallery-card ${isSelected ? "is-selected" : ""} ${isGuideTarget ? "first-login-guide-target" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
       <button
         class="project-gallery-select-toggle"
         type="button"

@@ -1145,6 +1145,14 @@ export const creatorApi = {
     return response?.data && typeof response.data === "object" ? response.data : response;
   },
 
+  async getFirstLoginOnboardingConfig() {
+    const response = await fetchJsonWithTtl("/api/public/first-login-onboarding", {
+      cacheKey: "GET /api/public/first-login-onboarding",
+      cacheTtlMs: 30000,
+    });
+    return response?.data && typeof response.data === "object" ? response.data : response;
+  },
+
   submitCommunityFeedback(input) {
     return postJson("/api/community/feedback", input);
   },

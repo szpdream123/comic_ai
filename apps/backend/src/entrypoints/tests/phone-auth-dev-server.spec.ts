@@ -1319,15 +1319,42 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie },
       });
       const sessionPayload = await sessionResponse.json();
+      await db.query(
+        "UPDATE sms_send_records SET created_at = created_at - INTERVAL '2 minutes' WHERE phone_e164 = '13800138000'",
+      );
+      const repeatRequestResponse = await fetch(`${server.origin}/api/auth/code/request`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone: "13800138000" }),
+      });
+      const repeatRequested = await repeatRequestResponse.json();
+      const repeatDebugResponse = await fetch(
+        `${server.origin}/api/auth/dev/challenges/${repeatRequested.challengeId}`,
+      );
+      const repeatDebug = await repeatDebugResponse.json();
+      const repeatVerifyResponse = await fetch(`${server.origin}/api/auth/code/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          challengeId: repeatRequested.challengeId,
+          phone: "13800138000",
+          code: repeatDebug.code,
+          remember: true,
+        }),
+      });
+      const repeatVerifyPayload = await repeatVerifyResponse.json();
 
       assert.equal(requestResponse.status, 200);
       assert.equal(debugResponse.status, 200);
       assert.match(debug.code, /^\d{6}$/);
       assert.equal(verifyResponse.status, 200);
+      assert.equal(verifyPayload.isNewUser, true);
       assert.equal(sessionResponse.status, 200);
       assert.equal(verifyPayload.user.phone, "13800138000");
       assert.match(userRecord.rows[0]?.invite_code ?? "", /^[0-9A-Z]{10}$/);
       assert.equal(sessionPayload.authenticated, true);
+      assert.equal(repeatVerifyResponse.status, 200);
+      assert.equal(repeatVerifyPayload.isNewUser, false);
       assert.match(cookie, /Max-Age=2592000/);
     } finally {
       await server.close();

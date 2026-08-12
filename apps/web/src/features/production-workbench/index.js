@@ -12,6 +12,12 @@ import {
   WORKBENCH_THEME_OPTIONS,
 } from "./project-detail.js?single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&canvas-inline-prompt-editor=1";
 import { buildProjectCreateRequest } from "./project-create-request.js";
+import {
+  advanceFirstLoginGuide,
+  initializeFirstLoginGuide,
+  reduceFirstLoginTipTargetAction,
+  reduceFirstLoginGuideAction,
+} from "./first-login-onboarding.js";
 import { normalizeNovelStyleScriptText, truncateScriptTextByCharacters } from "./script-text-normalizer.js?single-episode-limit=2";
 import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
 import {
@@ -2193,6 +2199,27 @@ function openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget) {
   return true;
 }
 
+function refreshFirstLoginOnboardingConfig(workbench) {
+  const currentGuide = workbench.ui.firstLoginGuide;
+  const currentUserId = workbench.ui.firstLoginGuideUserId;
+  if (
+    !currentGuide?.active
+    || currentGuide.step !== "welcome"
+    || !currentUserId
+    || typeof workbench.api?.getFirstLoginOnboardingConfig !== "function"
+  ) return;
+
+  void workbench.api.getFirstLoginOnboardingConfig().then((config) => {
+    if (
+      workbench.ui.firstLoginGuide !== currentGuide
+      || workbench.ui.firstLoginGuide?.step !== "welcome"
+      || workbench.ui.firstLoginGuideUserId !== currentUserId
+    ) return;
+    workbench.ui.firstLoginGuide = initializeFirstLoginGuide(workbench.session, config);
+    render(workbench);
+  }).catch(() => {});
+}
+
 export async function initProductionWorkbench({ root, session, api, onLogout, onRequireLogin, deferInitialRender = false }) {
   const initialCommunityData = readLingxiCommunityData();
   const workbench = {
@@ -2245,6 +2272,10 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     ui: {
       busy: false,
       toast: "",
+      firstLoginGuide: initializeFirstLoginGuide(session),
+      firstLoginGuideUserId: session?.firstLoginOnboarding === true
+        ? String(session?.user?.id ?? "")
+        : "",
       toastQueue: [],
       validationMessage: "",
       selectedWorkbenchTheme: readWorkbenchThemePreference(),
@@ -4872,6 +4903,18 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   workbench.updateSession = async (nextSession, nextApi = workbench.api) => {
     workbench.session = nextSession;
     workbench.api = nextApi;
+    const firstLoginUserId = nextSession?.firstLoginOnboarding === true
+      ? String(nextSession?.user?.id ?? "")
+      : "";
+    if (firstLoginUserId && workbench.ui.firstLoginGuideUserId !== firstLoginUserId) {
+      workbench.ui.firstLoginGuide = initializeFirstLoginGuide(nextSession);
+      workbench.ui.firstLoginGuideUserId = firstLoginUserId;
+      if (workbench.ui.firstLoginGuide) {
+        workbench.ui.activeNavTab = "home";
+        window.location.hash = "home";
+        refreshFirstLoginOnboardingConfig(workbench);
+      }
+    }
     if (deferInitialRender) syncAnnouncementUnreadState(workbench);
     const deferShellData = isCanvasNavTab(workbench.ui.activeNavTab)
       && workbench.ui.canvasProjectView === "detail";
@@ -4896,6 +4939,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeTaskCenterPolling, { once: true });
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasLiveSubscription, { once: true });
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasAssetTransfers, { once: true });
+  refreshFirstLoginOnboardingConfig(workbench);
   return workbench;
 }
 
@@ -11580,6 +11624,15 @@ function syncToolboxPromptReverseKeyFrameLightbox(workbench, target, index = -1)
 
 export async function handleProductionWorkbenchAction(workbench, target) {
   let action = target.dataset.action;
+  const firstLoginTipAction = reduceFirstLoginTipTargetAction(
+    workbench.ui.firstLoginGuide,
+    action,
+  );
+  workbench.ui.firstLoginGuide = firstLoginTipAction.state;
+  if (firstLoginTipAction.handled && !firstLoginTipAction.allowAction) {
+    render(workbench);
+    return;
+  }
   const allowWhileBusy = new Set([
     "set-nav-tab",
     "open-create-modal",
@@ -11776,6 +11829,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "set-community-post-page",
     "submit-community-comment",
     "submit-community-reply",
+    "start-first-login-guide",
+    "dismiss-first-login-guide",
+    "first-login-use-sample-script",
+    "first-login-use-own-script",
   ]);
   const videoSubmissionPreparationActions = new Set([
     "set-muse-scope-mode",
@@ -11796,6 +11853,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
   if (!WORKBENCH_CHROME_ACTIONS.has(action)) clearWorkbenchToast(workbench);
+
+  const firstLoginGuideAction = reduceFirstLoginGuideAction(workbench.ui.firstLoginGuide, action);
+  if (firstLoginGuideAction.handled) {
+    if (firstLoginGuideAction.openSingleEpisode) {
+      await openSingleEpisodeFlow(workbench);
+      workbench.ui.singleEpisodeScript = firstLoginGuideAction.script;
+    } else if (action === "start-first-login-guide") {
+      workbench.ui.activeNavTab = "home";
+      window.location.hash = "home";
+    }
+    workbench.ui.firstLoginGuide = firstLoginGuideAction.state;
+    render(workbench);
+    return;
+  }
 
   if (action === "open-toolbox-prompt-reverse") {
     if (!hasActiveSessionUser(workbench.session)) {
@@ -20684,6 +20755,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     render(workbench);
     try {
       await ensureProjectOverviewLoaded(workbench, projectId);
+      workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "project-opened");
       const nextStoryboards = syncStoryboards(
         workbench.ui.storyboards,
         createStoryboardList(workbench.state),
@@ -20864,6 +20936,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.scriptConversionSkillModalOpen = false;
     workbench.ui.scriptConversionSkillDraftId = "";
     resetSingleEpisodeModalState(workbench);
+    workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "editor-closed");
     render(workbench);
     return;
   }
@@ -21080,6 +21153,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     cancelSingleEpisodeAiPreviewRequest(workbench);
     workbench.ui.singleEpisodeAiChecking = false;
     workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+    workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "preview-closed");
     render(workbench);
     return;
   }
@@ -21548,6 +21622,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     } else {
       workbench.ui.singleEpisodeAiChecking = true;
       workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+      workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "generation-started");
       showWorkbenchToast(workbench, "正在分析中，请稍候...", { tone: "success" });
     }
     render(workbench);
@@ -21673,6 +21748,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         liveDisplayTables: finalizedPreview?.previewTables ?? finalizedPreview?.displayTables ?? null,
         activeStage: "complete",
       };
+      if (!isManualScriptAnalysis) {
+        workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "generation-ready");
+      }
       syncSingleEpisodeAiAssetTable(workbench, "scene");
       syncSingleEpisodeAiAssetTable(workbench, "character");
       syncSingleEpisodeAiAssetTable(workbench, "prop");
@@ -21712,6 +21790,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.singleEpisodeAiPreview.livePreviewTables =
         workbench.ui.singleEpisodeAiPreview.liveDisplayTables;
     } catch (error) {
+      if (!isManualScriptAnalysis) {
+        workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "generation-failed");
+      }
       if (isAbortError(error)) {
         if (workbench.singleEpisodeAiPreviewAbortController === abortController) {
           workbench.singleEpisodeAiPreviewAbortController = null;
@@ -21776,6 +21857,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-single-episode-flow") {
     await openSingleEpisodeFlow(workbench);
+    const nextFirstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "episode-flow-opened");
+    if (nextFirstLoginGuide !== workbench.ui.firstLoginGuide) {
+      workbench.ui.firstLoginGuide = nextFirstLoginGuide;
+      render(workbench);
+    }
     return;
   }
 
@@ -24618,6 +24704,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.scriptUploadFile = null;
       workbench.ui.scriptUploadFileName = "";
       window.location.hash = "project";
+      workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "project-created");
     });
     return;
   }
@@ -32726,6 +32813,7 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
       toast: "已创建章节并进入分镜工作台。",
       scopeMode: "storyboard",
     });
+    workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "storyboard-committed");
   }, {
     successToast: "已创建章节并进入分镜工作台。",
     onError: () => {
