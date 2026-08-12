@@ -9,6 +9,9 @@ import { translateProviderErrorMessageField } from "./provider-error-message.ts"
 import { compactProviderAuditValue, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import { buildTaskCenterProviderDiagnostics } from "./task-center-provider-diagnostics.ts";
 
+const PROVIDER_SUBMISSION_RECOVERY_IN_PROGRESS = "provider_submission_recovery_in_progress";
+const PROVIDER_SUBMISSION_RECOVERY_LEASE_MS = 10 * 60 * 1000;
+
 export interface ProviderRequestRecord {
   id: string;
   userId: string;
@@ -220,7 +223,16 @@ export async function submitProviderRequest(
     ) {
       return { kind: "stale_attempt", request: prepared.request };
     }
-    if (prepared.request.status === "result_unknown" && !prepared.request.externalRequestId) {
+    if (
+      !prepared.request.externalRequestId
+      && (
+        prepared.request.status === "result_unknown"
+        || (
+          prepared.request.status === "submitted"
+          && prepared.request.failureCode === PROVIDER_SUBMISSION_RECOVERY_IN_PROGRESS
+        )
+      )
+    ) {
       const claimed = await tryClaimProviderSubmissionRecovery(db, {
         providerRequestId: prepared.request.id,
         now: input.now,
@@ -252,8 +264,9 @@ export async function submitProviderRequest(
           failureCode,
           phase: "submit",
         });
-        await markProviderRequestFailed(db, {
+        const failed = await markProviderSubmissionRecoveryFailed(db, {
           providerRequestId: claimed.id,
+          recoveryClaimedAt: claimed.updatedAt,
           failureCode,
           redactedResponse: {
             ...(readProviderDiagnostics(error) ?? {}),
@@ -261,18 +274,31 @@ export async function submitProviderRequest(
           },
           now: input.now,
         });
+        if (!failed) {
+          return {
+            kind: "already_started",
+            request: (await findProviderRequestById(db, claimed.id))!,
+          };
+        }
         throw modelError;
       }
-      const accepted = await recordProviderSubmissionAccepted(db, {
+      const accepted = await persistAcceptedProviderSubmission(db, {
         providerRequestId: claimed.id,
+        recoveryClaimedAt: claimed.updatedAt,
         externalRequestId: recovered.externalRequestId,
         status: recovered.status,
         redactedResponse: sanitizeProviderIdentityFields(withStoredProviderRawResponse(recovered.redactedResponse ?? {})),
         now: input.now,
       });
+      if (!accepted.persisted) {
+        return {
+          kind: "already_started",
+          request: accepted.request,
+        };
+      }
       return {
         kind: "submitted",
-        request: accepted,
+        request: accepted.request,
         artifacts: recovered.artifacts,
         redactedRequest: recovered.redactedRequest,
       };
@@ -310,8 +336,9 @@ export async function submitProviderRequest(
     };
   }
 
+  let submitted: Awaited<ReturnType<ProviderAdapter["submit"]>>;
   try {
-    const submitted = await input.adapter.submit({
+    submitted = await input.adapter.submit({
       providerRequestId: started.id,
       providerName: started.providerName,
       providerOperation: started.providerOperation,
@@ -338,20 +365,6 @@ export async function submitProviderRequest(
       });
     }
 
-    const accepted = await recordProviderSubmissionAccepted(db, {
-      providerRequestId: started.id,
-      externalRequestId: submitted.externalRequestId,
-      status: submitted.status,
-      redactedResponse: sanitizeProviderIdentityFields(withStoredProviderRawResponse(submitted.redactedResponse ?? {})),
-      now: input.now,
-    });
-
-    return {
-      kind: "submitted",
-      request: accepted,
-      artifacts: submitted.artifacts,
-      redactedRequest: submitted.redactedRequest,
-    };
   } catch (error) {
     const definitiveFailure = hasDefinitiveProviderResponse(error);
     const failureCode = definitiveFailure
@@ -373,6 +386,66 @@ export async function submitProviderRequest(
     });
     throw modelError;
   }
+
+  const accepted = await persistAcceptedProviderSubmission(db, {
+    providerRequestId: started.id,
+    externalRequestId: submitted.externalRequestId,
+    status: submitted.status,
+    redactedResponse: sanitizeProviderIdentityFields(withStoredProviderRawResponse(submitted.redactedResponse ?? {})),
+    now: input.now,
+  });
+  if (!accepted.persisted) {
+    return {
+      kind: "already_started",
+      request: accepted.request,
+    };
+  }
+  return {
+    kind: "submitted",
+    request: accepted.request,
+    artifacts: submitted.artifacts,
+    redactedRequest: submitted.redactedRequest,
+  };
+}
+
+async function markProviderSubmissionRecoveryFailed(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    recoveryClaimedAt: Date;
+    failureCode: string;
+    redactedResponse: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord | undefined> {
+  const row = await queryOne<ProviderRequestRow>(
+    db,
+    `
+      UPDATE provider_requests
+      SET status = 'failed',
+          next_poll_at = NULL,
+          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          failure_code = $3,
+          updated_at = $6
+      WHERE id = $1
+        AND status = 'submitted'
+        AND external_request_id IS NULL
+        AND failure_code = $7
+        AND updated_at = $2
+      RETURNING *
+    `,
+    [
+      input.providerRequestId,
+      input.recoveryClaimedAt,
+      input.failureCode,
+      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
+      serializeTaskCenterProviderDiagnostics(input.redactedResponse),
+      input.now,
+      PROVIDER_SUBMISSION_RECOVERY_IN_PROGRESS,
+    ],
+  );
+  return row ? providerRequestFromRow(row) : undefined;
 }
 
 async function tryClaimProviderSubmissionRecovery(
@@ -384,16 +457,111 @@ async function tryClaimProviderSubmissionRecovery(
     `
       UPDATE provider_requests
       SET status = 'submitted',
-          failure_code = NULL,
+          failure_code = $4,
           updated_at = $2
       WHERE id = $1
-        AND status = 'result_unknown'
         AND external_request_id IS NULL
+        AND (
+          status = 'result_unknown'
+          OR (
+            status = 'submitted'
+            AND failure_code = $4
+            AND updated_at <= $3
+          )
+        )
       RETURNING *
     `,
-    [input.providerRequestId, input.now],
+    [
+      input.providerRequestId,
+      input.now,
+      new Date(input.now.getTime() - PROVIDER_SUBMISSION_RECOVERY_LEASE_MS),
+      PROVIDER_SUBMISSION_RECOVERY_IN_PROGRESS,
+    ],
   );
   return row ? providerRequestFromRow(row) : undefined;
+}
+
+async function markAcceptedProviderSubmissionResultUnknown(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    externalRequestId: string;
+    failureCode: string;
+    redactedResponse: Record<string, unknown>;
+    recoveryClaimedAt?: Date;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord | undefined> {
+  const row = await queryOne<ProviderRequestRow>(
+    db,
+    `
+      UPDATE provider_requests
+      SET status = 'result_unknown',
+          external_request_id = $2,
+          failure_code = $3,
+          response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
+          task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
+          updated_at = $6
+      WHERE id = $1
+        AND status = 'submitted'
+        AND external_request_id IS NULL
+        AND ($7::timestamptz IS NULL OR updated_at = $7)
+      RETURNING *
+    `,
+    [
+      input.providerRequestId,
+      input.externalRequestId,
+      input.failureCode,
+      JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
+      serializeTaskCenterProviderDiagnostics(input.redactedResponse),
+      input.now,
+      input.recoveryClaimedAt ?? null,
+    ],
+  );
+  return row ? providerRequestFromRow(row) : undefined;
+}
+
+async function persistAcceptedProviderSubmission(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    externalRequestId: string;
+    status: Extract<ProviderRequestStatus, "accepted" | "running" | "succeeded">;
+    redactedResponse: Record<string, unknown>;
+    recoveryClaimedAt?: Date;
+    now: Date;
+  },
+): Promise<{ request: ProviderRequestRecord; persisted: boolean }> {
+  try {
+    return {
+      request: await recordProviderSubmissionAccepted(db, input),
+      persisted: true,
+    };
+  } catch (error) {
+    const failureCode = "provider_submission_persist_failed";
+    const modelError = ModelError.fromUnknown(error, {
+      failureCode,
+      phase: "submit",
+    });
+    const preserved = await markAcceptedProviderSubmissionResultUnknown(db, {
+      providerRequestId: input.providerRequestId,
+      externalRequestId: input.externalRequestId,
+      failureCode,
+      redactedResponse: {
+        ...input.redactedResponse,
+        ...modelError.toRedactedProviderRecord(),
+      },
+      recoveryClaimedAt: input.recoveryClaimedAt,
+      now: input.now,
+    });
+    if (!preserved) {
+      return {
+        request: (await findProviderRequestById(db, input.providerRequestId))!,
+        persisted: false,
+      };
+    }
+    throw modelError;
+  }
 }
 
 async function providerRequestBelongsToExpectedAttempt(
@@ -702,6 +870,7 @@ async function recordProviderSubmissionAccepted(
     externalRequestId: string;
     status: Extract<ProviderRequestStatus, "accepted" | "running" | "succeeded">;
     redactedResponse: Record<string, unknown>;
+    recoveryClaimedAt?: Date;
     now: Date;
   },
 ): Promise<ProviderRequestRecord> {
@@ -711,11 +880,15 @@ async function recordProviderSubmissionAccepted(
       UPDATE provider_requests
       SET status = $2,
           external_request_id = $3,
+          failure_code = NULL,
           response_redacted_json = COALESCE(response_redacted_json, '{}'::jsonb) || $4::jsonb,
           task_center_diagnostics_json = COALESCE($5::jsonb, task_center_diagnostics_json),
           updated_at = $6
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
+        AND status = 'submitted'
+        AND external_request_id IS NULL
+        AND ($7::timestamptz IS NULL OR updated_at = $7)
       RETURNING *
     `,
     [
@@ -725,6 +898,7 @@ async function recordProviderSubmissionAccepted(
       JSON.stringify(sanitizeProviderIdentityFields(withStoredProviderRawResponse(input.redactedResponse))),
       serializeTaskCenterProviderDiagnostics(input.redactedResponse),
       input.now,
+      input.recoveryClaimedAt ?? null,
     ],
   );
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import type { SqlDatabase } from "../../shared/db/sql.ts";
 import {
   markExternalSubmissionStarted,
   createOrReuseProviderRequest,
@@ -290,6 +291,176 @@ describe("provider request no blind retry after external start", () => {
       await db.close();
     }
   });
+
+  it("reclaims a stale provider submission recovery lease", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new RecoveringProviderAdapter();
+
+    try {
+      const input = legacyRecoveryInput("stale-recovery-lease");
+      const prepared = await seedResultUnknownRequest(db, input);
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'submitted',
+              failure_code = 'provider_submission_recovery_in_progress',
+              updated_at = $2
+          WHERE id = $1
+        `,
+        [prepared.request.id, new Date("2026-05-09T09:55:00.000Z")],
+      );
+
+      const recovered = await submitProviderRequest(db, {
+        ...input,
+        adapter,
+        now: new Date("2026-05-09T10:09:00.000Z"),
+      });
+
+      assert.equal(recovered.kind, "submitted");
+      assert.equal(recovered.request.externalRequestId, "external-recovered");
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("prevents a stale recovery claimant from overwriting a newer accepted result", async () => {
+    const db = await createMigratedTestDb();
+    const staleAdapter = new BlockingMissingRecoveryProviderAdapter();
+    const freshAdapter = new RecoveringProviderAdapter();
+
+    try {
+      const input = legacyRecoveryInput("stale-recovery-claimant");
+      const prepared = await seedResultUnknownRequest(db, input);
+      const stale = submitProviderRequest(db, {
+        ...input,
+        adapter: staleAdapter,
+        now: new Date("2026-05-09T10:09:00.000Z"),
+      });
+      await staleAdapter.started;
+
+      const fresh = await submitProviderRequest(db, {
+        ...input,
+        adapter: freshAdapter,
+        now: new Date("2026-05-09T10:20:00.000Z"),
+      });
+      staleAdapter.release();
+      const staleResult = await stale;
+
+      assert.equal(fresh.kind, "submitted");
+      assert.equal(fresh.request.externalRequestId, "external-recovered");
+      assert.equal(staleResult.kind, "already_started");
+      assert.equal(staleResult.request.status, "accepted");
+      assert.equal(staleResult.request.externalRequestId, "external-recovered");
+      assert.equal(staleAdapter.recoveryCalls, 1);
+      assert.equal(freshAdapter.recoveryCalls, 1);
+
+      const request = await db.query<{
+        status: string;
+        external_request_id: string | null;
+        failure_code: string | null;
+      }>(
+        "SELECT status, external_request_id, failure_code FROM provider_requests WHERE id = $1",
+        [prepared.request.id],
+      );
+      assert.deepEqual(request.rows[0], {
+        status: "accepted",
+        external_request_id: "external-recovered",
+        failure_code: null,
+      });
+    } finally {
+      staleAdapter.release();
+      await db.close();
+    }
+  });
+
+  it("does not return artifacts from a stale recovery claimant", async () => {
+    const db = await createMigratedTestDb();
+    const staleAdapter = new BlockingAlternativeRecoveryProviderAdapter();
+    const freshAdapter = new RecoveringProviderAdapter();
+
+    try {
+      const input = legacyRecoveryInput("stale-recovery-artifact");
+      await seedResultUnknownRequest(db, input);
+      const stale = submitProviderRequest(db, {
+        ...input,
+        adapter: staleAdapter,
+        now: new Date("2026-05-09T10:09:00.000Z"),
+      });
+      await staleAdapter.started;
+
+      const fresh = await submitProviderRequest(db, {
+        ...input,
+        adapter: freshAdapter,
+        now: new Date("2026-05-09T10:20:00.000Z"),
+      });
+      staleAdapter.release();
+      const staleResult = await stale;
+
+      assert.equal(fresh.kind, "submitted");
+      assert.equal(fresh.request.externalRequestId, "external-recovered");
+      assert.deepEqual(staleResult, {
+        kind: "already_started",
+        request: fresh.request,
+      });
+    } finally {
+      staleAdapter.release();
+      await db.close();
+    }
+  });
+
+  it("preserves a returned external request id when acceptance persistence fails", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new SuccessfulProviderAdapter();
+    let acceptanceWrites = 0;
+    const failingDb: SqlDatabase = {
+      async query<T>(sql: string, params?: unknown[]) {
+        if (
+          sql.includes("SET status = $2")
+          && sql.includes("external_request_id = $3")
+          && sql.includes("provider_requests")
+        ) {
+          acceptanceWrites += 1;
+          throw new Error("simulated_acceptance_write_failure");
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+
+    try {
+      const input = legacyRecoveryInput("acceptance-persist-failure");
+      await assert.rejects(
+        submitProviderRequest(failingDb, {
+          ...input,
+          adapter,
+          now: new Date("2026-05-09T10:09:00.000Z"),
+        }),
+        (error: unknown) => {
+          assert.equal((error as { failureCode?: string }).failureCode, "provider_submission_persist_failed");
+          return true;
+        },
+      );
+
+      const request = await db.query<{
+        status: string;
+        external_request_id: string | null;
+        failure_code: string | null;
+      }>(
+        "SELECT status, external_request_id, failure_code FROM provider_requests WHERE request_key = $1",
+        [input.requestKey],
+      );
+      assert.deepEqual(request.rows[0], {
+        status: "result_unknown",
+        external_request_id: "external-submitted",
+        failure_code: "provider_submission_persist_failed",
+      });
+      assert.equal(acceptanceWrites, 1);
+      assert.equal(adapter.submitCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 class FailingIfCalledProviderAdapter implements ProviderAdapter {
@@ -298,6 +469,19 @@ class FailingIfCalledProviderAdapter implements ProviderAdapter {
   async submit(): Promise<never> {
     this.calls += 1;
     throw new Error("provider_should_not_be_called");
+  }
+}
+
+class SuccessfulProviderAdapter implements ProviderAdapter {
+  submitCalls = 0;
+
+  async submit() {
+    this.submitCalls += 1;
+    return {
+      externalRequestId: "external-submitted",
+      status: "accepted" as const,
+      redactedResponse: { providerStatus: "submitted" },
+    };
   }
 }
 
@@ -355,7 +539,7 @@ class BlankRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
 class BlockingRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
   private releaseRecovery!: () => void;
   readonly started: Promise<void>;
-  private readonly recoveryReleased: Promise<void>;
+  protected readonly recoveryReleased: Promise<void>;
 
   constructor() {
     super();
@@ -369,7 +553,7 @@ class BlockingRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
     this.markStarted = markStarted;
   }
 
-  private readonly markStarted: () => void;
+  protected readonly markStarted: () => void;
 
   override async recoverSubmission() {
     this.recoveryCalls += 1;
@@ -383,6 +567,28 @@ class BlockingRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
 
   release() {
     this.releaseRecovery();
+  }
+}
+
+class BlockingMissingRecoveryProviderAdapter extends BlockingRecoveryProviderAdapter {
+  override async recoverSubmission() {
+    this.recoveryCalls += 1;
+    this.markStarted();
+    await this.recoveryReleased;
+    return null;
+  }
+}
+
+class BlockingAlternativeRecoveryProviderAdapter extends BlockingRecoveryProviderAdapter {
+  override async recoverSubmission() {
+    this.recoveryCalls += 1;
+    this.markStarted();
+    await this.recoveryReleased;
+    return {
+      externalRequestId: "external-stale-recovered",
+      status: "accepted" as const,
+      artifacts: [{ mediaType: "image" as const, url: "https://example.invalid/stale.png" }],
+    };
   }
 }
 
