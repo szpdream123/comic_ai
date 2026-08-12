@@ -1,4 +1,8 @@
 import { creatorApi, resolveApiUrl } from "./src/shared/creator-api.js";
+import {
+  consumeFirstLoginOnboarding,
+  markFirstLoginOnboarding,
+} from "./src/features/production-workbench/first-login-onboarding.js";
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
@@ -37,6 +41,7 @@ async function bootstrap() {
   });
 
   await sessionPromise.then(async (session) => {
+    session = consumeFirstLoginOnboarding(session, sessionStorage);
     activeSession = session;
     resolvePublicSeoContentForSession(session);
     await workbench?.updateSession?.(session, creatorApi);
@@ -623,6 +628,7 @@ function bindLoginModal(modal) {
       return;
     }
     const loginMessage = `登录成功：${verifyPayload.user.phone}`;
+    markFirstLoginOnboarding(verifyPayload, sessionStorage);
     setStatus(loginMessage);
     showLoginToast(state, "success", "登录成功", loginMessage);
     setTimeout(completeLoginSuccess, 350);

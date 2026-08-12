@@ -282,6 +282,25 @@ test("selectProject preserves unrelated read caches", async () => {
   ]);
 });
 
+test("first-login onboarding public config is cached independently", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ data: { welcome: { title: "后台标题" }, tips: [] } }),
+    };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?onboarding-config=${Date.now()}`);
+  const first = await creatorApi.getFirstLoginOnboardingConfig();
+  const second = await creatorApi.getFirstLoginOnboardingConfig();
+
+  assert.deepEqual(first, { welcome: { title: "后台标题" }, tips: [] });
+  assert.deepEqual(second, first);
+  assert.deepEqual(calls.map((call) => call.url), ["/api/public/first-login-onboarding"]);
+});
+
 test("selectProject prevents stale asset refreshes from repopulating invalidated caches", async () => {
   const previousNow = Date.now;
   let now = previousNow();

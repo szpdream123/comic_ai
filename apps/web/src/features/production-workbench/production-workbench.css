@@ -36942,6 +36942,211 @@ body.is-episode-quick-asset-toggle-dragging {
   }
 }
 
+/* First-login guide: intentionally compact so the workbench remains the lesson. */
+.first-login-guide-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(3, 4, 12, 0.68);
+  backdrop-filter: blur(5px);
+}
+
+.first-login-guide-card {
+  width: min(23rem, calc(100vw - 2rem));
+  border: 1px solid rgba(139, 121, 255, 0.34);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  color: #f7f5ff;
+  background:
+    radial-gradient(circle at 90% 0%, rgba(92, 223, 255, 0.1), transparent 35%),
+    linear-gradient(160deg, rgba(27, 23, 53, 0.98), rgba(11, 12, 25, 0.98));
+  box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.first-login-guide-card--welcome {
+  position: relative;
+  padding: 1.8rem;
+  text-align: center;
+}
+
+.first-login-guide-card--compact {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 1300;
+}
+
+.first-login-guide-card h2 {
+  margin: 0.35rem 0 0.65rem;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.first-login-guide-icon {
+  display: grid;
+  width: 2.4rem;
+  height: 2.4rem;
+  margin: 0 auto 0.8rem;
+  place-items: center;
+  border: 1px solid rgba(103, 220, 255, 0.34);
+  border-radius: 0.75rem;
+  color: #7be7ff;
+  background: rgba(80, 201, 255, 0.09);
+  font-weight: 800;
+}
+
+.first-login-guide-card--compact .first-login-guide-icon {
+  margin: 0 0 0.7rem;
+}
+
+.first-login-guide-eyebrow,
+.first-login-guide-description {
+  margin: 0;
+}
+
+.first-login-guide-eyebrow {
+  color: #8eeaff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.first-login-guide-description {
+  color: rgba(224, 228, 248, 0.72);
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+
+.first-login-guide-heading,
+.first-login-guide-heading > div {
+  display: flex;
+  align-items: center;
+}
+
+.first-login-guide-heading {
+  justify-content: space-between;
+}
+
+.first-login-guide-heading > div {
+  gap: 0.65rem;
+}
+
+.first-login-guide-progress {
+  color: rgba(224, 228, 248, 0.48);
+  font-size: 0.72rem;
+}
+
+.first-login-guide-dismiss {
+  display: grid;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 0.55rem;
+  color: rgba(224, 228, 248, 0.62);
+  background: transparent;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.first-login-guide-card--welcome > .first-login-guide-dismiss {
+  position: absolute;
+  top: 0.8rem;
+  right: 0.8rem;
+}
+
+.first-login-guide-actions {
+  display: flex;
+  gap: 0.65rem;
+  justify-content: center;
+  margin-top: 1.15rem;
+}
+
+.first-login-guide-actions--stacked {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.first-login-guide-primary,
+.first-login-guide-secondary {
+  min-height: 2.35rem;
+  border-radius: 0.65rem;
+  padding: 0 1rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.first-login-guide-primary {
+  border: 1px solid rgba(110, 225, 255, 0.36);
+  color: #07111a;
+  background: linear-gradient(135deg, #69e5ff, #a798ff);
+}
+
+.first-login-guide-secondary {
+  border: 1px solid rgba(171, 162, 219, 0.2);
+  color: rgba(239, 238, 255, 0.82);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.first-login-guide-card--complete {
+  border-color: rgba(102, 225, 185, 0.34);
+}
+
+.first-login-guide-card--complete .first-login-guide-primary {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.first-login-guide-dismiss:hover,
+.first-login-guide-secondary:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.first-login-guide-primary:focus-visible,
+.first-login-guide-secondary:focus-visible,
+.first-login-guide-dismiss:focus-visible {
+  outline: 2px solid #8eeaff;
+  outline-offset: 2px;
+}
+
+.first-login-guide-target {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid rgba(111, 228, 255, 0.92) !important;
+  outline-offset: 4px;
+  box-shadow: 0 0 0 0.35rem rgba(111, 228, 255, 0.12), 0 0 1.6rem rgba(126, 118, 255, 0.28) !important;
+  animation: first-login-guide-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes first-login-guide-pulse {
+  50% {
+    box-shadow: 0 0 0 0.55rem rgba(111, 228, 255, 0.08), 0 0 2.1rem rgba(126, 118, 255, 0.4);
+  }
+}
+
+@media (max-width: 720px) {
+  .first-login-guide-card--compact {
+    right: 1rem;
+    bottom: 1rem;
+    left: 1rem;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .first-login-guide-target {
+    animation: none;
+  }
+}
+
 .canvas-director-node-body {
   box-sizing: border-box;
   display: grid;

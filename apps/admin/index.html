@@ -13273,6 +13273,232 @@
         };
       })();
 
+      const ONBOARDING_CORE_SECTIONS = [
+        { key: "welcome", label: "欢迎卡片", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160], ["primaryButton", "主按钮", 30], ["secondaryButton", "跳过按钮", 30]] },
+        { key: "steps.createProject", label: "核心步骤 · 创建项目", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160]] },
+        { key: "steps.enterProject", label: "核心步骤 · 进入项目", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160]] },
+        { key: "steps.prepareScript", label: "核心步骤 · 准备剧本", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160]] },
+        { key: "prepareScriptButtons", label: "剧本选择按钮", fields: [["sample", "示例剧本按钮", 30], ["own", "自己的剧本按钮", 30]] },
+        { key: "steps.generateStoryboard", label: "核心步骤 · 生成分镜", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160]] },
+        { key: "steps.generating", label: "生成处理中", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160]] },
+        { key: "steps.confirmStoryboard", label: "确认预览", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160]] },
+        { key: "complete", label: "完成卡片", fields: [["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160], ["primaryButton", "完成按钮", 30]] },
+      ];
+
+      function onboardingGuideStore() {
+        if (!state.onboardingGuide) state.onboardingGuide = { value: null, defaults: null, meta: { placements: [], targets: [] }, previewPath: "welcome", error: "", saving: false };
+        return state.onboardingGuide;
+      }
+
+      async function loadFirstLoginOnboarding() {
+        const store = onboardingGuideStore();
+        setPageLoading("onboardingGuide", true);
+        try {
+          const result = await api("/api/admin/first-login-onboarding");
+          store.value = structuredClone(result.data || {});
+          store.defaults = structuredClone(result.data || {});
+          store.meta = result.meta || { placements: [], targets: [] };
+          store.error = "";
+          clearPageForbidden("onboardingGuide");
+        } catch (error) {
+          if (!setPageForbidden("onboardingGuide", error)) store.error = error.payload?.error?.message || "新手引导配置加载失败";
+        } finally {
+          setPageLoading("onboardingGuide", false);
+        }
+      }
+
+      function onboardingValueAt(path) {
+        return String(path.split(".").reduce((value, key) => value?.[key], onboardingGuideStore().value) ?? "");
+      }
+
+      function setOnboardingValue(path, value) {
+        const store = onboardingGuideStore();
+        const keys = path.split(".");
+        let target = store.value;
+        keys.slice(0, -1).forEach((key) => { target = target[key] ||= {}; });
+        target[keys.at(-1)] = String(value);
+        store.previewPath = keys.slice(0, -1).join(".") || "welcome";
+        updateOnboardingPreview();
+        const counter = document.querySelector(`[data-onboarding-count="${CSS.escape(path)}"]`);
+        if (counter) counter.textContent = String(value).length;
+      }
+
+      function onboardingField(path, label, maxLength) {
+        const value = onboardingValueAt(path);
+        const multiline = path.endsWith("description");
+        const control = multiline
+          ? `<textarea rows="3" maxlength="${maxLength}" data-onboarding-field="${escapeAttribute(path)}" oninput="setOnboardingValue('${escapeAttribute(path)}', this.value)">${escapeHtml(value)}</textarea>`
+          : `<input maxlength="${maxLength}" value="${escapeAttribute(value)}" data-onboarding-field="${escapeAttribute(path)}" oninput="setOnboardingValue('${escapeAttribute(path)}', this.value)" />`;
+        return `<label class="onboarding-editor-field"><span>${escapeHtml(label)} <small><b data-onboarding-count="${escapeAttribute(path)}">${value.length}</b>/${maxLength}</small></span>${control}</label>`;
+      }
+
+      function onboardingCoreSection(section) {
+        return `<details class="onboarding-editor-section" ${onboardingGuideStore().previewPath === section.key ? "open" : ""} onclick="if(event.target.tagName==='SUMMARY'){onboardingGuideStore().previewPath='${section.key}';setTimeout(updateOnboardingPreview)}">
+          <summary><span>${escapeHtml(section.label)}</span><span class="tag blue">核心步骤</span></summary>
+          <div class="onboarding-editor-fields">${section.fields.map(([field, label, limit]) => onboardingField(`${section.key}.${field}`, label, limit)).join("")}</div>
+        </details>`;
+      }
+
+      function onboardingTipEditor(tip, index) {
+        const store = onboardingGuideStore();
+        const placementOptions = (store.meta.placements || []).map((item) => `<option value="${escapeAttribute(item.key)}" ${item.key === tip.placement ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+        const targetOptions = (store.meta.targets || []).filter((item) => (item.placements || []).includes(tip.placement)).map((item) => `<option value="${escapeAttribute(item.key)}" ${item.key === tip.targetKey ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+        return `<details class="onboarding-editor-section onboarding-tip-editor" open onclick="onboardingGuideStore().previewPath='tips.${index}';setTimeout(updateOnboardingPreview)">
+          <summary><span>${escapeHtml(tip.title || `提示步骤 ${index + 1}`)}</span><span class="tag warn">提示步骤</span></summary>
+          <div class="onboarding-tip-toolbar"><button class="icon-btn" type="button" onclick="event.stopPropagation();moveFirstLoginTip(${index},-1)" ${onboardingTipNeighborIndex(index, -1) < 0 ? "disabled" : ""}>↑</button><button class="icon-btn" type="button" onclick="event.stopPropagation();moveFirstLoginTip(${index},1)" ${onboardingTipNeighborIndex(index, 1) < 0 ? "disabled" : ""}>↓</button><button class="btn danger" type="button" onclick="event.stopPropagation();removeFirstLoginTip(${index})">删除</button></div>
+          <div class="onboarding-editor-fields">
+            <label class="onboarding-editor-field"><span>插入位置</span><select name="placement" onchange="updateFirstLoginTip(${index},'placement',this.value)">${placementOptions}</select></label>
+            <label class="onboarding-editor-field"><span>指引目标</span><select name="targetKey" onchange="updateFirstLoginTip(${index},'targetKey',this.value)">${targetOptions}</select></label>
+            ${[["eyebrow", "眉题", 30], ["title", "标题", 60], ["description", "说明", 160], ["primaryButton", "下一步按钮", 30]].map(([field, label, limit]) => onboardingField(`tips.${index}.${field}`, label, limit)).join("")}
+          </div>
+        </details>`;
+      }
+
+      function onboardingPreviewContent() {
+        const store = onboardingGuideStore();
+        const path = store.previewPath || "welcome";
+        const content = path.startsWith("tips.") ? store.value?.tips?.[Number(path.split(".")[1])] : path.split(".").reduce((value, key) => value?.[key], store.value);
+        const fallback = store.value?.welcome || {};
+        return content && typeof content === "object" ? content : fallback;
+      }
+
+      function onboardingPreviewMarkup() {
+        const content = onboardingPreviewContent();
+        const isWelcome = onboardingGuideStore().previewPath === "welcome";
+        const primary = content.primaryButton || (isWelcome ? "开始体验" : "下一步");
+        return `<div class="onboarding-preview-stage" data-onboarding-preview><div class="onboarding-preview-card"><div class="onboarding-preview-kicker">${escapeHtml(content.eyebrow || "步骤提示")}</div><h2>${escapeHtml(content.title || "新手引导")}</h2><p>${escapeHtml(content.description || "配置说明文字后，将在这里实时预览。")}</p><div class="onboarding-preview-actions"><button type="button">${escapeHtml(primary)}</button>${content.secondaryButton ? `<button type="button" class="secondary">${escapeHtml(content.secondaryButton)}</button>` : ""}</div></div></div>`;
+      }
+
+      function updateOnboardingPreview() {
+        const preview = document.querySelector("[data-onboarding-preview]");
+        if (preview) preview.outerHTML = onboardingPreviewMarkup();
+      }
+
+      function addFirstLoginTip() {
+        const store = onboardingGuideStore();
+        if ((store.value.tips || []).length >= 12) return showToast("提示步骤最多 12 个");
+        const placement = store.meta.placements?.[0]?.key || "before-create-project";
+        const targetKey = store.meta.targets?.find((item) => item.placements?.includes(placement))?.key || "create-project-button";
+        store.value.tips ||= [];
+        store.value.tips.push({ id: `tip-${Date.now()}`, placement, targetKey, eyebrow: "工具位置", title: "找到这个工具", description: "高亮区域就是接下来需要使用的工具。", primaryButton: "下一步" });
+        store.previewPath = `tips.${store.value.tips.length - 1}`;
+        renderShell();
+      }
+
+      function removeFirstLoginTip(index) {
+        onboardingGuideStore().value.tips.splice(index, 1);
+        onboardingGuideStore().previewPath = "welcome";
+        renderShell();
+      }
+
+      function onboardingTipNeighborIndex(index, offset) {
+        const tips = onboardingGuideStore().value.tips;
+        const currentPlacement = tips[index]?.placement;
+        if (!currentPlacement) return -1;
+        for (let candidateIndex = index + offset; candidateIndex >= 0 && candidateIndex < tips.length; candidateIndex += offset) {
+          if (tips[candidateIndex]?.placement === currentPlacement) return candidateIndex;
+        }
+        return -1;
+      }
+
+      function moveFirstLoginTip(index, offset) {
+        const tips = onboardingGuideStore().value.tips;
+        const target = onboardingTipNeighborIndex(index, offset);
+        if (target < 0) return;
+        const current = tips[index];
+        tips[index] = tips[target];
+        tips[target] = current;
+        onboardingGuideStore().previewPath = `tips.${target}`;
+        renderShell();
+      }
+
+      function updateFirstLoginTip(index, field, value) {
+        const store = onboardingGuideStore();
+        const tip = store.value.tips[index];
+        tip[field] = value;
+        if (field === "placement") tip.targetKey = store.meta.targets?.find((item) => item.placements?.includes(value))?.key || "";
+        store.previewPath = `tips.${index}`;
+        renderShell();
+      }
+
+      async function saveFirstLoginOnboarding() {
+        const store = onboardingGuideStore();
+        if (store.saving || !hasPermission("settings.write")) return;
+        store.saving = true;
+        renderShell();
+        try {
+          const result = await api("/api/admin/first-login-onboarding", {
+            method: "PATCH",
+            headers: { "idempotency-key": adminIdempotencyKey("first-login-onboarding") },
+            body: JSON.stringify({ value: store.value, reason: "后台更新新手引导" }),
+          });
+          store.value = structuredClone(result.data || store.value);
+          store.defaults = structuredClone(result.data || store.value);
+          store.meta = result.meta || store.meta;
+          showToast("新手引导已发布");
+        } catch (error) {
+          store.error = error.payload?.error?.message || error.message || "保存失败";
+        } finally {
+          store.saving = false;
+          renderShell();
+        }
+      }
+
+      function resetFirstLoginOnboardingDraft() {
+        const store = onboardingGuideStore();
+        store.value = structuredClone(store.defaults || {});
+        store.previewPath = "welcome";
+        renderShell();
+      }
+
+      function onboardingGuidePage() {
+        const store = onboardingGuideStore();
+        if (!store.value) return `<section class="state-panel"><strong>${escapeHtml(store.error || "正在加载新手引导配置…")}</strong></section>`;
+        const tips = store.value.tips || [];
+        return `<style>
+          .onboarding-editor-shell{display:grid;grid-template-columns:minmax(480px,1.15fr) minmax(340px,.85fr);gap:22px;align-items:start}.onboarding-editor-rail{display:grid;gap:12px}.onboarding-editor-intro{padding:22px;background:linear-gradient(135deg,#10253b,#163f55);color:#f5fbff;border:0}.onboarding-editor-intro h3{margin:0 0 7px;font-family:"Noto Serif SC","Songti SC",serif;font-size:24px}.onboarding-editor-intro p{margin:0;color:#b9d2df;line-height:1.7}.onboarding-editor-section{border:1px solid #dce5ed;border-radius:14px;background:#fff;overflow:hidden}.onboarding-editor-section summary{display:flex;align-items:center;justify-content:space-between;padding:15px 17px;cursor:pointer;font-weight:750}.onboarding-editor-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:4px 17px 18px}.onboarding-editor-field{display:grid;gap:7px;font-size:12px;color:#52677a}.onboarding-editor-field:has(textarea){grid-column:1/-1}.onboarding-editor-field span{display:flex;justify-content:space-between}.onboarding-editor-field small{font-weight:400;color:#91a0ad}.onboarding-editor-field input,.onboarding-editor-field textarea,.onboarding-editor-field select{width:100%;border:1px solid #ccd8e2;border-radius:9px;padding:10px 11px;background:#fbfdff;color:#172635;font:inherit}.onboarding-tip-toolbar{display:flex;justify-content:flex-end;gap:7px;padding:0 17px}.onboarding-preview-wrap{position:sticky;top:20px}.onboarding-preview-stage{min-height:520px;display:grid;align-items:end;padding:26px;border-radius:18px;background:radial-gradient(circle at 70% 15%,rgba(58,208,222,.18),transparent 35%),linear-gradient(145deg,#080d16,#13162a);box-shadow:0 22px 60px rgba(15,34,52,.22)}.onboarding-preview-card{padding:22px;border:1px solid rgba(126,219,255,.25);border-radius:16px;color:#f4f7ff;background:linear-gradient(155deg,rgba(28,28,54,.98),rgba(11,16,28,.98));box-shadow:0 22px 70px #0008}.onboarding-preview-kicker{color:#8eeaff;font-size:12px;font-weight:800;letter-spacing:.1em}.onboarding-preview-card h2{margin:8px 0 10px;font-family:"Noto Serif SC","Songti SC",serif;font-size:23px}.onboarding-preview-card p{margin:0;color:#b9c1d5;line-height:1.7}.onboarding-preview-actions{display:flex;gap:9px;margin-top:18px}.onboarding-preview-actions button{border:0;border-radius:9px;padding:10px 17px;background:#7ddff2;color:#08202b;font-weight:750}.onboarding-preview-actions .secondary{background:#ffffff12;color:#dbe4ee}@media(max-width:1050px){.onboarding-editor-shell{grid-template-columns:1fr}.onboarding-preview-wrap{position:static}.onboarding-preview-stage{min-height:380px}}
+        </style><div class="section-stack"><section class="card onboarding-editor-intro"><div class="toolbar"><div><h3>新手引导编辑台</h3><p>核心步骤负责完成创作流程；提示步骤只负责告诉新手“工具在哪里”。</p></div><span class="tag blue">首次登录生效</span></div></section><div class="onboarding-editor-shell"><div class="onboarding-editor-rail">${ONBOARDING_CORE_SECTIONS.map(onboardingCoreSection).join("")}<section class="card"><div class="toolbar"><div><h3 style="margin:0">提示步骤</h3><div class="metric-note">可新增、删除和排序，最多 12 个；目标只能从安全目录选择。</div></div><button class="btn primary" type="button" onclick="addFirstLoginTip()" ${tips.length >= 12 ? "disabled" : ""}>新增提示步骤</button></div></section>${tips.map(onboardingTipEditor).join("")}<div class="toolbar"><button class="btn ghost" type="button" onclick="resetFirstLoginOnboardingDraft()">撤销未保存修改</button><button class="btn primary" type="button" onclick="saveFirstLoginOnboarding()" ${store.saving ? "disabled" : permissionAttrs("settings.write")}>${store.saving ? "正在发布…" : "保存并发布"}</button></div>${store.error ? `<div class="error-text">${escapeHtml(store.error)}</div>` : ""}</div><aside class="onboarding-preview-wrap"><div class="toolbar"><h3>卡片预览</h3><span class="metric-note">点击左侧阶段切换</span></div>${onboardingPreviewMarkup()}</aside></div></div>`;
+      }
+
+      (function installOnboardingGuideAdminPage() {
+        pages.onboardingGuide = "新手引导";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() { return location.pathname.includes("/onboarding-guide") ? "onboardingGuide" : previousRouteFromPath(); };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "onboardingGuide") return previousNavigate(page);
+          state.page = page;
+          history.pushState(null, "", "/admin/onboarding-guide");
+          renderShell();
+          ensureAdminPageData(page).catch(() => undefined);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() { return state.page === "onboardingGuide" ? onboardingGuidePage() : previousRenderPage(); };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="onboardingGuide"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "onboardingGuide";
+          button.innerHTML = "<span>新手引导</span>";
+          if (state.page === "onboardingGuide") button.classList.add("active");
+          button.addEventListener("click", () => navigate("onboardingGuide"));
+          nav.insertBefore(button, settingsButton);
+        };
+      })();
+      ADMIN_PAGE_LOADERS.onboardingGuide = loadFirstLoginOnboarding;
+      window.onboardingGuideStore = onboardingGuideStore;
+      window.setOnboardingValue = setOnboardingValue;
+      window.addFirstLoginTip = addFirstLoginTip;
+      window.removeFirstLoginTip = removeFirstLoginTip;
+      window.moveFirstLoginTip = moveFirstLoginTip;
+      window.updateFirstLoginTip = updateFirstLoginTip;
+      window.saveFirstLoginOnboarding = saveFirstLoginOnboarding;
+      window.resetFirstLoginOnboardingDraft = resetFirstLoginOnboardingDraft;
+      window.updateOnboardingPreview = updateOnboardingPreview;
+
       function stripAdminReasonFields(root = document) {
         const forms = new Set();
         root.querySelectorAll?.('textarea[name="reason"]').forEach((textarea) => {
