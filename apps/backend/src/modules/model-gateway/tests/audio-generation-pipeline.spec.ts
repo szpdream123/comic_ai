@@ -43,8 +43,7 @@ describe("audio generation pipeline", () => {
     );
   });
 
-  it("preserves ambiguous provider submissions for manual review instead of releasing credits", () => {
-    assert.equal(__audioGenerationWorkerTestUtils.shouldPreserveAudioSubmissionAsResultUnknown("result_unknown"), true);
+  it("does not preserve failed submissions without a provider task id", () => {
     assert.equal(__audioGenerationWorkerTestUtils.shouldPreserveAudioSubmissionAsResultUnknown("failed"), false);
   });
 

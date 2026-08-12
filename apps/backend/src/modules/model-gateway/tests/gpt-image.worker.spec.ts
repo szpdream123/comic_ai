@@ -2315,7 +2315,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
     }
   });
 
-  it("waits ten minutes without polling when provider submission has no external id", async () => {
+  it("fails and releases credits when provider submission has no external id", async () => {
     const db = await createMigratedTestDb();
     await db.query(
       `
@@ -2436,26 +2436,33 @@ describe("GPT Image 2 BullMQ worker service", () => {
         "SELECT status, failure_code FROM user_model_request_logs WHERE task_id = $1",
         [imageTask.taskId],
       );
+      const reservation = await db.query<{
+        amount_reserved: number | string;
+        amount_released: number | string;
+        status: string;
+      }>(
+        "SELECT amount_reserved, amount_released, status FROM credit_reservations WHERE task_id = $1",
+        [imageTask.taskId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
-      assert.deepEqual(submitResult, { status: "skipped", nextAction: "stop" });
-      assert.equal(providerRequest.rows[0]?.status, "result_unknown");
-      assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_ambiguous");
-      assert.equal(task.rows[0]?.status, "running");
-      assert.equal(snapshot.rows[0]?.status, "running");
-      assert.equal(snapshot.rows[0]?.progress_stage, "provider_result_unknown");
-      assert.equal(snapshot.rows[0]?.credit_status, "reserved");
-      assert.equal(snapshot.rows[0]?.failure_json, null);
-      assert.equal(requestLog.rows[0]?.status, "submitted");
-      assert.equal(requestLog.rows[0]?.failure_code, null);
+      assert.deepEqual(submitResult, { status: "failed", failureCode: "provider_submission_missing_task_id" });
+      assert.equal(providerRequest.rows[0]?.status, "failed");
+      assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_missing_task_id");
+      assert.equal(task.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.status, "failed");
+      assert.equal(snapshot.rows[0]?.credit_status, "released");
+      assert.equal(snapshot.rows[0]?.failure_json?.failureCode, "provider_submission_missing_task_id");
+      assert.equal(requestLog.rows[0]?.status, "failed");
+      assert.equal(requestLog.rows[0]?.failure_code, "provider_submission_missing_task_id");
+      assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
+      assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 77);
+      assert.equal(reservation.rows[0]?.status, "released");
       assert.equal(
         new Date(task.rows[0]?.timeout_at ?? 0).getTime() - new Date(task.rows[0]?.requested_at ?? 0).getTime(),
         60 * 60 * 1000,
       );
-      assert.equal(
-        new Date(task.rows[0]?.locked_until ?? 0).getTime(),
-        new Date("2026-06-03T04:45:00.000Z").getTime(),
-      );
+      assert.equal(task.rows[0]?.locked_until, null);
     } finally {
       await server.close();
     }

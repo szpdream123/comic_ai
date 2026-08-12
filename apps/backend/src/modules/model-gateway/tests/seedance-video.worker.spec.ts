@@ -507,7 +507,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("waits ten minutes without polling after an ambiguous video submission", async () => {
+  it("fails immediately when video submission has no external id", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -533,17 +533,13 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.equal(result.status, "already_started");
-      assert.equal(result.externalRequestId, null);
-      assert.ok(result.attemptId);
-      assert.equal(task.rows[0]?.status, "running");
-      assert.equal(task.rows[0]?.failure_code, null);
-      assert.equal(
-        new Date(task.rows[0]?.locked_until ?? 0).getTime(),
-        new Date("2026-07-13T02:10:00.000Z").getTime(),
-      );
+      assert.deepEqual(result, { status: "failed", failureCode: "provider_submission_missing_task_id" });
+      assert.equal(task.rows[0]?.status, "failed");
+      assert.equal(task.rows[0]?.failure_code, "provider_submission_missing_task_id");
+      assert.equal(task.rows[0]?.locked_until, null);
       assert.equal(providerRequest.rows.length, 1);
-      assert.equal(providerRequest.rows[0]?.status, "result_unknown");
+      assert.equal(providerRequest.rows[0]?.status, "failed");
+      assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_missing_task_id");
     } finally {
       await db.close();
     }

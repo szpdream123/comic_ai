@@ -5,6 +5,7 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import {
   markExternalSubmissionStarted,
   createOrReuseProviderRequest,
+  markProviderRequestResultUnknown,
   submitProviderRequest,
 } from "../provider-request.service.ts";
 import type { ProviderAdapter } from "../provider-adapter.contract.ts";
@@ -105,6 +106,92 @@ describe("provider request no blind retry after external start", () => {
       await db.close();
     }
   });
+
+  it("keeps an active submitted request in progress when recovery has no external request id yet", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new MissingRecoveryProviderAdapter();
+
+    try {
+      const input = {
+        ...providerInput(),
+        requestKey: "task-active-submission:attempt-1",
+        requestHash: "hash-active-submission",
+        payloadHash: "payload-hash-active-submission",
+        payloadRef: "payloads/task-active-submission.json",
+      };
+      const prepared = await createOrReuseProviderRequest(db, input);
+      await markExternalSubmissionStarted(db, {
+        providerRequestId: prepared.request.id,
+        externalRequestId: null,
+        now: new Date("2026-05-09T10:07:00.000Z"),
+      });
+
+      const retry = await submitProviderRequest(db, {
+        ...input,
+        adapter,
+        now: new Date("2026-05-09T10:08:00.000Z"),
+      });
+
+      assert.equal(retry.kind, "already_started");
+      assert.equal(retry.request.status, "submitted");
+      assert.equal(retry.request.externalRequestId, null);
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("fails a legacy result_unknown request when recovery still returns no external request id", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new MissingRecoveryProviderAdapter();
+
+    try {
+      const input = {
+        ...providerInput(),
+        requestKey: "task-missing-recovery:attempt-1",
+        requestHash: "hash-missing-recovery",
+        payloadHash: "payload-hash-missing-recovery",
+        payloadRef: "payloads/task-missing-recovery.json",
+      };
+      const prepared = await createOrReuseProviderRequest(db, input);
+      await markExternalSubmissionStarted(db, {
+        providerRequestId: prepared.request.id,
+        externalRequestId: null,
+        now: new Date("2026-05-09T10:07:00.000Z"),
+      });
+      await markProviderRequestResultUnknown(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "worker_crashed_after_external_start",
+        now: new Date("2026-05-09T10:08:00.000Z"),
+      });
+
+      await assert.rejects(
+        submitProviderRequest(db, {
+          ...input,
+          adapter,
+          now: new Date("2026-05-09T10:09:00.000Z"),
+        }),
+        (error: unknown) => {
+          assert.equal((error as { failureCode?: string }).failureCode, "provider_submission_missing_task_id");
+          return true;
+        },
+      );
+
+      const request = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE id = $1",
+        [prepared.request.id],
+      );
+      assert.deepEqual(request.rows[0], {
+        status: "failed",
+        failure_code: "provider_submission_missing_task_id",
+      });
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 class FailingIfCalledProviderAdapter implements ProviderAdapter {
@@ -132,6 +219,21 @@ class RecoveringProviderAdapter implements ProviderAdapter {
       status: "accepted" as const,
       redactedResponse: { providerStatus: "submission_recovered" },
     };
+  }
+}
+
+class MissingRecoveryProviderAdapter implements ProviderAdapter {
+  submitCalls = 0;
+  recoveryCalls = 0;
+
+  async submit(): Promise<never> {
+    this.submitCalls += 1;
+    throw new Error("provider_should_not_be_called");
+  }
+
+  async recoverSubmission() {
+    this.recoveryCalls += 1;
+    return null;
   }
 }
 

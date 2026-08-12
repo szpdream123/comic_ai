@@ -248,6 +248,20 @@ export async function submitProviderRequest(
         redactedRequest: recovered.redactedRequest,
       };
     }
+    if (prepared.request.status === "result_unknown" && !prepared.request.externalRequestId) {
+      const failureCode = "provider_submission_missing_task_id";
+      const modelError = ModelError.fromUnknown(failureCode, {
+        failureCode,
+        phase: "submit",
+      });
+      await markProviderRequestFailed(db, {
+        providerRequestId: prepared.request.id,
+        failureCode,
+        redactedResponse: modelError.toRedactedProviderRecord(),
+        now: input.now,
+      });
+      throw modelError;
+    }
     return {
       kind: "already_started",
       request: prepared.request,
@@ -327,7 +341,7 @@ export async function submitProviderRequest(
     const definitiveFailure = hasDefinitiveProviderResponse(error);
     const failureCode = definitiveFailure
       ? readProviderFailureCode(error)
-      : "provider_submission_ambiguous";
+      : "provider_submission_missing_task_id";
     const modelError = ModelError.fromUnknown(error, {
       failureCode,
       phase: "submit",
@@ -336,22 +350,13 @@ export async function submitProviderRequest(
       ...(readProviderDiagnostics(error) ?? {}),
       ...modelError.toRedactedProviderRecord(),
     };
-    if (definitiveFailure) {
-      await markProviderRequestFailed(db, {
-        providerRequestId: started.id,
-        failureCode,
-        redactedResponse,
-        now: input.now,
-      });
-    } else {
-      await markProviderRequestResultUnknown(db, {
-        providerRequestId: started.id,
-        failureCode,
-        redactedResponse,
-        now: input.now,
-      });
-    }
-    throw error;
+    await markProviderRequestFailed(db, {
+      providerRequestId: started.id,
+      failureCode,
+      redactedResponse,
+      now: input.now,
+    });
+    throw modelError;
   }
 }
 
