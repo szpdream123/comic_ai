@@ -84,6 +84,15 @@ describe("canvas actor scope", { concurrency: false }, () => {
         }),
         (error: unknown) => error instanceof CanvasAuthorizationError && error.code === "canvas_not_found",
       );
+      await assert.rejects(
+        authorizeCanvasActor(db, {
+          sessionToken: ownerToken,
+          canvasId: "canvas-project-main",
+          action: "view",
+          now,
+        }),
+        (error: unknown) => error instanceof CanvasAuthorizationError && error.code === "canvas_not_found",
+      );
       await db.query(
         "DELETE FROM team_member_canvases WHERE member_id = $1 AND canvas_id = $2",
         [memberId, canvasId],

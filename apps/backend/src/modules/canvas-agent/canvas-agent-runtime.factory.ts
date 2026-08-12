@@ -39,6 +39,7 @@ import { CanvasAgentWebToolService } from "./canvas-agent-web.service.ts";
 import { CanvasAgentMcpToolService } from "./canvas-agent-mcp.service.ts";
 import { CanvasAgentProviderConfigService } from "./canvas-agent-provider-config.service.ts";
 import { CanvasAgentPromptPreferenceService } from "./canvas-agent-prompt-preference.service.ts";
+import { inspectCanvasAgentVideoUrl } from "./canvas-agent-video-inspection.service.ts";
 import { createDefaultCanvasAgentToolRegistry } from "./canvas-agent-tool.registry.ts";
 import type { CanvasAgentActor, CanvasAgentGenerationIntake } from "./canvas-agent.types.ts";
 import { CanvasAgentWorker } from "./canvas-agent.worker.ts";
@@ -149,6 +150,18 @@ export function createCanvasAgentWorkerRuntime(input: {
     generationIntake,
     now,
     context,
+    inspectVideo: async ({ grantId, canvasId, conversationId, actor }) => {
+      const attachment = await resolveFileAttachment({
+        canvasId,
+        conversationId,
+        actor,
+        fileGrantId: grantId,
+      });
+      if (!attachment || !String(attachment.contentType ?? "").toLowerCase().startsWith("video/")) {
+        throw new Error("canvas_agent_video_grant_required");
+      }
+      return inspectCanvasAgentVideoUrl(attachment.url);
+    },
     knowledge,
     promptPreferences,
     readHistory: async ({ canvasId, actor, nodeKey, search, limit }) => listCanvasGenerationHistory(input.db, {

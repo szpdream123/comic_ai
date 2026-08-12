@@ -47,6 +47,13 @@ export const CHARACTER_ACTION_PRESETS: CharacterActionPreset[] = [
     { t: .5, controls: { "rightShoulder.pitch": 60, "rightShoulder.spread": 0, "rightShoulder.twist": 30, "rightElbow.bend": 60, "rightHand.roll": 10, "leftShoulder.pitch": -10, "leftElbow.bend": 18 } },
     { t: 1, controls: { "rightShoulder.pitch": 60, "rightShoulder.spread": 0, "rightShoulder.twist": 30, "rightElbow.bend": 90, "rightHand.roll": -30, "leftShoulder.pitch": -10, "leftElbow.bend": 18 } },
   ] },
+  { id: "dance-cycle", label: "节奏舞蹈", duration: 1.6, keyframes: [
+    { t: 0, controls: { "body.offsetY": 0, "body.yaw": -8, "body.roll": -5, "torso.yaw": 12, "torso.roll": 8, "leftShoulder.pitch": 34, "leftShoulder.spread": -28, "rightShoulder.pitch": -18, "rightShoulder.spread": 38, "leftElbow.bend": 58, "rightElbow.bend": 82, "leftHip.pitch": -16, "leftHip.spread": -18, "rightHip.pitch": 20, "rightHip.spread": 10, "leftKnee.bend": 18, "rightKnee.bend": 42 } },
+    { t: .25, controls: { "body.offsetY": -.12, "body.yaw": 0, "body.roll": 0, "torso.yaw": 0, "torso.roll": 0, "leftShoulder.pitch": 8, "leftShoulder.spread": -46, "rightShoulder.pitch": 8, "rightShoulder.spread": 46, "leftElbow.bend": 34, "rightElbow.bend": 34, "leftHip.pitch": 32, "leftHip.spread": -28, "rightHip.pitch": 32, "rightHip.spread": 28, "leftKnee.bend": 58, "rightKnee.bend": 58 } },
+    { t: .5, controls: { "body.offsetY": .04, "body.yaw": 10, "body.roll": 6, "torso.yaw": -14, "torso.roll": -9, "leftShoulder.pitch": -20, "leftShoulder.spread": -38, "rightShoulder.pitch": 36, "rightShoulder.spread": 28, "leftElbow.bend": 84, "rightElbow.bend": 56, "leftHip.pitch": 22, "leftHip.spread": -10, "rightHip.pitch": -18, "rightHip.spread": 20, "leftKnee.bend": 44, "rightKnee.bend": 16 } },
+    { t: .75, controls: { "body.offsetY": -.1, "body.yaw": 0, "body.roll": 0, "torso.yaw": 0, "torso.roll": 0, "leftShoulder.pitch": 54, "leftShoulder.spread": -18, "rightShoulder.pitch": 54, "rightShoulder.spread": 18, "leftElbow.bend": 68, "rightElbow.bend": 68, "leftHip.pitch": 28, "leftHip.spread": -24, "rightHip.pitch": 28, "rightHip.spread": 24, "leftKnee.bend": 52, "rightKnee.bend": 52 } },
+    { t: 1, controls: { "body.offsetY": 0, "body.yaw": -8, "body.roll": -5, "torso.yaw": 12, "torso.roll": 8, "leftShoulder.pitch": 34, "leftShoulder.spread": -28, "rightShoulder.pitch": -18, "rightShoulder.spread": 38, "leftElbow.bend": 58, "rightElbow.bend": 82, "leftHip.pitch": -16, "leftHip.spread": -18, "rightHip.pitch": 20, "rightHip.spread": 10, "leftKnee.bend": 18, "rightKnee.bend": 42 } },
+  ] },
 ];
 
 export function sampleCharacterActionControls(presetId: string | null | undefined, elapsedSeconds: number, baseControls: Record<string, number> = {}) {

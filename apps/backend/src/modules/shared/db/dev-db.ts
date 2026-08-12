@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { Pool, type PoolClient } from "pg";
 
@@ -23,27 +24,61 @@ export async function createDevDb(): Promise<DevDatabase> {
     throw new Error("DATABASE_URL is required; configure PostgreSQL before starting the backend");
   }
 
-  const pool = new Pool({
-    connectionString,
-    ...loadDatabasePoolConfig(process.env),
-  });
   const schemaName = process.env.DATABASE_SCHEMA?.trim() || undefined;
 
-  try {
-    if (schemaName) {
-      await prepareSchema(pool, schemaName);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const pool = new Pool({
+      connectionString,
+      ...loadDatabasePoolConfig(process.env),
+    });
+    pool.on("error", (error) => {
+      const code = typeof (error as { code?: unknown })?.code === "string"
+        ? (error as { code: string }).code
+        : "PG_POOL_ERROR";
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[database] idle PostgreSQL client error ${code}: ${message}`);
+    });
+
+    try {
+      if (schemaName) {
+        await prepareSchema(pool, schemaName);
+      }
+      const db = createPostgresDatabase(pool, schemaName);
+      if (!isManagedProductionWorkerSchemaReady()) {
+        await ensureFoundationSchema(db);
+      }
+      return db;
+    } catch (error) {
+      await pool.end().catch(() => undefined);
+      if (attempt < 3 && isTransientDatabaseStartupError(error)) {
+        const delayMs = attempt * 500;
+        console.warn(`[database] PostgreSQL startup connection failed; retrying in ${delayMs}ms (attempt ${attempt + 1}/3).`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw new Error(
+        `PostgreSQL database initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    const db = createPostgresDatabase(pool, schemaName);
-    if (!isManagedProductionWorkerSchemaReady()) {
-      await ensureFoundationSchema(db);
-    }
-    return db;
-  } catch (error) {
-    await pool.end().catch(() => undefined);
-    throw new Error(
-      `PostgreSQL database initialization failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
   }
+
+  throw new Error("PostgreSQL database initialization failed: startup retry limit reached");
+}
+
+function isTransientDatabaseStartupError(error: unknown) {
+  const code = typeof (error as { code?: unknown })?.code === "string"
+    ? (error as { code: string }).code
+    : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    "ECONNABORTED",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+  ].includes(code) || /\b(?:ECONNABORTED|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH)\b/i.test(message)
+    || /connection terminated(?: unexpectedly| due to connection timeout)/i.test(message);
 }
 
 function isManagedProductionWorkerSchemaReady() {

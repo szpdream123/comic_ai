@@ -87,6 +87,8 @@ const PROMPT_REVERSE_TOOL_MODEL_RELATIVE_PATH = ["packages", "db", "migrations",
 const MODELFLARE_RESPONSES_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260830-add-modelflare-responses-model.sql"];
 const SAN_BAO_MEDIA_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "20260901-add-san-bao-media-models.sql"];
 const SAN_BAO_GPT_IMAGE2_VARIANTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260902-merge-san-bao-gpt-image2-variants.sql"];
+const GLOBALAIOPC_MODEL_CENTER_SOUNDCLONE_RELATIVE_PATH = ["packages", "db", "migrations", "20260903-add-globalaiopc-model-center-and-soundclone.sql"];
+const PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH = ["packages", "db", "migrations", "20260904-create-provider-material-assets.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
@@ -479,6 +481,14 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260902-merge-san-bao-gpt-image2-variants.sql",
       sql: await readFile(join(rootDir, ...SAN_BAO_GPT_IMAGE2_VARIANTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260903-add-globalaiopc-model-center-and-soundclone.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_MODEL_CENTER_SOUNDCLONE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260904-create-provider-material-assets.sql",
+      sql: await readFile(join(rootDir, ...PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

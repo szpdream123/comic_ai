@@ -58,8 +58,7 @@ test("opening new Canvas shows the project list without auto-creating or opening
   };
   await handleWorkbenchActionForTest(workbench, { dataset: { action: "open-new-canvas" } });
   assert.equal(listCalls, 1);
-  assert.equal(workbench.ui.activeNavTab, "new-canvas");
-  assert.equal(workbench.ui.canvasEntryPoint, "new");
+  assert.equal(workbench.ui.activeNavTab, "tools");
   assert.equal(workbench.ui.canvasProjectView, "list");
   assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-1");
 });
@@ -114,7 +113,7 @@ test("team member initial route falls back to the project panel", () => {
   assert.equal(nextTab, "project");
 });
 
-test("disabled new Canvas feature hides only the new route and keeps legacy Canvas available", () => {
+test("Canvas remains available when the legacy feature flag is disabled", () => {
   const session = {
     authenticated: true,
     features: { newCanvas: false },
@@ -128,7 +127,7 @@ test("disabled new Canvas feature hides only the new route and keeps legacy Canv
   assert.match(html, /data-tab="tools"/);
   assert.doesNotMatch(html, /data-tab="new-canvas"/);
   assert.equal(deriveInitialNavTabForTest("#tools-canvas", session), "tools");
-  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "home");
+  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "tools");
 
   const workbench = {
     session,
@@ -139,27 +138,26 @@ test("disabled new Canvas feature hides only the new route and keeps legacy Canv
   assert.equal(workbench.ui.canvasProjectView, "detail");
 
   syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
-  assert.equal(workbench.ui.activeNavTab, "home");
-  assert.equal(workbench.ui.canvasProjectView, "list");
-  assert.equal(workbench.ui.toast, "新画布当前未启用。");
+  assert.equal(workbench.ui.activeNavTab, "tools");
+  assert.equal(workbench.ui.canvasProjectView, "detail");
 });
 
-test("new Canvas path and detail token restore an independent navigation state", () => {
+test("legacy Canvas path and detail token restore the unified tools navigation state", () => {
   const session = {
     authenticated: true,
     features: { newCanvas: true },
     user: { id: "user-1", phone: "13800000000" },
   };
-  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/new-canvas/", hash: "" }), "new-canvas");
+  assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/new-canvas/", hash: "" }), "tools");
   assert.equal(readWorkbenchRouteTokenForTest({ pathname: "/canvas", hash: "" }), "tools");
-  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "new-canvas");
+  assert.equal(deriveInitialNavTabForTest("#new-canvas-canvas", session), "tools");
 
   const workbench = {
     session,
     ui: { activeNavTab: "tools", canvasProjectView: "list", selectedCanvasNodeId: "node-1" },
   };
   syncWorkbenchRouteStateForTest(workbench, "#new-canvas-canvas");
-  assert.equal(workbench.ui.activeNavTab, "new-canvas");
+  assert.equal(workbench.ui.activeNavTab, "tools");
   assert.equal(workbench.ui.canvasProjectView, "detail");
 
   syncWorkbenchRouteStateForTest(workbench, "#tools");

@@ -731,6 +731,29 @@ describe("generation model execution resolver", () => {
     assert.equal(execution.parameters.musicBpm, 88);
     assert.equal(execution.parameters.durationSec, 60);
   });
+
+  it("routes SoundClone through the dedicated GlobalAiOpc audio executor", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "audio",
+      modelCode: "soundclone",
+      modelConfig: imageModelConfig({
+        modelCode: "soundclone",
+        displayName: "SoundClone",
+        providerName: "GlobalAiOpc",
+        providerModel: "soundCloningAudio",
+        providerProtocol: "globalaiopc_sound_clone",
+        mediaType: "audio",
+        taskModes: ["audio.text_to_speech"],
+      }),
+      dispatchPolicy: dispatchPolicy({ submitQueueName: "generation-submit-image" }),
+      parameters: { voiceId: "cloned-voice-1" },
+      fallbackQueueName: "generation-submit-image",
+    });
+
+    assert.equal(execution.providerExecutor, "globalaiopc-sound-clone");
+    assert.equal(execution.queueName, "generation-submit-image");
+    assert.equal(execution.taskMode, "audio.text_to_speech");
+  });
 });
 
 function assertExecutionError(callback: () => void, code: string) {

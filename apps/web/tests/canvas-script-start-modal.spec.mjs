@@ -30,7 +30,7 @@ test("script start action persists the selected skill and custom instruction bef
   assert.match(source, /canvasTextSkillModalMode = "script-start"/);
   assert.match(source, /workflowStartInstruction: String\(workbench\.ui\.canvasTextSkillCustomInstruction/);
   assert.match(source, /const generationText = customInstruction/);
-  assert.match(source, /parseCanvasScriptWorkflow\(workbench, nodeId\)/);
+  assert.match(source, /result = await parseCanvasScriptWorkflow\(workbench, scriptNodeId\)/);
 });
 test("script skill picker accepts the shared episode skill card id and preserves cleared categories", async () => {
   const source = await readFile(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");

@@ -1033,6 +1033,22 @@ export async function decideCanvasAgentApproval(
       "UPDATE canvas_agent_tasks SET status=$2, updated_at=$3 WHERE id=$1 AND status='waiting_approval'",
       [input.taskId, input.decision === "approved" ? "queued" : "canceled", input.now],
     );
+    if (input.decision === "rejected") {
+      await db.query(`
+        UPDATE tasks
+        SET status='canceled', failure_code='approval_rejected', current_attempt_id=NULL,
+            locked_by=NULL, locked_until=NULL, heartbeat_at=NULL, updated_at=$2
+        WHERE id=(SELECT workflow_task_id FROM canvas_agent_tasks WHERE id=$1)
+          AND status IN ('queued','running','cancel_requested')
+      `, [input.taskId, input.now]);
+      await db.query(`
+        UPDATE workflows
+        SET status='canceled', failure_code='approval_rejected',
+            finished_at=COALESCE(finished_at,$2), updated_at=$2
+        WHERE id=(SELECT workflow_id FROM canvas_agent_tasks WHERE id=$1)
+          AND status IN ('queued','running','cancel_requested')
+      `, [input.taskId, input.now]);
+    }
     await appendCanvasAgentEvent(db, {
       taskId: input.taskId,
       eventType: `approval.${input.decision}`,

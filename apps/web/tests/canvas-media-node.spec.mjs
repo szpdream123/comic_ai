@@ -270,6 +270,8 @@ test("Canvas media pointer guards leave inline video surfaces draggable", () => 
   assert.doesNotMatch(selector, /data-canvas-video-body\] video/);
   assert.match(selector, /data-canvas-video-body\] button/);
   assert.match(selector, /data-canvas-video-fullscreen\] video/);
+  assert.match(selector, /canvas-x6-source-upload-action/);
+  assert.doesNotMatch(selector, /canvas-upload-meta/);
 });
 
 test("Canvas page video overlay has explicit close and native fullscreen controls", () => {
@@ -326,11 +328,21 @@ test("Canvas host hides source media fallback under X6 and renders stable-ID vid
       },
     },
   });
+  const graphSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  const mediaSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-media-node.js", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(html, /canvas-upload-node canvas-special-media-node selected/);
-  assert.match(html, /canvas-upload-node canvas-special-media-node\s/);
-  assert.match(html, /src="\/api\/storage\/objects\/storage-video\/content\?proxy=1"/);
-  assert.match(html, /src="\/api\/storage\/objects\/storage-audio\/content\?proxy=1"/);
+  assert.match(html, /data-canvas-x6-mount/);
+  assert.doesNotMatch(html, /canvas-upload-node canvas-special-media-node/);
+  assert.match(graphSource, /\["source-video", "source-audio"\]\.includes\(type\)/);
+  assert.match(graphSource, /renderCanvasSourceMediaNodeBody\(node, type === "source-video" \? "video" : "audio"\)/);
+  assert.match(graphSource, /data-canvas-video-fallback-src/);
+  assert.match(mediaSource, /storageObjectId/);
   assert.match(html, /data-canvas-video-fullscreen[^>]*role="dialog"/);
   assert.match(html, /data-action="request-canvas-video-native-fullscreen"/);
 });
@@ -366,9 +378,15 @@ test("Canvas host renders enlarged upload images and AI image click previews", (
       },
     },
   });
-  assert.match(html, /canvas-upload-preview canvas-image-preview-trigger/);
-  assert.match(html, /data-action="toggle-canvas-image-fullscreen"/);
-  assert.match(html, /src="https:\/\/example\.test\/generated\.png"/);
+  const graphSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /data-canvas-x6-mount/);
+  assert.doesNotMatch(html, /canvas-upload-preview canvas-image-preview-trigger/);
+  assert.match(graphSource, /type === "source-image"[\s\S]*?renderCanvasSourceMediaNodeBody\(node, "image"/);
+  assert.match(graphSource, /\["send", "ai-image"\]\.includes\(type\)/);
+  assert.match(graphSource, /function renderCanvasImageGenerationX6Node[\s\S]*?data-action="toggle-canvas-image-fullscreen"/);
   assert.match(html, /data-canvas-image-fullscreen[^>]*role="dialog"/);
   assert.match(html, /src="\/api\/storage\/objects\/storage-upload-image\/content\?proxy=1"/);
 });

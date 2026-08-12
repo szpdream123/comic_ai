@@ -39,6 +39,14 @@ function normalizeTransform(value: unknown, fallback: DirectorTransform): Direct
   };
 }
 
+function normalizePoseControls(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const controls = Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => (
+    typeof entry[1] === "number" && Number.isFinite(entry[1])
+  )));
+  return Object.keys(controls).length ? controls : undefined;
+}
+
 const FALLBACK_TRANSFORM: DirectorTransform = {
   position: [0, 0, 0],
   rotation: [0, 0, 0],
@@ -56,11 +64,13 @@ export function normalizeObjectMotionPath(
         .map((entry, index): DirectorObjectMotionKeyframe | null => {
           if (!entry || typeof entry !== "object") return null;
           const keyframe = entry as Partial<DirectorObjectMotionKeyframe>;
+          const poseControls = normalizePoseControls(keyframe.poseControls);
           return {
             id: typeof keyframe.id === "string" && keyframe.id ? keyframe.id : `object_motion_${index + 1}`,
             time: clamp(finite(keyframe.time, index)),
             transform: normalizeTransform(keyframe.transform, fallbackTransform),
             actionPresetId: typeof keyframe.actionPresetId === "string" ? keyframe.actionPresetId : null,
+            ...(poseControls ? { poseControls } : {}),
             facingMode: keyframe.facingMode === "path" ? "path" : "manual",
           };
         })
@@ -201,10 +211,39 @@ export function sampleObjectMotionPath(object: DirectorObject, count = 80) {
 export function getObjectMotionActionPresetId(object: DirectorObject, progress: number) {
   const path = normalizeObjectMotionPath(object.motionPath, object.transform);
   if (path.keyframes.length === 0) return object.characterRig?.actionPresetId ?? null;
+  if (path.keyframes.some((keyframe) => keyframe.poseControls && Object.keys(keyframe.poseControls).length > 0)) {
+    return null;
+  }
   const p = clamp(progress);
   let index = 0;
   while (index < path.keyframes.length - 2 && p >= path.keyframes[index + 1].time) index += 1;
   return path.keyframes[index]?.actionPresetId ?? null;
+}
+
+export function getObjectMotionPoseControls(object: DirectorObject, progress: number): Record<string, number> | null {
+  let carriedControls: Record<string, number> = {};
+  const poseFrames = normalizeObjectMotionPath(object.motionPath, object.transform).keyframes
+    .flatMap((keyframe) => {
+      if (!keyframe.poseControls || Object.keys(keyframe.poseControls).length === 0) return [];
+      carriedControls = { ...carriedControls, ...keyframe.poseControls };
+      return [{ ...keyframe, poseControls: { ...carriedControls } }];
+    });
+  if (!poseFrames.length) return null;
+  const p = clamp(progress);
+  const lastPoseFrame = poseFrames[poseFrames.length - 1];
+  if (p <= poseFrames[0].time) return { ...poseFrames[0].poseControls };
+  if (p >= lastPoseFrame.time) return { ...lastPoseFrame.poseControls };
+  const endIndex = poseFrames.findIndex((keyframe) => keyframe.time >= p);
+  const start = poseFrames[endIndex - 1];
+  const end = poseFrames[endIndex];
+  const blend = clamp((p - start.time) / Math.max(0.000001, end.time - start.time));
+  const controls: Record<string, number> = {};
+  new Set([...Object.keys(start.poseControls!), ...Object.keys(end.poseControls!)]).forEach((key) => {
+    const from = start.poseControls![key];
+    const to = end.poseControls![key];
+    controls[key] = interpolate(from ?? 0, to ?? from ?? 0, blend);
+  });
+  return controls;
 }
 
 export function getObjectMotionSpeed(object: DirectorObject, progress: number) {

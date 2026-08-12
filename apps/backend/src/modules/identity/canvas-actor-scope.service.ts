@@ -36,6 +36,7 @@ const actionCapabilities: Record<CanvasAction, CanvasCapability> = {
   run: capabilities.canvasRun,
   manage: capabilities.canvasManage,
 };
+const CANVAS_PROJECT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export async function authorizeCanvasActor(
   db: SqlDatabase,
@@ -51,6 +52,9 @@ export async function authorizeCanvasActor(
     now: input.now,
   });
   const canvasId = String(input.canvasId ?? "").trim();
+  if (!CANVAS_PROJECT_ID_PATTERN.test(canvasId)) {
+    throw new CanvasAuthorizationError("canvas_not_found");
+  }
   const canvas = await queryOne<{ id: string; owner_user_id: string }>(
     db,
     actor.teamMember

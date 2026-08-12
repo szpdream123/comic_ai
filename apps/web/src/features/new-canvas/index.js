@@ -5,10 +5,12 @@ import {
   clearCanvasGraphEditorOverlay,
   clearCanvasGraphSelection,
   mountCanvasGraphEditorOverlay,
+  mountCanvasGraphNodeActionToolbar,
   mountCanvasWorkflowIfPresent,
   refreshCanvasSelectionActionToolbar,
   refreshCanvasWorkflowGraph,
   refreshCanvasWorkflowNode,
+  settleCanvasGraphBlankConnectionDraft,
   syncCanvasGraphViewport,
   syncCanvasZoomControlDisplay,
 } from "../production-workbench/canvas/canvas-x6-graph.js";
@@ -53,7 +55,7 @@ import { createCanvasPanoramaViewerController } from "./canvas-panorama-viewer.j
 
 const DEFAULT_STYLE_HREFS = [
   "/src/features/production-workbench/production-workbench.css",
-  "/src/features/new-canvas/new-canvas.css",
+  "/src/features/new-canvas/new-canvas.css?v=20260810-1",
 ];
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
 export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-storyboard-cell";
@@ -285,6 +287,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
       workbench.onCanvasStoryboardImageReturn = (input) => (
         context.onCanvasStoryboardImageReturn?.(input, { workbench, surface }) === true
       );
+      workbench.onCanvasBlankConnection = (input) => {
+        suppressCanvasBlankClickUntil = Date.now() + 500;
+        context.onCanvasBlankConnection?.(input, { workbench, surface });
+      };
       const createMarkup = (renderUi = workbench.ui) => renderNewCanvasLayout(
         renderer({
           state: workbench.state,
@@ -338,8 +344,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
             currentGraphMount.closest?.(".canvas-stage")?.classList?.add?.("is-x6-ready");
             workbench.canvasGraph = graph;
             refreshCanvasWorkflowGraph(workbench);
-            const flow = surface.querySelector?.(".canvas-flow");
-            if (flow) syncCanvasNodeEditor(flow, flow, graph, workbench.ui.selectedCanvasNodeId);
+            const stage = surface.querySelector?.(".canvas-stage");
+            if (stage) {
+              syncCanvasNodeActionToolbar(stage, stage, graph, workbench.ui.selectedCanvasNodeId);
+              syncCanvasNodeEditor(stage, stage, graph, workbench.ui.selectedCanvasNodeId);
+            }
             minimapController.bind(graph);
             void panoramaViewerController.bind();
             void bindCanvasAudioWaveforms(surface);
@@ -360,8 +369,12 @@ function createProductionCanvasAdapter(dependencies = {}) {
           return;
         }
         graph = mountedGraph;
-        const flow = surface.querySelector?.(".canvas-flow");
-        if (flow && graph) syncCanvasNodeEditor(flow, flow, graph, workbench.ui.selectedCanvasNodeId);
+        if (!graph) showCanvasGraphMountFailure(surface);
+        const stage = surface.querySelector?.(".canvas-stage");
+        if (stage && graph) {
+          syncCanvasNodeActionToolbar(stage, stage, graph, workbench.ui.selectedCanvasNodeId);
+          syncCanvasNodeEditor(stage, stage, graph, workbench.ui.selectedCanvasNodeId);
+        }
         minimapController.bind(graph);
         void panoramaViewerController.bind();
         void bindCanvasAudioWaveforms(surface);
@@ -374,11 +387,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (disposed || !graph || typeof document === "undefined") return render();
         const template = document.createElement("template");
         template.innerHTML = createMarkup();
-        const currentFlow = surface.querySelector?.(".canvas-flow");
-        const nextFlow = template.content.querySelector?.(".canvas-flow");
-        if (!currentFlow || !nextFlow) return render();
-        currentFlow.replaceWith(nextFlow);
-        syncCanvasNodeEditor(nextFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
+        const currentStage = surface.querySelector?.(".canvas-stage");
+        const nextStage = template.content.querySelector?.(".canvas-stage");
+        if (!currentStage || !nextStage) return render();
+        syncCanvasNodeActionToolbar(currentStage, nextStage, graph, workbench.ui.selectedCanvasNodeId);
+        syncCanvasNodeEditor(currentStage, nextStage, graph, workbench.ui.selectedCanvasNodeId);
         syncCanvasStageOverlays(surface, template.content);
         syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
@@ -391,10 +404,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (disposed || !graph || typeof document === "undefined") return renderInteraction();
         const template = document.createElement("template");
         template.innerHTML = createMarkup();
-        const currentFlow = surface.querySelector?.(".canvas-flow");
-        const nextFlow = template.content.querySelector?.(".canvas-flow");
-        if (!currentFlow || !nextFlow) return renderInteraction();
-        syncCanvasNodeEditor(currentFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
+        const currentStage = surface.querySelector?.(".canvas-stage");
+        const nextStage = template.content.querySelector?.(".canvas-stage");
+        if (!currentStage || !nextStage) return renderInteraction();
+        syncCanvasNodeActionToolbar(currentStage, nextStage, graph, workbench.ui.selectedCanvasNodeId);
+        syncCanvasNodeEditor(currentStage, nextStage, graph, workbench.ui.selectedCanvasNodeId);
         syncCanvasStageOverlays(surface, template.content);
         syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
         syncCanvasSelectionClasses(surface, template.content, "[data-canvas-minimap] [data-node-id]");
@@ -478,10 +492,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         const template = document.createElement("template");
         template.innerHTML = createMarkup();
-        const currentFlow = surface.querySelector?.(".canvas-flow");
-        const nextFlow = template.content.querySelector?.(".canvas-flow");
-        if (!currentFlow || !nextFlow) return render();
-        syncCanvasNodeEditor(currentFlow, nextFlow, graph, workbench.ui.selectedCanvasNodeId);
+        const currentStage = surface.querySelector?.(".canvas-stage");
+        const nextStage = template.content.querySelector?.(".canvas-stage");
+        if (!currentStage || !nextStage) return render();
+        syncCanvasNodeActionToolbar(currentStage, nextStage, graph, workbench.ui.selectedCanvasNodeId);
+        syncCanvasNodeEditor(currentStage, nextStage, graph, workbench.ui.selectedCanvasNodeId);
         syncCanvasStageOverlays(surface, template.content);
         syncCanvasSidebarNodeItem(surface, template.content, normalizedNodeId);
         syncCanvasSelectionClasses(surface, template.content, ".canvas-sidebar [data-action=\"select-canvas-node\"][data-node-id]");
@@ -671,6 +686,12 @@ function createProductionCanvasAdapter(dependencies = {}) {
             .find((candidate) => candidate?.matches?.("[data-action]"));
         const action = actionTarget?.dataset?.action;
         if (action) {
+          if (action === "retry-canvas-x6-mount") {
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            void render();
+            return;
+          }
           if (action === "extract-canvas-storyboard-cell" && Date.now() < suppressStoryboardExtractClickUntil) {
             suppressStoryboardExtractClickUntil = 0;
             event.preventDefault?.();
@@ -736,7 +757,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         }
         const canvasStage = event.target?.closest?.(".canvas-stage");
         const interactive = event.target?.closest?.(
-          ".x6-node, .canvas-x6-special-node, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-selection-action-toolbar, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
+          ".x6-node, .canvas-x6-special-node, .canvas-node-editor, .canvas-context-menu, .canvas-selection-action-toolbar, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-command-tools, .canvas-zoom-tools",
         );
         if (canvasStage && !interactive && Date.now() < suppressCanvasBlankClickUntil) {
           suppressCanvasBlankClickUntil = 0;
@@ -746,6 +767,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         if (canvasStage && !interactive) {
           const hadEditor = workbench.ui.canvasEditorOpen === true;
           const overlaysChanged = dismissCanvasSurfaceOverlays(workbench.ui);
+          settleCanvasGraphBlankConnectionDraft(graph, { document: workbench.ui.canvasDocument });
           if (workbench.ui.canvasEditorOpen === true) {
             clearCanvasGraphEditorOverlay(graph);
             workbench.ui.canvasEditorOpen = false;
@@ -896,6 +918,14 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.preventDefault();
           event.stopPropagation();
           applyCanvasArrangement();
+          return;
+        }
+        if (event.key === "Escape" && workbench.ui?.canvasContextMenu?.mode === "connection") {
+          event.preventDefault();
+          event.stopPropagation();
+          workbench.ui.canvasContextMenu = null;
+          settleCanvasGraphBlankConnectionDraft(graph, { document: workbench.ui.canvasDocument });
+          void renderInteraction();
           return;
         }
         if (event.key === "Escape" && workbench.ui?.canvasMarkdownFullscreen?.open === true) {
@@ -1276,6 +1306,18 @@ function syncCanvasSelectionClasses(surface, nextRoot, selector) {
   }
 }
 
+function showCanvasGraphMountFailure(surface) {
+  const stage = surface.querySelector?.(".canvas-stage");
+  if (!stage || stage.querySelector?.(".canvas-x6-mount-failure")) return false;
+  const notice = surface.ownerDocument?.createElement?.("aside");
+  if (!notice) return false;
+  notice.className = "canvas-x6-mount-failure";
+  notice.setAttribute("role", "alert");
+  notice.innerHTML = '<strong>画布加载失败</strong><span>节点和连线未显示，请重试。</span><button type="button" data-action="retry-canvas-x6-mount">重新加载画布</button>';
+  stage.append(notice);
+  return true;
+}
+
 function clearCanvasSelectionPresentation(surface, graph, workbench) {
   clearCanvasGraphEditorOverlay(graph);
   clearCanvasGraphSelection(graph);
@@ -1348,17 +1390,24 @@ export function resolveCanvasGraphNodeAtClientPoint(graph, clientX, clientY) {
   return String(node?.id ?? "");
 }
 
-function syncCanvasNodeEditor(currentFlow, nextFlow, graph, nodeId) {
-  const editor = nextFlow.querySelector?.(".canvas-node-editor");
-  const editorHtml = editor?.outerHTML ?? "";
-  currentFlow.querySelector?.(".canvas-node-editor")?.remove();
-  if (nextFlow !== currentFlow) editor?.remove();
-  currentFlow.querySelector?.(".canvas-node-action-toolbar")?.remove();
+function syncCanvasNodeEditor(currentStage, nextStage, graph, nodeId) {
+  const editorTemplate = nextStage.querySelector?.(":scope > [data-canvas-node-editor-template]");
+  const editorHtml = editorTemplate?.innerHTML?.trim?.() ?? "";
+  currentStage.querySelector?.(":scope > [data-canvas-node-editor-template]")?.remove();
+  if (nextStage !== currentStage) editorTemplate?.remove();
   if (!editorHtml || !nodeId) {
     clearCanvasGraphEditorOverlay(graph);
     return;
   }
   mountCanvasGraphEditorOverlay(graph, nodeId, editorHtml);
+}
+
+function syncCanvasNodeActionToolbar(currentStage, nextStage, graph, nodeId) {
+  const toolbarTemplate = nextStage.querySelector?.(":scope > [data-canvas-node-action-toolbar-template]");
+  const toolbarHtml = toolbarTemplate?.innerHTML?.trim?.() ?? "";
+  currentStage.querySelector?.(":scope > [data-canvas-node-action-toolbar-template]")?.remove?.();
+  if (nextStage !== currentStage) toolbarTemplate?.remove?.();
+  mountCanvasGraphNodeActionToolbar(graph, nodeId, toolbarHtml);
 }
 
 function syncCanvasStageOverlays(surface, nextRoot) {
@@ -1375,7 +1424,6 @@ function syncCanvasStageOverlays(surface, nextRoot) {
     "[data-canvas-image-fullscreen]",
     "[data-canvas-video-fullscreen]",
     ".canvas-inline-toast",
-    ".canvas-revision-conflict-backdrop",
   ]) {
     if (selector === '[data-selection-picker-id="canvas-prompt-reference-picker"]') {
       const currentPicker = currentStage.querySelector?.(selector);

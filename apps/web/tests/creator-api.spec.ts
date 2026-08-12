@@ -34,6 +34,61 @@ test("createProject sends an idempotency key", async () => {
   assert.match(calls[0].options.headers["idempotency-key"], /^project\.create:/);
 });
 
+test("video-to-director analysis and scene save use the existing toolbox and director contracts", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => "{}" };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.runToolboxVideoToDirector({
+    displayName: "视觉模型",
+    frameSheetDataUrls: ["data:image/webp;base64,AQID"],
+    shotSegments: [{ startMs: 0, endMs: 1_000 }],
+  });
+  await creatorApi.saveDirectorDeskScene("desk/1", { version: 1 });
+
+  assert.equal(calls[0].url, "/api/toolbox/prompt-reverse");
+  assert.match(calls[0].options.headers["idempotency-key"], /^toolbox\.video-to-director:/);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    displayName: "视觉模型",
+    frameSheetDataUrls: ["data:image/webp;base64,AQID"],
+    shotSegments: [{ startMs: 0, endMs: 1_000 }],
+    mode: "video",
+    analysisTarget: "director",
+  });
+  assert.equal(calls[1].url, "/api/director-desks/desk%2F1/scene");
+  assert.equal(calls[1].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { scene: { version: 1 } });
+});
+
+test("createCanvasProject forwards an explicit idempotency key outside the request body", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => "{}",
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.createCanvasProject({
+    title: "Refresh canvas",
+    status: "草稿",
+    idempotencyKey: "canvas-project.create:refresh-race",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/api/creator/canvases");
+  assert.equal(calls[0].options.headers["idempotency-key"], "canvas-project.create:refresh-race");
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    title: "Refresh canvas",
+    status: "草稿",
+  });
+});
+
 test("tool preset API methods use the versioned creator REST contract", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

@@ -589,6 +589,7 @@ describe("GPT Image 2 BullMQ worker service", () => {
       GPT_IMAGE2_PROVIDER_ENABLED: "true",
       BULLMQ_OUTBOX_DISPATCHER_ENABLED: "true",
       GPT_IMAGE2_API_KEY: "gpt-image-test-key",
+      GLOBAL_AI_OPC_API_KEY: "global-ai-opc-test-key",
       STORAGE_PUBLIC_BASE_URL: "https://platform-storage.example.test",
       GENERATION_ARTIFACT_UPLOAD_RETRY_ATTEMPTS: "3",
       GENERATION_ARTIFACT_UPLOAD_RETRY_DELAY_MS: "0",
@@ -614,6 +615,9 @@ describe("GPT Image 2 BullMQ worker service", () => {
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
+      }
+      if (requestUrl.endsWith("/asset/seedance2/assetUpload")) {
+        return new Response("unavailable", { status: 503 });
       }
       return new Response(
         JSON.stringify({
@@ -820,6 +824,10 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(runningTaskResponse.status, 200);
       assert.equal(runningTask.status, "running");
       assert.deepEqual(finalizeResult, { status: "succeeded" });
+      assert.equal(
+        providerCalls.some((call) => call.url.endsWith("/asset/seedance2/assetUpload")),
+        true,
+      );
       assert.equal(uploadedBodies.length, 1);
       assert.equal(uploadedBodies[0] instanceof Uint8Array, true);
       assert.equal(completedTaskResponse.status, 200);
@@ -1619,6 +1627,14 @@ describe("GPT Image 2 BullMQ worker service", () => {
         `,
         [imageTask.taskId],
       );
+      const storedObjectCount = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM storage_objects
+          WHERE metadata_json->>'taskId' = $1
+        `,
+        [imageTask.taskId],
+      );
 
       assert.equal(imageTaskResponse.status, 200);
       assert.deepEqual(submitResult, { status: "submitted", providerStatus: "succeeded" });
@@ -1626,6 +1642,8 @@ describe("GPT Image 2 BullMQ worker service", () => {
       assert.equal(artifactDownloadAttempts, 3);
       assert.ok(artifactDownloadSignals.every((signal) => signal instanceof AbortSignal));
       assert.equal(uploadInputs.length, 2);
+      assert.equal(new Set(uploadInputs.map((entry) => entry.objectKey)).size, 1);
+      assert.equal(storedObjectCount.rows[0]?.count, 1);
       assert.ok(uploadInputs.every((entry) => entry.contentLength === 8));
       assert.ok(uploadInputs.every((entry) => entry.contentType === "image/jpeg"));
       assert.ok(uploadInputs.every((entry) => entry.body instanceof Uint8Array));

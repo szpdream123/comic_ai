@@ -271,6 +271,63 @@ describe("Canvas generation runtime", { concurrency: false }, () => {
     }
   });
 
+  it("terminalizes batch items when generation results require review", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedCanvas(db);
+    const taskIds = new Map<string, string>();
+    try {
+      const dispatchNode = async (input: { nodeKey: string }) => {
+        const workflow = await createWorkflowWithTasks(db, {
+          userId: fixture.userId,
+          projectId: null,
+          canvasProjectId: fixture.canvasId,
+          workflowType: "canvas_batch_node",
+          inputSnapshot: {},
+          tasks: [{
+            taskType: "episode_generate_image",
+            queueName: "generation-submit-image",
+            targetEntityType: "canvas",
+            targetEntityId: fixture.canvasId,
+            inputSnapshot: {},
+          }],
+        });
+        const taskId = workflow.tasks[0]!.id;
+        taskIds.set(input.nodeKey, taskId);
+        return { taskId };
+      };
+      const created = await createCanvasGenerationBatch(db, {
+        canvasProjectId: fixture.canvasId,
+        actorScope: fixture.scope,
+        idempotencyKey: "batch-review-terminal-test",
+        nodes: [
+          { nodeKey: "unknown", mediaKind: "image" },
+          { nodeKey: "review", mediaKind: "image" },
+        ],
+        dispatchNode,
+        now: new Date("2026-07-25T07:20:00.000Z"),
+      });
+      await db.query("UPDATE tasks SET status='result_unknown', failure_code=NULL WHERE id=$1", [taskIds.get("unknown")]);
+      await db.query("UPDATE tasks SET status='manual_review_required', failure_code=NULL WHERE id=$1", [taskIds.get("review")]);
+
+      const reconciled = await reconcileCanvasGenerationBatch(db, {
+        batchId: created.id,
+        canvasProjectId: fixture.canvasId,
+        dispatchNode,
+        now: new Date("2026-07-25T07:21:00.000Z"),
+      });
+      assert.equal(reconciled.status, "failed");
+      assert.deepEqual(
+        reconciled.items.map((item) => [item.nodeKey, item.status, item.failure.failureCode]),
+        [
+          ["unknown", "failed", "result_unknown"],
+          ["review", "failed", "manual_review_required"],
+        ],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("runs text nodes inside the DAG and injects their artifacts into successors", async () => {
     const db = await createMigratedTestDb();
     const fixture = await seedCanvas(db);

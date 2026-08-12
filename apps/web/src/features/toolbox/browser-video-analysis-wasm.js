@@ -10,7 +10,7 @@ export async function probeBrowserVideoWasmRuntime(options = {}) {
       classWorkerURL: options.workerURL,
       coreURL: options.coreURL,
       wasmURL: options.wasmURL,
-    });
+    }, { signal: options.signal });
     return true;
   } finally {
     ffmpeg.terminate();
@@ -31,15 +31,15 @@ export async function decodeBrowserVideoTimelineWithWasm(file, options = {}) {
       classWorkerURL: options.workerURL,
       coreURL: options.coreURL,
       wasmURL: options.wasmURL,
-    });
+    }, { signal: options.signal });
     ffmpeg.on("progress", (event) => {
       const progress = Number(event?.progress);
       if (Number.isFinite(progress)) {
         options.onProgress?.({ progress: Math.min(99, Math.round(progress * 99)), stage: "extracting_frames" });
       }
     });
-    await ffmpeg.writeFile(inputPath, new Uint8Array(await file.arrayBuffer()));
-    await ffmpeg.createDir(outputDirectory);
+    await ffmpeg.writeFile(inputPath, new Uint8Array(await file.arrayBuffer()), { signal: options.signal });
+    await ffmpeg.createDir(outputDirectory, { signal: options.signal });
     const filter = `fps=${frameRate},scale=${maxEdge}:${maxEdge}:force_original_aspect_ratio=decrease`;
     const exitCode = await ffmpeg.exec([
       "-threads", "1",
@@ -48,16 +48,16 @@ export async function decodeBrowserVideoTimelineWithWasm(file, options = {}) {
       "-q:v", "2",
       "-f", "image2",
       `${outputDirectory}/frame-%06d.jpg`,
-    ]);
+    ], -1, { signal: options.signal });
     if (exitCode !== 0) throw new Error("浏览器 WASM 解码器无法读取所选视频");
 
-    const entries = (await ffmpeg.listDir(outputDirectory))
+    const entries = (await ffmpeg.listDir(outputDirectory, { signal: options.signal }))
       .filter((entry) => entry && !entry.isDir && /^frame-\d{6}\.jpg$/i.test(String(entry.name)))
       .sort((left, right) => String(left.name).localeCompare(String(right.name)));
     if (!entries.length) throw new Error("浏览器 WASM 解码器没有生成视频画面");
 
     for (let index = 0; index < entries.length; index += 1) {
-      const bytes = await ffmpeg.readFile(`${outputDirectory}/${entries[index].name}`);
+      const bytes = await ffmpeg.readFile(`${outputDirectory}/${entries[index].name}`, "binary", { signal: options.signal });
       const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
       frameUrls.push(url);
       options.onProgress?.({

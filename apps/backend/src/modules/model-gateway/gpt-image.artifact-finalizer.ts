@@ -4,7 +4,8 @@ import { UnrecoverableError } from "bullmq";
 import type { AssetType } from "../project/asset.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import {
-  createScopedStorageObject,
+  createOrReuseGenerationStorageObject,
+  findGenerationStorageObject,
   markStorageObjectAvailable,
   markStorageObjectFailed,
   type StorageObjectRecord,
@@ -292,7 +293,7 @@ async function uploadProviderArtifactBytesToStorage(
 }> {
   const { retryAttempts, retryDelayMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
   assertRecoveryTimeRemaining(input.recoveryDeadlineAt);
-  const storageObject = await createScopedStorageObject(db, {
+  const storageObject = await createOrReuseGenerationStorageObject(db, {
     userId: input.userId,
     projectId: input.projectId,
     canvasProjectId: input.canvasProjectId ?? null,
@@ -302,10 +303,24 @@ async function uploadProviderArtifactBytesToStorage(
     sizeBytes: input.bytes.byteLength,
     provider: input.runtime.provider,
     status: "pending_upload",
-    metadata: input.metadata,
+    metadata: input.metadata as Record<string, unknown> & { taskId: string; attemptId: string | null },
     createdByUserId: input.createdByUserId ?? null,
     now: input.now,
   });
+  const reusable = await findReusableUploadedArtifact(input.runtime, storageObject, input.recoveryDeadlineAt);
+  if (reusable) {
+    const availableStorageObject = await markStorageObjectAvailable(db, {
+      storageObjectId: storageObject.id,
+      sizeBytes: reusable.sizeBytes,
+      contentType: reusable.contentType,
+      now: input.now,
+    });
+    return {
+      storageObject: availableStorageObject ?? storageObject,
+      contentType: reusable.contentType,
+      sizeBytes: reusable.sizeBytes,
+    };
+  }
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     try {
@@ -388,9 +403,31 @@ async function uploadProviderArtifactUrlToStorage(
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
   const { retryAttempts, retryDelayMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
-  let storageObject: StorageObjectRecord | null = null;
+  let storageObject: StorageObjectRecord | null = await findGenerationStorageObject(db, {
+    userId: input.createdByUserId ?? input.userId,
+    bucket: input.runtime.bucket,
+    taskId: String(input.metadata.taskId),
+    attemptId: readString(input.metadata.attemptId) ?? null,
+  }) ?? null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
+
+  if (storageObject) {
+    const reusable = await findReusableUploadedArtifact(input.runtime, storageObject, input.recoveryDeadlineAt);
+    if (reusable) {
+      const availableStorageObject = await markStorageObjectAvailable(db, {
+        storageObjectId: storageObject.id,
+        sizeBytes: reusable.sizeBytes,
+        contentType: reusable.contentType,
+        now: input.now,
+      });
+      return {
+        storageObject: availableStorageObject ?? storageObject,
+        contentType: reusable.contentType,
+        sizeBytes: reusable.sizeBytes,
+      };
+    }
+  }
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     let response: Response | null = null;
@@ -399,9 +436,11 @@ async function uploadProviderArtifactUrlToStorage(
         input.fetchTimeoutMs ?? 5 * 60_000,
         input.recoveryDeadlineAt,
       );
-      response = await fetchProviderArtifactSafely(input.artifactUrl, fetchTimeoutMs
-        ? { signal: AbortSignal.timeout(fetchTimeoutMs) }
-        : undefined, input.fetchImpl);
+      response = await fetchProviderArtifactWithResponseTimeout(
+        input.artifactUrl,
+        fetchTimeoutMs,
+        input.fetchImpl,
+      );
       if (!response.ok || !response.body) {
         throw Object.assign(new Error(`provider_artifact_download_${response.status}`), {
           failureCode: "provider_output_download_failed",
@@ -420,7 +459,7 @@ async function uploadProviderArtifactUrlToStorage(
       });
 
       if (!storageObject) {
-        storageObject = await createScopedStorageObject(db, {
+        storageObject = await createOrReuseGenerationStorageObject(db, {
           userId: input.userId,
           projectId: input.projectId,
           canvasProjectId: input.canvasProjectId ?? null,
@@ -430,13 +469,13 @@ async function uploadProviderArtifactUrlToStorage(
           sizeBytes: knownSizeBytes,
           provider: input.runtime.provider,
           status: "pending_upload",
-          metadata: input.metadata,
+          metadata: input.metadata as Record<string, unknown> & { taskId: string; attemptId: string | null },
           createdByUserId: input.createdByUserId ?? null,
           now: input.now,
         });
       }
 
-      const bytes = await readProviderArtifactBytes(response.body, input.maxBytes);
+      const bytes = await readProviderArtifactBytes(response.body, input.maxBytes, fetchTimeoutMs);
       knownSizeBytes = bytes.byteLength;
       if (input.mediaKind === "image") {
         assertDecodedImageContent(bytes, contentType);
@@ -489,13 +528,35 @@ async function uploadProviderArtifactUrlToStorage(
   });
 }
 
-async function readProviderArtifactBytes(body: ReadableStream<Uint8Array>, maxBytes?: number) {
+async function fetchProviderArtifactWithResponseTimeout(
+  artifactUrl: string,
+  timeoutMs: number,
+  fetchImpl?: typeof fetch,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchProviderArtifactSafely(
+      artifactUrl,
+      { signal: controller.signal },
+      fetchImpl,
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function readProviderArtifactBytes(
+  body: ReadableStream<Uint8Array>,
+  maxBytes?: number,
+  inactivityTimeoutMs?: number,
+) {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let sizeBytes = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readProviderArtifactChunk(reader, inactivityTimeoutMs);
       if (done) break;
       if (!value?.byteLength) continue;
       sizeBytes += value.byteLength;
@@ -533,6 +594,26 @@ async function readProviderArtifactBytes(body: ReadableStream<Uint8Array>, maxBy
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+async function readProviderArtifactChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  inactivityTimeoutMs?: number,
+) {
+  if (!inactivityTimeoutMs) return reader.read();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(Object.assign(new Error("provider_artifact_download_inactive"), {
+          failureCode: "provider_output_download_failed",
+        })), inactivityTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function createCountingUploadStream(body: ReadableStream<Uint8Array>, maxBytes?: number) {
@@ -738,6 +819,31 @@ function readArtifactValidationConfig(mediaKind: "audio" | "image") {
         maxBytes: 64 * 1024 * 1024,
         requiredContentTypePrefix: "image/",
       };
+}
+
+async function findReusableUploadedArtifact(
+  runtime: UploadSessionRuntime,
+  storageObject: StorageObjectRecord,
+  recoveryDeadlineAt?: Date | null,
+) {
+  if (typeof runtime.adapter.headObject !== "function") {
+    return storageObject.status === "available" && Number(storageObject.sizeBytes ?? 0) > 0
+      ? { contentType: storageObject.contentType, sizeBytes: Number(storageObject.sizeBytes) }
+      : null;
+  }
+  const remote = await runWithinRecoveryDeadline(
+    () => runtime.adapter.headObject!({
+      bucket: storageObject.bucket,
+      objectKey: storageObject.objectKey,
+    }),
+    recoveryDeadlineAt,
+  );
+  const sizeBytes = Number(remote.contentLength ?? 0);
+  if (!remote.exists || !Number.isFinite(sizeBytes) || sizeBytes <= 0) return null;
+  return {
+    contentType: readString(remote.contentType) ?? storageObject.contentType,
+    sizeBytes,
+  };
 }
 
 function parseContentLength(value: string | null) {

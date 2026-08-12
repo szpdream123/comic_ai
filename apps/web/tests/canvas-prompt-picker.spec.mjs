@@ -15,7 +15,7 @@ import {
 } from "../src/features/production-workbench/index.js";
 import { renderCanvasPromptDisplayValue, renderCanvasPromptReferenceThumbnails, renderCanvasSurfaceForHost } from "../src/features/production-workbench/project-detail.js";
 import { createDefaultCanvasDocument } from "../src/features/production-workbench/canvas/canvas-default-document.js";
-import { addCanvasNode, updateCanvasNodeData } from "../src/features/production-workbench/canvas/canvas-state.js";
+import { addCanvasNode, removeCanvasNode, updateCanvasNodeData } from "../src/features/production-workbench/canvas/canvas-state.js";
 import { resolveCanvasPromptReferences } from "../src/features/production-workbench/canvas/canvas-prompt-reference.js";
 
 test("Prompt Picker expands Canvas characters into stable single-reference and merge-all choices", async () => {
@@ -695,6 +695,32 @@ test("Canvas prompt reference thumbnails render previews once per stable token",
   assert.equal((html.match(/class="canvas-generation-reference-thumb canvas-prompt-reference-thumb"/g) ?? []).length, 1);
   assert.match(html, /https:\/\/signed\.test\/front\?token=secret/);
   assert.match(html, /任小野 · 正面/);
+});
+
+test("Canvas prompt reference thumbnails disappear with a deleted source node", () => {
+  const workbench = createWorkbench();
+  let document = addCanvasNode(workbench.ui.canvasDocument, { id: "image-source", type: "source-image" });
+  document = updateCanvasNodeData(document, "source-node", { prompt: "@node:image-source" });
+  document = {
+    ...document,
+    edges: [{
+      id: "edge-image-source",
+      sourceNodeId: "image-source",
+      sourcePortId: "out_image",
+      targetNodeId: "source-node",
+      targetPortId: "in_text",
+      data: { kind: "image" },
+    }],
+  };
+
+  const nextDocument = removeCanvasNode(document, "image-source");
+  const node = nextDocument.nodes.find((candidate) => candidate.id === "source-node");
+  const html = renderCanvasPromptReferenceThumbnails(node, nextDocument, {
+    "@node:image-source": { label: "已删除素材", previewUrl: "/uploads/deleted.png" },
+  });
+
+  assert.equal(node.data.prompt, "");
+  assert.doesNotMatch(html, /canvas-generation-reference-thumb|deleted\.png/);
 });
 
 test("Canvas generation expands a named prompt reference and submits after clicking generate", async () => {

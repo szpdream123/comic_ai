@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DirectorObject } from "./directorProject";
 import {
   getObjectMotionActionPresetId,
+  getObjectMotionPoseControls,
   getObjectMotionSnapshot,
   normalizeObjectMotionPath,
   sampleObjectMotionPath,
@@ -31,6 +32,58 @@ describe("object motion path", () => {
       interpolation: "smooth",
       keyframes: [],
     });
+  });
+
+  it("normalizes and interpolates optional performance pose controls", () => {
+    const character: DirectorObject = {
+      ...movingObject(),
+      kind: "character",
+      characterRig: { rigType: "ue4-mannequin", posePresetId: "stand", controls: {} },
+      motionPath: {
+        interpolation: "linear",
+        keyframes: [
+          {
+            id: "pose_1",
+            time: 0.2,
+            actionPresetId: "dance-cycle",
+            poseControls: { "head.yaw": 10, "rightHand.roll": Number.NaN },
+            transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+          },
+          {
+            id: "route_only",
+            time: 0.5,
+            transform: { position: [1, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+          },
+          {
+            id: "pose_2",
+            time: 0.8,
+            actionPresetId: "dance-cycle",
+            poseControls: { "head.yaw": 30, "leftElbow.bend": 80 },
+            transform: { position: [2, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+          },
+          {
+            id: "pose_3",
+            time: 0.9,
+            actionPresetId: "dance-cycle",
+            poseControls: { "rightKnee.bend": 45 },
+            transform: { position: [2, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+          },
+        ],
+      },
+    };
+
+    expect(normalizeObjectMotionPath(character.motionPath, character.transform).keyframes[0].poseControls)
+      .toEqual({ "head.yaw": 10 });
+    expect(getObjectMotionPoseControls(character, 0)).toEqual({ "head.yaw": 10 });
+    expect(getObjectMotionPoseControls(character, 0.5)?.["head.yaw"]).toBeCloseTo(20);
+    expect(getObjectMotionPoseControls(character, 0.5)?.["leftElbow.bend"]).toBeCloseTo(40);
+    expect(getObjectMotionPoseControls(character, 1)).toEqual({
+      "head.yaw": 30,
+      "leftElbow.bend": 80,
+      "rightKnee.bend": 45,
+    });
+    expect(getObjectMotionActionPresetId(character, 0.5)).toBeNull();
+    expect(getObjectMotionPoseControls(movingObject(), 0.5)).toBeNull();
   });
 
   it("interpolates position, rotation and scale on the shared normalized timeline", () => {

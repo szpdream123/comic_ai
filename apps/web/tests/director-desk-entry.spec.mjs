@@ -506,3 +506,11 @@ test("workbench rerenders preserve the live director desk mount and editor state
   assert.equal(mount.dataset.theme, "dark");
   assert.equal(classNames.has("dark"), true);
 });
+
+test("generated video previews open the newly created director desk instance", () => {
+  const workbenchSource = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");
+
+  assert.match(workbenchSource, /const initialInstanceId = String\(workbench\.ui\?\.directorDeskInitialInstanceId \?\? ""\)\.trim\(\);/);
+  assert.match(workbenchSource, /initialScreen: initialInstanceId \? "editor" : "home",[\s\S]*?instanceId: initialInstanceId \|\| undefined,/);
+  assert.match(workbenchSource, /workbench\.ui\.directorDeskInitialInstanceId = deskKey;[\s\S]*?workbench\.ui\.activeNavTab = "director";/);
+});

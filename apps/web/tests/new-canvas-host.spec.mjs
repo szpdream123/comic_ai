@@ -38,9 +38,11 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.doesNotMatch(source, /apps\/web\/new-canvas/);
   assert.match(source, /nextGraphMount\.replaceWith\(currentGraphMount\)/);
   assert.match(source, /currentGraphMount\.closest\?\.\("\.canvas-stage"\)/);
-  assert.match(source, /if \(flow && graph\) syncCanvasNodeEditor\(flow, flow, graph, workbench\.ui\.selectedCanvasNodeId\)/);
-  assert.match(source, /syncCanvasNodeEditor\(nextFlow, nextFlow, graph, workbench\.ui\.selectedCanvasNodeId\)/);
-  assert.match(source, /const editorHtml = editor\?\.outerHTML \?\? ""/);
+  assert.match(source, /if \(stage && graph\) \{[\s\S]*?syncCanvasNodeActionToolbar\(stage, stage, graph, workbench\.ui\.selectedCanvasNodeId\);[\s\S]*?syncCanvasNodeEditor\(stage, stage, graph, workbench\.ui\.selectedCanvasNodeId\);/);
+  assert.match(source, /syncCanvasNodeActionToolbar\(currentStage, nextStage, graph, workbench\.ui\.selectedCanvasNodeId\);[\s\S]*?syncCanvasNodeEditor\(currentStage, nextStage, graph, workbench\.ui\.selectedCanvasNodeId\);/);
+  assert.match(source, /const editorHtml = editorTemplate\?\.innerHTML\?\.trim\?\.\(\) \?\? ""/);
+  assert.match(source, /showCanvasGraphMountFailure\(surface\)/);
+  assert.match(source, /action === "retry-canvas-x6-mount"[\s\S]*?void render\(\)/);
   assert.match(source, /createCanvasAgentController/);
   assert.match(source, /let renderToken = 0/);
   assert.match(source, /token !== renderToken/);
@@ -78,6 +80,11 @@ test("new-canvas clears X6 cells and listeners before disposing a graph", () => 
   }), true);
   assert.deepEqual(calls, ["off", ["clearCells", { silent: true }], "dispose"]);
   assert.equal(disposeCanvasGraph(null), false);
+});
+
+test("new-canvas forwards blank X6 connection drops to its host", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  assert.match(source, /workbench\.onCanvasBlankConnection = \(input\) => \{[\s\S]*?suppressCanvasBlankClickUntil = Date\.now\(\) \+ 500;[\s\S]*?context\.onCanvasBlankConnection\?\.\(input/);
 });
 
 test("Canvas resolves a clicked X6 node from graph coordinates", () => {
@@ -145,6 +152,16 @@ test("new Canvas commits a typed zoom percentage with Enter", () => {
   assert.match(keydownBlock, /data-canvas-zoom-value-input/);
   assert.match(keydownBlock, /event\.key === "Enter"/);
   assert.match(keydownBlock, /context\.onChange\?\./);
+});
+
+test("new Canvas cancels a pending blank connection with Escape", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+  const keydownBlock = source.match(/const onKeydown = \(event\) => \{[\s\S]*?const onPointerDown/)?.[0] ?? "";
+
+  assert.match(keydownBlock, /canvasContextMenu\?\.mode === "connection"/);
+  assert.match(keydownBlock, /workbench\.ui\.canvasContextMenu = null/);
+  assert.match(keydownBlock, /settleCanvasGraphBlankConnectionDraft\(graph, \{ document: workbench\.ui\.canvasDocument \}\)/);
+  assert.match(keydownBlock, /void renderInteraction\(\)/);
 });
 
 test("new-canvas renders the existing production-workbench Canvas surface", () => {
@@ -943,7 +960,10 @@ test("Canvas storyboard cell drag uses a structured payload and a dedicated drop
   assert.match(source, /context\.onCanvasStoryboardCellDrop\?\.\(\{/);
   assert.match(source, /context\.onCanvasStoryboardImageReturn\?\.\(input/);
   assert.match(source, /suppressStoryboardExtractClickUntil = Date\.now\(\) \+ 500/);
-  assert.match(graphSource, /storyboardBody\?\.addEventListener\?\.\("wheel", \(event\) => event\.stopPropagation\(\), \{ passive: true \}\)/);
+  assert.match(graphSource, /storyboardBody\.addEventListener\("wheel", \(event\) => event\.stopPropagation\(\), \{ passive: true \}\)/);
+  assert.match(graphSource, /const canvasStoryboardScrollState = new Map\(\)/);
+  assert.match(graphSource, /canvasStoryboardScrollState\.set\(nodeId, storyboardBody\.scrollTop\)/);
+  assert.match(graphSource, /storyboardBody\.scrollTop = Math\.min\([\s\S]*?previousScrollTop/);
   assert.match(graphSource, /function resolveCanvasStoryboardReturnTarget/);
   assert.match(graphSource, /function resolveCanvasStoryboardCutReference/);
   assert.match(graphSource, /workbench\.onCanvasStoryboardImageReturn\?\.\(\{/);
@@ -1067,7 +1087,10 @@ test("Canvas selection and deselection stay local instead of rebuilding the canv
 
   assert.doesNotMatch(selectionHandler, /syncPanel\(|renderInteraction\(|refreshCanvasWorkflowGraph\(/);
   assert.match(blankDismiss, /clearCanvasSelectionPresentation\(surface, graph, workbench\)/);
-  assert.match(blankDismiss, /const shouldSyncSelection = Boolean\(workbench\.ui\.selectedCanvasNodeId \|\| workbench\.ui\.canvasEditorOpen\)/);
+  assert.match(blankDismiss, /const hadEditor = workbench\.ui\.canvasEditorOpen === true/);
+  assert.match(blankDismiss, /const overlaysChanged = dismissCanvasSurfaceOverlays\(workbench\.ui\)/);
+  assert.match(blankDismiss, /settleCanvasGraphBlankConnectionDraft\(graph, \{ document: workbench\.ui\.canvasDocument \}\)/);
+  assert.match(blankDismiss, /const shouldSyncSelection = hadEditor\s*\|\| Boolean\(workbench\.ui\.selectedCanvasNodeId\)\s*\|\| overlaysChanged/);
   assert.match(blankDismiss, /if \(shouldSyncSelection\) \{[\s\S]*?void renderSelection\(\);/);
   assert.doesNotMatch(blankDismiss, /zoomTo\(|translate\(|syncCanvasGraphViewport\(/);
   assert.doesNotMatch(blankDismiss, /renderInteraction\(|render\(|createMarkup\(|refreshCanvasWorkflowGraph\(/);
@@ -1117,7 +1140,8 @@ test("selected nodes render the primary toolbar zone before secondary actions", 
   assert.match(html, /data-media-tool="camera_studio"/);
   assert.match(html, /data-canvas-sidebar-mode="assets"/);
   assert.match(html, /data-action="set-canvas-sidebar-mode" data-canvas-sidebar-mode="history" aria-label="历史"/);
-  assert.match(html, /left:clamp\(8px,200px,calc\(100% - 12rem\)\)/);
+  assert.match(html, /<template data-canvas-node-action-toolbar-template>/);
+  assert.doesNotMatch(html, /left:clamp\(/);
 });
 
 test("Director and Markdown parity controls render on the actual Canvas surface", () => {
@@ -1150,10 +1174,22 @@ test("Director and Markdown parity controls render on the actual Canvas surface"
       },
     },
   });
-  assert.match(html, /data-canvas-director-body/);
-  assert.match(html, /data-action="open-canvas-director"/);
-  assert.match(html, /data-action="sync-canvas-director-frame"/);
-  assert.match(html, /data-action="delete-canvas-director-capture"/);
+  const graphSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  const directorSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-director-node.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(html, /data-canvas-x6-mount/);
+  assert.doesNotMatch(html, /data-canvas-director-body/);
+  assert.match(graphSource, /type === "ai-director"[\s\S]*?renderCanvasDirectorNodeBody\(node\)/);
+  assert.match(directorSource, /data-canvas-director-body/);
+  assert.match(directorSource, /data-action="open-canvas-director"/);
+  assert.match(directorSource, /data-action="sync-canvas-director-frame"/);
+  assert.match(directorSource, /data-action="delete-canvas-director-capture"/);
   assert.doesNotMatch(html, /class="canvas-node-editor generation-editor/);
   assert.doesNotMatch(html, /data-canvas-prompt-input/);
   assert.match(html, /data-canvas-markdown-fullscreen/);
@@ -1162,6 +1198,15 @@ test("Director and Markdown parity controls render on the actual Canvas surface"
 });
 
 test("ordinary Markdown stays inline while AI Markdown keeps its text generation editor", () => {
+  const graphSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  const markdownSource = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-markdown-node.js", import.meta.url),
+    "utf8",
+  );
+  const markdownRendererSource = `${graphSource}\n${markdownSource}`;
   const markdownHtml = renderCanvasSurfaceForHost({
     ui: {
       selectedCanvasProjectId: "canvas-markdown",
@@ -1180,7 +1225,15 @@ test("ordinary Markdown stays inline while AI Markdown keeps its text generation
       },
     },
   });
-  assert.match(markdownHtml, /class="canvas-markdown-toolbar"/);
+  assert.match(markdownHtml, /data-canvas-x6-mount/);
+  assert.doesNotMatch(markdownHtml, /class="canvas-markdown-toolbar"/);
+  assert.match(graphSource, /const markdownNode = \["markdown", "ai-markdown"\]\.includes\(type\)/);
+  assert.match(graphSource, /markdownNode \? renderCanvasMarkdown\w+\(node\) : ""/);
+  assert.match(markdownRendererSource, /data-action="set-canvas-markdown-mode"/);
+  assert.match(markdownRendererSource, /data-action="copy-canvas-markdown-text"/);
+  assert.match(markdownRendererSource, /data-action="toggle-canvas-markdown-fullscreen"/);
+  assert.match(markdownRendererSource, /data-canvas-markdown-text-stats/);
+  assert.match(graphSource, /data-canvas-text-input/);
   assert.doesNotMatch(markdownHtml, /class="canvas-node-editor generation-editor/);
   assert.doesNotMatch(markdownHtml, /请输入您的生图要求/);
 

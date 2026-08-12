@@ -75,6 +75,30 @@ test("media tool button actions replace only the drawer when it is already open"
   }
 });
 
+test("Canvas crop number inputs update the preview selection immediately", () => {
+  const selection = { style: {} };
+  const cropInputs = [];
+  const surface = {
+    querySelector(selector) {
+      return selector === ".canvas-media-crop-selection" ? selection : null;
+    },
+    querySelectorAll(selector) {
+      return selector === "[data-media-field^='crop']" ? cropInputs : [];
+    },
+  };
+  const ui = {
+    selectedCanvasNodeId: "source-image-node",
+    canvasDocument: { nodes: [{ id: "source-image-node", type: "source-image", data: {} }] },
+    canvasMediaTools: { open: true, tool: "crop" },
+  };
+  const controller = createCanvasMediaToolsController({ surface, workbench: { ui }, render() {} });
+
+  controller.handleInput({ dataset: { mediaField: "cropWidth" }, type: "number", value: "50" });
+
+  assert.equal(selection.style.width, "50%");
+  controller.dispose();
+});
+
 test("Canvas media tools create a derivation, generation task, and task binding", async () => {
   const calls = [];
   const ui = {
@@ -759,11 +783,12 @@ test("Canvas media drawer traps focus, closes on Escape, and restores the curren
 
 test("new Canvas CSS disables workflow motion when reduced motion is requested", () => {
   const css = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  const workbenchCss = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   const backdropRule = css.match(/\.canvas-media-tools-backdrop\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
   const drawerRule = css.match(/\.canvas-media-tools-drawer\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
   assert.doesNotMatch(backdropRule, /animation\s*:/);
   assert.doesNotMatch(drawerRule, /animation\s*:/);
-  assert.match(css, /\.new-canvas-root \.canvas-edge\.active,[\s\S]*?animation:\s*none !important/);
-  assert.match(css, /\.new-canvas-root \.canvas-generation-progress-track i,[\s\S]*?transition:\s*none !important/);
+  assert.match(workbenchCss, /\.canvas-x6-mount \.x6-edge:is\(\.is-canvas-edge-connecting, \.is-canvas-edge-flowing\)[\s\S]*?animation:\s*none/);
+  assert.match(css, /\.new-canvas-root \.canvas-x6-generation-track > i[\s\S]*?transition:\s*none !important/);
 });

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { operationNames } from "../../../../../packages/contracts/domain/operation-names.ts";
 import {
@@ -37,6 +37,7 @@ import { ModelError, translateProviderErrorMessage } from "./provider-error-mess
 import { attachProviderRawResponse, readProviderRawResponse } from "./provider-response-diagnostics.ts";
 import { buildCumobImagePayload } from "./cumob-image.provider-adapter.ts";
 import { buildGlobalAiOpcImagePayload } from "./global-ai-opc-image.provider-adapter.ts";
+import { registerGeneratedImageWithGlobalAiOpc } from "./global-ai-opc-material.service.ts";
 import { buildSanBaoImagePayload } from "./san-bao.provider-adapter.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
@@ -1058,23 +1059,36 @@ async function requeueGptImageAfterCumobRateLimit(
       `,
       [input.taskId, input.attemptId, input.now],
     );
-    const generationSnapshot = await queryOne<{ id: string }>(
+    const generationSnapshot = await queryOne<{ id: string | null }>(
       db,
       `
-        UPDATE ai_generation_task_snapshots
-        SET status = 'queued',
-            progress_stage = 'provider_rate_limited',
-            provider_status_json = COALESCE(provider_status_json, '{}'::jsonb)
-              || jsonb_build_object('failureCode', 'cumob_image_429'),
-            updated_at = $2
-        WHERE task_id = $1
-          AND status IN ('running', 'result_unknown')
-        RETURNING id
+        WITH updated_snapshot AS (
+          UPDATE ai_generation_task_snapshots
+          SET status = 'queued',
+              progress_stage = 'provider_rate_limited',
+              provider_status_json = COALESCE(provider_status_json, '{}'::jsonb)
+                || jsonb_build_object('failureCode', 'cumob_image_429'),
+              updated_at = $2
+          WHERE task_id = $1
+            AND status IN ('running', 'result_unknown')
+          RETURNING id
+        )
+        SELECT id FROM updated_snapshot
+        UNION ALL
+        SELECT NULL::uuid AS id
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM ai_generation_task_snapshots
+          WHERE task_id = $1
+        )
+        LIMIT 1
       `,
       [input.taskId, input.now],
     );
     if (!providerRequest || !attempt || !task || !generationSnapshot) {
-      throw new Error("cumob_rate_limit_requeue_state_conflict");
+      throw new Error(
+        `cumob_rate_limit_requeue_state_conflict:providerRequest=${Boolean(providerRequest)},attempt=${Boolean(attempt)},task=${Boolean(task)},generationSnapshot=${Boolean(generationSnapshot)}`,
+      );
     }
     await input.onRequeued?.(Number(providerRequest.retry_count));
     await db.query("COMMIT");
@@ -1387,6 +1401,14 @@ export async function finalizeGptImageArtifactJob(
     return { status: "failed", failureCode: "provider_output_missing" };
   }
 
+  const artifactLease = await claimGptImageArtifactFinalizeLease(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  });
+  if (!artifactLease) return { status: "skipped" };
+
+  return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
   let persisted: PersistedGptImageArtifact;
   try {
     await assertCanvasGenerationAssignmentActive(db, snapshot);
@@ -1623,8 +1645,16 @@ export async function finalizeGptImageArtifactJob(
     now: input.now,
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
+  await registerGeneratedImageWithGlobalAiOpc(db, {
+    storageObjectId: persisted.storageObjectId,
+    sourceUrl: persisted.sourceUrl || persisted.previewUrl,
+    env: input.env,
+    fetchImpl: input.fetchImpl,
+    now: input.now,
+  }).catch(() => undefined);
 
   return { status: "succeeded" };
+  });
 }
 
 export async function fetchGptImageArtifactJob(
@@ -1653,6 +1683,14 @@ export async function fetchGptImageArtifactJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const artifact = parseArtifactFromProviderResponse(parseProviderResponse(row.provider_response_redacted_json));
   if (!artifact) return { status: "failed", failureCode: "provider_output_missing" };
+  const artifactLease = await claimGptImageArtifactFinalizeLease(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  });
+  if (!artifactLease) return { status: "skipped" };
+
+  return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
@@ -1690,6 +1728,7 @@ export async function fetchGptImageArtifactJob(
     now: input.now,
   });
   return { status: "succeeded" };
+  });
 }
 
 export async function persistGptImageArtifactJob(
@@ -1709,6 +1748,14 @@ export async function persistGptImageArtifactJob(
   if (!row?.attempt_id) {
     return { status: "skipped" };
   }
+  const artifactLease = await claimGptImageArtifactFinalizeLease(db, {
+    taskId: row.task_id,
+    attemptId: row.attempt_id,
+    now: input.now,
+  });
+  if (!artifactLease) return { status: "skipped" };
+
+  return runWithGptImageArtifactFinalizeLease(db, artifactLease, async () => {
   const snapshot = parseSnapshot(row.input_snapshot_json);
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   const providerLabel = "model-gateway";
@@ -1826,8 +1873,15 @@ export async function persistGptImageArtifactJob(
     now: input.now,
   });
   await aggregateWorkflowStatus(db, row.workflow_id);
+  await registerGeneratedImageWithGlobalAiOpc(db, {
+    storageObjectId: persisted.storageObjectId,
+    sourceUrl: persisted.sourceUrl || persisted.previewUrl,
+    env: input.env,
+    now: input.now,
+  }).catch(() => undefined);
 
   return { status: "succeeded" };
+  });
 }
 
 async function markGptImageTaskManualReview(
@@ -2290,6 +2344,126 @@ async function failGptImagePollJob(
     now: input.now,
   });
   return { status: "failed", failureCode: input.failureCode };
+}
+
+interface GptImageArtifactFinalizeLease {
+  taskId: string;
+  attemptId: string;
+  owner: string;
+}
+
+async function claimGptImageArtifactFinalizeLease(
+  db: SqlDatabase,
+  input: { taskId: string; attemptId: string; now: Date },
+): Promise<GptImageArtifactFinalizeLease | null> {
+  const owner = `gpt-image-artifact-finalizer:${randomUUID()}`;
+  const lockedUntil = new Date(input.now.getTime() + 20 * 60_000);
+  const claim = await queryOne<{ claimed: boolean }>(
+    db,
+    `
+      WITH claimed_task AS (
+        UPDATE tasks task
+        SET locked_by = $3,
+            locked_until = $4,
+            heartbeat_at = $5
+        WHERE task.id = $1
+          AND task.current_attempt_id = $2
+          AND task.status IN ('running', 'manual_review_required')
+          AND (
+            task.locked_until IS NULL
+            OR task.locked_until <= $5
+            OR task.locked_by NOT LIKE 'gpt-image-artifact-finalizer:%'
+          )
+        RETURNING task.id
+      ), claimed_attempt AS (
+        UPDATE task_attempts attempt
+        SET locked_by = $3,
+            locked_until = $4,
+            heartbeat_at = $5
+        WHERE attempt.id = $2
+          AND attempt.task_id = $1
+          AND EXISTS (SELECT 1 FROM claimed_task)
+        RETURNING attempt.id
+      )
+      SELECT EXISTS (SELECT 1 FROM claimed_task) AS claimed
+    `,
+    [input.taskId, input.attemptId, owner, lockedUntil, input.now],
+  );
+  return claim?.claimed ? { taskId: input.taskId, attemptId: input.attemptId, owner } : null;
+}
+
+async function runWithGptImageArtifactFinalizeLease<T>(
+  db: SqlDatabase,
+  lease: GptImageArtifactFinalizeLease,
+  operation: () => Promise<T>,
+) {
+  const heartbeat = setInterval(() => {
+    void renewGptImageArtifactFinalizeLease(db, lease).catch(() => undefined);
+  }, 30_000);
+  heartbeat.unref?.();
+  try {
+    return await operation();
+  } finally {
+    clearInterval(heartbeat);
+    await releaseGptImageArtifactFinalizeLease(db, lease).catch(() => undefined);
+  }
+}
+
+async function renewGptImageArtifactFinalizeLease(
+  db: SqlDatabase,
+  lease: GptImageArtifactFinalizeLease,
+) {
+  const now = new Date();
+  const lockedUntil = new Date(now.getTime() + 20 * 60_000);
+  await db.query(
+    `
+      WITH renewed_task AS (
+        UPDATE tasks
+        SET locked_until = $4,
+            heartbeat_at = $5
+        WHERE id = $1
+          AND current_attempt_id = $2
+          AND locked_by = $3
+        RETURNING id
+      )
+      UPDATE task_attempts
+      SET locked_until = $4,
+          heartbeat_at = $5
+      WHERE id = $2
+        AND task_id = $1
+        AND locked_by = $3
+        AND EXISTS (SELECT 1 FROM renewed_task)
+    `,
+    [lease.taskId, lease.attemptId, lease.owner, lockedUntil, now],
+  );
+}
+
+async function releaseGptImageArtifactFinalizeLease(
+  db: SqlDatabase,
+  lease: GptImageArtifactFinalizeLease,
+) {
+  await db.query(
+    `
+      WITH released_task AS (
+        UPDATE tasks
+        SET locked_by = NULL,
+            locked_until = NULL,
+            heartbeat_at = NULL
+        WHERE id = $1
+          AND current_attempt_id = $2
+          AND locked_by = $3
+        RETURNING id
+      )
+      UPDATE task_attempts
+      SET locked_by = NULL,
+          locked_until = NULL,
+          heartbeat_at = NULL
+      WHERE id = $2
+        AND task_id = $1
+        AND locked_by = $3
+    `,
+    [lease.taskId, lease.attemptId, lease.owner],
+  );
 }
 
 async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {

@@ -1,6 +1,6 @@
 import { CANVAS_NODE_SIZES, findCanvasPort } from "./canvas-default-document.js";
 import { validateCanvasConnection } from "./canvas-edge-rules.js";
-import { resolveCanvasPromptReferences } from "./canvas-prompt-reference.js";
+import { removeCanvasNodeReferencesFromPrompt, resolveCanvasPromptReferences } from "./canvas-prompt-reference.js";
 import {
   buildCanvasAnimationSpritePrompt,
   normalizeCanvasAnimationState,
@@ -133,7 +133,7 @@ const NODE_PORTS = {
     outputs: [{ id: "out_text", kind: "text", label: "Markdown" }],
   },
   "ai-storyboard": {
-    inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image"], label: "文本/图片" }],
+    inputs: [{ id: "in_asset", kind: "any", accepts: ["text", "image", "video"], label: "文本/图片/视频" }],
     outputs: [{ id: "out_text", kind: "text", label: "分镜" }],
   },
   "ai-director": {
@@ -175,51 +175,74 @@ const NODE_TITLES = {
 
 const CANVAS_NODE_TEMPLATES = [
   {
-    id: "template-ai-text", group: "AI", type: "ai-text", title: "AI 文本", description: "生成或改写文本",
-    defaultData: { title: "AI 文本", status: "ready", mediaKind: "text", prompt: "" },
+    id: "template-ai-text", group: "核心节点", type: "ai-text", title: "文本", description: "编写、生成或改写文本",
+    defaultData: { title: "文本", status: "ready", mediaKind: "text", prompt: "", canvasMode: "text" },
   },
   {
-    id: "template-ai-image", group: "AI", type: "ai-image", title: "AI 图片", description: "生成或编辑图片",
-    mediaKind: "image", defaultData: { title: "AI 图片", status: "ready", mediaKind: "image", prompt: "" },
+    id: "template-ai-image", group: "核心节点", type: "ai-image", title: "图片", description: "上传、生成或编辑图片",
+    mediaKind: "image", defaultData: { title: "图片", status: "ready", mediaKind: "image", prompt: "", canvasMode: "image" },
   },
   {
-    id: "template-ai-video", group: "AI", type: "ai-video", title: "AI 视频", description: "生成或编辑视频",
-    mediaKind: "video", defaultData: { title: "AI 视频", status: "ready", mediaKind: "video", prompt: "" },
+    id: "template-ai-video", group: "核心节点", type: "ai-video", title: "视频", description: "上传、生成或续写视频",
+    mediaKind: "video", defaultData: { title: "视频", status: "ready", mediaKind: "video", prompt: "", canvasMode: "video" },
   },
   {
-    id: "template-ai-audio", group: "AI", type: "ai-audio", title: "AI 音频", description: "生成语音或音效",
-    mediaKind: "audio", defaultData: { title: "AI 音频", status: "ready", mediaKind: "audio", prompt: "" },
+    id: "template-smart-edit", group: "核心节点", type: "ai-video", title: "智能剪辑", description: "用视频素材完成剪辑和增强",
+    mediaKind: "video", defaultData: { title: "智能剪辑", status: "ready", mediaKind: "video", prompt: "", canvasMode: "smart-edit", videoGenerationMode: "edit-video" },
   },
   {
+    id: "template-ai-audio", group: "核心节点", type: "ai-audio", title: "音频", description: "生成语音、音乐或转录音频",
+    mediaKind: "audio", defaultData: { title: "音频", status: "ready", mediaKind: "audio", prompt: "", canvasMode: "audio" },
+  },
+  {
+    id: "template-ai-animation", visible: false, group: "兼容", type: "ai-animation", title: "AI 动画", description: "生成 Sprite Sheet 动画",
+    mediaKind: "image", defaultData: { title: "AI 动画", status: "ready", mediaKind: "image", prompt: "", animationAction: "idle", animationFrames: 8, animationPreviewMode: "playing" },
+  },
+  {
+    id: "template-ai-markdown", visible: false, group: "兼容", type: "ai-markdown", title: "AI Markdown", description: "生成 Markdown 文档",
+    defaultData: { title: "AI Markdown", status: "ready", mediaKind: "text", prompt: "", text: "" },
+  },
+  {
+    visible: false,
     id: "template-ai-panorama", group: "AI", type: "ai-panorama", title: "全景预览", description: "预览或编辑全景图片",
     mediaKind: "image", defaultData: { title: "全景预览", status: "ready", mediaKind: "image", prompt: "" },
   },
   {
+    visible: false,
     id: "template-ai-storyboard", group: "AI", type: "ai-storyboard", title: "图片切分", description: "切分或编辑图片",
     mediaKind: "image", defaultData: { title: "图片切分", status: "ready", mediaKind: "image", text: "", prompt: "" },
   },
   {
-    id: "template-ai-director", group: "来源", type: "ai-director", title: "导演台", description: "分析并编排画布",
-    defaultData: { title: "导演台", status: "ready", mediaKind: "text", text: "", prompt: "" },
+    id: "template-ai-director", group: "核心节点", type: "ai-director", title: "导演台", description: "分析素材并编排画布",
+    defaultData: { title: "导演台", status: "ready", mediaKind: "text", text: "", prompt: "", canvasMode: "director" },
   },
   {
+    id: "template-frame-analysis", group: "核心节点", type: "ai-storyboard", title: "逐帧拉片", description: "按时间线分析镜头、资产和衔接",
+    defaultData: { title: "逐帧拉片", status: "empty", mediaKind: "video", text: "", prompt: "", canvasMode: "frame-analysis", segmentDurationSeconds: 15 },
+  },
+  {
+    visible: false,
     id: "template-source-text", group: "来源", type: "source-text", title: "文本源", description: "添加文本来源",
     defaultData: { title: "文本源", status: "ready", mediaKind: "text", text: "", source: "manual" },
   },
   {
+    visible: false,
     id: "template-source-image", group: "来源", type: "source-image", title: "图片源", description: "上传或引用图片",
     defaultData: { title: "图片源", status: "empty", mediaKind: "image", source: "upload" },
   },
   {
+    visible: false,
     id: "template-source-video", group: "来源", type: "source-video", title: "视频源", description: "上传或引用视频",
     defaultData: { title: "视频源", status: "empty", mediaKind: "video", source: "upload" },
   },
   {
+    visible: false,
     id: "template-source-audio", group: "来源", type: "source-audio", title: "音频源", description: "上传或引用音频",
     defaultData: { title: "音频源", status: "empty", mediaKind: "audio", source: "upload" },
   },
   {
     id: "template-script-source",
+    visible: false,
     group: "来源",
     type: "source-text",
     title: "剧本源",
@@ -228,12 +251,14 @@ const CANVAS_NODE_TEMPLATES = [
   },
   {
     id: "template-script",
-    group: "来源",
+    group: "核心节点",
     type: "script",
-    title: "脚本节点",
-    description: "连接剧本源或文本源后生成分镜",
+    title: "脚本",
+    description: "输入剧本并生成可执行分镜",
     defaultData: {
-      title: "脚本节点",
+      title: "脚本",
+      status: "ready",
+      canvasMode: "script",
     },
   },
   {
@@ -266,6 +291,7 @@ const CANVAS_NODE_TEMPLATES = [
   },
   {
     id: "template-upload",
+    visible: false,
     group: "来源",
     type: "upload",
     title: "上传",
@@ -287,6 +313,7 @@ const CANVAS_NODE_TEMPLATES = [
   },
   {
     id: "template-group",
+    visible: false,
     group: "编排",
     type: "group",
     title: "分组",
@@ -340,6 +367,7 @@ export function addConnectedCanvasNode(document, input = {}) {
     return { ok: false, reason: "canvas_connection_kind_mismatch", document: clone(document) };
   }
   return connectCanvasNodes(nextDocument, {
+    id: input.edgeId || undefined,
     sourceNodeId: input.sourceNodeId,
     sourcePortId: input.sourcePortId,
     targetNodeId: node.id,
@@ -445,7 +473,7 @@ export function createCanvasNodeFromTemplate(document, template = {}) {
 
 export function addCanvasNode(document, input = {}) {
   const type = normalizeNodeType(input.type ?? input.kind);
-  const node = input.template
+  const baseNode = input.template
     ? createCanvasNodeFromTemplate(document, {
         ...input.template,
         type,
@@ -457,6 +485,15 @@ export function addCanvasNode(document, input = {}) {
         position: input.position,
         modelCode: input.modelCode,
       });
+  const inputData = input.data && typeof input.data === "object" ? clone(input.data) : {};
+  const node = {
+    ...baseNode,
+    data: {
+      ...baseNode.data,
+      ...inputData,
+      ports: clone(inputData.ports ?? baseNode.data?.ports ?? NODE_PORTS[baseNode.type] ?? NODE_PORTS.output),
+    },
+  };
   return touchCanvasDocument({
     ...clone(document),
     nodes: [...safeArray(document?.nodes), node],
@@ -1031,7 +1068,7 @@ export function removeCanvasNode(document, nodeId) {
   return touchCanvasDocument({
     ...clone(document),
     nodes: remainingNodes.map((node) => normalizeCanvasGroupNode(
-      node,
+      removeCanvasNodePromptReferences(node, normalizedNodeId),
       grouping.childParent.get(String(node?.id ?? "")) === normalizedNodeId
         ? null
         : grouping.childParent.get(String(node?.id ?? "")),
@@ -1043,6 +1080,20 @@ export function removeCanvasNode(document, nodeId) {
       .filter((edge) => edge.sourceNodeId !== normalizedNodeId && edge.targetNodeId !== normalizedNodeId)
       .map((edge) => clone(edge)),
   });
+}
+
+function removeCanvasNodePromptReferences(node, nodeId) {
+  const prompt = node?.data?.prompt;
+  if (typeof prompt !== "string" || !prompt.includes("@node:")) return node;
+  const nextPrompt = removeCanvasNodeReferencesFromPrompt(prompt, nodeId);
+  if (nextPrompt === prompt) return node;
+  return {
+    ...node,
+    data: {
+      ...(node.data ?? {}),
+      prompt: nextPrompt,
+    },
+  };
 }
 
 function resolveStoryboardCutCellIndex(imageNode, storyboardNode) {

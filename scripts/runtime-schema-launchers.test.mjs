@@ -53,6 +53,19 @@ describe("runtime schema migration launchers", () => {
     assert.match(databaseSource, /CREATOR_DEV_STACK_MANAGED === "true"[\s\S]*CREATOR_DEV_SCHEMA_READY === "true"/);
   });
 
+  it("prepares the foundation schema once before every managed development child starts", async () => {
+    const source = await readFile(new URL("run-creator-dev-stack.mjs", import.meta.url), "utf8");
+    const migrationOffset = source.indexOf("runRuntimeSchemaMigrations(");
+    const foundationOffset = source.indexOf("runDevFoundationSchema({");
+    const firstSpawnOffset = source.indexOf("supervisor.start(");
+
+    assert.ok(foundationOffset > migrationOffset, "foundation preparation must follow runtime migrations");
+    assert.ok(foundationOffset < firstSpawnOffset, "foundation preparation must finish before child services start");
+    assert.match(source, /production-foundation-schema\.ts/);
+    assert.match(source, /CREATOR_DEV_STACK_MANAGED:\s*"true",\s*CREATOR_DEV_SCHEMA_READY:\s*"true"/);
+    assert.match(source, /timeout:\s*devFoundationSchemaTimeoutMs/);
+  });
+
   it("bounds production shutdown so a stuck worker cannot block a restart forever", async () => {
     const source = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
     assert.match(source, /function requestStop\(signal\)/);
@@ -90,12 +103,31 @@ describe("runtime schema migration launchers", () => {
   it("bounds both migration lock waiting and the migration child process", async () => {
     const helperSource = await readFile(new URL("runtime-schema-migrations.mjs", import.meta.url), "utf8");
     const runnerSource = await readFile(new URL("migrate-user-scope.mjs", import.meta.url), "utf8");
+    const databaseSource = await readFile(
+      new URL("../apps/backend/src/modules/shared/db/dev-db.ts", import.meta.url),
+      "utf8",
+    );
 
     assert.match(helperSource, /timeout:\s*RUNTIME_SCHEMA_MIGRATION_TIMEOUT_MS/);
     assert.match(runnerSource, /pg_try_advisory_lock/);
     assert.match(runnerSource, /current_database\(\)/);
     assert.match(runnerSource, /current_schema\(\)/);
     assert.doesNotMatch(runnerSource, /SELECT pg_advisory_lock/);
+    assert.match(runnerSource, /connectPostgresClientWithRetry/);
+    assert.doesNotMatch(runnerSource, /new pg\.Client/);
+    assert.match(databaseSource, /ECONNABORTED/);
+  });
+
+  it("retries PostgreSQL LISTEN connections before supervised workers exit", async () => {
+    for (const relativePath of [
+      "run-generation-outbox-dispatcher.mjs",
+      "run-canvas-agent-worker.mjs",
+    ]) {
+      const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+      assert.match(source, /connectPostgresClientWithRetry/);
+      assert.match(source, /envKey:\s*"DATABASE_URL"/);
+      assert.doesNotMatch(source, /new Client\(/);
+    }
   });
 
   it("gates every standalone worker without rerunning the gate under a supervisor", async () => {

@@ -20,6 +20,13 @@ const TOOLBOX_TOOLS = [
     category: "AI 图片/视频",
     coverUrl: "/assets/library/official/scenes/scene-3d-studio.png",
   },
+  {
+    id: "video-to-director",
+    title: "视频转3D导演台",
+    summary: "解析人物动作、镜头与道具，生成可编辑3D预演",
+    category: "AI 视频/3D",
+    coverUrl: "/assets/library/official/scenes/scene-3d-studio.png",
+  },
 ];
 
 const VIDEO_DEPTH_RESOLUTION_OPTIONS = [
@@ -53,6 +60,7 @@ export function renderToolboxPage(ui = {}) {
   const promptReverse = resolvePromptReverseState(ui);
   const videoDepth = resolveVideoDepthState(ui);
   const watermarkRemoval = resolveWatermarkRemovalState(ui);
+  const videoToDirector = resolveVideoToDirectorState(ui);
   return `
     <section class="toolbox-page" aria-labelledby="toolbox-page-title">
       <header class="toolbox-page-header">
@@ -72,18 +80,22 @@ export function renderToolboxPage(ui = {}) {
     ${promptReverse.open ? renderPromptReverseModal(promptReverse) : ""}
     ${videoDepth.open ? renderVideoDepthModal(videoDepth) : ""}
     ${watermarkRemoval.open ? renderWatermarkRemovalModal(watermarkRemoval) : ""}
+    ${videoToDirector.open ? renderVideoToDirectorModal(videoToDirector) : ""}
   `;
 }
 
 function renderToolCard(tool) {
   const isVideoDepth = tool.id === "video-depth";
   const isWatermarkRemoval = tool.id === "watermark-removal";
+  const isVideoToDirector = tool.id === "video-to-director";
   const action = isVideoDepth
     ? "open-toolbox-video-depth"
+    : isVideoToDirector
+      ? "open-toolbox-video-to-director"
     : isWatermarkRemoval
       ? "open-toolbox-watermark-removal"
       : "open-toolbox-prompt-reverse";
-  const sourceLabel = isVideoDepth ? "视频 → 深度视频" : isWatermarkRemoval ? "图片/视频 → 去水印" : "图片/视频 → 提示词";
+  const sourceLabel = isVideoDepth ? "视频 → 深度视频" : isVideoToDirector ? "视频 → 3D预演" : isWatermarkRemoval ? "图片/视频 → 去水印" : "图片/视频 → 提示词";
   return `
     <button type="button" class="toolbox-card${isVideoDepth ? " toolbox-card-depth" : ""}${isWatermarkRemoval ? " toolbox-card-watermark" : ""}" data-toolbox-tool="${tool.id}" data-action="${action}" aria-label="打开${tool.title}">
       <img class="toolbox-card-cover" src="${tool.coverUrl}" alt="${tool.title}功能封面" loading="lazy" />
@@ -129,6 +141,42 @@ export function closeToolboxPromptReverse(ui = {}) {
     error: "",
   };
   return ui.toolboxPromptReverse;
+}
+
+export function openToolboxVideoToDirector(ui = {}) {
+  ui.toolboxVideoToDirector = { ...resolveVideoToDirectorState(ui), open: true, loadingModels: true, error: "" };
+  return ui.toolboxVideoToDirector;
+}
+
+export function closeToolboxVideoToDirector(ui = {}) {
+  ui.toolboxVideoToDirector = { ...resolveVideoToDirectorState(ui), open: false, error: "" };
+  return ui.toolboxVideoToDirector;
+}
+
+export function updateToolboxVideoToDirectorState(ui = {}, patch = {}) {
+  ui.toolboxVideoToDirector = { ...resolveVideoToDirectorState(ui), ...(patch && typeof patch === "object" ? patch : {}) };
+  return ui.toolboxVideoToDirector;
+}
+
+export function setToolboxVideoToDirectorFile(ui = {}, input = {}) {
+  return updateToolboxVideoToDirectorState(ui, {
+    file: input.file ?? null,
+    fileName: String(input.fileName ?? ""),
+    fileSize: Number(input.fileSize ?? 0) || 0,
+    previewUrl: String(input.previewUrl ?? ""),
+    status: "idle",
+    progress: 0,
+    result: null,
+    compiled: null,
+    error: "",
+  });
+}
+
+export function clearToolboxVideoToDirectorFile(ui = {}) {
+  return updateToolboxVideoToDirectorState(ui, {
+    file: null, fileName: "", fileSize: 0, previewUrl: "", status: "idle", progress: 0,
+    result: null, compiled: null, error: "",
+  });
 }
 
 export function openToolboxVideoDepth(ui = {}) {
@@ -412,6 +460,70 @@ export function clearToolboxPromptReverseFile(ui = {}) {
     keyFramePreviews: [],
     activeKeyFrameIndex: -1,
   });
+}
+
+function renderVideoToDirectorModal(state) {
+  const hasFile = Boolean(state.file && state.previewUrl);
+  const isBusy = ["decoding", "preparing", "loading", "creating"].includes(state.status);
+  const pluginBusy = ["checking", "installing", "uninstalling"].includes(state.pluginStatus);
+  const pluginReady = state.pluginStatus === "ready";
+  const pluginMessage = pluginReady
+    ? `视频解析器已安装${state.pluginVersion ? ` · ${escapeHtml(state.pluginVersion)}` : ""}`
+    : state.pluginStatus === "checking"
+      ? "正在检测视频解析器"
+      : state.pluginStatus === "installing"
+        ? "正在安装视频解析器"
+        : state.pluginStatus === "uninstalling"
+          ? "正在卸载视频解析器"
+          : "视频解析器未安装";
+  const pluginAction = pluginReady
+    ? `<button type="button" data-action="uninstall-toolbox-video-to-director-plugin" ${isBusy ? "disabled" : ""}>卸载</button>`
+    : pluginBusy
+      ? ""
+      : `<button type="button" data-action="install-toolbox-video-to-director-plugin">安装</button>`;
+  const shots = Array.isArray(state.result?.shots) ? state.result.shots : [];
+  const stats = state.compiled?.stats ?? {};
+  const warnings = Array.isArray(state.compiled?.warnings) ? state.compiled.warnings : [];
+  return `
+    <div class="toolbox-reverse-scrim toolbox-director-backdrop" role="presentation">
+      <section class="toolbox-director-modal" role="dialog" aria-modal="true" aria-labelledby="toolbox-video-director-title">
+        <header class="toolbox-director-header">
+          <h2 id="toolbox-video-director-title">视频转3D导演台</h2>
+          <div class="toolbox-director-header-plugin" data-plugin-status="${escapeAttr(state.pluginStatus)}">
+            <i aria-hidden="true"></i><span>${pluginMessage}</span>${pluginAction}
+          </div>
+          <button type="button" class="toolbox-reverse-close" data-action="close-toolbox-video-to-director" aria-label="关闭视频转3D导演台" title="关闭">×</button>
+        </header>
+        <div class="toolbox-director-workspace">
+          <section class="toolbox-director-source">
+            <label class="toolbox-depth-setting" for="toolbox-video-director-model"><span>解析模型</span>
+              <select id="toolbox-video-director-model" data-toolbox-video-director-model ${isBusy ? "disabled" : ""}>
+                ${state.loadingModels ? `<option>正在读取模型…</option>` : state.models.length
+                  ? state.models.map((model) => `<option value="${escapeAttr(model.displayName)}" ${model.displayName === state.selectedModelName ? "selected" : ""}>${escapeHtml(model.displayName)}</option>`).join("")
+                  : `<option value="">暂无可用模型</option>`}
+              </select>
+            </label>
+            <label class="toolbox-director-dropzone" for="toolbox-video-director-file" data-dropzone="toolbox-video-to-director">
+              <input id="toolbox-video-director-file" type="file" accept="video/mp4,video/webm,video/quicktime" hidden ${isBusy ? "disabled" : ""} />
+              ${hasFile ? `<video src="${escapeAttr(state.previewUrl)}" controls preload="metadata"></video><span>${escapeHtml(state.fileName)} · ${formatFileSize(state.fileSize)}</span>` : `<strong>添加参考视频</strong><span>MP4 / WebM / MOV，最大 500 MB</span>`}
+            </label>
+            ${hasFile && !isBusy ? `<button type="button" class="toolbox-director-clear" data-action="clear-toolbox-video-to-director-file">移除视频</button>` : ""}
+            <div class="toolbox-director-stages" aria-label="解析流程">
+              ${["视频解码", "镜头切分", "人物与动作", "运镜分析", "模型道具匹配", "导演台编译"].map((label, index) => `<span class="${state.progress >= (index + 1) * 15 ? "is-done" : state.progress >= index * 15 ? "is-active" : ""}"><i>${index + 1}</i>${label}</span>`).join("")}
+            </div>
+            ${state.error ? `<p class="toolbox-reverse-error" role="alert">${escapeHtml(state.error)}</p>` : ""}
+            <button type="button" class="toolbox-director-primary" data-action="run-toolbox-video-to-director" data-toolbox-video-director-progress-button ${!hasFile || !state.selectedModelName || isBusy || state.pluginStatus !== "ready" ? "disabled" : ""}>${isBusy ? `正在解析 ${Math.round(state.progress || 0)}%` : state.result ? "重新解析" : "开始解析"}</button>
+          </section>
+          <section class="toolbox-director-result" aria-live="polite">
+            <header><strong>${state.result?.summary ? escapeHtml(state.result.summary) : "等待解析"}</strong>${state.compiled ? `<small>${stats.shots || 0} 镜头 · ${stats.characters || 0} 人物 · ${stats.props || 0} 道具</small>` : ""}</header>
+            ${shots.length ? `<div class="toolbox-director-timeline">${shots.map((shot) => `<article><div><b>镜头 ${shot.index}</b><time>${formatMilliseconds(shot.startMs)} - ${formatMilliseconds(shot.endMs)}</time></div><p>${escapeHtml(shot.shotSize)} · ${escapeHtml(shot.cameraMove)} · ${(shot.characters || []).map((item) => escapeHtml(`${item.name}/${item.action}`)).join("、") || "无人物"}</p><small>${(shot.props || []).map((item) => escapeHtml(item.name)).join("、") || "无可见道具"}</small></article>`).join("")}</div>` : `<div class="toolbox-reverse-empty"><span class="toolbox-reverse-empty-frame" aria-hidden="true"><i></i><i></i><i></i></span><strong>生成前不会修改导演台</strong><p>解析完成后可检查镜头、人物动作和道具匹配，再创建新的导演台。</p></div>`}
+            ${warnings.length ? `<div class="toolbox-director-warnings"><strong>需要检查</strong>${warnings.slice(0, 5).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}</div>` : ""}
+            ${state.compiled ? `<button type="button" class="toolbox-director-create" data-action="create-toolbox-video-director-desk" ${isBusy ? "disabled" : ""}>创建并打开导演台</button>` : ""}
+          </section>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderPromptReverseModal(state) {
@@ -949,6 +1061,28 @@ function resolvePromptReverseState(ui = {}) {
   };
   const view = resolvePromptReverseView(base, activeKind);
   return { ...base, ...view, activeKind, mode: activeKind };
+}
+
+function resolveVideoToDirectorState(ui = {}) {
+  const state = ui.toolboxVideoToDirector && typeof ui.toolboxVideoToDirector === "object" ? ui.toolboxVideoToDirector : {};
+  return {
+    open: false,
+    models: [],
+    selectedModelName: "",
+    loadingModels: false,
+    file: null,
+    fileName: "",
+    fileSize: 0,
+    previewUrl: "",
+    status: "idle",
+    progress: 0,
+    pluginStatus: "unknown",
+    pluginVersion: "",
+    result: null,
+    compiled: null,
+    error: "",
+    ...state,
+  };
 }
 
 function resolvePromptReverseView(state = {}, kind = "image") {

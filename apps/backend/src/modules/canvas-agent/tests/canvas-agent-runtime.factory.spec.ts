@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
-import { findCanvasByCanvasProjectId } from "../../project/creator-canvas-record.service.ts";
+import {
+  failOrphanedCanvasAgentGenerationNodes,
+  findCanvasByCanvasProjectId,
+} from "../../project/creator-canvas-record.service.ts";
 import { __canvasAgentRuntimeTestUtils } from "../canvas-agent-runtime.factory.ts";
 import {
   loadCanvasAgentRuntimeConfiguration,
@@ -213,6 +216,47 @@ describe("Canvas Agent runtime composition", () => {
       assert.equal(node?.data?.taskId, taskId);
       assert.equal(node?.data?.generationStage, "task_created");
       assert.equal(node?.data?.source, "canvas_agent");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("fails stale Canvas Agent nodes that reference a missing generation task", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedActorFixture(db);
+    const stepId = randomUUID();
+    const taskId = randomUUID();
+    const nodeKey = `canvas-agent-image-${stepId}`;
+    try {
+      await __canvasAgentRuntimeTestUtils.upsertCanvasAgentGenerationNode(db, {
+        canvasId: fixture.canvasId,
+        conversationId: randomUUID(),
+        agentTaskId: randomUUID(),
+        agentStepId: stepId,
+        ownerUserId: fixture.userId,
+        actorTeamMemberId: fixture.memberId,
+        idempotencyKey: `canvas-agent:${stepId}`,
+        kind: "image",
+        request: { model: "image-model", prompt: "一座雨夜城市" },
+        taskId,
+        nodeKey,
+        modelCode: "image-model",
+        prompt: "一座雨夜城市",
+        now: new Date("2026-07-30T08:00:00.000Z"),
+      });
+
+      const repaired = await failOrphanedCanvasAgentGenerationNodes(db, {
+        staleBefore: new Date("2026-07-30T08:01:00.000Z"),
+        now: new Date("2026-07-30T08:02:00.000Z"),
+      });
+      assert.deepEqual(repaired.failedNodeKeys, [nodeKey]);
+      const canvas = await findCanvasByCanvasProjectId(db, {
+        canvasProjectId: fixture.canvasId,
+        userId: fixture.userId,
+      });
+      const node = canvas?.document.nodes.find((item) => item.id === nodeKey);
+      assert.equal(node?.data?.status, "failed");
+      assert.equal(node?.data?.failureCode, "generation_task_missing");
     } finally {
       await db.close();
     }

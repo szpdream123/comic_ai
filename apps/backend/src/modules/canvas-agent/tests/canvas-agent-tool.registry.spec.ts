@@ -35,6 +35,41 @@ test("tool registry validates schemas and blocks local paths", async () => {
   );
 });
 
+test("video.inspect reads only authorized video metadata and leaves visual semantics to the current model", async () => {
+  let inspectedGrantId = "";
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    generationIntake: { create: async () => ({ generationTaskId: "generation-1" }) },
+    context: {
+      resolveFileGrant: async ({ grantId }) => ({
+        storageObjectId: "storage-video",
+        purpose: "视频参考",
+        contentType: grantId === "grant-video" ? "video/mp4" : "image/png",
+      }),
+    },
+    inspectVideo: async ({ grantId }) => {
+      inspectedGrantId = grantId;
+      return { durationMs: 1_000, video: { width: 1920, height: 1080 } };
+    },
+  });
+  const result = await registry.execute("video.inspect", { grantId: "grant-video" }, {
+    canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-1",
+  });
+  assert.equal(inspectedGrantId, "grant-video");
+  assert.deepEqual(result.output, {
+    contentType: "video/mp4",
+    durationMs: 1_000,
+    video: { width: 1920, height: 1080 },
+  });
+  await assert.rejects(
+    registry.execute("video.inspect", { grantId: "grant-image" }, {
+      canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-2", actor, callId: "call-2",
+    }),
+    /canvas_agent_video_grant_required/,
+  );
+});
+
 test("media tool uses generation intake and never a provider adapter", async () => {
   let calls = 0;
   const registry = createDefaultCanvasAgentToolRegistry({
@@ -654,6 +689,7 @@ test("Canvas Agent adds granted visual attachments only for compatible model cap
 
   assert.deepEqual(resolvedGrantIds, ["grant-image", "grant-video"]);
   const userMessage = messages[1];
+  assert.match(String(messages[0]?.content ?? ""), /current task model and attached video input/);
   assert.equal(userMessage.role, "user");
   assert.ok(Array.isArray(userMessage.content));
   assert.equal(userMessage.content.filter((part) => part.type === "image_url").length, 1);

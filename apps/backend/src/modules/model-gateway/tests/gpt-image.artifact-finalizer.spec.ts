@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { __gptImageArtifactFinalizerTestUtils } from "../gpt-image.artifact-finalizer.ts";
+import {
+  __gptImageArtifactFinalizerTestUtils,
+  persistGptImageArtifact,
+} from "../gpt-image.artifact-finalizer.ts";
 
 describe("gpt-image artifact finalizer", () => {
   it("uses a five-minute default image download timeout and keeps audio separate", () => {
@@ -275,6 +278,97 @@ describe("gpt-image artifact finalizer", () => {
         return true;
       },
     );
+  });
+
+  it("allows an active download to exceed the timeout while chunks keep arriving", async () => {
+    let emitted = 0;
+    const source = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        controller.enqueue(new Uint8Array([emitted]));
+        emitted += 1;
+        if (emitted === 4) controller.close();
+      },
+    });
+
+    const bytes = await __gptImageArtifactFinalizerTestUtils.readProviderArtifactBytes(
+      source,
+      undefined,
+      40,
+    );
+    assert.deepEqual([...bytes], [0, 1, 2, 3]);
+  });
+
+  it("reuses an uploaded generation object without another PUT", async () => {
+    let putCalls = 0;
+    const storageRow = {
+      id: "10000000-0000-4000-8000-000000000001",
+      project_id: null,
+      canvas_project_id: null,
+      bucket: "creator-test",
+      object_key: "AIManhuaDrama/generation/existing-result.png",
+      content_type: "image/png",
+      size_bytes: 8,
+      checksum: null,
+      provider: "creator-test",
+      status: "available",
+      etag: "etag-1",
+      version_id: null,
+      last_verified_at: new Date("2026-08-03T09:59:00.000Z"),
+      deleted_at: null,
+      metadata_json: {
+        taskId: "task-existing",
+        attemptId: "attempt-existing",
+      },
+      created_by_user_id: "user-existing",
+      created_at: new Date("2026-08-03T09:59:00.000Z"),
+    };
+    const result = await persistGptImageArtifact({
+      async query(sql) {
+        if (sql.includes("FROM storage_objects") && sql.includes("metadata_json->>'taskId'")) {
+          return { rows: [storageRow] };
+        }
+        if (sql.includes("UPDATE storage_objects") && sql.includes("status = 'available'")) {
+          return { rows: [storageRow] };
+        }
+        throw new Error(`unexpected_query:${sql}`);
+      },
+    } as never, {
+      task: {
+        userId: "user-existing",
+        projectId: null,
+        taskId: "task-existing",
+        attemptId: "attempt-existing",
+        createdByUserId: "user-existing",
+      },
+      snapshot: {},
+      artifact: {
+        mediaType: "image",
+        mimeType: "image/png",
+        url: "https://provider.example.test/result.png",
+      },
+      externalRequestId: "provider-task-existing",
+      runtime: {
+        bucket: "creator-test",
+        provider: "creator-test",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async headObject() {
+            return { exists: true, contentType: "image/png", contentLength: 8 };
+          },
+          async putObject() {
+            putCalls += 1;
+            return {};
+          },
+        },
+      } as never,
+      env: {},
+      now: new Date("2026-08-03T10:00:00.000Z"),
+    });
+
+    assert.equal(putCalls, 0);
+    assert.equal(result.storageObjectId, storageRow.id);
+    assert.equal(result.storageObjectKey, storageRow.object_key);
   });
 
   it("cancels a provider response reader when the stream fails", async () => {

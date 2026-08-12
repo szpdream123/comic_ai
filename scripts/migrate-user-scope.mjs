@@ -2,12 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 
-import pg from "pg";
-
 import {
   fingerprintSnapshot,
   readSchemaSnapshot,
 } from "./verify-user-centric-baseline.mjs";
+import { connectPostgresClientWithRetry } from "./postgres-startup-retry.mjs";
 
 const migrations = [
   ["user-centric-schema.sql", "packages/db/baseline/user-centric-schema.sql"],
@@ -103,6 +102,7 @@ const migrations = [
   ["20260831-canvas-agent-outbox-wakeup.sql", "packages/db/migrations/20260831-canvas-agent-outbox-wakeup.sql"],
   ["20260901-add-san-bao-media-models.sql", "packages/db/migrations/20260901-add-san-bao-media-models.sql"],
   ["20260902-merge-san-bao-gpt-image2-variants.sql", "packages/db/migrations/20260902-merge-san-bao-gpt-image2-variants.sql"],
+  ["20260903-add-globalaiopc-model-center-and-soundclone.sql", "packages/db/migrations/20260903-add-globalaiopc-model-center-and-soundclone.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -179,10 +179,14 @@ const connectionString = process.env.DATABASE_URL?.trim();
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const configuredSchemaName = process.env.DATABASE_SCHEMA?.trim() || null;
 
-const client = new pg.Client({ connectionString });
+const client = await connectPostgresClientWithRetry({
+  connectionString,
+  env: process.env,
+  envKey: "DATABASE_URL",
+  serviceName: "schema",
+});
 let transactionOpen = false;
 try {
-  await client.connect();
   if (configuredSchemaName) {
     const schema = await client.query(
       "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1) AS exists",

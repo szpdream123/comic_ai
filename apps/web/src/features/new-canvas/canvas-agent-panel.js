@@ -31,7 +31,7 @@ const TERMINAL_STATUSES = new Set([
 const LEGACY_CANVAS_AGENT_PANEL_WIDTH = 480;
 const DEFAULT_CANVAS_AGENT_PANEL_WIDTH = 600;
 const CANVAS_AGENT_PANEL_MIN_WIDTH = 300;
-const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260729-4";
+const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260810-2";
 const AGENT_ATTACHMENT_UPLOAD_LIMITS = {
   image: {
     label: "图片",
@@ -60,6 +60,7 @@ const AGENT_ATTACHMENT_UPLOAD_LIMITS = {
   },
   blockedExtensions: [".7z", ".bat", ".cmd", ".com", ".dmg", ".exe", ".gz", ".html", ".js", ".msi", ".ps1", ".rar", ".sh", ".tar", ".zip"],
 };
+const PERSISTED_CANVAS_PROJECT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 const AGENT_HEADER_ICON_PATHS = {
   new: '<path d="M12 5v14M5 12h14" />',
@@ -213,7 +214,6 @@ export function renderCanvasAgentPanel(ui = {}) {
 
       <footer class="canvas-agent-composer">
         <div class="canvas-agent-prompt-surface">
-          ${renderAgentPromptAttachmentChips(agent)}
           <div class="canvas-agent-prompt-editor-host episode-prompt-editor-host" data-agent-prompt-editor>
             <textarea id="canvas-agent-prompt-input" data-agent-field="promptDraft" placeholder="${conversationArchived ? "恢复会话后继续发送" : "描述要分析、规划或修改的画布内容，输入 @ 引入节点"}" ${busy || conversationArchived ? "disabled" : ""}>${escapeHtml(agent.promptDraft)}</textarea>
           </div>
@@ -458,11 +458,15 @@ export function createCanvasAgentController({
       const module = await loadPromptEditorModule();
       if (promptEditorMountToken !== token || !editorHost.isConnected) return false;
       const references = Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [];
+      const attachmentReferences = listCanvasAgentPromptEditorAttachmentReferences(agent);
       const handle = module.mountPromptEditor(editorHost, {
         ariaLabel: "Agent 指令，输入 @ 引入画布节点",
         editable: !agent.busyAction && !isSelectedAgentConversationArchived(agent),
         id: "canvas-agent-prompt-input",
-        mentionReferences: references.map(buildAgentPromptEditorReference),
+        mentionReferences: [
+          ...references.map(buildAgentPromptEditorReference),
+          ...attachmentReferences,
+        ],
         maxSuggestions: Number.MAX_SAFE_INTEGER,
         placeholder: isSelectedAgentConversationArchived(agent)
           ? "恢复会话后继续发送"
@@ -471,8 +475,9 @@ export function createCanvasAgentController({
         restoreState: options.restoreState ?? null,
         getSuggestions: () => listCanvasAgentNodeReferences(workbench.ui).map(buildAgentPromptEditorReference),
         onMentionSelect(item) {
+          const referenceId = String(item.referenceId ?? item.assetId ?? item.id ?? "");
           const reference = listCanvasAgentNodeReferences(workbench.ui)
-            .find((candidate) => candidate.nodeId === String(item.referenceId ?? item.assetId ?? item.id ?? ""));
+            .find((candidate) => candidate.nodeId === referenceId);
           if (!reference) return item;
           agent.promptNodeReferences = [
             ...(Array.isArray(agent.promptNodeReferences) ? agent.promptNodeReferences : [])
@@ -482,6 +487,8 @@ export function createCanvasAgentController({
           return buildAgentPromptEditorReference(reference);
         },
         onMentionsChange(mentions) {
+          const mentionReferenceIds = new Set((Array.isArray(mentions) ? mentions : [])
+            .map((mention) => String(mention.referenceId ?? mention.assetId ?? mention.id ?? "")));
           const referenceByNodeId = new Map(
             listCanvasAgentNodeReferences(workbench.ui).map((reference) => [reference.nodeId, reference]),
           );
@@ -489,6 +496,22 @@ export function createCanvasAgentController({
           agent.promptNodeReferences = (Array.isArray(mentions) ? mentions : [])
             .map((mention) => referenceByNodeId.get(String(mention.referenceId ?? mention.assetId ?? mention.id ?? "")))
             .filter((reference) => reference && !seenNodeIds.has(reference.nodeId) && seenNodeIds.add(reference.nodeId));
+          const attachments = Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [];
+          const retainedAttachments = attachments.filter((attachment) => mentionReferenceIds.has(
+            `attachment:${String(attachment?.id ?? attachment?.storageObjectId ?? attachment?.fileGrantId ?? "").trim()}`,
+          ));
+          const removedAttachments = attachments.filter((attachment) => !retainedAttachments.includes(attachment));
+          agent.promptAttachments = retainedAttachments;
+          const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+          if (canvasId && agent.conversationId && typeof workbench.api?.revokeCanvasAgentFileGrant === "function") {
+            for (const attachment of removedAttachments.filter((item) => item?.fileGrantId)) {
+              void Promise.resolve(workbench.api.revokeCanvasAgentFileGrant(
+                canvasId,
+                agent.conversationId,
+                attachment.fileGrantId,
+              )).catch(() => undefined);
+            }
+          }
         },
         onChange({ prompt }) {
           agent.promptDraft = String(prompt ?? "");
@@ -965,7 +988,10 @@ export function createCanvasAgentController({
       }
       await loadFileGrants(conversationId);
     } finally {
-      if (uploaded.length) agent.promptAttachments = [...current, ...uploaded];
+      if (uploaded.length) {
+        agent.promptAttachments = [...current, ...uploaded];
+        agent.promptDraft = appendAgentPromptAttachmentTokens(agent.promptDraft, uploaded);
+      }
       agent.attachmentUploading = false;
       syncPanel();
     }
@@ -1151,7 +1177,7 @@ export function createCanvasAgentController({
     },
     handleInput(target) {
       if (target?.matches?.("[data-agent-attachment-input]")) {
-        const files = target.files;
+        const files = Array.from(target.files ?? []);
         target.value = "";
         void run("upload-agent-attachments", () => uploadAgentAttachments(files));
         return true;
@@ -1300,6 +1326,9 @@ export function createCanvasAgentController({
           if (attachment?.fileGrantId && canvasId && agent.conversationId
             && typeof workbench.api?.revokeCanvasAgentFileGrant === "function") {
             await workbench.api.revokeCanvasAgentFileGrant(canvasId, agent.conversationId, attachment.fileGrantId);
+          }
+          if (attachment) {
+            agent.promptDraft = removeAgentPromptAttachmentToken(agent.promptDraft, attachment);
           }
           agent.promptAttachments = (Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [])
             .filter((item) => String(item?.id ?? "") !== attachmentId);
@@ -1653,6 +1682,8 @@ export function createCanvasAgentController({
           ) {
             throw new Error("管理员尚未配置可用文本模型。");
           }
+          const selectedModel = agent.models.find((model) => model.modelCode === modelCode);
+          assertAgentModelMediaSupport(selectedModel, agent.promptAttachments, agent.promptNodeReferences);
           const conversationId = await ensureConversation();
           const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
           const { references, fileGrantIds, messageNodeReferences } = await prepareAgentMessageNodeReferences(
@@ -1738,6 +1769,8 @@ export function createCanvasAgentController({
           const fromPrompt = action === "interject-prompt";
           const text = String(fromPrompt ? agent.promptDraft : agent.interjectionDraft ?? "").trim();
           if (!text) throw new Error("请输入插话内容。");
+          const selectedModel = agent.models.find((model) => model.modelCode === String(agent.modelCode ?? "").trim());
+          assertAgentModelMediaSupport(selectedModel, agent.promptAttachments, agent.promptNodeReferences);
           const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
           const { references, fileGrantIds, messageNodeReferences } = await prepareAgentMessageNodeReferences(
             canvasId,
@@ -1780,6 +1813,19 @@ export function createCanvasAgentController({
       return false;
     },
     async resume() {
+      const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "").trim();
+      if (
+        canvasId
+        && !PERSISTED_CANVAS_PROJECT_ID_PATTERN.test(canvasId)
+        && typeof workbench.saveCanvasNow === "function"
+      ) {
+        try {
+          await workbench.saveCanvasNow();
+        } catch (error) {
+          agent.error = friendlyAgentError(error);
+          syncPanel();
+        }
+      }
       const modelsPromise = loadModels();
       await loadConversations();
       await Promise.all([
@@ -1823,6 +1869,51 @@ function buildAgentPromptEditorReference(reference = {}) {
     referenceId: String(reference.nodeId ?? ""),
     source: mediaKind === "video" ? String(reference.previewUrl ?? "") : "",
   };
+}
+
+function listCanvasAgentPromptEditorAttachmentReferences(agent = {}) {
+  return (Array.isArray(agent.promptAttachments) ? agent.promptAttachments : [])
+    .map((attachment) => {
+      const attachmentId = String(
+        attachment?.id ?? attachment?.storageObjectId ?? attachment?.fileGrantId ?? "",
+      ).trim();
+      if (!attachmentId) return null;
+      const mediaKind = ["image", "video", "document"].includes(attachment?.kind)
+        ? attachment.kind
+        : "document";
+      const referenceId = `attachment:${attachmentId}`;
+      return {
+        id: referenceId,
+        assetId: referenceId,
+        assetKind: mediaKind,
+        description: `${mediaKind === "video" ? "视频" : mediaKind === "image" ? "图片" : "文档"}附件`,
+        label: String(attachment?.name ?? "附件"),
+        name: String(attachment?.name ?? "附件"),
+        preview: mediaKind === "image" ? String(attachment?.previewUrl ?? "") : "",
+        referenceId,
+        source: mediaKind === "video" ? String(attachment?.previewUrl ?? "") : "",
+      };
+    })
+    .filter(Boolean);
+}
+
+function appendAgentPromptAttachmentTokens(prompt, attachments = []) {
+  const value = String(prompt ?? "");
+  const tokens = (Array.isArray(attachments) ? attachments : [])
+    .map((attachment) => `【@${String(attachment?.name ?? "附件").trim()}】`);
+  if (!tokens.length) return value;
+  return `${value}${value && !/\s$/u.test(value) ? " " : ""}${tokens.join(" ")}`;
+}
+
+function removeAgentPromptAttachmentToken(prompt, attachment = {}) {
+  const value = String(prompt ?? "");
+  const token = `【@${String(attachment?.name ?? "附件").trim()}】`;
+  let start = value.indexOf(token);
+  if (start < 0) return value;
+  let end = start + token.length;
+  if (end < value.length && /\s/u.test(value[end])) end += 1;
+  else if (start > 0 && /\s/u.test(value[start - 1])) start -= 1;
+  return `${value.slice(0, start)}${value.slice(end)}`;
 }
 
 function mergeAgentPromptReferenceTokens(prompt, references = []) {
@@ -2329,7 +2420,7 @@ function renderAgentAttachmentPreview(attachment = {}) {
 
 function renderAgentAttachmentIcon(name) {
   if (name === "add") {
-    return '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
+    return '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 16.5a4.5 4.5 0 0 1-7.7 3.2l-6.4-6.4a6 6 0 0 1 8.5-8.5l6.1 6.1a3.75 3.75 0 0 1-5.3 5.3l-5.7-5.7a1.5 1.5 0 0 1 2.1-2.1l5.3 5.3" /></svg>';
   }
   return "";
 }
@@ -2852,7 +2943,7 @@ function resolveAgentMediaCanvasNodeId(document, message = {}, media = null) {
 
 function renderAgentMedia(media, messageIndex, canvasNodeId) {
   const ready = ["completed", "succeeded", "success"].includes(media.status) && Boolean(media.url);
-  const failed = ["failed", "canceled", "cancelled", "result_unknown"].includes(media.status);
+  const failed = ["failed", "canceled", "cancelled", "result_unknown", "manual_review_required"].includes(media.status);
   if (!ready) {
     return `<div class="canvas-agent-media-status ${failed ? "is-error" : ""}" role="status">${escapeHtml(failed ? media.error || "媒体生成失败" : "媒体生成中")}</div>`;
   }
@@ -3123,6 +3214,34 @@ function normalizeAgentModel(model = {}) {
     modelLabel: String(model.modelLabel ?? model.name ?? model.label ?? modelCode).trim(),
     capabilities: model.capabilities && typeof model.capabilities === "object" ? model.capabilities : {},
   };
+}
+
+function assertAgentModelMediaSupport(model, attachments = [], references = []) {
+  const capabilities = model?.capabilities && typeof model.capabilities === "object"
+    ? model.capabilities
+    : {};
+  const declaredInputs = new Set([capabilities.input, capabilities.inputs]
+    .flatMap((value) => Array.isArray(value) ? value : typeof value === "string" ? [value] : [])
+    .map((value) => String(value ?? "").trim().toLowerCase())
+    .filter(Boolean));
+  const supportsImage = capabilities.vision === true
+    || capabilities.imageInput === true
+    || capabilities.multimodal === true
+    || ["image", "image_url", "input_image", "vision", "multimodal"]
+      .some((capability) => declaredInputs.has(capability));
+  const supportsVideo = capabilities.videoInput === true
+    || capabilities.video === true
+    || capabilities.multimodal === true
+    || ["video", "video_url", "input_video", "input_file", "multimodal"]
+      .some((capability) => declaredInputs.has(capability));
+  const mediaKinds = [...(Array.isArray(attachments) ? attachments : []), ...(Array.isArray(references) ? references : [])]
+    .map((item) => String(item?.kind ?? item?.mediaKind ?? "").trim().toLowerCase());
+  if (!supportsImage && mediaKinds.includes("image")) {
+    throw new Error("当前 Agent 模型不支持图片分析，请切换支持图片输入的模型。");
+  }
+  if (!supportsVideo && mediaKinds.includes("video")) {
+    throw new Error("当前 Agent 模型不支持视频分析，请切换支持视频输入的模型。");
+  }
 }
 
 function escapeHtml(value) {

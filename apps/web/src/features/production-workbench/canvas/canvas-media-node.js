@@ -406,7 +406,7 @@ export function resolveCanvasMediaActionBody(target, options = {}) {
 
 export function bindCanvasMediaControlPointerGuards(root) {
   const controls = [...(root?.querySelectorAll?.(
-    "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video, [data-canvas-image-preview-trigger], .canvas-upload-meta[data-action='pick-canvas-upload-file'], [data-canvas-image-fullscreen] button",
+    "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video, [data-canvas-image-preview-trigger], .canvas-x6-source-upload-action[data-action='pick-canvas-upload-file'], [data-canvas-image-fullscreen] button",
   ) ?? [])];
   controls.forEach((control) => {
     if (control.dataset.canvasMediaPointerGuard === "true") return;

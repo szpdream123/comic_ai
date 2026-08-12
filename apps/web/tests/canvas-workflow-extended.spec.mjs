@@ -113,10 +113,12 @@ test("Canvas Markdown preview renders structured content safely and ships import
 
   const projectDetailSource = readFileSync("apps/web/src/features/production-workbench/project-detail.js", "utf8");
   const markdownNodeSource = readFileSync("apps/web/src/features/production-workbench/canvas/canvas-markdown-node.js", "utf8");
+  const graphSource = readFileSync("apps/web/src/features/production-workbench/canvas/canvas-x6-graph.js", "utf8");
   const workbenchSource = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");
   assert.match(markdownNodeSource, /set-canvas-markdown-mode/);
-  assert.match(projectDetailSource, /data-canvas-markdown-input/);
-  assert.match(projectDetailSource, /data-action="export-canvas-markdown"/);
+  assert.doesNotMatch(projectDetailSource, /data-canvas-markdown-input/);
+  assert.match(graphSource, /data-canvas-markdown-input/);
+  assert.match(graphSource, /data-action="export-canvas-markdown"/);
   assert.match(workbenchSource, /text\/markdown;charset=utf-8/);
   assert.match(workbenchSource, /URL\.revokeObjectURL\(url\)/);
   assert.doesNotMatch(workbenchSource.slice(workbenchSource.indexOf("export function exportCanvasMarkdownFile"), workbenchSource.indexOf("function canvasMarkdownPlainText")), /window\.open/);

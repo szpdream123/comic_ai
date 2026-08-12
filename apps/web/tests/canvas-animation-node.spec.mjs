@@ -335,12 +335,13 @@ test("animation nodes use the rich X6 HTML shape and the host wires image genera
     "utf8",
   );
 
-  assert.match(projectDetailSource, /renderLiblibAnimationNode\(node, options\)/);
+  assert.doesNotMatch(projectDetailSource, /renderLiblibAnimationNode\(node, options\)/);
   assert.match(projectDetailSource, /renderCanvasAnimationControls\(node\)/);
   assert.match(hostSource, /data-canvas-animation-frames/);
   assert.match(hostSource, /parameters\.outputKind = "sprite-sheet"/);
   assert.match(hostSource, /node\.type === "ai-animation" \? "image"/);
   assert.match(graphSource, /renderCanvasAnimationNodeBody\(node\)/);
+  assert.match(graphSource, /comic-ai-canvas-special-media-node/);
   assert.match(css, /\.canvas-animation-preview-switch/);
   assert.match(css, /\.canvas-animation-action-picker/);
 

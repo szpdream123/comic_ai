@@ -16,6 +16,45 @@ import {
 } from "../canvas-agent-task.service.ts";
 
 describe("Canvas Agent step skip", { concurrency: false }, () => {
+  it("cancels the generic workflow when an approval is rejected", async () => {
+    const fixture = await createFixture();
+    try {
+      const step = await createCanvasAgentStep(fixture.db, {
+        taskId: fixture.taskId, kind: "tool", toolId: "canvas.write", callId: "write-reject-1",
+        effect: "canvas_write", input: { nodeId: "node-1" }, now: fixture.now,
+      });
+      const approval = await requestCanvasAgentApproval(fixture.db, {
+        taskId: fixture.taskId, stepId: step.id, actor: fixture.actor,
+        effect: "canvas_write", reason: "canvas write", now: fixture.now,
+      });
+
+      await decideCanvasAgentApproval(fixture.db, {
+        taskId: fixture.taskId, approvalId: approval.id, actor: fixture.actor,
+        decision: "rejected", now: fixture.later,
+      });
+
+      const state = await fixture.db.query<{
+        agent_status: string;
+        workflow_task_status: string;
+        workflow_status: string;
+      }>(`
+        SELECT agent.status AS agent_status, task.status AS workflow_task_status,
+               workflow.status AS workflow_status
+        FROM canvas_agent_tasks agent
+        JOIN tasks task ON task.id=agent.workflow_task_id
+        JOIN workflows workflow ON workflow.id=agent.workflow_id
+        WHERE agent.id=$1
+      `, [fixture.taskId]);
+      assert.deepEqual(state.rows[0], {
+        agent_status: "canceled",
+        workflow_task_status: "canceled",
+        workflow_status: "canceled",
+      });
+    } finally {
+      await fixture.db.close();
+    }
+  });
+
   it("persists an approval-waiting skip and prevents later approval or execution", async () => {
     const fixture = await createFixture();
     try {

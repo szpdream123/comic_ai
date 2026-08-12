@@ -56,18 +56,36 @@ export async function findGenerationArtifactHandoff(
   db: SqlDatabase,
   taskId: string,
 ): Promise<GenerationArtifactHandoff | null> {
-  const row = await queryOne<{ handoff: Record<string, unknown> | string | null }>(
+  const row = await queryOne<{
+    handoff: Record<string, unknown> | string | null;
+    snapshot_status: string | null;
+    task_status: string | null;
+    result_assets_json: unknown;
+    attempt_id: string | null;
+  }>(
     db,
     `
-      SELECT provider_status_json->'artifactHandoff' AS handoff
-      FROM ai_generation_task_snapshots
-      WHERE task_id = $1
+      SELECT snapshot.provider_status_json->'artifactHandoff' AS handoff,
+             snapshot.status AS snapshot_status,
+             task.status AS task_status,
+             snapshot.result_assets_json,
+             attempt.id AS attempt_id
+      FROM ai_generation_task_snapshots snapshot
+      JOIN tasks task ON task.id = snapshot.task_id
+      LEFT JOIN LATERAL (
+        SELECT id
+        FROM task_attempts
+        WHERE task_id = snapshot.task_id AND status = 'succeeded'
+        ORDER BY attempt_number DESC
+        LIMIT 1
+      ) attempt ON true
+      WHERE snapshot.task_id = $1
       LIMIT 1
     `,
     [taskId],
   );
   const value = typeof row?.handoff === "string" ? parseRecord(row.handoff) : row?.handoff;
-  if (!value || typeof value !== "object") return null;
+  if (!value || typeof value !== "object") return findLegacySucceededArtifactHandoff(db, row);
   const mediaType = readString(value.mediaType);
   const attemptId = readString(value.attemptId);
   const storageObjectId = readString(value.storageObjectId);
@@ -81,21 +99,55 @@ export async function findGenerationArtifactHandoff(
     || !storageObjectKey
     || !contentType
     || !fetchedAt
-  ) return null;
-  const available = await queryOne<{ available: boolean }>(
-    db,
-    `
-      SELECT true AS available
-      FROM storage_objects
-      WHERE id = $1
-        AND object_key = $2
-        AND status = 'available'
-      LIMIT 1
-    `,
-    [storageObjectId, storageObjectKey],
-  );
-  if (!available?.available) return null;
+  ) return findLegacySucceededArtifactHandoff(db, row);
+  const available = await queryOne<{ available: boolean }>(db, `
+    SELECT true AS available
+    FROM storage_objects
+    WHERE id = $1
+      AND object_key = $2
+      AND status = 'available'
+    LIMIT 1
+  `, [storageObjectId, storageObjectKey]);
+  if (!available?.available) return findLegacySucceededArtifactHandoff(db, row);
   return { mediaType, attemptId, storageObjectId, storageObjectKey, contentType, fetchedAt };
+}
+
+async function findLegacySucceededArtifactHandoff(
+  db: SqlDatabase,
+  succeeded: {
+    snapshot_status?: string | null;
+    task_status?: string | null;
+    result_assets_json?: unknown;
+    attempt_id?: string | null;
+  } | null | undefined,
+): Promise<GenerationArtifactHandoff | null> {
+  if (succeeded?.snapshot_status !== "succeeded" || succeeded.task_status !== "succeeded") return null;
+  const attemptId = readString(succeeded?.attempt_id);
+  const assets = readArray(succeeded?.result_assets_json);
+  if (!attemptId || !assets.length) return null;
+  for (const asset of assets) {
+    const mediaType = readString(asset.mediaKind);
+    const storageObjectId = readString(asset.storageObjectId);
+    if ((mediaType !== "image" && mediaType !== "video" && mediaType !== "audio") || !storageObjectId) continue;
+    const storage = await queryOne<{
+      object_key: string;
+      content_type: string;
+      fetched_at: Date | string;
+    }>(db, `
+      SELECT object_key, content_type, COALESCE(last_verified_at, created_at) AS fetched_at
+      FROM storage_objects
+      WHERE id = $1 AND status = 'available'
+      LIMIT 1
+    `, [storageObjectId]);
+    const storageObjectKey = readString(storage?.object_key);
+    const contentType = readString(storage?.content_type);
+    const fetchedAt = storage?.fetched_at instanceof Date
+      ? storage.fetched_at.toISOString()
+      : readString(storage?.fetched_at);
+    if (!storageObjectKey || !contentType || !fetchedAt) continue;
+    return { mediaType, attemptId, storageObjectId, storageObjectKey, contentType, fetchedAt };
+  }
+  return null;
 }
 
 export async function findOrRecoverGenerationArtifactHandoff(
@@ -154,4 +206,13 @@ function parseRecord(value: string) {
 
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readArray(value: unknown): Record<string, unknown>[] {
+  const parsed = typeof value === "string" ? (() => {
+    try { return JSON.parse(value); } catch { return null; }
+  })() : value;
+  return Array.isArray(parsed)
+    ? parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    : [];
 }

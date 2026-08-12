@@ -1819,6 +1819,54 @@ async function persistCanvasNodeTaskFailure(
   );
 }
 
+export async function failOrphanedCanvasAgentGenerationNodes(
+  db: SqlDatabase,
+  input: { staleBefore: Date; now: Date; limit?: number },
+) {
+  const limit = Math.max(1, Math.min(500, Math.trunc(input.limit ?? 100)));
+  const candidates = await db.query<{
+    canvas_project_id: string;
+    node_key: string;
+    task_id: string;
+    created_by_user_id: string | null;
+  }>(`
+    SELECT node.canvas_project_id, node.node_key,
+           node.data_json->>'taskId' AS task_id, node.created_by_user_id
+    FROM creator_canvas_nodes node
+    WHERE node.deleted_at IS NULL
+      AND node.status IN ('queued','running')
+      AND node.data_json->>'source' = 'canvas_agent'
+      AND COALESCE(node.data_json->>'taskId', '') <> ''
+      AND node.updated_at < $1
+      AND NOT EXISTS (
+        SELECT 1 FROM tasks task WHERE task.id::text = node.data_json->>'taskId'
+      )
+    ORDER BY node.updated_at ASC, node.id ASC
+    LIMIT $2
+  `, [input.staleBefore, limit]);
+  const failedNodeKeys: string[] = [];
+  for (const candidate of candidates.rows) {
+    await db.query("BEGIN");
+    try {
+      await persistCanvasNodeTaskFailure(db, {
+        canvasProjectId: candidate.canvas_project_id,
+        nodeKey: candidate.node_key,
+        taskId: candidate.task_id,
+        status: "failed",
+        failure: { failureCode: "generation_task_missing" },
+        userId: candidate.created_by_user_id,
+        now: input.now,
+      });
+      await db.query("COMMIT");
+      failedNodeKeys.push(candidate.node_key);
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
+  }
+  return { failedNodeKeys };
+}
+
 export function normalizeCanvasDocument(
   value: unknown,
   input: { canvasProjectId: string; now: string },
@@ -2121,6 +2169,40 @@ async function syncCanvasNodesAndEdges(
       [input.canvasProjectId, input.userId, JSON.stringify(nodes), input.now],
     );
   }
+
+  await db.query(
+    `
+      WITH removed_nodes AS (
+        SELECT node_key
+        FROM creator_canvas_nodes
+        WHERE canvas_project_id = $1
+          AND deleted_at IS NOT NULL
+          AND COALESCE(source_kind, '') <> 'style-reference'
+      ), deleted_artifacts AS (
+        UPDATE creator_canvas_node_artifacts artifact
+        SET deleted_at = $2,
+            updated_at = $2
+        FROM removed_nodes node
+        WHERE artifact.canvas_project_id = $1
+          AND artifact.node_key = node.node_key
+          AND artifact.deleted_at IS NULL
+        RETURNING artifact.id
+      ), deleted_runs AS (
+        UPDATE creator_canvas_node_runs run
+        SET deleted_at = $2,
+            updated_at = $2
+        FROM removed_nodes node
+        WHERE run.canvas_project_id = $1
+          AND run.node_key = node.node_key
+          AND run.deleted_at IS NULL
+        RETURNING run.id
+      )
+      SELECT
+        (SELECT count(*) FROM deleted_artifacts) AS deleted_artifact_count,
+        (SELECT count(*) FROM deleted_runs) AS deleted_run_count
+    `,
+    [input.canvasProjectId, input.now],
+  );
 
   const activeEdgeIds = input.document.edges.map((edge) => edge.id);
   if (activeEdgeIds.length) {

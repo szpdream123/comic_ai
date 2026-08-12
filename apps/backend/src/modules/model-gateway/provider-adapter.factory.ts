@@ -8,6 +8,7 @@ import { CumobImageProviderAdapter } from "./cumob-image.provider-adapter.ts";
 import { ExtraTokenVideoProviderAdapter } from "./extra-token-video.provider-adapter.ts";
 import { GlobalAiOpcImageProviderAdapter } from "./global-ai-opc-image.provider-adapter.ts";
 import { GlobalAiOpcVideoProviderAdapter } from "./global-ai-opc-video.provider-adapter.ts";
+import { GlobalAiOpcSoundCloneProviderAdapter } from "./global-ai-opc-sound-clone.provider-adapter.ts";
 import { HttpProviderAdapter } from "./http-provider-adapter.ts";
 import { LingdongApiProviderAdapter } from "./lingdong-api.provider-adapter.ts";
 import { ModelError } from "./model-error.ts";
@@ -154,6 +155,7 @@ export function createProviderAdapterFromModelConfig(
       createTaskEndpoint,
       queryTaskEndpoint: resolveProviderEndpoint(providerConfig, "queryTaskEndpoint"),
       defaultRequestParams: readRecord(providerConfig.defaultRequestParams),
+      requestFormat: readNonEmptyString(providerConfig.requestFormat),
       fetchImpl,
     });
   }
@@ -409,6 +411,20 @@ export function createProviderAdapterFromModelConfig(
       lyricsEndpoint: joinUrl(baseURL, readNonEmptyString(providerConfig.lyricsPath) || "/music/generations/lyricsFlowMusic"),
       musicEndpoint: joinUrl(baseURL, readNonEmptyString(providerConfig.musicPath) || "/music/generations"),
       queryTaskEndpoint: joinUrl(baseURL, readNonEmptyString(providerConfig.queryTaskPath) || "/music/tasks/{taskId}?language=zh"),
+      fetchImpl,
+    });
+  }
+
+  if (providerProtocol === "globalaiopc_sound_clone") {
+    const createTaskEndpoint = resolveProviderEndpoint(providerConfig, "createTaskEndpoint");
+    const queryTaskEndpoint = resolveProviderEndpoint(providerConfig, "queryTaskEndpoint");
+    if (!createTaskEndpoint || !queryTaskEndpoint) {
+      throw new Error("provider_endpoint_required");
+    }
+    return new GlobalAiOpcSoundCloneProviderAdapter({
+      apiKey: resolveProviderApiKey(providerConfig, env),
+      createTaskEndpoint,
+      queryTaskEndpoint,
       fetchImpl,
     });
   }

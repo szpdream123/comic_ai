@@ -285,6 +285,25 @@ describe("creator canvas record service", { concurrency: false }, () => {
         },
         now: new Date("2026-06-12T11:01:00.000Z"),
       });
+      const imageRun = await createCanvasNodeRun(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "image-1",
+        idempotencyKey: "removed-image-run",
+        status: "succeeded",
+        mediaKind: "image",
+        userId,
+        now: new Date("2026-06-12T11:01:10.000Z"),
+      });
+      await appendCanvasNodeArtifact(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "image-1",
+        runId: imageRun.id,
+        artifactKind: "image",
+        url: "https://cdn.example.test/removed-image.png",
+        selected: true,
+        userId,
+        now: new Date("2026-06-12T11:01:20.000Z"),
+      });
 
       await saveCanvasByCanvasProjectId(db, {
         canvasProjectId: canvas.canvasProjectId,
@@ -303,6 +322,10 @@ describe("creator canvas record service", { concurrency: false }, () => {
         deleted_nodes: number;
         active_edges: number;
         deleted_edges: number;
+        active_runs: number;
+        deleted_runs: number;
+        active_artifacts: number;
+        deleted_artifacts: number;
         revision_count: number;
       }>(
         `
@@ -311,6 +334,10 @@ describe("creator canvas record service", { concurrency: false }, () => {
             (SELECT count(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_nodes,
             (SELECT count(*)::int FROM creator_canvas_edges WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS active_edges,
             (SELECT count(*)::int FROM creator_canvas_edges WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_edges,
+            (SELECT count(*)::int FROM creator_canvas_node_runs WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS active_runs,
+            (SELECT count(*)::int FROM creator_canvas_node_runs WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_runs,
+            (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS active_artifacts,
+            (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_artifacts,
             (SELECT count(*)::int FROM creator_canvas_revisions WHERE canvas_project_id = $1) AS revision_count
         `,
         [canvas.canvasProjectId],
@@ -321,7 +348,124 @@ describe("creator canvas record service", { concurrency: false }, () => {
         deleted_nodes: 1,
         active_edges: 0,
         deleted_edges: 1,
+        active_runs: 0,
+        deleted_runs: 1,
+        active_artifacts: 0,
+        deleted_artifacts: 1,
         revision_count: 3,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("cleans active history left on deleted nodes while preserving style-reference history", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedUser(db);
+      const canvas = await createStandaloneCanvas(db, {
+        userId,
+        now: new Date("2026-06-12T11:05:00.000Z"),
+      });
+      const styleReferenceBase = canvasNode("style-reference-1", "text", 420, 20, "text", "Style Reference");
+      const saved = await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: canvas.serverRevision,
+        document: {
+          ...canvas.document,
+          nodes: [
+            canvasNode("removed-1", "image", 10, 20, "image", "Removed"),
+            {
+              ...styleReferenceBase,
+              data: { ...styleReferenceBase.data, source: "style-reference" },
+            },
+          ],
+          edges: [],
+        },
+        now: new Date("2026-06-12T11:06:00.000Z"),
+      });
+      const removedRun = await createCanvasNodeRun(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "removed-1",
+        idempotencyKey: "orphaned-run",
+        status: "succeeded",
+        mediaKind: "image",
+        userId,
+        now: new Date("2026-06-12T11:06:10.000Z"),
+      });
+      const styleReferenceRun = await createCanvasNodeRun(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "style-reference-1",
+        idempotencyKey: "style-reference-run",
+        status: "succeeded",
+        mediaKind: "text",
+        userId,
+        now: new Date("2026-06-12T11:06:20.000Z"),
+      });
+      await appendCanvasNodeArtifact(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "removed-1",
+        runId: removedRun.id,
+        artifactKind: "image",
+        url: "https://cdn.example.test/orphaned.png",
+        userId,
+        now: new Date("2026-06-12T11:06:30.000Z"),
+      });
+      await appendCanvasNodeArtifact(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        nodeKey: "style-reference-1",
+        runId: styleReferenceRun.id,
+        artifactKind: "text",
+        userId,
+        now: new Date("2026-06-12T11:06:40.000Z"),
+      });
+      await db.query(
+        `UPDATE creator_canvas_nodes SET deleted_at = $2 WHERE canvas_project_id = $1 AND node_key = 'removed-1'`,
+        [canvas.canvasProjectId, new Date("2026-06-12T11:07:00.000Z")],
+      );
+
+      await saveCanvasByCanvasProjectId(db, {
+        canvasProjectId: canvas.canvasProjectId,
+        userId,
+        clientRevision: saved.serverRevision,
+        document: {
+          ...saved.document,
+          viewport: { ...saved.document.viewport, x: 1 },
+          nodes: [],
+          edges: [],
+        },
+        now: new Date("2026-06-12T11:08:00.000Z"),
+      });
+
+      const rows = await db.query<{
+        active_nodes: number;
+        deleted_nodes: number;
+        active_runs: number;
+        deleted_runs: number;
+        active_artifacts: number;
+        deleted_artifacts: number;
+      }>(
+        `
+          SELECT
+            (SELECT count(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS active_nodes,
+            (SELECT count(*)::int FROM creator_canvas_nodes WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_nodes,
+            (SELECT count(*)::int FROM creator_canvas_node_runs WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS active_runs,
+            (SELECT count(*)::int FROM creator_canvas_node_runs WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_runs,
+            (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE canvas_project_id = $1 AND deleted_at IS NULL) AS active_artifacts,
+            (SELECT count(*)::int FROM creator_canvas_node_artifacts WHERE canvas_project_id = $1 AND deleted_at IS NOT NULL) AS deleted_artifacts
+        `,
+        [canvas.canvasProjectId],
+      );
+
+      assert.deepEqual(rows.rows[0], {
+        active_nodes: 1,
+        deleted_nodes: 1,
+        active_runs: 1,
+        deleted_runs: 1,
+        active_artifacts: 1,
+        deleted_artifacts: 1,
       });
     } finally {
       await db.close();

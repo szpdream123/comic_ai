@@ -312,7 +312,10 @@ export function createTextModelChatGateway(deps: {
       }
       const completed = await streamResult.completed;
       if (completed.status !== "succeeded") {
-        throw new Error(completed.failureCode || "provider_stream_error");
+        throw Object.assign(new Error(completed.failureCode || "provider_stream_error"), {
+          responseText: content,
+          usage: completed.usage,
+        });
       }
       return {
         content,

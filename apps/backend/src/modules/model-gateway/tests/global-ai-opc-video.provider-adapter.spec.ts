@@ -268,6 +268,153 @@ describe("GlobalAiOpc video provider adapter", () => {
     );
   });
 
+  it("builds Seedance 2.5 Model Center requests with documented field names", () => {
+    assert.deepEqual(
+      buildGlobalAiOpcVideoPayload({
+        providerRequestId: "provider-request-seedance-25",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.video.generate",
+        requestKey: "workflow-global-video:seedance-25",
+        payloadRef: "creator://seedance-25",
+        payloadHash: "hash-seedance-25",
+        redactedPayload: {
+          prompt: "A rain-soaked street",
+          firstFrameUrl: "https://cdn.example.com/first.png",
+          lastFrameUrl: "https://cdn.example.com/last.png",
+          parameters: {
+            durationSec: 8,
+            aspectRatio: "16:9",
+            resolution: "720p",
+            referenceImages: [{ url: "https://cdn.example.com/reference.png" }],
+            referenceVideos: [{ url: "https://cdn.example.com/reference.mp4" }],
+            referenceAudio: { url: "https://cdn.example.com/reference.mp3" },
+          },
+        },
+      }, {
+        model: "seedance-2.5-c1",
+        requestFormat: "globalaiopc_model_center_video",
+      }),
+      {
+        model: "seedance-2.5-c1",
+        prompt: "A rain-soaked street",
+        reference_images: ["https://cdn.example.com/reference.png"],
+        reference_videos: ["https://cdn.example.com/reference.mp4"],
+        reference_audios: ["https://cdn.example.com/reference.mp3"],
+        duration: 8,
+        aspect_ratio: "16:9",
+        resolution: "720p",
+        first_image: "https://cdn.example.com/first.png",
+        last_image: "https://cdn.example.com/last.png",
+      },
+    );
+  });
+
+  it("accepts documented GlobalAiOpc assetId references", () => {
+    assert.deepEqual(buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-seedance-asset",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:seedance-asset",
+      payloadRef: "creator://seedance-asset",
+      payloadHash: "hash-seedance-asset",
+      redactedPayload: {
+        prompt: "Use provider material",
+        parameters: { referenceImages: ["assetId://asset-provider-image-1"] },
+      },
+    }, {
+      model: "seedance-2.5-c1",
+      requestFormat: "globalaiopc_model_center_video",
+    }), {
+      model: "seedance-2.5-c1",
+      prompt: "Use provider material",
+      reference_images: ["assetId://asset-provider-image-1"],
+    });
+  });
+
+  it("keeps MiniMax references separate from explicit frame mode", () => {
+    const input = {
+      providerRequestId: "provider-request-minimax-h3",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:minimax-h3",
+      payloadRef: "creator://minimax-h3",
+      payloadHash: "hash-minimax-h3",
+    };
+    const config = { model: "MiniMax-H3-c4", requestFormat: "globalaiopc_model_center_video" };
+
+    assert.deepEqual(buildGlobalAiOpcVideoPayload({
+      ...input,
+      redactedPayload: {
+        prompt: "Reference performance",
+        parameters: {
+          referenceImages: [{ url: "https://cdn.example.com/actor.png" }],
+          referenceAudio: { url: "https://cdn.example.com/voice.mp3" },
+          durationSec: 10,
+          aspectRatio: "9:16",
+          resolution: "1440P",
+        },
+      },
+    }, config), {
+      model: "MiniMax-H3-c4",
+      prompt: "Reference performance",
+      reference_images: ["https://cdn.example.com/actor.png"],
+      reference_audios: ["https://cdn.example.com/voice.mp3"],
+      duration: 10,
+      aspect_ratio: "9:16",
+      resolution: "1440P",
+    });
+
+    assert.deepEqual(buildGlobalAiOpcVideoPayload({
+      ...input,
+      redactedPayload: {
+        prompt: "Frame performance",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        lastFrameUrl: "https://cdn.example.com/last.png",
+        parameters: {
+          referenceImages: [{ url: "https://cdn.example.com/ignored.png" }],
+          referenceAudio: { url: "https://cdn.example.com/ignored.mp3" },
+        },
+      },
+    }, config), {
+      model: "MiniMax-H3-c4",
+      prompt: "Frame performance",
+      first_image: "https://cdn.example.com/first.png",
+      last_image: "https://cdn.example.com/last.png",
+    });
+  });
+
+  it("rejects MiniMax audio-only and video references", () => {
+    const baseInput = {
+      providerRequestId: "provider-request-minimax-invalid",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:minimax-invalid",
+      payloadRef: "creator://minimax-invalid",
+      payloadHash: "hash-minimax-invalid",
+    };
+    const config = { model: "MiniMax-H3-c4", requestFormat: "globalaiopc_model_center_video" };
+    assert.throws(
+      () => buildGlobalAiOpcVideoPayload({
+        ...baseInput,
+        redactedPayload: {
+          prompt: "Audio only",
+          parameters: { referenceAudio: { url: "https://cdn.example.com/voice.mp3" } },
+        },
+      }, config),
+      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_reference_visual_required",
+    );
+    assert.throws(
+      () => buildGlobalAiOpcVideoPayload({
+        ...baseInput,
+        redactedPayload: {
+          prompt: "Video reference",
+          parameters: { referenceVideos: [{ url: "https://cdn.example.com/reference.mp4" }] },
+        },
+      }, config),
+      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_reference_videos_unsupported",
+    );
+  });
+
   it("submits and polls GlobalAiOpc video tasks", async () => {
     const capturedUrls: string[] = [];
     let capturedCreateBody = "";
@@ -438,6 +585,51 @@ describe("GlobalAiOpc video provider adapter", () => {
     assert.equal(JSON.parse(capturedBody).model, "sd2_manxue_720p");
     assert.equal(result.redactedResponse?.model, "sd2_manxue_720p");
     assert.equal(result.externalRequestId, "global-video-task-2");
+  });
+
+  it("routes Model Center video configuration through its documented endpoint and payload", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    const adapter = createProviderAdapterFromModelConfig({
+      providerProtocol: "globalaiopc_video",
+      providerModel: "seedance-2.5-c1",
+      providerConfig: {
+        baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+        createTaskEndpoint: "/v2/model-center/tasks",
+        queryTaskEndpoint: "/v2/model-center/tasks/{taskId}",
+        apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+        requestFormat: "globalaiopc_model_center_video",
+      },
+    }, { GLOBAL_AI_OPC_API_KEY: "global-ai-opc-key" }, (async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = String(init?.body ?? "");
+      return new Response(JSON.stringify({ id: "model-center-task", status: "queued" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "provider-request-model-center",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:model-center",
+      payloadRef: "creator://model-center",
+      payloadHash: "hash-model-center",
+      redactedPayload: {
+        prompt: "Camera orbit",
+        parameters: { aspectRatio: "1:1", resolution: "480p", durationSec: 6 },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "seedance-2.5-c1",
+      prompt: "Camera orbit",
+      duration: 6,
+      aspect_ratio: "1:1",
+      resolution: "480p",
+    });
   });
 
   it("builds the GlobalAiOpc video adapter with explicit endpoints", async () => {

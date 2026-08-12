@@ -28,6 +28,7 @@ test("Canvas generation history maps artifacts into reusable Canvas assets", () 
 
   assert.deepEqual(assets, [{
     id: "artifact-1",
+    nodeKey: "image-1",
     source: "outputs",
     runId: "run-1",
     artifactId: "artifact-1",

@@ -98,7 +98,7 @@ test("home statusbar wraps quick actions instead of forcing horizontal overlap o
   assert.match(css, /\.statusbar-quick-action span:not\(\.statusbar-action-icon\),[\s\S]*text-overflow:\s*ellipsis/);
 });
 
-test("home hero renders cinematic starfield layers for the AI short drama studio", () => {
+test("home renders the AI creation hub without changing the workbench navigation", () => {
   const html = renderProjectDetail({
     state: createBaseState(),
     session: { user: { phone: "+86 13800138000" } },
@@ -107,18 +107,12 @@ test("home hero renders cinematic starfield layers for the AI short drama studio
       membershipStatus: { status: "none" },
     },
   });
-  const css = readFileSync(
-    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(html, /home-cinematic-sky/);
-  assert.match(html, /home-meteor-field/);
-  assert.match(html, /home-cursor-aura/);
-  assert.match(html, /AI 漫剧 \/ 短剧生成舱/);
-  assert.match(css, /\.home-meteor-field span/);
-  assert.match(css, /@keyframes homeMeteorFall/);
-  assert.match(css, /--home-pointer-x/);
+  assert.match(html, /home-agent-composer/);
+  assert.match(html, /今天想创作什么/);
+  assert.match(html, /home-capability-grid/);
+  assert.match(html, /data-action="set-nav-tab" data-tab="tools"/);
+  assert.match(html, /我的项目/);
+  assert.doesNotMatch(html, /home-cinematic-sky/);
 });
 
 test("global statusbar account card prefers nickname and shows experience membership expiry", () => {

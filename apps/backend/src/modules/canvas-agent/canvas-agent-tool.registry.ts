@@ -114,6 +114,12 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   }) => Promise<{ revision: number; summary?: Record<string, unknown> }>;
   generationIntake: CanvasAgentGenerationIntake;
   context?: Pick<CanvasAgentContextService, "resolveFileGrant">;
+  inspectVideo?: (input: {
+    grantId: string;
+    canvasId: string;
+    conversationId: string;
+    actor: CanvasAgentActor;
+  }) => Promise<Record<string, unknown>>;
   knowledge?: Pick<CanvasAgentKnowledgeService, "listMemories" | "remember" | "readProviderDocument">;
   promptPreferences?: Pick<CanvasAgentPromptPreferenceService, "list" | "learn" | "revoke">;
   readHistory?: (input: { canvasId: string; actor: CanvasAgentActor; nodeKey?: string; search?: string; limit?: number }) => Promise<Record<string, unknown>>;
@@ -181,6 +187,44 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
       output: await deps.readCanvas({ canvasId: context.canvasId, actor: context.actor }),
     }),
   });
+  if (deps.context && deps.inspectVideo) {
+    registry.register({
+      id: "video.inspect",
+      description: "Read deterministic FFprobe container and stream metadata for an authorized conversation video. Use the current Canvas Agent model and its attached video input for visual semantic understanding; this tool does not select or call another model.",
+      effect: "read",
+      requiredCapability: "canvas:view",
+      inputSchema: {
+        type: "object",
+        properties: { grantId: { type: "string", minLength: 1 } },
+        required: ["grantId"],
+        additionalProperties: false,
+      },
+      execute: async (input, context) => {
+        const grantId = String(input.grantId);
+        const grant = await deps.context!.resolveFileGrant({
+          grantId,
+          canvasId: context.canvasId,
+          conversationId: context.conversationId,
+          actor: context.actor,
+          now: deps.now?.() ?? new Date(),
+        });
+        const contentType = String(grant.contentType ?? "").trim().toLowerCase();
+        if (!contentType.startsWith("video/")) throw new Error("canvas_agent_video_grant_required");
+        return {
+          status: "succeeded",
+          output: {
+            contentType,
+            ...await deps.inspectVideo!({
+              grantId,
+              canvasId: context.canvasId,
+              conversationId: context.conversationId,
+              actor: context.actor,
+            }),
+          },
+        };
+      },
+    });
+  }
   if (deps.readHistory) {
     registry.register({
       id: "canvas.read_history",

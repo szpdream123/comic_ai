@@ -1,10 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 import {
   configuredPort,
   findListenerPid,
+  generationQueueEnabled,
   isProjectProcess,
   loadDotEnvFile,
   readWindowsProcess,
@@ -19,6 +20,7 @@ const outLog = join(logDir, "creator-dev-stack.out.log");
 const errLog = join(logDir, "creator-dev-stack.err.log");
 const projectRoot = process.cwd();
 const stackEntrypoint = join(projectRoot, "scripts", "run-creator-dev-stack.mjs");
+const statusEntrypoint = join(projectRoot, "scripts", "status-dev-detached.mjs");
 const stopRequestFile = join(runDir, "creator-dev-stack.stop");
 
 loadDotEnvFile(join(projectRoot, ".env"), { override: true });
@@ -33,8 +35,13 @@ process.once("exit", releaseStartLock);
 const existingPid = readPidFile(pidFile);
 const existingProcess = existingPid ? readWindowsProcess(existingPid) : null;
 if (existingProcess && isProjectProcess(existingProcess, projectRoot, "run-creator-dev-stack.mjs")) {
-  console.log(`creator-dev stack already running (pid=${existingPid})`);
-  process.exit(0);
+  const status = readStackStatus(runtime, statusEntrypoint);
+  if (status.ready) {
+    console.log(`creator-dev stack already running (pid=${existingPid})`);
+    process.exit(0);
+  }
+  console.error(`creator-dev stack is already running but unhealthy: ${status.output}`);
+  process.exit(1);
 }
 
 if (existingPid) {
@@ -63,8 +70,24 @@ writeSync(errFd, `\n[creator-dev] ===== session ${sessionStartedAt} =====\n`);
 const child = spawnDetached(runtime, [stackEntrypoint], outFd, errFd);
 
 writeFileSync(pidFile, `${child.pid}\n`, "utf8");
+const readiness = await waitForStackReady({
+  childPid: child.pid,
+  runtime,
+  statusEntrypoint,
+  outLog,
+  sessionStartedAt,
+  timeoutMs: 90_000,
+});
+if (!readiness.ready) {
+  terminateProcessTree(child.pid);
+  rmSync(pidFile, { force: true });
+  releaseStartLock();
+  console.error(`Creator-dev stack failed to become ready: ${readiness.lastStatus}`);
+  console.error(`Logs: ${outLog}`);
+  process.exit(1);
+}
 releaseStartLock();
-console.log(`Detached creator-dev stack pid=${child.pid}`);
+console.log(`Creator-dev stack is ready (pid=${child.pid}, port=${port})`);
 console.log(`Logs: ${outLog}`);
 
 function spawnDetached(command, args, outFd, errFd) {
@@ -144,6 +167,68 @@ function waitForPortRelease(port, timeoutMs) {
   while (Date.now() - startedAt < timeoutMs) {
     if (!findListenerPid(port)) return;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  }
+}
+
+async function waitForStackReady(input) {
+  const startedAt = Date.now();
+  let lastStatus = "status unavailable";
+  const requiredLogMarkers = ["Phone auth dev server listening on"];
+  if (generationQueueEnabled()) {
+    requiredLogMarkers.push(
+      "[generation-outbox] Dispatcher started.",
+      "[generation-maintenance] Scheduler started.",
+      "[generation-video] Worker started.",
+      "[canvas-agent] Worker started.",
+    );
+  }
+
+  while (Date.now() - startedAt < input.timeoutMs) {
+    if (!isProcessAlive(input.childPid)) {
+      return { ready: false, lastStatus: "supervisor process exited during startup" };
+    }
+    const status = readStackStatus(input.runtime, input.statusEntrypoint);
+    lastStatus = status.output;
+    if (status.ready) {
+      const logTail = readFileTail(input.outLog, 128 * 1024);
+      const sessionOffset = logTail.lastIndexOf(`[creator-dev] ===== session ${input.sessionStartedAt} =====`);
+      const currentSession = sessionOffset >= 0 ? logTail.slice(sessionOffset) : "";
+      if (requiredLogMarkers.every((marker) => currentSession.includes(marker))) {
+        return { ready: true, lastStatus };
+      }
+      lastStatus = "runtime processes exist but startup readiness markers are incomplete";
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return { ready: false, lastStatus };
+}
+
+function readStackStatus(runtimePath, entrypoint) {
+  const status = spawnSync(runtimePath, [entrypoint], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: "utf8",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  return {
+    ready: status.status === 0,
+    output: status.stdout.trim() || status.stderr.trim() || `status_exit_${status.status ?? "unknown"}`,
+  };
+}
+
+function readFileTail(path, maxBytes) {
+  if (!existsSync(path)) return "";
+  const size = statSync(path).size;
+  const length = Math.min(size, maxBytes);
+  if (length <= 0) return "";
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    return buffer.toString("utf8");
+  } finally {
+    closeSync(fd);
   }
 }
 
