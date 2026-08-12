@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import {
@@ -47,6 +48,37 @@ function artifactStageTaskDb(
 }
 
 describe("generation artifact recovery", () => {
+  it("binds every artifact provider result to the durable current attempt", async () => {
+    const [videoSource, audioSource, imageSource, imageRecoverySource] = await Promise.all([
+      readFile(new URL("../seedance-video.worker.ts", import.meta.url), "utf8"),
+      readFile(new URL("../audio-generation.worker.ts", import.meta.url), "utf8"),
+      readFile(new URL("../gpt-image.worker.ts", import.meta.url), "utf8"),
+      readFile(new URL("../gpt-image-artifact-recovery.service.ts", import.meta.url), "utf8"),
+    ]);
+    const section = (source: string, start: string, end: string) => {
+      const startIndex = source.indexOf(start);
+      const endIndex = source.indexOf(end, startIndex + start.length);
+      assert.notEqual(startIndex, -1, start);
+      assert.notEqual(endIndex, -1, end);
+      return source.slice(startIndex, endIndex);
+    };
+
+    for (const query of [
+      section(videoSource, "async function findSeedanceTaskForFinalize", "async function ensureSeedanceFinalizeAttempt"),
+      section(videoSource, "async function findSeedanceTaskForPersist", "async function persistSeedanceVideoArtifact"),
+      section(imageSource, "async function findGptImageTaskForFinalize", "function readGptImageArtifactRecoveryDeadline"),
+      section(imageSource, "async function findGptImageTaskForPersist", "async function findGenerationTaskSnapshotFailure"),
+    ]) {
+      assert.match(query, /pr\.attempt_id = t\.current_attempt_id/);
+      assert.match(query, /pr\.attempt_id IS NULL AND t\.attempt_count = 1/);
+    }
+    const audioQuery = section(audioSource, "async function findAudioTask", "function findAudioArtifact");
+    assert.match(audioQuery, /request\.attempt_id = t\.current_attempt_id/);
+    assert.match(audioQuery, /request\.attempt_id IS NULL AND t\.attempt_count = 1/);
+    assert.match(imageRecoverySource, /request\.attempt_id = task\.current_attempt_id/);
+    assert.match(imageRecoverySource, /request\.attempt_id IS NULL AND task\.attempt_count = 1/);
+  });
+
   it("retries every artifact stage when its durable task is still nonterminal", async () => {
     const taskId = "50000000-0000-4000-8000-000000000390";
     const now = new Date("2026-08-11T06:00:00.000Z");
@@ -672,6 +704,7 @@ describe("generation artifact recovery", () => {
 
   it("continues persist recovery after a generation queue failure", async () => {
     let attemptReopened = false;
+    let uploadRecordEnsured = false;
     const result = await persistGptImageArtifactJob({
       async query(sql) {
         if (sql.includes("FROM tasks t") && sql.includes("LEFT JOIN provider_requests pr")) {
@@ -738,6 +771,10 @@ describe("generation artifact recovery", () => {
             }],
           };
         }
+        if (sql.includes("FROM project_upload_records")) {
+          uploadRecordEnsured = true;
+          return { rows: [{ id: "upload-record-1" }] };
+        }
         if (sql.includes("UPDATE task_attempts attempt")) {
           attemptReopened = true;
           return { rows: [{ id: "attempt-1" }] };
@@ -777,6 +814,7 @@ describe("generation artifact recovery", () => {
     });
 
     assert.equal(attemptReopened, true);
+    assert.equal(uploadRecordEnsured, true);
     assert.deepEqual(result, { status: "succeeded" });
   });
 });

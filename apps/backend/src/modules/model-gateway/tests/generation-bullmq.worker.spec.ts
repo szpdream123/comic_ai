@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   handleGenerationFetchArtifactJob,
   handleGenerationFinalizeArtifactJob,
+  handleGenerationPollAudioJob,
   handleGenerationPersistArtifactJob,
   handleGenerationPollImageJob,
   handleGenerationSubmitAudioJob,
@@ -69,12 +70,13 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "gpt-image-2-cn",
       providerExecutor: "gpt-image-2",
       pollAttempt: 1,
+      outboxEventId: "outbox-1",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.image.poll__task-image-1__1",
+      jobId: "generation.image.poll__task-image-1__outbox-1__1",
       delay: 30_000,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5000 },
+      attempts: 20,
+      backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     });
@@ -210,8 +212,8 @@ describe("generation BullMQ worker handlers", () => {
     assert.deepEqual(added[0]?.options, {
       jobId: "generation.image.poll__task-image-skipped__2",
       delay: 30_000,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5000 },
+      attempts: 20,
+      backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     });
@@ -245,7 +247,7 @@ describe("generation BullMQ worker handlers", () => {
   });
 
   it("finalizes an image that completed during provider submission", async () => {
-    const added: Array<{ queueName: string; name: string }> = [];
+    const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
     const result = await handleGenerationSubmitImageJob({
       job: {
         data: {
@@ -258,13 +260,17 @@ describe("generation BullMQ worker handlers", () => {
       },
       config: loadGenerationQueueConfig({}),
       publisher: {
-        async add(queueName, name) {
-          added.push({ queueName, name });
+        async add(queueName, name, data, options) {
+          added.push({ queueName, name, data, options });
         },
       },
       processors: {
         async submitGptImage() {
-          return { status: "submitted", providerStatus: "succeeded" };
+          return {
+            status: "submitted",
+            providerStatus: "succeeded",
+            attemptId: "attempt-image-sync-2",
+          };
         },
         async submitSeedanceVideo() {
           throw new Error("video submit should not run for synchronous image jobs");
@@ -277,10 +283,13 @@ describe("generation BullMQ worker handlers", () => {
     });
 
     assert.deepEqual(result, { status: "submitted", queuedFinalize: true });
-    assert.deepEqual(added, [{
-      queueName: "generation-finalize-artifact",
-      name: "generation.image.finalize",
-    }]);
+    assert.equal(added[0]?.queueName, "generation-finalize-artifact");
+    assert.equal(added[0]?.name, "generation.image.finalize");
+    assert.equal((added[0]?.data as { attemptId?: string }).attemptId, "attempt-image-sync-2");
+    assert.equal(
+      (added[0]?.options as { jobId?: string }).jobId,
+      "generation.image.finalize__task-image-sync__attempt-image-sync-2",
+    );
   });
 
   it("queues a delayed video poll job after a Seedance submit job succeeds", async () => {
@@ -330,16 +339,17 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
       pollAttempt: 1,
+      outboxEventId: "outbox-1",
       membershipPriority: true,
       queuePriority: 2,
       priorityReason: "membership_priority",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.poll__task-1__1",
+      jobId: "generation.video.poll__task-1__outbox-1__1",
       delay: 30_000,
       priority: 2,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5000 },
+      attempts: 20,
+      backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     });
@@ -415,6 +425,7 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "seedance-i2v-pro",
           providerExecutor: "seedance",
           outboxEventId: "outbox-1",
+          dispatchToken: "ops-retry-video-wave-1",
         },
       },
       config: loadGenerationQueueConfig({
@@ -448,15 +459,53 @@ describe("generation BullMQ worker handlers", () => {
       providerExecutor: "seedance",
       outboxEventId: "outbox-1",
       retrySequence: 1,
+      dispatchToken: "ops-retry-video-wave-1",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.submit.retry__task-1__1",
+      jobId: "generation.video.submit.retry__task-1__ops-retry-video-wave-1__1",
       delay: 2500,
       attempts: 3,
       backoff: { type: "exponential", delay: 5000 },
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     });
+  });
+
+  it("keeps an audio retry wave isolated when poll recovery resubmits", async () => {
+    const added: Array<{ queueName: string; name: string; data: unknown; options: unknown }> = [];
+    const result = await handleGenerationPollAudioJob({
+      job: {
+        data: {
+          taskId: "task-audio-retry",
+          workflowId: "workflow-audio-retry",
+          mediaType: "audio",
+          modelCode: "cosyvoice-v2",
+          providerExecutor: "aliyun-bailian-audio",
+          pollAttempt: 1,
+          attemptId: "attempt-audio-retry",
+          dispatchToken: "ops-retry-audio-wave-1",
+        },
+      },
+      config: loadGenerationQueueConfig({}),
+      publisher: {
+        async add(queueName, name, data, options) {
+          added.push({ queueName, name, data, options });
+        },
+      },
+      processors: {
+        async submitSeedanceVideo() { throw new Error("video submit should not run"); },
+        async pollSeedanceVideo() { throw new Error("video poll should not run"); },
+        async pollAudio() { return { status: "skipped", nextAction: "submit" as const }; },
+      },
+      now: new Date("2026-06-03T00:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "skipped", queuedPoll: false, queuedSubmit: true });
+    assert.equal((added[0]?.data as Record<string, unknown>).dispatchToken, "ops-retry-audio-wave-1");
+    assert.equal(
+      (added[0]?.options as Record<string, unknown>).jobId,
+      "generation.audio.submit.retry__task-audio-retry__ops-retry-audio-wave-1__1",
+    );
   });
 
   it("requeues a Seedance submit job when the task remains retryable", async () => {
@@ -580,6 +629,7 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "seedance-i2v-pro",
           providerExecutor: "seedance",
           pollAttempt: 2,
+          outboxEventId: "outbox-poll-wave-1",
         },
       },
       config: generationQueueConfigWithMaxPollAttempts(3, {
@@ -610,12 +660,13 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
       pollAttempt: 3,
+      outboxEventId: "outbox-poll-wave-1",
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.poll__task-1__3",
+      jobId: "generation.video.poll__task-1__outbox-poll-wave-1__3",
       delay: 30_000,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5000 },
+      attempts: 20,
+      backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     });
@@ -632,6 +683,7 @@ describe("generation BullMQ worker handlers", () => {
           modelCode: "seedance-i2v-pro",
           providerExecutor: "seedance",
           pollAttempt: 2,
+          outboxEventId: "outbox-poll-wave-1",
         },
       },
       config: loadGenerationQueueConfig({
@@ -667,13 +719,14 @@ describe("generation BullMQ worker handlers", () => {
       modelCode: "seedance-i2v-pro",
       providerExecutor: "seedance",
       pollAttempt: 2,
+      outboxEventId: "outbox-poll-wave-1",
       retrySequence: 1,
     });
     assert.deepEqual(added[0]?.options, {
-      jobId: "generation.video.poll.rate-limit-retry__task-1__2__1",
+      jobId: "generation.video.poll.rate-limit-retry__task-1__2__outbox-poll-wave-1__1",
       delay: 2500,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 5000 },
+      attempts: 20,
+      backoff: { type: "exponential", delay: 30_000 },
       removeOnComplete: { age: 86400, count: 10000 },
       removeOnFail: { age: 604800, count: 50000 },
     });

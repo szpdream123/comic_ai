@@ -28,6 +28,7 @@ export interface GenerationBullMQJob {
   data: {
     outboxEventId: string;
     taskId: string;
+    attemptId?: string;
     workflowId: string;
     mediaType: "image" | "video" | "audio";
     modelCode: string | null;
@@ -79,10 +80,8 @@ export function buildGenerationBullMQJob(
   const queueName =
     readString(event.payload.queueName) ||
     (mediaType === "video" ? config.queues.submitVideo : config.queues.submitImage);
-  const dispatchToken = readString(event.payload.dispatchToken);
-  const jobId = dispatchToken
-    ? buildGenerationBullMQJobId("generation.task.created", taskId, "submit", dispatchToken)
-    : buildGenerationBullMQJobId("generation.task.created", taskId, "submit");
+  const dispatchToken = readString(event.payload.dispatchToken) || event.id;
+  const jobId = buildGenerationBullMQJobId("generation.task.created", taskId, "submit", dispatchToken);
   const queuePriority = readQueuePriority(event.payload.queuePriority);
   const data: GenerationBullMQJob["data"] = {
     outboxEventId: event.id,
@@ -94,7 +93,7 @@ export function buildGenerationBullMQJob(
   };
   const queueAssignmentKey = readString(event.payload.queueAssignmentKey);
   if (queueAssignmentKey) data.queueAssignmentKey = queueAssignmentKey;
-  if (dispatchToken) data.dispatchToken = dispatchToken;
+  data.dispatchToken = dispatchToken;
   const retrySequence = readPositiveInteger(event.payload.retrySequence);
   if (retrySequence !== undefined) data.retrySequence = retrySequence;
   if (readBoolean(event.payload.membershipPriority) === true) {
@@ -140,10 +139,14 @@ function buildGenerationPollBullMQJob(
   const workflowId = readRequiredString(event.payload.workflowId, "workflowId");
   const mediaType = readMediaType(event.payload.mediaType);
   const pollAttempt = readPositiveInteger(event.payload.pollAttempt) ?? 1;
+  const attemptId = readString(event.payload.attemptId);
+  const dispatchToken = readString(event.payload.dispatchToken) || event.id;
   const jobId = buildGenerationBullMQJobId(
     `generation.${mediaType}.poll`,
     taskId,
+    ...(attemptId ? [attemptId] : []),
     pollAttempt,
+    dispatchToken,
   );
 
   return {
@@ -161,6 +164,7 @@ function buildGenerationPollBullMQJob(
     data: {
       outboxEventId: event.id,
       taskId,
+      ...(attemptId ? { attemptId } : {}),
       workflowId,
       mediaType,
       modelCode: readString(event.payload.modelCode) || null,
@@ -190,8 +194,10 @@ function buildGenerationFinalizeBullMQJob(
   const artifactKind = readMediaType(event.payload.artifactKind ?? event.payload.mediaType);
   const finalizeMode = readFinalizeMode(event.payload.finalizeMode);
   const artifactStage = readArtifactStage(event.payload.artifactStage);
+  const attemptId = readString(event.payload.attemptId);
   const jobId = buildFinalizeJobId({
     taskId,
+    attemptId: attemptId || undefined,
     finalizeMode,
     outboxEventId: event.id,
   });
@@ -206,6 +212,7 @@ function buildGenerationFinalizeBullMQJob(
     data: {
       outboxEventId: event.id,
       taskId,
+      ...(attemptId ? { attemptId } : {}),
       workflowId,
       mediaType,
       modelCode: readString(event.payload.modelCode) || null,
@@ -235,21 +242,16 @@ function buildGenerationFinalizeBullMQJob(
 
 function buildFinalizeJobId(input: {
   taskId: string;
+  attemptId?: string;
   finalizeMode: "retry_finalize" | "retry_persist_asset";
   outboxEventId: string;
 }) {
-  if (input.finalizeMode === "retry_finalize") {
-    return buildGenerationBullMQJobId(
-      "generation.task.finalize_requested",
-      input.taskId,
-      input.finalizeMode,
-      input.outboxEventId,
-    );
-  }
   return buildGenerationBullMQJobId(
     "generation.task.finalize_requested",
     input.taskId,
+    ...(input.attemptId ? [input.attemptId] : []),
     input.finalizeMode,
+    input.outboxEventId,
   );
 }
 

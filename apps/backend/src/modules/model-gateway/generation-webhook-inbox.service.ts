@@ -7,6 +7,7 @@ import { readGenerationProviderRouteReferences } from "./generation-model-config
 
 interface WebhookProviderRequestRow {
   provider_request_id: string;
+  attempt_id: string | null;
   poll_sequence: number | string;
   task_id: string;
   task_type: string;
@@ -81,7 +82,7 @@ export async function recordGenerationProviderWebhook(
       return {
         duplicate: true,
         status: existing?.status === "dispatched" ? "dispatched" : "unmatched",
-        ...(existing?.task_id ? { taskId: existing.task_id } : {}),
+          ...(existing?.status === "dispatched" && existing.task_id ? { taskId: existing.task_id } : {}),
       };
     }
 
@@ -90,6 +91,7 @@ export async function recordGenerationProviderWebhook(
       `
         SELECT
           request.id AS provider_request_id,
+          COALESCE(request.attempt_id, task.current_attempt_id) AS attempt_id,
           request.poll_sequence,
           task.id AS task_id,
           task.task_type,
@@ -104,9 +106,13 @@ export async function recordGenerationProviderWebhook(
         WHERE request.provider_name = $1
           AND request.external_request_id = $2
           AND request.status IN ('submitted', 'accepted', 'running', 'result_unknown')
+          AND (
+            request.attempt_id = task.current_attempt_id
+            OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+          )
         ORDER BY request.updated_at DESC, request.id DESC
         LIMIT 1
-        FOR UPDATE OF request
+        FOR UPDATE OF request, task
       `,
       [providerName, externalRequestId],
     );
@@ -142,6 +148,7 @@ export async function recordGenerationProviderWebhook(
       userId: request.user_id,
       workflowId: request.workflow_id,
       taskId: request.task_id,
+      attemptId: request.attempt_id,
       kind: mediaType,
       modelCode: readString(snapshot.model) || null,
       providerExecutor: readString(snapshot.providerExecutor) || defaultProviderExecutor(mediaType),

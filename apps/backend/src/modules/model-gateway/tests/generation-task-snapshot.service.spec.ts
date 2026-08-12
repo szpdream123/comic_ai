@@ -27,13 +27,25 @@ describe("generation task snapshot service", () => {
       });
       await db.query(`
         UPDATE ai_generation_task_snapshots
-        SET canvas_project_id=$2,
+        SET project_id=NULL,
+            canvas_project_id=$2,
             target_type='canvas',
             target_id=$2,
             media_type='image',
             request_summary_json=jsonb_build_object('canvasNodeId', 'image-1')
         WHERE task_id=$1
       `, [ids.taskId, canvas.canvasProjectId]);
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, canvas_project_id, bucket, object_key, content_type,
+            size_bytes, created_by_user_id, provider, status
+          )
+          VALUES ($1, $2, 'snapshot-test', 'canvas/image-1.png', 'image/png',
+                  128, $3, 'test', 'available')
+        `,
+        ["80000000-0000-4000-8000-000000000001", canvas.canvasProjectId, ids.userId],
+      );
       const run = await createCanvasNodeRun(db, {
         canvasProjectId: canvas.canvasProjectId,
         nodeKey: "image-1",
@@ -46,6 +58,8 @@ describe("generation task snapshot service", () => {
         userId: ids.userId,
         now: new Date("2026-06-03T05:00:30.000Z"),
       });
+      await db.query("UPDATE tasks SET status = 'succeeded' WHERE id = $1", [ids.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'succeeded' WHERE id = $1", [ids.attemptId]);
 
       await markGenerationTaskSnapshotSucceeded(db, {
         taskId: ids.taskId,
@@ -103,6 +117,8 @@ describe("generation task snapshot service", () => {
       assert.equal(snapshot?.credit_status, "reserved");
       assert.deepEqual(snapshot?.provider_status_json, { providerStatus: "running" });
 
+      await db.query("UPDATE tasks SET status = 'result_unknown' WHERE id = $1", [ids.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'result_unknown' WHERE id = $1", [ids.attemptId]);
       await markGenerationTaskSnapshotResultUnknown(db, {
         taskId: ids.taskId,
         attemptId: ids.attemptId,
@@ -120,6 +136,8 @@ describe("generation task snapshot service", () => {
       assert.equal(snapshot?.failure_json?.noticeType, "manual_review");
       assert.equal(snapshot?.failure_json?.failureCode, "provider_result_unknown");
 
+      await db.query("UPDATE tasks SET status = 'manual_review_required' WHERE id = $1", [ids.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'manual_review_required' WHERE id = $1", [ids.attemptId]);
       await markGenerationTaskSnapshotManualReviewRequired(db, {
         taskId: ids.taskId,
         attemptId: ids.attemptId,
@@ -145,11 +163,113 @@ describe("generation task snapshot service", () => {
     }
   });
 
+  it("does not let a historical attempt overwrite the current task snapshot", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const ids = await seedSnapshotFixture(db);
+      const currentAttemptId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, project_id, workflow_id, task_id, attempt_number, status,
+            started_at, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, 2, 'running', $5, $5, $5)
+        `,
+        [
+          currentAttemptId,
+          projectId,
+          ids.workflowId,
+          ids.taskId,
+          new Date("2026-06-03T05:01:00.000Z"),
+        ],
+      );
+      await db.query(
+        `
+          UPDATE tasks
+          SET current_attempt_id = $1,
+              attempt_count = 2,
+              status = 'running',
+              updated_at = $3
+          WHERE id = $2
+        `,
+        [
+          currentAttemptId,
+          ids.taskId,
+          new Date("2026-06-03T05:01:00.000Z"),
+        ],
+      );
+
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        providerRequestId: ids.providerRequestId,
+        progressStage: "provider_rendering",
+        progressPercent: 80,
+        now: new Date("2026-06-03T05:02:00.000Z"),
+      });
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        providerRequestId: ids.providerRequestId,
+        failure: { failureCode: "late_attempt_failure" },
+        now: new Date("2026-06-03T05:03:00.000Z"),
+      });
+      const snapshot = await loadSnapshot(db, ids.taskId);
+
+      assert.equal(snapshot?.status, "queued");
+      assert.equal(snapshot?.progress_stage, "task_created");
+      assert.equal(snapshot?.progress_percent, 10);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not let a delayed terminal snapshot overwrite a resumed attempt", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const ids = await seedSnapshotFixture(db);
+      await db.query("UPDATE tasks SET status = 'result_unknown' WHERE id = $1", [ids.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'result_unknown' WHERE id = $1", [ids.attemptId]);
+      await markGenerationTaskSnapshotResultUnknown(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        failure: { failureCode: "provider_poll_timeout" },
+        now: new Date("2026-06-03T05:01:00.000Z"),
+      });
+      await db.query("UPDATE tasks SET status = 'running', failure_code = NULL WHERE id = $1", [ids.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'running', failure_code = NULL WHERE id = $1", [ids.attemptId]);
+      await markGenerationTaskSnapshotRunning(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        progressStage: "provider_poll_resumed",
+        progressPercent: 50,
+        now: new Date("2026-06-03T05:02:00.000Z"),
+      });
+
+      await markGenerationTaskSnapshotResultUnknown(db, {
+        taskId: ids.taskId,
+        attemptId: ids.attemptId,
+        failure: { failureCode: "delayed_old_poll_timeout" },
+        now: new Date("2026-06-03T05:03:00.000Z"),
+      });
+      const snapshot = await loadSnapshot(db, ids.taskId);
+
+      assert.equal(snapshot?.status, "running");
+      assert.equal(snapshot?.progress_stage, "provider_poll_resumed");
+      assert.equal(snapshot?.failure_json?.failureCode, "provider_poll_timeout");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("translates provider error messages before storing snapshot failure fields", async () => {
     const db = await createMigratedTestDb();
     try {
       const ids = await seedSnapshotFixture(db);
 
+      await db.query("UPDATE tasks SET status = 'failed' WHERE id = $1", [ids.taskId]);
+      await db.query("UPDATE task_attempts SET status = 'failed' WHERE id = $1", [ids.attemptId]);
       await markGenerationTaskSnapshotFailed(db, {
         taskId: ids.taskId,
         attemptId: ids.attemptId,
@@ -324,7 +444,10 @@ async function seedSnapshotFixture(db: Awaited<ReturnType<typeof createMigratedT
       taskId,
       new Date("2026-06-03T05:00:00.000Z")],
   );
-  await db.query("UPDATE tasks SET current_attempt_id = $2 WHERE id = $1", [taskId, attemptId]);
+  await db.query(
+    "UPDATE tasks SET status = 'running', current_attempt_id = $2 WHERE id = $1",
+    [taskId, attemptId],
+  );
   await db.query(
     `
       INSERT INTO provider_requests (
@@ -405,6 +528,18 @@ async function createSnapshotCanvas(
     ) VALUES ($1,$2,2,1,$3::jsonb,$4::jsonb,0,0,$5,$5,$6,$6)
   `, [documentId, canvasProjectId, JSON.stringify(document), JSON.stringify(document.viewport), input.userId, input.now]);
   await db.query("UPDATE creator_canvas_projects SET latest_document_id=$2 WHERE id=$1", [canvasProjectId, documentId]);
+  await db.query(
+    `
+      INSERT INTO creator_canvas_nodes (
+        id, canvas_project_id, node_key, node_type, title, status,
+        media_kind, source_kind, created_by_user_id, updated_by_user_id,
+        created_at, updated_at
+      )
+      VALUES ($1, $2, 'image-1', 'ai-image', 'Snapshot Image', 'idle',
+              'image', 'generation', $3, $3, $4, $4)
+    `,
+    [randomUUID(), canvasProjectId, input.userId, input.now],
+  );
   return { canvasProjectId };
 }
 

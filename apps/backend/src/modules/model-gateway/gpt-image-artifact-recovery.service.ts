@@ -25,12 +25,14 @@ export async function handleGptImageArtifactQueueExhaustion(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     error: unknown;
     now: Date;
   },
 ): Promise<"retry_pending" | "manual_review_required" | "skipped"> {
   await db.query("BEGIN");
   try {
+    const enforceExpectedAttempt = Object.prototype.hasOwnProperty.call(input, "expectedAttemptId");
     const row = await queryOne<GptImageArtifactRecoveryTaskRow>(
       db,
       `
@@ -51,6 +53,10 @@ export async function handleGptImageArtifactQueueExhaustion(
           FROM provider_requests request
           WHERE request.task_id = task.id
             AND request.status = 'succeeded'
+            AND (
+              request.attempt_id = task.current_attempt_id
+              OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+            )
           ORDER BY request.updated_at DESC, request.created_at DESC
           LIMIT 1
         ) provider_request ON true
@@ -59,12 +65,17 @@ export async function handleGptImageArtifactQueueExhaustion(
         LEFT JOIN credit_reservations reservation
           ON reservation.id = task_reservation.id
         WHERE task.id = $1
+          AND (
+            $2::boolean = false
+            OR ($3::uuid IS NOT NULL AND task.current_attempt_id = $3)
+            OR ($3::uuid IS NULL AND task.attempt_count = 1)
+          )
           AND task.task_type = 'episode_generate_image'
           AND task.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
         LIMIT 1
         FOR UPDATE OF task
       `,
-      [input.taskId],
+      [input.taskId, enforceExpectedAttempt, input.expectedAttemptId ?? null],
     );
     if (!row || !row.provider_request_id || ["succeeded", "canceled"].includes(row.task_status)) {
       await db.query("COMMIT");

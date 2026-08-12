@@ -356,7 +356,7 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     assert.equal(assignedInput?.stage, "submit");
     assert.equal(
       assignedInput?.redisJobId,
-      "generation.task.created__50000000-0000-4000-8000-000000000031__submit",
+      "generation.task.created__50000000-0000-4000-8000-000000000031__submit__90000000-0000-0000-0000-000000000031",
     );
     assert.equal(publishedAssignment?.assignmentKey, assignedInput?.assignmentKey);
     assert.equal(publishedAssignment?.redisJobId, assignedInput?.redisJobId);
@@ -368,7 +368,7 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     );
   });
 
-  it("uses a numeric poll attempt to keep shard assignments unique", async () => {
+  it("uses the outbox recovery wave to keep poll shard assignments unique", async () => {
     const taskId = "50000000-0000-4000-8000-000000000032";
     const event = {
       ...generationOutboxEvent("90000000-0000-0000-0000-000000000032", taskId),
@@ -427,11 +427,11 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
     assert.deepEqual(result.failedEventIds, []);
     assert.equal(
       reservedInput?.assignmentKey,
-      `generation.task.poll_requested:${taskId}:poll:3`,
+      `generation.task.poll_requested:${taskId}:poll:${event.id}`,
     );
     assert.equal(
       reservedInput?.redisJobId,
-      `generation.image.poll__${taskId}__3`,
+      `generation.image.poll__${taskId}__3__${event.id}`,
     );
   });
 
@@ -581,12 +581,12 @@ describe("generation outbox dispatcher", { concurrency: false }, () => {
       async query(sql: string, params?: unknown[]) {
         if (sql.includes("generation_queue_stage_assignments")) {
           assert.deepEqual(params, [
-            `generation.task.poll_requested:${taskId}:poll:3`,
+            `generation.task.poll_requested:${taskId}:poll:${event.id}`,
             taskId,
-            `generation.image.poll__${taskId}__3`,
+            `generation.image.poll__${taskId}__3__${event.id}`,
           ]);
           return { rows: [{
-            assignment_key: `generation.task.poll_requested:${taskId}:poll:3`,
+            assignment_key: `generation.task.poll_requested:${taskId}:poll:${event.id}`,
             queue_name: "generation-image-poll-rretry-000",
             shard_id: "70000000-0000-4000-8000-000000000004",
             shard_no: 0,

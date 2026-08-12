@@ -187,10 +187,39 @@ export async function submitProviderRequest(
       redactedRequest?: Record<string, unknown>;
     }
   | { kind: "already_started"; request: ProviderRequestRecord }
+  | { kind: "stale_attempt"; request: ProviderRequestRecord }
 > {
-  const prepared = await createOrReuseProviderRequest(db, input);
+  let prepared = await createOrReuseProviderRequest(db, input);
+
+  if (
+    prepared.request.externalSubmissionStartedAt
+    && input.taskId
+    && input.attemptId
+    && ["failed", "canceled"].includes(prepared.request.status)
+    && !(await providerRequestBelongsToExpectedAttempt(db, {
+      providerRequestId: prepared.request.id,
+      taskId: input.taskId,
+      attemptId: input.attemptId,
+    }))
+  ) {
+    prepared = await createOrReuseProviderRequest(db, {
+      ...input,
+      requestKey: `${input.requestKey}:retry:${input.attemptId}`,
+    });
+  }
 
   if (prepared.request.externalSubmissionStartedAt) {
+    if (
+      input.taskId &&
+      input.attemptId &&
+      !(await providerRequestBelongsToExpectedAttempt(db, {
+        providerRequestId: prepared.request.id,
+        taskId: input.taskId,
+        attemptId: input.attemptId,
+      }))
+    ) {
+      return { kind: "stale_attempt", request: prepared.request };
+    }
     const recovered = !prepared.request.externalRequestId
       && !["failed", "canceled", "succeeded"].includes(prepared.request.status)
       ? await input.adapter.recoverSubmission?.({
@@ -228,13 +257,27 @@ export async function submitProviderRequest(
   const started = await tryMarkExternalSubmissionStarted(db, {
     providerRequestId: prepared.request.id,
     externalRequestId: null,
+    expectedTaskId: input.taskId ?? null,
+    expectedAttemptId: input.attemptId ?? null,
     now: input.now,
   });
 
   if (!started) {
+    const current = (await findProviderRequestById(db, prepared.request.id))!;
+    if (
+      input.taskId &&
+      input.attemptId &&
+      !(await providerRequestBelongsToExpectedAttempt(db, {
+        providerRequestId: current.id,
+        taskId: input.taskId,
+        attemptId: input.attemptId,
+      }))
+    ) {
+      return { kind: "stale_attempt", request: current };
+    }
     return {
       kind: "already_started",
-      request: (await findProviderRequestById(db, prepared.request.id))!,
+      request: current,
     };
   }
 
@@ -312,6 +355,37 @@ export async function submitProviderRequest(
   }
 }
 
+async function providerRequestBelongsToExpectedAttempt(
+  db: SqlDatabase,
+  input: { providerRequestId: string; taskId: string; attemptId: string },
+): Promise<boolean> {
+  const row = await queryOne<{ matches: boolean }>(
+    db,
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM provider_requests request
+        JOIN tasks task ON task.id = request.task_id
+        JOIN task_attempts attempt
+          ON attempt.id = $3
+         AND attempt.task_id = task.id
+        WHERE request.id = $1
+          AND task.id = $2
+          AND task.current_attempt_id = $3
+          AND task.status = 'running'
+          AND attempt.status = 'running'
+          AND (
+            request.attempt_id = $3
+            OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+          )
+      ) AS matches
+    `,
+    [input.providerRequestId, input.taskId, input.attemptId],
+  );
+
+  return row?.matches === true;
+}
+
 export async function markExternalSubmissionStarted(
   db: SqlDatabase,
   input: {
@@ -354,7 +428,9 @@ export async function recordProviderRequestRedactedBody(
     ],
   );
 
-  return providerRequestFromRow(row!);
+  return row
+    ? providerRequestFromRow(row)
+    : (await findProviderRequestById(db, input.providerRequestId))!;
 }
 
 export async function hasExternalProviderSubmissionStartedForTask(
@@ -381,22 +457,53 @@ async function tryMarkExternalSubmissionStarted(
   input: {
     providerRequestId: string;
     externalRequestId: string | null;
+    expectedTaskId?: string | null;
+    expectedAttemptId?: string | null;
     now: Date;
   },
 ): Promise<ProviderRequestRecord | undefined> {
   const row = await queryOne<ProviderRequestRow>(
     db,
     `
+      WITH locked_attempt AS MATERIALIZED (
+        SELECT task.id
+        FROM tasks task
+        JOIN task_attempts attempt
+          ON attempt.id = $5::uuid
+         AND attempt.task_id = task.id
+        WHERE $4::uuid IS NOT NULL
+          AND $5::uuid IS NOT NULL
+          AND task.id = $4::uuid
+          AND task.current_attempt_id = $5::uuid
+          AND task.status = 'running'
+          AND attempt.status = 'running'
+        FOR UPDATE OF task, attempt
+      )
       UPDATE provider_requests
-      SET status = 'submitted',
+      SET attempt_id = CASE
+            WHEN $4::uuid IS NOT NULL AND $5::uuid IS NOT NULL THEN $5::uuid
+            ELSE attempt_id
+          END,
+          status = 'submitted',
           external_submission_started_at = $2,
           external_request_id = $3,
           updated_at = $2
       WHERE id = $1
         AND external_submission_started_at IS NULL
+        AND (
+          $4::uuid IS NULL
+          OR $5::uuid IS NULL
+          OR (task_id = $4::uuid AND EXISTS (SELECT 1 FROM locked_attempt))
+        )
       RETURNING *
     `,
-    [input.providerRequestId, input.now, input.externalRequestId],
+    [
+      input.providerRequestId,
+      input.now,
+      input.externalRequestId,
+      input.expectedTaskId ?? null,
+      input.expectedAttemptId ?? null,
+    ],
   );
 
   return row ? providerRequestFromRow(row) : undefined;
@@ -422,7 +529,12 @@ export async function markProviderRequestResultUnknown(
           task_center_diagnostics_json = COALESCE($4::jsonb, task_center_diagnostics_json),
           updated_at = $5
       WHERE id = $1
-        AND external_submission_started_at IS NOT NULL
+        AND (
+          external_submission_started_at IS NOT NULL
+          OR external_request_id IS NOT NULL
+          OR status IN ('submitted', 'accepted', 'running', 'result_unknown')
+        )
+        AND status NOT IN ('succeeded', 'failed', 'canceled')
       RETURNING *
     `,
     [
@@ -434,7 +546,9 @@ export async function markProviderRequestResultUnknown(
     ],
   );
 
-  return providerRequestFromRow(row!);
+  return row
+    ? providerRequestFromRow(row)
+    : (await findProviderRequestById(db, input.providerRequestId))!;
 }
 
 function readProviderDiagnostics(error: unknown): Record<string, unknown> | undefined {
@@ -631,7 +745,11 @@ async function updateProviderRequestTerminalStatus(
           failure_code = $6,
           updated_at = $7
       WHERE id = $1
-        AND external_submission_started_at IS NOT NULL
+        AND (
+          external_submission_started_at IS NOT NULL
+          OR external_request_id IS NOT NULL
+          OR status IN ('submitted', 'accepted', 'running', 'result_unknown')
+        )
         AND (
           status NOT IN ('succeeded', 'failed', 'canceled')
           OR status = $2

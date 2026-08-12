@@ -5,6 +5,47 @@ import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { recordGenerationProviderWebhook } from "../generation-webhook-inbox.service.ts";
 
 describe("generation provider webhook inbox", { concurrency: false }, () => {
+  it("does not dispatch a webhook from a historical attempt", async () => {
+    const db = await createMigratedTestDb();
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    const taskId = "50000000-0000-4000-8000-000000000512";
+    const oldAttemptId = attemptIdForTask(taskId);
+    const currentAttemptId = "51000000-0000-4000-8000-000000000513";
+    try {
+      await seedWebhookTask(db, taskId);
+      await db.query("UPDATE task_attempts SET status = 'failed' WHERE id = $1", [oldAttemptId]);
+      await db.query(
+        `
+          INSERT INTO task_attempts (id, workflow_id, task_id, attempt_number, status)
+          SELECT $2, workflow_id, id, 2, 'running' FROM tasks WHERE id = $1
+        `,
+        [taskId, currentAttemptId],
+      );
+      await db.query(
+        "UPDATE tasks SET current_attempt_id = $2, attempt_count = 2 WHERE id = $1",
+        [taskId, currentAttemptId],
+      );
+      await db.query("UPDATE provider_requests SET attempt_id = $2 WHERE task_id = $1", [taskId, oldAttemptId]);
+
+      const result = await recordGenerationProviderWebhook(db, {
+        providerName: "provider-webhook-test",
+        eventId: "event-historical-512",
+        externalRequestId: "external-511",
+        payload: { status: "succeeded" },
+        signatureVerified: true,
+        now,
+      });
+      const events = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'generation.task.poll_requested'",
+      );
+
+      assert.deepEqual(result, { duplicate: false, status: "unmatched" });
+      assert.equal(events.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("deduplicates signed events and wakes the existing poll path once", async () => {
     const db = await createMigratedTestDb();
     const now = new Date("2026-07-22T12:00:00.000Z");
@@ -104,6 +145,18 @@ async function seedWebhookTask(
     `,
     [taskId],
   );
+  const attemptId = attemptIdForTask(taskId);
+  await db.query(
+    `
+      INSERT INTO task_attempts (id, workflow_id, task_id, attempt_number, status)
+      SELECT $2, workflow_id, id, 1, 'running' FROM tasks WHERE id = $1
+    `,
+    [taskId, attemptId],
+  );
+  await db.query(
+    "UPDATE tasks SET current_attempt_id = $2, attempt_count = 1 WHERE id = $1",
+    [taskId, attemptId],
+  );
   await db.query(
     `
       INSERT INTO provider_requests (
@@ -118,4 +171,8 @@ async function seedWebhookTask(
     `,
     [taskId],
   );
+}
+
+function attemptIdForTask(taskId: string) {
+  return taskId.replace(/^50000000-/, "51000000-");
 }

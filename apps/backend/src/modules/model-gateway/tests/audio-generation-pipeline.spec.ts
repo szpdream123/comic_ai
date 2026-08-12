@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import {
   handleGenerationFinalizeArtifactJob,
   handleGenerationPollAudioJob,
@@ -12,6 +13,8 @@ import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
 import {
   __audioGenerationWorkerTestUtils,
   expireAudioGenerationPollJob,
+  fetchAudioGenerationArtifactJob,
+  persistAudioGenerationArtifactJob,
 } from "../audio-generation.worker.ts";
 
 function baseProcessors(overrides: Record<string, unknown> = {}) {
@@ -24,15 +27,19 @@ function baseProcessors(overrides: Record<string, unknown> = {}) {
 }
 
 describe("audio generation pipeline", () => {
-  it("allows queue-error manual-review audio artifacts to resume fetch and finalize", async () => {
+  it("allows only recoverable manual-review audio artifacts to resume fetch and finalize", async () => {
     const source = await readFile(new URL("../audio-generation.worker.ts", import.meta.url), "utf8");
     assert.match(
       source,
-      /fetchAudioGenerationArtifactJob[\s\S]*?findAudioTask\(db, input\.taskId, \["running", "result_unknown", "manual_review_required"\]\)/,
+      /fetchAudioGenerationArtifactJob[\s\S]*?findAttemptScopedAudioTask\(db, input, \["running", "result_unknown", "manual_review_required"\]\)/,
     );
     assert.match(
       source,
-      /finalizeAudioGenerationArtifactJob[\s\S]*?findAudioTask\(db, input\.taskId, \["running", "result_unknown", "manual_review_required"\]\)/,
+      /finalizeAudioGenerationArtifactJob[\s\S]*?findAttemptScopedAudioTask\(db, input, \["running", "result_unknown", "manual_review_required"\]\)/,
+    );
+    assert.match(
+      source,
+      /t\.status <> 'manual_review_required'[\s\S]*t\.failure_code IN \('provider_output_persist_failed', 'generation_queue_error'\)/,
     );
   });
 
@@ -41,7 +48,7 @@ describe("audio generation pipeline", () => {
     assert.equal(__audioGenerationWorkerTestUtils.shouldPreserveAudioSubmissionAsResultUnknown("failed"), false);
   });
 
-  it("fails audio poll timeouts without leaving manual review state", async () => {
+  it("keeps audio poll timeouts in result_unknown when provider termination is unconfirmed", async () => {
     const db = await createMigratedTestDb();
     try {
       const userId = "70000000-0000-4000-8000-000000000301";
@@ -125,6 +132,21 @@ describe("audio generation pipeline", () => {
         `,
         [providerRequestId, projectId, workflowId, taskId, attemptId, new Date("2026-07-20T00:00:00.000Z"), userId],
       );
+      await db.query(
+        `
+          INSERT INTO ai_generation_task_snapshots (
+            id, user_id, project_id, target_type, target_id, workflow_id, task_id,
+            attempt_id, provider_request_id, model_code, media_type, task_mode,
+            status, progress_stage, submitted_at, started_at, created_at, updated_at
+          )
+          VALUES (
+            '90000000-0000-4000-8000-000000000301', $1, $2, 'episode', $3, $4, $3,
+            $5, $6, 'cosyvoice-v2', 'audio', 'audio.text_to_speech',
+            'running', 'provider_running', $7, $7, $7, $7
+          )
+        `,
+        [userId, projectId, taskId, workflowId, attemptId, providerRequestId, new Date("2026-07-20T00:00:00.000Z")],
+      );
 
       await expireAudioGenerationPollJob(db, {
         taskId,
@@ -164,13 +186,89 @@ describe("audio generation pipeline", () => {
         `,
         [taskId, providerRequestId],
       );
-      assert.equal(Number(member.rows[0]?.member_credits ?? -1), 30);
-      assert.equal(Number(refunds.rows[0]?.count ?? -1), 1);
-      assert.equal(Number(refunds.rows[0]?.amount ?? -1), 30);
+      assert.equal(Number(member.rows[0]?.member_credits ?? -1), 0);
+      assert.equal(Number(refunds.rows[0]?.count ?? -1), 0);
+      assert.equal(Number(refunds.rows[0]?.amount ?? -1), 0);
       assert.deepEqual(state.rows[0], {
-        task_status: "failed",
-        attempt_status: "failed",
-        provider_status: "failed",
+        task_status: "result_unknown",
+        attempt_status: "result_unknown",
+        provider_status: "result_unknown",
+      });
+
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              failure_code = NULL,
+              response_redacted_json = $2::jsonb,
+              updated_at = $3
+          WHERE id = $1
+        `,
+        [
+          providerRequestId,
+          JSON.stringify({
+            artifact: {
+              mediaType: "audio",
+              mimeType: "audio/mpeg",
+              fileExtension: "mp3",
+              url: "https://cdn.example.test/result-unknown-audio.mp3",
+            },
+          }),
+          new Date("2026-07-20T01:01:00.000Z"),
+        ],
+      );
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "audio-result-unknown-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject() {
+            return { eTag: "audio-result-unknown-etag" };
+          },
+        },
+      };
+      const fetchArtifact = await fetchAudioGenerationArtifactJob(db, {
+        taskId,
+        runtime,
+        env: {},
+        fetchImpl: (async (url) => {
+          assert.equal(String(url), "https://cdn.example.test/result-unknown-audio.mp3");
+          return new Response(new Uint8Array([73, 68, 51, 4]), {
+            status: 200,
+            headers: { "content-type": "audio/mpeg", "content-length": "4" },
+          });
+        }) as typeof fetch,
+        now: new Date("2026-07-20T01:01:01.000Z"),
+      });
+      const persistArtifact = await persistAudioGenerationArtifactJob(db, {
+        taskId,
+        runtime,
+        env: {},
+        now: new Date("2026-07-20T01:01:02.000Z"),
+      });
+      const recovered = await db.query<{ task_status: string; attempt_status: string; snapshot_status: string }>(
+        `
+          SELECT task.status AS task_status,
+                 attempt.status AS attempt_status,
+                 snapshot.status AS snapshot_status
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = task.id
+          WHERE task.id = $1
+        `,
+        [taskId],
+      );
+      assert.deepEqual(fetchArtifact, { status: "succeeded" });
+      assert.deepEqual(persistArtifact, { status: "succeeded" });
+      assert.deepEqual(recovered.rows[0], {
+        task_status: "succeeded",
+        attempt_status: "succeeded",
+        snapshot_status: "succeeded",
       });
     } finally {
       await db.close();

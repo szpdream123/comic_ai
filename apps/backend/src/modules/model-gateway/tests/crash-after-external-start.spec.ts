@@ -36,6 +36,38 @@ describe("provider request crash after external start", () => {
       await db.close();
     }
   });
+
+  it("does not downgrade a terminal provider result to result_unknown", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createOrReuseProviderRequest(db, {
+        ...providerInput(),
+        requestKey: "task-3:terminal",
+      });
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET status = 'succeeded',
+              external_submission_started_at = $2,
+              external_request_id = 'external-terminal'
+          WHERE id = $1
+        `,
+        [prepared.request.id, new Date("2026-05-09T10:01:00.000Z")],
+      );
+
+      const terminal = await markProviderRequestResultUnknown(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "provider_poll_timeout",
+        now: new Date("2026-05-09T10:05:00.000Z"),
+      });
+
+      assert.equal(terminal.status, "succeeded");
+      assert.equal(terminal.failureCode, null);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 function providerInput() {

@@ -8,6 +8,61 @@ import {
 } from "../generation-due-poll.service.ts";
 
 describe("generation due poll scheduler", { concurrency: false }, () => {
+  it("does not enqueue a historical attempt after the task moved to a new attempt", async () => {
+    const db = await createMigratedTestDb();
+    const now = new Date("2026-07-22T12:00:00.000Z");
+    const taskId = "50000000-0000-4000-8000-000000000504";
+    const oldAttemptId = attemptIdForTask(taskId);
+    const currentAttemptId = "51000000-0000-4000-8000-000000000505";
+    try {
+      await seedDuePollTask(db, taskId);
+      await db.query("UPDATE task_attempts SET status = 'failed' WHERE id = $1", [oldAttemptId]);
+      await db.query(
+        `
+          INSERT INTO task_attempts (id, workflow_id, task_id, attempt_number, status)
+          SELECT $2, workflow_id, id, 2, 'running' FROM tasks WHERE id = $1
+        `,
+        [taskId, currentAttemptId],
+      );
+      await db.query(
+        "UPDATE tasks SET current_attempt_id = $2, attempt_count = 2 WHERE id = $1",
+        [taskId, currentAttemptId],
+      );
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET attempt_id = $2, next_poll_at = $3, poll_deadline_at = $4
+          WHERE task_id = $1
+        `,
+        [taskId, oldAttemptId, new Date(now.getTime() - 1), new Date(now.getTime() - 1)],
+      );
+
+      const staleSchedule = await scheduleGenerationProviderPoll(db, {
+        taskId,
+        expectedAttemptId: oldAttemptId,
+        nextPollAttempt: 9,
+        nextPollAt: now,
+        pollDeadlineAt: new Date(now.getTime() + 60_000),
+        now,
+      });
+
+      const result = await enqueueDueGenerationPolls(db, {
+        now,
+        limit: 10,
+        maxAttempts: { image: 5, video: 5, audio: 5 },
+      });
+      const events = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'generation.task.poll_requested'",
+      );
+
+      assert.deepEqual(result.enqueuedTaskIds, []);
+      assert.equal(staleSchedule, undefined);
+      assert.equal(events.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("claims each due sequence once and writes a unique poll outbox event", async () => {
     const db = await createMigratedTestDb();
     const now = new Date("2026-07-22T12:00:00.000Z");
@@ -34,7 +89,7 @@ describe("generation due poll scheduler", { concurrency: false }, () => {
       });
       const events = await db.query<{
         dedupe_key: string;
-        payload_json: { pollAttempt?: number; mediaType?: string };
+        payload_json: { attemptId?: string; pollAttempt?: number; mediaType?: string };
       }>(
         `
           SELECT dedupe_key, payload_json
@@ -51,8 +106,8 @@ describe("generation due poll scheduler", { concurrency: false }, () => {
       assert.deepEqual(first.enqueuedTaskIds, [taskId]);
       assert.deepEqual(duplicate.enqueuedTaskIds, []);
       assert.deepEqual(events.rows, [{
-        dedupe_key: `generation.task.poll_requested:${taskId}:1`,
-        payload_json: { mediaType: "image", modelCode: "gpt-image-2-cn", pollAttempt: 1, providerExecutor: "gpt-image-2", taskId, workflowId: "40000000-0000-4000-8000-000000000501" },
+        dedupe_key: `generation.task.poll_requested:${taskId}:${attemptIdForTask(taskId)}:1`,
+        payload_json: { attemptId: attemptIdForTask(taskId), mediaType: "image", modelCode: "gpt-image-2-cn", pollAttempt: 1, providerExecutor: "gpt-image-2", taskId, workflowId: "40000000-0000-4000-8000-000000000501" },
       }]);
       assert.equal(Number(request.rows[0]?.poll_sequence), 1);
       assert.equal(request.rows[0]?.next_poll_at, null);
@@ -174,6 +229,18 @@ async function seedDuePollTask(
     `,
     [taskId],
   );
+  const attemptId = attemptIdForTask(taskId);
+  await db.query(
+    `
+      INSERT INTO task_attempts (id, workflow_id, task_id, attempt_number, status)
+      SELECT $2, workflow_id, id, 1, 'running' FROM tasks WHERE id = $1
+    `,
+    [taskId, attemptId],
+  );
+  await db.query(
+    "UPDATE tasks SET current_attempt_id = $2, attempt_count = 1 WHERE id = $1",
+    [taskId, attemptId],
+  );
   await db.query(
     `
       INSERT INTO provider_requests (
@@ -227,6 +294,18 @@ async function seedProjectlessTeamAssetPollTask(
     `,
     [input.taskId, input.workflowId, input.assetId],
   );
+  const attemptId = attemptIdForTask(input.taskId);
+  await db.query(
+    `
+      INSERT INTO task_attempts (id, workflow_id, task_id, attempt_number, status)
+      SELECT $2, workflow_id, id, 1, 'running' FROM tasks WHERE id = $1
+    `,
+    [input.taskId, attemptId],
+  );
+  await db.query(
+    "UPDATE tasks SET current_attempt_id = $2, attempt_count = 1 WHERE id = $1",
+    [input.taskId, attemptId],
+  );
   await db.query(
     `
       INSERT INTO provider_requests (
@@ -240,4 +319,8 @@ async function seedProjectlessTeamAssetPollTask(
     `,
     [input.workflowId, input.taskId, input.userId, input.taskId],
   );
+}
+
+function attemptIdForTask(taskId: string) {
+  return taskId.replace(/^50000000-/, "51000000-");
 }

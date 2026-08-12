@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { createAuthSession } from "../../identity/session.service.ts";
 import { capabilities } from "../../../../../../packages/contracts/domain/capabilities.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { appendGenerationTaskPollRequestedOutboxEvent } from "../../model-gateway/generation-outbox.service.ts";
 import { createAdminOpsService } from "../admin-ops.service.ts";
 
 const adminUserId = "30000000-0000-4000-8000-000000000001";
@@ -376,6 +377,20 @@ describe("admin ops service", { concurrency: false }, () => {
           retryEpisodeId,
         ],
       );
+      const previousAttemptId = "95000000-0000-4000-8000-000000000019";
+      await db.query(
+        `
+          INSERT INTO task_attempts (
+            id, workflow_id, task_id, attempt_number, status, failure_code
+          )
+          VALUES ($1, $2, $3, 1, 'failed', 'provider_timeout')
+        `,
+        [previousAttemptId, workflowId, failedTaskId],
+      );
+      await db.query(
+        "UPDATE tasks SET current_attempt_id = $2 WHERE id = $1",
+        [failedTaskId, previousAttemptId],
+      );
       const service = createAdminOpsService({ db });
 
       const retried = await service.retryTask({
@@ -407,6 +422,7 @@ describe("admin ops service", { concurrency: false }, () => {
           targetType: string;
           targetId: string;
           providerExecutor: string;
+          dispatchToken: string;
         };
         status: string;
       }>(
@@ -417,10 +433,27 @@ describe("admin ops service", { concurrency: false }, () => {
           ORDER BY created_at ASC
         `,
       );
+      const task = await db.query<{
+        current_attempt_id: string | null;
+        requested_at: string;
+        timeout_at: string;
+      }>(
+        `
+          SELECT current_attempt_id,
+                 input_snapshot_json->>'requestedAt' AS requested_at,
+                 input_snapshot_json->>'timeoutAt' AS timeout_at
+          FROM tasks
+          WHERE id = $1
+        `,
+        [failedTaskId],
+      );
 
       assert.equal(retried.status, 200);
       assert.equal(retried.body.task.status, "queued");
       assert.equal(replay.status, 200);
+      assert.equal(task.rows[0]?.current_attempt_id, null);
+      assert.equal(new Date(task.rows[0]!.requested_at).toISOString(), "2026-05-19T10:08:00.000Z");
+      assert.equal(new Date(task.rows[0]!.timeout_at).toISOString(), "2026-05-19T13:08:00.000Z");
       assert.equal(outbox.rows.length, 1);
       assert.deepEqual(outbox.rows[0], {
         event_type: "generation.task.created",
@@ -433,8 +466,63 @@ describe("admin ops service", { concurrency: false }, () => {
           targetType: "episode",
           targetId: retryEpisodeId,
           providerExecutor: "seedance",
+          dispatchToken: "ops-retry-seedance-video",
         },
         status: "pending",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("recreates an audio submit outbox event when retrying a failed audio task", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedOpsFixture(db);
+      await db.query(
+        `
+          UPDATE tasks
+          SET task_type = 'episode_generate_audio',
+              queue_name = 'generation-submit-audio',
+              input_snapshot_json = $2::jsonb,
+              target_entity_type = 'episode',
+              target_entity_id = $3
+          WHERE id = $1
+        `,
+        [
+          failedTaskId,
+          JSON.stringify({
+            kind: "audio",
+            model: "cosyvoice-v2",
+            providerExecutor: "aliyun-bailian-audio",
+            targetType: "episode",
+            targetId: retryEpisodeId,
+          }),
+          retryEpisodeId,
+        ],
+      );
+      const service = createAdminOpsService({ db });
+      const retried = await service.retryTask({
+        user: { actor: adminOpsActor() },
+        idempotencyKey: "ops-retry-audio",
+        body: { taskId: failedTaskId, reason: "Audio provider recovered." },
+        now: new Date("2026-05-19T10:09:30.000Z"),
+      });
+      const outbox = await db.query<{ payload_json: Record<string, unknown> }>(
+        "SELECT payload_json FROM outbox_events WHERE event_type = 'generation.task.created'",
+      );
+
+      assert.equal(retried.status, 200);
+      assert.deepEqual(outbox.rows[0]?.payload_json, {
+        workflowId,
+        taskId: failedTaskId,
+        mediaType: "audio",
+        modelCode: "cosyvoice-v2",
+        queueName: "generation-submit-audio",
+        targetType: "episode",
+        targetId: retryEpisodeId,
+        providerExecutor: "aliyun-bailian-audio",
+        dispatchToken: "ops-retry-audio",
       });
     } finally {
       await db.close();
@@ -451,11 +539,33 @@ describe("admin ops service", { concurrency: false }, () => {
           UPDATE tasks
           SET task_type = 'episode_generate_video',
               queue_name = 'generation-submit-video',
-              input_snapshot_json = '{"kind":"video","model":"seedance-i2v-pro","providerExecutor":"seedance"}'::jsonb
+              input_snapshot_json = '{"kind":"video","model":"seedance-i2v-pro","providerExecutor":"seedance","requestedAt":"2026-05-19T06:00:00.000Z","timeoutAt":"2026-05-19T09:00:00.000Z"}'::jsonb
           WHERE id = $1
         `,
         [unknownTaskId],
       );
+      await db.query(
+        `
+          UPDATE provider_requests
+          SET next_poll_at = '2026-05-19T09:00:00.000Z',
+              poll_deadline_at = '2026-05-19T09:00:00.000Z',
+              poll_sequence = 17
+          WHERE id = $1
+        `,
+        [providerRequestId],
+      );
+      const oldPollEvent = await appendGenerationTaskPollRequestedOutboxEvent(db, {
+        userId: creatorUserId,
+        workflowId,
+        taskId: unknownTaskId,
+        attemptId,
+        kind: "video",
+        modelCode: "seedance-i2v-pro",
+        providerExecutor: "seedance",
+        pollAttempt: 1,
+        availableAt: new Date("2026-05-19T09:00:00.000Z"),
+      });
+      await db.query("UPDATE outbox_events SET status = 'failed' WHERE id = $1", [oldPollEvent?.id]);
       const service = createAdminOpsService({ db });
 
       const recovered = await service.recoverTask({
@@ -478,9 +588,20 @@ describe("admin ops service", { concurrency: false }, () => {
         },
         now: new Date("2026-05-19T10:09:00.000Z"),
       });
-      const task = await db.query<{ status: string }>(
-        "SELECT status FROM tasks WHERE id = $1",
+      const task = await db.query<{
+        status: string;
+        input_snapshot_json: Record<string, unknown>;
+      }>(
+        "SELECT status, input_snapshot_json FROM tasks WHERE id = $1",
         [unknownTaskId],
+      );
+      const provider = await db.query<{
+        next_poll_at: Date | string | null;
+        poll_deadline_at: Date | string | null;
+        poll_sequence: number | string;
+      }>(
+        "SELECT next_poll_at, poll_deadline_at, poll_sequence FROM provider_requests WHERE id = $1",
+        [providerRequestId],
       );
       const outbox = await db.query<{ event_type: string; payload_json: Record<string, unknown> }>(
         "SELECT event_type, payload_json FROM outbox_events ORDER BY created_at ASC",
@@ -489,10 +610,16 @@ describe("admin ops service", { concurrency: false }, () => {
       assert.equal(recovered.status, 200);
       assert.equal(replay.status, 200);
       assert.equal(task.rows[0]?.status, "running");
-      assert.equal(outbox.rows.length, 1);
-      assert.equal(outbox.rows[0]?.event_type, "generation.task.poll_requested");
-      assert.equal(outbox.rows[0]?.payload_json.taskId, unknownTaskId);
-      assert.equal(outbox.rows[0]?.payload_json.pollAttempt, 1);
+      assert.equal(new Date(String(task.rows[0]?.input_snapshot_json.requestedAt)).toISOString(), "2026-05-19T10:08:00.000Z");
+      assert.equal(new Date(String(task.rows[0]?.input_snapshot_json.timeoutAt)).toISOString(), "2026-05-19T13:08:00.000Z");
+      assert.equal(provider.rows[0]?.next_poll_at, null);
+      assert.equal(new Date(provider.rows[0]?.poll_deadline_at ?? 0).toISOString(), "2026-05-19T13:08:00.000Z");
+      assert.equal(Number(provider.rows[0]?.poll_sequence), 0);
+      assert.equal(outbox.rows.length, 2);
+      assert.equal(outbox.rows[1]?.event_type, "generation.task.poll_requested");
+      assert.equal(outbox.rows[1]?.payload_json.taskId, unknownTaskId);
+      assert.equal(outbox.rows[1]?.payload_json.pollAttempt, 1);
+      assert.equal(outbox.rows[1]?.payload_json.dispatchToken, "ops-resume-provider-poll");
       assert.equal(
         Number((await db.query("SELECT count(*)::int AS count FROM outbox_events WHERE event_type = 'generation.task.created'")).rows[0]?.count),
         0,
@@ -592,6 +719,18 @@ describe("admin ops service", { concurrency: false }, () => {
         "UPDATE provider_requests SET status = 'succeeded', failure_code = NULL WHERE id = $1",
         [providerRequestId],
       );
+      await db.query(
+        "UPDATE tasks SET status = 'failed', failure_code = 'generation_queue_error' WHERE id = $1",
+        [unknownTaskId],
+      );
+      await db.query(
+        "UPDATE workflows SET status = 'failed', failure_code = 'generation_queue_error', finished_at = $2 WHERE id = $1",
+        [workflowId, new Date("2026-05-19T10:08:30.000Z")],
+      );
+      await db.query(
+        "UPDATE task_attempts SET status = 'failed', failure_code = 'generation_queue_error', finished_at = $2 WHERE id = $1",
+        [attemptId, new Date("2026-05-19T10:08:30.000Z")],
+      );
       const recovered = await service.recoverTask({
         user: { actor: adminOpsActor() },
         idempotencyKey: "ops-rebuild-after-success",
@@ -609,6 +748,42 @@ describe("admin ops service", { concurrency: false }, () => {
       assert.equal(rejected.status, 409);
       assert.deepEqual(rejected.body, { error: "task_recovery_not_allowed" });
       assert.equal(recovered.status, 200);
+      const recoveredState = await db.query<{
+        task_status: string;
+        task_failure_code: string | null;
+        attempt_status: string;
+        attempt_failure_code: string | null;
+        attempt_finished_at: Date | string | null;
+        workflow_status: string;
+        workflow_failure_code: string | null;
+        workflow_finished_at: Date | string | null;
+      }>(
+        `
+          SELECT task.status AS task_status,
+                 task.failure_code AS task_failure_code,
+                 attempt.status AS attempt_status,
+                 attempt.failure_code AS attempt_failure_code,
+                 attempt.finished_at AS attempt_finished_at,
+                 workflow.status AS workflow_status,
+                 workflow.failure_code AS workflow_failure_code,
+                 workflow.finished_at AS workflow_finished_at
+          FROM tasks task
+          JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
+          JOIN workflows workflow ON workflow.id = task.workflow_id
+          WHERE task.id = $1
+        `,
+        [unknownTaskId],
+      );
+      assert.deepEqual(recoveredState.rows[0], {
+        task_status: "running",
+        task_failure_code: null,
+        attempt_status: "running",
+        attempt_failure_code: null,
+        attempt_finished_at: null,
+        workflow_status: "running",
+        workflow_failure_code: null,
+        workflow_finished_at: null,
+      });
       assert.equal(outbox.rows.length, 1);
       assert.equal(outbox.rows[0]?.event_type, "generation.task.finalize_requested");
     } finally {

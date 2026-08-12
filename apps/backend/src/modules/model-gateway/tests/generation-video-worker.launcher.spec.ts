@@ -38,6 +38,10 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion/);
     assert.match(launcherScript, /resolveGenerationArtifactQueueExhaustionFailureCode/);
     assert.match(launcherScript, /artifactQueueFailure && job\?\.data\?\.mediaType === "image"/);
+    assert.match(launcherScript, /const attemptId = typeof job\?\.data\?\.attemptId === "string"/);
+    assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion\(db, \{[\s\S]*expectedAttemptId: attemptId \?\? null/);
+    assert.match(launcherScript, /failGenerationTaskAfterQueueError\(db, \{[\s\S]*expectedAttemptId: attemptId \?\? null/);
+    assert.match(launcherScript, /scheduleGenerationProviderPoll\(db, \{[\s\S]*expectedAttemptId: attemptId \?\? null/);
     assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion\(db, \{[\s\S]*taskId,[\s\S]*error,[\s\S]*now: failedAt/);
     assert.match(launcherScript, /if \(imageRecoveryOutcome !== "skipped"\) return/);
     assert.match(launcherScript, /job\.attemptsMade/);

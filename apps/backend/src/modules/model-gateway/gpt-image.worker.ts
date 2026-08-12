@@ -94,6 +94,7 @@ interface GptImageTaskRow {
   provider_request_id?: string | null;
   provider_status?: string | null;
   provider_failure_code?: string | null;
+  external_submission_started_at?: Date | string | null;
   external_request_id?: string | null;
   provider_response_redacted_json?: Record<string, unknown> | string | null;
   reservation_id: string | null;
@@ -338,10 +339,10 @@ export async function processGptImageSubmitJob(
     now: Date;
   },
 ): Promise<
-  | { status: "submitted" }
+  | { status: "submitted"; providerStatus?: "waiting" | "succeeded"; attemptId: string }
   | { status: "rate_limited"; retryAfterMs: number; reason: string }
   | { status: "failed"; failureCode: string }
-  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop" }
+  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop"; attemptId?: string }
 > {
   const row = await findGptImageTaskForSubmit(db, input.taskId);
   if (!row) {
@@ -481,7 +482,6 @@ export async function processGptImageSubmitJob(
             providerModel,
             mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
-            mediaType: modelConfig.mediaType,
             invocationMode: modelConfig.invocationMode,
           }
         : fallbackGptImageModelConfig(),
@@ -505,10 +505,45 @@ export async function processGptImageSubmitJob(
       now: input.now,
       adapter,
     });
+    if (submitted.kind === "stale_attempt") {
+      const failureCode = "provider_request_attempt_conflict";
+      const claimedRow = { ...row, attempt_id: claim.attempt.id };
+      await markGptImageTaskManualReview(db, {
+        row: claimedRow,
+        failureCode,
+        providerRequestId: null,
+        metadata: {
+          billingEvent: "manual_review_required",
+          outcome: "manual_review_required",
+          provider: providerLabel,
+          historicalProviderRequestId: submitted.request.id,
+          failureCode,
+          settledAt: input.now,
+        },
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotManualReviewRequired(db, {
+        taskId: row.task_id,
+        attemptId: claim.attempt.id,
+        progressStage: "provider_attempt_conflict",
+        failure: {
+          failureCode,
+          historicalProviderRequestId: submitted.request.id,
+          displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+        },
+        creditSummary: {
+          reserved: resolveGptImageBillingAmount(row, snapshot),
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+      return { status: "failed", failureCode };
+    }
     providerRequestId = submitted.request.id;
+    const submittedArtifacts = submitted.kind === "submitted" ? submitted.artifacts : undefined;
     if (
       requestLogBody.requestFormat === "cumob_image" &&
-      !submitted.artifacts?.length &&
+      !submittedArtifacts?.length &&
       !submitted.request.externalRequestId
     ) {
       const failureCode = "provider_result_unknown";
@@ -558,7 +593,7 @@ export async function processGptImageSubmitJob(
       });
       return { status: "skipped" };
     }
-    if (!submitted.artifacts?.length && submitted.request.externalRequestId) {
+    if (!submittedArtifacts?.length && submitted.request.externalRequestId) {
       await markGenerationTaskSnapshotRunning(db, {
         taskId: row.task_id,
         attemptId: claim.attempt.id,
@@ -577,15 +612,16 @@ export async function processGptImageSubmitJob(
       return {
         status: "submitted",
         providerStatus: submitted.request.status === "succeeded" ? "succeeded" : "waiting",
+        attemptId: claim.attempt.id,
       };
     }
-    if (submitted.kind !== "submitted" || !submitted.artifacts?.length) {
+    if (submitted.kind !== "submitted" || !submittedArtifacts?.length) {
       throw Object.assign(new Error("gpt_image_artifact_missing"), {
         failureCode: "provider_output_download_failed",
       });
     }
 
-    const artifact = submitted.artifacts.find((item) => item.mediaType === "image");
+    const artifact = submittedArtifacts.find((item) => item.mediaType === "image");
     if (!artifact) {
       throw Object.assign(new Error("gpt_image_image_artifact_missing"), {
         failureCode: "provider_output_download_failed",
@@ -625,6 +661,7 @@ export async function processGptImageSubmitJob(
     return {
       status: "submitted",
       providerStatus: "succeeded",
+      attemptId: claim.attempt.id,
     };
   } catch (error) {
     const rawFailureCode = readErrorFailureCode(error);
@@ -657,7 +694,11 @@ export async function processGptImageSubmitJob(
       payloadRef,
       payloadHash,
     });
-    const providerRequest = await findLatestGptImageProviderRequestForTask(db, row.task_id);
+    const providerRequest = await findLatestGptImageProviderRequestForTask(
+      db,
+      row.task_id,
+      claim.attempt.id,
+    );
     providerRequestId = providerRequest?.provider_request_id ?? providerRequestId;
     const rateLimitDeadline = resolveGptImageTimeoutAt(snapshot, input.now);
     if (
@@ -823,7 +864,11 @@ async function acquireGptImageSubmitPermit(
   });
 }
 
-async function findLatestGptImageProviderRequestForTask(db: SqlDatabase, taskId: string) {
+async function findLatestGptImageProviderRequestForTask(
+  db: SqlDatabase,
+  taskId: string,
+  attemptId: string,
+) {
   return queryOne<{
     provider_request_id: string;
     status: string;
@@ -831,13 +876,19 @@ async function findLatestGptImageProviderRequestForTask(db: SqlDatabase, taskId:
   }>(
     db,
     `
-      SELECT id AS provider_request_id, status, failure_code
-      FROM provider_requests
-      WHERE task_id = $1
-      ORDER BY updated_at DESC, id DESC
+      SELECT request.id AS provider_request_id, request.status, request.failure_code
+      FROM provider_requests request
+      JOIN tasks task ON task.id = request.task_id
+      WHERE request.task_id = $1
+        AND task.current_attempt_id = $2
+        AND (
+          request.attempt_id = $2
+          OR (request.attempt_id IS NULL AND task.attempt_count = 1)
+        )
+      ORDER BY request.updated_at DESC, request.id DESC
       LIMIT 1
     `,
-    [taskId],
+    [taskId, attemptId],
   );
 }
 
@@ -850,11 +901,14 @@ async function recoverFailedGptImageSubmitJob(
 ): Promise<
   | { status: "failed"; failureCode: string }
   | { status: "rate_limited"; retryAfterMs: number; reason: string }
-  | { status: "skipped" }
+  | { status: "skipped"; attemptId?: string }
 > {
   const row = await findGptImageTaskForSubmitRecovery(db, input.taskId);
   if (!row?.attempt_id || !row.provider_request_id || row.provider_status !== "failed") {
-    return { status: "skipped" };
+    return {
+      status: "skipped",
+      ...(row?.attempt_id ? { attemptId: row.attempt_id } : {}),
+    };
   }
   const failureCode = row.provider_failure_code ?? "provider_failed";
   const snapshot = parseSnapshot(row.input_snapshot_json);
@@ -1058,11 +1112,18 @@ async function requeueGptImageAfterCumobRateLimit(
         WHERE id = $1
           AND current_attempt_id = $2
           AND status IN ('running', 'result_unknown')
+          AND EXISTS (
+            SELECT 1 FROM task_attempts attempt
+            WHERE attempt.id = $2
+              AND attempt.task_id = $1
+              AND attempt.status = 'canceled'
+              AND attempt.failure_code = 'cumob_image_429'
+          )
         RETURNING id
       `,
       [input.taskId, input.attemptId, input.now],
     );
-    const generationSnapshot = await queryOne<{ id: string }>(
+    await queryOne<{ id: string }>(
       db,
       `
         UPDATE ai_generation_task_snapshots
@@ -1077,7 +1138,7 @@ async function requeueGptImageAfterCumobRateLimit(
       `,
       [input.taskId, input.now],
     );
-    if (!providerRequest || !attempt || !task || !generationSnapshot) {
+    if (!providerRequest || !attempt || !task) {
       throw new Error("cumob_rate_limit_requeue_state_conflict");
     }
     await input.onRequeued?.(Number(providerRequest.retry_count));
@@ -1152,6 +1213,7 @@ export async function processGptImagePollJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     rateLimiter?: ProviderRateLimiter;
@@ -1162,9 +1224,14 @@ export async function processGptImagePollJob(
   | { status: "succeeded" }
   | { status: "failed"; failureCode: string }
   | { status: "rate_limited"; retryAfterMs: number; reason: string }
-  | { status: "skipped" }
+  | { status: "skipped"; nextAction?: "submit" | "poll" | "finalize" | "stop" }
 > {
-  const row = await findGptImageTaskForPoll(db, input.taskId);
+  const row = await findGptImageTaskForPoll(
+    db,
+    input.taskId,
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"),
+    input.expectedAttemptId ?? null,
+  );
   if (!row?.provider_request_id || !row.external_request_id || !row.attempt_id) {
     return {
       status: "skipped",
@@ -1178,11 +1245,16 @@ export async function processGptImagePollJob(
     return { status: "succeeded" };
   }
 
-  await renewGptImagePollLease(db, {
+  if (!await renewGptImagePollLease(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
     now: input.now,
-  });
+  })) {
+    return {
+      status: "skipped",
+      nextAction: await resolveGenerationSkippedNextAction(db, { taskId: input.taskId }),
+    };
+  }
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const modelCode = readString(snapshot.model) || "gpt-image-2-cn";
   const modelConfig = await resolveGenerationModelConfigForTask(db, snapshot, modelCode);
@@ -1213,7 +1285,6 @@ export async function processGptImagePollJob(
             providerModel: modelConfig.providerModel,
             mediaType: modelConfig.mediaType,
             providerConfig: modelConfig.providerConfig,
-            mediaType: modelConfig.mediaType,
             invocationMode: modelConfig.invocationMode,
           }
         : fallbackGptImageModelConfig(),
@@ -1306,16 +1377,90 @@ export async function processGptImagePollJob(
 
 export async function expireGptImagePollJob(
   db: SqlDatabase,
-  input: { taskId: string; now: Date },
+  input: { taskId: string; expectedAttemptId?: string | null; now: Date },
 ): Promise<{ status: "failed"; failureCode: "provider_poll_timeout" }> {
-  const row = await findGptImageTaskForPollExpiration(db, input.taskId);
-  if (row?.reservation_id) {
-    await reopenManualReviewReservationForSettlement(db, {
-      reservationId: row.reservation_id,
-      now: input.now,
-    });
-  }
+  const row = await findGptImageTaskForPollExpiration(
+    db,
+    input.taskId,
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"),
+    input.expectedAttemptId ?? null,
+  );
   if (row?.provider_request_id) {
+    const externallyStarted = Boolean(
+      row.external_submission_started_at
+      || row.external_request_id
+      || ["submitted", "accepted", "running", "result_unknown", "succeeded"].includes(row.provider_status ?? ""),
+    );
+    if (externallyStarted && !["failed", "canceled"].includes(row.provider_status ?? "")) {
+      const provider = await markProviderRequestResultUnknown(db, {
+        providerRequestId: row.provider_request_id,
+        failureCode: "provider_poll_timeout",
+        redactedResponse: {
+          providerStatus: "timeout",
+          externalRequestId: row.external_request_id ?? null,
+        },
+        now: input.now,
+      });
+      if (provider.status === "result_unknown") {
+        const snapshot = parseSnapshot(row.input_snapshot_json);
+        await markGptImageTaskResultUnknown(db, {
+          row,
+          failureCode: "provider_poll_timeout",
+          providerRequestId: row.provider_request_id,
+          metadata: {
+            billingEvent: "manual_review_required",
+            outcome: "manual_review_required",
+            providerRequestId: row.provider_request_id,
+            externalRequestId: row.external_request_id ?? null,
+            failureCode: "provider_poll_timeout",
+            settledAt: input.now,
+          },
+          now: input.now,
+        });
+        await markGenerationTaskSnapshotResultUnknown(db, {
+          taskId: row.task_id,
+          attemptId: row.attempt_id,
+          providerRequestId: row.provider_request_id,
+          providerStatus: { providerStatus: "timeout", externalRequestId: row.external_request_id ?? null },
+          failure: {
+            failureCode: "provider_poll_timeout",
+            displayMessage: "图片生成已超过自动轮询窗口，但供应商终态尚未确认。系统将继续后台复核，积分保持预留。",
+          },
+          creditSummary: {
+            reserved: resolveGptImageBillingAmount(row, snapshot),
+            settledAt: input.now.toISOString(),
+          },
+          now: input.now,
+        });
+        return { status: "failed", failureCode: "provider_poll_timeout" };
+      }
+      if (provider.status === "succeeded") {
+        return { status: "failed", failureCode: "provider_poll_timeout" };
+      }
+    }
+    if (row.provider_status === "canceled") {
+      const snapshot = parseSnapshot(row.input_snapshot_json);
+      await failGptImageTask(db, {
+        row,
+        failureCode: "provider_poll_timeout",
+        providerRequestId: row.provider_request_id,
+        metadata: { providerStatus: "canceled", failureCode: "provider_poll_timeout" },
+        now: input.now,
+      });
+      await markGenerationTaskSnapshotFailed(db, {
+        taskId: row.task_id,
+        attemptId: row.attempt_id,
+        providerRequestId: row.provider_request_id,
+        providerStatus: { providerStatus: "canceled" },
+        failure: { failureCode: "provider_poll_timeout", displayMessage: "图片供应商任务已取消，积分已返还。" },
+        creditSummary: {
+          released: resolveGptImageBillingAmount(row, snapshot),
+          settledAt: input.now.toISOString(),
+        },
+        now: input.now,
+      });
+      return { status: "failed", failureCode: "provider_poll_timeout" };
+    }
     await failGptImagePollJob(db, {
       row,
       snapshot: parseSnapshot(row.input_snapshot_json),
@@ -1327,7 +1472,7 @@ export async function expireGptImagePollJob(
       now: input.now,
     });
   } else if (row) {
-    await failGptImageTask(db, {
+    const failed = await failGptImageTask(db, {
       row,
       failureCode: "provider_poll_timeout",
       providerRequestId: null,
@@ -1340,6 +1485,9 @@ export async function expireGptImagePollJob(
       },
       now: input.now,
     });
+    if (!failed) {
+      return { status: "failed", failureCode: "provider_poll_timeout" };
+    }
     await markGenerationTaskSnapshotFailed(db, {
       taskId: row.task_id,
       attemptId: row.attempt_id,
@@ -1367,6 +1515,7 @@ export async function finalizeGptImageArtifactJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -1377,7 +1526,8 @@ export async function finalizeGptImageArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findGptImageTaskForFinalize(db, input.taskId);
+  const row = await findGptImageTaskForFinalize(db, input.taskId,
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"), input.expectedAttemptId ?? null);
   if (!row?.provider_request_id || !row.attempt_id) {
     return resolveGenerationArtifactStageUnavailable(db, {
       taskId: input.taskId,
@@ -1584,6 +1734,10 @@ export async function finalizeGptImageArtifactJob(
         });
       }
       if (row.reservation_id && amount > 0) {
+        await reopenManualReviewReservationForSettlement(db, {
+          reservationId: row.reservation_id,
+          now: input.now,
+        });
         await settleReservationAllocationInTransaction(db, {
           reservationId: row.reservation_id,
           allocationKey: "gpt-image-2-result",
@@ -1638,6 +1792,7 @@ export async function fetchGptImageArtifactJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -1648,7 +1803,8 @@ export async function fetchGptImageArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findGptImageTaskForFinalize(db, input.taskId);
+  const row = await findGptImageTaskForFinalize(db, input.taskId,
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"), input.expectedAttemptId ?? null);
   if (!row?.provider_request_id || !row.attempt_id) {
     return resolveGenerationArtifactStageUnavailable(db, {
       taskId: input.taskId,
@@ -1708,6 +1864,7 @@ export async function persistGptImageArtifactJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    expectedAttemptId?: string | null;
     runtime: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     now: Date;
@@ -1717,7 +1874,8 @@ export async function persistGptImageArtifactJob(
   | { status: "failed"; failureCode: string }
   | { status: "skipped" }
 > {
-  const row = await findGptImageTaskForPersist(db, input.taskId);
+  const row = await findGptImageTaskForPersist(db, input.taskId,
+    Object.prototype.hasOwnProperty.call(input, "expectedAttemptId"), input.expectedAttemptId ?? null);
   if (!row?.attempt_id) {
     return resolveGenerationArtifactStageUnavailable(db, {
       taskId: input.taskId,
@@ -1781,14 +1939,26 @@ export async function persistGptImageArtifactJob(
     status: "succeeded",
     now: input.now,
     finalize: async () => {
-      await updateTeamAssetGenerationResult(db, {
-        snapshot,
-        userId: row.user_id,
-        status: "active",
-        previewUrl: urls.previewUrl,
-        storageObjectId: storageObject.id,
-        now: input.now,
-      });
+      if (readTeamAssetTargetId(snapshot)) {
+        await updateTeamAssetGenerationResult(db, {
+          snapshot,
+          userId: row.user_id,
+          status: "active",
+          previewUrl: urls.previewUrl,
+          storageObjectId: storageObject.id,
+          now: input.now,
+        });
+      } else {
+        await ensureProjectUploadRecordForStorageObject(db, {
+          userId: row.created_by_user_id ?? row.user_id,
+          storageObjectId: storageObject.id,
+          pageKey: "project",
+          sourceAction: "generate_image",
+          publicUrl: urls.previewUrl,
+          status: "uploaded",
+          now: input.now,
+        });
+      }
       if (row.reservation_id && amount > 0) {
         await reopenManualReviewReservationForSettlement(db, {
           reservationId: row.reservation_id,
@@ -1859,6 +2029,10 @@ async function markGptImageTaskManualReview(
   const amount = resolveGptImageBillingAmount(input.row, snapshot);
   const settleCredits = async (inTransaction: boolean) => {
     if (input.row.reservation_id && amount > 0) {
+      await reopenManualReviewReservationForSettlement(db, {
+        reservationId: input.row.reservation_id,
+        now: input.now,
+      });
       const settle = inTransaction
         ? settleReservationAllocationInTransaction
         : settleReservationAllocation;
@@ -1911,6 +2085,10 @@ async function markGptImageTaskResultUnknown(
   const amount = resolveGptImageBillingAmount(input.row, snapshot);
   const settleCredits = async (inTransaction: boolean) => {
     if (input.row.reservation_id && amount > 0) {
+      await reopenManualReviewReservationForSettlement(db, {
+        reservationId: input.row.reservation_id,
+        now: input.now,
+      });
       const settle = inTransaction
         ? settleReservationAllocationInTransaction
         : settleReservationAllocation;
@@ -1981,7 +2159,12 @@ async function findGptImageTaskForSubmit(db: SqlDatabase, taskId: string) {
   );
 }
 
-async function findGptImageTaskForPoll(db: SqlDatabase, taskId: string) {
+async function findGptImageTaskForPoll(
+  db: SqlDatabase,
+  taskId: string,
+  enforceExpectedAttempt: boolean,
+  expectedAttemptId: string | null,
+) {
   return queryOne<GptImageTaskRow>(
     db,
     `
@@ -1995,27 +2178,44 @@ async function findGptImageTaskForPoll(db: SqlDatabase, taskId: string) {
         w.created_by_user_id,
         pr.id AS provider_request_id,
         pr.status AS provider_status,
+        pr.external_submission_started_at,
         pr.external_request_id,
         pr.response_redacted_json AS provider_response_redacted_json,
         r.id AS reservation_id,
         r.amount_reserved
       FROM tasks t
       JOIN workflows w ON w.id = t.workflow_id
-      LEFT JOIN provider_requests pr ON pr.task_id = t.id
+      LEFT JOIN provider_requests pr
+        ON pr.task_id = t.id
+       AND (
+         pr.attempt_id = t.current_attempt_id
+         OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+       )
       LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
+        AND (
+          $2::boolean = false
+          OR ($3::uuid IS NOT NULL AND t.current_attempt_id = $3)
+          OR ($3::uuid IS NULL AND t.attempt_count = 1)
+        )
         AND t.task_type = 'episode_generate_image'
         AND t.status IN ('running', 'result_unknown')
         AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
+        AND t.current_attempt_id IS NOT NULL
         AND pr.external_request_id IS NOT NULL
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
-    [taskId],
+    [taskId, enforceExpectedAttempt, expectedAttemptId],
   );
 }
 
-async function findGptImageTaskForPollExpiration(db: SqlDatabase, taskId: string) {
+async function findGptImageTaskForPollExpiration(
+  db: SqlDatabase,
+  taskId: string,
+  enforceExpectedAttempt: boolean,
+  expectedAttemptId: string | null,
+) {
   return queryOne<GptImageTaskRow>(
     db,
     `
@@ -2029,6 +2229,7 @@ async function findGptImageTaskForPollExpiration(db: SqlDatabase, taskId: string
         w.created_by_user_id,
         pr.id AS provider_request_id,
         pr.status AS provider_status,
+        pr.external_submission_started_at,
         pr.external_request_id,
         pr.response_redacted_json AS provider_response_redacted_json,
         r.id AS reservation_id,
@@ -2039,18 +2240,27 @@ async function findGptImageTaskForPollExpiration(db: SqlDatabase, taskId: string
         SELECT request.*
         FROM provider_requests request
         WHERE request.task_id = t.id
-          AND request.attempt_id = t.current_attempt_id
+          AND t.current_attempt_id IS NOT NULL
+          AND (
+            request.attempt_id = t.current_attempt_id
+            OR (request.attempt_id IS NULL AND t.attempt_count = 1)
+          )
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
       LEFT JOIN generation_task_credit_reservations r ON r.task_id = t.id
       WHERE t.id = $1
+        AND (
+          $2::boolean = false
+          OR ($3::uuid IS NOT NULL AND t.current_attempt_id = $3)
+          OR ($3::uuid IS NULL AND t.attempt_count = 0)
+        )
         AND t.task_type = 'episode_generate_image'
         AND t.status IN ('running', 'result_unknown')
         AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
       LIMIT 1
     `,
-    [taskId],
+    [taskId, enforceExpectedAttempt, expectedAttemptId],
   );
 }
 
@@ -2083,7 +2293,10 @@ async function findGptImageTaskForSubmitRecovery(db: SqlDatabase, taskId: string
         SELECT request.*
         FROM provider_requests request
         WHERE request.task_id = t.id
-          AND request.attempt_id = t.current_attempt_id
+          AND (
+            request.attempt_id = t.current_attempt_id
+            OR (request.attempt_id IS NULL AND t.attempt_count = 1)
+          )
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
@@ -2093,6 +2306,7 @@ async function findGptImageTaskForSubmitRecovery(db: SqlDatabase, taskId: string
         AND t.task_type = 'episode_generate_image'
         AND t.status IN ('running', 'result_unknown', 'failed')
         AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
+        AND t.current_attempt_id IS NOT NULL
         AND (
           t.status <> 'failed'
           OR (
@@ -2122,11 +2336,15 @@ async function findFailedGptImageSubmissionRepairCandidates(
             SELECT provider.*
             FROM provider_requests provider
             WHERE provider.task_id = task.id
-              AND provider.attempt_id = task.current_attempt_id
+              AND (
+                provider.attempt_id = task.current_attempt_id
+                OR (provider.attempt_id IS NULL AND task.attempt_count = 1)
+              )
             ORDER BY provider.updated_at DESC, provider.created_at DESC
             LIMIT 1
           ) request ON request.status = 'failed'
           WHERE task.task_type = 'episode_generate_image'
+            AND task.current_attempt_id IS NOT NULL
             AND task.status IN ('running', 'result_unknown')
             AND task.updated_at <= $1
             AND request.updated_at <= $1
@@ -2143,12 +2361,16 @@ async function findFailedGptImageSubmissionRepairCandidates(
             SELECT provider.*
             FROM provider_requests provider
             WHERE provider.task_id = task.id
-              AND provider.attempt_id = task.current_attempt_id
+              AND (
+                provider.attempt_id = task.current_attempt_id
+                OR (provider.attempt_id IS NULL AND task.attempt_count = 1)
+              )
             ORDER BY provider.updated_at DESC, provider.created_at DESC
             LIMIT 1
           ) request ON request.status = 'failed'
           WHERE snapshot.status IN ('queued', 'running', 'result_unknown')
             AND task.task_type = 'episode_generate_image'
+            AND task.current_attempt_id IS NOT NULL
             AND task.status = 'failed'
             AND task.failure_code = COALESCE(request.failure_code, 'provider_failed')
             AND task.updated_at <= $1
@@ -2187,7 +2409,8 @@ async function renewGptImagePollLease(
   input: { taskId: string; attemptId: string; now: Date },
 ) {
   const lockedUntil = new Date(input.now.getTime() + 15 * 60_000);
-  await db.query(
+  const renewed = await queryOne<{ id: string }>(
+    db,
     `
       WITH renewed_task AS (
         UPDATE tasks
@@ -2214,9 +2437,11 @@ async function renewGptImagePollLease(
         AND task_id = $1
         AND status IN ('running', 'result_unknown')
         AND EXISTS (SELECT 1 FROM renewed_task)
+      RETURNING id
     `,
     [input.taskId, input.attemptId, lockedUntil, input.now],
   );
+  return Boolean(renewed);
 }
 
 async function failGptImagePollJob(
@@ -2307,7 +2532,9 @@ async function failGptImagePollJob(
   return { status: "failed", failureCode: input.failureCode };
 }
 
-async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
+async function findGptImageTaskForFinalize(
+  db: SqlDatabase, taskId: string, enforceExpectedAttempt = false, expectedAttemptId: string | null = null,
+) {
   return queryOne<GptImageTaskRow>(
     db,
     `
@@ -2330,18 +2557,27 @@ async function findGptImageTaskForFinalize(db: SqlDatabase, taskId: string) {
         ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
+       AND (
+         pr.attempt_id = t.current_attempt_id
+         OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+       )
       LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       LEFT JOIN ai_generation_task_snapshots generation_snapshot
         ON generation_snapshot.task_id = t.id
       WHERE t.id = $1
+        AND (
+          $2::boolean = false
+          OR ($3::uuid IS NOT NULL AND t.current_attempt_id = $3)
+          OR ($3::uuid IS NULL AND t.attempt_count = 1)
+        )
         AND t.task_type = 'episode_generate_image'
-        AND t.status IN ('running', 'manual_review_required')
+        AND t.status IN ('running', 'result_unknown', 'manual_review_required')
         AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http')
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
-    [taskId],
+    [taskId, enforceExpectedAttempt, expectedAttemptId],
   );
 }
 
@@ -2357,7 +2593,9 @@ function readGptImageArtifactRecoveryDeadline(value: Record<string, unknown> | s
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
-async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
+async function findGptImageTaskForPersist(
+  db: SqlDatabase, taskId: string, enforceExpectedAttempt = false, expectedAttemptId: string | null = null,
+) {
   return queryOne<GptImageTaskRow>(
     db,
     `
@@ -2379,12 +2617,21 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
         ON w.id = t.workflow_id
       LEFT JOIN provider_requests pr
         ON pr.task_id = t.id
+       AND (
+         pr.attempt_id = t.current_attempt_id
+         OR (pr.attempt_id IS NULL AND t.attempt_count = 1)
+       )
       LEFT JOIN generation_task_credit_reservations r
         ON r.task_id = t.id
       WHERE t.id = $1
+        AND (
+          $2::boolean = false
+          OR ($3::uuid IS NOT NULL AND t.current_attempt_id = $3)
+          OR ($3::uuid IS NULL AND t.attempt_count = 1)
+        )
         AND t.task_type = 'episode_generate_image'
         AND (
-          t.status = 'running'
+          t.status IN ('running', 'result_unknown')
           OR (
             t.status = 'manual_review_required'
             AND t.failure_code IN ('provider_output_persist_failed', 'generation_queue_error')
@@ -2394,7 +2641,7 @@ async function findGptImageTaskForPersist(db: SqlDatabase, taskId: string) {
       ORDER BY pr.created_at DESC NULLS LAST
       LIMIT 1
     `,
-    [taskId],
+    [taskId, enforceExpectedAttempt, expectedAttemptId],
   );
 }
 
@@ -2475,6 +2722,10 @@ async function failGptImageTask(
   const amount = resolveGptImageBillingAmount(input.row, snapshot);
   const settleCredits = async (inTransaction: boolean) => {
     if (input.row.reservation_id && amount > 0) {
+      await reopenManualReviewReservationForSettlement(db, {
+        reservationId: input.row.reservation_id,
+        now: input.now,
+      });
       const settle = inTransaction
         ? settleReservationAllocationInTransaction
         : settleReservationAllocation;
@@ -2518,9 +2769,9 @@ async function failGptImageTask(
     });
     await aggregateWorkflowStatus(db, input.row.workflow_id);
   } else {
-    await settleCredits(false);
-    await db.query(
-      `
+    await db.query("BEGIN");
+    try {
+      const failed = await queryOne<{ id: string }>(db, `
         UPDATE tasks
         SET status = 'failed',
             failure_code = $2,
@@ -2529,11 +2780,21 @@ async function failGptImageTask(
             heartbeat_at = NULL,
             updated_at = $3
         WHERE id = $1
+          AND current_attempt_id IS NULL
           AND status IN ('queued', 'running', 'result_unknown')
-      `,
-      [input.row.task_id, input.failureCode, input.now],
-    );
-    await aggregateWorkflowStatus(db, input.row.workflow_id);
+        RETURNING id
+      `, [input.row.task_id, input.failureCode, input.now]);
+      if (!failed) {
+        await db.query("COMMIT");
+        return false;
+      }
+      await settleCredits(true);
+      await aggregateWorkflowStatus(db, input.row.workflow_id);
+      await db.query("COMMIT");
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    }
   }
   await updateProjectAssetGenerationTerminalResult(db, {
     row: input.row,
@@ -2542,6 +2803,7 @@ async function failGptImageTask(
     failureCode: input.failureCode,
     now: input.now,
   });
+  return true;
 }
 
 function resolveEpisodeGenerationAssetType(input: {

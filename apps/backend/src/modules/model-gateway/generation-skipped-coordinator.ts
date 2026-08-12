@@ -44,6 +44,11 @@ export async function resolveGenerationSkippedNextAction(
         SELECT request.*
         FROM provider_requests request
         WHERE request.task_id = t.id
+          AND t.current_attempt_id IS NOT NULL
+          AND (
+            request.attempt_id = t.current_attempt_id
+            OR (request.attempt_id IS NULL AND t.attempt_count = 1)
+          )
         ORDER BY request.updated_at DESC, request.created_at DESC
         LIMIT 1
       ) pr ON true
