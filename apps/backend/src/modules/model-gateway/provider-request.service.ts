@@ -220,22 +220,51 @@ export async function submitProviderRequest(
     ) {
       return { kind: "stale_attempt", request: prepared.request };
     }
-    const recovered = !prepared.request.externalRequestId
-      && !["failed", "canceled", "succeeded"].includes(prepared.request.status)
-      ? await input.adapter.recoverSubmission?.({
-          providerRequestId: prepared.request.id,
-          providerName: prepared.request.providerName,
-          providerOperation: prepared.request.providerOperation,
-          requestKey: prepared.request.requestKey,
-          payloadRef: prepared.request.payloadRef,
-          payloadHash: prepared.request.payloadHash,
-          redactedPayload: prepared.request.redactedPayload,
-          externalSubmissionStartedAt: prepared.request.externalSubmissionStartedAt,
-        })
-      : null;
-    if (recovered) {
-      const accepted = await recordProviderSubmissionAccepted(db, {
+    if (prepared.request.status === "result_unknown" && !prepared.request.externalRequestId) {
+      const claimed = await tryClaimProviderSubmissionRecovery(db, {
         providerRequestId: prepared.request.id,
+        now: input.now,
+      });
+      if (!claimed) {
+        return {
+          kind: "already_started",
+          request: (await findProviderRequestById(db, prepared.request.id))!,
+        };
+      }
+      let recovered: Awaited<ReturnType<NonNullable<ProviderAdapter["recoverSubmission"]>>> | undefined;
+      try {
+        recovered = await input.adapter.recoverSubmission?.({
+          providerRequestId: claimed.id,
+          providerName: claimed.providerName,
+          providerOperation: claimed.providerOperation,
+          requestKey: claimed.requestKey,
+          payloadRef: claimed.payloadRef,
+          payloadHash: claimed.payloadHash,
+          redactedPayload: claimed.redactedPayload,
+          externalSubmissionStartedAt: claimed.externalSubmissionStartedAt,
+        });
+        if (!recovered?.externalRequestId?.trim()) {
+          throw new Error("provider_submission_missing_task_id");
+        }
+      } catch (error) {
+        const failureCode = "provider_submission_missing_task_id";
+        const modelError = ModelError.fromUnknown(error, {
+          failureCode,
+          phase: "submit",
+        });
+        await markProviderRequestFailed(db, {
+          providerRequestId: claimed.id,
+          failureCode,
+          redactedResponse: {
+            ...(readProviderDiagnostics(error) ?? {}),
+            ...modelError.toRedactedProviderRecord(),
+          },
+          now: input.now,
+        });
+        throw modelError;
+      }
+      const accepted = await recordProviderSubmissionAccepted(db, {
+        providerRequestId: claimed.id,
         externalRequestId: recovered.externalRequestId,
         status: recovered.status,
         redactedResponse: sanitizeProviderIdentityFields(withStoredProviderRawResponse(recovered.redactedResponse ?? {})),
@@ -247,20 +276,6 @@ export async function submitProviderRequest(
         artifacts: recovered.artifacts,
         redactedRequest: recovered.redactedRequest,
       };
-    }
-    if (prepared.request.status === "result_unknown" && !prepared.request.externalRequestId) {
-      const failureCode = "provider_submission_missing_task_id";
-      const modelError = ModelError.fromUnknown(failureCode, {
-        failureCode,
-        phase: "submit",
-      });
-      await markProviderRequestFailed(db, {
-        providerRequestId: prepared.request.id,
-        failureCode,
-        redactedResponse: modelError.toRedactedProviderRecord(),
-        now: input.now,
-      });
-      throw modelError;
     }
     return {
       kind: "already_started",
@@ -360,6 +375,27 @@ export async function submitProviderRequest(
   }
 }
 
+async function tryClaimProviderSubmissionRecovery(
+  db: SqlDatabase,
+  input: { providerRequestId: string; now: Date },
+): Promise<ProviderRequestRecord | undefined> {
+  const row = await queryOne<ProviderRequestRow>(
+    db,
+    `
+      UPDATE provider_requests
+      SET status = 'submitted',
+          failure_code = NULL,
+          updated_at = $2
+      WHERE id = $1
+        AND status = 'result_unknown'
+        AND external_request_id IS NULL
+      RETURNING *
+    `,
+    [input.providerRequestId, input.now],
+  );
+  return row ? providerRequestFromRow(row) : undefined;
+}
+
 async function providerRequestBelongsToExpectedAttempt(
   db: SqlDatabase,
   input: { providerRequestId: string; taskId: string; attemptId: string },
@@ -424,6 +460,8 @@ export async function recordProviderRequestRedactedBody(
           updated_at = $3
       WHERE id = $1
         AND external_submission_started_at IS NOT NULL
+        AND external_request_id IS NULL
+        AND status = 'submitted'
       RETURNING *
     `,
     [
@@ -690,7 +728,8 @@ async function recordProviderSubmissionAccepted(
     ],
   );
 
-  return providerRequestFromRow(row!);
+  if (!row) throw new Error("provider_request_submission_acceptance_conflict");
+  return providerRequestFromRow(row);
 }
 
 export async function advanceProviderRequestStage(

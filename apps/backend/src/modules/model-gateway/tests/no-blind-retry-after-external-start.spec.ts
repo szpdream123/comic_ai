@@ -87,6 +87,11 @@ describe("provider request no blind retry after external start", () => {
         externalRequestId: null,
         now: new Date("2026-05-09T10:05:00.000Z"),
       });
+      await markProviderRequestResultUnknown(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "worker_crashed_after_external_start",
+        now: new Date("2026-05-09T10:05:30.000Z"),
+      });
 
       const retry = await submitProviderRequest(db, {
         ...providerInput(),
@@ -136,7 +141,7 @@ describe("provider request no blind retry after external start", () => {
       assert.equal(retry.request.status, "submitted");
       assert.equal(retry.request.externalRequestId, null);
       assert.equal(adapter.submitCalls, 0);
-      assert.equal(adapter.recoveryCalls, 1);
+      assert.equal(adapter.recoveryCalls, 0);
     } finally {
       await db.close();
     }
@@ -192,6 +197,99 @@ describe("provider request no blind retry after external start", () => {
       await db.close();
     }
   });
+
+  it("fails a legacy result_unknown request when recovery throws", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new ThrowingRecoveryProviderAdapter();
+
+    try {
+      const input = legacyRecoveryInput("throwing-recovery");
+      const prepared = await seedResultUnknownRequest(db, input);
+
+      await assert.rejects(
+        submitProviderRequest(db, {
+          ...input,
+          adapter,
+          now: new Date("2026-05-09T10:09:00.000Z"),
+        }),
+        hasMissingTaskIdFailure,
+      );
+
+      await assertProviderRequestFailedWithoutTaskId(db, prepared.request.id);
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("fails a legacy result_unknown request when recovery returns a blank external request id", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new BlankRecoveryProviderAdapter();
+
+    try {
+      const input = legacyRecoveryInput("blank-recovery");
+      const prepared = await seedResultUnknownRequest(db, input);
+
+      await assert.rejects(
+        submitProviderRequest(db, {
+          ...input,
+          adapter,
+          now: new Date("2026-05-09T10:09:00.000Z"),
+        }),
+        hasMissingTaskIdFailure,
+      );
+
+      await assertProviderRequestFailedWithoutTaskId(db, prepared.request.id);
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("allows only one concurrent recovery call for a legacy result_unknown request", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new BlockingRecoveryProviderAdapter();
+
+    try {
+      const input = legacyRecoveryInput("concurrent-recovery");
+      const prepared = await seedResultUnknownRequest(db, input);
+      const first = submitProviderRequest(db, {
+        ...input,
+        adapter,
+        now: new Date("2026-05-09T10:09:00.000Z"),
+      });
+      await adapter.started;
+
+      const second = await submitProviderRequest(db, {
+        ...input,
+        adapter,
+        now: new Date("2026-05-09T10:09:01.000Z"),
+      });
+      adapter.release();
+      const recovered = await first;
+
+      assert.equal(second.kind, "already_started");
+      assert.equal(second.request.status, "submitted");
+      assert.equal(recovered.kind, "submitted");
+      assert.equal(recovered.request.externalRequestId, "external-concurrent-recovered");
+      assert.equal(adapter.submitCalls, 0);
+      assert.equal(adapter.recoveryCalls, 1);
+
+      const request = await db.query<{ status: string; external_request_id: string | null }>(
+        "SELECT status, external_request_id FROM provider_requests WHERE id = $1",
+        [prepared.request.id],
+      );
+      assert.deepEqual(request.rows[0], {
+        status: "accepted",
+        external_request_id: "external-concurrent-recovered",
+      });
+    } finally {
+      adapter.release();
+      await db.close();
+    }
+  });
 });
 
 class FailingIfCalledProviderAdapter implements ProviderAdapter {
@@ -235,6 +333,104 @@ class MissingRecoveryProviderAdapter implements ProviderAdapter {
     this.recoveryCalls += 1;
     return null;
   }
+}
+
+class ThrowingRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
+  override async recoverSubmission(): Promise<never> {
+    this.recoveryCalls += 1;
+    throw new Error("provider_recovery_network_error");
+  }
+}
+
+class BlankRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
+  override async recoverSubmission() {
+    this.recoveryCalls += 1;
+    return {
+      externalRequestId: "   ",
+      status: "accepted" as const,
+    };
+  }
+}
+
+class BlockingRecoveryProviderAdapter extends MissingRecoveryProviderAdapter {
+  private releaseRecovery!: () => void;
+  readonly started: Promise<void>;
+  private readonly recoveryReleased: Promise<void>;
+
+  constructor() {
+    super();
+    let markStarted!: () => void;
+    this.started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    this.recoveryReleased = new Promise<void>((resolve) => {
+      this.releaseRecovery = resolve;
+    });
+    this.markStarted = markStarted;
+  }
+
+  private readonly markStarted: () => void;
+
+  override async recoverSubmission() {
+    this.recoveryCalls += 1;
+    this.markStarted();
+    await this.recoveryReleased;
+    return {
+      externalRequestId: "external-concurrent-recovered",
+      status: "accepted" as const,
+    };
+  }
+
+  release() {
+    this.releaseRecovery();
+  }
+}
+
+function legacyRecoveryInput(suffix: string) {
+  return {
+    ...providerInput(),
+    requestKey: `task-${suffix}:attempt-1`,
+    requestHash: `hash-${suffix}`,
+    payloadHash: `payload-hash-${suffix}`,
+    payloadRef: `payloads/task-${suffix}.json`,
+  };
+}
+
+async function seedResultUnknownRequest(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  input: ReturnType<typeof legacyRecoveryInput>,
+) {
+  const prepared = await createOrReuseProviderRequest(db, input);
+  await markExternalSubmissionStarted(db, {
+    providerRequestId: prepared.request.id,
+    externalRequestId: null,
+    now: new Date("2026-05-09T10:07:00.000Z"),
+  });
+  await markProviderRequestResultUnknown(db, {
+    providerRequestId: prepared.request.id,
+    failureCode: "worker_crashed_after_external_start",
+    now: new Date("2026-05-09T10:08:00.000Z"),
+  });
+  return prepared;
+}
+
+function hasMissingTaskIdFailure(error: unknown) {
+  assert.equal((error as { failureCode?: string }).failureCode, "provider_submission_missing_task_id");
+  return true;
+}
+
+async function assertProviderRequestFailedWithoutTaskId(
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  providerRequestId: string,
+) {
+  const request = await db.query<{ status: string; failure_code: string | null }>(
+    "SELECT status, failure_code FROM provider_requests WHERE id = $1",
+    [providerRequestId],
+  );
+  assert.deepEqual(request.rows[0], {
+    status: "failed",
+    failure_code: "provider_submission_missing_task_id",
+  });
 }
 
 function providerInput() {
