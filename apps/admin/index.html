@@ -2211,6 +2211,7 @@
 
       const state = {
         session: null,
+        adminRoles: [],
         page: "dashboard",
         models: [],
         selectedModelId: null,
@@ -13540,6 +13541,180 @@
       window.saveFirstLoginOnboarding = saveFirstLoginOnboarding;
       window.resetFirstLoginOnboardingDraft = resetFirstLoginOnboardingDraft;
       window.updateOnboardingPreview = updateOnboardingPreview;
+
+      function geoOperationsState() {
+        if (!state.geoOperations) {
+          state.geoOperations = {
+            questions: [], evidence: [], content: [], details: {}, settings: null,
+            selectedQuestionId: "", selectedEvidenceIds: [], loadError: "",
+          };
+        }
+        return state.geoOperations;
+      }
+
+      async function loadGeoOperations() {
+        const store = geoOperationsState();
+        setPageLoading("geoOperations", true);
+        try {
+          const [questions, evidence, content, settings] = await Promise.all([
+            api("/api/admin/geo/questions"),
+            api("/api/admin/geo/evidence"),
+            api("/api/admin/geo/content"),
+            api("/api/admin/geo/settings"),
+          ]);
+          store.questions = questions.data || [];
+          store.evidence = evidence.data || [];
+          store.content = content.data || [];
+          store.settings = settings.data || null;
+          const details = await Promise.all(store.content.map(async (item) => {
+            try { return [item.id, (await api(`/api/admin/geo/content/${encodeURIComponent(item.id)}`)).data]; }
+            catch { return [item.id, null]; }
+          }));
+          store.details = Object.fromEntries(details);
+          store.loadError = "";
+          clearPageForbidden("geoOperations");
+        } catch (error) {
+          setPageForbidden("geoOperations", error);
+          store.loadError = error.payload?.error?.message || error.message || "GEO运营数据加载失败";
+        } finally {
+          setPageLoading("geoOperations", false);
+        }
+      }
+
+      function geoQualityCounts(item) {
+        const detail = geoOperationsState().details[item.id];
+        const version = detail?.versions?.find((entry) => entry.id === item.currentDraftVersionId) || detail?.versions?.[0];
+        return {
+          blockers: version?.qualityReport?.blockers?.length || 0,
+          warnings: version?.qualityReport?.warnings?.length || 0,
+          title: version?.title || item.topic,
+        };
+      }
+
+      function geoOperationsPage() {
+        const store = geoOperationsState();
+        if (store.loadError) return `<section class="state-panel" data-state="error"><strong>GEO运营暂不可用</strong><span>${escapeHtml(store.loadError)}</span><button class="btn ghost" onclick="loadGeoOperations().then(renderShell)">重新加载</button></section>`;
+        const questionRows = store.questions.length ? store.questions.map((item) => `<tr><td><input type="radio" name="geoQuestion" ${store.selectedQuestionId === item.id ? "checked" : ""} onchange="geoSelectQuestion('${item.id}')" /></td><td><strong>${escapeHtml(item.rawQuestion)}</strong><div class="metric-note">${escapeHtml(item.topic)} · ${escapeHtml(item.intent)}</div></td><td>${item.priority}</td><td><span class="tag blue">${escapeHtml(item.coverageStatus)}</span></td></tr>`).join("") : `<tr><td colspan="4">暂无问题，请先新增目标问题。</td></tr>`;
+        const evidenceRows = store.evidence.length ? store.evidence.map((item) => `<tr><td><input type="checkbox" ${store.selectedEvidenceIds.includes(item.id) ? "checked" : ""} ${item.reviewStatus === "approved" && item.publicUseAllowed ? "" : "disabled"} onchange="geoToggleEvidence('${item.id}', this.checked)" /></td><td><strong>${escapeHtml(item.name)}</strong><div class="metric-note">${escapeHtml(item.factText)}</div></td><td><span class="tag ${item.reviewStatus === "approved" ? "blue" : "warn"}">${escapeHtml(item.reviewStatus)}</span></td><td>${item.publicUseAllowed ? "允许公开" : "仅内部"}</td></tr>`).join("") : `<tr><td colspan="4">暂无证据，请先录入并审核证据。</td></tr>`;
+        const contentRows = store.content.length ? store.content.map((item) => {
+          const quality = geoQualityCounts(item);
+          const canReview = (item.status === "draft" || item.status === "published") && quality.blockers === 0 && item.currentDraftVersionId !== item.currentPublishedVersionId;
+          const canPublish = item.status === "in_review" && quality.blockers === 0;
+          const route = { guide: "guides", case: "cases", report: "reports", answer: "answers" }[item.contentType];
+          return `<tr><td><strong>${escapeHtml(quality.title)}</strong><div class="metric-note">/${route}/${escapeHtml(item.slug)}</div></td><td><span class="tag blue">${escapeHtml(item.status)}</span></td><td><span class="tag ${quality.blockers ? "danger" : "blue"}">阻断 ${quality.blockers}</span> <span class="tag warn">警告 ${quality.warnings}</span></td><td><div class="row-actions"><button class="btn ghost" ${canReview ? "" : "disabled"} onclick="geoSubmitReview('${item.id}', ${item.lockVersion})">提交审核</button><button class="btn primary" ${canPublish ? "" : "disabled"} onclick="geoPublishContent('${item.id}')">发布官网</button>${item.currentPublishedVersionId ? `<a class="btn ghost" href="/${route}/${encodeURIComponent(item.slug)}" target="_blank">预览</a>` : ""}</div></td></tr>`;
+        }).join("") : `<tr><td colspan="4">暂无内容草稿。</td></tr>`;
+        return `<div class="section-stack">
+          <section class="card"><div class="toolbar"><div><div class="eyebrow">灵曦AI · 国内GEO</div><h2>GEO运营</h2><p class="metric-note">从目标问题和审核证据生成草稿，经自动质检后由人工审核发布。</p></div><button class="btn ghost" onclick="loadGeoOperations().then(renderShell)">刷新</button></div></section>
+          <section class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));align-items:start">
+            <article class="card"><div class="toolbar"><h3>问题库</h3><span class="tag blue">${store.questions.length}</span></div><form onsubmit="geoCreateQuestion(event)" class="section-stack"><label class="field"><span>目标问题</span><input name="rawQuestion" required placeholder="例如：AI短剧怎样保持角色一致？" /></label><div class="form-grid"><label class="field"><span>主题</span><input name="topic" required /></label><label class="field"><span>意图</span><select name="intent"><option value="tutorial">教程</option><option value="comparison">对比</option><option value="decision">决策</option></select></label></div><label class="field"><span>优先级</span><input name="priority" type="number" min="0" max="100" value="80" /></label><button class="btn ghost" type="submit">新增问题</button></form></article>
+            <article class="card"><div class="toolbar"><h3>证据库</h3><span class="tag blue">${store.evidence.length}</span></div><form onsubmit="geoCreateEvidence(event)" class="section-stack"><label class="field"><span>证据名称</span><input name="name" required /></label><label class="field"><span>可公开事实</span><textarea name="factText" required></textarea></label><label class="field"><span>来源网址</span><input name="sourceUrl" type="url" /></label><label class="checkbox-row"><input name="publicUseAllowed" type="checkbox" checked />允许公开引用并直接审核通过</label><button class="btn ghost" type="submit">新增证据</button></form></article>
+            <article class="card"><div class="toolbar"><h3>生成草稿</h3><span class="tag blue">自动质检</span></div><form onsubmit="geoGenerateDraft(event)" class="section-stack"><label class="field"><span>内容类型</span><select name="contentType"><option value="guide">指南</option><option value="answer">问答</option><option value="case">案例</option><option value="report">报告</option></select></label><label class="field"><span>英文slug</span><input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="character-consistency" /></label><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><p class="metric-note">需选择1个问题和至少1条已审核、允许公开的证据。</p><button class="btn primary" type="submit">生成草稿</button></form></article>
+          </section>
+          <section class="card"><div class="toolbar"><h3>问题与证据选择</h3><span class="metric-note">所选资料将作为模型唯一事实来源</span></div><div class="grid" style="grid-template-columns:1fr 1fr"><div class="table-wrap"><table><thead><tr><th>选择</th><th>问题</th><th>优先级</th><th>覆盖</th></tr></thead><tbody>${questionRows}</tbody></table></div><div class="table-wrap"><table><thead><tr><th>选择</th><th>证据</th><th>审核</th><th>公开</th></tr></thead><tbody>${evidenceRows}</tbody></table></div></div></section>
+          <section class="card"><div class="toolbar"><h3>内容中心</h3><span class="metric-note">阻断项必须清零，警告项可在人工确认后发布</span></div><div class="table-wrap"><table><thead><tr><th>内容</th><th>状态</th><th>自动质检</th><th>操作</th></tr></thead><tbody>${contentRows}</tbody></table></div></section>
+          <section class="card"><div class="toolbar"><h3>GEO设置</h3><span class="tag blue">品牌固定为灵曦AI</span></div><form onsubmit="geoSaveSettings(event)" class="form-grid"><label class="field"><span>默认模型</span><input name="defaultModelCode" value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><label class="field"><span>内容相似度警戒线</span><input name="similarityThreshold" type="number" min="0.5" max="1" step="0.01" value="${Number(store.settings?.similarityThreshold || 0.86)}" /></label><button class="btn primary" type="submit">保存设置</button></form></section>
+        </div>`;
+      }
+
+      async function geoCreateQuestion(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        const error = form.querySelector(".form-error") || { textContent: "" };
+        await runAdminMutation(form, error, () => api("/api/admin/geo/questions", { method: "POST", body: JSON.stringify({ rawQuestion: data.get("rawQuestion"), topic: data.get("topic"), intent: data.get("intent"), priority: Number(data.get("priority")), targetPlatforms: ["deepseek", "doubao", "baidu"], productCapabilities: [], notes: "" }) }), "问题已新增");
+        form.reset(); await loadGeoOperations(); renderShell();
+      }
+      async function geoCreateEvidence(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        const approved = Boolean(data.get("publicUseAllowed"));
+        const error = form.querySelector(".form-error") || { textContent: "" };
+        await runAdminMutation(form, error, () => api("/api/admin/geo/evidence", { method: "POST", body: JSON.stringify({ type: "product_feature", name: data.get("name"), factText: data.get("factText"), sourceUrl: data.get("sourceUrl") || null, reviewStatus: approved ? "approved" : "pending", validUntil: null, publicUseAllowed: approved }) }), "证据已新增");
+        form.reset(); await loadGeoOperations(); renderShell();
+      }
+      function geoSelectQuestion(id) { geoOperationsState().selectedQuestionId = id; renderShell(); }
+      function geoToggleEvidence(id, checked) {
+        const store = geoOperationsState();
+        store.selectedEvidenceIds = checked ? [...new Set([...store.selectedEvidenceIds, id])] : store.selectedEvidenceIds.filter((item) => item !== id);
+      }
+      async function geoGenerateDraft(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const store = geoOperationsState();
+        if (!store.selectedQuestionId || store.selectedEvidenceIds.length === 0) return showToast("请先选择问题和已审核证据");
+        const question = store.questions.find((item) => item.id === store.selectedQuestionId);
+        const data = new FormData(form);
+        const error = form.querySelector(".form-error") || { textContent: "" };
+        await runAdminMutation(form, error, () => api("/api/admin/geo/generate", { method: "POST", body: JSON.stringify({ questionId: store.selectedQuestionId, evidenceIds: store.selectedEvidenceIds, contentType: data.get("contentType"), topic: question?.topic || "GEO内容", slug: data.get("slug"), modelCode: data.get("modelCode") }) }), "草稿已生成并完成自动质检");
+        await loadGeoOperations(); renderShell();
+      }
+      async function geoSubmitReview(contentId, lockVersion) {
+        await api(`/api/admin/geo/content/${encodeURIComponent(contentId)}/submit-review`, { method: "POST", headers: { "idempotency-key": `admin-ui-geo-review-${Date.now()}` }, body: JSON.stringify({ expectedLockVersion: lockVersion }) });
+        showToast("内容已提交审核"); await loadGeoOperations(); renderShell();
+      }
+      async function geoPublishContent(contentId) {
+        const item = geoOperationsState().content.find((entry) => entry.id === contentId);
+        const quality = item ? geoQualityCounts(item) : { blockers: 0, warnings: 0, title: "" };
+        if (quality.blockers > 0) return showToast("仍有阻断项，暂不能发布");
+        const reason = window.prompt(`确认将“${quality.title}”发布到官网吗？当前警告 ${quality.warnings} 项。\n请输入发布原因：`, "人工审核通过");
+        if (!reason) return;
+        await api(`/api/admin/geo/content/${encodeURIComponent(contentId)}/publish`, { method: "POST", headers: { "idempotency-key": `admin-ui-geo-publish-${Date.now()}` }, body: JSON.stringify({ reason }) });
+        showToast("内容已发布到官网"); await loadGeoOperations(); renderShell();
+      }
+      async function geoSaveSettings(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        const error = form.querySelector(".form-error") || { textContent: "" };
+        await runAdminMutation(form, error, () => api("/api/admin/geo/settings", { method: "PATCH", body: JSON.stringify({ value: { brandName: "灵曦AI", enabled: true, defaultModelCode: data.get("defaultModelCode"), similarityThreshold: Number(data.get("similarityThreshold")), configRevisionId: "geo-default-v1", allowedContentTypes: ["guide", "case", "report", "answer"] }, reason: "更新GEO运营配置" }) }), "GEO设置已保存");
+        await loadGeoOperations(); renderShell();
+      }
+
+      (function installGeoOperationsPage() {
+        pages.geoOperations = "GEO运营";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          state.adminRoles = Array.isArray(state.session?.roles) ? state.session.roles : [];
+          if (location.pathname.includes("/geo-operations") && state.adminRoles.includes("super_admin")) return "geoOperations";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "geoOperations") return previousNavigate(page);
+          state.page = page;
+          history.pushState(null, "", "/admin/geo-operations");
+          renderShell();
+          ensureAdminPageData(page).catch(() => undefined);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() { return state.page === "geoOperations" ? geoOperationsPage() : previousRenderPage(); };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          state.adminRoles = Array.isArray(state.session?.roles) ? state.session.roles : [];
+          if (!Array.isArray(state.adminRoles) || !state.adminRoles.includes("super_admin")) return;
+          const nav = document.querySelector(".nav");
+          if (!nav || nav.querySelector('[data-page="geoOperations"]')) return;
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const button = document.createElement("button");
+          button.dataset.page = "geoOperations";
+          button.innerHTML = "<span>GEO运营</span>";
+          if (state.page === "geoOperations") button.classList.add("active");
+          button.addEventListener("click", () => navigate("geoOperations"));
+          nav.insertBefore(button, settingsButton);
+        };
+      })();
+      ADMIN_PAGE_LOADERS.geoOperations = loadGeoOperations;
+      window.loadGeoOperations = loadGeoOperations;
+      window.geoCreateQuestion = geoCreateQuestion;
+      window.geoCreateEvidence = geoCreateEvidence;
+      window.geoSelectQuestion = geoSelectQuestion;
+      window.geoToggleEvidence = geoToggleEvidence;
+      window.geoGenerateDraft = geoGenerateDraft;
+      window.geoSubmitReview = geoSubmitReview;
+      window.geoPublishContent = geoPublishContent;
+      window.geoSaveSettings = geoSaveSettings;
 
       function stripAdminReasonFields(root = document) {
         const forms = new Set();

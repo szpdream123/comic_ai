@@ -6,6 +6,16 @@ import vm from "node:vm";
 const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
 const script = (html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "").replace(/\r\n/g, "\n");
 
+test("admin shell exposes the super-admin GEO workflow", () => {
+  for (const text of [
+    "GEO运营", "问题库", "证据库", "内容中心", "自动质检", "提交审核", "发布官网",
+    "/api/admin/geo/questions", "/api/admin/geo/evidence", "/api/admin/geo/content",
+    "/api/admin/geo/generate", "/submit-review", "/publish",
+  ]) assert.match(script, new RegExp(escapeRegExp(text)));
+  assert.match(script, /state\.adminRoles\.includes\("super_admin"\)/);
+  assert.doesNotMatch(script, /一键发布/);
+});
+
 test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);
