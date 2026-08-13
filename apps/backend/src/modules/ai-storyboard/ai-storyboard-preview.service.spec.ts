@@ -1221,12 +1221,7 @@ describe("ai storyboard preview service", () => {
       async *streamJson() {
         calls += 1;
         if (calls === 1) throw Object.assign(new Error("provider failed"), { retryable: true });
-        yield [
-          JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
-          JSON.stringify({ characters: [{ characterName: "任小野" }] }),
-          JSON.stringify({ props: [{ propName: "饭食" }] }),
-          JSON.stringify({ storyboards: [{ shotNo: 1, plot: "递出饭食" }] }),
-        ][calls - 2]!;
+        yield JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] });
       },
     };
     const service = createAiStoryboardPreviewService({ gateway });
@@ -1235,11 +1230,261 @@ describe("ai storyboard preview service", () => {
       projectId: "40000000-0000-4000-8000-000000000001",
       scriptText: "任小野把饭食递给闵婶子。",
       skipScriptStage: true,
+      selectedStages: ["scene"],
       packages: {},
     });
 
-    assert.equal(calls, 5);
+    assert.equal(calls, 2);
     assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
+  });
+
+  it("keeps asset-stage retry behavior while the extraction stages run in parallel", async () => {
+    const calls = new Map<string, number>();
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson(input) {
+        const stage = input.prompt.startsWith("SCENE")
+          ? "scene"
+          : input.prompt.startsWith("CHARACTER")
+            ? "character"
+            : "prop";
+        const attempt = (calls.get(stage) ?? 0) + 1;
+        calls.set(stage, attempt);
+        if (stage === "scene" && attempt === 1) {
+          throw Object.assign(new Error("provider failed"), { retryable: true });
+        }
+        yield {
+          scene: JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
+          character: JSON.stringify({ characters: [{ characterName: "任小野" }] }),
+          prop: JSON.stringify({ props: [{ propName: "饭食" }] }),
+        }[stage];
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene", "character", "prop"],
+      packages: {},
+      templates: {
+        scenePrompt: "SCENE {{script}}",
+        characterPrompt: "CHARACTER {{script}}",
+        propPrompt: "PROP {{script}}",
+      },
+    });
+
+    assert.deepEqual(Object.fromEntries(calls), { scene: 2, character: 1, prop: 1 });
+    assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
+    assert.equal(result.displayTables.characters.rows[0]?.characterName, "任小野");
+    assert.equal(result.displayTables.props.rows[0]?.propName, "饭食");
+  });
+
+  it("starts independent asset stages concurrently and preserves ordered events", async () => {
+    const gateway = new ControlledParallelAssetGateway();
+    const service = createAiStoryboardPreviewService({ gateway });
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of service.generatePreviewStream({
+        projectId: "40000000-0000-4000-8000-000000000001",
+        scriptText: "任小野把饭食递给闵婶子。",
+        skipScriptStage: true,
+        selectedStages: ["scene", "character", "prop", "shot"],
+        packages: {},
+        templates: {
+          scenePrompt: "SCENE {{script}}",
+          characterPrompt: "CHARACTER {{script}}",
+          propPrompt: "PROP {{script}}",
+          shotPrompt: "SHOT {{script}}",
+        },
+      })) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    const allAssetStagesStartedBeforeRelease = await settlesWithin(gateway.allAssetStagesStarted, 200);
+    const shotStartedBeforeRelease = gateway.startedStages.includes("shot");
+    gateway.release("prop");
+    gateway.release("character");
+    gateway.release("scene");
+    const events = await eventsPromise;
+
+    assert.equal(allAssetStagesStartedBeforeRelease, true);
+    assert.equal(shotStartedBeforeRelease, false);
+    assert.deepEqual(
+      events.filter((event) => event.type === "asset_start").map((event) => event.stage),
+      ["scene", "character", "prop", "shot"],
+    );
+    assert.deepEqual(
+      events.filter((event) => event.type === "asset_done").map((event) => event.stage),
+      ["scene", "character", "prop", "shot"],
+    );
+    const complete = events.find((event) => event.type === "complete");
+    assert.equal(complete?.type, "complete");
+    if (complete?.type === "complete") {
+      assert.equal(complete.preview.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
+      assert.equal(complete.preview.displayTables.characters.rows[0]?.characterName, "任小野");
+      assert.equal(complete.preview.displayTables.props.rows[0]?.propName, "饭食");
+      assert.equal(complete.preview.displayTables.storyboards.rows[0]?.plot, "递出饭食");
+    }
+  });
+
+  it("aborts sibling parallel asset stages when one stage fails", async () => {
+    const gateway = new FailingParallelAssetGateway();
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events = [];
+
+    await assert.rejects(
+      async () => {
+        for await (const event of service.generatePreviewStream({
+          projectId: "40000000-0000-4000-8000-000000000001",
+          scriptText: "任小野把饭食递给闵婶子。",
+          skipScriptStage: true,
+          selectedStages: ["scene", "character", "prop", "shot"],
+          packages: {},
+          templates: {
+            scenePrompt: "SCENE {{script}}",
+            characterPrompt: "CHARACTER {{script}}",
+            propPrompt: "PROP {{script}}",
+            shotPrompt: "SHOT {{script}}",
+          },
+        })) {
+          events.push(event);
+        }
+      },
+      /scene failed/,
+    );
+    const siblingsAborted = await settlesWithin(gateway.allSiblingsAborted, 200);
+    gateway.releaseAll();
+
+    assert.equal(siblingsAborted, true);
+    assert.equal(gateway.startedStages.includes("shot"), false);
+    assert.equal(events.some((event) => event.type === "complete"), false);
+  });
+
+  it("runs only the selected parallel asset stages before the shot stage", async () => {
+    const gateway = new ControlledParallelAssetGateway(["character", "prop"]);
+    const service = createAiStoryboardPreviewService({ gateway });
+    const eventsPromise = (async () => {
+      const events = [];
+      for await (const event of service.generatePreviewStream({
+        projectId: "40000000-0000-4000-8000-000000000001",
+        scriptText: "任小野把饭食递给闵婶子。",
+        skipScriptStage: true,
+        selectedStages: ["character", "prop", "shot"],
+        packages: {},
+        templates: {
+          characterPrompt: "CHARACTER {{script}}",
+          propPrompt: "PROP {{script}}",
+          shotPrompt: "SHOT {{script}}",
+        },
+      })) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    assert.equal(await settlesWithin(gateway.allAssetStagesStarted, 200), true);
+    assert.equal(gateway.startedStages.includes("scene"), false);
+    assert.equal(gateway.startedStages.includes("shot"), false);
+    gateway.release("prop");
+    gateway.release("character");
+    const events = await eventsPromise;
+
+    assert.deepEqual(
+      events.filter((event) => event.type === "asset_start").map((event) => event.stage),
+      ["character", "prop", "shot"],
+    );
+  });
+
+  it("propagates request cancellation to every active parallel asset stage", async () => {
+    const gateway = new CancellationObservingParallelAssetGateway();
+    const service = createAiStoryboardPreviewService({ gateway });
+    const abortController = new AbortController();
+    const generation = (async () => {
+      for await (const _event of service.generatePreviewStream({
+        projectId: "40000000-0000-4000-8000-000000000001",
+        scriptText: "任小野把饭食递给闵婶子。",
+        skipScriptStage: true,
+        selectedStages: ["scene", "character", "prop", "shot"],
+        packages: {},
+        templates: {
+          scenePrompt: "SCENE {{script}}",
+          characterPrompt: "CHARACTER {{script}}",
+          propPrompt: "PROP {{script}}",
+          shotPrompt: "SHOT {{script}}",
+        },
+        signal: abortController.signal,
+      })) {
+        // Drain until cancellation rejects the generation.
+      }
+    })();
+
+    assert.equal(await settlesWithin(gateway.allAssetStagesStarted, 200), true);
+    abortController.abort();
+    await assert.rejects(generation, /request aborted/);
+
+    assert.equal(await settlesWithin(gateway.allAssetStagesAborted, 200), true);
+    assert.equal(gateway.startedStages.includes("shot"), false);
+  });
+
+  it("keeps the foreground asset stage under consumer backpressure", async () => {
+    const gateway = new BackpressureAssetGateway();
+    const service = createAiStoryboardPreviewService({ gateway });
+    const iterator = service.generatePreviewStream({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene"],
+      packages: {},
+    })[Symbol.asyncIterator]();
+
+    assert.equal((await iterator.next()).value.type, "script_done");
+    assert.equal((await iterator.next()).value.type, "asset_prompt");
+    assert.equal((await iterator.next()).value.type, "asset_start");
+    assert.equal((await iterator.next()).value.type, "asset_delta");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(gateway.pulledChunks, 1);
+    await iterator.return?.();
+  });
+
+  it("reports a background asset failure in stage order without truncating prior stages", async () => {
+    const gateway = new OrderedBackgroundFailureGateway();
+    const service = createAiStoryboardPreviewService({ gateway });
+    const events = [];
+
+    await assert.rejects(
+      async () => {
+        for await (const event of service.generatePreviewStream({
+          projectId: "40000000-0000-4000-8000-000000000001",
+          scriptText: "任小野把饭食递给闵婶子。",
+          skipScriptStage: true,
+          selectedStages: ["scene", "character", "prop", "shot"],
+          packages: {},
+          templates: {
+            scenePrompt: "SCENE {{script}}",
+            characterPrompt: "CHARACTER {{script}}",
+            propPrompt: "PROP {{script}}",
+            shotPrompt: "SHOT {{script}}",
+          },
+        })) {
+          events.push(event);
+        }
+      },
+      /prop failed/,
+    );
+
+    assert.deepEqual(
+      events.filter((event) => event.type === "asset_done").map((event) => event.stage),
+      ["scene", "character"],
+    );
+    assert.equal(events.some((event) => event.type === "asset_start" && event.stage === "prop"), true);
+    assert.equal(events.some((event) => event.type === "asset_start" && event.stage === "shot"), false);
+    assert.equal(events.some((event) => event.type === "complete"), false);
   });
 
   it("yields each model chunk before the model stream is finished", async () => {
@@ -1362,5 +1607,233 @@ class ManualStreamGateway implements TextChatGatewayLike {
     } else {
       this.queue.push("__END__");
     }
+  }
+}
+
+class ControlledParallelAssetGateway implements TextChatGatewayLike {
+  readonly startedStages: string[] = [];
+  readonly allAssetStagesStarted: Promise<void>;
+  private readonly releaseStage: Record<"scene" | "character" | "prop", () => void>;
+  private readonly releasedStage: Record<"scene" | "character" | "prop", Promise<void>>;
+  private resolveAllAssetStagesStarted!: () => void;
+  private readonly expectedStages: Array<"scene" | "character" | "prop">;
+
+  constructor(expectedStages: Array<"scene" | "character" | "prop"> = ["scene", "character", "prop"]) {
+    this.expectedStages = expectedStages;
+    this.allAssetStagesStarted = new Promise((resolve) => {
+      this.resolveAllAssetStagesStarted = resolve;
+    });
+    const releases = ["scene", "character", "prop"].map((stage) => {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [stage, { release, released }] as const;
+    });
+    const controls = Object.fromEntries(releases) as Record<
+      "scene" | "character" | "prop",
+      { release: () => void; released: Promise<void> }
+    >;
+    this.releaseStage = {
+      scene: controls.scene.release,
+      character: controls.character.release,
+      prop: controls.prop.release,
+    };
+    this.releasedStage = {
+      scene: controls.scene.released,
+      character: controls.character.released,
+      prop: controls.prop.released,
+    };
+  }
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    this.startedStages.push(stage);
+    if (this.expectedStages.every((item) => this.startedStages.includes(item))) {
+      this.resolveAllAssetStagesStarted();
+    }
+    if (stage !== "shot") {
+      await this.releasedStage[stage];
+    }
+    yield {
+      scene: JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
+      character: JSON.stringify({ characters: [{ characterName: "任小野" }] }),
+      prop: JSON.stringify({ props: [{ propName: "饭食" }] }),
+      shot: JSON.stringify({ storyboards: [{ shotNo: 1, plot: "递出饭食" }] }),
+    }[stage];
+  }
+
+  release(stage: "scene" | "character" | "prop") {
+    this.releaseStage[stage]();
+  }
+}
+
+class FailingParallelAssetGateway implements TextChatGatewayLike {
+  readonly startedStages: string[] = [];
+  readonly allSiblingsAborted: Promise<void>;
+  private readonly allAssetStagesStarted: Promise<void>;
+  private resolveAllAssetStagesStarted!: () => void;
+  private resolveAllSiblingsAborted!: () => void;
+  private releaseWaiting!: () => void;
+  private readonly waitingReleased: Promise<void>;
+  private readonly abortedStages = new Set<string>();
+
+  constructor() {
+    this.allAssetStagesStarted = new Promise((resolve) => {
+      this.resolveAllAssetStagesStarted = resolve;
+    });
+    this.allSiblingsAborted = new Promise((resolve) => {
+      this.resolveAllSiblingsAborted = resolve;
+    });
+    this.waitingReleased = new Promise((resolve) => {
+      this.releaseWaiting = resolve;
+    });
+  }
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string; signal?: AbortSignal }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    this.startedStages.push(stage);
+    if (["scene", "character", "prop"].every((item) => this.startedStages.includes(item))) {
+      this.resolveAllAssetStagesStarted();
+    }
+    if (stage === "scene") {
+      await this.allAssetStagesStarted;
+      throw new Error("scene failed");
+    }
+    if (stage === "character" || stage === "prop") {
+      await Promise.race([
+        this.waitingReleased,
+        new Promise<void>((resolve) => {
+          input.signal?.addEventListener("abort", () => {
+            this.abortedStages.add(stage);
+            if (this.abortedStages.has("character") && this.abortedStages.has("prop")) {
+              this.resolveAllSiblingsAborted();
+            }
+            resolve();
+          }, { once: true });
+        }),
+      ]);
+      return;
+    }
+    yield JSON.stringify({ storyboards: [{ shotNo: 1, plot: "不应生成" }] });
+  }
+
+  releaseAll() {
+    this.releaseWaiting();
+  }
+}
+
+class CancellationObservingParallelAssetGateway implements TextChatGatewayLike {
+  readonly startedStages: string[] = [];
+  readonly allAssetStagesStarted: Promise<void>;
+  readonly allAssetStagesAborted: Promise<void>;
+  private resolveAllAssetStagesStarted!: () => void;
+  private resolveAllAssetStagesAborted!: () => void;
+  private readonly abortedStages = new Set<string>();
+
+  constructor() {
+    this.allAssetStagesStarted = new Promise((resolve) => {
+      this.resolveAllAssetStagesStarted = resolve;
+    });
+    this.allAssetStagesAborted = new Promise((resolve) => {
+      this.resolveAllAssetStagesAborted = resolve;
+    });
+  }
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string; signal?: AbortSignal }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    this.startedStages.push(stage);
+    if (["scene", "character", "prop"].every((item) => this.startedStages.includes(item))) {
+      this.resolveAllAssetStagesStarted();
+    }
+    if (stage === "shot") {
+      yield JSON.stringify({ storyboards: [] });
+      return;
+    }
+    await new Promise<void>((_resolve, reject) => {
+      input.signal?.addEventListener("abort", () => {
+        this.abortedStages.add(stage);
+        if (["scene", "character", "prop"].every((item) => this.abortedStages.has(item))) {
+          this.resolveAllAssetStagesAborted();
+        }
+        reject(new Error("request aborted"));
+      }, { once: true });
+    });
+  }
+}
+
+class BackpressureAssetGateway implements TextChatGatewayLike {
+  pulledChunks = 0;
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson() {
+    this.pulledChunks += 1;
+    yield '{"scenes":[';
+    this.pulledChunks += 1;
+    yield '{"sceneName":"旧木屋"}]}';
+  }
+}
+
+class OrderedBackgroundFailureGateway implements TextChatGatewayLike {
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string; signal?: AbortSignal }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    if (stage === "scene") {
+      yield '{"scenes":[';
+      await Promise.resolve();
+      if (input.signal?.aborted) throw new Error("scene aborted");
+      yield '{"sceneName":"旧木屋"}]}';
+      return;
+    }
+    if (stage === "character") {
+      yield JSON.stringify({ characters: [{ characterName: "任小野" }] });
+      return;
+    }
+    if (stage === "prop") {
+      throw new Error("prop failed");
+    }
+    yield JSON.stringify({ storyboards: [{ shotNo: 1, plot: "不应生成" }] });
   }
 }
