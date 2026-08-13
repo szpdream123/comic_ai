@@ -2601,6 +2601,14 @@ test("admin exposes a dedicated first-login onboarding editor with safe optional
   );
   assert.match(editor, /select[\s\S]*targetKey/);
   assert.match(editor, /最多 12 个/);
+  assert.match(editor, /ONBOARDING_TIMELINE/);
+  assert.match(editor, /onboardingPlacementBlock/);
+  assert.match(editor, /data-onboarding-placement/);
+  assert.match(editor, /addFirstLoginTip\(placement\)/);
+  assert.match(editor, /item\.pageLabel/);
+  assert.match(editor, /执行顺序/);
+  assert.match(editor, /onboardingExecutionSummaryItem/);
+  assert.match(editor, /entry\.tip\.title/);
   assert.doesNotMatch(editor, /cssSelector|querySelector\(tip\.target|name="selector"/);
   assert.match(editor, /tips\[candidateIndex\]\?\.placement === currentPlacement/);
   assert.doesNotMatch(editor, /\[tips\[index\], tips\[target\]\] = \[tips\[target\], tips\[index\]\]/);

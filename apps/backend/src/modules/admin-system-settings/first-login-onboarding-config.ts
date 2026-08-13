@@ -45,6 +45,7 @@ export const firstLoginOnboardingTargets = [
     key: "project-module-entry",
     label: "项目模块入口",
     pageLabel: "项目列表",
+    action: "set-nav-tab",
     placements: ["before-create-project"],
   },
   {
@@ -65,6 +66,7 @@ export const firstLoginOnboardingTargets = [
     key: "episode-module-entry",
     label: "剧集模块入口",
     pageLabel: "项目详情",
+    action: "set-project-interior-section",
     placements: ["before-prepare-script"],
   },
   {
@@ -91,6 +93,7 @@ export const firstLoginOnboardingTargets = [
     key: "prompt-skill-selector",
     label: "提示词技能选择",
     pageLabel: "创建第一集",
+    action: "open-episode-prompt-skill-modal",
     placements: ["before-generate-storyboard"],
   },
   {

@@ -17,6 +17,7 @@ import {
   initializeFirstLoginGuide,
   reduceFirstLoginTipTargetAction,
   reduceFirstLoginGuideAction,
+  skipUnavailableFirstLoginTips,
 } from "./first-login-onboarding.js";
 import { normalizeNovelStyleScriptText, truncateScriptTextByCharacters } from "./script-text-normalizer.js?single-episode-limit=2";
 import { validateTeamAssetLocalUploadFile } from "../library-team/asset-library-page.js";
@@ -8545,6 +8546,24 @@ function updateNewCanvasSurfaceForHostAction(workbench) {
   return updateMountedNewCanvasSurface(workbench, options);
 }
 
+export function reconcileFirstLoginGuideTargets(workbench) {
+  if (workbench.ui?.firstLoginGuide?.step !== "tip") return false;
+  const targetElements = workbench.root?.querySelectorAll?.("[data-first-login-target]") ?? [];
+  const availableTargetKeys = new Set(
+    [...targetElements]
+      .filter((element) =>
+        element?.hidden !== true &&
+        (typeof element?.getClientRects !== "function" || element.getClientRects().length > 0),
+      )
+      .map((element) => String(element?.dataset?.firstLoginTarget ?? "").trim())
+      .filter(Boolean),
+  );
+  const nextGuide = skipUnavailableFirstLoginTips(workbench.ui.firstLoginGuide, availableTargetKeys);
+  if (nextGuide === workbench.ui.firstLoginGuide) return false;
+  workbench.ui.firstLoginGuide = nextGuide;
+  return true;
+}
+
 function render(workbench, options = {}) {
   if (updateNewCanvasSurfaceForHostAction(workbench)) return;
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
@@ -8611,6 +8630,10 @@ function render(workbench, options = {}) {
     }
     disposeHomeLiquidEther(workbench);
     disposeHomeLightfall(workbench);
+    return;
+  }
+  if (reconcileFirstLoginGuideTargets(workbench)) {
+    render(workbench, options);
     return;
   }
   restoreToolboxWatermarkRemovalMask(workbench);
@@ -11624,9 +11647,15 @@ function syncToolboxPromptReverseKeyFrameLightbox(workbench, target, index = -1)
 
 export async function handleProductionWorkbenchAction(workbench, target) {
   let action = target.dataset.action;
+  const firstLoginTargetKey = String(
+    target.dataset.firstLoginTarget ??
+    target.closest?.("[data-first-login-target]")?.dataset?.firstLoginTarget ??
+    "",
+  ).trim();
   const firstLoginTipAction = reduceFirstLoginTipTargetAction(
     workbench.ui.firstLoginGuide,
     action,
+    firstLoginTargetKey,
   );
   workbench.ui.firstLoginGuide = firstLoginTipAction.state;
   if (firstLoginTipAction.handled && !firstLoginTipAction.allowAction) {
@@ -11860,8 +11889,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       await openSingleEpisodeFlow(workbench);
       workbench.ui.singleEpisodeScript = firstLoginGuideAction.script;
     } else if (action === "start-first-login-guide") {
-      workbench.ui.activeNavTab = "home";
-      window.location.hash = "home";
+      workbench.ui.firstLoginGuide = firstLoginGuideAction.state;
+      await handleProductionWorkbenchAction(workbench, {
+        dataset: { action: "set-nav-tab", tab: "project" },
+      });
+      return;
     }
     workbench.ui.firstLoginGuide = firstLoginGuideAction.state;
     render(workbench);

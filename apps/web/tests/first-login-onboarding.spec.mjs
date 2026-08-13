@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
+import { renderProjectDetail, renderSingleEpisodeAiPreview } from "../src/features/production-workbench/project-detail.js";
+import { renderEpisodeWorkbench } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
+import * as productionWorkbenchModule from "../src/features/production-workbench/index.js";
+import * as onboardingGuideModule from "../src/features/production-workbench/first-login-onboarding.js";
 import {
   advanceFirstLoginGuide,
   consumeFirstLoginOnboarding,
@@ -16,7 +19,10 @@ import {
   advanceFirstLoginTipForTargetAction,
   reduceFirstLoginTipTargetAction,
 } from "../src/features/production-workbench/first-login-onboarding.js";
-import { initProductionWorkbench } from "../src/features/production-workbench/index.js";
+import {
+  handleProductionWorkbenchAction,
+  initProductionWorkbench,
+} from "../src/features/production-workbench/index.js";
 
 function createStorage() {
   const values = new Map();
@@ -31,6 +37,26 @@ function createStorage() {
       values.delete(key);
     },
     values,
+  };
+}
+
+function createGuideTipState({ id = "target-tip", placement, targetKey, nextStep }) {
+  const config = normalizeFirstLoginOnboardingConfig({
+    tips: [{
+      id,
+      placement,
+      targetKey,
+      eyebrow: "位置提示",
+      title: "查看高亮区域",
+      description: "这里是当前步骤需要了解的功能。",
+      primaryButton: "下一步",
+    }],
+  });
+  return {
+    ...createFirstLoginGuideState(true, config),
+    step: "tip",
+    tipId: id,
+    nextStep,
   };
 }
 
@@ -132,6 +158,93 @@ test("workbench guide actions activate only for an eligible first-login session"
   assert.equal(dismissed.state, null);
 });
 
+test("starting the guide opens the project library and highlights its create button instead of the home CTA", async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const location = { hash: "#home", pathname: "/", search: "" };
+  const root = {
+    innerHTML: "",
+    addEventListener() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  };
+  globalThis.window = {
+    location,
+    history: {
+      replaceState() {},
+      pushState(_state, _title, path) {
+        location.pathname = path;
+        location.hash = "";
+      },
+    },
+    addEventListener() {},
+    requestAnimationFrame(callback) { return setTimeout(callback, 0); },
+    cancelAnimationFrame(timer) { clearTimeout(timer); },
+    setTimeout,
+    clearTimeout,
+    matchMedia() { return { matches: false, addEventListener() {}, removeEventListener() {} }; },
+  };
+  globalThis.document = {
+    documentElement: { dataset: {} },
+    head: { appendChild() {} },
+    addEventListener() {},
+    createElement() {
+      return { setAttribute() {} };
+    },
+    querySelector() { return null; },
+  };
+
+  try {
+    const session = {
+      authenticated: true,
+      firstLoginOnboarding: true,
+      user: { id: "new-user", actorType: "user", phone: "13800138000" },
+    };
+    const workbench = await initProductionWorkbench({
+      root,
+      session,
+      api: {
+        async getProjects() {
+          return {
+            projects: [],
+            pagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
+          };
+        },
+      },
+      deferInitialRender: true,
+    });
+
+    await handleProductionWorkbenchAction(workbench, {
+      dataset: { action: "start-first-login-guide" },
+    });
+
+    assert.equal(workbench.ui.activeNavTab, "project");
+    assert.equal(workbench.ui.projectPanelMode, "library");
+    assert.equal(location.pathname, "/projects");
+    assert.match(root.innerHTML, /data-scroll-surface="project"/);
+    assert.match(
+      root.innerHTML,
+      /class="[^"]*gallery-create-button[^"]*first-login-guide-target[^"]*"[^>]*data-action="open-create-modal"/,
+    );
+
+    const homeHtml = renderProjectDetail({
+      state: {},
+      ui: {
+        activeNavTab: "home",
+        firstLoginGuide: workbench.ui.firstLoginGuide,
+      },
+      session,
+    });
+    assert.doesNotMatch(
+      homeHtml,
+      /class="[^"]*hero-cta[^"]*first-login-guide-target[^"]*"[^>]*data-action="open-create-modal"/,
+    );
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
 test("sample and own-script actions enter the same basic flow with different script seeds", () => {
   const prepareScript = moveFirstLoginGuide(createFirstLoginGuideState(true), "prepare-script");
   const sample = reduceFirstLoginGuideAction(prepareScript, "first-login-use-sample-script");
@@ -183,6 +296,227 @@ test("real workbench success events advance the guide in order and failures neve
   assert.equal(state.step, "confirm-storyboard");
   state = advanceFirstLoginGuide(state, "storyboard-committed");
   assert.equal(state.step, "complete");
+});
+
+test("new timeline placements run before script preparation, preview confirmation, and completion", () => {
+  const makeTip = (id, placement, targetKey) => ({
+    id,
+    placement,
+    targetKey,
+    eyebrow: "位置提示",
+    title: id,
+    description: "检查当前高亮位置。",
+    primaryButton: "下一步",
+  });
+  const config = normalizeFirstLoginOnboardingConfig({
+    tips: [
+      makeTip("find-episode-entry", "before-prepare-script", "create-first-episode-button"),
+      makeTip("review-preview", "before-confirm-storyboard", "storyboard-preview-surface"),
+      makeTip("find-workbench", "before-complete", "storyboard-workbench"),
+    ],
+  });
+
+  let state = moveFirstLoginGuide(createFirstLoginGuideState(true, config), "enter-project");
+  state = advanceFirstLoginGuide(state, "project-opened");
+  assert.equal(state.tipId, "find-episode-entry");
+  assert.equal(state.nextStep, "prepare-script");
+
+  state = moveFirstLoginGuide(state, "generating");
+  state = advanceFirstLoginGuide(state, "generation-ready");
+  assert.equal(state.tipId, "review-preview");
+  assert.equal(state.nextStep, "confirm-storyboard");
+
+  state = moveFirstLoginGuide(state, "confirm-storyboard");
+  state = advanceFirstLoginGuide(state, "storyboard-committed");
+  assert.equal(state.tipId, "find-workbench");
+  assert.equal(state.nextStep, "complete");
+});
+
+test("new timeline placements keep configured tip order before entering the core step", () => {
+  const config = normalizeFirstLoginOnboardingConfig({
+    tips: ["surface", "table"].map((id) => ({
+      id: `preview-${id}`,
+      placement: "before-confirm-storyboard",
+      targetKey: id === "surface" ? "storyboard-preview-surface" : "storyboard-preview-table",
+      eyebrow: "检查结果",
+      title: `查看${id}`,
+      description: "按配置顺序介绍结果。",
+      primaryButton: "下一步",
+    })),
+  });
+  let state = advanceFirstLoginGuide(
+    moveFirstLoginGuide(createFirstLoginGuideState(true, config), "generating"),
+    "generation-ready",
+  );
+
+  assert.equal(state.tipId, "preview-surface");
+  state = reduceFirstLoginGuideAction(state, "next-first-login-tip").state;
+  assert.equal(state.tipId, "preview-table");
+  state = reduceFirstLoginGuideAction(state, "next-first-login-tip").state;
+  assert.equal(state.step, "confirm-storyboard");
+});
+
+test("unavailable guide targets are skipped without blocking the next visible tip or core step", () => {
+  assert.equal(typeof onboardingGuideModule.skipUnavailableFirstLoginTips, "function");
+  const config = normalizeFirstLoginOnboardingConfig({
+    tips: [
+      {
+        id: "missing-scene-table",
+        placement: "before-confirm-storyboard",
+        targetKey: "scene-preview-table",
+        eyebrow: "检查结果",
+        title: "查看场景",
+        description: "查看生成的场景。",
+        primaryButton: "下一步",
+      },
+      {
+        id: "visible-commit",
+        placement: "before-confirm-storyboard",
+        targetKey: "commit-storyboard-button",
+        eyebrow: "完成创建",
+        title: "创建章节",
+        description: "确认后创建章节。",
+        primaryButton: "下一步",
+      },
+    ],
+  });
+  const firstTip = advanceFirstLoginGuide(
+    moveFirstLoginGuide(createFirstLoginGuideState(true, config), "generating"),
+    "generation-ready",
+  );
+
+  const visibleTip = onboardingGuideModule.skipUnavailableFirstLoginTips(firstTip, new Set(["commit-storyboard-button"]));
+  assert.equal(visibleTip.tipId, "visible-commit");
+  assert.deepEqual(visibleTip.completedTipIds, ["missing-scene-table"]);
+
+  const coreStep = onboardingGuideModule.skipUnavailableFirstLoginTips(firstTip, new Set());
+  assert.equal(coreStep.step, "confirm-storyboard");
+  assert.deepEqual(coreStep.completedTipIds, ["missing-scene-table", "visible-commit"]);
+});
+
+test("single episode creation and ready preview expose every registered guide target", () => {
+  const projectState = {
+    project: { id: "project-1", name: "测试项目", aspectRatio: "9:16" },
+    projectDetail: {
+      project: { id: "project-1", projectId: "project-1", name: "测试项目" },
+      episodes: [],
+      assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+      shots: [],
+    },
+  };
+  const modalHtml = renderProjectDetail({
+    state: projectState,
+    session: { user: { phone: "13800138000" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      isSingleEpisodeModalOpen: true,
+      singleEpisodeScript: "测试剧本",
+      firstLoginGuide: createGuideTipState({
+        placement: "before-generate-storyboard",
+        targetKey: "script-input",
+        nextStep: "generate-storyboard",
+      }),
+    },
+  });
+
+  for (const targetKey of ["script-input", "text-model-selector", "prompt-skill-selector", "generate-storyboard-button"]) {
+    assert.match(modalHtml, new RegExp(`data-first-login-target="${targetKey}"`));
+  }
+  assert.match(modalHtml, /class="[^"]*single-episode-script-field[^"]*first-login-guide-target[^"]*"[^>]*data-first-login-target="script-input"/);
+
+  const previewHtml = renderSingleEpisodeAiPreview({
+    firstLoginGuide: createGuideTipState({
+      placement: "before-confirm-storyboard",
+      targetKey: "storyboard-preview-table",
+      nextStep: "confirm-storyboard",
+    }),
+    singleEpisodeAiPreview: {
+      status: "ready",
+      data: {
+        displayTables: {
+          scenes: { title: "场景", rows: [{ sceneName: "天台" }] },
+          characters: { title: "角色", rows: [{ characterName: "林夏" }] },
+          props: { title: "道具", rows: [{ propName: "信" }] },
+          storyboards: { title: "分镜", rows: [{ shotNo: 1, plot: "看向远方" }] },
+        },
+      },
+    },
+  });
+
+  for (const targetKey of [
+    "storyboard-preview-surface",
+    "scene-preview-table",
+    "character-preview-table",
+    "prop-preview-table",
+    "storyboard-preview-table",
+    "commit-storyboard-button",
+  ]) {
+    assert.match(previewHtml, new RegExp(`data-first-login-target="${targetKey}"`));
+  }
+  assert.match(previewHtml, /class="[^"]*storyboards[^"]*first-login-guide-target[^"]*"[^>]*data-first-login-target="storyboard-preview-table"/);
+});
+
+test("post-render target reconciliation skips missing tips and keeps a visible target", () => {
+  assert.equal(typeof productionWorkbenchModule.reconcileFirstLoginGuideTargets, "function");
+  const firstLoginGuide = advanceFirstLoginGuide(
+    moveFirstLoginGuide(createFirstLoginGuideState(true, normalizeFirstLoginOnboardingConfig({
+      tips: [
+        {
+          id: "missing-preview",
+          placement: "before-confirm-storyboard",
+          targetKey: "scene-preview-table",
+          eyebrow: "场景",
+          title: "查看场景",
+          description: "场景为空时应自动跳过。",
+          primaryButton: "下一步",
+        },
+        {
+          id: "visible-commit",
+          placement: "before-confirm-storyboard",
+          targetKey: "commit-storyboard-button",
+          eyebrow: "提交",
+          title: "创建章节",
+          description: "这个目标当前可见。",
+          primaryButton: "下一步",
+        },
+      ],
+    })), "generating"),
+    "generation-ready",
+  );
+  const workbench = {
+    ui: { firstLoginGuide },
+    root: {
+      querySelectorAll(selector) {
+        assert.equal(selector, "[data-first-login-target]");
+        return [{
+          dataset: { firstLoginTarget: "commit-storyboard-button" },
+          hidden: false,
+          getClientRects() { return [{}]; },
+        }];
+      },
+    },
+  };
+
+  const changed = productionWorkbenchModule.reconcileFirstLoginGuideTargets(workbench);
+
+  assert.equal(changed, true);
+  assert.equal(workbench.ui.firstLoginGuide.tipId, "visible-commit");
+});
+
+test("episode workbench exposes completion guide targets", () => {
+  const html = renderEpisodeWorkbench({
+    episodeId: "episode-1",
+    episodeTitle: "第一集",
+    storyboards: [{ id: "storyboard-1", index: 1, title: "开场", description: "城市天台" }],
+    selectedStoryboard: { id: "storyboard-1" },
+    firstLoginGuideTargetKey: "first-storyboard-card",
+  });
+
+  assert.match(html, /id="storyboard-workbench"/);
+  assert.match(html, /data-first-login-target="first-storyboard-card"/);
+  assert.match(html, /class="[^\"]*episode-replica-shot-shell[^\"]*first-login-guide-target[^\"]*"/);
 });
 
 test("configured copy is merged safely and escaped before rendering", () => {
@@ -284,6 +618,23 @@ test("clicking the highlighted tool completes its informational tip before the r
   assert.deepEqual(advanced.completedTipIds, ["find-create"]);
 });
 
+test("clickable module and skill targets advance their tips before continuing the real action", () => {
+  const cases = [
+    ["before-create-project", "project-module-entry", "create-project", "set-nav-tab"],
+    ["before-prepare-script", "episode-module-entry", "prepare-script", "set-project-interior-section"],
+    ["before-generate-storyboard", "prompt-skill-selector", "generate-storyboard", "open-episode-prompt-skill-modal"],
+  ];
+
+  for (const [placement, targetKey, nextStep, action] of cases) {
+    const state = createGuideTipState({ placement, targetKey, nextStep });
+    const result = reduceFirstLoginTipTargetAction(state, action, targetKey);
+    assert.equal(result.handled, true);
+    assert.equal(result.allowAction, true);
+    assert.equal(result.state.step, nextStep);
+    assert.equal(reduceFirstLoginTipTargetAction(state, action, "another-navigation-target").handled, false);
+  }
+});
+
 test("the highlighted tool waits until every tip at that placement is complete", () => {
   const config = normalizeFirstLoginOnboardingConfig({
     tips: ["a", "b"].map((id) => ({
@@ -299,12 +650,12 @@ test("the highlighted tool waits until every tip at that placement is complete",
   const prepare = moveFirstLoginGuide(createFirstLoginGuideState(true, config), "prepare-script");
   const firstTip = reduceFirstLoginGuideAction(prepare, "first-login-use-own-script").state;
 
-  const firstClick = reduceFirstLoginTipTargetAction(firstTip, "confirm-single-episode");
+  const firstClick = reduceFirstLoginTipTargetAction(firstTip, "confirm-single-episode", "generate-storyboard-button");
   assert.equal(firstClick.handled, true);
   assert.equal(firstClick.allowAction, false);
   assert.equal(firstClick.state.tipId, "find-generate-b");
 
-  const secondClick = reduceFirstLoginTipTargetAction(firstClick.state, "confirm-single-episode");
+  const secondClick = reduceFirstLoginTipTargetAction(firstClick.state, "confirm-single-episode", "generate-storyboard-button");
   assert.equal(secondClick.handled, true);
   assert.equal(secondClick.allowAction, true);
   assert.equal(secondClick.state.step, "generate-storyboard");

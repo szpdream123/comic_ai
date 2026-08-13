@@ -163,6 +163,7 @@ export function renderEpisodeWorkbench({
   projectDetail = null,
   membershipStatus = null,
   teamAssetLibraryEnabled = false,
+  firstLoginGuideTargetKey = "",
 } = {}) {
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
   const boardMode = generationUiState.museBoardMode ?? "operation";
@@ -308,6 +309,7 @@ export function renderEpisodeWorkbench({
                     mode: storyboardPaginationMode,
                   },
                   batchSelectionActions,
+                  firstLoginGuideTargetKey,
                 )
           }
         </section>
@@ -799,6 +801,7 @@ export function renderStoryboardPanel(
   assetGroups = {},
   pagination = {},
   batchSelectionActions = "",
+  firstLoginGuideTargetKey = "",
 ) {
   const totalCount = Math.max(0, Number(pagination.total ?? storyboards.length) || 0);
   const pageSize = normalizeStoryboardPageSize(pagination.pageSize);
@@ -835,6 +838,7 @@ export function renderStoryboardPanel(
                 selectedStoryboardIds.includes(storyboard.id),
                 assetGroups,
                 activeBoardMode,
+                currentPage === 1 && index === 0 && firstLoginGuideTargetKey === "first-storyboard-card",
               ),
             ).join("")}${currentPage === totalPages ? addStoryboardRow : ""}`
             : `${addStoryboardRow}${renderStoryboardEmptyState()}`
@@ -909,7 +913,7 @@ function clampStoryboardPage(value, totalPages) {
   return Math.min(Math.max(Math.trunc(page), 1), Math.max(1, totalPages));
 }
 
-export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}, boardMode = "operation") {
+export function renderStoryboardCard(storyboard, active, checked = false, assetGroups = {}, boardMode = "operation", isFirstGuideTarget = false) {
   const desc = String(storyboard.description ?? "").trim();
   const displayTitle = String(storyboard.displayTitle ?? "").trim() || String(storyboard.title ?? "");
   const storyboardName = `分镜 ${String(storyboard.index ?? 1)}: ${displayTitle}`;
@@ -919,7 +923,7 @@ export function renderStoryboardCard(storyboard, active, checked = false, assetG
   const generationBadge = renderStoryboardGenerationBadge(storyboard);
   const showStoryboardColumn = boardMode === "storyboard";
   return `
-    <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""}">
+    <article class="episode-replica-shot-shell ${active ? "active" : ""} ${checked ? "checked" : ""} ${isFirstGuideTarget ? "first-login-guide-target" : ""}" ${isFirstGuideTarget ? 'data-first-login-target="first-storyboard-card"' : ""}>
       <div class="episode-replica-shot-card ${active ? "active" : ""}" data-storyboard-id="${escapeAttr(storyboard.id)}">
         <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-storyboard-selection" data-storyboard-id="${escapeAttr(storyboard.id)}" aria-label="${checked ? "取消选择分镜" : "选择分镜"}" aria-pressed="${checked ? "true" : "false"}"></button>
         <span class="episode-replica-shot-card-head">

@@ -48,7 +48,10 @@ const CORE_STEP_PROGRESS = {
 const PLACEMENT_BY_CORE_STEP = {
   "create-project": "before-create-project",
   "enter-project": "before-enter-project",
+  "prepare-script": "before-prepare-script",
   "generate-storyboard": "before-generate-storyboard",
+  "confirm-storyboard": "before-confirm-storyboard",
+  complete: "before-complete",
 };
 const CORE_TARGET_BY_STEP = {
   "create-project": "create-project-button",
@@ -56,11 +59,36 @@ const CORE_TARGET_BY_STEP = {
   "generate-storyboard": "generate-storyboard-button",
 };
 const TARGET_ACTION_BY_KEY = {
+  "project-module-entry": "set-nav-tab",
   "create-project-button": "open-create-modal",
   "recent-project-card": "open-project-detail",
+  "episode-module-entry": "set-project-interior-section",
+  "create-first-episode-button": "open-single-episode-flow",
+  "text-model-selector": "toggle-single-episode-text-model-menu",
+  "prompt-skill-selector": "open-episode-prompt-skill-modal",
   "generate-storyboard-button": "confirm-single-episode",
+  "commit-storyboard-button": "commit-ai-storyboard-preview",
 };
-const ALLOWED_TIP_TARGETS = new Set(Object.values(CORE_TARGET_BY_STEP));
+const TARGET_PLACEMENTS_BY_KEY = {
+  "project-module-entry": ["before-create-project"],
+  "create-project-button": ["before-create-project"],
+  "recent-project-card": ["before-enter-project"],
+  "episode-module-entry": ["before-prepare-script"],
+  "create-first-episode-button": ["before-prepare-script"],
+  "script-input": ["before-generate-storyboard"],
+  "text-model-selector": ["before-generate-storyboard"],
+  "prompt-skill-selector": ["before-generate-storyboard"],
+  "generate-storyboard-button": ["before-generate-storyboard"],
+  "storyboard-preview-surface": ["before-confirm-storyboard"],
+  "scene-preview-table": ["before-confirm-storyboard"],
+  "character-preview-table": ["before-confirm-storyboard"],
+  "prop-preview-table": ["before-confirm-storyboard"],
+  "storyboard-preview-table": ["before-confirm-storyboard"],
+  "commit-storyboard-button": ["before-confirm-storyboard"],
+  "storyboard-workbench": ["before-complete"],
+  "first-storyboard-card": ["before-complete"],
+};
+const ALLOWED_TIP_TARGETS = new Set(Object.keys(TARGET_PLACEMENTS_BY_KEY));
 const ALLOWED_TIP_PLACEMENTS = new Set(Object.values(PLACEMENT_BY_CORE_STEP));
 
 function recordValue(value) {
@@ -105,6 +133,7 @@ export function normalizeFirstLoginOnboardingConfig(value) {
     if (
       !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id) || seenTipIds.has(id) ||
       !ALLOWED_TIP_PLACEMENTS.has(placement) || !ALLOWED_TIP_TARGETS.has(targetKey) ||
+      !TARGET_PLACEMENTS_BY_KEY[targetKey]?.includes(placement) ||
       Object.values(normalized).some((field) => !field)
     ) return [];
     seenTipIds.add(id);
@@ -242,21 +271,37 @@ export function resolveFirstLoginGuideTargetKey(state) {
   return CORE_TARGET_BY_STEP[state?.step] ?? "";
 }
 
-export function advanceFirstLoginTipForTargetAction(state, action) {
+export function advanceFirstLoginTipForTargetAction(state, action, clickedTargetKey = null) {
   if (state?.step !== "tip") return state;
   const targetKey = resolveFirstLoginGuideTargetKey(state);
   if (TARGET_ACTION_BY_KEY[targetKey] !== action) return state;
+  if (clickedTargetKey !== null && clickedTargetKey !== targetKey) return state;
   return reduceFirstLoginGuideAction(state, "next-first-login-tip").state;
 }
 
-export function reduceFirstLoginTipTargetAction(state, action) {
-  const nextState = advanceFirstLoginTipForTargetAction(state, action);
+export function reduceFirstLoginTipTargetAction(state, action, clickedTargetKey = null) {
+  const nextState = advanceFirstLoginTipForTargetAction(state, action, clickedTargetKey);
   const handled = nextState !== state;
   return {
     handled,
     allowAction: !handled || nextState?.step !== "tip",
     state: nextState,
   };
+}
+
+export function skipUnavailableFirstLoginTips(state, availableTargetKeys) {
+  const available = availableTargetKeys instanceof Set
+    ? availableTargetKeys
+    : new Set(Array.isArray(availableTargetKeys) ? availableTargetKeys : []);
+  let nextState = state;
+  for (let skipped = 0; skipped < 12 && nextState?.step === "tip"; skipped += 1) {
+    const targetKey = resolveFirstLoginGuideTargetKey(nextState);
+    if (targetKey && available.has(targetKey)) break;
+    const advanced = reduceFirstLoginGuideAction(nextState, "next-first-login-tip").state;
+    if (advanced === nextState) break;
+    nextState = advanced;
+  }
+  return nextState;
 }
 
 export function advanceFirstLoginGuide(state, event) {
@@ -277,6 +322,9 @@ export function advanceFirstLoginGuide(state, event) {
     return ["generate-storyboard", "generating", "confirm-storyboard"].includes(state?.step)
       ? moveFirstLoginGuide(state, "prepare-script")
       : state;
+  }
+  if (event === "preview-closed" && state?.step === "tip" && state.nextStep === "confirm-storyboard") {
+    return moveFirstLoginGuide(state, "generate-storyboard");
   }
   const [expectedStep, nextStep] = transitions[event] ?? [];
   return state?.step === expectedStep
