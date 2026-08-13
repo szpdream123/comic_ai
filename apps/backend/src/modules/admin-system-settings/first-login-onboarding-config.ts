@@ -32,30 +32,128 @@ export interface FirstLoginOnboardingConfig {
 export const firstLoginOnboardingPlacements = [
   { key: "before-create-project", label: "创建项目前" },
   { key: "before-enter-project", label: "进入项目前" },
+  { key: "before-prepare-script", label: "准备剧本前" },
   { key: "before-generate-storyboard", label: "生成分镜前" },
+  { key: "before-confirm-storyboard", label: "生成完成、确认预览前" },
+  { key: "before-complete", label: "确认提交、完成卡片前" },
 ] as const;
 
 export type FirstLoginOnboardingPlacement = (typeof firstLoginOnboardingPlacements)[number]["key"];
 
 export const firstLoginOnboardingTargets = [
   {
+    key: "project-module-entry",
+    label: "项目模块入口",
+    pageLabel: "项目列表",
+    placements: ["before-create-project"],
+  },
+  {
     key: "create-project-button",
     label: "创建项目按钮",
+    pageLabel: "项目列表",
+    action: "open-create-modal",
     placements: ["before-create-project"],
   },
   {
     key: "recent-project-card",
     label: "刚创建的项目卡片",
+    pageLabel: "项目列表",
+    action: "open-project-detail",
     placements: ["before-enter-project"],
+  },
+  {
+    key: "episode-module-entry",
+    label: "剧集模块入口",
+    pageLabel: "项目详情",
+    placements: ["before-prepare-script"],
+  },
+  {
+    key: "create-first-episode-button",
+    label: "创建第一集按钮",
+    pageLabel: "项目详情",
+    action: "open-single-episode-flow",
+    placements: ["before-prepare-script"],
+  },
+  {
+    key: "script-input",
+    label: "剧本输入区",
+    pageLabel: "创建第一集",
+    placements: ["before-generate-storyboard"],
+  },
+  {
+    key: "text-model-selector",
+    label: "文本模型选择",
+    pageLabel: "创建第一集",
+    action: "toggle-single-episode-text-model-menu",
+    placements: ["before-generate-storyboard"],
+  },
+  {
+    key: "prompt-skill-selector",
+    label: "提示词技能选择",
+    pageLabel: "创建第一集",
+    placements: ["before-generate-storyboard"],
   },
   {
     key: "generate-storyboard-button",
     label: "AI 生成分镜按钮",
+    pageLabel: "创建第一集",
+    action: "confirm-single-episode",
     placements: ["before-generate-storyboard"],
+  },
+  {
+    key: "storyboard-preview-surface",
+    label: "分镜预览区域",
+    pageLabel: "分镜预览",
+    placements: ["before-confirm-storyboard"],
+  },
+  {
+    key: "scene-preview-table",
+    label: "场景表",
+    pageLabel: "分镜预览",
+    placements: ["before-confirm-storyboard"],
+  },
+  {
+    key: "character-preview-table",
+    label: "角色表",
+    pageLabel: "分镜预览",
+    placements: ["before-confirm-storyboard"],
+  },
+  {
+    key: "prop-preview-table",
+    label: "道具表",
+    pageLabel: "分镜预览",
+    placements: ["before-confirm-storyboard"],
+  },
+  {
+    key: "storyboard-preview-table",
+    label: "分镜表",
+    pageLabel: "分镜预览",
+    placements: ["before-confirm-storyboard"],
+  },
+  {
+    key: "commit-storyboard-button",
+    label: "创建章节按钮",
+    pageLabel: "分镜预览",
+    action: "commit-ai-storyboard-preview",
+    placements: ["before-confirm-storyboard"],
+  },
+  {
+    key: "storyboard-workbench",
+    label: "分镜工作台",
+    pageLabel: "分镜工作台",
+    placements: ["before-complete"],
+  },
+  {
+    key: "first-storyboard-card",
+    label: "第一条分镜",
+    pageLabel: "分镜工作台",
+    placements: ["before-complete"],
   },
 ] as const satisfies ReadonlyArray<{
   key: string;
   label: string;
+  pageLabel: string;
+  action?: string;
   placements: readonly FirstLoginOnboardingPlacement[];
 }>;
 

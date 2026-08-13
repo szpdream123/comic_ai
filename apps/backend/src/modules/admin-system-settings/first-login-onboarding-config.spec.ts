@@ -6,6 +6,7 @@ import {
   firstLoginOnboardingConfigKey,
   normalizeFirstLoginOnboardingConfig,
   firstLoginOnboardingPlacements,
+  firstLoginOnboardingTargets,
 } from "./first-login-onboarding-config.ts";
 
 test("first-login onboarding config exposes a fixed default copy contract", () => {
@@ -20,8 +21,63 @@ test("first-login onboarding config exposes a fixed default copy contract", () =
   assert.deepEqual(firstLoginOnboardingPlacements.map((item) => item.key), [
     "before-create-project",
     "before-enter-project",
+    "before-prepare-script",
     "before-generate-storyboard",
+    "before-confirm-storyboard",
+    "before-complete",
   ]);
+});
+
+test("first-login onboarding exposes useful safe targets at every timeline boundary", () => {
+  const targetsAt = (placement: string) => firstLoginOnboardingTargets
+    .filter((target) => target.placements.includes(placement as never))
+    .map((target) => target.key);
+
+  assert.deepEqual(targetsAt("before-create-project"), ["project-module-entry", "create-project-button"]);
+  assert.deepEqual(targetsAt("before-prepare-script"), ["episode-module-entry", "create-first-episode-button"]);
+  assert.deepEqual(targetsAt("before-generate-storyboard"), [
+    "script-input",
+    "text-model-selector",
+    "prompt-skill-selector",
+    "generate-storyboard-button",
+  ]);
+  assert.deepEqual(targetsAt("before-confirm-storyboard"), [
+    "storyboard-preview-surface",
+    "scene-preview-table",
+    "character-preview-table",
+    "prop-preview-table",
+    "storyboard-preview-table",
+    "commit-storyboard-button",
+  ]);
+  assert.deepEqual(targetsAt("before-complete"), ["storyboard-workbench", "first-storyboard-card"]);
+  assert.equal(firstLoginOnboardingTargets.every((target) => Boolean(target.pageLabel)), true);
+});
+
+test("first-login onboarding keeps new timeline tips only with a compatible safe target", () => {
+  const baseTip = {
+    eyebrow: "结果说明",
+    title: "先检查分镜结果",
+    description: "这里可以检查生成完成的分镜。",
+    primaryButton: "下一步",
+  };
+  const config = normalizeFirstLoginOnboardingConfig({
+    tips: [
+      {
+        ...baseTip,
+        id: "review-storyboard",
+        placement: "before-confirm-storyboard",
+        targetKey: "storyboard-preview-table",
+      },
+      {
+        ...baseTip,
+        id: "mismatched-target",
+        placement: "before-complete",
+        targetKey: "storyboard-preview-table",
+      },
+    ],
+  });
+
+  assert.deepEqual(config.tips.map((tip) => tip.id), ["review-storyboard"]);
 });
 
 test("first-login onboarding config accepts safe text overrides without changing the fixed schema", () => {
