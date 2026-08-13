@@ -4,6 +4,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import type { GeoServiceResult, createGeoContentService } from "./geo-content.service.ts";
 import { validateGeoDraft } from "./geo-content-validator.ts";
 import type { GeoBlock, GeoContentType, GeoDocument, GeoEvidenceSnapshot, GeoQualityIssue } from "./geo-types.ts";
+import { loadGeoRuntimeSettings } from "./geo-settings.ts";
 
 export interface GeoTextChatGatewayLike {
   completeJson(input: GeoGatewayInput): Promise<string>;
@@ -21,14 +22,18 @@ export class GeoGenerationError extends Error {
 
 export function createGeoGenerationService(deps: {
   db: SqlDatabase; gateway: GeoTextChatGatewayLike; contentService: ContentService; now?: () => Date;
+  leaseDurationMs?: number; heartbeatIntervalMs?: number;
 }) {
   const now = deps.now ?? (() => new Date());
+  const leaseDurationMs = deps.leaseDurationMs ?? 2 * 60 * 60 * 1000;
+  const heartbeatIntervalMs = deps.heartbeatIntervalMs ?? 60 * 1000;
 
   async function generateDraft(input: {
     questionId: string; evidenceIds: string[]; contentType: GeoContentType; topic: string; slug: string;
     modelCode: string; actorAdminAccountId: string;
   }): Promise<GeoServiceResult<{ runId: string; item: unknown; version: unknown }>> {
     const runId = randomUUID();
+    const leaseToken = randomUUID();
     const questionResult = await deps.db.query<{ id: string; raw_question: string; topic: string; intent: string; target_platforms_json: string[]; product_capabilities_json: string[] }>(
       `SELECT id,raw_question,topic,intent,target_platforms_json,product_capabilities_json FROM geo_questions WHERE id=$1`,
       [input.questionId],
@@ -48,7 +53,15 @@ export function createGeoGenerationService(deps: {
       reviewStatus: row.review_status, publicUseAllowed: row.public_use_allowed,
       validUntil: row.valid_until == null ? null : new Date(row.valid_until).toISOString(),
     }));
-    const existing = await deps.contentService.listPublished();
+    if (evidence.some((item) => item.reviewStatus !== "approved" || !item.publicUseAllowed || (item.validUntil && new Date(item.validUntil).getTime() < now().getTime()))) {
+      return failure("geo_evidence_not_public", "生成资料只能使用已审核、允许公开且仍在有效期内的证据。", 400);
+    }
+    const [{ settings, revisionId }, existing] = await Promise.all([
+      loadGeoRuntimeSettings(deps.db),
+      deps.contentService.listPublished(),
+    ]);
+    const modelCode = input.modelCode.trim() || settings.defaultModelCode;
+    if (!modelCode) return failure("geo_model_required", "请先选择GEO生成模型或配置默认模型。", 400);
     const existingDocuments = "data" in existing.body ? existing.body.data.map((entry) => entry.version.document) : [];
     const publicPacket = {
       brand: "灵曦AI",
@@ -56,21 +69,27 @@ export function createGeoGenerationService(deps: {
       evidence,
       contentType: input.contentType,
       topic: input.topic,
+      brandFacts: settings.brandFacts,
+      brandTone: settings.brandTone,
+      forbiddenPhrases: settings.forbiddenPhrases,
+      targetWordRange: settings.defaultWordRange,
       rules: ["只使用资料包中的事实", "数字声明必须绑定evidenceIds", "不得出现旧品牌灵曦剧场", "不得承诺自动向第三方平台发帖"],
     };
+    const startedAt = now();
     await deps.db.query(
       `INSERT INTO geo_generation_runs (
          id,run_type,status,model_code,prompt_template_revision,input_snapshot_json,evidence_ids_json,
-         provider_request_ids_json,created_by_admin_id,started_at,created_at,updated_at
-       ) VALUES ($1,'generate','running',$2,'geo-default-v1',$3::jsonb,$4::jsonb,'[]'::jsonb,$5,$6,$6,$6)`,
-      [runId, input.modelCode, JSON.stringify(publicPacket), JSON.stringify(evidenceIds), input.actorAdminAccountId, now()],
+         provider_request_ids_json,created_by_admin_id,started_at,heartbeat_at,lease_expires_at,lease_token,created_at,updated_at
+       ) VALUES ($1,'generate','running',$2,'geo-default-v1',$3::jsonb,$4::jsonb,'[]'::jsonb,$5,$6,$6,$7,$8,$6,$6)`,
+      [runId, modelCode, JSON.stringify(publicPacket), JSON.stringify(evidenceIds), input.actorAdminAccountId, startedAt, leaseExpiry(startedAt, leaseDurationMs), leaseToken],
     );
 
     const providerRequestIds: string[] = [];
     const usage: Record<string, unknown>[] = [];
+    const heartbeat = startGenerationHeartbeat({ db: deps.db, runId, leaseToken, now, leaseDurationMs, heartbeatIntervalMs });
     try {
       const writer = await complete(deps.gateway, {
-        model: input.modelCode,
+        model: modelCode,
         prompt: buildWriterPrompt(publicPacket),
         createdByUserId: null,
         responseFormat: "json_object",
@@ -80,11 +99,12 @@ export function createGeoGenerationService(deps: {
       });
       providerRequestIds.push(writer.providerRequestId);
       if (writer.usage) usage.push(writer.usage);
+      await assertGenerationLease(deps.db, runId, leaseToken, now(), leaseDurationMs);
       const document = parseGeoGeneratedDocument(writer.content);
-      const deterministic = validateGeoDraft({ document, evidence, existingDocuments, now: now() });
+      const deterministic = validateGeoDraft({ document, evidence, existingDocuments, now: now(), similarityThreshold: settings.similarityThreshold });
 
       const reviewer = await complete(deps.gateway, {
-        model: input.modelCode,
+        model: modelCode,
         prompt: buildReviewerPrompt(publicPacket, document, deterministic),
         createdByUserId: null,
         responseFormat: "json_object",
@@ -94,6 +114,7 @@ export function createGeoGenerationService(deps: {
       });
       providerRequestIds.push(reviewer.providerRequestId);
       if (reviewer.usage) usage.push(reviewer.usage);
+      await assertGenerationLease(deps.db, runId, leaseToken, now(), leaseDurationMs);
       const reviewIssues = parseReviewIssues(reviewer.content);
       const qualityReport = {
         blockers: [...deterministic.blockers, ...reviewIssues.filter((item) => item.severity === "blocker").map(stripSeverity)],
@@ -103,28 +124,69 @@ export function createGeoGenerationService(deps: {
       const draft = await deps.contentService.createDraftFromDocument({
         contentType: input.contentType, topic: input.topic, slug: input.slug,
         questionIds: [input.questionId], evidenceIds, document, generationRunId: runId,
-        configRevisionId: "geo-default-v1", actorAdminAccountId: input.actorAdminAccountId, qualityReport,
+        configRevisionId: revisionId, actorAdminAccountId: input.actorAdminAccountId, qualityReport,
+        generationCompletion: { leaseToken, providerRequestIds, usage: { stages: usage } },
       });
       if (!("data" in draft.body)) throw new GeoGenerationError(draft.body.error.code, draft.body.error.message);
-      await deps.db.query(
-        `UPDATE geo_generation_runs SET status='succeeded',content_item_id=$2,provider_request_ids_json=$3::jsonb,
-           usage_json=$4::jsonb,completed_at=$5,updated_at=$5 WHERE id=$1`,
-        [runId, draft.body.data.item.id, JSON.stringify(providerRequestIds), JSON.stringify({ stages: usage }), now()],
-      );
       return { status: 201, body: { data: { runId, item: draft.body.data.item, version: draft.body.data.version } } };
     } catch (error) {
       const normalized = normalizeGenerationError(error);
       await deps.db.query(
         `UPDATE geo_generation_runs SET status='failed',provider_request_ids_json=$2::jsonb,usage_json=$3::jsonb,
-           error_code=$4,error_summary=$5,completed_at=$6,updated_at=$6 WHERE id=$1`,
-        [runId, JSON.stringify(providerRequestIds), JSON.stringify({ stages: usage }), normalized.code, normalized.message, now()],
+           error_code=$4,error_summary=$5,completed_at=$6,updated_at=$6
+         WHERE id=$1 AND lease_token=$7 AND status='running'`,
+        [runId, JSON.stringify(providerRequestIds), JSON.stringify({ stages: usage }), normalized.code, normalized.message, now(), leaseToken],
       );
       return failure(normalized.code, normalized.message, 409);
+    } finally {
+      await heartbeat.stop();
     }
   }
 
   return { generateDraft };
 }
+
+export async function recoverStaleGeoGenerationRuns(input: {
+  db: SqlDatabase;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const result = await input.db.query<{ id: string }>(
+    `UPDATE geo_generation_runs SET status='failed',error_code='generation_run_abandoned',
+       error_summary='生成进程中断，任务已标记为可重新生成。',completed_at=$2,updated_at=$2
+     WHERE status='running' AND (lease_expires_at IS NULL OR lease_expires_at<$1) RETURNING id`,
+    [now, now],
+  );
+  return result.rows.length;
+}
+
+async function renewGenerationLease(db: SqlDatabase, runId: string, leaseToken: string, now: Date, leaseDurationMs: number) {
+  const result = await db.query<{ id: string }>(
+    `UPDATE geo_generation_runs SET heartbeat_at=$3,lease_expires_at=$4,updated_at=$3
+      WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_expires_at>=$3 RETURNING id`,
+    [runId, leaseToken, now, leaseExpiry(now, leaseDurationMs)],
+  );
+  return Boolean(result.rows[0]);
+}
+async function assertGenerationLease(db: SqlDatabase, runId: string, leaseToken: string, now: Date, leaseDurationMs: number) {
+  if (!await renewGenerationLease(db, runId, leaseToken, now, leaseDurationMs)) {
+    throw new GeoGenerationError("geo_generation_lease_lost", "生成任务租约已失效，请重新生成。");
+  }
+}
+function startGenerationHeartbeat(input: { db: SqlDatabase; runId: string; leaseToken: string; now: () => Date; leaseDurationMs: number; heartbeatIntervalMs: number }) {
+  let renewing = false;
+  let inFlight: Promise<unknown> | null = null;
+  const timer = setInterval(() => {
+    if (renewing) return;
+    renewing = true;
+    inFlight = renewGenerationLease(input.db, input.runId, input.leaseToken, input.now(), input.leaseDurationMs)
+      .catch(() => false)
+      .finally(() => { renewing = false; inFlight = null; });
+  }, input.heartbeatIntervalMs);
+  timer.unref?.();
+  return { stop: async () => { clearInterval(timer); await inFlight; } };
+}
+function leaseExpiry(now: Date, leaseDurationMs: number) { return new Date(now.getTime() + leaseDurationMs); }
 
 export function parseGeoGeneratedDocument(raw: string): GeoDocument {
   let value: unknown;

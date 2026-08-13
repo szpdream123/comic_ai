@@ -11,6 +11,8 @@ const NUMBER_CLAIM = /(?:\d+(?:\.\d+)?\s*(?:%|％|分钟|小时|天|倍|个|张|
 const SENSITIVE_VALUE = /(?:password|passwd|secret|api[_-]?(?:key|token)|access[_-]?token|refresh[_-]?token|authorization|密码|密钥|令牌)\s*[:=：]\s*["']?[a-z0-9_\-./+=]{6,}/i;
 const PHONE_NUMBER = /(?<!\d)1[3-9]\d{9}(?!\d)/;
 const ABSOLUTE_CLAIM = /(?:唯一|绝对|保证|百分百|100%|行业第一|最强|永久|完全不会)/;
+const PRODUCT_CLAIM = /(?:灵曦AI|本平台|该平台|平台|产品|系统|工具).{0,18}(?:支持|可以|可|提供|具备|实现|提升|降低|节省|自动|效果|成本|价格|模型)/;
+const SUBJECTLESS_PRODUCT_CLAIM = /(?:^|[。！？；\n])\s*(?:支持|可(?:以)?|提供|具备|实现|自动)\s*(?:批量|统一|一键|自动|按|对|将|管理|生成|保存|复用|导入|导出)/;
 
 export function validateGeoDraft(input: {
   document: GeoDocument;
@@ -39,6 +41,10 @@ export function validateGeoDraft(input: {
   if (ABSOLUTE_CLAIM.test(allText)) {
     blockers.push(issue("absolute_claim", "内容包含无法审慎验证的绝对化表述。"));
   }
+  const unboundFields = [input.document.summary, input.document.directAnswer, ...input.document.faq.flatMap((item) => [item.question, item.answer]), ...Object.values(input.document.socialDrafts)];
+  if (unboundFields.some(hasProductClaim)) {
+    blockers.push(issue("factual_claim_without_evidence", "摘要、直接回答、FAQ和站外草稿不得承载无法绑定证据的产品声明。"));
+  }
 
   const evidenceById = new Map(input.evidence.map((item) => [item.id, item]));
   input.document.blocks.forEach((block, index) => {
@@ -49,6 +55,9 @@ export function validateGeoDraft(input: {
 
     const text = blockText(block);
     const evidenceIds = blockEvidenceIds(block);
+    if (hasProductClaim(text) && evidenceIds.length === 0) {
+      blockers.push(issue("factual_claim_without_evidence", "涉及灵曦AI能力或事实的正文必须绑定已审核证据。", `blocks.${index}`));
+    }
     if (NUMBER_CLAIM.test(text) && evidenceIds.length === 0) {
       blockers.push(issue("numeric_claim_without_evidence", "数字、比例或时效声明必须绑定已审核证据。", `blocks.${index}`));
     }
@@ -70,7 +79,7 @@ export function validateGeoDraft(input: {
   const threshold = input.similarityThreshold ?? 0.86;
   const currentFingerprint = documentFingerprint(input.document);
   if ((input.existingDocuments ?? []).some((document) => diceSimilarity(currentFingerprint, documentFingerprint(document)) >= threshold)) {
-    warnings.push(issue("high_similarity", "当前内容与已有内容相似度较高，请确认是否重复。"));
+    blockers.push(issue("high_similarity", "当前内容与已有内容超过相似度阈值，需调整后再送审。"));
   }
 
   return { blockers: dedupeIssues(blockers), warnings: dedupeIssues(warnings), checkedAt: now.toISOString() };
@@ -145,6 +154,7 @@ function isSafeUrlFromOptional(value: string) {
 function documentFingerprint(document: GeoDocument) {
   return collectDocumentText(document).join("").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
+function hasProductClaim(text: string) { return PRODUCT_CLAIM.test(text) || SUBJECTLESS_PRODUCT_CLAIM.test(text); }
 
 function diceSimilarity(left: string, right: string) {
   if (left === right) return 1;

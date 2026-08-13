@@ -1472,7 +1472,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         title: "AI短剧如何保持角色一致性",
         summary: "从角色资料、参考素材和分镜约束三个环节减少不同镜头中的角色漂移。",
         directAnswer: "先固定角色资料，再让每个分镜引用同一组已确认素材。",
-        blocks: [{ type: "paragraph", text: "灵曦AI可统一管理角色参考素材。", evidenceIds: [] }],
+        blocks: [{ type: "paragraph", text: "先建立可复用的角色参考素材，再进入分镜制作。", evidenceIds: [] }],
         faq: [{ question: "什么时候更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
         socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
         seo: { title: "AI短剧角色一致性方法 | 灵曦AI", description: "介绍AI短剧角色资料、参考素材和分镜约束的实用方法。" },
@@ -1482,7 +1482,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     if (!("data" in draft.body)) throw new Error("fixture draft failed");
     assert.equal((await service.submitForReview({ contentItemId: draft.body.data.item.id, expectedLockVersion: draft.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
     assert.equal((await service.publish({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "公开页验证" })).status, 200);
-    await service.createDraftFromDocument({
+    const draftOnly = await service.createDraftFromDocument({
       contentType: "answer", topic: "未发布", slug: "draft-only-answer", questionIds: [], evidenceIds: [],
       generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
       document: {
@@ -1516,6 +1516,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency<\/loc>/);
       assert.match(sitemapXml, /<lastmod>2026-08-13T10:00:00\.000Z<\/lastmod>/);
       assert.doesNotMatch(sitemapXml, /draft-only-answer/);
+      if (!("data" in draftOnly.body)) throw new Error("draft-only fixture failed");
+      assert.equal((await service.submitForReview({ contentItemId: draftOnly.body.data.item.id, expectedLockVersion: draftOnly.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+      assert.equal((await service.publish({ contentItemId: draftOnly.body.data.item.id, actorAdminAccountId, reason: "重定向归档验证" })).status, 200);
+      assert.equal((await service.archive({ contentItemId: draftOnly.body.data.item.id, actorAdminAccountId, reason: "配置替代内容", redirectPath: "/guides/ai-short-drama-character-consistency" })).status, 200);
+      const moved = await fetch(`${server.origin}/answers/draft-only-answer`, { headers: proxyHeaders, redirect: "manual" });
+      assert.equal(moved.status, 301);
+      assert.equal(moved.headers.get("location"), "/guides/ai-short-drama-character-consistency");
+      assert.equal((await service.archive({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "无替代内容归档" })).status, 200);
+      const gone = await fetch(`${server.origin}/guides/ai-short-drama-character-consistency`, { headers: proxyHeaders, redirect: "manual" });
+      assert.equal(gone.status, 410);
     } finally {
       await server.close();
     }

@@ -49,6 +49,20 @@ describe("GEO controlled content", () => {
     });
     assert.ok(numeric.blockers.some((item) => item.code === "numeric_claim_without_evidence"));
 
+    const unsupportedBrandFact = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "paragraph", text: "灵曦AI支持自动发布所有第三方平台。", evidenceIds: [] }],
+      },
+      evidence: [],
+    });
+    assert.ok(unsupportedBrandFact.blockers.some((item) => item.code === "factual_claim_without_evidence"));
+    const implicitProductFact = validateGeoDraft({
+      document: { ...validDocument, directAnswer: "平台支持自动发布所有第三方渠道。", blocks: [{ type: "paragraph", text: "平台支持按角色保存参考素材。", evidenceIds: [] }] },
+      evidence: [],
+    });
+    assert.ok(implicitProductFact.blockers.some((item) => item.code === "factual_claim_without_evidence"));
+
     const unsafe = validateGeoDraft({
       document: {
         ...validDocument,
@@ -66,6 +80,16 @@ describe("GEO controlled content", () => {
     assert.ok(expired.blockers.some((item) => item.code === "invalid_evidence"));
   });
 
+  it("blocks subjectless product capability claims without evidence", () => {
+    for (const text of ["支持批量生成分镜。", "可统一管理角色素材。", "提供一键导出能力。"]) {
+      const result = validateGeoDraft({
+        document: { ...validDocument, blocks: [{ type: "paragraph", text, evidenceIds: [] }] },
+        evidence: [],
+      });
+      assert.ok(result.blockers.some((item) => item.code === "factual_claim_without_evidence"), text);
+    }
+  });
+
   it("warns about duplicate content and blocks sensitive values", () => {
     const report = validateGeoDraft({
       document: {
@@ -77,7 +101,7 @@ describe("GEO controlled content", () => {
       similarityThreshold: 0.7,
     });
     assert.ok(report.blockers.some((item) => item.code === "sensitive_information"));
-    assert.ok(report.warnings.some((item) => item.code === "high_similarity"));
+    assert.ok(report.blockers.some((item) => item.code === "high_similarity"));
   });
 
   it("escapes rendered values and emits FAQ JSON-LD from the same document", () => {

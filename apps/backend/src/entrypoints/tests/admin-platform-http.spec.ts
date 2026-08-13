@@ -9,8 +9,10 @@ import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 describe("admin management platform HTTP routes", { concurrency: false }, () => {
   it("restricts GEO operations to super admins and publishes an evidence-bound draft", async () => {
     const db = await createMigratedTestDb();
+    const gatewayModels: string[] = [];
     const gateway = {
-      async completeJsonWithUsage(input: { prompt?: string }) {
+      async completeJsonWithUsage(input: { prompt?: string; model?: string }) {
+        gatewayModels.push(String(input.model || ""));
         if (String(input.prompt).includes("独立内容审查员")) {
           return { content: JSON.stringify({ issues: [] }), usage: { total_tokens: 10 }, providerRequestId: "geo-review-request" };
         }
@@ -46,34 +48,52 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         await opsDb.close();
       }
 
+      const questionBody = JSON.stringify({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "" });
+      const missingIdempotency = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", cookie }, body: questionBody,
+      });
+      assert.equal(missingIdempotency.status, 400);
+      const questionIdempotencyKey = `geo-question-${randomUUID()}`;
       const questionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
-        method: "POST", headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "" }),
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": questionIdempotencyKey, cookie }, body: questionBody,
       });
       const question = await questionResponse.json();
       assert.equal(questionResponse.status, 201, JSON.stringify(question));
+      const replayedQuestionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": questionIdempotencyKey, cookie }, body: questionBody,
+      });
+      const replayedQuestion = await replayedQuestionResponse.json();
+      assert.equal(replayedQuestionResponse.status, 201, JSON.stringify(replayedQuestion));
+      assert.equal(replayedQuestion.data.id, question.data.id);
 
       const evidenceResponse = await fetch(`${server.origin}/api/admin/geo/evidence`, {
-        method: "POST", headers: { "content-type": "application/json", cookie },
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-evidence-${randomUUID()}`, cookie },
         body: JSON.stringify({ type: "product_feature", name: "角色素材管理", factText: "灵曦AI支持按角色保存参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true }),
       });
       const evidence = await evidenceResponse.json();
       assert.equal(evidenceResponse.status, 201, JSON.stringify(evidence));
 
+      const configuredSettingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, {
+        method: "PATCH", headers: { "content-type": "application/json", "idempotency-key": `geo-settings-valid-${randomUUID()}`, cookie },
+        body: JSON.stringify({ value: { defaultModelCode: "configured-geo-model", brandName: "灵曦AI", brandFacts: ["只使用审核证据"], brandTone: "专业、克制、清晰，不夸大效果", forbiddenPhrases: ["灵曦剧场"], defaultWordRange: { min: 1200, max: 2600 }, similarityThreshold: 0.82, publicAuthorName: "灵曦AI内容团队" }, reason: "HTTP配置验证" }),
+      });
+      assert.equal(configuredSettingsResponse.status, 200, await configuredSettingsResponse.text());
+
       const generatedResponse = await fetch(`${server.origin}/api/admin/geo/generate`, {
-        method: "POST", headers: { "content-type": "application/json", cookie },
-        body: JSON.stringify({ questionId: question.data.id, evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "geo-writer-model" }),
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-generate-${randomUUID()}`, cookie },
+        body: JSON.stringify({ questionId: question.data.id, evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "" }),
       });
       const generated = await generatedResponse.json();
       assert.equal(generatedResponse.status, 201, JSON.stringify(generated));
+      assert.deepEqual(gatewayModels, ["configured-geo-model", "configured-geo-model"]);
 
       const reviewResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/submit-review`, {
-        method: "POST", headers: { "content-type": "application/json", cookie },
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-review-${randomUUID()}`, cookie },
         body: JSON.stringify({ expectedLockVersion: generated.data.item.lockVersion }),
       });
       assert.equal(reviewResponse.status, 200, await reviewResponse.text());
       const publishResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/publish`, {
-        method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ reason: "HTTP流程验证" }),
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-publish-${randomUUID()}`, cookie }, body: JSON.stringify({ reason: "HTTP流程验证" }),
       });
       assert.equal(publishResponse.status, 200, await publishResponse.text());
 
@@ -81,8 +101,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const settings = await settingsResponse.json();
       assert.equal(settingsResponse.status, 200, JSON.stringify(settings));
       assert.equal(settings.data.brandName, "灵曦AI");
+      assert.equal(settings.data.publicAuthorName, "灵曦AI内容团队");
+      assert.notEqual(settings.data.configRevisionId, "geo-default-v1");
       const rejectedBrand = await fetch(`${server.origin}/api/admin/geo/settings`, {
-        method: "PATCH", headers: { "content-type": "application/json", cookie },
+        method: "PATCH", headers: { "content-type": "application/json", "idempotency-key": `geo-settings-${randomUUID()}`, cookie },
         body: JSON.stringify({ value: { brandName: "灵曦剧场" }, reason: "错误品牌验证" }),
       });
       assert.equal(rejectedBrand.status, 400);

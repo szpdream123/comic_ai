@@ -108,6 +108,7 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     contentItemId?: string; contentType: GeoContentType; topic: string; slug: string;
     questionIds: string[]; evidenceIds: string[]; document: GeoDocument; generationRunId: string | null;
     configRevisionId: string; actorAdminAccountId: string; qualityReport?: GeoQualityReport;
+    generationCompletion?: { leaseToken: string; providerRequestIds: string[]; usage: Record<string, unknown> };
   }) {
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) || !input.topic.trim()) {
       return fail(400, "geo_content_invalid", "主题和英文短链必须有效。");
@@ -127,55 +128,82 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     const evidence = evidenceRows.rows.map(toEvidenceSnapshot);
     const qualityReport = input.qualityReport ?? validateGeoDraft({ document: input.document, evidence, existingDocuments: existingRows.rows.map((row) => row.document_json), now: now() });
 
-    let itemResult: { rows: GeoItemRow[] };
+    const newItemId = randomUUID();
+    let itemId = newItemId;
     if (input.contentItemId) {
-      itemResult = await deps.db.query<GeoItemRow>(`SELECT * FROM geo_content_items WHERE id=$1 AND status<>'archived'`, [input.contentItemId]);
+      const itemResult = await deps.db.query<GeoItemRow>(`SELECT * FROM geo_content_items WHERE id=$1 AND status<>'archived'`, [input.contentItemId]);
       const selected = itemResult.rows[0];
       if (!selected) return fail(404, "geo_content_not_found", "GEO内容不存在或已归档。");
       if (selected.content_type !== input.contentType || selected.slug !== input.slug) {
         return fail(409, "geo_content_identity_conflict", "已有内容的类型和短链不可变更。");
       }
-    } else {
-      itemResult = await deps.db.query<GeoItemRow>(
-        `INSERT INTO geo_content_items (id,content_type,topic,slug,status,lock_version,created_by_admin_id,updated_by_admin_id,created_at,updated_at)
-         VALUES ($1,$2,$3,$4,'draft',1,$5,$5,$6,$6)
-         ON CONFLICT (content_type,slug) DO UPDATE SET topic=EXCLUDED.topic,updated_by_admin_id=EXCLUDED.updated_by_admin_id,updated_at=EXCLUDED.updated_at
-           WHERE geo_content_items.status<>'archived'
-         RETURNING *`,
-        [randomUUID(), input.contentType, input.topic.trim(), input.slug, input.actorAdminAccountId, now()],
-      );
-      if (!itemResult.rows[0]) return fail(409, "geo_content_archived", "同短链内容已归档，请先恢复或更换短链。");
+      itemId = selected.id;
     }
-    const itemId = itemResult.rows[0]!.id;
     const versionId = randomUUID();
     const result = await deps.db.query<{ item: GeoItemRow; version: GeoVersionRow }>(
-      `WITH next_version AS (
-         SELECT COALESCE(MAX(version_number),0)+1 AS version_number FROM geo_content_versions WHERE content_item_id=$1
+      `WITH run_lock AS MATERIALIZED (
+         SELECT id FROM geo_generation_runs
+          WHERE id=$11 AND lease_token=$17 AND status='running' AND lease_expires_at>$13
+          FOR UPDATE
+       ), lease_guard AS MATERIALIZED (
+         SELECT true AS allowed WHERE $11::uuid IS NULL
+         UNION ALL SELECT true FROM run_lock
+       ), upserted_item AS (
+         INSERT INTO geo_content_items (id,content_type,topic,slug,status,current_draft_version_id,lock_version,created_by_admin_id,updated_by_admin_id,created_at,updated_at)
+         SELECT $1,$21,$22,$23,'draft',$2,2,$12,$12,$13,$13 FROM lease_guard WHERE $20
+         ON CONFLICT (content_type,slug) DO UPDATE SET topic=EXCLUDED.topic,current_draft_version_id=$2,
+           status=CASE WHEN geo_content_items.current_published_version_id IS NULL THEN 'draft' ELSE 'published' END,
+           lock_version=geo_content_items.lock_version+1,updated_by_admin_id=EXCLUDED.updated_by_admin_id,updated_at=EXCLUDED.updated_at
+           WHERE geo_content_items.status<>'archived'
+         RETURNING *
+       ), selected_item AS MATERIALIZED (
+         SELECT id FROM upserted_item
+         UNION ALL
+         SELECT item.id FROM geo_content_items item CROSS JOIN lease_guard WHERE item.id=$1 AND NOT $20
+       ), locked_item AS MATERIALIZED (
+         SELECT selected.id, pg_advisory_xact_lock(hashtextextended(selected.id::text, 0)) FROM selected_item selected
+       ), next_version AS (
+         SELECT locked_item.id AS content_item_id,COALESCE((
+           SELECT MAX(version.version_number) FROM geo_content_versions version WHERE version.content_item_id=locked_item.id
+         ),0)+1 AS version_number FROM locked_item
        ), inserted_version AS (
          INSERT INTO geo_content_versions (
            id,content_item_id,version_number,title,summary,document_json,faq_json,seo_json,social_drafts_json,
            quality_report_json,config_revision_id,generation_run_id,created_by_admin_id,created_at
-         ) SELECT $2,$1,version_number,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13 FROM next_version
+         ) SELECT $2,content_item_id,version_number,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13 FROM next_version
          RETURNING *
        ), question_links AS (
          INSERT INTO geo_content_question_links (content_version_id,question_id)
-         SELECT $2,unnest($14::uuid[]) RETURNING content_version_id
+         SELECT inserted_version.id,selected.question_id FROM inserted_version CROSS JOIN unnest($14::uuid[]) AS selected(question_id) RETURNING content_version_id
        ), evidence_links AS (
          INSERT INTO geo_content_evidence_links (content_version_id,evidence_id)
-         SELECT $2,unnest($15::uuid[]) RETURNING content_version_id
+         SELECT inserted_version.id,selected.evidence_id FROM inserted_version CROSS JOIN unnest($15::uuid[]) AS selected(evidence_id) RETURNING content_version_id
        ), updated_item AS (
          UPDATE geo_content_items SET current_draft_version_id=$2,
            status=CASE WHEN current_published_version_id IS NULL THEN 'draft' ELSE 'published' END,
-           lock_version=lock_version+1,updated_by_admin_id=$12,updated_at=$13 WHERE id=$1 RETURNING *
+           lock_version=lock_version+1,updated_by_admin_id=$12,updated_at=$13
+          FROM inserted_version WHERE geo_content_items.id=inserted_version.content_item_id AND NOT $20 RETURNING geo_content_items.*
+       ), final_item AS (
+         SELECT * FROM upserted_item
+         UNION ALL SELECT * FROM updated_item
+       ), completed_run AS (
+         UPDATE geo_generation_runs run SET status='succeeded',content_item_id=inserted_version.content_item_id,
+           provider_request_ids_json=$18::jsonb,usage_json=$19::jsonb,completed_at=$13,updated_at=$13
+          FROM inserted_version WHERE run.id=$11 AND run.lease_token=$17 AND run.status='running' RETURNING run.id
        ), audited AS (
          INSERT INTO geo_audit_events (id,actor_admin_account_id,event_type,target_type,target_id,metadata_json,created_at)
-         SELECT $16,$12,'draft_created','geo_content_item',$1,jsonb_build_object('versionId',$2),$13 FROM inserted_version RETURNING id
+         SELECT $16,$12,'draft_created','geo_content_item',content_item_id,jsonb_build_object('versionId',$2),$13 FROM inserted_version RETURNING id
        )
-       SELECT row_to_json(updated_item.*) AS item,row_to_json(inserted_version.*) AS version
-       FROM updated_item CROSS JOIN inserted_version CROSS JOIN audited`,
-      [itemId, versionId, input.document.title.trim(), input.document.summary.trim(), JSON.stringify(input.document), JSON.stringify(input.document.faq), JSON.stringify(input.document.seo), JSON.stringify(input.document.socialDrafts), JSON.stringify(qualityReport), input.configRevisionId, input.generationRunId, input.actorAdminAccountId, now(), questionIds, evidenceIds, randomUUID()],
+       SELECT row_to_json(final_item.*) AS item,row_to_json(inserted_version.*) AS version
+       FROM final_item CROSS JOIN inserted_version CROSS JOIN audited`,
+      [itemId, versionId, input.document.title.trim(), input.document.summary.trim(), JSON.stringify(input.document), JSON.stringify(input.document.faq), JSON.stringify(input.document.seo), JSON.stringify(input.document.socialDrafts), JSON.stringify(qualityReport), input.configRevisionId, input.generationRunId, input.actorAdminAccountId, now(), questionIds, evidenceIds, randomUUID(), input.generationCompletion?.leaseToken ?? null, JSON.stringify(input.generationCompletion?.providerRequestIds ?? []), JSON.stringify(input.generationCompletion?.usage ?? {}), !input.contentItemId, input.contentType, input.topic.trim(), input.slug],
     );
-    const row = result.rows[0]!;
+    const row = result.rows[0];
+    if (!row) {
+      if (input.generationRunId) return fail(409, "geo_generation_lease_lost", "生成任务租约已失效，请重新生成。");
+      if (!input.contentItemId) return fail(409, "geo_content_archived", "同短链内容已归档，请先恢复或更换短链。");
+      return fail(404, "geo_content_not_found", "GEO内容不存在或已归档。");
+    }
     return created({ item: mapItem(row.item), version: mapVersion(row.version) });
   }
 
@@ -242,18 +270,33 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     return ok({ item: mapItem(result.rows[0].item), version: mapVersion(result.rows[0].version) });
   }
 
-  async function archive(input: { contentItemId: string; actorAdminAccountId: string; reason: string }) {
+  async function archive(input: { contentItemId: string; actorAdminAccountId: string; reason: string; redirectPath?: string | null }) {
+    const redirectPath = input.redirectPath?.trim() || null;
+    if (redirectPath && !/^\/(guides|cases|reports|answers)\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(redirectPath)) {
+      return fail(400, "geo_redirect_invalid", "替代地址必须是有效的GEO公开内容路径。");
+    }
+    const match = redirectPath?.match(/^\/(guides|cases|reports|answers)\/([a-z0-9]+(?:-[a-z0-9]+)*)$/) ?? null;
+    const typeByRoute: Record<string, GeoContentType> = { guides: "guide", cases: "case", reports: "report", answers: "answer" };
     const result = await deps.db.query<{ item: GeoItemRow }>(
-      `WITH updated AS (
-         UPDATE geo_content_items SET status='archived',lock_version=lock_version+1,updated_by_admin_id=$2,updated_at=$3
-         WHERE id=$1 AND status<>'archived' RETURNING *
+      `WITH redirect_target AS MATERIALIZED (
+         SELECT id FROM geo_content_items
+          WHERE $6::text IS NOT NULL AND content_type=$7 AND slug=$8
+            AND status='published' AND current_published_version_id IS NOT NULL
+          FOR SHARE
+       ), updated AS (
+         UPDATE geo_content_items source SET status='archived',redirect_path=$6,lock_version=lock_version+1,updated_by_admin_id=$2,updated_at=$3
+         WHERE source.id=$1 AND source.status<>'archived'
+           AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM redirect_target target WHERE target.id<>source.id))
+         RETURNING source.*
        ), audited AS (
          INSERT INTO geo_audit_events (id,actor_admin_account_id,event_type,target_type,target_id,reason,metadata_json,created_at)
          SELECT $4,$2,'archived','geo_content_item',id,$5,'{}'::jsonb,$3 FROM updated RETURNING id
        ) SELECT row_to_json(updated.*) AS item FROM updated CROSS JOIN audited`,
-      [input.contentItemId, input.actorAdminAccountId, now(), randomUUID(), input.reason.trim()],
+      [input.contentItemId, input.actorAdminAccountId, now(), randomUUID(), input.reason.trim(), redirectPath, match ? typeByRoute[match[1]!] : null, match?.[2] ?? null],
     );
-    if (!result.rows[0]) return fail(409, "geo_archive_conflict", "内容不存在或已经归档。");
+    if (!result.rows[0]) return redirectPath
+      ? fail(400, "geo_redirect_invalid", "替代地址必须指向另一条当前已发布内容。")
+      : fail(409, "geo_archive_conflict", "内容不存在或已经归档。");
     return ok(mapItem(result.rows[0].item));
   }
 

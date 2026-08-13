@@ -22,8 +22,15 @@ describe("GEO operations schema", () => {
       loadSqlMigrations(),
     ]);
     const migration = migrations.find((item) => item.name === "20260905-create-geo-operations.sql");
+    const leaseMigration = migrations.find((item) => item.name === "20260906-add-geo-generation-leases.sql");
 
     assert.ok(migration);
+    assert.ok(leaseMigration);
+    assert.doesNotMatch(migration.sql, /heartbeat_at|lease_expires_at|lease_token/);
+    assert.match(leaseMigration.sql, /ADD COLUMN IF NOT EXISTS heartbeat_at/i);
+    assert.match(leaseMigration.sql, /ADD COLUMN IF NOT EXISTS lease_expires_at/i);
+    assert.match(leaseMigration.sql, /ADD COLUMN IF NOT EXISTS lease_token/i);
+    assert.match(leaseMigration.sql, /UPDATE geo_generation_runs[\s\S]*status\s*=\s*'running'/i);
     for (const table of geoTables) {
       assert.match(migration.sql, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
       assert.match(schemaSql, new RegExp(`CREATE TABLE IF NOT EXISTS [\" ]*${table}`));

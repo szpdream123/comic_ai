@@ -105,6 +105,7 @@ const migrations = [
   ["20260903-add-globalaiopc-model-center-and-soundclone.sql", "packages/db/migrations/20260903-add-globalaiopc-model-center-and-soundclone.sql"],
   ["20260904-create-provider-material-assets.sql", "packages/db/migrations/20260904-create-provider-material-assets.sql"],
   ["20260905-create-geo-operations.sql", "packages/db/migrations/20260905-create-geo-operations.sql"],
+  ["20260906-add-geo-generation-leases.sql", "packages/db/migrations/20260906-add-geo-generation-leases.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);

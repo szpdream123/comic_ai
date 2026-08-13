@@ -413,6 +413,9 @@ CREATE TABLE IF NOT EXISTS "geo_generation_runs" (
   "error_summary" text,
   "created_by_admin_id" uuid NOT NULL,
   "started_at" timestamp with time zone,
+  "heartbeat_at" timestamp with time zone,
+  "lease_expires_at" timestamp with time zone,
+  "lease_token" uuid,
   "completed_at" timestamp with time zone,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -499,6 +502,7 @@ CREATE INDEX IF NOT EXISTS "geo_evidence_review_idx" ON "geo_evidence_items" ("r
 CREATE INDEX IF NOT EXISTS "geo_content_status_idx" ON "geo_content_items" ("status", "updated_at" DESC, "id" DESC);
 CREATE INDEX IF NOT EXISTS "geo_content_versions_item_idx" ON "geo_content_versions" ("content_item_id", "version_number" DESC);
 CREATE INDEX IF NOT EXISTS "geo_generation_runs_status_idx" ON "geo_generation_runs" ("status", "created_at" DESC);
+CREATE INDEX IF NOT EXISTS "geo_generation_runs_recovery_idx" ON "geo_generation_runs" ("lease_expires_at", "id") WHERE "status" = 'running';
 CREATE INDEX IF NOT EXISTS "geo_audit_events_target_idx" ON "geo_audit_events" ("target_type", "target_id", "created_at" DESC);
 
 CREATE TABLE IF NOT EXISTS "auth_sessions" (

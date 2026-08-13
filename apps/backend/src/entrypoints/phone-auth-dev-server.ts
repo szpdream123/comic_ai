@@ -102,9 +102,10 @@ import {
 } from "../modules/canvas-agent/index.ts";
 import { TextModelGatewayError } from "../modules/model-gateway/text-model-gateway.errors.ts";
 import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
-import { createGeoGenerationService, parseGeoGeneratedDocument } from "../modules/geo/geo-generation.service.ts";
+import { createGeoGenerationService, parseGeoGeneratedDocument, recoverStaleGeoGenerationRuns } from "../modules/geo/geo-generation.service.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
+import { geoRuntimeConfigKey, loadGeoRuntimeSettings, loadGeoRuntimeSettingsRevision, normalizeGeoRuntimeSettings } from "../modules/geo/geo-settings.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
@@ -1303,22 +1304,6 @@ function isGeoDocumentInput(value: unknown): value is GeoDocument {
   } catch {
     return false;
   }
-}
-
-function normalizeGeoSettings(value: unknown) {
-  const input = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-  return {
-    brandName: readString(input.brandName) || "灵曦AI",
-    enabled: input.enabled !== false,
-    defaultModelCode: readString(input.defaultModelCode) || null,
-    configRevisionId: readString(input.configRevisionId) || "geo-default-v1",
-    similarityThreshold: Math.min(1, Math.max(0.5, Number(input.similarityThreshold ?? 0.86))),
-    allowedContentTypes: readStringArray(input.allowedContentTypes).filter(isGeoContentType).length > 0
-      ? readStringArray(input.allowedContentTypes).filter(isGeoContentType)
-      : ["guide", "case", "report", "answer"],
-  };
 }
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -15682,6 +15667,48 @@ function readConfiguredCorsOrigins() {
   return values;
 }
 
+async function executeIdempotentGeoMutation(
+  db: SqlDatabase,
+  input: {
+    adminAccountId: string;
+    idempotencyKey: string;
+    request: Record<string, unknown>;
+    execute: () => Promise<{ status: number; body: Record<string, unknown> }>;
+  },
+) {
+  const store = new SqlIdempotencyRecordStore(db);
+  const started = await beginOrReplayCommand(store, {
+    scopeKey: `admin:${input.adminAccountId}`,
+    adminAccountId: input.adminAccountId,
+    operationName: operationNames.geoMutation,
+    idempotencyKey: input.idempotencyKey,
+    requestHash: hashJson(input.request),
+  });
+  if (started.kind === "processing") throw new IdempotencyProcessingError(started.record);
+  if (started.kind === "replayed") {
+    const snapshot = started.record.responseSnapshot;
+    if (snapshot && typeof snapshot.status === "number" && snapshot.body && typeof snapshot.body === "object") {
+      return { status: snapshot.status, body: snapshot.body as Record<string, unknown> };
+    }
+    throw new IdempotencyProcessingError(started.record);
+  }
+  try {
+    const result = await input.execute();
+    await store.update({
+      ...started.record,
+      responseResourceType: "geo_mutation",
+      responseResourceId: started.record.id,
+      responseSnapshot: result,
+      status: "succeeded",
+      updatedAt: new Date(),
+    });
+    return result;
+  } catch (error) {
+    await store.update({ ...started.record, status: "failed_terminal", updatedAt: new Date() }).catch(() => undefined);
+    throw error;
+  }
+}
+
 const geoPublicRouteTypes: Record<string, GeoContentType> = {
   guides: "guide",
   cases: "case",
@@ -15710,10 +15737,25 @@ async function serveGeoPublic(
   let html: string;
 
   if (slug) {
+    const archived = await db.query<{ status: string; redirect_path: string | null }>(
+      `SELECT status,redirect_path FROM geo_content_items WHERE content_type=$1 AND slug=$2`,
+      [contentType, slug],
+    );
+    if (archived.rows[0]?.status === "archived") {
+      if (archived.rows[0].redirect_path) {
+        response.statusCode = 301;
+        response.setHeader("location", archived.rows[0].redirect_path);
+        response.setHeader("cache-control", "public, max-age=300");
+        response.end();
+        return;
+      }
+      return writeText(response, { status: 410, contentType: "text/plain; charset=utf-8", body: "Gone" });
+    }
     const result = await service.findPublishedByPath(`/${routeName}/${slug}`);
     if (!("data" in result.body)) {
       return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
     }
+    const versionSettings = await loadGeoRuntimeSettingsRevision(db, result.body.data.version.configRevisionId);
     const allPublished = await service.listPublished();
     const related = "data" in allPublished.body
       ? allPublished.body.data
@@ -15733,7 +15775,7 @@ async function serveGeoPublic(
       document: result.body.data.version.document,
       publishedAt: result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
       updatedAt: result.body.data.item.updatedAt,
-      authorName: "灵曦AI团队",
+      authorName: versionSettings.publicAuthorName,
       related,
     });
   } else {
@@ -17847,6 +17889,7 @@ export function createPhoneAuthDevServer(
     void pendingDb
       .then((db) => {
         resolvedDb = db;
+        return recoverStaleGeoGenerationRuns({ db }).catch(() => undefined);
       })
       .catch(() => {
         if (dbPromise === pendingDb) {
@@ -17859,6 +17902,7 @@ export function createPhoneAuthDevServer(
     void dbPromise
       .then((db) => {
         resolvedDb = db;
+        return recoverStaleGeoGenerationRuns({ db }).catch(() => undefined);
       })
       .catch(() => undefined);
   } else {
@@ -18090,6 +18134,8 @@ export function createPhoneAuthDevServer(
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
 
         const actorAdminAccountId = adminRoute.session.admin_account_id;
+        const geoIdempotencyKey = request.method === "GET" ? null : requiredIdempotencyKeyFromRequest(request);
+        if (request.method !== "GET" && !geoIdempotencyKey) return writeIdempotencyKeyRequired(response);
         const geoContentService = createGeoContentService({ db });
         const geoGenerationService = createGeoGenerationService({
           db,
@@ -18102,7 +18148,7 @@ export function createPhoneAuthDevServer(
         }
         if (request.method === "POST" && pathname === "/api/admin/geo/questions") {
           const body = (await readJsonBody(request)) as Record<string, unknown>;
-          return writeJson(response, await geoContentService.saveQuestion({
+          const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.saveQuestion({
             rawQuestion: readString(body.rawQuestion),
             topic: readString(body.topic),
             intent: readString(body.intent),
@@ -18111,7 +18157,8 @@ export function createPhoneAuthDevServer(
             productCapabilities: readStringArray(body.productCapabilities),
             notes: readString(body.notes),
             actorAdminAccountId,
-          }));
+          }) as Promise<{ status: number; body: Record<string, unknown> }> });
+          return writeJson(response, result);
         }
         if (request.method === "GET" && pathname === "/api/admin/geo/evidence") {
           return writeJson(response, await geoContentService.listEvidence());
@@ -18122,7 +18169,7 @@ export function createPhoneAuthDevServer(
           if (!["pending", "approved", "rejected"].includes(reviewStatus)) {
             return writeJson(response, envelopedError(400, "geo_evidence_invalid", "Invalid evidence review status"));
           }
-          return writeJson(response, await geoContentService.saveEvidence({
+          const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.saveEvidence({
             type: readString(body.type),
             name: readString(body.name),
             factText: readString(body.factText),
@@ -18133,7 +18180,8 @@ export function createPhoneAuthDevServer(
             modelName: readString(body.modelName) || null,
             modelVersion: readString(body.modelVersion) || null,
             actorAdminAccountId,
-          }));
+          }) as Promise<{ status: number; body: Record<string, unknown> }> });
+          return writeJson(response, result);
         }
         if (request.method === "GET" && pathname === "/api/admin/geo/content") {
           return writeJson(response, await geoContentService.listContent());
@@ -18144,7 +18192,7 @@ export function createPhoneAuthDevServer(
           if (!isGeoContentType(contentType) || !isGeoDocumentInput(body.document)) {
             return writeJson(response, envelopedError(400, "geo_content_invalid", "Invalid GEO content document"));
           }
-          return writeJson(response, await geoContentService.createDraftFromDocument({
+          const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.createDraftFromDocument({
             contentItemId: readString(body.contentItemId) || undefined,
             contentType,
             topic: readString(body.topic),
@@ -18155,7 +18203,8 @@ export function createPhoneAuthDevServer(
             generationRunId: null,
             configRevisionId: readString(body.configRevisionId) || "geo-default-v1",
             actorAdminAccountId,
-          }));
+          }) as Promise<{ status: number; body: Record<string, unknown> }> });
+          return writeJson(response, result);
         }
         const geoContentDetailMatch = pathname.match(/^\/api\/admin\/geo\/content\/([^/]+)$/);
         if (request.method === "GET" && geoContentDetailMatch) {
@@ -18167,7 +18216,7 @@ export function createPhoneAuthDevServer(
           if (!isGeoContentType(contentType)) {
             return writeJson(response, envelopedError(400, "geo_content_type_invalid", "Invalid GEO content type"));
           }
-          return writeJson(response, await geoGenerationService.generateDraft({
+          const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoGenerationService.generateDraft({
             questionId: readString(body.questionId),
             evidenceIds: readStringArray(body.evidenceIds),
             contentType,
@@ -18175,7 +18224,8 @@ export function createPhoneAuthDevServer(
             slug: readString(body.slug),
             modelCode: readString(body.modelCode),
             actorAdminAccountId,
-          }));
+          }) as Promise<{ status: number; body: Record<string, unknown> }> });
+          return writeJson(response, result);
         }
         const geoContentActionMatch = pathname.match(/^\/api\/admin\/geo\/content\/([^/]+)\/(submit-review|publish|rollback|archive)$/);
         if (request.method === "POST" && geoContentActionMatch) {
@@ -18183,63 +18233,71 @@ export function createPhoneAuthDevServer(
           const contentItemId = geoContentActionMatch[1]!;
           const action = geoContentActionMatch[2]!;
           if (action === "submit-review") {
-            return writeJson(response, await geoContentService.submitForReview({
+            const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.submitForReview({
               contentItemId,
               expectedLockVersion: Number(body.expectedLockVersion),
               actorAdminAccountId,
-            }));
+            }) as Promise<{ status: number; body: Record<string, unknown> }> });
+            return writeJson(response, result);
           }
           if (action === "publish") {
-            return writeJson(response, await geoContentService.publish({
+            const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.publish({
               contentItemId,
               actorAdminAccountId,
               reason: readString(body.reason) || "人工审核通过",
-            }));
+            }) as Promise<{ status: number; body: Record<string, unknown> }> });
+            return writeJson(response, result);
           }
           if (action === "rollback") {
-            return writeJson(response, await geoContentService.rollback({
+            const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.rollback({
               contentItemId,
               versionId: readString(body.versionId),
               actorAdminAccountId,
               reason: readString(body.reason) || "人工回滚",
-            }));
+            }) as Promise<{ status: number; body: Record<string, unknown> }> });
+            return writeJson(response, result);
           }
-          return writeJson(response, await geoContentService.archive({
+          const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.archive({
             contentItemId,
             actorAdminAccountId,
             reason: readString(body.reason) || "人工归档",
-          }));
+            redirectPath: readString(body.redirectPath) || null,
+          }) as Promise<{ status: number; body: Record<string, unknown> }> });
+          return writeJson(response, result);
         }
         if (request.method === "GET" && pathname === "/api/admin/geo/settings") {
-          const stored = await db.query<{ value_json: Record<string, unknown> }>(
-            `SELECT value_json FROM runtime_config_entries WHERE key='geo.operations.settings'`,
-          );
+          const stored = await loadGeoRuntimeSettings(db);
           return writeJson(response, {
             status: 200,
-            body: { data: normalizeGeoSettings(stored.rows[0]?.value_json) },
+            body: { data: { ...stored.settings, configRevisionId: stored.revisionId } },
           });
         }
         if (request.method === "PATCH" && pathname === "/api/admin/geo/settings") {
           const body = (await readJsonBody(request)) as Record<string, unknown>;
-          const previous = await db.query<{ value_json: Record<string, unknown> }>(
-            `SELECT value_json FROM runtime_config_entries WHERE key='geo.operations.settings'`,
-          );
-          const settings = normalizeGeoSettings(body.value);
-          if (settings.brandName !== "灵曦AI") {
-            return writeJson(response, envelopedError(400, "geo_brand_invalid", "GEO brand must be 灵曦AI"));
+          const replayedOrCreated = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: async () => {
+          const rawValue = body.value && typeof body.value === "object" && !Array.isArray(body.value) ? body.value as Record<string, unknown> : {};
+          if (rawValue.brandName != null && rawValue.brandName !== "灵曦AI") {
+            return envelopedError(400, "geo_brand_invalid", "GEO brand must be 灵曦AI") as { status: number; body: Record<string, unknown> };
           }
+          const previous = await db.query<{ value_json: Record<string, unknown> }>(
+            `SELECT value_json FROM runtime_config_entries WHERE key=$1`, [geoRuntimeConfigKey],
+          );
+          const settings = normalizeGeoRuntimeSettings(body.value);
           const changedAt = new Date();
+          const revisionId = randomUUID();
           await db.query(
             `WITH saved AS (
                INSERT INTO runtime_config_entries (key,value_json,value_type,scope,description,updated_by_admin_id,updated_at)
-               VALUES ('geo.operations.settings',$1::jsonb,'json','admin','GEO运营配置',$2,$3)
+               VALUES ($7,$1::jsonb,'json','admin','GEO运营配置',$2,$3)
                ON CONFLICT (key) DO UPDATE SET value_json=EXCLUDED.value_json,updated_by_admin_id=EXCLUDED.updated_by_admin_id,updated_at=EXCLUDED.updated_at
                RETURNING key
              ) INSERT INTO runtime_config_revisions (id,config_key,previous_value_json,next_value_json,changed_by_admin_id,reason,created_at)
-               SELECT $4,'geo.operations.settings',$5::jsonb,$1::jsonb,$2,$6,$3 FROM saved`,
-            [JSON.stringify(settings), actorAdminAccountId, changedAt, randomUUID(), JSON.stringify(previous.rows[0]?.value_json ?? null), readString(body.reason) || "更新GEO运营配置"],
+               SELECT $4,$7,$5::jsonb,$1::jsonb,$2,$6,$3 FROM saved`,
+            [JSON.stringify(settings), actorAdminAccountId, changedAt, revisionId, JSON.stringify(previous.rows[0]?.value_json ?? null), readString(body.reason) || "更新GEO运营配置", geoRuntimeConfigKey],
           );
-          return writeJson(response, { status: 200, body: { data: settings } });
+          return { status: 200, body: { data: { ...settings, configRevisionId: revisionId } } };
+          }});
+          return writeJson(response, replayedOrCreated);
         }
         return writeJson(response, envelopedError(404, "geo_route_not_found", "GEO route not found"));
       }

@@ -36,6 +36,7 @@ export const operationNames = {
   adminAuthChangePassword: "admin.auth.change_password",
   adminAuthRevokeOtherSessions: "admin.auth.revoke_other_sessions",
   adminAuthUpdateProfile: "admin.auth.update_profile",
+  geoMutation: "geo.mutation",
 } as const;
 
 export type OperationName = (typeof operationNames)[keyof typeof operationNames];

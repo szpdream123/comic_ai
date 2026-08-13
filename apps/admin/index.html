@@ -13612,7 +13612,7 @@
           </section>
           <section class="card"><div class="toolbar"><h3>问题与证据选择</h3><span class="metric-note">所选资料将作为模型唯一事实来源</span></div><div class="grid" style="grid-template-columns:1fr 1fr"><div class="table-wrap"><table><thead><tr><th>选择</th><th>问题</th><th>优先级</th><th>覆盖</th></tr></thead><tbody>${questionRows}</tbody></table></div><div class="table-wrap"><table><thead><tr><th>选择</th><th>证据</th><th>审核</th><th>公开</th></tr></thead><tbody>${evidenceRows}</tbody></table></div></div></section>
           <section class="card"><div class="toolbar"><h3>内容中心</h3><span class="metric-note">阻断项必须清零，警告项可在人工确认后发布</span></div><div class="table-wrap"><table><thead><tr><th>内容</th><th>状态</th><th>自动质检</th><th>操作</th></tr></thead><tbody>${contentRows}</tbody></table></div></section>
-          <section class="card"><div class="toolbar"><h3>GEO设置</h3><span class="tag blue">品牌固定为灵曦AI</span></div><form onsubmit="geoSaveSettings(event)" class="form-grid"><label class="field"><span>默认模型</span><input name="defaultModelCode" value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><label class="field"><span>内容相似度警戒线</span><input name="similarityThreshold" type="number" min="0.5" max="1" step="0.01" value="${Number(store.settings?.similarityThreshold || 0.86)}" /></label><button class="btn primary" type="submit">保存设置</button></form></section>
+          <section class="card"><div class="toolbar"><h3>GEO设置</h3><span class="tag blue">品牌固定为灵曦AI</span></div><form onsubmit="geoSaveSettings(event)" class="form-grid"><label class="field"><span>默认模型</span><input name="defaultModelCode" value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><label class="field"><span>公开作者</span><input name="publicAuthorName" value="${escapeHtml(store.settings?.publicAuthorName || "灵曦AI内容团队")}" /></label><label class="field"><span>品牌语气</span><input name="brandTone" value="${escapeHtml(store.settings?.brandTone || "专业、克制、清晰，不夸大效果")}" /></label><label class="field"><span>品牌事实（每行一条）</span><textarea name="brandFacts">${escapeHtml((store.settings?.brandFacts || []).join("\n"))}</textarea></label><label class="field"><span>禁用词（每行一条）</span><textarea name="forbiddenPhrases">${escapeHtml((store.settings?.forbiddenPhrases || []).join("\n"))}</textarea></label><label class="field"><span>目标字数</span><div class="row-actions"><input name="wordMin" type="number" min="300" value="${Number(store.settings?.defaultWordRange?.min || 1200)}" /><input name="wordMax" type="number" min="300" value="${Number(store.settings?.defaultWordRange?.max || 2600)}" /></div></label><label class="field"><span>内容相似度阻断线</span><input name="similarityThreshold" type="number" min="0.5" max="1" step="0.01" value="${Number(store.settings?.similarityThreshold || 0.82)}" /></label><button class="btn primary" type="submit">保存设置</button></form></section>
         </div>`;
       }
 
@@ -13621,7 +13621,7 @@
         const form = event.currentTarget;
         const data = new FormData(form);
         const error = form.querySelector(".form-error") || { textContent: "" };
-        await runAdminMutation(form, error, () => api("/api/admin/geo/questions", { method: "POST", body: JSON.stringify({ rawQuestion: data.get("rawQuestion"), topic: data.get("topic"), intent: data.get("intent"), priority: Number(data.get("priority")), targetPlatforms: ["deepseek", "doubao", "baidu"], productCapabilities: [], notes: "" }) }), "问题已新增");
+        await runAdminMutation(form, error, () => api("/api/admin/geo/questions", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-question-${Date.now()}` }, body: JSON.stringify({ rawQuestion: data.get("rawQuestion"), topic: data.get("topic"), intent: data.get("intent"), priority: Number(data.get("priority")), targetPlatforms: ["deepseek", "doubao", "baidu"], productCapabilities: [], notes: "" }) }), "问题已新增");
         form.reset(); await loadGeoOperations(); renderShell();
       }
       async function geoCreateEvidence(event) {
@@ -13630,7 +13630,7 @@
         const data = new FormData(form);
         const approved = Boolean(data.get("publicUseAllowed"));
         const error = form.querySelector(".form-error") || { textContent: "" };
-        await runAdminMutation(form, error, () => api("/api/admin/geo/evidence", { method: "POST", body: JSON.stringify({ type: "product_feature", name: data.get("name"), factText: data.get("factText"), sourceUrl: data.get("sourceUrl") || null, reviewStatus: approved ? "approved" : "pending", validUntil: null, publicUseAllowed: approved }) }), "证据已新增");
+        await runAdminMutation(form, error, () => api("/api/admin/geo/evidence", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-evidence-${Date.now()}` }, body: JSON.stringify({ type: "product_feature", name: data.get("name"), factText: data.get("factText"), sourceUrl: data.get("sourceUrl") || null, reviewStatus: approved ? "approved" : "pending", validUntil: null, publicUseAllowed: approved }) }), "证据已新增");
         form.reset(); await loadGeoOperations(); renderShell();
       }
       function geoSelectQuestion(id) { geoOperationsState().selectedQuestionId = id; renderShell(); }
@@ -13646,7 +13646,7 @@
         const question = store.questions.find((item) => item.id === store.selectedQuestionId);
         const data = new FormData(form);
         const error = form.querySelector(".form-error") || { textContent: "" };
-        await runAdminMutation(form, error, () => api("/api/admin/geo/generate", { method: "POST", body: JSON.stringify({ questionId: store.selectedQuestionId, evidenceIds: store.selectedEvidenceIds, contentType: data.get("contentType"), topic: question?.topic || "GEO内容", slug: data.get("slug"), modelCode: data.get("modelCode") }) }), "草稿已生成并完成自动质检");
+        await runAdminMutation(form, error, () => api("/api/admin/geo/generate", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-generate-${Date.now()}` }, body: JSON.stringify({ questionId: store.selectedQuestionId, evidenceIds: store.selectedEvidenceIds, contentType: data.get("contentType"), topic: question?.topic || "GEO内容", slug: data.get("slug"), modelCode: data.get("modelCode") }) }), "草稿已生成并完成自动质检");
         await loadGeoOperations(); renderShell();
       }
       async function geoSubmitReview(contentId, lockVersion) {
@@ -13667,7 +13667,8 @@
         const form = event.currentTarget;
         const data = new FormData(form);
         const error = form.querySelector(".form-error") || { textContent: "" };
-        await runAdminMutation(form, error, () => api("/api/admin/geo/settings", { method: "PATCH", body: JSON.stringify({ value: { brandName: "灵曦AI", enabled: true, defaultModelCode: data.get("defaultModelCode"), similarityThreshold: Number(data.get("similarityThreshold")), configRevisionId: "geo-default-v1", allowedContentTypes: ["guide", "case", "report", "answer"] }, reason: "更新GEO运营配置" }) }), "GEO设置已保存");
+        const lines = (value) => String(value || "").split(/\n+/).map((item) => item.trim()).filter(Boolean);
+        await runAdminMutation(form, error, () => api("/api/admin/geo/settings", { method: "PATCH", headers: { "idempotency-key": `admin-ui-geo-settings-${Date.now()}` }, body: JSON.stringify({ value: { brandName: "灵曦AI", defaultModelCode: data.get("defaultModelCode"), brandFacts: lines(data.get("brandFacts")), brandTone: data.get("brandTone"), forbiddenPhrases: lines(data.get("forbiddenPhrases")), defaultWordRange: { min: Number(data.get("wordMin")), max: Number(data.get("wordMax")) }, similarityThreshold: Number(data.get("similarityThreshold")), publicAuthorName: data.get("publicAuthorName") }, reason: "更新GEO运营配置" }) }), "GEO设置已保存");
         await loadGeoOperations(); renderShell();
       }
 
