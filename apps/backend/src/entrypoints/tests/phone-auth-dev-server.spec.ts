@@ -29,6 +29,7 @@ import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { createDevDb } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
+import { createGeoContentService } from "../../modules/geo/geo-content.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 const directUploadPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -1450,6 +1451,71 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.match(routeHtml, /data-public-seo-login/);
         assert.doesNotMatch(routeHtml, /<noscript>/);
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves GEO public SSR pages and dynamic sitemap entries without creator shell state", async () => {
+    const db = await createMigratedTestDb();
+    const actorAdminAccountId = "32000000-0000-4000-8000-000000000001";
+    await db.query(
+      `INSERT INTO admin_accounts (id,login_name,password_hash,display_name,status)
+       VALUES ($1,'geo_public_admin','plain:test-password','GEO Public Admin','active')`,
+      [actorAdminAccountId],
+    );
+    const service = createGeoContentService({ db, now: () => new Date("2026-08-13T10:00:00.000Z") });
+    const draft = await service.createDraftFromDocument({
+      contentType: "guide", topic: "角色一致性", slug: "ai-short-drama-character-consistency",
+      questionIds: [], evidenceIds: [], generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      document: {
+        title: "AI短剧如何保持角色一致性",
+        summary: "从角色资料、参考素材和分镜约束三个环节减少不同镜头中的角色漂移。",
+        directAnswer: "先固定角色资料，再让每个分镜引用同一组已确认素材。",
+        blocks: [{ type: "paragraph", text: "灵曦AI可统一管理角色参考素材。", evidenceIds: [] }],
+        faq: [{ question: "什么时候更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
+        socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+        seo: { title: "AI短剧角色一致性方法 | 灵曦AI", description: "介绍AI短剧角色资料、参考素材和分镜约束的实用方法。" },
+      },
+    });
+    assert.equal(draft.status, 201);
+    if (!("data" in draft.body)) throw new Error("fixture draft failed");
+    assert.equal((await service.submitForReview({ contentItemId: draft.body.data.item.id, expectedLockVersion: draft.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+    assert.equal((await service.publish({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "公开页验证" })).status, 200);
+    await service.createDraftFromDocument({
+      contentType: "answer", topic: "未发布", slug: "draft-only-answer", questionIds: [], evidenceIds: [],
+      generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      document: {
+        title: "未发布问答", summary: "这是一条仅用于验证站点地图不会暴露草稿的内容。", directAnswer: "尚未发布。",
+        blocks: [{ type: "paragraph", text: "草稿内容。", evidenceIds: [] }], faq: [],
+        socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+        seo: { title: "未发布问答 | 灵曦AI", description: "未发布内容不会进入公开站点地图。" },
+      },
+    });
+    const server = createPhoneAuthDevServer({ db });
+    const proxyHeaders = { connection: "close", "x-forwarded-host": "www.lingxiyunai.com:443", "x-forwarded-proto": "https" };
+    try {
+      await server.listen(0);
+      for (const cookie of [undefined, "auth_session=existing-session"]) {
+        const response = await fetch(`${server.origin}/guides/ai-short-drama-character-consistency`, {
+          headers: cookie ? { ...proxyHeaders, cookie } : proxyHeaders,
+        });
+        const html = await response.text();
+        assert.equal(response.status, 200);
+        assert.match(html, /<h1>AI短剧如何保持角色一致性<\/h1>/);
+        assert.match(html, /application\/ld\+json/);
+        assert.match(html, /<link rel="canonical" href="https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency"/);
+        assert.doesNotMatch(html, /src="\/app\.js/);
+        assert.doesNotMatch(html, /public-seo-session-pending/);
+      }
+      const listing = await fetch(`${server.origin}/guides`, { headers: proxyHeaders });
+      assert.equal(listing.status, 200);
+      assert.match(await listing.text(), /AI短剧如何保持角色一致性/);
+      const sitemap = await fetch(`${server.origin}/sitemap.xml`, { headers: proxyHeaders });
+      const sitemapXml = await sitemap.text();
+      assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency<\/loc>/);
+      assert.match(sitemapXml, /<lastmod>2026-08-13T10:00:00\.000Z<\/lastmod>/);
+      assert.doesNotMatch(sitemapXml, /draft-only-answer/);
     } finally {
       await server.close();
     }

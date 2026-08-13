@@ -104,6 +104,7 @@ import { TextModelGatewayError } from "../modules/model-gateway/text-model-gatew
 import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
 import { createGeoGenerationService, parseGeoGeneratedDocument } from "../modules/geo/geo-generation.service.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
+import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
@@ -15681,6 +15682,134 @@ function readConfiguredCorsOrigins() {
   return values;
 }
 
+const geoPublicRouteTypes: Record<string, GeoContentType> = {
+  guides: "guide",
+  cases: "case",
+  reports: "report",
+  answers: "answer",
+};
+
+function isGeoPublicPath(pathname: string) {
+  return /^\/(guides|cases|reports|answers)(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)?\/?$/.test(pathname);
+}
+
+async function serveGeoPublic(
+  request: Parameters<typeof createServer>[0],
+  pathname: string,
+  response: ServerResponse,
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const match = pathname.match(/^\/(guides|cases|reports|answers)(?:\/([a-z0-9]+(?:-[a-z0-9]+)*))?\/?$/);
+  if (!match) return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
+  const routeName = match[1]!;
+  const contentType = geoPublicRouteTypes[routeName]!;
+  const slug = match[2];
+  const service = createGeoContentService({ db });
+  const template = await readFile(join(webRoot, "geo-public.html"), "utf8");
+  const origin = serverOriginFromRequest(request);
+  let html: string;
+
+  if (slug) {
+    const result = await service.findPublishedByPath(`/${routeName}/${slug}`);
+    if (!("data" in result.body)) {
+      return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
+    }
+    const allPublished = await service.listPublished();
+    const related = "data" in allPublished.body
+      ? allPublished.body.data
+        .filter((entry) => entry.item.id !== result.body.data.item.id)
+        .slice(0, 4)
+        .map((entry) => ({
+          href: geoPublicHref(entry.item.contentType, entry.item.slug),
+          title: entry.version.title,
+          summary: entry.version.summary,
+        }))
+      : [];
+    html = renderGeoArticle({
+      template,
+      canonicalUrl: `${origin}/${routeName}/${slug}`,
+      brandName: "灵曦AI",
+      contentType,
+      document: result.body.data.version.document,
+      publishedAt: result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
+      updatedAt: result.body.data.item.updatedAt,
+      authorName: "灵曦AI团队",
+      related,
+    });
+  } else {
+    const result = await service.listPublished(contentType);
+    const labels: Record<string, { title: string; description: string }> = {
+      guides: { title: "AI短剧创作指南", description: "基于可审核产品事实整理的AI短剧方法、流程与操作指南。" },
+      cases: { title: "AI短剧实践案例", description: "记录问题、方法、证据和结果边界的AI短剧实践案例。" },
+      reports: { title: "AI短剧观察报告", description: "围绕AI短剧生产流程与工具能力的事实型观察报告。" },
+      answers: { title: "AI短剧常见问答", description: "直接回答AI短剧创作和使用灵曦AI时的常见问题。" },
+    };
+    const items = "data" in result.body ? result.body.data.map((entry) => ({
+      href: geoPublicHref(entry.item.contentType, entry.item.slug),
+      title: entry.version.title,
+      summary: entry.version.summary,
+      contentType: entry.item.contentType,
+      publishedAt: entry.version.publishedAt ?? undefined,
+    })) : [];
+    html = renderGeoListing({
+      template,
+      canonicalUrl: `${origin}/${routeName}`,
+      brandName: "灵曦AI",
+      title: `${labels[routeName]!.title} | 灵曦AI`,
+      description: labels[routeName]!.description,
+      items,
+    });
+  }
+
+  const file = Buffer.from(html, "utf8");
+  const etag = staticAssetEtag(file);
+  response.setHeader("etag", etag);
+  response.setHeader("cache-control", "public, max-age=0, must-revalidate");
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  if (requestMatchesEtag(request, etag)) {
+    response.statusCode = 304;
+    response.end();
+    return;
+  }
+  response.statusCode = 200;
+  response.end(file);
+}
+
+async function serveDynamicSitemap(
+  request: Parameters<typeof createServer>[0],
+  response: ServerResponse,
+  db: Awaited<ReturnType<typeof createDevDb>>,
+) {
+  const origin = serverOriginFromRequest(request);
+  let dynamicEntries: Array<{ href: string; lastmod: string | null }> = [];
+  try {
+    const result = await createGeoContentService({ db }).listPublished();
+    if ("data" in result.body) {
+      dynamicEntries = result.body.data.map((entry) => ({
+        href: geoPublicHref(entry.item.contentType, entry.item.slug),
+        lastmod: entry.version.publishedAt ?? entry.item.updatedAt,
+      }));
+    }
+  } catch {
+    dynamicEntries = [];
+  }
+  const staticEntries = Array.from(publicSeoRoutes.values()).map((route) => ({ href: route.path, lastmod: null }));
+  const geoRootEntries = Object.keys(geoPublicRouteTypes).map((route) => ({ href: `/${route}`, lastmod: null }));
+  const entries = [...staticEntries, ...geoRootEntries, ...dynamicEntries];
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries
+    .map((entry) => `  <url><loc>${escapeSeoHtml(`${origin}${entry.href}`)}</loc>${entry.lastmod ? `<lastmod>${escapeSeoHtml(new Date(entry.lastmod).toISOString())}</lastmod>` : ""}</url>`)
+    .join("\n")}\n</urlset>\n`;
+  response.statusCode = 200;
+  response.setHeader("content-type", "application/xml; charset=utf-8");
+  response.setHeader("cache-control", "no-store");
+  response.end(xml);
+}
+
+function geoPublicHref(contentType: GeoContentType, slug: string) {
+  const routeByType: Record<GeoContentType, string> = { guide: "guides", case: "cases", report: "reports", answer: "answers" };
+  return `/${routeByType[contentType]}/${slug}`;
+}
+
 async function serveStatic(
   request: Parameters<typeof createServer>[0],
   pathname: string,
@@ -17904,6 +18033,12 @@ export function createPhoneAuthDevServer(
             target.searchParams.set("inviteCode", inviteCode);
           }
           return redirect(response, target.toString());
+        }
+
+        if (request.method === "GET" && (isGeoPublicPath(pathname) || pathname === "/sitemap.xml")) {
+          const publicDb = await getDb();
+          if (pathname === "/sitemap.xml") return await serveDynamicSitemap(request, response, publicDb);
+          return await serveGeoPublic(request, pathname, response, publicDb);
         }
 
         if (request.method === "GET" && !pathname.startsWith("/api/")) {
