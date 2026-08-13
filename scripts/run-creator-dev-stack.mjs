@@ -10,9 +10,19 @@ const envFilePath = join(process.cwd(), ".env");
 const logDir = join(process.cwd(), ".local", "logs");
 const runDir = join(process.cwd(), ".local", "run");
 const stopRequestFile = join(runDir, "creator-dev-stack.stop");
+const foundationSchemaEntrypoint = join(
+  process.cwd(),
+  "apps",
+  "backend",
+  "src",
+  "entrypoints",
+  "production-foundation-schema.ts",
+);
+const devFoundationSchemaTimeoutMs = 20 * 60_000;
 
 loadDotEnvFile(envFilePath, { override: true });
 runRuntimeSchemaMigrations({ runtime, cwd: process.cwd(), env: process.env });
+runDevFoundationSchema({ runtime, cwd: process.cwd(), env: process.env });
 mkdirSync(logDir, { recursive: true });
 mkdirSync(runDir, { recursive: true });
 rmSync(stopRequestFile, { force: true });
@@ -37,6 +47,7 @@ const supervisor = createCreatorDevServiceSupervisor({
       env: {
         ...process.env,
         CREATOR_DEV_STACK_MANAGED: "true",
+        CREATOR_DEV_SCHEMA_READY: "true",
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -64,6 +75,30 @@ const supervisor = createCreatorDevServiceSupervisor({
     process.exitCode = code ?? 1;
   },
 });
+
+function runDevFoundationSchema({ runtime, cwd, env }) {
+  console.info("[schema] Preparing foundation schema before service startup...");
+  const result = spawnSync(runtime, [
+    ...resolveTsxRuntimeArgs(runtime),
+    foundationSchemaEntrypoint,
+  ], {
+    cwd,
+    env: {
+      ...env,
+      CREATOR_DEV_STACK_MANAGED: "false",
+      CREATOR_DEV_SCHEMA_READY: "false",
+    },
+    stdio: "inherit",
+    timeout: devFoundationSchemaTimeoutMs,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`dev_foundation_schema_failed:${result.status ?? "unknown"}`);
+  }
+  console.info("[schema] Foundation schema is ready.");
+}
 
 supervisor.start("phone-auth", ["scripts/run-phone-auth-dev-server.mjs"]);
 

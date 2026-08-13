@@ -4,7 +4,7 @@ const FRAME_MAX_EDGE = 1920;
 const INSTALL_CACHE_KEY = "comic-ai-browser-video-analysis-v3";
 const INSTALL_DB_NAME = "comic-ai-browser-video-analysis";
 const INSTALL_DB_STORE = "resources";
-const INSTALL_VERSION = "browser-3-hd";
+const INSTALL_VERSION = "browser-6-stable-tracks";
 const UNSUPPORTED_MESSAGE = "当前电脑浏览器不支持本地视频解析，请升级或更换浏览器";
 const SUPPORTED_VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 
@@ -39,8 +39,10 @@ export async function isBrowserVideoAnalysisInstalled() {
   }
 }
 
-export async function installBrowserVideoAnalysis({ onProgress, verifyRuntime = true } = {}) {
+export async function installBrowserVideoAnalysis({ onProgress, verifyRuntime = true, signal } = {}) {
+  throwIfAborted(signal);
   const support = await checkBrowserVideoAnalysis();
+  throwIfAborted(signal);
   if (!support.ready) throw new Error(support.error);
   const storage = await getInstallStorage();
   if (!storage) throw new Error(UNSUPPORTED_MESSAGE);
@@ -49,18 +51,20 @@ export async function installBrowserVideoAnalysis({ onProgress, verifyRuntime = 
   try {
     for (let index = 0; index < resources.length; index += 1) {
       const resource = resources[index];
-      const response = await globalThis.fetch(resource, { cache: "no-store" });
+      throwIfAborted(signal);
+      const response = await globalThis.fetch(resource, { cache: "no-store", signal });
       if (!response.ok) throw new Error(`视频解析插件资源加载失败（${response.status}）`);
       const buffer = await readResponseBuffer(response, (loaded, total) => {
         const resourceProgress = total ? loaded / total : 0;
         const progress = ((index + resourceProgress) / resources.length) * 92;
         onProgress?.({ progress: Math.min(92, Math.round(progress)), message: "正在安装浏览器视频解析插件" });
-      });
+      }, signal);
+      throwIfAborted(signal);
       const headers = new Headers(response.headers);
       headers.set("content-length", String(buffer.byteLength));
       await storage.put(resource, new Response(buffer, { status: 200, headers }));
     }
-    if (verifyRuntime) await verifyInstalledWasmRuntime(storage);
+    if (verifyRuntime) await verifyInstalledWasmRuntime(storage, signal);
   } catch (error) {
     await Promise.all(resources.map((resource) => storage.delete(resource).catch(() => undefined)));
     throw error;
@@ -75,7 +79,9 @@ export async function uninstallBrowserVideoAnalysis() {
 }
 
 export async function runBrowserVideoAnalysis(file, options = {}) {
+  throwIfAborted(options.signal);
   const support = await checkBrowserVideoAnalysis();
+  throwIfAborted(options.signal);
   if (!support.ready) throw new Error(support.error);
   if (!support.installed) throw new Error("请先安装浏览器视频解析插件");
   validateVideoFile(file);
@@ -83,24 +89,39 @@ export async function runBrowserVideoAnalysis(file, options = {}) {
   const frameUrls = [];
   try {
     options.onProgress?.({ progress: 0, stage: "probing", message: "正在读取本机视频" });
+    throwIfAborted(options.signal);
     const jobId = createBrowserJobId();
     let decoded;
     if (supportsNativeVideoDecoder()) {
       try {
-        const nativeDecoder = await loadInstalledDecoder("native");
+        const nativeDecoder = await loadInstalledDecoder("native", options.signal);
         decoded = await decodeWithNativeDecoder(nativeDecoder, file, options, frameUrls);
       } catch (nativeError) {
+        throwIfAborted(options.signal);
         releaseFrameUrls(frameUrls);
-        const wasmDecoder = await loadInstalledDecoder("wasm");
+        const wasmDecoder = await loadInstalledDecoder("wasm", options.signal);
         decoded = await decodeWithWasmDecoder(wasmDecoder, file, options, frameUrls);
         if (!decoded) throw nativeError;
       }
     } else {
-      const wasmDecoder = await loadInstalledDecoder("wasm");
+      const wasmDecoder = await loadInstalledDecoder("wasm", options.signal);
       decoded = await decodeWithWasmDecoder(wasmDecoder, file, options, frameUrls);
     }
+    throwIfAborted(options.signal);
     const timelineFrames = Array.isArray(decoded.timelineFrames) ? decoded.timelineFrames : [];
     if (!timelineFrames.length) throw new Error("浏览器没有生成完整的 6 FPS 时间轴");
+    const poseAnalysis = await analyzeDecodedPoseTimeline(timelineFrames, {
+      durationMs: decoded.sourceDurationMs ?? Math.round(decoded.durationSeconds * 1000),
+      signal: options.signal,
+      onProgress(progress) {
+        options.onProgress?.({
+          progress: 70 + Math.round((Number(progress?.progress ?? 0) / 100) * 29),
+          stage: "tracking_people",
+          message: "本机正在识别人物站位和动作",
+        });
+      },
+    });
+    throwIfAborted(options.signal);
     const signatures = [];
 
     const output = {
@@ -121,6 +142,7 @@ export async function runBrowserVideoAnalysis(file, options = {}) {
       sampling: { frameRate: decoded.frameRate, frameCount: timelineFrames.length },
       artifacts: { normalizedVideo: "", audio: "" },
       timelineFrames,
+      poseAnalysis,
       segments: createBrowserSegments(timelineFrames, signatures, decoded.durationSeconds),
       notes: [
         "All decoding and timeline extraction ran in this browser.",
@@ -136,6 +158,7 @@ export async function runBrowserVideoAnalysis(file, options = {}) {
 }
 
 async function decodeWithNativeDecoder(decoder, file, options, frameUrls) {
+  throwIfAborted(options.signal);
   const signatureCanvas = globalThis.document.createElement("canvas");
   signatureCanvas.width = 32;
   signatureCanvas.height = 18;
@@ -145,8 +168,11 @@ async function decodeWithNativeDecoder(decoder, file, options, frameUrls) {
   const decoded = await decoder.decodeBrowserVideoTimeline(file, {
     frameRate: options.frameRate,
     maxEdge: Number(options.maxEdge) || FRAME_MAX_EDGE,
+    signal: options.signal,
     async onFrame(frame) {
+      throwIfAborted(options.signal);
       const blob = await canvasToJpegBlob(frame.canvas);
+      throwIfAborted(options.signal);
       const url = globalThis.URL.createObjectURL(blob);
       frameUrls.push(url);
       timelineFrames.push({
@@ -157,24 +183,35 @@ async function decodeWithNativeDecoder(decoder, file, options, frameUrls) {
       });
     },
     onProgress(progress) {
+      throwIfAborted(options.signal);
       options.onProgress?.({
-        progress: Math.min(99, Math.round((progress.index / progress.frameCount) * 99)),
+        progress: Math.min(70, Math.round((progress.index / progress.frameCount) * 70)),
         stage: "extracting_frames",
         message: `本机正在解析 ${progress.index}/${progress.frameCount} 帧`,
       });
     },
   });
+  throwIfAborted(options.signal);
   return { ...decoded, timelineFrames };
 }
 
 async function decodeWithWasmDecoder(decoder, file, options, frameUrls) {
-  const runtime = await createCachedWasmRuntimeUrls();
+  throwIfAborted(options.signal);
+  const runtime = await createCachedWasmRuntimeUrls(options.signal);
   try {
     const decoded = await decoder.decodeBrowserVideoTimelineWithWasm(file, {
       ...runtime,
       maxEdge: Number(options.maxEdge) || FRAME_MAX_EDGE,
-      onProgress: options.onProgress,
+      signal: options.signal,
+      onProgress(progress) {
+        throwIfAborted(options.signal);
+        options.onProgress?.({
+          ...progress,
+          progress: Math.min(70, Math.round((Number(progress?.progress ?? 0) / 100) * 70)),
+        });
+      },
     });
+    throwIfAborted(options.signal);
     for (const frame of decoded.timelineFrames ?? []) frameUrls.push(frame.url);
     return decoded;
   } finally {
@@ -216,6 +253,7 @@ function supportsBrowserVideoAnalysis() {
     || typeof globalThis.Worker !== "function"
     || typeof globalThis.WebAssembly !== "object"
     || typeof globalThis.fetch !== "function"
+    || typeof globalThis.createImageBitmap !== "function"
   ) return false;
   try {
     const canvas = globalThis.document.createElement("canvas");
@@ -376,7 +414,29 @@ function resolveWasmBinaryUrl() {
   return resolveVersionedDecoderResourceUrl("./browser-video-analysis-ffmpeg-core.wasm");
 }
 
+function resolvePoseRuntimeBundleUrl() {
+  return resolveVersionedDecoderResourceUrl("./browser-video-pose-runtime.bundle.js");
+}
+
+function resolvePoseWasmLoaderUrl() {
+  return resolveVersionedWebResourceUrl("../../../vendor/pose-landmarker/vision_wasm_nosimd_internal.js");
+}
+
+function resolvePoseWasmBinaryUrl() {
+  return resolveVersionedWebResourceUrl("../../../vendor/pose-landmarker/vision_wasm_nosimd_internal.wasm");
+}
+
+function resolvePoseModelUrl() {
+  return resolveVersionedWebResourceUrl("../../../vendor/pose-landmarker/pose_landmarker_lite.task");
+}
+
 function resolveVersionedDecoderResourceUrl(path) {
+  const url = new URL(path, import.meta.url);
+  url.searchParams.set("v", INSTALL_VERSION);
+  return url.href;
+}
+
+function resolveVersionedWebResourceUrl(path) {
   const url = new URL(path, import.meta.url);
   url.searchParams.set("v", INSTALL_VERSION);
   return url.href;
@@ -389,32 +449,76 @@ function decoderResourceUrls() {
     resolveWasmWorkerUrl(),
     resolveWasmCoreUrl(),
     resolveWasmBinaryUrl(),
+    resolvePoseRuntimeBundleUrl(),
+    resolvePoseWasmLoaderUrl(),
+    resolvePoseWasmBinaryUrl(),
+    resolvePoseModelUrl(),
   ];
 }
 
-async function loadInstalledDecoder(mode = "native") {
+async function loadInstalledDecoder(mode = "native", signal) {
+  throwIfAborted(signal);
   const storage = await getInstallStorage();
-  const resource = mode === "wasm" ? resolveWasmDecoderBundleUrl() : resolveDecoderBundleUrl();
+  const resource = mode === "wasm"
+    ? resolveWasmDecoderBundleUrl()
+    : mode === "pose"
+      ? resolvePoseRuntimeBundleUrl()
+      : resolveDecoderBundleUrl();
   const response = await storage?.match(resource);
   if (!response) throw new Error("请先安装浏览器视频解析插件");
-  const moduleUrl = globalThis.URL.createObjectURL(await response.blob());
+  const blob = await response.blob();
+  throwIfAborted(signal);
+  const moduleUrl = globalThis.URL.createObjectURL(blob);
   try {
-    return await import(moduleUrl);
+    const decoder = await import(moduleUrl);
+    throwIfAborted(signal);
+    return decoder;
   } finally {
     globalThis.URL.revokeObjectURL(moduleUrl);
   }
 }
 
-async function createCachedWasmRuntimeUrls() {
+async function analyzeDecodedPoseTimeline(timelineFrames, options) {
+  throwIfAborted(options.signal);
+  const storage = await getInstallStorage();
+  const poseRuntime = await loadInstalledDecoder("pose", options.signal);
+  const [loaderResponse, binaryResponse, modelResponse] = await Promise.all([
+    storage?.match(resolvePoseWasmLoaderUrl()),
+    storage?.match(resolvePoseWasmBinaryUrl()),
+    storage?.match(resolvePoseModelUrl()),
+  ]);
+  if (!loaderResponse || !binaryResponse || !modelResponse) {
+    throw new Error("本机人物姿态模型未安装，请重新加载解析器");
+  }
+  const wasmLoaderPath = globalThis.URL.createObjectURL(await loaderResponse.blob());
+  const wasmBinaryPath = globalThis.URL.createObjectURL(await binaryResponse.blob());
+  try {
+    return await poseRuntime.analyzeBrowserPoseTimeline(timelineFrames, {
+      ...options,
+      wasmLoaderPath,
+      wasmBinaryPath,
+      modelAssetBuffer: new Uint8Array(await modelResponse.arrayBuffer()),
+    });
+  } finally {
+    globalThis.URL.revokeObjectURL(wasmLoaderPath);
+    globalThis.URL.revokeObjectURL(wasmBinaryPath);
+  }
+}
+
+async function createCachedWasmRuntimeUrls(signal) {
+  throwIfAborted(signal);
   const storage = await getInstallStorage();
   const entries = await Promise.all([
     ["workerURL", resolveWasmWorkerUrl()],
     ["coreURL", resolveWasmCoreUrl()],
     ["wasmURL", resolveWasmBinaryUrl()],
   ].map(async ([key, resource]) => {
+    throwIfAborted(signal);
     const response = await storage?.match(resource);
     if (!response) throw new Error("浏览器 WASM 解码器资源未安装，请重新安装插件");
-    return [key, globalThis.URL.createObjectURL(await response.blob())];
+    const blob = await response.blob();
+    throwIfAborted(signal);
+    return [key, globalThis.URL.createObjectURL(blob)];
   }));
   const urls = Object.fromEntries(entries);
   return {
@@ -425,25 +529,32 @@ async function createCachedWasmRuntimeUrls() {
   };
 }
 
-async function verifyInstalledWasmRuntime(storage) {
+async function verifyInstalledWasmRuntime(storage, signal) {
+  throwIfAborted(signal);
   const response = await storage?.match(resolveWasmDecoderBundleUrl());
   if (!response) throw new Error("浏览器 WASM 解码器资源未安装");
-  const moduleUrl = globalThis.URL.createObjectURL(await response.blob());
+  const blob = await response.blob();
+  throwIfAborted(signal);
+  const moduleUrl = globalThis.URL.createObjectURL(blob);
   let runtime = null;
   try {
     const decoder = await import(moduleUrl);
-    runtime = await createCachedWasmRuntimeUrls();
-    await decoder.probeBrowserVideoWasmRuntime(runtime);
+    throwIfAborted(signal);
+    runtime = await createCachedWasmRuntimeUrls(signal);
+    await decoder.probeBrowserVideoWasmRuntime({ ...runtime, signal });
+    throwIfAborted(signal);
   } finally {
     runtime?.revoke();
     globalThis.URL.revokeObjectURL(moduleUrl);
   }
 }
 
-async function readResponseBuffer(response, onProgress) {
+async function readResponseBuffer(response, onProgress, signal) {
+  throwIfAborted(signal);
   const total = Number(response.headers.get("content-length") ?? 0);
   if (!response.body?.getReader) {
     const buffer = await response.arrayBuffer();
+    throwIfAborted(signal);
     onProgress?.(buffer.byteLength, total || buffer.byteLength);
     return buffer;
   }
@@ -451,6 +562,7 @@ async function readResponseBuffer(response, onProgress) {
   const chunks = [];
   let loaded = 0;
   for (;;) {
+    throwIfAborted(signal);
     const { done, value } = await reader.read();
     if (done) break;
     if (!value) continue;
@@ -467,9 +579,19 @@ async function readResponseBuffer(response, onProgress) {
   return buffer;
 }
 
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+  const error = new Error("视频分析已取消");
+  error.name = "AbortError";
+  throw error;
+}
+
 export const __browserVideoAnalysisTestUtils = {
   createBrowserSegments,
   loadInstalledDecoder,
   resolveDecoderBundleUrl,
+  resolvePoseModelUrl,
+  resolvePoseRuntimeBundleUrl,
   supportsBrowserVideoAnalysis,
 };

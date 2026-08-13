@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { Worker } from "bullmq";
-import { Client } from "pg";
 
+import { connectPostgresClientWithRetry } from "./postgres-startup-retry.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
 loadDotEnvFile(join(process.cwd(), ".env"));
@@ -67,7 +67,12 @@ const publisher = createBullMQCanvasAgentPublisher({
 });
 const outbox = new CanvasAgentOutboxService({ db, publisher, workerId });
 const outboxWakeSignal = createCanvasAgentOutboxWakeSignal();
-const notificationClient = new Client({ connectionString: process.env.DATABASE_URL });
+const notificationClient = await connectPostgresClientWithRetry({
+  connectionString: process.env.DATABASE_URL,
+  env: process.env,
+  envKey: "DATABASE_URL",
+  serviceName: "canvas-agent",
+});
 const redisErrorReporter = createRedisErrorReporter();
 const executionGate = createConcurrencyGate(shardConfig.workerTotalConcurrency);
 const workers = new Map();
@@ -101,7 +106,6 @@ console.info(
 );
 let scheduledLoops = [];
 try {
-  await notificationClient.connect();
   await notificationClient.query(`LISTEN ${canvasAgentOutboxWakeChannel}`);
   notificationClient.on("notification", (message) => {
     if (message.channel === canvasAgentOutboxWakeChannel) outboxWakeSignal.notify();

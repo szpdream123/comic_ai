@@ -316,7 +316,7 @@ test("new canvas host mounts, dispatches, and disposes the character library con
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
   assert.match(source, /createCanvasCharacterLibraryController\(\{ surface, workbench \}\)/);
-  assert.match(source, /renderCanvasCharacterLibraryShell\(workbench\.ui\)/);
+  assert.match(source, /renderCanvasCharacterLibraryShell\(renderUi\)/);
   assert.match(source, /closest\?\.\("\[data-character-action\]"\)/);
   assert.match(source, /characterLibraryController\.handleInput\(event\.target\)/);
   assert.match(source, /characterLibraryController\.handleKeydown\(event, event\.target\)/);

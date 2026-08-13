@@ -908,7 +908,7 @@ async function buildAudioProviderContext(
   if (
     !modelConfig
     || modelConfig.mediaType !== "audio"
-    || !["aliyun_bailian_audio", "apimart_audio"].includes(modelConfig.providerProtocol)
+    || !["aliyun_bailian_audio", "apimart_audio", "globalaiopc_sound_clone"].includes(modelConfig.providerProtocol)
   ) {
     throw new Error("audio_model_not_configured");
   }

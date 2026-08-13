@@ -622,6 +622,7 @@ function putJson(url, body, options = {}) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
     timeoutMs: options.timeoutMs,
+    ...(options.keepalive === true ? { keepalive: true } : {}),
   }).then((result) => {
     clearReadRequestCaches();
     return result;
@@ -1115,6 +1116,17 @@ export const creatorApi = {
     });
   },
 
+  runToolboxVideoToDirector(input = {}) {
+    return postJsonWithIdempotency("/api/toolbox/prompt-reverse", {
+      ...input,
+      mode: "video",
+      analysisTarget: "director",
+    }, {
+      action: "toolbox.video-to-director",
+      timeoutMs: 600000,
+    });
+  },
+
   checkToolboxVideoDepthPlugin() {
     return fetchToolboxVideoDepthPlugin("health", { timeoutMs: 2500 });
   },
@@ -1247,8 +1259,10 @@ export const creatorApi = {
   },
 
   createCanvasProject(input) {
-    return postJsonWithIdempotency("/api/creator/canvases", input, {
+    const { idempotencyKey, ...payload } = input ?? {};
+    return postJsonWithIdempotency("/api/creator/canvases", payload, {
       action: "canvas-project.create",
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     });
   },
 
@@ -1643,6 +1657,14 @@ export const creatorApi = {
 
   createDirectorDesk(input = {}) {
     return postJson("/api/director-desks", input);
+  },
+
+  saveDirectorDeskScene(deskKey, scene) {
+    return fetchJson(`/api/director-desks/${encodeURIComponent(deskKey)}/scene`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene }),
+    });
   },
 
   listDirectorDesks() {

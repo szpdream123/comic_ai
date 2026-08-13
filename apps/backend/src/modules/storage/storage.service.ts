@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   authorizeCanvasActor,
@@ -204,6 +204,108 @@ export async function createScopedStorageObject(
       null,
       JSON.stringify(input.metadata ?? {}),
       input.createdByUserId ?? input.userId,
+      input.now,
+    ],
+  );
+
+  return storageObjectFromRow(row!);
+}
+
+export async function findGenerationStorageObject(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    bucket: string;
+    taskId: string;
+    attemptId: string | null;
+  },
+): Promise<StorageObjectRecord | undefined> {
+  const row = await queryOne<StorageObjectRow>(
+    db,
+    `
+      SELECT *
+      FROM storage_objects
+      WHERE created_by_user_id = $1
+        AND bucket = $2
+        AND metadata_json->>'taskId' = $3
+        AND metadata_json->>'attemptId' IS NOT DISTINCT FROM $4
+        AND status IN ('available', 'pending_upload', 'failed')
+      ORDER BY
+        CASE status
+          WHEN 'available' THEN 0
+          WHEN 'pending_upload' THEN 1
+          ELSE 2
+        END,
+        created_at ASC
+      LIMIT 1
+    `,
+    [input.userId, input.bucket, input.taskId, input.attemptId],
+  );
+
+  return row ? storageObjectFromRow(row) : undefined;
+}
+
+export async function createOrReuseGenerationStorageObject(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    projectId?: string | null;
+    canvasProjectId?: string | null;
+    bucket: string;
+    objectName: string;
+    contentType: string;
+    sizeBytes?: number | null;
+    provider?: string;
+    status?: StorageObjectStatus;
+    metadata: Record<string, unknown> & { taskId: string; attemptId: string | null };
+    createdByUserId?: string | null;
+    now: Date;
+  },
+): Promise<StorageObjectRecord> {
+  const ownerUserId = input.createdByUserId ?? input.userId;
+  const existing = await findGenerationStorageObject(db, {
+    userId: ownerUserId,
+    bucket: input.bucket,
+    taskId: input.metadata.taskId,
+    attemptId: input.metadata.attemptId,
+  });
+  if (existing) return existing;
+
+  await assertStorageScope(db, {
+    userId: input.userId,
+    projectId: input.projectId ?? null,
+    canvasProjectId: input.canvasProjectId ?? null,
+  });
+
+  const objectId = buildGenerationStorageObjectId(input.metadata.taskId, input.metadata.attemptId);
+  const objectKey = buildGenerationObjectKey({ objectId, objectName: input.objectName });
+  const row = await queryOne<StorageObjectRow>(
+    db,
+    `
+      INSERT INTO storage_objects (
+        id, project_id, canvas_project_id, bucket, object_key, content_type,
+        size_bytes, checksum, provider, status, etag, version_id,
+        last_verified_at, deleted_at, metadata_json, created_by_user_id, created_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, NULL, $8, $9,
+        NULL, NULL, NULL, NULL, $10::jsonb, $11, $12
+      )
+      ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+      RETURNING *
+    `,
+    [
+      objectId,
+      input.projectId ?? null,
+      input.canvasProjectId ?? null,
+      input.bucket,
+      objectKey,
+      input.contentType,
+      input.sizeBytes ?? null,
+      input.provider ?? "legacy",
+      input.status ?? "pending_upload",
+      JSON.stringify(input.metadata),
+      ownerUserId,
       input.now,
     ],
   );
@@ -597,6 +699,25 @@ function buildScopedObjectKey(input: {
     rootPrefix,
     dateFolder,
     `${input.objectId}-${safeName}`,
+  ].join("/");
+}
+
+function buildGenerationStorageObjectId(taskId: string, attemptId: string | null) {
+  const hex = createHash("sha256")
+    .update(`generation-artifact\0${taskId}\0${attemptId ?? ""}`)
+    .digest("hex")
+    .slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20)}`;
+}
+
+function buildGenerationObjectKey(input: { objectId: string; objectName: string }) {
+  const rootPrefix = sanitizeStorageFolderName(
+    process.env.STORAGE_OBJECT_ROOT_PREFIX?.trim() || "AIManhuaDrama",
+  );
+  return [
+    rootPrefix,
+    "generation",
+    `${input.objectId}-${sanitizeObjectName(input.objectName)}`,
   ].join("/");
 }
 

@@ -377,7 +377,7 @@ export async function repairQueuedGenerationTaskOutbox(
         AND (
           (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
-          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio'))
+          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
         AND (
           t.last_dispatched_at IS NULL
@@ -966,7 +966,7 @@ export async function repairRunningSeedancePollJobs(
         AND (
           (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
-          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio'))
+          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
         AND t.current_attempt_id IS NOT NULL
         AND EXISTS (
@@ -1136,7 +1136,7 @@ export async function repairRunningSeedancePollJobs(
         AND (
           (t.task_type = 'episode_generate_video' AND t.input_snapshot_json->>'providerExecutor' = 'seedance')
           OR (t.task_type = 'episode_generate_image' AND t.input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
-          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio'))
+          OR (t.task_type = 'episode_generate_audio' AND t.input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
         AND t.current_attempt_id IS NOT NULL
         AND (
@@ -1321,7 +1321,7 @@ async function markGenerationTaskRedisRepairClaimed(
       AND (
         (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
         OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
-        OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio'))
+        OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
       )
         AND (
           last_dispatched_at IS NULL
@@ -1385,7 +1385,7 @@ async function markRunningPollRepairClaimed(
         AND (
           (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
           OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
-          OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio'))
+          OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
         )
         AND (
           last_dispatched_at IS NULL
@@ -1472,7 +1472,7 @@ async function markRunningFinalizeRepairClaimed(
           AND (
             (task_type = 'episode_generate_video' AND input_snapshot_json->>'providerExecutor' = 'seedance')
             OR (task_type = 'episode_generate_image' AND input_snapshot_json->>'providerExecutor' IN ('gpt-image-2', 'image-http'))
-            OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio'))
+            OR (task_type = 'episode_generate_audio' AND input_snapshot_json->>'providerExecutor' IN ('aliyun-bailian-audio', 'apimart-audio', 'globalaiopc-sound-clone'))
           )
           AND (
             locked_until IS NULL

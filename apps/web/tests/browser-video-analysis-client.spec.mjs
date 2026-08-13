@@ -13,6 +13,10 @@ import {
   uninstallBrowserVideoAnalysis,
 } from "../src/features/toolbox/browser-video-analysis-client.js";
 import { __videoAnalysisPluginTestUtils } from "../src/features/toolbox/video-analysis-plugin-client.js";
+import {
+  buildBrowserPoseAnalysis,
+  poseControlsFromLandmarks,
+} from "../src/features/toolbox/browser-video-pose-runtime.js";
 
 test("browser video analysis creates a complete ordered timeline at no less than 6 FPS", () => {
   const minimum = createBrowserVideoAnalysisFramePlan(13.033, 1);
@@ -27,6 +31,91 @@ test("browser video analysis creates a complete ordered timeline at no less than
   assert.equal(higher.frameRate, 8);
   assert.equal(higher.frames.length, 16);
   assert.throws(() => createBrowserVideoAnalysisFramePlan(300.01, 6), /300 秒/);
+});
+
+test("lightweight pose tracking preserves people when detection order changes", () => {
+  const person = (x, height, controls) => ({
+    anchor: { x, y: 0.55 },
+    footY: 0.9,
+    height,
+    bbox: [x - 0.08, 0.9 - height, x + 0.08, 0.9],
+    confidence: 0.9,
+    controls,
+  });
+  const analysis = buildBrowserPoseAnalysis([
+    { timestampMs: 0, detections: [person(0.5, 0.72, { "leftElbow.bend": 30 }), person(0.2, 0.42, {})] },
+    { timestampMs: 167, detections: [person(0.22, 0.42, {}), person(0.52, 0.72, { "leftElbow.bend": 65 })] },
+    { timestampMs: 334, detections: [person(0.54, 0.72, { "leftElbow.bend": 80 }), person(0.24, 0.42, {})] },
+  ], 500);
+
+  assert.equal(analysis.tracks.length, 2);
+  assert.equal(analysis.tracks[0].isPrimary, true);
+  assert.deepEqual(analysis.tracks[0].samples.map((sample) => sample.x), [0.5, 0.52, 0.54]);
+  assert.equal(analysis.tracks[0].samples.at(-1).controls["leftElbow.bend"], 70.46);
+  assert.ok(analysis.tracks[0].samples[0].depth < analysis.tracks[1].samples[0].depth);
+});
+
+test("lightweight pose tracking limits one-frame joint flips", () => {
+  const detection = (bend) => ({
+    anchor: { x: 0.5, y: 0.55 }, footY: 0.9, height: 0.7,
+    bbox: [0.35, 0.2, 0.65, 0.9], confidence: 0.9,
+    controls: { "leftElbow.bend": bend, "torso.roll": bend },
+  });
+  const analysis = buildBrowserPoseAnalysis([
+    { timestampMs: 0, detections: [detection(0)] },
+    { timestampMs: 167, detections: [detection(140)] },
+  ], 334);
+
+  assert.equal(analysis.tracks[0].samples[1].controls["leftElbow.bend"], 24.7);
+  assert.equal(analysis.tracks[0].samples[1].controls["torso.roll"], 18.2);
+});
+
+test("lightweight pose tracking rejects impossible one-frame identity jumps", () => {
+  const person = (x) => ({
+    anchor: { x, y: 0.55 }, footY: 0.9, height: 0.6,
+    bbox: [x - 0.08, 0.3, x + 0.08, 0.9], confidence: 0.9, controls: {},
+  });
+  const analysis = buildBrowserPoseAnalysis([
+    { timestampMs: 0, detections: [person(0.2)] },
+    { timestampMs: 167, detections: [person(0.23)] },
+    { timestampMs: 334, detections: [person(0.75)] },
+    { timestampMs: 501, detections: [person(0.78)] },
+  ], 668);
+
+  assert.equal(analysis.tracks.length, 2);
+  assert.deepEqual(analysis.tracks.map((track) => track.samples.map((sample) => sample.x))
+    .sort((left, right) => left[0] - right[0]), [
+    [0.2, 0.23],
+    [0.75, 0.78],
+  ]);
+});
+
+test("pose landmarks produce director-compatible arm and leg controls", () => {
+  const landmarks = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0 }));
+  const world = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0 }));
+  const set = (index, x, y, z = 0) => {
+    landmarks[index] = { x, y, z, visibility: 1 };
+    world[index] = { x, y, z };
+  };
+  set(0, 0.5, 0.2);
+  set(7, 0.45, 0.25); set(8, 0.55, 0.25);
+  set(11, 0.6, 0.4); set(12, 0.4, 0.4);
+  set(13, 0.7, 0.4, -0.1); set(14, 0.3, 0.4, -0.1);
+  set(15, 0.7, 0.55); set(16, 0.3, 0.55);
+  set(19, 0.68, 0.6); set(20, 0.32, 0.6);
+  set(23, 0.55, 0.62); set(24, 0.45, 0.62);
+  set(25, 0.6, 0.78, -0.05); set(26, 0.4, 0.78, -0.05);
+  set(27, 0.57, 0.94); set(28, 0.43, 0.94);
+  const controls = poseControlsFromLandmarks(landmarks, world);
+
+  assert.equal(controls["body.roll"], 0);
+  assert.equal(controls["torso.roll"], 0);
+  assert.equal(controls["head.roll"], 0);
+  assert.equal(controls["leftShoulder.spread"], 90);
+  assert.equal(controls["rightShoulder.spread"], -90);
+  assert.ok(controls["leftElbow.bend"] > 0);
+  assert.ok(Number.isFinite(controls["rightHip.pitch"]));
+  assert.ok(controls["rightKnee.bend"] >= 0);
 });
 
 test("video prompt key frames follow visual similarity and never repeat", () => {
@@ -71,6 +160,57 @@ test("video prompt key frames follow visual similarity and never repeat", () => 
   assert.equal(__videoAnalysisPluginTestUtils.isObscuredSignature(Array(27).fill(0.99)), true);
   assert.equal(__videoAnalysisPluginTestUtils.isObscuredSignature(Array(27).fill(0.5)), true);
   assert.equal(__videoAnalysisPluginTestUtils.isMostlyBlackSignature(Array.from({ length: 27 }, (_, index) => Math.floor(index / 3) % 2 ? 0.6 : 0.2)), false);
+});
+
+test("video analysis detects ordered shot segments from visual changes", () => {
+  const segments = __videoAnalysisPluginTestUtils.detectShotSegments([
+    { timestampMs: 0, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 400, signature: [0.8, 0.8, 0.8] },
+    { timestampMs: 1_000, signature: [0.85, 0.85, 0.85] },
+    { timestampMs: 2_000, signature: [0.1, 0.1, 0.1] },
+  ], 3_000);
+
+  assert.deepEqual(segments.map(({ startMs, endMs }) => ({ startMs, endMs })), [
+    { startMs: 0, endMs: 2_000 },
+    { startMs: 2_000, endMs: 3_000 },
+  ]);
+  assert.equal(segments[1].confidence, 1);
+});
+
+test("video analysis ignores isolated motion spikes but keeps sustained scene replacements", () => {
+  const isolatedSpike = __videoAnalysisPluginTestUtils.detectShotSegments([
+    { timestampMs: 0, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 200, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 400, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 600, signature: [0.9, 0.9, 0.9] },
+    { timestampMs: 800, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 1_000, signature: [0.1, 0.1, 0.1] },
+  ], 1_200);
+  assert.deepEqual(isolatedSpike.map((segment) => segment.startMs), [0]);
+
+  const sustainedReplacement = __videoAnalysisPluginTestUtils.detectShotSegments([
+    { timestampMs: 0, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 200, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 400, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 600, signature: [0.9, 0.9, 0.9] },
+    { timestampMs: 800, signature: [0.9, 0.9, 0.9] },
+  ], 1_000);
+  assert.deepEqual(sustainedReplacement.map((segment) => segment.startMs), [0, 600]);
+});
+
+test("video analysis preserves rapid stable montage cuts", () => {
+  const segments = __videoAnalysisPluginTestUtils.detectShotSegments([
+    { timestampMs: 0, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 200, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 400, signature: [0.1, 0.1, 0.1] },
+    { timestampMs: 600, signature: [0.5, 0.5, 0.5] },
+    { timestampMs: 800, signature: [0.5, 0.5, 0.5] },
+    { timestampMs: 1_000, signature: [0.5, 0.5, 0.5] },
+    { timestampMs: 1_200, signature: [0.9, 0.9, 0.9] },
+    { timestampMs: 1_400, signature: [0.9, 0.9, 0.9] },
+  ], 1_600);
+
+  assert.deepEqual(segments.map((segment) => segment.startMs), [0, 600, 1_200]);
 });
 
 test("browser video analysis decoder uses Mediabunny capability probing and ordered canvas extraction", async () => {
@@ -118,19 +258,41 @@ test("browser video analysis installs its decoder bundle into browser storage an
     ready: true,
     installed: false,
     plugin: "video-analysis",
-    version: "browser-3-hd",
+    version: "browser-6-stable-tracks",
     frameRate: 6,
     device: "浏览器本地解析",
   });
   const progress = [];
   await installBrowserVideoAnalysis({ verifyRuntime: false, onProgress: (value) => progress.push(value) });
   assert.equal(await isBrowserVideoAnalysisInstalled(), true);
-  assert.equal(requests.length, 5);
+  assert.equal(requests.length, 9);
   assert.ok(requests.includes(__browserVideoAnalysisTestUtils.resolveDecoderBundleUrl()));
+  assert.ok(requests.includes(__browserVideoAnalysisTestUtils.resolvePoseRuntimeBundleUrl()));
+  assert.ok(requests.includes(__browserVideoAnalysisTestUtils.resolvePoseModelUrl()));
   assert.equal(progress.at(-1).progress, 100);
 
   await uninstallBrowserVideoAnalysis();
   assert.equal(await isBrowserVideoAnalysisInstalled(), false);
+});
+
+test("browser video analysis stops installation immediately when canceled", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    installBrowserVideoAnalysis({ signal: controller.signal, verifyRuntime: false }),
+    (error) => error?.name === "AbortError",
+  );
+});
+
+test("browser WASM video analysis forwards cancellation to every expensive FFmpeg operation", async () => {
+  const source = await readFile(
+    new URL("../src/features/toolbox/browser-video-analysis-wasm.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /ffmpeg\.load\([\s\S]*signal: options\.signal/);
+  assert.match(source, /ffmpeg\.writeFile\([\s\S]*signal: options\.signal/);
+  assert.match(source, /ffmpeg\.exec\([\s\S]*signal: options\.signal/);
+  assert.match(source, /ffmpeg\.readFile\([\s\S]*signal: options\.signal/);
 });
 
 test("browser video analysis reports unsupported when browser runtime APIs are unavailable", async (context) => {
@@ -159,13 +321,14 @@ test("browser video analysis keeps the WASM path available without WebCodecs", a
   const health = await checkBrowserVideoAnalysis();
   assert.equal(health.ready, true);
   assert.equal(health.installed, false);
-  assert.equal(health.version, "browser-3-hd");
+  assert.equal(health.version, "browser-6-stable-tracks");
 });
 
 function installSupportedBrowserMocks() {
   globalThis.Worker = class Worker {};
   globalThis.VideoDecoder = class VideoDecoder {};
   globalThis.VideoFrame = class VideoFrame {};
+  globalThis.createImageBitmap = async () => ({ close() {} });
   globalThis.document = {
     createElement(type) {
       assert.equal(type, "canvas");
@@ -193,6 +356,7 @@ function captureBrowserGlobals() {
     Worker: globalThis.Worker,
     VideoDecoder: globalThis.VideoDecoder,
     VideoFrame: globalThis.VideoFrame,
+    createImageBitmap: globalThis.createImageBitmap,
     createObjectURL: globalThis.URL.createObjectURL,
     revokeObjectURL: globalThis.URL.revokeObjectURL,
   };
@@ -207,6 +371,7 @@ function restoreBrowserGlobals(originals) {
   globalThis.Worker = originals.Worker;
   globalThis.VideoDecoder = originals.VideoDecoder;
   globalThis.VideoFrame = originals.VideoFrame;
+  globalThis.createImageBitmap = originals.createImageBitmap;
   globalThis.URL.createObjectURL = originals.createObjectURL;
   globalThis.URL.revokeObjectURL = originals.revokeObjectURL;
 }

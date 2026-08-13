@@ -276,8 +276,8 @@ test("new Canvas panorama and storyboard use interactive X6 HTML shapes", () => 
   const x6Data = canvasDocumentToX6Data(document);
   assert.equal(x6Data.nodes.find((node) => node.id === "pano-1").shape, "comic-ai-canvas-special-media-node");
   assert.equal(x6Data.nodes.find((node) => node.id === "story-1").shape, "comic-ai-canvas-special-media-node");
-  assert.equal(x6Data.nodes.find((node) => node.id === "text-1").shape, "comic-ai-canvas-node");
-  assert.equal("attrs" in x6Data.nodes.find((node) => node.id === "pano-1"), false);
+  assert.equal(x6Data.nodes.find((node) => node.id === "text-1").shape, "comic-ai-canvas-special-media-node");
+  assert.equal(x6Data.nodes.find((node) => node.id === "pano-1").attrs.fo.refWidth, "100%");
 });
 
 test("X6 HTML shape resolves from the browser bundle namespace", () => {

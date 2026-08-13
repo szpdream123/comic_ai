@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import type { AiModelConfigRecord } from "../../model-catalog/ai-model-config.store.ts";
 import { grantCredits, reserveCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { createOrReuseGenerationStorageObject } from "../../storage/storage.service.ts";
 import type { UploadSessionRuntime } from "../../storage/upload-session.service.ts";
 import { handleGenerationFetchArtifactJob } from "../generation-bullmq.worker.ts";
 import { loadGenerationQueueConfig } from "../generation-queue.config.ts";
@@ -506,7 +507,7 @@ describe("Seedance video worker user ownership", () => {
     }
   });
 
-  it("waits ten minutes without polling after an ambiguous video submission", async () => {
+  it("fails immediately when video submission has no external id", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -532,17 +533,13 @@ describe("Seedance video worker user ownership", () => {
         [seeded.taskId],
       );
 
-      assert.equal(result.status, "already_started");
-      assert.equal(result.externalRequestId, null);
-      assert.ok(result.attemptId);
-      assert.equal(task.rows[0]?.status, "running");
-      assert.equal(task.rows[0]?.failure_code, null);
-      assert.equal(
-        new Date(task.rows[0]?.locked_until ?? 0).getTime(),
-        new Date("2026-07-13T02:10:00.000Z").getTime(),
-      );
+      assert.deepEqual(result, { status: "failed", failureCode: "provider_submission_missing_task_id" });
+      assert.equal(task.rows[0]?.status, "failed");
+      assert.equal(task.rows[0]?.failure_code, "provider_submission_missing_task_id");
+      assert.equal(task.rows[0]?.locked_until, null);
       assert.equal(providerRequest.rows.length, 1);
-      assert.equal(providerRequest.rows[0]?.status, "result_unknown");
+      assert.equal(providerRequest.rows[0]?.status, "failed");
+      assert.equal(providerRequest.rows[0]?.failure_code, "provider_submission_missing_task_id");
     } finally {
       await db.close();
     }
@@ -937,6 +934,147 @@ describe("Seedance video worker user ownership", () => {
         { status: "available", created_by_user_id: seeded.userId },
       ]);
       assert.equal(versions.rows[0]?.count, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("reuses a remotely uploaded video after a crash without another download or PUT", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "309",
+        userId: "70000000-0000-4000-8000-000000000309",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/reusable-seedance.mp4",
+      });
+      const now = new Date("2026-07-13T02:20:00.000Z");
+      const storageObject = await createOrReuseGenerationStorageObject(db, {
+        userId: seeded.userId,
+        projectId: seeded.projectId,
+        bucket: "seedance-reuse-test",
+        objectName: `seedance-video-${seeded.taskId}.mp4`,
+        contentType: "video/mp4",
+        sizeBytes: 8,
+        provider: "tencent_cos",
+        status: "pending_upload",
+        metadata: {
+          taskId: seeded.taskId,
+          attemptId: seeded.attemptId,
+        },
+        createdByUserId: seeded.userId,
+        now,
+      });
+      let putCalls = 0;
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "seedance-reuse-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async headObject(input) {
+            assert.equal(input.objectKey, storageObject.objectKey);
+            return { exists: true, contentType: "video/mp4", contentLength: 8 };
+          },
+          async putObject() {
+            putCalls += 1;
+            return {};
+          },
+        },
+      };
+
+      const result = await finalizeSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: {},
+        fetchImpl: (async () => {
+          throw new Error("existing remote video must not be downloaded again");
+        }) as typeof fetch,
+        now,
+      });
+      const stored = await db.query<{ status: string }>(
+        "SELECT status FROM storage_objects WHERE id = $1",
+        [storageObject.id],
+      );
+
+      assert.deepEqual(result, { status: "succeeded" });
+      assert.equal(putCalls, 0);
+      assert.equal(stored.rows[0]?.status, "available");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("skips a concurrent video finalizer while the first upload lease is active", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const seeded = await seedRateLimitedSeedanceTask(db, {
+        suffix: "310",
+        userId: "70000000-0000-4000-8000-000000000310",
+        status: "running",
+        providerSucceeded: true,
+        videoUrl: "https://cdn.example.test/concurrent-seedance.mp4",
+      });
+      let releaseDownload!: () => void;
+      const downloadRelease = new Promise<void>((resolve) => { releaseDownload = resolve; });
+      let markDownloadStarted!: () => void;
+      const downloadStarted = new Promise<void>((resolve) => { markDownloadStarted = resolve; });
+      let putCalls = 0;
+      const runtime: UploadSessionRuntime = {
+        mode: "cos",
+        provider: "tencent_cos",
+        bucket: "seedance-concurrent-test",
+        region: "ap-guangzhou",
+        publicBaseUrl: "https://storage.example.test",
+        adapter: {
+          async createSignedReadUrl(input) {
+            return { url: `https://storage.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+          },
+          async putObject(input) {
+            putCalls += 1;
+            for await (const _chunk of input.body as AsyncIterable<Buffer | Uint8Array | string>) {
+              // Drain the first finalizer's upload.
+            }
+            return {};
+          },
+        },
+      };
+      const first = finalizeSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: {},
+        fetchImpl: (async () => {
+          markDownloadStarted();
+          await downloadRelease;
+          return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+            status: 200,
+            headers: { "content-type": "video/mp4", "content-length": "8" },
+          });
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:20:00.000Z"),
+      });
+      await downloadStarted;
+
+      const concurrent = await finalizeSeedanceVideoArtifactJob(db, {
+        taskId: seeded.taskId,
+        runtime,
+        env: {},
+        fetchImpl: (async () => {
+          throw new Error("concurrent finalizer must not download");
+        }) as typeof fetch,
+        now: new Date("2026-07-13T02:20:01.000Z"),
+      });
+      releaseDownload();
+      const completed = await first;
+
+      assert.deepEqual(concurrent, { status: "skipped" });
+      assert.deepEqual(completed, { status: "succeeded" });
+      assert.equal(putCalls, 1);
     } finally {
       await db.close();
     }

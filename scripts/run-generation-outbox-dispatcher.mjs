@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import Redis from "ioredis";
-import { Client } from "pg";
 
+import { connectPostgresClientWithRetry } from "./postgres-startup-retry.mjs";
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
 
 loadDotEnvFile(join(process.cwd(), ".env"));
@@ -37,7 +37,12 @@ const heartbeatKey = generationOutboxDispatcherHeartbeatKey(config.queuePrefix);
 const heartbeatTtlMs = generationOutboxDispatcherHeartbeatTtlMs(
   config.outbox.dispatchIntervalMs,
 );
-const notificationClient = new Client({ connectionString: process.env.DATABASE_URL });
+const notificationClient = await connectPostgresClientWithRetry({
+  connectionString: process.env.DATABASE_URL,
+  env: process.env,
+  envKey: "DATABASE_URL",
+  serviceName: "generation-outbox",
+});
 let stopping = false;
 let lastCompletedLoopAt = Date.now();
 const stallTimeoutMs = Math.max(120_000, heartbeatTtlMs * 2);
@@ -73,7 +78,6 @@ function requestStop(signal) {
 }
 
 try {
-  await notificationClient.connect();
   await notificationClient.query(`LISTEN ${generationOutboxWakeChannel}`);
   await writeDispatcherHeartbeat();
   notificationClient.on("notification", (message) => {

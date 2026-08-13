@@ -25,6 +25,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
       fetchImpl?: typeof fetch;
       requestTimeoutMs?: number;
       defaultRequestParams?: Record<string, unknown>;
+      requestFormat?: string;
     },
   ) {}
 
@@ -35,6 +36,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
       buildGlobalAiOpcVideoPayload(input, {
         model: this.config.model,
         defaultRequestParams: this.config.defaultRequestParams,
+        requestFormat: this.config.requestFormat,
       }),
     );
     const response = await fetchWithTimeout(
@@ -161,6 +163,7 @@ export function buildGlobalAiOpcVideoPayload(
   config: {
     model?: string;
     defaultRequestParams?: Record<string, unknown>;
+    requestFormat?: string;
   } = {},
 ): Record<string, unknown> {
   const payload = input.redactedPayload;
@@ -211,6 +214,41 @@ export function buildGlobalAiOpcVideoPayload(
     ...readMediaUrlArray(parameters.referenceAudio),
     ...readMediaUrlArray(parameters.audioFilePaths),
   ]);
+  if (config.requestFormat === "globalaiopc_model_center_video") {
+    const firstImage = firstHttpUrl([
+      readString(payload.firstFrameUrl),
+      readMediaUrl(parameters.firstFrame),
+    ]);
+    const isMiniMaxH3 = config.model === "MiniMax-H3-c4";
+    if (isMiniMaxH3 && videoUrls.length > 0) {
+      throw Object.assign(new Error("该模型不支持视频参考"), {
+        failureCode: "model_reference_videos_unsupported",
+        providerModel: config.model,
+      });
+    }
+    if (isMiniMaxH3 && !firstImage && audioUrls.length > 0 && referenceImageUrls.length === 0) {
+      throw Object.assign(new Error("参考音频必须搭配参考图片使用"), {
+        failureCode: "model_reference_visual_required",
+        providerModel: config.model,
+      });
+    }
+    return stripUndefined({
+      model: config.model ?? defaultModel,
+      prompt,
+      reference_images: !isMiniMaxH3 || !firstImage
+        ? (referenceImageUrls.length ? referenceImageUrls : undefined)
+        : undefined,
+      reference_videos: videoUrls.length ? videoUrls : undefined,
+      reference_audios: !isMiniMaxH3 || !firstImage
+        ? (audioUrls.length ? audioUrls : undefined)
+        : undefined,
+      duration,
+      aspect_ratio: ratio,
+      resolution,
+      first_image: firstImage,
+      last_image: firstImage ? lastImageUrl : undefined,
+    });
+  }
   const referenceMode = isReferenceMediaMode(parameters) || videoUrls.length > 0 || audioUrls.length > 0;
   const referenceModeImageUrls = dedupeHttpUrls([
     firstImageUrl,
@@ -649,7 +687,7 @@ function firstHttpUrl(values: Array<string | undefined>) {
 }
 
 function isProviderMediaUrl(value: string) {
-  return /^(?:https?:\/\/|asset:\/\/)/i.test(value.trim());
+  return /^(?:https?:\/\/|asset(?:Id)?:\/\/)/i.test(value.trim());
 }
 
 function stripUndefined(input: Record<string, unknown>) {

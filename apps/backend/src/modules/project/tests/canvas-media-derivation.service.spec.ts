@@ -93,6 +93,63 @@ describe("Canvas media derivation runtime", { concurrency: false }, () => {
     }
   });
 
+  it("fails derivations whose generation tasks require result review", async () => {
+    const db = await createMigratedTestDb();
+    const fixture = await seedCanvas(db);
+    try {
+      const derivationIds: string[] = [];
+      for (const taskStatus of ["result_unknown", "manual_review_required"] as const) {
+        const workflow = await createWorkflowWithTasks(db, {
+          userId: fixture.userId,
+          projectId: null,
+          canvasProjectId: fixture.canvasId,
+          workflowType: "canvas_media_derivation",
+          inputSnapshot: {},
+          tasks: [{
+            taskType: "episode_generate_image",
+            queueName: "generation-submit-image",
+            targetEntityType: "canvas",
+            targetEntityId: fixture.canvasId,
+            inputSnapshot: {},
+          }],
+        });
+        const taskId = workflow.tasks[0]!.id;
+        const derivation = await startCanvasMediaDerivation(db, {
+          canvasProjectId: fixture.canvasId,
+          nodeKey: "image-node",
+          derivationType: "remove_background",
+          baseCanvasRevision: 1,
+          source: { assetId: null, assetVersionId: null, storageObjectId: null },
+          taskId,
+          actorScope: fixture.scope,
+          now: new Date("2026-07-30T00:00:00.000Z"),
+        });
+        await db.query("UPDATE tasks SET status=$2, failure_code=NULL WHERE id=$1", [taskId, taskStatus]);
+        derivationIds.push(derivation.id);
+      }
+
+      const result = await reconcileCanvasMediaDerivations(db, {
+        now: new Date("2026-07-30T00:01:00.000Z"),
+        resolveArtifact: async () => null,
+      });
+      assert.deepEqual(result.failedDerivationIds.sort(), derivationIds.sort());
+      assert.deepEqual(result.waitingDerivationIds, []);
+      const stored = await db.query<{ status: string; detached_reason: string }>(`
+        SELECT status, detached_reason
+        FROM creator_canvas_media_derivations
+        WHERE id = ANY($1::uuid[])
+        ORDER BY id
+      `, [derivationIds]);
+      assert.equal(stored.rows.every((row) => row.status === "failed"), true);
+      assert.deepEqual(
+        stored.rows.map((row) => JSON.parse(row.detached_reason).failureCode).sort(),
+        ["manual_review_required", "result_unknown"],
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("attaches derivation output only when revision and source binding are unchanged", async () => {
     const db = await createMigratedTestDb();
     const fixture = await seedCanvas(db);

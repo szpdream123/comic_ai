@@ -31,11 +31,16 @@ import type {
 import { getCameraMotionPath, getCameraMotionSnapshot, sampleCameraMotionPath } from "../schema/cameraMotion";
 import {
   getObjectMotionActionPresetId,
+  getObjectMotionPoseControls,
   getObjectMotionSnapshot,
   getObjectMotionSpeed,
   normalizeObjectMotionPath,
   sampleObjectMotionPath,
 } from "../schema/objectMotion";
+
+function isMotionTransformHidden(transform: { scale: [number, number, number] }) {
+  return transform.scale.every((value) => Math.abs(value) < 0.01);
+}
 import { getAnimatedCameraFocusTarget } from "../schema/cameraTarget";
 import { parseImportedCharacterActionId } from "../schema/importedCharacterAction";
 import { BuiltInLifeModel } from "../modelLibrary/BuiltInLifeModel";
@@ -914,32 +919,33 @@ function ObjectSceneNode({
   const animatedCharacterRig = useMemo(() => {
     if (!item.characterRig) return item.characterRig;
     const actionPresetId = getObjectMotionActionPresetId(item, motionProgress);
+    const poseControls = getObjectMotionPoseControls(item, motionProgress);
+    let controls = item.characterRig.controls;
     if (actionPresetId) {
-      return {
-        ...item.characterRig,
-        controls: sampleCharacterActionControls(
-          actionPresetId,
-          motionTimeSeconds,
-          item.characterRig.controls
-        ),
-      };
+      controls = sampleCharacterActionControls(actionPresetId, motionTimeSeconds, controls);
     }
-    if (!motionWalking) return item.characterRig;
-    const stride = Math.sin(motionPhase) * 28;
-    const leftKnee = Math.max(0, Math.sin(motionPhase + Math.PI / 2)) * 24;
-    const rightKnee = Math.max(0, Math.sin(motionPhase - Math.PI / 2)) * 24;
-    return {
-      ...item.characterRig,
-      controls: {
-        ...item.characterRig.controls,
-        "body.offsetY": (item.characterRig.controls["body.offsetY"] ?? 0) + Math.abs(Math.cos(motionPhase)) * 0.025,
-        "body.pitch": (item.characterRig.controls["body.pitch"] ?? 0) - 3,
+    else if (motionWalking) {
+      const stride = Math.sin(motionPhase) * 28;
+      const leftKnee = Math.max(0, Math.sin(motionPhase + Math.PI / 2)) * 24;
+      const rightKnee = Math.max(0, Math.sin(motionPhase - Math.PI / 2)) * 24;
+      controls = {
+        ...controls,
+        "body.offsetY": (controls["body.offsetY"] ?? 0) + Math.abs(Math.cos(motionPhase)) * 0.025,
+        "body.pitch": (controls["body.pitch"] ?? 0) - 3,
         "leftShoulder.pitch": -stride * 0.72,
         "rightShoulder.pitch": stride * 0.72,
         "leftHip.pitch": stride,
         "rightHip.pitch": -stride,
         "leftKnee.bend": leftKnee,
         "rightKnee.bend": rightKnee,
+      };
+    }
+    if (!actionPresetId && !motionWalking && !poseControls) return item.characterRig;
+    return {
+      ...item.characterRig,
+      controls: {
+        ...controls,
+        ...poseControls,
       },
     };
   }, [item, motionPhase, motionProgress, motionTimeSeconds, motionWalking]);
@@ -1976,6 +1982,7 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
           const motionTransform = hasMotion
             ? getObjectMotionSnapshot(item, cameraMotionProgress)
             : item.transform;
+          if (hasMotion && isMotionTransformHidden(motionTransform)) return null;
           const renderedItem = {
             ...item,
             transform: constrainObjectMotionTransform(item, motionTransform, scene, objects),
@@ -2014,7 +2021,11 @@ export function SceneRoot({ renderMode = "interactive" }: { renderMode?: SceneRo
         )
       ) : null}
       {(interactive || renderMode === "director-monitor") && showCharacterRoutes && !cameraMotionPlaying && cameraPilotMode === "idle" ? objects
-        .filter((item) => item.visible && item.kind === "character" && (item.id !== characterRouteDrawingObjectId || draftRoutePoints.length < 2) && (item.motionPath?.keyframes.length ?? 0) > 0)
+        .filter((item) => item.visible
+          && item.kind === "character"
+          && (item.id !== characterRouteDrawingObjectId || draftRoutePoints.length < 2)
+          && (item.motionPath?.keyframes.length ?? 0) > 0
+          && !isMotionTransformHidden(getObjectMotionSnapshot(item, cameraMotionProgress)))
         .map((character) => (
           <CharacterRouteRig
             key={`${character.id}-route`}

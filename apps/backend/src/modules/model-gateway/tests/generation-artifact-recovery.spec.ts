@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import {
+  findGenerationArtifactHandoff,
   recordGenerationArtifactHandoff,
 } from "../generation-artifact-handoff.service.ts";
 import {
@@ -434,6 +435,61 @@ describe("generation artifact recovery", () => {
     assert.deepEqual(result, { status: "failed", failureCode: "provider_output_missing" });
   });
 
+  it("does not start another artifact transfer while a finalize lease is active", async () => {
+    let uploadCalls = 0;
+    const result = await fetchGptImageArtifactJob({
+      async query(sql) {
+        if (sql.includes("FROM tasks t") && sql.includes("LEFT JOIN provider_requests pr")) {
+          return {
+            rows: [{
+              task_id: "task-active-transfer",
+              workflow_id: "workflow-active-transfer",
+              attempt_id: "attempt-active-transfer",
+              user_id: "user-active-transfer",
+              project_id: null,
+              input_snapshot_json: {},
+              created_by_user_id: "user-active-transfer",
+              provider_request_id: "provider-active-transfer",
+              external_request_id: "external-active-transfer",
+              provider_response_redacted_json: {
+                artifact: {
+                  mediaType: "image",
+                  mimeType: "image/png",
+                  url: "https://provider.example.test/result.png",
+                },
+              },
+              reservation_id: null,
+              amount_reserved: null,
+            }],
+          };
+        }
+        if (sql.includes("provider_status_json->'artifactHandoff'") || sql.includes("FROM storage_objects")) {
+          return { rows: [] };
+        }
+        if (sql.includes("WITH claimed_task AS") && sql.includes("AS claimed")) {
+          return { rows: [{ claimed: false }] };
+        }
+        throw new Error(`unexpected_query:${sql}`);
+      },
+    } as never, {
+      taskId: "task-active-transfer",
+      runtime: {
+        bucket: "creator-test",
+        adapter: {
+          async putObject() {
+            uploadCalls += 1;
+            return {};
+          },
+        },
+      } as never,
+      env: {},
+      now: new Date("2026-08-03T10:00:00.000Z"),
+    });
+
+    assert.deepEqual(result, { status: "skipped" });
+    assert.equal(uploadCalls, 0);
+  });
+
   it("marks missing provider image output unrecoverable at the queue boundary", async () => {
     const config = loadGenerationQueueConfig({});
     await assert.rejects(
@@ -702,6 +758,43 @@ describe("generation artifact recovery", () => {
     assert.match(updateSql, /status IN \('queued', 'running', 'failed', 'result_unknown', 'manual_review_required', 'succeeded'\)/);
   });
 
+  it("recovers a legacy succeeded artifact when the durable handoff is absent", async () => {
+    const handoff = await findGenerationArtifactHandoff({
+      async query(sql) {
+        if (sql.includes("provider_status_json->'artifactHandoff'")) {
+          return {
+            rows: [{
+              handoff: null,
+              snapshot_status: "succeeded",
+              task_status: "succeeded",
+              result_assets_json: [{ mediaKind: "image", storageObjectId: "storage-legacy-1" }],
+              attempt_id: "attempt-legacy-1",
+            }],
+          };
+        }
+        if (sql.includes("SELECT object_key, content_type, COALESCE(last_verified_at, created_at) AS fetched_at")) {
+          return {
+            rows: [{
+              object_key: "generation/legacy.png",
+              content_type: "image/png",
+              fetched_at: new Date("2026-07-24T11:58:00.000Z"),
+            }],
+          };
+        }
+        return { rows: [] };
+      },
+    } as never, "task-legacy-1");
+
+    assert.deepEqual(handoff, {
+      mediaType: "image",
+      attemptId: "attempt-legacy-1",
+      storageObjectId: "storage-legacy-1",
+      storageObjectKey: "generation/legacy.png",
+      contentType: "image/png",
+      fetchedAt: "2026-07-24T11:58:00.000Z",
+    });
+  });
+
   it("continues persist recovery after a generation queue failure", async () => {
     let attemptReopened = false;
     let uploadRecordEnsured = false;
@@ -770,6 +863,12 @@ describe("generation artifact recovery", () => {
               created_at: new Date("2026-07-24T11:59:00.000Z"),
             }],
           };
+        }
+        if (sql.includes("WITH claimed_task AS") && sql.includes("AS claimed")) {
+          return { rows: [{ claimed: true }] };
+        }
+        if (sql.includes("WITH released_task AS")) {
+          return { rows: [] };
         }
         if (sql.includes("FROM project_upload_records")) {
           uploadRecordEnsured = true;

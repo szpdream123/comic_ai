@@ -138,11 +138,25 @@ test("renders the Director node actions and recent stable previews", () => {
 
 function createDirectorDeleteWorkbench(document, saveStandaloneCanvas) {
   const updates = [];
+  const newCanvasMount = {
+    isConnected: true,
+    dataset: { canvasProjectId: "canvas-1" },
+    remove() { this.isConnected = false; },
+  };
   return {
     workbench: {
       state: {},
       session: { user: { phone: "13800000000" } },
       api: { saveStandaloneCanvas },
+      root: {
+        innerHTML: "",
+        querySelector(selector) {
+          if (selector !== "[data-new-canvas-mount]") return null;
+          return {
+            replaceWith(host) { host.isConnected = true; },
+          };
+        },
+      },
       ui: {
         activeNavTab: "tools",
         canvasProjectView: "detail",
@@ -154,7 +168,7 @@ function createDirectorDeleteWorkbench(document, saveStandaloneCanvas) {
         canvasServerRevision: 1,
       },
       newCanvasHostActionDepth: 1,
-      newCanvasMount: { isConnected: true, dataset: { canvasProjectId: "canvas-1" } },
+      newCanvasMount,
       newCanvasInstance: {
         async update(input) {
           updates.push(input);

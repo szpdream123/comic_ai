@@ -11,6 +11,11 @@ describe("creator dev detached scripts", () => {
     assert.match(source, /isProjectProcess/);
     assert.match(source, /outside this project/);
     assert.match(source, /rotateLog/);
+    assert.match(source, /waitForStackReady/);
+    assert.match(source, /status-dev-detached\.mjs/);
+    assert.match(source, /already running but unhealthy/);
+    assert.match(source, /startup readiness markers are incomplete/);
+    assert.match(source, /terminateProcessTree\(child\.pid\)/);
   });
 
   it("requests graceful stop before the force-kill fallback", () => {
@@ -30,5 +35,9 @@ describe("creator dev detached scripts", () => {
     assert.match(source, /run-generation-video-worker\.mjs/);
     assert.match(source, /run-canvas-agent-worker\.mjs/);
     assert.match(source, /isProjectProcess/);
+    assert.match(source, /DATABASE_URL\(PostgreSQL\)/);
+    assert.match(source, /REDIS_URL\(Redis\)/);
+    assert.match(source, /await client\.query\("SELECT 1"\)/);
+    assert.match(source, /await redis\.ping\(\)/);
   });
 });

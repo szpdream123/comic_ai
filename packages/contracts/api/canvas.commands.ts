@@ -2,6 +2,29 @@ import { capabilities } from "../domain/capabilities.ts";
 import { operationNames } from "../domain/operation-names.ts";
 import type { ApiCommandContract } from "./types.ts";
 
+export const createCanvasProjectCommand: ApiCommandContract = {
+  name: "CreateCanvasProject",
+  operationName: operationNames.canvasProjectCreate,
+  capability: capabilities.projectCreate,
+  idempotencyRequired: true,
+  requestSchema: {
+    title: "optional canvas project title",
+    status: "optional canvas project status",
+  },
+  responseSchema: { project: "canvas project summary" },
+  resourceScope: "user:{user_id}:canvas_projects",
+  statePreconditions: [
+    "actor belongs to an active main account",
+    "actor can create projects",
+  ],
+  businessErrors: [
+    "team_member_canvas_create_forbidden",
+    "idempotency_conflict",
+  ],
+  auditEvent: "canvas.project.created",
+  verificationIds: ["CANVAS-project-create", "IDEMP-canvas-project-create"],
+};
+
 export const generateCanvasAudioCommand: ApiCommandContract = {
   name: "GenerateCanvasAudio",
   operationName: operationNames.canvasAudioGenerate,
@@ -93,6 +116,7 @@ export const duplicateToolPresetCommand: ApiCommandContract = {
 };
 
 export const canvasCommandContracts = [
+  createCanvasProjectCommand,
   generateCanvasAudioCommand,
   createToolPresetCommand,
   duplicateToolPresetCommand,

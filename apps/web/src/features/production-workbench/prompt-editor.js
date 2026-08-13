@@ -92,6 +92,7 @@ export function mountPromptEditor(element, options = {}) {
     },
   });
   installTextareaCompatibility(editor);
+  const removeMentionHoverPreview = installMentionHoverPreview(editor, element);
   element.querySelector?.(`textarea#${String(options.id ?? "video-prompt-input")}`)?.remove();
 
   const handle = {
@@ -112,6 +113,7 @@ export function mountPromptEditor(element, options = {}) {
       if (element.__promptEditorHandle === handle) {
         delete element.__promptEditorHandle;
       }
+      removeMentionHoverPreview();
       editor.destroy();
     },
     focus(position = "end") {
@@ -335,8 +337,9 @@ function createMentionOption(documentRef, item, { active, index, onSelect }) {
   button.dataset.index = String(index);
   button.setAttribute("role", "option");
   button.setAttribute("aria-selected", String(active));
-  button.addEventListener("mousedown", (event) => {
+  button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+    event.stopPropagation();
     onSelect(index);
   });
 
@@ -367,6 +370,101 @@ function createMentionOption(documentRef, item, { active, index, onSelect }) {
   copy.append(title, kind);
   button.append(thumb, copy);
   return button;
+}
+
+function installMentionHoverPreview(editor, element) {
+  const editorElement = editor.view.dom;
+  const documentRef = element.ownerDocument;
+  const view = documentRef.defaultView ?? globalThis.window;
+  let activeMention = null;
+  let previewElement = null;
+
+  const hidePreview = () => {
+    previewElement?.remove();
+    previewElement = null;
+    activeMention = null;
+  };
+  const showPreview = (mention) => {
+    const imageUrl = String(mention.getAttribute("data-preview") ?? "").trim();
+    const kind = String(mention.getAttribute("data-asset-kind") ?? "").trim();
+    const videoUrl = kind === "video"
+      ? String(mention.getAttribute("data-source") ?? "").trim()
+      : "";
+    if (!imageUrl && !videoUrl) {
+      hidePreview();
+      return;
+    }
+
+    hidePreview();
+    activeMention = mention;
+    previewElement = documentRef.createElement("span");
+    previewElement.className = "episode-prompt-editor-hover-preview";
+    previewElement.setAttribute("aria-hidden", "true");
+    previewElement.style.visibility = "hidden";
+    const media = documentRef.createElement(imageUrl ? "img" : "video");
+    if (imageUrl) {
+      media.alt = "";
+      media.src = imageUrl;
+    } else {
+      media.muted = true;
+      media.playsInline = true;
+      media.preload = "metadata";
+      media.src = videoUrl;
+    }
+    previewElement.append(media);
+    documentRef.body.append(previewElement);
+
+    const anchorRect = mention.getBoundingClientRect();
+    const previewRect = previewElement.getBoundingClientRect();
+    const viewportWidth = Number(view?.innerWidth ?? 0);
+    const viewportHeight = Number(view?.innerHeight ?? 0);
+    const padding = 12;
+    const gap = 8;
+    const left = Math.max(
+      padding,
+      Math.min(
+        anchorRect.left + (anchorRect.width - previewRect.width) / 2,
+        viewportWidth - previewRect.width - padding,
+      ),
+    );
+    const above = anchorRect.top - previewRect.height - gap;
+    const top = above >= padding
+      ? above
+      : Math.min(anchorRect.bottom + gap, viewportHeight - previewRect.height - padding);
+    Object.assign(previewElement.style, {
+      left: `${Math.max(padding, left)}px`,
+      top: `${Math.max(padding, top)}px`,
+      visibility: "",
+    });
+  };
+  const resolveMention = (target) => {
+    const targetElement = target?.nodeType === 1 ? target : target?.parentElement;
+    const mention = targetElement?.closest?.(".episode-prompt-editor-mention") ?? null;
+    return mention && editorElement.contains(mention) ? mention : null;
+  };
+  const handlePointerOver = (event) => {
+    const mention = resolveMention(event.target);
+    if (!mention || mention === activeMention) return;
+    showPreview(mention);
+  };
+  const handlePointerOut = (event) => {
+    if (!activeMention) return;
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget && activeMention.contains(relatedTarget)) return;
+    hidePreview();
+  };
+
+  editorElement.addEventListener("pointerover", handlePointerOver);
+  editorElement.addEventListener("pointerout", handlePointerOut);
+  view?.addEventListener?.("scroll", hidePreview, true);
+  view?.addEventListener?.("resize", hidePreview);
+  return () => {
+    editorElement.removeEventListener("pointerover", handlePointerOver);
+    editorElement.removeEventListener("pointerout", handlePointerOut);
+    view?.removeEventListener?.("scroll", hidePreview, true);
+    view?.removeEventListener?.("resize", hidePreview);
+    hidePreview();
+  };
 }
 
 function emitEditorState(editor, options, initial) {

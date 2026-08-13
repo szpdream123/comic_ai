@@ -59,7 +59,7 @@ it("formats every Canvas animation action and frame grid as a Sprite Sheet promp
   assert.equal(upgradedLegacyPrompt.match(/character animation Sprite Sheet with exactly 6 frames/g)?.length, 1);
 });
 
-it("accepts Canvas image, animation, panorama, storyboard, and video generators while rejecting non-generator nodes", async () => {
+it("accepts Canvas image derivations and generators while rejecting non-generator nodes", async () => {
   const db = await createMigratedTestDb();
   let providerBody: Record<string, unknown> | null = null;
   const env = {
@@ -199,6 +199,17 @@ it("accepts Canvas image, animation, panorama, storyboard, and video generators 
               ports: { inputs: [], outputs: [{ id: "out_text", kind: "text" }] },
             },
           }, {
+            id: "source-image-node",
+            type: "source-image",
+            position: { x: 300, y: 100 },
+            data: {
+              mediaKind: "image",
+              assetId: libraryAssetId,
+              assetVersionId: libraryAssetVersionId,
+              url: "https://cdn.test/source.png",
+              ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
+            },
+          }, {
             id: "ai-image-node",
             type: "ai-image",
             position: { x: 500, y: 100 },
@@ -324,6 +335,28 @@ it("accepts Canvas image, animation, panorama, storyboard, and video generators 
       run_count: 0,
       task_count: 0,
     });
+
+    const sourceImageResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "canvas-source-image-derivation",
+        cookie,
+      },
+      body: JSON.stringify({
+        target: { kind: "canvas", canvasProjectId, nodeId: "source-image-node" },
+        prompt: "裁剪",
+        model: "cumob-gpt-image-2-pro",
+        parameters: {
+          derivationId: randomUUID(),
+          referenceImages: ["https://cdn.test/source.png"],
+          crop: { x: 10, y: 15, width: 70, height: 60 },
+        },
+      }),
+    });
+    const sourceImagePayload = await sourceImageResponse.json();
+    assert.equal(sourceImageResponse.status, 200, JSON.stringify(sourceImagePayload));
+    assert.ok(sourceImagePayload.data.taskId);
 
     const acceptedResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
       method: "POST",

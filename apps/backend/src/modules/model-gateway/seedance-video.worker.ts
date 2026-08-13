@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -18,7 +18,8 @@ import { ensureProjectUploadRecordForStorageObject } from "../project/project-up
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import {
-  createScopedStorageObject,
+  createOrReuseGenerationStorageObject,
+  findGenerationStorageObject,
   findStorageObjectByKey,
   markStorageObjectAvailable,
   markStorageObjectFailed,
@@ -64,6 +65,7 @@ import {
   createUserModelRequestLog,
 } from "./user-model-request-log.service.ts";
 import { buildGlobalAiOpcVideoPayload } from "./global-ai-opc-video.provider-adapter.ts";
+import { prepareGlobalAiOpcVideoMaterials } from "./global-ai-opc-material.service.ts";
 import { buildLingdongVideoPayload } from "./lingdong-api.provider-adapter.ts";
 import { buildSanBaoVideoPayload } from "./san-bao.provider-adapter.ts";
 import {
@@ -281,7 +283,7 @@ export async function processSeedanceVideoSubmitJob(
     const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
     const requestKey = `${row.workflow_id}:${row.task_id}`;
     const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
-    const requestBody = {
+    const originalRequestBody = {
       prompt,
       motionPrompt: prompt,
       firstFrameUrl,
@@ -290,6 +292,16 @@ export async function processSeedanceVideoSubmitJob(
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
     };
+    const requestBody = modelConfig?.providerProtocol === "globalaiopc_video"
+      && readString(modelConfig.providerConfig.requestFormat) === "globalaiopc_model_center_video"
+      ? await prepareGlobalAiOpcVideoMaterials(db, {
+          requestBody: originalRequestBody,
+          providerConfig: modelConfig?.providerConfig ?? {},
+          env: input.env,
+          fetchImpl: resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
+          now: input.now,
+        }).catch(() => originalRequestBody)
+      : originalRequestBody;
     const requestLogBody = buildSeedanceUserModelRequestLogBody(requestBody, {
       providerName,
       providerProtocol: modelConfig?.providerProtocol,
@@ -1584,9 +1596,11 @@ export async function finalizeSeedanceVideoArtifactJob(
       failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
     });
   }
+  const leaseOwner = `seedance-video-finalizer:${randomUUID()}`;
   row = await ensureSeedanceFinalizeAttempt(db, {
     row,
     now: input.now,
+    workerId: leaseOwner,
   });
   if (!row.attempt_id) {
     return resolveGenerationArtifactStageUnavailable(db, {
@@ -1594,9 +1608,15 @@ export async function finalizeSeedanceVideoArtifactJob(
       failureCode: GENERATION_ARTIFACT_FETCH_NOT_READY,
     });
   }
-  await markSeedanceFinalizeLease(db, {
+  const leaseClaimed = await markSeedanceFinalizeLease(db, {
     taskId: row.task_id,
+    owner: leaseOwner,
     now: input.now,
+  });
+  if (!leaseClaimed) return { status: "skipped" };
+  const stopLeaseHeartbeat = startSeedanceFinalizeLeaseHeartbeat(db, {
+    taskId: row.task_id,
+    owner: leaseOwner,
   });
 
   try {
@@ -1725,6 +1745,8 @@ export async function finalizeSeedanceVideoArtifactJob(
       now: input.now,
     });
     return { status: "failed", failureCode };
+  } finally {
+    stopLeaseHeartbeat();
   }
 
   await ensureProjectUploadRecordForStorageObject(db, {
@@ -1999,22 +2021,60 @@ async function markSeedanceFinalizeLease(
   db: SqlDatabase,
   input: {
     taskId: string;
+    owner: string;
     now: Date;
   },
-) {
-  await db.query(
+): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(db,
     `
       UPDATE tasks
       SET status = 'running',
           failure_code = NULL,
-          locked_by = 'seedance-video-finalize-worker',
-          locked_until = $2,
-          heartbeat_at = $3,
-          updated_at = $3
+          locked_by = $2,
+          locked_until = $3,
+          heartbeat_at = $4,
+          updated_at = $4
       WHERE id = $1
         AND status IN ('running', 'manual_review_required', 'result_unknown')
+        AND (
+          locked_until IS NULL
+          OR locked_until <= $4
+          OR locked_by = $2
+        )
+      RETURNING id
     `,
-    [input.taskId, seedanceVideoLeaseUntil(input.now), input.now],
+    [input.taskId, input.owner, seedanceVideoLeaseUntil(input.now), input.now],
+  );
+  return Boolean(row);
+}
+
+function startSeedanceFinalizeLeaseHeartbeat(
+  db: SqlDatabase,
+  input: { taskId: string; owner: string },
+) {
+  const heartbeat = setInterval(() => {
+    void renewSeedanceFinalizeLease(db, input).catch(() => undefined);
+  }, 30_000);
+  heartbeat.unref?.();
+  return () => clearInterval(heartbeat);
+}
+
+async function renewSeedanceFinalizeLease(
+  db: SqlDatabase,
+  input: { taskId: string; owner: string },
+) {
+  const now = new Date();
+  await db.query(
+    `
+      UPDATE tasks
+      SET locked_until = $3,
+          heartbeat_at = $4,
+          updated_at = $4
+      WHERE id = $1
+        AND locked_by = $2
+        AND status = 'running'
+    `,
+    [input.taskId, input.owner, seedanceVideoLeaseUntil(now), now],
   );
 }
 
@@ -2040,7 +2100,12 @@ export async function fetchSeedanceVideoArtifactJob(
   const snapshot = parseSnapshot(row.input_snapshot_json);
   const videoUrl = readString(parseProviderResponse(row.provider_response_redacted_json).videoUrl);
   if (!videoUrl) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
-  row = await ensureSeedanceFinalizeAttempt(db, { row, now: input.now });
+  const leaseOwner = `seedance-video-finalizer:${randomUUID()}`;
+  row = await ensureSeedanceFinalizeAttempt(db, {
+    row,
+    now: input.now,
+    workerId: leaseOwner,
+  });
   if (!row.attempt_id) return resolveSeedanceVideoFetchUnavailable(db, input.taskId);
   const existing = await findOrRecoverGenerationArtifactHandoff(db, {
     taskId: input.taskId,
@@ -2050,7 +2115,17 @@ export async function fetchSeedanceVideoArtifactJob(
   });
   if (existing) return { status: "succeeded" };
   await assertCanvasGenerationAssignmentActive(db, snapshot);
-  await markSeedanceFinalizeLease(db, { taskId: row.task_id, now: input.now });
+  const leaseClaimed = await markSeedanceFinalizeLease(db, {
+    taskId: row.task_id,
+    owner: leaseOwner,
+    now: input.now,
+  });
+  if (!leaseClaimed) return { status: "skipped" };
+  const stopLeaseHeartbeat = startSeedanceFinalizeLeaseHeartbeat(db, {
+    taskId: row.task_id,
+    owner: leaseOwner,
+  });
+  try {
   await markGenerationTaskSnapshotRunning(db, {
     taskId: row.task_id,
     attemptId: row.attempt_id,
@@ -2079,6 +2154,9 @@ export async function fetchSeedanceVideoArtifactJob(
     now: input.now,
   });
   return { status: "succeeded" };
+  } finally {
+    stopLeaseHeartbeat();
+  }
 }
 
 async function resolveSeedanceVideoFetchUnavailable(
@@ -3035,6 +3113,7 @@ async function ensureSeedanceFinalizeAttempt(
   input: {
     row: SeedanceTaskRow;
     now: Date;
+    workerId: string;
   },
 ): Promise<SeedanceTaskRow> {
   if (
@@ -3052,7 +3131,7 @@ async function ensureSeedanceFinalizeAttempt(
           UPDATE tasks
           SET current_attempt_id = $2,
               status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
-              locked_by = COALESCE(locked_by, 'seedance-video-finalize-worker'),
+              locked_by = COALESCE(locked_by, $5),
               locked_until = COALESCE(locked_until, $3),
               heartbeat_at = COALESCE(heartbeat_at, $4),
               updated_at = $4
@@ -3066,6 +3145,7 @@ async function ensureSeedanceFinalizeAttempt(
           input.row.attempt_id,
           seedanceVideoLeaseUntil(input.now),
           input.now,
+          input.workerId,
         ],
       );
       if (!attached) return { ...input.row, attempt_id: null };
@@ -3084,7 +3164,7 @@ async function ensureSeedanceFinalizeAttempt(
 
   const claim = await claimQueuedTask(db, {
     taskId: input.row.task_id,
-    workerId: "seedance-video-finalize-worker",
+    workerId: input.workerId,
     now: input.now,
     leaseMs: SEEDANCE_VIDEO_TASK_LEASE_MS,
   });
@@ -3334,9 +3414,25 @@ async function uploadProviderArtifactToStorage(
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
   const { retryAttempts, retryDelayMs, downloadTimeoutMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
-  let storageObject: StorageObjectRecord | null = null;
+  let storageObject: StorageObjectRecord | null = await findGenerationStorageObject(db, {
+    userId: input.createdByUserId!,
+    bucket: input.runtime.bucket,
+    taskId: String(input.metadata.taskId),
+    attemptId: readString(input.metadata.attemptId) ?? null,
+  }) ?? null;
   let contentType = "application/octet-stream";
   let knownSizeBytes: number | null = null;
+
+  if (storageObject) {
+    const reusable = await findReusableSeedanceStorageObject(input.runtime, storageObject);
+    if (reusable) {
+      return {
+        storageObject,
+        contentType: reusable.contentType,
+        sizeBytes: reusable.sizeBytes,
+      };
+    }
+  }
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
     const abortController = new AbortController();
@@ -3360,7 +3456,7 @@ async function uploadProviderArtifactToStorage(
       contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || contentType;
       knownSizeBytes = parseContentLength(response.headers.get("content-length"));
       if (!storageObject) {
-        storageObject = await createScopedStorageObject(db, {
+        storageObject = await createOrReuseGenerationStorageObject(db, {
           userId: input.createdByUserId!,
           projectId: input.projectId,
           canvasProjectId: input.canvasProjectId ?? null,
@@ -3370,7 +3466,7 @@ async function uploadProviderArtifactToStorage(
           sizeBytes: knownSizeBytes,
           provider: input.runtime.provider,
           status: "pending_upload",
-          metadata: input.metadata,
+          metadata: input.metadata as Record<string, unknown> & { taskId: string; attemptId: string | null },
           createdByUserId: input.createdByUserId ?? null,
           now: input.now,
         });
@@ -3436,6 +3532,29 @@ async function uploadProviderArtifactToStorage(
     failureCode: "provider_output_upload_failed",
     storageObjectId: storageObject?.id,
   });
+}
+
+async function findReusableSeedanceStorageObject(
+  runtime: UploadSessionRuntime,
+  storageObject: StorageObjectRecord,
+) {
+  if (typeof runtime.adapter.headObject !== "function") {
+    const sizeBytes = Number(storageObject.sizeBytes ?? 0);
+    return storageObject.status === "available" && Number.isFinite(sizeBytes) && sizeBytes > 0
+      ? { contentType: storageObject.contentType, sizeBytes }
+      : null;
+  }
+  const remote = await runtime.adapter.headObject({
+    bucket: storageObject.bucket,
+    objectKey: storageObject.objectKey,
+  });
+  if (!remote.exists) return null;
+  const sizeBytes = Number(remote.contentLength ?? storageObject.sizeBytes ?? 0);
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return null;
+  return {
+    contentType: readString(remote.contentType) ?? storageObject.contentType,
+    sizeBytes,
+  };
 }
 
 async function failSeedanceTask(
@@ -3692,6 +3811,7 @@ export function buildSeedanceUserModelRequestLogBody(
     }, {
       model: input.providerModel?.trim() || undefined,
       defaultRequestParams: readObject(input.providerConfig?.defaultRequestParams),
+      requestFormat: readString(input.providerConfig?.requestFormat),
     });
     return {
       requestFormat: "globalaiopc_video",

@@ -81,6 +81,22 @@ export function parseCanvasPromptReferences(prompt) {
   return result.references;
 }
 
+export function removeCanvasNodeReferencesFromPrompt(prompt, nodeIds = []) {
+  const source = String(prompt ?? "");
+  const deletedNodeIds = new Set((Array.isArray(nodeIds) ? nodeIds : [nodeIds]).map(String).filter(Boolean));
+  if (!source.includes("@node:") || !deletedNodeIds.size) return source;
+  const tokens = [...new Set(parseCanvasPromptReferences(source)
+    .filter((reference) => reference.type === "node" && deletedNodeIds.has(String(reference.id)))
+    .map((reference) => reference.token))]
+    .sort((left, right) => right.length - left.length);
+  let nextPrompt = source;
+  for (const token of tokens) {
+    nextPrompt = nextPrompt.split(` ${token}`).join("");
+    nextPrompt = nextPrompt.split(token).join("");
+  }
+  return nextPrompt.trim() ? nextPrompt : "";
+}
+
 export function upsertCanvasPromptReference(document, type, record) {
   const normalizedType = String(type ?? "").trim().toLowerCase();
   const id = String(record?.id ?? "").trim();

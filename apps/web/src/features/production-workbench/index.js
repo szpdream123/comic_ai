@@ -71,12 +71,15 @@ import {
 import { resolveCanvasScriptBatchInitialState, resolveCanvasScriptBatchItems } from "./canvas-script-batch-modal.js";
 import {
   clearToolboxPromptReverseFile,
+  clearToolboxVideoToDirectorFile,
   clearToolboxWatermarkRemovalFile,
   clearToolboxWatermarkRemovalMask,
   closeToolboxPromptReverse,
+  closeToolboxVideoToDirector,
   closeToolboxVideoDepth,
   closeToolboxWatermarkRemoval,
   openToolboxPromptReverse,
+  openToolboxVideoToDirector,
   openToolboxVideoDepth,
   openToolboxWatermarkRemoval,
   setToolboxPromptReverseGuideOpen,
@@ -84,6 +87,7 @@ import {
   setToolboxPromptReverseFile,
   setToolboxPromptReverseModel,
   setToolboxPromptReverseSegmentDuration,
+  setToolboxVideoToDirectorFile,
   setToolboxVideoDepthGuideOpen,
   setToolboxWatermarkRemovalGuideOpen,
   setToolboxWatermarkRemovalBrushSize,
@@ -91,8 +95,10 @@ import {
   setToolboxWatermarkRemovalTool,
   undoToolboxWatermarkRemovalMask,
   updateToolboxPromptReverseActiveView,
+  updateToolboxVideoToDirectorState,
   updateToolboxWatermarkRemovalState,
 } from "../toolbox/toolbox-page.js";
+import { compileVideoToDirectorProject } from "../toolbox/video-to-director-compiler.js";
 import {
   buildVideoModelFrameSheets,
 } from "../toolbox/video-analysis-plugin-client.js";
@@ -136,6 +142,8 @@ import {
   selectedCanvasWorkflowNodeIds,
   alignSelectedCanvasNodes,
   distributeSelectedCanvasNodes,
+  flushCanvasGraphDocument,
+  settleCanvasGraphBlankConnectionDraft,
   syncCanvasGraphViewport,
   syncCanvasZoomControlDisplay,
 } from "./canvas/canvas-x6-graph.js";
@@ -170,6 +178,11 @@ import {
   resolveCanvasAnimationSheetAspectRatio,
 } from "./canvas/canvas-animation-node.js";
 import { removeCanvasDirectorCaptureDocument } from "./canvas/canvas-director-node.js";
+import { isCanvasFrameAnalysisNode } from "./canvas/canvas-frame-analysis-node.js";
+import {
+  applyLibTvCanvasImport,
+  buildLibTvCanvasImportPreview,
+} from "./canvas/canvas-libtv-import.js";
 import {
   canvasConnectedVideoNodeIds,
   canvasGroupRunnableNodeIds,
@@ -200,23 +213,20 @@ import {
   connectCanvasNodes,
   createCanvasNode,
   createCanvasClipboardSnapshot,
-  disconnectCanvasNodes,
   duplicateCanvasNodes,
   arrangeCanvasGroupNodes,
   resizeCanvasGroupsToChildren,
   groupCanvasNodes,
   pasteCanvasClipboardSnapshot,
   ungroupCanvasNodes,
-  resolveCompatibleCanvasNodeTemplates,
   resolveCanvasModelOptions,
   resolveCanvasNodeTemplates,
+  resolveCompatibleCanvasNodeTemplates,
   removeCanvasNode,
   restoreCanvasStoryboardCutImage,
   resolveCanvasNodePlacement,
   updateCanvasViewport,
   updateCanvasNodeData,
-  updateCanvasNodePosition,
-  updateCanvasNodeSize,
 } from "./canvas/canvas-state.js";
 
 const TEAM_ASSET_LOCAL_UPLOAD_CATEGORY_PREFIX = "team-assets";
@@ -233,6 +243,10 @@ const DEFAULT_SCRIPT = `Episode 1: Dawn over the mechanical city.
 
 The lead mechanist opens the tower window, sees the industrial skyline, and prepares to launch the first test frame.`;
 const DEFAULT_CANVAS_PROJECT_ID = "canvas-project-main";
+const CANVAS_REFRESH_DRAFT_STORAGE_PREFIX = "comic-ai:canvas-refresh-draft";
+const CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY = "comic-ai:canvas-pending-create-idempotency";
+const CANVAS_PENDING_CREATE_IDEMPOTENCY_MAX_AGE_MS = 5 * 60_000;
+const CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 const CREDIT_SESSION_REFRESH_INTERVAL_MS = 5 * 60_000;
 const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
 const SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS = 220;
@@ -241,10 +255,9 @@ const SINGLE_EPISODE_AI_SCROLL_STICKY_THRESHOLD_PX = 72;
 const WORKBENCH_TOAST_DISMISS_MS = 3000;
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
 const ENABLE_EPISODE_EVENT_TRACKING = false;
-const CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250;
 const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const DIRECTOR_DESK_MODULE_URL = "/director-desk/director-desk.js";
-const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260729-4";
+const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260810-2";
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
 const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const CANVAS_LIVE_RECONNECT_BASE_MS = 800;
@@ -263,7 +276,7 @@ const newCanvasHostActionOptions = new WeakMap();
 const PUBLIC_NAV_PATHS = {
   home: "/",
   tools: "/canvas",
-  "new-canvas": "/new-canvas",
+  "new-canvas": "/canvas",
   script: "/script",
   toolbox: "/toolbox",
   project: "/projects",
@@ -273,7 +286,7 @@ const PUBLIC_NAV_PATHS = {
 const PUBLIC_PATH_TOKENS = new Map([
   ["/", "home"],
   ["/canvas", "tools"],
-  ["/new-canvas", "new-canvas"],
+  ["/new-canvas", "tools"],
   ["/script", "script"],
   ["/toolbox", "toolbox"],
   ["/projects", "project"],
@@ -397,6 +410,36 @@ function applyToolboxPromptReverseFile(workbench, file) {
 
 function revokeToolboxPromptReversePreview(ui = {}) {
   const previewUrl = String(ui.toolboxPromptReverse?.previewUrl ?? "");
+  if (previewUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(previewUrl);
+  }
+}
+
+function applyToolboxVideoToDirectorFile(workbench, file) {
+  const accepted = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+  if (!accepted.has(String(file?.type ?? "").toLowerCase())) {
+    updateToolboxVideoToDirectorState(workbench.ui, { error: "仅支持 MP4、WEBM 或 MOV 视频。" });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  if (Number(file?.size ?? 0) > TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES) {
+    updateToolboxVideoToDirectorState(workbench.ui, { error: "视频大小不能超过 500 MB。" });
+    renderWorkbenchChrome(workbench);
+    return false;
+  }
+  revokeToolboxVideoToDirectorPreview(workbench.ui);
+  setToolboxVideoToDirectorFile(workbench.ui, {
+    file,
+    fileName: file.name,
+    fileSize: file.size,
+    previewUrl: typeof globalThis.URL?.createObjectURL === "function" ? globalThis.URL.createObjectURL(file) : "",
+  });
+  renderWorkbenchChrome(workbench);
+  return true;
+}
+
+function revokeToolboxVideoToDirectorPreview(ui = {}) {
+  const previewUrl = String(ui.toolboxVideoToDirector?.previewUrl ?? "");
   if (previewUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
     globalThis.URL.revokeObjectURL(previewUrl);
   }
@@ -1230,6 +1273,17 @@ function updateToolboxPromptReverseProgress(workbench) {
   return true;
 }
 
+function updateToolboxVideoToDirectorProgress(workbench) {
+  const state = workbench.ui.toolboxVideoToDirector ?? {};
+  const modal = workbench.root?.querySelector?.(".toolbox-director-modal");
+  const button = modal?.querySelector?.("[data-toolbox-video-director-progress-button]");
+  if (!button) return false;
+  const percent = Math.round(Math.max(0, Math.min(99, Number(state.progress ?? 0))));
+  button.textContent = `正在解析 ${percent}%`;
+  button.disabled = true;
+  return true;
+}
+
 async function runToolboxVideoDepth(workbench) {
   const depth = workbench.ui.toolboxVideoDepth ?? {};
   const requestFile = depth.file;
@@ -1457,6 +1511,69 @@ async function loadToolboxPromptReverseModels(workbench) {
       loadingModels: false,
       error: `加载模型失败：${friendlyError(error)}`,
     };
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function loadToolboxVideoToDirectorModels(workbench) {
+  try {
+    const payload = await workbench.api.getToolboxPromptReverseModels({ fresh: true });
+    const models = normalizeToolboxPromptReverseModels(payload);
+    const current = workbench.ui.toolboxVideoToDirector ?? {};
+    if (!current.open) return;
+    updateToolboxVideoToDirectorState(workbench.ui, {
+      models,
+      selectedModelName: models.some((item) => item.displayName === current.selectedModelName)
+        ? current.selectedModelName
+        : models[0]?.displayName ?? "",
+      loadingModels: false,
+      error: models.length ? "" : "暂无可用的视频视觉模型。",
+    });
+  } catch (error) {
+    updateToolboxVideoToDirectorState(workbench.ui, { loadingModels: false, error: `加载模型失败：${friendlyError(error)}` });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function checkToolboxVideoToDirectorPlugin(workbench) {
+  updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "checking", error: "" });
+  renderWorkbenchChrome(workbench);
+  try {
+    const health = await checkBrowserVideoAnalysis();
+    updateToolboxVideoToDirectorState(workbench.ui, {
+      pluginStatus: health.ready ? health.installed ? "ready" : "not-installed" : "unavailable",
+      pluginVersion: health.installed ? `${String(health.device ?? "浏览器本地解析")} · 6 FPS` : "",
+      error: health.ready ? "" : String(health.error ?? "当前浏览器不支持本地视频解析"),
+    });
+  } catch {
+    updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "not-installed" });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function installToolboxVideoToDirectorPlugin(workbench) {
+  updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "installing", error: "" });
+  renderWorkbenchChrome(workbench);
+  try {
+    const result = await installBrowserVideoAnalysis();
+    updateToolboxVideoToDirectorState(workbench.ui, {
+      pluginStatus: "ready",
+      pluginVersion: `${String(result?.device ?? "浏览器本地解析")} · 6 FPS`,
+    });
+  } catch (error) {
+    updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "not-installed", error: `加载失败：${friendlyError(error)}` });
+  }
+  renderWorkbenchChrome(workbench);
+}
+
+async function uninstallToolboxVideoToDirectorPlugin(workbench) {
+  updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "uninstalling", error: "" });
+  renderWorkbenchChrome(workbench);
+  try {
+    await uninstallBrowserVideoAnalysis();
+    updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "not-installed", pluginVersion: "" });
+  } catch (error) {
+    updateToolboxVideoToDirectorState(workbench.ui, { pluginStatus: "ready", error: `卸载失败：${friendlyError(error)}` });
   }
   renderWorkbenchChrome(workbench);
 }
@@ -2759,11 +2876,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     },
   };
   const initialRouteToken = readWorkbenchRouteToken(window.location);
-  if (!isNewCanvasEnabled(workbench.session) && ["new-canvas", "new-canvas-canvas"].includes(initialRouteToken)) {
-    workbench.ui.activeNavTab = "home";
-    workbench.ui.canvasProjectView = "list";
-    workbench.ui.toast = "新画布当前未启用。";
-  }
   installWorkbenchToastQueue(workbench);
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
   syncWorkbenchDisplayCreditBalance(workbench, session);
@@ -2784,7 +2896,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   };
   workbench.updateCanvasDocument = (canvasDocument, options = {}) => updateActiveCanvasDocument(workbench, canvasDocument, options);
   workbench.updateCanvasViewport = (canvasDocument) => {
-    const updated = updateActiveCanvasDocument(workbench, canvasDocument, { scheduleSave: false });
+    const updated = updateActiveCanvasDocument(workbench, canvasDocument, { immediateSave: true });
     void persistCanvasSession(
       workbench,
       resolveCanvasSaveProjectId(workbench),
@@ -2797,9 +2909,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     resolveCanvasSaveProjectId(workbench),
     0,
     { force: true },
-  );
-  workbench.onCanvasConnectionDrop = (event, connection, stage) => (
-    openCanvasConnectionDropMenu(workbench, stage, event, connection)
   );
   workbench.saveCanvasNow = () => saveProjectCanvasNow(workbench);
   workbench.persistCanvasNodePositions = (positions = []) => persistCanvasNodePositions(workbench, positions);
@@ -2832,45 +2941,6 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     if (episodeResizeTarget && isEpisodeWorkbenchCenterResizeHotzone(event, episodeResizeTarget)) {
       startEpisodeWorkbenchLayoutResize(workbench, event, episodeResizeTarget);
       return;
-    }
-    const canvasEdgeTarget = eventTarget?.closest?.(".canvas-flow-edge[data-canvas-edge-id]");
-    if (canvasEdgeTarget) {
-      workbench.canvasPointerHandledAt = Date.now();
-      startCanvasEdgeDisconnectDrag(workbench, event, canvasEdgeTarget);
-      return;
-    }
-    const nearestCanvasEdge = findNearestCanvasEdgeFromEvent(eventTarget, event);
-    if (nearestCanvasEdge) {
-      workbench.canvasPointerHandledAt = Date.now();
-      startCanvasEdgeDisconnectDrag(workbench, event, nearestCanvasEdge);
-      return;
-    }
-    const canvasPortTarget = eventTarget?.closest?.(".canvas-node-connect[data-node-id][data-port-id]");
-    if (canvasPortTarget) {
-      workbench.canvasPointerHandledAt = Date.now();
-      startCanvasConnectionDrag(workbench, event, canvasPortTarget);
-      return;
-    }
-    const canvasResizeTarget = eventTarget?.closest?.("[data-canvas-node-resize-handle][data-node-id]");
-    if (canvasResizeTarget) {
-      workbench.canvasPointerHandledAt = Date.now();
-      startCanvasNodeResize(workbench, event, canvasResizeTarget);
-      return;
-    }
-    const canvasNodeTarget = eventTarget?.closest?.(".canvas-lib-node[data-canvas-node-id]");
-    const uploadCardDragTarget = eventTarget?.closest?.(".canvas-upload-card");
-    const canvasNodeDragHandleTarget = eventTarget?.closest?.("[data-canvas-node-drag-handle]");
-    if (
-      canvasNodeTarget &&
-      (canvasNodeDragHandleTarget || uploadCardDragTarget) &&
-      !eventTarget?.closest?.(".canvas-node-connect, input")
-    ) {
-      startCanvasUploadNodeLongPressDrag(workbench, event, canvasNodeTarget);
-      return;
-    }
-    if (shouldStartCanvasPan(eventTarget, event, workbench)) {
-      workbench.canvasPointerHandledAt = Date.now();
-      startCanvasPan(workbench, event);
     }
   });
   root.addEventListener("pointermove", (event) => {
@@ -2905,75 +2975,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   };
   window.addEventListener("hashchange", restoreHistoryRoute);
   window.addEventListener("popstate", restoreHistoryRoute);
-  root.addEventListener("wheel", (event) => {
-    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const stage = eventTarget?.closest?.(".canvas-stage");
-    if (!stage || isCanvasX6InteractionTarget(eventTarget, event) || isCanvasInteractionOverlayTarget(eventTarget)) {
-      return;
-    }
-    event.preventDefault();
-    const viewport = normalizeCanvasViewport(ensureWorkbenchCanvasDocument(workbench).viewport);
-    if (viewport.interactionMode === "classic" && !event.ctrlKey) {
-      updateCanvasViewportAndRender(workbench, {
-        x: Math.round(viewport.x - Number(event.deltaX ?? 0)),
-        y: Math.round(viewport.y - Number(event.deltaY ?? 0)),
-      }, { render: false });
-      return;
-    }
-    zoomCanvasAtPoint(workbench, event.deltaY < 0 ? 1 : -1, {
-      clientX: event.clientX,
-      clientY: event.clientY,
-      stage,
-    });
-  }, { passive: false });
   root.addEventListener("mousedown", (event) => {
-    if (Date.now() - Number(workbench.canvasPointerHandledAt ?? 0) < 450) {
-      return;
-    }
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (isCanvasX6BlankClickTarget(eventTarget, event)) {
       closeCanvasEditorWithoutRender(workbench, eventTarget, event);
       return;
     }
     if (isCanvasX6InteractionTarget(eventTarget, event)) {
-      return;
-    }
-    const canvasEdgeTarget = eventTarget?.closest?.(".canvas-flow-edge[data-canvas-edge-id]");
-    if (canvasEdgeTarget) {
-      startCanvasEdgeDisconnectDrag(workbench, event, canvasEdgeTarget);
-      return;
-    }
-    const nearestCanvasEdge = findNearestCanvasEdgeFromEvent(eventTarget, event);
-    if (nearestCanvasEdge) {
-      startCanvasEdgeDisconnectDrag(workbench, event, nearestCanvasEdge);
-      return;
-    }
-    const canvasPortTarget = eventTarget?.closest?.(".canvas-node-connect[data-node-id][data-port-id]");
-    if (canvasPortTarget) {
-      startCanvasConnectionDrag(workbench, event, canvasPortTarget);
-      return;
-    }
-    const canvasResizeTarget = eventTarget?.closest?.("[data-canvas-node-resize-handle][data-node-id]");
-    if (canvasResizeTarget) {
-      startCanvasNodeResize(workbench, event, canvasResizeTarget);
-      return;
-    }
-    const canvasNodeTarget = eventTarget?.closest?.(".canvas-lib-node[data-canvas-node-id]");
-    const uploadCardDragTarget = eventTarget?.closest?.(".canvas-upload-card");
-    const canvasNodeDragHandleTarget = eventTarget?.closest?.("[data-canvas-node-drag-handle]");
-    const blockedCanvasNodeDragTarget = canvasNodeDragHandleTarget
-      ? null
-      : uploadCardDragTarget
-      ? eventTarget?.closest?.(".canvas-node-connect, input")
-      : eventTarget?.closest?.(
-        ".canvas-text-format-toolbar, .canvas-node-connect, [data-canvas-node-resize-handle], button, input, textarea, [contenteditable='true'], select, option, a",
-      );
-    if (canvasNodeTarget && !blockedCanvasNodeDragTarget) {
-      startCanvasNodeDrag(workbench, event, canvasNodeTarget);
-      return;
-    }
-    if (shouldStartCanvasPan(eventTarget, event, workbench)) {
-      startCanvasPan(workbench, event);
       return;
     }
     const mouseSelectTarget = eventTarget?.closest?.(
@@ -3092,7 +3100,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       }
       if (eventTarget?.closest?.(".canvas-stage")) {
         const canvasInteractiveTarget = eventTarget?.closest?.(
-          ".canvas-node-editor, .canvas-lib-node, .canvas-context-menu, .canvas-script-picker, .canvas-add-menu, .canvas-zoom-tools",
+          ".canvas-node-editor, .canvas-context-menu, .canvas-script-picker, .canvas-add-menu, .canvas-zoom-tools",
         );
         if (canvasInteractiveTarget) {
           const canvasGenerationMenuTarget = eventTarget?.closest?.(
@@ -3293,14 +3301,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
     const rect = stage.getBoundingClientRect?.();
-    const point = canvasPointFromClient(
-      stage,
-      event.clientX,
-      event.clientY,
-      ensureWorkbenchCanvasDocument(workbench).viewport,
-    );
+    const point = workbench.canvasGraph?.clientToLocal?.(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
     const nodeTarget = eventTarget?.closest?.(
-      ".canvas-lib-node[data-canvas-node-id], .canvas-x6-special-node[data-node-id], .canvas-node-editor[data-node-id]",
+      ".canvas-x6-special-node[data-node-id], .canvas-node-editor[data-node-id]",
     );
     const nodeId = nodeTarget?.dataset?.canvasNodeId ?? nodeTarget?.dataset?.nodeId ?? "";
     const canvasNode = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((node) => node.id === nodeId);
@@ -3587,6 +3593,13 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
+    if (target?.matches?.("#toolbox-video-director-file")) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (file) applyToolboxVideoToDirectorFile(workbench, file);
+      return;
+    }
+
     if (target?.matches?.("#toolbox-video-depth-file")) {
       const [file] = [...(target.files ?? [])];
       target.value = "";
@@ -3609,6 +3622,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
     if (target?.matches?.("[data-toolbox-prompt-reverse-segment-duration]")) {
       setToolboxPromptReverseSegmentDuration(workbench.ui, target.value);
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-toolbox-video-director-model]")) {
+      updateToolboxVideoToDirectorState(workbench.ui, { selectedModelName: String(target.value ?? ""), error: "" });
       renderWorkbenchChrome(workbench);
       return;
     }
@@ -3888,6 +3907,20 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
 
+    if (target?.matches?.("[data-canvas-local-resource-file]")) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (file) await importCanvasLocalResourceFile(workbench, file);
+      return;
+    }
+
+    if (target?.matches?.("[data-canvas-libtv-import-file]")) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (file) await loadCanvasLibTvImportPreview(workbench, file);
+      return;
+    }
+
     if (target?.matches?.("[data-canvas-markdown-input]")) {
       const [file] = [...(target.files ?? [])];
       const nodeId = target.dataset.nodeId ?? "";
@@ -3994,7 +4027,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dragover", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
     if (!zone) {
       return;
     }
@@ -4007,7 +4040,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dragleave", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
     if (!zone) {
       return;
     }
@@ -4020,7 +4053,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("drop", async (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
     if (!zone) {
       return;
     }
@@ -4029,6 +4062,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     if (zone.dataset.dropzone === "toolbox-prompt-reverse") {
       const [file] = [...(event.dataTransfer?.files ?? [])];
       if (file) applyToolboxPromptReverseFile(workbench, file);
+      return;
+    }
+    if (zone.dataset.dropzone === "toolbox-video-to-director") {
+      const [file] = [...(event.dataTransfer?.files ?? [])];
+      if (file) applyToolboxVideoToDirectorFile(workbench, file);
       return;
     }
     if (zone.dataset.dropzone === "toolbox-video-depth") {
@@ -4935,17 +4973,27 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   };
   workbench.disposeCanvasLiveSubscription = () => stopCanvasLiveSubscription(workbench);
   workbench.disposeCanvasAssetTransfers = () => stopAllCanvasAssetTransfers(workbench);
+  workbench.disposeCanvasFrameAnalysis = () => workbench.canvasFrameAnalysisAbortController?.abort?.();
   workbench.persistCanvasViewportBeforePageHide = () => persistCanvasViewportBeforePageHide(workbench);
   globalThis.window?.addEventListener?.("pagehide", workbench.persistCanvasViewportBeforePageHide, { once: true });
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeTaskCenterPolling, { once: true });
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasLiveSubscription, { once: true });
   globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasAssetTransfers, { once: true });
   refreshFirstLoginOnboardingConfig(workbench);
+  globalThis.window?.addEventListener?.("pagehide", workbench.disposeCanvasFrameAnalysis, { once: true });
   return workbench;
 }
 
 function persistCanvasViewportBeforePageHide(workbench) {
-  return syncCanvasGraphViewport(workbench?.canvasGraph, workbench);
+  const graphDocument = flushCanvasGraphDocument(workbench?.canvasGraph, workbench);
+  const viewportSynced = syncCanvasGraphViewport(workbench?.canvasGraph, workbench);
+  if (graphDocument) {
+    workbench.ui.canvasSaveStatus = "pending";
+    writeCanvasRefreshDraft(workbench);
+    persistWorkbenchState(workbench);
+    void saveProjectCanvasNow(workbench, { keepalive: true }).catch(() => undefined);
+  }
+  return Boolean(graphDocument || viewportSynced);
 }
 
 function installEpisodeWorkbenchTestHooks(workbench) {
@@ -5841,10 +5889,6 @@ function resolveMembershipEntitlement(membershipStatus, entitlementKey) {
 
 function isTeamMemberSession(session) {
   return String(session?.user?.actorType ?? "").trim().toLowerCase() === "team_member";
-}
-
-function isNewCanvasEnabled(session = {}) {
-  return (session?.features?.newCanvas ?? session?.user?.features?.newCanvas) !== false;
 }
 
 function hasEffectiveTeamMemberManagementAccess(workbench) {
@@ -8212,7 +8256,6 @@ const NEW_CANVAS_NODE_LOCAL_ACTIONS = new Set([
   "create-canvas-script-workflow",
   "copy-canvas-markdown-text",
   "delete-canvas-director-capture",
-  "edit-canvas-text-node",
   "format-canvas-text-node",
   "open-canvas-prompt-reference-picker",
   "open-canvas-script-picker",
@@ -8320,7 +8363,7 @@ function resolveNewCanvasHostUpdateOptions(workbench, target) {
   const scopedGenerationAction = target?.dataset?.scope === "canvas"
     && ["toggle-generation-select-menu", "select-generation-field-option"].includes(action);
   const nodeLocalInput = target?.matches?.(
-    "[data-canvas-audio-field], [data-canvas-storyboard-position-input], [data-canvas-model-select], [data-canvas-upload-input], [data-canvas-markdown-input], [data-canvas-script-workflow-skill]",
+    "[data-canvas-audio-field], [data-canvas-storyboard-position-input], [data-canvas-frame-analysis-segment], [data-canvas-model-select], [data-canvas-upload-input], [data-canvas-markdown-input], [data-canvas-script-workflow-skill]",
   ) === true;
   const sidebarInput = target?.matches?.(NEW_CANVAS_SIDEBAR_INPUT_SELECTOR) === true;
   if (NEW_CANVAS_SIDEBAR_ACTIONS.has(action) || sidebarInput) {
@@ -8398,6 +8441,36 @@ function markCanvasProjectOpening(workbench, target) {
   cover.append(label);
 }
 
+function openCanvasConnectionDropMenu(workbench, input = {}) {
+  const sourceNodeId = String(input.sourceNodeId ?? "");
+  const sourcePortId = String(input.sourcePortId ?? "");
+  if (!sourceNodeId || !sourcePortId) return false;
+  const compatibleTemplateIds = resolveCompatibleCanvasNodeTemplates(
+    ensureWorkbenchCanvasDocument(workbench),
+    { sourceNodeId, sourcePortId },
+    workbench.ui.episodeGenerationConfig,
+  ).map((template) => template.id);
+  workbench.ui.canvasAddMenuOpen = false;
+  workbench.ui.canvasEditorOpen = false;
+  workbench.ui.canvasContextMenu = {
+    mode: "connection",
+    sourceNodeId,
+    sourcePortId,
+    compatibleTemplateIds,
+    x: Number(input.x ?? 0),
+    y: Number(input.y ?? 0),
+    canvasX: Number(input.canvasX ?? 0),
+    canvasY: Number(input.canvasY ?? 0),
+    stageWidth: Number(input.stageWidth ?? 0),
+    stageHeight: Number(input.stageHeight ?? 0),
+    draftEdgeId: String(input.draftEdgeId ?? ""),
+  };
+  if (!updateMountedNewCanvasSurface(workbench, { interactionOnly: true })) {
+    render(workbench);
+  }
+  return true;
+}
+
 async function syncNewCanvasMount(workbench) {
   if (!shouldMountNewCanvas(workbench)) {
     disposeNewCanvasMount(workbench);
@@ -8465,6 +8538,9 @@ async function syncNewCanvasMount(workbench) {
       },
       onCanvasBlankDoubleClick(input) {
         addCanvasNodeFromShortcut(workbench, "source-text", input?.position);
+      },
+      onCanvasBlankConnection(input) {
+        openCanvasConnectionDropMenu(workbench, input);
       },
       onCanvasStoryboardCellDrop(input) {
         void handleNewCanvasStoryboardCellDrop(workbench, input).catch((error) => {
@@ -8654,7 +8730,6 @@ function render(workbench, options = {}) {
     mountCanvasWorkflowIfPresent(workbench);
     void syncCanvasPromptEditor(workbench);
   }
-  updateVisibleCanvasEdges(workbench.root?.querySelector?.(".canvas-stage"));
   syncCanvasAssetIncrementalLoading(workbench);
   syncCanvasLiveSubscription(workbench);
   resumeCanvasGenerationPollingIfNeeded(workbench);
@@ -8766,9 +8841,11 @@ function syncDirectorDeskModule(workbench) {
       workbench.directorDeskModule = module;
       workbench.directorDeskMount = mount;
       const authenticated = hasActiveSessionUser(workbench.session);
+      const initialInstanceId = String(workbench.ui?.directorDeskInitialInstanceId ?? "").trim();
       mount.dataset.authenticated = String(authenticated);
       module.mountDirectorDesk(mount, {
-        initialScreen: "home",
+        initialScreen: initialInstanceId ? "editor" : "home",
+        instanceId: initialInstanceId || undefined,
         theme: workbench.ui?.selectedWorkbenchTheme === "daylight" ? "light" : "dark",
         authenticated,
         canManageDesks: !isTeamMemberSession(workbench.session),
@@ -8799,6 +8876,9 @@ function syncDirectorDeskModule(workbench) {
           render(workbench);
         },
       });
+      if (workbench.ui?.directorDeskInitialInstanceId === initialInstanceId) {
+        workbench.ui.directorDeskInitialInstanceId = "";
+      }
       syncDirectorDeskMountTheme(workbench, mount);
     })
     .catch((error) => {
@@ -11604,6 +11684,7 @@ const WORKBENCH_CHROME_ACTIONS = new Set([
   "copy-task-center-id", "toggle-workbench-theme-menu", "select-workbench-theme",
   "open-credit-ledger", "close-credit-ledger", "refresh-credit-ledger", "change-credit-ledger-page",
   "open-toolbox-prompt-reverse", "close-toolbox-prompt-reverse", "open-toolbox-prompt-reverse-guide", "close-toolbox-prompt-reverse-guide",
+  "open-toolbox-video-to-director", "close-toolbox-video-to-director", "install-toolbox-video-to-director-plugin", "uninstall-toolbox-video-to-director-plugin", "clear-toolbox-video-to-director-file", "run-toolbox-video-to-director", "create-toolbox-video-director-desk",
   "open-toolbox-prompt-reverse-keyframe", "close-toolbox-prompt-reverse-keyframe",
   "set-toolbox-prompt-reverse-kind", "check-toolbox-prompt-reverse-plugin", "install-toolbox-prompt-reverse-plugin", "uninstall-toolbox-prompt-reverse-plugin",
   "clear-toolbox-prompt-reverse-file", "run-toolbox-prompt-reverse", "copy-toolbox-prompt-reverse",
@@ -11751,7 +11832,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "paste-canvas-selection",
     "group-canvas-selection",
     "ungroup-canvas-selection",
-    "edit-canvas-text-node",
     "format-canvas-text-node",
     "set-canvas-markdown-mode",
     "copy-canvas-markdown-text",
@@ -11908,6 +11988,148 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     openToolboxPromptReverse(workbench.ui);
     renderWorkbenchChrome(workbench);
     await loadToolboxPromptReverseModels(workbench);
+    return;
+  }
+
+  if (action === "open-toolbox-video-to-director") {
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "login");
+      return;
+    }
+    openToolboxVideoToDirector(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    await Promise.all([loadToolboxVideoToDirectorModels(workbench), checkToolboxVideoToDirectorPlugin(workbench)]);
+    return;
+  }
+
+  if (action === "close-toolbox-video-to-director") {
+    revokeToolboxVideoToDirectorPreview(workbench.ui);
+    clearToolboxVideoToDirectorFile(workbench.ui);
+    closeToolboxVideoToDirector(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "install-toolbox-video-to-director-plugin") {
+    await installToolboxVideoToDirectorPlugin(workbench);
+    return;
+  }
+
+  if (action === "uninstall-toolbox-video-to-director-plugin") {
+    await uninstallToolboxVideoToDirectorPlugin(workbench);
+    return;
+  }
+
+  if (action === "clear-toolbox-video-to-director-file") {
+    revokeToolboxVideoToDirectorPreview(workbench.ui);
+    clearToolboxVideoToDirectorFile(workbench.ui);
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "run-toolbox-video-to-director") {
+    const current = workbench.ui.toolboxVideoToDirector ?? {};
+    const requestFile = current.file;
+    if (!requestFile || !current.selectedModelName) {
+      updateToolboxVideoToDirectorState(workbench.ui, { error: requestFile ? "请选择可用模型。" : "请先添加参考视频。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    if (current.pluginStatus !== "ready") {
+      updateToolboxVideoToDirectorState(workbench.ui, { error: "请先加载浏览器视频解析器。" });
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    if (!await ensureToolboxPromptReverseAccess(workbench)) {
+      renderWorkbenchChrome(workbench);
+      return;
+    }
+    updateToolboxVideoToDirectorState(workbench.ui, { status: "decoding", progress: 2, result: null, compiled: null, error: "" });
+    if (!updateToolboxVideoToDirectorProgress(workbench)) renderWorkbenchChrome(workbench);
+    let browserAnalysisResult = null;
+    let localPoseAnalysis = null;
+    try {
+      browserAnalysisResult = await runBrowserVideoAnalysis(requestFile, {
+        onProgress(progress) {
+          if (workbench.ui.toolboxVideoToDirector?.file !== requestFile) return;
+          updateToolboxVideoToDirectorState(workbench.ui, { status: "decoding", progress: Math.round(Number(progress?.progress ?? 0) * 0.55) });
+          if (!updateToolboxVideoToDirectorProgress(workbench)) renderWorkbenchChrome(workbench);
+        },
+      });
+      updateToolboxVideoToDirectorState(workbench.ui, { status: "preparing", progress: 56 });
+      if (!updateToolboxVideoToDirectorProgress(workbench)) renderWorkbenchChrome(workbench);
+      const modelInput = await buildVideoModelFrameSheets(browserAnalysisResult.output, {
+        maxKeyFrameCount: 12,
+        onProgress(progress) {
+          if (workbench.ui.toolboxVideoToDirector?.file !== requestFile) return;
+          updateToolboxVideoToDirectorState(workbench.ui, { status: "preparing", progress: 56 + Math.round(Number(progress?.progress ?? 0) * 0.28) });
+          if (!updateToolboxVideoToDirectorProgress(workbench)) renderWorkbenchChrome(workbench);
+        },
+      });
+      localPoseAnalysis = browserAnalysisResult.output?.poseAnalysis ?? null;
+      disposeBrowserVideoAnalysisResult(browserAnalysisResult);
+      browserAnalysisResult = null;
+      updateToolboxVideoToDirectorState(workbench.ui, { status: "loading", progress: 86 });
+      if (!updateToolboxVideoToDirectorProgress(workbench)) renderWorkbenchChrome(workbench);
+      const payload = await workbench.api.runToolboxVideoToDirector({
+        displayName: current.selectedModelName,
+        frameSheetDataUrls: modelInput.frameSheetDataUrls,
+        shotSegments: modelInput.shotSegments,
+        samplingMetadata: {
+          frameRate: modelInput.frameRate,
+          durationMs: modelInput.durationMs,
+          frameCount: modelInput.frameCount,
+          sheetCount: modelInput.frameSheetDataUrls.length,
+          timelineSheetCount: modelInput.timelineSheetCount,
+          keyFrameCount: modelInput.keyFrameCount,
+          columns: 8,
+          rows: 6,
+          framesPerSheet: 48,
+          segmentDurationMs: 15000,
+        },
+      });
+      const result = payload?.data?.result ?? payload?.result ?? payload;
+      const compiled = compileVideoToDirectorProject({
+        ...result,
+        durationMs: modelInput.durationMs,
+        poseAnalysis: localPoseAnalysis,
+      });
+      if (workbench.ui.toolboxVideoToDirector?.file !== requestFile) return;
+      updateToolboxVideoToDirectorState(workbench.ui, { status: "completed", progress: 100, result, compiled, error: "" });
+      void refreshSessionCreditBalance(workbench, { fresh: true, renderOnChange: true });
+    } catch (error) {
+      disposeBrowserVideoAnalysisResult(browserAnalysisResult);
+      if (workbench.ui.toolboxVideoToDirector?.file !== requestFile) return;
+      updateToolboxVideoToDirectorState(workbench.ui, { status: "idle", progress: 0, error: `解析失败：${friendlyToolboxPromptReverseError(error)}` });
+    }
+    renderWorkbenchChrome(workbench);
+    return;
+  }
+
+  if (action === "create-toolbox-video-director-desk") {
+    const current = workbench.ui.toolboxVideoToDirector ?? {};
+    if (!current.compiled?.project) return;
+    if (!await ensureDirectorDeskCreationAllowed(workbench, { interactive: true })) return;
+    updateToolboxVideoToDirectorState(workbench.ui, { status: "creating", error: "" });
+    renderWorkbenchChrome(workbench);
+    try {
+      const baseName = String(current.fileName || "视频").replace(/\.[^.]+$/, "").slice(0, 40);
+      const created = await workbench.api.createDirectorDesk({ name: `${baseName} 3D预演` });
+      const desk = created?.data?.desk ?? created?.desk ?? created?.data ?? created;
+      const deskKey = String(desk?.id ?? desk?.deskKey ?? "").trim();
+      if (!deskKey) throw new Error("导演台创建接口未返回标识");
+      await workbench.api.saveDirectorDeskScene(deskKey, current.compiled.project);
+      revokeToolboxVideoToDirectorPreview(workbench.ui);
+      closeToolboxVideoToDirector(workbench.ui);
+      workbench.ui.directorDeskInitialInstanceId = deskKey;
+      workbench.ui.activeNavTab = "director";
+      if (globalThis.window?.location) globalThis.window.location.hash = "director";
+      workbench.ui.toast = { tone: "success", message: "3D预演已创建并写入导演台。" };
+      render(workbench);
+    } catch (error) {
+      updateToolboxVideoToDirectorState(workbench.ui, { status: "completed", error: `创建导演台失败：${friendlyError(error)}` });
+      renderWorkbenchChrome(workbench);
+    }
     return;
   }
 
@@ -14666,6 +14888,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const result = contextMenu?.mode === "connection"
       ? addConnectedCanvasNode(canvasDocument, {
           ...nodeInput,
+          edgeId: contextMenu.draftEdgeId,
           sourceNodeId: contextMenu.sourceNodeId,
           sourcePortId: contextMenu.sourcePortId,
         })
@@ -14713,36 +14936,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.canvasContextMenu = null;
     workbench.ui.canvasScriptPicker = null;
     render(workbench);
-    return;
-  }
-
-  if (action === "edit-canvas-text-node") {
-    const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-    const nodeId = target.dataset.nodeId ?? "";
-    const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
-    if (!nodeId || !node) {
-      return;
-    }
-    updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
-      title: node.data?.title ?? (node.type === "script" ? "剧本源" : "文本源"),
-      text: node.data?.text ?? "",
-      textHtml: node.data?.textHtml ?? canvasPlainTextToParagraphHtml(node.data?.text ?? ""),
-      source: node.data?.source ?? "manual_self_written",
-    }));
-    workbench.ui.selectedCanvasNodeId = nodeId;
-    workbench.ui.editingCanvasTextNodeId = nodeId;
-    workbench.ui.canvasEditorOpen = false;
-    workbench.ui.canvasRunPreview = null;
-    workbench.ui.canvasContextMenu = null;
-    render(workbench);
-    queueMicrotask(() => {
-      const input = findCanvasTextInput(workbench, nodeId);
-      input?.focus?.();
-      if (!input?.matches?.("[contenteditable='true']")) {
-        const end = String(input?.value ?? "").length;
-        input?.setSelectionRange?.(end, end);
-      }
-    });
     return;
   }
 
@@ -15551,13 +15744,39 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "expand-canvas-frame-analysis") {
+    expandCanvasFrameAnalysisSegments(workbench, String(target.dataset.nodeId ?? ""));
+    return;
+  }
+
+  if (action === "cancel-canvas-frame-analysis") {
+    const nodeId = String(target.dataset.nodeId ?? "");
+    if (String(workbench.ui.canvasGeneratingNodeId ?? "") !== nodeId) return;
+    workbench.canvasFrameAnalysisAbortController?.abort?.();
+    workbench.ui.canvasGeneratingNodeId = null;
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
+      status: "canceled",
+      analysisProgress: 0,
+      generationProgress: 0,
+      analysisStageLabel: "",
+      failureMessage: "",
+    }));
+    render(workbench);
+    return;
+  }
+
   if (action === "run-canvas-node") {
-    await refreshCanvasGenerationCreditContext(workbench);
     const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
     const nodeId = target.dataset.nodeId ?? "";
     if (!nodeId || !canvasDocument.nodes?.some?.((item) => item.id === nodeId)) {
       return;
     }
+    const node = canvasDocument.nodes.find((item) => item.id === nodeId);
+    if (isCanvasFrameAnalysisNode(node)) {
+      await runCanvasFrameAnalysisNode(workbench, nodeId);
+      return;
+    }
+    await refreshCanvasGenerationCreditContext(workbench);
     const normalizedCanvasDocument = ensureCanvasNodeConfiguredModel(workbench, canvasDocument, nodeId);
     const preview = buildCanvasRunPreview(normalizedCanvasDocument, nodeId);
     workbench.ui.canvasRunPreview = preview;
@@ -17825,15 +18044,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-nav-tab") {
     const nextTab = target.dataset.tab ?? "home";
     const navigationRenderOptions = { preserveNavigationShell: true };
-    if (nextTab === "new-canvas" && !isNewCanvasEnabled(workbench.session)) {
-      workbench.ui.activeNavTab = "home";
-      workbench.ui.canvasProjectView = "list";
-      workbench.ui.toast = "新画布当前未启用。";
-      globalThis.window?.history?.replaceState?.(null, "", "/");
-      render(workbench, navigationRenderOptions);
-      return;
-    }
-    if (!isCanvasNavTab(nextTab)) {
+    const normalizedTab = nextTab === "new-canvas" ? "tools" : nextTab;
+    if (!isCanvasNavTab(normalizedTab)) {
       stopCanvasLiveSubscription(workbench);
     }
     if (workbench.ui.singleEpisodeAiChecking || workbench.ui.singleEpisodeAiPreview?.status === "loading") {
@@ -17852,7 +18064,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       });
       return;
     }
-    workbench.ui.activeNavTab = nextTab;
+    workbench.ui.activeNavTab = normalizedTab;
     workbench.ui.projectPanelMode =
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
     if (workbench.ui.activeNavTab === "team") {
@@ -17874,7 +18086,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.teamDashboardDateRange = "today";
     }
     if (isCanvasNavTab(workbench.ui.activeNavTab)) {
-      workbench.ui.canvasEntryPoint = workbench.ui.activeNavTab === "new-canvas" ? "new" : "legacy";
       workbench.ui.canvasProjectView = "list";
       workbench.ui.selectedCanvasNodeId = null;
       workbench.ui.canvasEditorOpen = false;
@@ -17910,16 +18121,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-new-canvas") {
-    if (!isNewCanvasEnabled(workbench.session)) {
-      workbench.ui.activeNavTab = "home";
-      workbench.ui.canvasProjectView = "list";
-      workbench.ui.toast = "新画布当前未启用。";
-      globalThis.window?.history?.replaceState?.(null, "", "/");
-      render(workbench, { preserveNavigationShell: true });
-      return;
-    }
-    workbench.ui.activeNavTab = "new-canvas";
-    workbench.ui.canvasEntryPoint = "new";
+    workbench.ui.activeNavTab = "tools";
     workbench.ui.canvasProjectView = "list";
     workbench.ui.selectedCanvasNodeId = null;
     workbench.ui.canvasEditorOpen = false;
@@ -17928,9 +18130,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.canvasProjectMenuId = null;
     await syncCanvasProjectsFromApi(workbench);
     if (globalThis.window?.history?.pushState) {
-      globalThis.window.history.pushState(null, "", "/new-canvas");
+      globalThis.window.history.pushState(null, "", "/canvas");
     } else if (globalThis.window?.location) {
-      globalThis.window.location.hash = "new-canvas";
+      globalThis.window.location.hash = "tools";
     }
     render(workbench, { preserveNavigationShell: true });
     return;
@@ -17949,13 +18151,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "open-canvas-project") {
-    if (workbench.ui.activeNavTab === "new-canvas" && !isNewCanvasEnabled(workbench.session)) {
-      workbench.ui.activeNavTab = "home";
-      workbench.ui.canvasProjectView = "list";
-      workbench.ui.toast = "新画布当前未启用。";
-      render(workbench);
-      return;
-    }
     const projectId = target.dataset.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID;
     if (workbench.ui.canvasOpeningProjectId) {
       return;
@@ -18025,13 +18220,6 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "create-canvas-project") {
-    if (workbench.ui.activeNavTab === "new-canvas" && !isNewCanvasEnabled(workbench.session)) {
-      workbench.ui.activeNavTab = "home";
-      workbench.ui.canvasProjectView = "list";
-      workbench.ui.toast = "新画布当前未启用。";
-      render(workbench);
-      return;
-    }
     if (isTeamMemberSession(workbench.session)) {
       workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
       render(workbench);
@@ -23634,6 +23822,37 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "trigger-canvas-local-resource-upload") {
+    findScopedInput(workbench.root, target, "[data-canvas-local-resource-file]")?.click?.();
+    return;
+  }
+
+  if (action === "trigger-canvas-libtv-import") {
+    findScopedInput(workbench.root, target, "[data-canvas-libtv-import-file]")?.click?.();
+    return;
+  }
+
+  if (action === "close-canvas-libtv-import") {
+    workbench.ui.canvasLibTvImportPreview = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "apply-canvas-libtv-import") {
+    const preview = workbench.ui.canvasLibTvImportPreview;
+    if (!preview) return;
+    const result = applyLibTvCanvasImport(ensureWorkbenchCanvasDocument(workbench), preview);
+    updateActiveCanvasDocument(workbench, result.document);
+    workbench.ui.canvasLibTvImportPreview = null;
+    workbench.ui.selectedCanvasNodeId = result.document.nodes?.at?.(-1)?.id ?? null;
+    workbench.ui.canvasSidebarMode = "nodes";
+    workbench.ui.toast = result.warnings.length
+      ? `已导入 ${result.importedNodeCount} 个节点、${result.importedEdgeCount} 条连线，${result.warnings.length} 项需检查。`
+      : `已导入 ${result.importedNodeCount} 个节点和 ${result.importedEdgeCount} 条连线。`;
+    render(workbench);
+    return;
+  }
+
   if (action === "toggle-video-model-menu") {
     workbench.ui.isVideoModelMenuOpen = !workbench.ui.isVideoModelMenuOpen;
     workbench.ui.openGenerationSelectMenu = null;
@@ -25437,6 +25656,30 @@ function handleNewCanvasHostInput(workbench, target) {
 }
 
 async function handleNewCanvasHostChange(workbench, target) {
+  if (target?.matches?.("[data-canvas-local-resource-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    if (!file) return false;
+    await importCanvasLocalResourceFile(workbench, file);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-libtv-import-file]")) {
+    const [file] = [...(target.files ?? [])];
+    target.value = "";
+    if (!file) return false;
+    await loadCanvasLibTvImportPreview(workbench, file);
+    return true;
+  }
+  if (target?.matches?.("[data-canvas-frame-analysis-segment]")) {
+    const document = ensureWorkbenchCanvasDocument(workbench);
+    const nodeId = String(target.dataset.nodeId ?? "");
+    const node = document.nodes?.find?.((item) => item.id === nodeId && isCanvasFrameAnalysisNode(item));
+    if (!node) return false;
+    const segmentDurationSeconds = Math.max(1, Math.min(300, Math.round(Number(target.value) || 15)));
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(document, nodeId, { segmentDurationSeconds }));
+    refreshCanvasWorkflowNode(workbench, nodeId);
+    return true;
+  }
   if (target?.matches?.("[data-canvas-script-shot-selection], [data-canvas-script-shot-select-all]")) {
     return updateCanvasScriptShotSelection(workbench, target);
   }
@@ -28142,6 +28385,28 @@ function syncActiveCanvasDocument(workbench) {
     .filter((id) => availableIds.has(String(id)))
     .slice(0, 5);
   if (!projects.length) {
+    if (workbench.ui.canvasProjectView === "detail" && !isTeamMemberSession(workbench.session)) {
+      const selectedProjectId = DEFAULT_CANVAS_PROJECT_ID;
+      const documentsByProject = {
+        ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+          ? workbench.ui.canvasDocumentsByProject
+          : {}),
+      };
+      const refreshDraft = readCanvasRefreshDraft(workbench, selectedProjectId);
+      const document = normalizeStandaloneCanvasDocument(
+        refreshDraft?.document
+          ?? documentsByProject[selectedProjectId]
+          ?? workbench.ui.canvasDocument
+          ?? createStandaloneCanvasDocument({ canvasProjectId: selectedProjectId }),
+        selectedProjectId,
+      );
+      documentsByProject[selectedProjectId] = document;
+      workbench.ui.selectedCanvasProjectId = selectedProjectId;
+      workbench.ui.canvasDocumentsByProject = documentsByProject;
+      workbench.ui.canvasDocument = document;
+      if (refreshDraft) workbench.ui.canvasSaveStatus = "pending";
+      return document;
+    }
     workbench.ui.selectedCanvasProjectId = null;
     workbench.ui.canvasDocument = null;
     workbench.ui.canvasDocumentsByProject = {
@@ -28221,10 +28486,140 @@ function updateActiveCanvasDocument(workbench, canvasDocument, options = {}) {
 
 function areCanvasDocumentsEqual(left, right) {
   try {
-    return JSON.stringify(left) === JSON.stringify(right);
+    const withoutDocumentTimestamp = (value) => {
+      if (!value || Array.isArray(value) || typeof value !== "object") return value;
+      return Object.keys(value).reduce((document, key) => {
+        if (key !== "updatedAt") document[key] = value[key];
+        return document;
+      }, Object.create(null));
+    };
+    const stableJson = (value) => JSON.stringify(value, (_key, nestedValue) => {
+      if (!nestedValue || Array.isArray(nestedValue) || typeof nestedValue !== "object") {
+        return nestedValue;
+      }
+      return Object.keys(nestedValue).sort().reduce((sorted, key) => {
+        sorted[key] = nestedValue[key];
+        return sorted;
+      }, Object.create(null));
+    });
+    return stableJson(withoutDocumentTimestamp(left)) === stableJson(withoutDocumentTimestamp(right));
   } catch {
     return false;
   }
+}
+
+function canvasRefreshDraftStorageKey(canvasProjectId) {
+  return `${CANVAS_REFRESH_DRAFT_STORAGE_PREFIX}:${String(canvasProjectId ?? "").trim()}`;
+}
+
+function canvasRefreshDraftStorage() {
+  return globalThis.window?.localStorage ?? globalThis.localStorage ?? null;
+}
+
+function resolvePendingCanvasCreateIdempotencyKey() {
+  const storage = canvasRefreshDraftStorage();
+  const now = Date.now();
+  if (storage) {
+    try {
+      const pending = JSON.parse(storage.getItem(CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY) || "null");
+      if (
+        String(pending?.key ?? "").startsWith("canvas-project.create:")
+        && now - Number(pending?.createdAt ?? 0) < CANVAS_PENDING_CREATE_IDEMPOTENCY_MAX_AGE_MS
+      ) {
+        return pending.key;
+      }
+    } catch {
+      // Replace malformed or expired create state below.
+    }
+  }
+  const suffix = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${now}-${Math.random().toString(36).slice(2)}`;
+  const key = `canvas-project.create:${suffix}`;
+  try {
+    storage?.setItem(CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY, JSON.stringify({ key, createdAt: now }));
+  } catch {
+    // Project creation still works when browser storage is unavailable.
+  }
+  return key;
+}
+
+function clearPendingCanvasCreateIdempotencyKey() {
+  try {
+    canvasRefreshDraftStorage()?.removeItem(CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY);
+  } catch {
+    // Browser storage cleanup is best effort.
+  }
+}
+
+function readCanvasRefreshDraft(workbench, canvasProjectId = resolveCanvasSaveProjectId(workbench)) {
+  const projectId = String(canvasProjectId ?? "").trim();
+  const storage = canvasRefreshDraftStorage();
+  if (!storage || !projectId) return null;
+  try {
+    const draft = JSON.parse(storage.getItem(canvasRefreshDraftStorageKey(projectId)) || "null");
+    if (
+      !draft
+      || String(draft.canvasProjectId ?? "") !== projectId
+      || !draft.document
+      || typeof draft.document !== "object"
+    ) return null;
+    return {
+      canvasProjectId: projectId,
+      clientRevision: Number(draft.clientRevision ?? 1) || 1,
+      savedAt: Number(draft.savedAt ?? 0) || 0,
+      document: normalizeStandaloneCanvasDocument(draft.document, projectId),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCanvasRefreshDraft(workbench, canvasProjectId = resolveCanvasSaveProjectId(workbench), document = workbench?.ui?.canvasDocument) {
+  const projectId = String(canvasProjectId ?? DEFAULT_CANVAS_PROJECT_ID).trim() || DEFAULT_CANVAS_PROJECT_ID;
+  const storage = canvasRefreshDraftStorage();
+  if (!storage || !document || typeof document !== "object") return false;
+  try {
+    storage.setItem(canvasRefreshDraftStorageKey(projectId), JSON.stringify({
+      canvasProjectId: projectId,
+      clientRevision: Number(workbench?.ui?.canvasServerRevision ?? 1) || 1,
+      savedAt: Date.now(),
+      document: normalizeStandaloneCanvasDocument(document, projectId),
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearCanvasRefreshDraft(workbench, canvasProjectId, savedDocument = null) {
+  const projectId = String(canvasProjectId ?? "").trim();
+  const storage = canvasRefreshDraftStorage();
+  if (!storage || !projectId) return false;
+  try {
+    if (savedDocument) {
+      const draft = readCanvasRefreshDraft(workbench, projectId);
+      if (draft && !areCanvasDocumentsEqual(
+        draft.document,
+        normalizeStandaloneCanvasDocument(savedDocument, projectId),
+      )) return false;
+    }
+    storage.removeItem(canvasRefreshDraftStorageKey(projectId));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function moveCanvasRefreshDraft(workbench, previousProjectId, nextProjectId) {
+  const previousId = String(previousProjectId ?? "").trim();
+  const nextId = String(nextProjectId ?? "").trim();
+  if (!previousId || !nextId || previousId === nextId) return false;
+  const draft = readCanvasRefreshDraft(workbench, previousId);
+  if (!draft) return false;
+  const moved = writeCanvasRefreshDraft(workbench, nextId, draft.document);
+  if (moved) clearCanvasRefreshDraft(workbench, previousId);
+  return moved;
 }
 
 function isCanvasCharacterReferenceNode(node) {
@@ -28357,20 +28752,17 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
     : Promise.resolve(null);
   const [payload, sessionPayload] = await Promise.all([canvasRequest, sessionRequest]);
   const canvas = payload?.canvas ?? payload;
-  let document = canvas?.document && typeof canvas.document === "object"
+  const serverRevision = Number(canvas?.serverRevision ?? 1) || 1;
+  const serverDocument = canvas?.document && typeof canvas.document === "object"
     ? normalizeStandaloneCanvasDocument(canvas.document, canvasProjectId)
     : null;
-  if (!document) {
+  if (!serverDocument) {
     return false;
   }
+  clearCanvasRefreshDraft(workbench, projectId);
+  const document = serverDocument;
   if (canLoadSession) {
     const session = sessionPayload?.session ?? sessionPayload;
-    if (session?.viewport && typeof session.viewport === "object") {
-      document = {
-        ...document,
-        viewport: { ...(document.viewport ?? {}), ...session.viewport },
-      };
-    }
     workbench.ui.selectedCanvasNodeId = Array.isArray(session?.selectedNodeKeys)
       ? String(session.selectedNodeKeys[0] ?? "") || null
       : null;
@@ -28381,7 +28773,7 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   workbench.ui.canvasSessionUiStateReady = true;
   workbench.ui.activeCanvasProjectId = projectId;
   workbench.ui.selectedCanvasProjectId = projectId;
-  workbench.ui.canvasServerRevision = Number(canvas.serverRevision ?? 1) || 1;
+  workbench.ui.canvasServerRevision = serverRevision;
   workbench.ui.canvasSaveStatus = "idle";
   workbench.ui.canvasSaveError = "";
   workbench.ui.canvasRevisionConflict = null;
@@ -28433,15 +28825,6 @@ function isCanvasLiveAccessRevokedError(error) {
     || errorCode.includes("access_revoked")
     || errorCode.includes("access_denied")
     || errorCode.includes("canvas_project_not_found");
-}
-
-function canvasHasUnsavedDraft(workbench) {
-  return Boolean(
-    workbench.canvasSaveTimer ||
-    workbench.canvasSaveInFlight ||
-    workbench.canvasSaveQueuedDocument ||
-    ["pending", "saving", "error", "conflict"].includes(String(workbench.ui?.canvasSaveStatus ?? "idle"))
-  );
 }
 
 function rememberCanvasLiveEventId(workbench, canvasProjectId, event) {
@@ -28496,6 +28879,8 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
   if (!canSync()) return null;
   const activeSave = workbench.canvasSaveInFlight;
   if (activeSave) await Promise.resolve(activeSave).catch(() => null);
+  const activePositionSave = workbench.canvasPositionSaveInFlight;
+  if (activePositionSave) await Promise.resolve(activePositionSave).catch(() => null);
   if (!canSync()) return null;
   const currentRevision = Number(workbench.ui.canvasServerRevision ?? 0);
   if (Number(hintedRevision) > 0 && Number(hintedRevision) <= currentRevision) return null;
@@ -28528,25 +28913,36 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
     : null;
   if (!serverDocument) return null;
 
-  if (canvasHasUnsavedDraft(workbench)) {
+  const currentDocument = workbench.ui.canvasDocument && typeof workbench.ui.canvasDocument === "object"
+    ? normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, canvasProjectId)
+    : null;
+  if (currentDocument && areCanvasDocumentsEqual(currentDocument, serverDocument)) {
     if (workbench.canvasSaveTimer) {
       clearTimeout(workbench.canvasSaveTimer);
       workbench.canvasSaveTimer = null;
     }
-    const localDocument = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, canvasProjectId);
     workbench.canvasSaveQueuedDocument = null;
-    workbench.ui.canvasRevisionConflict = {
-      canvasProjectId,
-      clientRevision: Number(workbench.ui.canvasServerRevision ?? 1) || 1,
-      serverRevision,
-      localDocument,
-      serverDocument,
+    workbench.ui.canvasDocument = serverDocument;
+    workbench.ui.canvasDocumentsByProject = {
+      ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
+        ? workbench.ui.canvasDocumentsByProject
+        : {}),
+      [canvasProjectId]: serverDocument,
     };
-    workbench.ui.canvasSaveStatus = "conflict";
-    workbench.ui.canvasSaveError = "检测到其他位置的新版本，本地草稿已保留。请选择要继续使用的版本。";
+    workbench.ui.canvasServerRevision = serverRevision;
+    workbench.ui.canvasRevisionConflict = null;
+    workbench.ui.canvasSaveStatus = "saved";
+    workbench.ui.canvasSaveError = "";
+    clearCanvasRefreshDraft(workbench, canvasProjectId, currentDocument);
     if (options.render !== false) render(workbench);
     return head;
   }
+
+  if (workbench.canvasSaveTimer) {
+    clearTimeout(workbench.canvasSaveTimer);
+    workbench.canvasSaveTimer = null;
+  }
+  workbench.canvasSaveQueuedDocument = null;
 
   workbench.ui.canvasDocument = serverDocument;
   workbench.ui.canvasDocumentsByProject = {
@@ -28559,6 +28955,7 @@ async function syncCanvasHeadFromLive(workbench, canvasProjectId, hintedRevision
   workbench.ui.canvasRevisionConflict = null;
   workbench.ui.canvasSaveStatus = "saved";
   workbench.ui.canvasSaveError = "";
+  clearCanvasRefreshDraft(workbench, canvasProjectId, serverDocument);
   if (options.render !== false) render(workbench);
   return head;
 }
@@ -28658,6 +29055,40 @@ function syncCanvasLiveSubscription(workbench) {
   return promise;
 }
 
+function scheduleProjectCanvasSave(workbench, options = {}) {
+  const projectId = resolveCanvasSaveProjectId(workbench);
+  if (typeof workbench.api?.saveStandaloneCanvas !== "function") {
+    return;
+  }
+  const document = workbench.ui?.canvasDocument;
+  if (!document || typeof document !== "object") {
+    return;
+  }
+  if (workbench.canvasSaveInFlight) {
+    workbench.canvasSaveQueuedDocument = document;
+    workbench.ui.canvasSaveStatus = "pending";
+    return;
+  }
+  const delayMs = Number.isFinite(options.delayMs)
+    ? options.delayMs
+    : (!projectId || projectId === DEFAULT_CANVAS_PROJECT_ID ? 0 : 600);
+  if (workbench.canvasSaveTimer) {
+    clearTimeout(workbench.canvasSaveTimer);
+  }
+  workbench.ui.canvasSaveStatus = "pending";
+  workbench.canvasSaveTimer = setTimeout(() => {
+    workbench.canvasSaveTimer = null;
+    void saveProjectCanvasNow(workbench).catch((error) => {
+      if (workbench.ui.canvasSaveStatus !== "conflict") {
+        workbench.ui.canvasSaveStatus = "error";
+        workbench.ui.canvasSaveError = friendlyError(error);
+      }
+      if (workbench.root?.isConnected === true) renderWorkbenchChrome(workbench);
+      console.warn("[canvas] save failed", error);
+    });
+  }, delayMs);
+}
+
 async function resolveCanvasRevisionConflict(workbench, version, options = {}) {
   const conflict = workbench.ui?.canvasRevisionConflict;
   if (!conflict || !["local", "server"].includes(version)) return false;
@@ -28684,6 +29115,7 @@ async function resolveCanvasRevisionConflict(workbench, version, options = {}) {
   workbench.ui.canvasSaveError = "";
   if (version === "server") {
     workbench.ui.canvasSaveStatus = "saved";
+    clearCanvasRefreshDraft(workbench, canvasProjectId, selectedDocument);
     if (options.render !== false) render(workbench);
     return true;
   }
@@ -28700,38 +29132,6 @@ async function resolveCanvasRevisionConflict(workbench, version, options = {}) {
   return true;
 }
 
-function scheduleProjectCanvasSave(workbench, options = {}) {
-  const projectId = resolveCanvasSaveProjectId(workbench);
-  if (!projectId || typeof workbench.api?.saveStandaloneCanvas !== "function") {
-    return;
-  }
-  const document = workbench.ui?.canvasDocument;
-  if (!document || typeof document !== "object") {
-    return;
-  }
-  if (workbench.canvasSaveInFlight) {
-    workbench.canvasSaveQueuedDocument = document;
-    workbench.ui.canvasSaveStatus = "pending";
-    return;
-  }
-  const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 600;
-  if (workbench.canvasSaveTimer) {
-    clearTimeout(workbench.canvasSaveTimer);
-  }
-  workbench.ui.canvasSaveStatus = "pending";
-  workbench.canvasSaveTimer = setTimeout(() => {
-    workbench.canvasSaveTimer = null;
-    void saveProjectCanvasNow(workbench).catch((error) => {
-      if (workbench.ui.canvasSaveStatus !== "conflict") {
-        workbench.ui.canvasSaveStatus = "error";
-        workbench.ui.canvasSaveError = friendlyError(error);
-      }
-      if (workbench.root?.isConnected === true) renderWorkbenchChrome(workbench);
-      console.warn("[canvas] save failed", error);
-    });
-  }, delayMs);
-}
-
 async function persistCanvasNodePositions(workbench, positions = []) {
   const projectId = resolveCanvasSaveProjectId(workbench);
   const normalized = (Array.isArray(positions) ? positions : []).map((position) => ({
@@ -28739,7 +29139,11 @@ async function persistCanvasNodePositions(workbench, positions = []) {
     x: Number(position?.x),
     y: Number(position?.y),
   })).filter((position) => position.nodeKey && Number.isFinite(position.x) && Number.isFinite(position.y));
-  if (!projectId || !normalized.length) return null;
+  if (!normalized.length) return null;
+  if (!projectId || projectId === DEFAULT_CANVAS_PROJECT_ID) {
+    scheduleProjectCanvasSave(workbench, { delayMs: 0 });
+    return null;
+  }
   if (typeof workbench.api?.saveCanvasNodePositions !== "function") {
     scheduleProjectCanvasSave(workbench);
     return null;
@@ -28789,8 +29193,9 @@ async function persistCanvasNodePositions(workbench, positions = []) {
     workbench.ui.canvasSaveError = "";
     return canvas;
   } catch (error) {
-    workbench.ui.canvasSaveStatus = "error";
-    workbench.ui.canvasSaveError = friendlyError(error);
+    // Position persistence is best effort; keep failures out of the global Canvas status.
+    workbench.ui.canvasSaveStatus = "idle";
+    workbench.ui.canvasSaveError = "";
     throw error;
   } finally {
     if (workbench.canvasPositionSaveInFlight === request) {
@@ -28802,13 +29207,37 @@ async function persistCanvasNodePositions(workbench, positions = []) {
   }
 }
 
-async function saveProjectCanvasNow(workbench) {
+async function saveProjectCanvasNow(workbench, options = {}) {
+  const previousSave = workbench.canvasSaveLock ?? null;
+  const requestedDocument = workbench.ui?.canvasDocument;
+  let releaseSaveLock;
+  const currentSave = new Promise((resolve) => {
+    releaseSaveLock = resolve;
+  });
+  const saveLock = previousSave
+    ? previousSave.catch(() => undefined).then(() => currentSave)
+    : currentSave;
+  workbench.canvasSaveLock = saveLock;
+  if (previousSave) {
+    await previousSave.catch(() => undefined);
+    if (requestedDocument && typeof requestedDocument === "object") {
+      workbench.ui.canvasDocument = requestedDocument;
+    }
+  }
+  try {
+    return await saveProjectCanvasNowUnlocked(workbench, options);
+  } finally {
+    releaseSaveLock();
+    if (workbench.canvasSaveLock === saveLock) {
+      workbench.canvasSaveLock = null;
+    }
+  }
+}
+
+async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
   const saveRequestId = Number(workbench.canvasSaveRequestId ?? 0) + 1;
   workbench.canvasSaveRequestId = saveRequestId;
-  let projectId = resolveCanvasSaveProjectId(workbench);
-  if (!projectId) {
-    return null;
-  }
+  let projectId = resolveCanvasSaveProjectId(workbench) ?? DEFAULT_CANVAS_PROJECT_ID;
   const saveCanvas = workbench.api?.saveStandaloneCanvas;
   if (typeof saveCanvas !== "function") {
     return null;
@@ -28825,12 +29254,13 @@ async function saveProjectCanvasNow(workbench) {
     projectId = await createStandaloneCanvasForSave(workbench, projectId);
   }
   let revision = Number(workbench.ui.canvasServerRevision ?? 1) || 1;
-  const documentToSave = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId);
+  let documentToSave = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId);
+  const requestOptions = { timeoutMs: 30_000, ...(options.keepalive === true ? { keepalive: true } : {}) };
   let savePromise = saveCanvas.call(workbench.api, projectId, {
     clientRevision: revision,
     document: documentToSave,
     events: [],
-  }, { timeoutMs: 30_000 });
+  }, requestOptions);
   workbench.canvasSaveInFlight = savePromise;
   workbench.ui.canvasSaveStatus = "saving";
   try {
@@ -28843,11 +29273,12 @@ async function saveProjectCanvasNow(workbench) {
       }
       projectId = await createStandaloneCanvasForSave(workbench, projectId);
       revision = 1;
+      documentToSave = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId);
       savePromise = saveCanvas.call(workbench.api, projectId, {
         clientRevision: revision,
-        document: normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument, projectId),
+        document: documentToSave,
         events: [],
-      }, { timeoutMs: 30_000 });
+      }, requestOptions);
       workbench.canvasSaveInFlight = savePromise;
       payload = await savePromise;
     }
@@ -28869,6 +29300,7 @@ async function saveProjectCanvasNow(workbench) {
     workbench.ui.canvasSaveStatus = "saved";
     workbench.ui.canvasSaveError = "";
     workbench.ui.canvasRevisionConflict = null;
+    clearCanvasRefreshDraft(workbench, projectId, documentToSave);
     return canvas;
   } catch (error) {
     if (
@@ -28878,6 +29310,7 @@ async function saveProjectCanvasNow(workbench) {
     ) {
       const localDocument = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument ?? documentToSave, projectId);
       const serverDocument = normalizeStandaloneCanvasDocument(error.details.serverDocument, projectId);
+      const serverRevision = Number(error.details.serverRevision ?? revision) || revision;
       workbench.ui.canvasDocument = localDocument;
       workbench.ui.canvasDocumentsByProject = {
         ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
@@ -28888,7 +29321,7 @@ async function saveProjectCanvasNow(workbench) {
       workbench.ui.canvasRevisionConflict = {
         canvasProjectId: projectId,
         clientRevision: revision,
-        serverRevision: Number(error.details.serverRevision ?? revision) || revision,
+        serverRevision,
         localDocument,
         serverDocument,
       };
@@ -28904,7 +29337,7 @@ async function saveProjectCanvasNow(workbench) {
       workbench.canvasSaveQueuedDocument = null;
       if (queuedDocument && typeof queuedDocument === "object") {
         workbench.ui.canvasDocument = queuedDocument;
-        void saveProjectCanvasNow(workbench).catch((error) => {
+        void saveProjectCanvasNow(workbench, options).catch((error) => {
           if (workbench.ui.canvasSaveStatus !== "conflict") {
             workbench.ui.canvasSaveStatus = "error";
             workbench.ui.canvasSaveError = friendlyError(error);
@@ -29045,6 +29478,7 @@ async function createStandaloneCanvasForSave(workbench, staleProjectId) {
   const created = await workbench.api.createCanvasProject({
     title: staleProject?.title ?? `画布项目 ${projects.length + 1}`,
     status: staleProject?.status ?? "草稿",
+    idempotencyKey: resolvePendingCanvasCreateIdempotencyKey(),
   });
   const project = createDefaultCanvasProjectRecord(created?.project ?? {});
   if (!project.id || project.id === DEFAULT_CANVAS_PROJECT_ID) {
@@ -29067,6 +29501,7 @@ async function createStandaloneCanvasForSave(workbench, staleProjectId) {
   workbench.ui.canvasDocument = document;
   workbench.ui.canvasDocumentsByProject = documentsByProject;
   workbench.ui.canvasServerRevision = 1;
+  moveCanvasRefreshDraft(workbench, staleProjectId, project.id);
   return project.id;
 }
 
@@ -29207,7 +29642,7 @@ function applyCanvasRichTextFormat(input, command) {
     return { text, html: input.innerHTML, render: false };
   }
   if (command === "fullscreen") {
-    input.closest?.(".canvas-text-node")?.classList.toggle?.("is-richtext-expanded");
+    input.closest?.(".canvas-x6-special-node")?.classList.toggle?.("is-richtext-expanded");
     markActiveCanvasTextToolbar(input, command);
     return { text: readCanvasRichTextPlainText(input), html: input.innerHTML, render: false };
   }
@@ -29254,7 +29689,7 @@ function readCanvasRichTextPlainText(input) {
 }
 
 function markActiveCanvasTextToolbar(input, command) {
-  const toolbar = input?.closest?.(".canvas-text-card")?.querySelector?.(".canvas-text-format-toolbar");
+  const toolbar = input?.closest?.(".canvas-x6-generic-body")?.querySelector?.(".canvas-text-format-toolbar");
   toolbar?.querySelectorAll?.("[data-format-command]")?.forEach((button) => {
     button.classList.toggle("active", button.dataset.formatCommand === command);
   });
@@ -29553,25 +29988,6 @@ export function resolveCanvasCenteringDelta(containerRect, nodeRects = []) {
   };
 }
 
-function shouldStartCanvasPan(eventTarget, event, workbench) {
-  const interactionMode = ["hand", "classic"].includes(workbench?.ui?.canvasDocument?.viewport?.interactionMode)
-    ? workbench.ui.canvasDocument.viewport.interactionMode
-    : "default";
-  const allowedButtons = interactionMode === "classic" ? [0] : [1, 2];
-  const panButtons = interactionMode === "hand" ? [0] : allowedButtons;
-  if (!eventTarget || !panButtons.includes(event.button) || isCanvasX6InteractionTarget(eventTarget)) {
-    return false;
-  }
-  const stage = eventTarget.closest?.(".canvas-stage");
-  if (!stage) {
-    return false;
-  }
-  const blockedTarget = eventTarget.closest?.(
-    ".canvas-node-connect, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-script-picker, .script-workspace-layer, .canvas-add-menu, .canvas-zoom-tools, button, input, textarea, [contenteditable='true'], select, option, a",
-  );
-  return !blockedTarget;
-}
-
 function isCanvasX6InteractionTarget(eventTarget, event = null) {
   if (eventTarget?.closest?.(".canvas-x6-mount")) return true;
   return (event?.composedPath?.() ?? []).some((candidate) =>
@@ -29596,6 +30012,9 @@ function closeCanvasEditorWithoutRender(workbench, eventTarget, event = null) {
     ?? (event?.composedPath?.() ?? []).find((candidate) => candidate?.classList?.contains?.("canvas-stage"));
   stage?.querySelector?.(".canvas-node-editor")?.remove?.();
   const overlaysChanged = dismissCanvasSurfaceOverlays(workbench?.ui ?? {});
+  settleCanvasGraphBlankConnectionDraft(workbench?.canvasGraph, {
+    document: workbench?.ui?.canvasDocument,
+  });
   if (workbench?.ui?.canvasEditorOpen === true) workbench.ui.canvasEditorOpen = false;
   if (overlaysChanged) {
     void workbench?.newCanvasInstance?.update?.({
@@ -29641,55 +30060,6 @@ function consumeCanvasRightPanContextMenuSuppression(workbench) {
   return gesture?.moved === true;
 }
 
-function isCanvasInteractionOverlayTarget(eventTarget) {
-  return Boolean(eventTarget?.closest?.(
-    ".canvas-sidebar, .canvas-node-editor, .canvas-add-menu, .canvas-context-menu, .canvas-script-picker, .script-workspace-layer, .selection-picker-layer, .canvas-zoom-tools",
-  ));
-}
-
-function canvasPointFromClient(stage, clientX, clientY, viewport = {}) {
-  const stageRect = stage.getBoundingClientRect();
-  const normalized = normalizeCanvasViewport(viewport);
-  const visualScale = resolveCanvasElementVisualScale(stage, 1);
-  const localX = (clientX - stageRect.left) / visualScale;
-  const localY = (clientY - stageRect.top) / visualScale;
-  return {
-    x: (localX - normalized.x) / normalized.zoom,
-    y: (localY - normalized.y) / normalized.zoom,
-  };
-}
-
-function clientPointFromCanvas(stage, point = {}, viewport = {}) {
-  const stageRect = stage.getBoundingClientRect();
-  const normalized = normalizeCanvasViewport(viewport);
-  const visualScale = resolveCanvasElementVisualScale(stage, 1);
-  return {
-    x: stageRect.left + ((normalized.x + (Number(point.x ?? 0) * normalized.zoom)) * visualScale),
-    y: stageRect.top + ((normalized.y + (Number(point.y ?? 0) * normalized.zoom)) * visualScale),
-  };
-}
-
-function readCanvasViewportFromFlow(flow) {
-  if (!flow || typeof getComputedStyle !== "function") {
-    return { x: 0, y: 0, zoom: 1 };
-  }
-  const style = getComputedStyle(flow);
-  return normalizeCanvasViewport({
-    x: Number.parseFloat(style.getPropertyValue("--canvas-pan-x")) || 0,
-    y: Number.parseFloat(style.getPropertyValue("--canvas-pan-y")) || 0,
-    zoom: Number.parseFloat(style.getPropertyValue("--canvas-zoom")) || 1,
-  });
-}
-
-function resolveCanvasElementVisualScale(element, fallbackScale = 1) {
-  const rect = element?.getBoundingClientRect?.();
-  const offsetWidth = Number(element?.offsetWidth ?? 0);
-  const measuredScale = offsetWidth > 0 ? Number(rect?.width ?? 0) / offsetWidth : 0;
-  return Number.isFinite(measuredScale) && measuredScale > 0
-    ? measuredScale
-    : Number(fallbackScale) || 1;
-}
-
 function updateCanvasViewportAndRender(workbench, patch = {}, options = {}) {
   const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
   const nextViewport = {
@@ -29706,60 +30076,6 @@ function updateCanvasViewportAndRender(workbench, patch = {}, options = {}) {
   if (options.render !== false) {
     render(workbench);
   }
-}
-
-function startCanvasPan(workbench, event) {
-  const stage = resolveEventElement(event.composedPath?.()[0] ?? event.target)?.closest?.(".canvas-stage");
-  const interactionMode = ["hand", "classic"].includes(workbench?.ui?.canvasDocument?.viewport?.interactionMode)
-    ? workbench.ui.canvasDocument.viewport.interactionMode
-    : "default";
-  const allowedButtons = interactionMode === "classic" ? [0] : [1, 2];
-  const panButtons = interactionMode === "hand" ? [0] : allowedButtons;
-  if (!stage || !panButtons.includes(event.button)) {
-    return;
-  }
-  event.preventDefault();
-  workbench.ui.canvasAddMenuOpen = false;
-  workbench.ui.canvasContextMenu = null;
-  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-  const startViewport = normalizeCanvasViewport(canvasDocument.viewport);
-  const startClient = { x: event.clientX, y: event.clientY };
-  const ownerDocument = stage.ownerDocument ?? document;
-  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
-  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
-  const flow = stage.querySelector?.(".canvas-flow");
-  const graphMount = stage.querySelector?.(".canvas-x6-mount");
-  let latestViewport = startViewport;
-  stage.classList.add("is-panning");
-
-  const onPointerMove = (moveEvent) => {
-    latestViewport = {
-      x: Math.round(startViewport.x + moveEvent.clientX - startClient.x),
-      y: Math.round(startViewport.y + moveEvent.clientY - startClient.y),
-      zoom: startViewport.zoom,
-      snapEnabled: startViewport.snapEnabled,
-      interactionMode: startViewport.interactionMode,
-    };
-    flow?.style?.setProperty?.("--canvas-pan-x", `${latestViewport.x}px`);
-    flow?.style?.setProperty?.("--canvas-pan-y", `${latestViewport.y}px`);
-    graphMount?.style?.setProperty?.(
-      "transform",
-      `translate3d(${latestViewport.x - startViewport.x}px, ${latestViewport.y - startViewport.y}px, 0)`,
-    );
-  };
-
-  const onPointerUp = () => {
-    ownerDocument.removeEventListener(moveEventName, onPointerMove);
-    ownerDocument.removeEventListener(upEventName, onPointerUp);
-    stage.classList.remove("is-panning");
-    graphMount?.style?.removeProperty?.("transform");
-    if (latestViewport.x !== startViewport.x || latestViewport.y !== startViewport.y) {
-      updateCanvasViewportAndRender(workbench, latestViewport);
-    }
-  };
-
-  ownerDocument.addEventListener(moveEventName, onPointerMove);
-  ownerDocument.addEventListener(upEventName, onPointerUp);
 }
 
 function startEpisodeWorkbenchLayoutResize(workbench, event, centerPanel) {
@@ -29817,651 +30133,23 @@ function startEpisodeWorkbenchLayoutResize(workbench, event, centerPanel) {
 }
 
 function zoomCanvasAtPoint(workbench, direction, options = {}) {
-  const stage = options.stage ?? workbench.root?.querySelector?.(".canvas-stage");
   const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
   const viewport = normalizeCanvasViewport(canvasDocument.viewport);
   const nextZoom = clampCanvasZoom(viewport.zoom + (direction > 0 ? 0.1 : -0.1));
   if (nextZoom === viewport.zoom) {
     return;
   }
-  if (!stage) {
+  const graph = workbench.canvasGraph;
+  if (typeof graph?.zoomTo !== "function" || typeof graph?.translate !== "function") {
     updateCanvasViewportAndRender(workbench, {
       ...viewport,
       zoom: nextZoom,
     });
     return;
   }
-  const stageRect = stage.getBoundingClientRect();
-  const clientX = Number(options.clientX ?? stageRect.left + (stageRect.width / 2));
-  const clientY = Number(options.clientY ?? stageRect.top + (stageRect.height / 2));
-  const anchor = canvasPointFromClient(stage, clientX, clientY, viewport);
-  const nextViewport = {
-    ...viewport,
-    zoom: nextZoom,
-    x: Math.round(clientX - stageRect.left - (anchor.x * nextZoom)),
-    y: Math.round(clientY - stageRect.top - (anchor.y * nextZoom)),
-  };
-  updateCanvasViewportAndRender(workbench, nextViewport);
-}
-
-function startCanvasNodeDrag(workbench, event, nodeElement) {
-  const nodeId = nodeElement?.dataset?.canvasNodeId ?? "";
-  if (!nodeId || event.button !== 0) {
-    return;
-  }
-  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-  const startViewport = readCanvasViewportFromFlow(nodeElement.closest?.(".canvas-flow"));
-  const visualScale = resolveCanvasElementVisualScale(nodeElement, startViewport.zoom);
-  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
-  if (!node) {
-    return;
-  }
-  event.preventDefault();
-  workbench.ui.canvasContextMenu = null;
-  const startClient = { x: event.clientX, y: event.clientY };
-  const startPosition = {
-    x: Number(node.position?.x ?? 0),
-    y: Number(node.position?.y ?? 0),
-  };
-  let latestPosition = { ...startPosition };
-  let moved = false;
-  const ownerDocument = nodeElement.ownerDocument ?? document;
-  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
-  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
-  const stage = nodeElement.closest?.(".canvas-stage");
-  const editor = stage?.querySelector?.(".canvas-node-editor");
-  nodeElement.classList.add("is-dragging");
-
-  const syncEditorPosition = () => {
-    if (!editor || editor.dataset.nodeId && editor.dataset.nodeId !== nodeId) {
-      return;
-    }
-    const nodeRect = nodeElement.getBoundingClientRect();
-    const stageRect = stage?.getBoundingClientRect?.();
-    const nodeStyle = getComputedStyle(nodeElement);
-    const editorRectWidth = editor.getBoundingClientRect().width;
-    const editorStyle = getComputedStyle(editor);
-    const nodeWidth = Number.parseFloat(nodeStyle.width) || nodeRect.width / visualScale;
-    const nodeHeight = Number.parseFloat(nodeStyle.height) || nodeRect.height / visualScale;
-    const editorWidth = Number.parseFloat(editorStyle.width) || editorRectWidth / visualScale || 600;
-    const editorHeight = Number.parseFloat(editorStyle.height) || editor.getBoundingClientRect().height / visualScale || 220;
-    if (!stageRect) {
-      return;
-    }
-    const nextLeft = Math.max(12, latestPosition.x + (nodeWidth / 2) - (editorWidth / 2));
-    const nextTop = latestPosition.y >= 260
-      ? Math.max(12, latestPosition.y - editorHeight - 12)
-      : latestPosition.y + nodeHeight + 2;
-    editor.style.left = `${Math.round(nextLeft)}px`;
-    editor.style.top = `${Math.round(nextTop)}px`;
-  };
-
-  const onPointerMove = (moveEvent) => {
-    const dx = (moveEvent.clientX - startClient.x) / visualScale;
-    const dy = (moveEvent.clientY - startClient.y) / visualScale;
-    if (Math.abs(dx) + Math.abs(dy) > 2) {
-      moved = true;
-    }
-    latestPosition = {
-      x: Math.round(startPosition.x + dx),
-      y: Math.round(startPosition.y + dy),
-    };
-    nodeElement.style.left = `${latestPosition.x}px`;
-    nodeElement.style.top = `${latestPosition.y}px`;
-    syncEditorPosition();
-    updateVisibleCanvasEdges(stage);
-  };
-
-  const onPointerUp = () => {
-    ownerDocument.removeEventListener(moveEventName, onPointerMove);
-    ownerDocument.removeEventListener(upEventName, onPointerUp);
-    nodeElement.classList.remove("is-dragging");
-    if (!moved) {
-      return;
-    }
-    workbench.ui.lastCanvasNodeDrag = { nodeId, at: Date.now() };
-    updateActiveCanvasDocument(workbench, updateCanvasNodePosition(ensureWorkbenchCanvasDocument(workbench), nodeId, latestPosition));
-    workbench.ui.selectedCanvasNodeId = nodeId;
-    workbench.ui.canvasEditorOpen = true;
-    workbench.ui.canvasRunPreview = null;
-    workbench.ui.toast = "";
-    refreshCanvasGraphFromDocument(workbench);
-    render(workbench);
-  };
-
-  ownerDocument.addEventListener(moveEventName, onPointerMove);
-  ownerDocument.addEventListener(upEventName, onPointerUp);
-}
-
-function startCanvasUploadNodeLongPressDrag(workbench, event, nodeElement) {
-  if (!nodeElement || event.button !== 0) {
-    return;
-  }
-  const ownerDocument = nodeElement.ownerDocument ?? document;
-  const startClient = { x: event.clientX, y: event.clientY };
-  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
-  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
-  const cancelEventName = event.type === "pointerdown" ? "pointercancel" : "mouseleave";
-  let dragStarted = false;
-  let timer = null;
-  workbench.canvasPointerHandledAt = Date.now();
-
-  const cleanup = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    ownerDocument.removeEventListener(moveEventName, onPointerMove);
-    ownerDocument.removeEventListener(upEventName, onPointerUp);
-    ownerDocument.removeEventListener(cancelEventName, onPointerCancel);
-  };
-
-  const beginDrag = () => {
-    if (dragStarted) {
-      return;
-    }
-    dragStarted = true;
-    cleanup();
-    workbench.canvasPointerHandledAt = Date.now();
-    workbench.ui.lastCanvasNodeDrag = {
-      nodeId: nodeElement.dataset?.canvasNodeId ?? "",
-      at: Date.now(),
-    };
-    startCanvasNodeDrag(workbench, event, nodeElement);
-  };
-
-  const onPointerMove = (moveEvent) => {
-    const dx = moveEvent.clientX - startClient.x;
-    const dy = moveEvent.clientY - startClient.y;
-    if (Math.abs(dx) + Math.abs(dy) > 6) {
-      beginDrag();
-    }
-  };
-
-  const onPointerUp = () => {
-    cleanup();
-  };
-
-  const onPointerCancel = () => {
-    cleanup();
-  };
-
-  timer = setTimeout(beginDrag, CANVAS_UPLOAD_LONG_PRESS_DRAG_MS);
-  ownerDocument.addEventListener(moveEventName, onPointerMove);
-  ownerDocument.addEventListener(upEventName, onPointerUp, { once: true });
-  ownerDocument.addEventListener(cancelEventName, onPointerCancel, { once: true });
-}
-
-function startCanvasNodeResize(workbench, event, resizeHandle) {
-  const nodeId = resizeHandle?.dataset?.nodeId ?? "";
-  const nodeElement = resizeHandle?.closest?.(".canvas-lib-node[data-canvas-node-id]");
-  if (!nodeId || !nodeElement || event.button !== 0) {
-    return;
-  }
-  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-  const startViewport = normalizeCanvasViewport(canvasDocument.viewport);
-  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId);
-  if (!node) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  const startClient = { x: event.clientX, y: event.clientY };
-  const startSize = {
-    width: Number(node.size?.width ?? nodeElement.getBoundingClientRect?.().width ?? 310),
-    height: Number(node.size?.height ?? nodeElement.getBoundingClientRect?.().height ?? 300),
-  };
-  const minSize = resolveCanvasNodeMinSize(node);
-  let latestSize = { ...startSize };
-  let moved = false;
-  const ownerDocument = nodeElement.ownerDocument ?? document;
-  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
-  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
-  const stage = nodeElement.closest?.(".canvas-stage");
-  nodeElement.classList.add("is-resizing");
-
-  const onPointerMove = (moveEvent) => {
-    const dx = (moveEvent.clientX - startClient.x) / startViewport.zoom;
-    const dy = (moveEvent.clientY - startClient.y) / startViewport.zoom;
-    if (Math.abs(dx) + Math.abs(dy) > 2) {
-      moved = true;
-    }
-    latestSize = {
-      width: Math.max(minSize.width, Math.round(startSize.width + dx)),
-      height: Math.max(minSize.height, Math.round(startSize.height + dy)),
-    };
-    nodeElement.style.setProperty("--node-width", `${latestSize.width}px`);
-    nodeElement.style.setProperty("--node-height", `${latestSize.height}px`);
-    updateVisibleCanvasEdges(stage);
-  };
-
-  const onPointerUp = () => {
-    ownerDocument.removeEventListener(moveEventName, onPointerMove);
-    ownerDocument.removeEventListener(upEventName, onPointerUp);
-    nodeElement.classList.remove("is-resizing");
-    if (!moved) {
-      return;
-    }
-    updateActiveCanvasDocument(workbench, updateCanvasNodeSize(ensureWorkbenchCanvasDocument(workbench), nodeId, latestSize));
-    workbench.ui.selectedCanvasNodeId = nodeId;
-    workbench.ui.editingCanvasTextNodeId = nodeId;
-    workbench.ui.canvasEditorOpen = false;
-    workbench.ui.canvasRunPreview = null;
-    workbench.ui.toast = "";
-    refreshCanvasGraphFromDocument(workbench);
-    render(workbench);
-  };
-
-  ownerDocument.addEventListener(moveEventName, onPointerMove);
-  ownerDocument.addEventListener(upEventName, onPointerUp);
-}
-
-function resolveCanvasNodeMinSize(node) {
-  if (node?.type === "script" || node?.type === "director" || node?.data?.mediaKind === "text") {
-    return { width: 240, height: 220 };
-  }
-  return { width: 320, height: 280 };
-}
-
-function startCanvasEdgeDisconnectDrag(workbench, event, edgeElement) {
-  const edgeId = edgeElement?.dataset?.canvasEdgeId ?? "";
-  if (!edgeId || event.button !== 0) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  const ownerDocument = edgeElement.ownerDocument ?? document;
-  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
-  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
-  const stage = edgeElement.closest?.(".canvas-stage");
-  const edgeLayer = stage?.querySelector?.(".canvas-lib-edge-layer");
-  const startClient = { x: event.clientX, y: event.clientY };
-  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-  const edge = canvasDocument.edges?.find?.((item) => item.id === edgeId);
-  const anchorPort = edge && stage
-    ? stage.querySelector(
-      `.canvas-node-connect[data-node-id="${cssEscape(edge.targetNodeId ?? "")}"][data-port-id="${cssEscape(edge.targetPortId ?? "")}"][data-port-direction="in"]`,
-    )
-    : null;
-  const sourcePort = edge && stage
-    ? stage.querySelector(
-      `.canvas-node-connect[data-node-id="${cssEscape(edge.sourceNodeId ?? "")}"][data-port-id="${cssEscape(edge.sourcePortId ?? "")}"][data-port-direction="out"]`,
-    )
-    : null;
-  if (!stage || !edgeLayer || !edge || !anchorPort || !sourcePort) {
-    return;
-  }
-  const anchor = canvasPortPointFromElement(stage, anchorPort);
-  const previewPath = ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
-  previewPath.setAttribute("class", "canvas-flow-edge-preview canvas-flow-edge-disconnect-preview");
-  edgeLayer.appendChild(previewPath);
-  let moved = false;
-  edgeElement.classList.add("is-disconnecting");
-
-  const updatePreview = (clientX, clientY) => {
-    const endPoint = canvasPointFromClient(stage, clientX, clientY, readCanvasViewportFromFlow(stage.querySelector?.(".canvas-flow")));
-    const end = {
-      x: Math.round(endPoint.x),
-      y: Math.round(endPoint.y),
-    };
-    previewPath.setAttribute("d", canvasReverseEdgePath(anchor, end));
-  };
-
-  const onPointerMove = (moveEvent) => {
-    const distance = Math.abs(moveEvent.clientX - startClient.x) + Math.abs(moveEvent.clientY - startClient.y);
-    if (distance > 6) {
-      moved = true;
-    }
-    updatePreview(moveEvent.clientX, moveEvent.clientY);
-  };
-
-  const onPointerUp = (upEvent) => {
-    ownerDocument.removeEventListener(moveEventName, onPointerMove);
-    ownerDocument.removeEventListener(upEventName, onPointerUp);
-    edgeElement.classList.remove("is-disconnecting");
-    previewPath.remove();
-    if (!moved) {
-      return;
-    }
-    const releasePort = findCanvasPortFromPoint(stage, ownerDocument, upEvent.clientX, upEvent.clientY);
-    const isReleaseOnSourceOutput =
-      releasePort &&
-      (releasePort.dataset.portDirection ?? "") === "out" &&
-      (releasePort.dataset.nodeId ?? "") === (edge.sourceNodeId ?? "") &&
-      (releasePort.dataset.portId ?? "") === (edge.sourcePortId ?? "");
-    if (!isReleaseOnSourceOutput) {
-      return;
-    }
-    const result = disconnectCanvasNodes(ensureWorkbenchCanvasDocument(workbench), {
-      sourceNodeId: edge.sourceNodeId,
-      sourcePortId: edge.sourcePortId,
-      targetNodeId: edge.targetNodeId,
-      targetPortId: edge.targetPortId,
-    });
-    if (!result.ok) {
-      workbench.ui.toast = "这条连接已经不存在。";
-      render(workbench);
-      return;
-    }
-    updateActiveCanvasDocument(workbench, result.document, { immediateSave: true });
-    workbench.ui.selectedCanvasNodeId = edge.targetNodeId ?? null;
-    workbench.ui.canvasEditorOpen = true;
-    workbench.ui.canvasRunPreview = null;
-    workbench.ui.toast = "已取消流程连接。";
-    refreshCanvasGraphFromDocument(workbench);
-    render(workbench);
-  };
-
-  updatePreview(event.clientX, event.clientY);
-  ownerDocument.addEventListener(moveEventName, onPointerMove);
-  ownerDocument.addEventListener(upEventName, onPointerUp);
-}
-
-function findNearestCanvasEdgeFromEvent(eventTarget, event) {
-  if (!eventTarget || !event || event.button !== 0) {
-    return null;
-  }
-  const blockedTarget = eventTarget.closest?.(
-    ".canvas-node-connect, .canvas-lib-node, .canvas-node-editor, .canvas-context-menu, .canvas-add-menu, .canvas-zoom-tools, button, input, textarea, select, option, a",
-  );
-  if (blockedTarget) {
-    return null;
-  }
-  const stage = eventTarget.closest?.(".canvas-stage");
-  if (!stage) {
-    return null;
-  }
-  return findNearestCanvasEdge(stage, event.clientX, event.clientY);
-}
-
-function findNearestCanvasEdge(stage, clientX, clientY) {
-  const stageRect = stage.getBoundingClientRect();
-  const pointer = canvasPointFromClient(
-    stage,
-    clientX,
-    clientY,
-    readCanvasViewportFromFlow(stage.querySelector?.(".canvas-flow")),
-  );
-  let nearest = null;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-  stage.querySelectorAll(".canvas-flow-edge[data-canvas-edge-id]").forEach((edge) => {
-    const hitPath = edge.querySelector(".canvas-flow-edge-hit, .canvas-flow-edge-line");
-    if (!hitPath) {
-      return;
-    }
-    const points = sampleCanvasEdgePath(hitPath);
-    if (!points.length) {
-      return;
-    }
-    points.forEach((point) => {
-      const distance = Math.hypot(point.x - pointer.x, point.y - pointer.y);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = edge;
-      }
-    });
-  });
-  return nearestDistance <= 18 ? nearest : null;
-}
-
-function sampleCanvasEdgePath(pathElement) {
-  if (typeof pathElement.getTotalLength === "function" && typeof pathElement.getPointAtLength === "function") {
-    const length = pathElement.getTotalLength();
-    if (Number.isFinite(length) && length > 0) {
-      const sampleCount = Math.max(16, Math.ceil(length / 28));
-      return Array.from({ length: sampleCount + 1 }, (_, index) => pathElement.getPointAtLength((length * index) / sampleCount));
-    }
-  }
-  const cubic = parseCanvasCubicPath(pathElement.getAttribute("d") ?? "");
-  if (!cubic) {
-    return [];
-  }
-  return Array.from({ length: 33 }, (_, index) => {
-    const t = index / 32;
-    const inverse = 1 - t;
-    return {
-      x:
-        (inverse ** 3 * cubic.start.x) +
-        (3 * inverse ** 2 * t * cubic.controlA.x) +
-        (3 * inverse * t ** 2 * cubic.controlB.x) +
-        (t ** 3 * cubic.end.x),
-      y:
-        (inverse ** 3 * cubic.start.y) +
-        (3 * inverse ** 2 * t * cubic.controlA.y) +
-        (3 * inverse * t ** 2 * cubic.controlB.y) +
-        (t ** 3 * cubic.end.y),
-    };
-  });
-}
-
-function parseCanvasCubicPath(pathData) {
-  const match = String(pathData).match(
-    /^\s*M\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+C\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?),?\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?),?\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*$/i,
-  );
-  if (!match) {
-    return null;
-  }
-  const values = match.slice(1).map(Number);
-  if (values.some((value) => !Number.isFinite(value))) {
-    return null;
-  }
-  return {
-    start: { x: values[0], y: values[1] },
-    controlA: { x: values[2], y: values[3] },
-    controlB: { x: values[4], y: values[5] },
-    end: { x: values[6], y: values[7] },
-  };
-}
-
-function startCanvasConnectionDrag(workbench, event, portElement) {
-  const sourceNodeId = portElement?.dataset?.nodeId ?? "";
-  const sourcePortId = portElement?.dataset?.portId ?? "";
-  const sourceDirection = portElement?.dataset?.portDirection ?? "";
-  if (!sourceNodeId || !sourcePortId || event.button !== 0) {
-    return;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  const stage = portElement.closest?.(".canvas-stage");
-  const edgeLayer = stage?.querySelector?.(".canvas-lib-edge-layer");
-  if (!stage || !edgeLayer) {
-    return;
-  }
-  workbench.ui.canvasContextMenu = null;
-  portElement.classList.add("is-linking");
-  const ownerDocument = portElement.ownerDocument ?? document;
-  const moveEventName = event.type === "pointerdown" ? "pointermove" : "mousemove";
-  const upEventName = event.type === "pointerdown" ? "pointerup" : "mouseup";
-  const start = canvasPortPointFromElement(stage, portElement);
-  const previewPath = ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
-  previewPath.setAttribute("class", "canvas-flow-edge-preview");
-  edgeLayer.appendChild(previewPath);
-
-  const updatePreview = (clientX, clientY) => {
-    const endPoint = canvasPointFromClient(stage, clientX, clientY, readCanvasViewportFromFlow(stage.querySelector?.(".canvas-flow")));
-    const end = {
-      x: Math.round(endPoint.x),
-      y: Math.round(endPoint.y),
-    };
-    previewPath.setAttribute("d", canvasEdgePath(start, end));
-  };
-
-  const onPointerMove = (moveEvent) => {
-    updatePreview(moveEvent.clientX, moveEvent.clientY);
-  };
-
-  const onPointerUp = (upEvent) => {
-    ownerDocument.removeEventListener(moveEventName, onPointerMove);
-    ownerDocument.removeEventListener(upEventName, onPointerUp);
-    portElement.classList.remove("is-linking");
-    previewPath.remove();
-    const targetPort = findCanvasPortFromPoint(stage, ownerDocument, upEvent.clientX, upEvent.clientY);
-    if (!targetPort || targetPort === portElement) {
-      if (!targetPort && sourceDirection === "out") {
-        openCanvasConnectionDropMenu(workbench, stage, upEvent, {
-          sourceNodeId,
-          sourcePortId,
-        });
-      }
-      return;
-    }
-    const targetDirection = targetPort.dataset.portDirection ?? "";
-    if (sourceDirection === "in" && targetDirection === "out") {
-      const result = disconnectCanvasNodes(ensureWorkbenchCanvasDocument(workbench), {
-        sourceNodeId: targetPort.dataset.nodeId ?? "",
-        sourcePortId: targetPort.dataset.portId ?? "",
-        targetNodeId: portElement.dataset.nodeId ?? "",
-        targetPortId: portElement.dataset.portId ?? "",
-      });
-      if (!result.ok) {
-        workbench.ui.toast = "这两个端口之间没有可取消的连接。";
-        render(workbench);
-        return;
-      }
-      updateActiveCanvasDocument(workbench, result.document, { immediateSave: true });
-      workbench.ui.selectedCanvasNodeId = portElement.dataset.nodeId ?? null;
-      workbench.ui.canvasEditorOpen = true;
-      workbench.ui.canvasRunPreview = null;
-      workbench.ui.toast = "已取消流程连接。";
-      refreshCanvasGraphFromDocument(workbench);
-      render(workbench);
-      return;
-    }
-    const outputPort = sourceDirection === "out" ? portElement : targetPort;
-    const inputPort = sourceDirection === "out" ? targetPort : portElement;
-    if ((outputPort.dataset.portDirection ?? "") !== "out" || (inputPort.dataset.portDirection ?? "") !== "in" || targetDirection === sourceDirection) {
-      workbench.ui.toast = "请从输出端口连接到输入端口。";
-      render(workbench);
-      return;
-    }
-    const result = connectCanvasNodes(ensureWorkbenchCanvasDocument(workbench), {
-      sourceNodeId: outputPort.dataset.nodeId ?? "",
-      sourcePortId: outputPort.dataset.portId ?? "",
-      targetNodeId: inputPort.dataset.nodeId ?? "",
-      targetPortId: inputPort.dataset.portId ?? "",
-    });
-    if (!result.ok) {
-      workbench.ui.toast = canvasConnectionReasonLabel(result.reason);
-      render(workbench);
-      return;
-    }
-    updateActiveCanvasDocument(workbench, result.document, { immediateSave: true });
-    workbench.ui.selectedCanvasNodeId = inputPort.dataset.nodeId ?? null;
-    workbench.ui.canvasEditorOpen = true;
-    workbench.ui.canvasRunPreview = null;
-    workbench.ui.toast = "已连接流程节点。";
-    refreshCanvasGraphFromDocument(workbench);
-    render(workbench);
-  };
-
-  updatePreview(event.clientX, event.clientY);
-  ownerDocument.addEventListener(moveEventName, onPointerMove);
-  ownerDocument.addEventListener(upEventName, onPointerUp);
-}
-
-function openCanvasConnectionDropMenu(workbench, stage, event, connection) {
-  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
-  const compatibleTemplates = resolveCompatibleCanvasNodeTemplates(
-    canvasDocument,
-    connection,
-    workbench.ui.episodeGenerationConfig,
-  );
-  if (!compatibleTemplates.length) return false;
-  const rect = stage.getBoundingClientRect?.();
-  const point = canvasPointFromClient(
-    stage,
-    event.clientX,
-    event.clientY,
-    readCanvasViewportFromFlow(stage.querySelector?.(".canvas-flow")),
-  );
-  workbench.ui.canvasAddMenuOpen = false;
-  workbench.ui.canvasScriptPicker = null;
-  workbench.ui.canvasContextMenu = {
-    mode: "connection",
-    sourceNodeId: connection.sourceNodeId,
-    sourcePortId: connection.sourcePortId,
-    compatibleTemplateIds: compatibleTemplates.map((template) => template.id),
-    x: Math.round(event.clientX - (rect?.left ?? 0)),
-    y: Math.round(event.clientY - (rect?.top ?? 0)),
-    canvasX: Math.round(point.x),
-    canvasY: Math.round(point.y),
-    stageWidth: Math.round(rect?.width ?? 0),
-    stageHeight: Math.round(rect?.height ?? 0),
-  };
+  graph.zoomTo(nextZoom, options.center ? { center: options.center } : undefined);
+  syncCanvasGraphViewport(graph, workbench);
   render(workbench);
-  return true;
-}
-
-function findCanvasPortFromPoint(stage, ownerDocument, clientX, clientY) {
-  const directPort = ownerDocument
-    .elementFromPoint(clientX, clientY)
-    ?.closest?.(".canvas-node-connect[data-node-id][data-port-id]");
-  if (directPort) {
-    return directPort;
-  }
-  let nearestPort = null;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-  stage.querySelectorAll(".canvas-node-connect[data-node-id][data-port-id]").forEach((port) => {
-    const rect = port.getBoundingClientRect();
-    const centerX = rect.left + (rect.width / 2);
-    const centerY = rect.top + (rect.height / 2);
-    const distance = Math.hypot(centerX - clientX, centerY - clientY);
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearestPort = port;
-    }
-  });
-  return nearestDistance <= 28 ? nearestPort : null;
-}
-
-function updateVisibleCanvasEdges(stage) {
-  if (!stage) {
-    return;
-  }
-  const edgeLayer = stage.querySelector?.(".canvas-lib-edge-layer");
-  if (!edgeLayer) {
-    return;
-  }
-  edgeLayer.querySelectorAll(".canvas-flow-edge").forEach((edge) => {
-    const sourcePort = stage.querySelector(
-      `.canvas-node-connect[data-node-id="${cssEscape(edge.dataset.sourceNodeId ?? "")}"][data-port-id="${cssEscape(edge.dataset.sourcePortId ?? "")}"][data-port-direction="out"]`,
-    );
-    const targetPort = stage.querySelector(
-      `.canvas-node-connect[data-node-id="${cssEscape(edge.dataset.targetNodeId ?? "")}"][data-port-id="${cssEscape(edge.dataset.targetPortId ?? "")}"][data-port-direction="in"]`,
-    );
-    if (!sourcePort || !targetPort) {
-      return;
-    }
-    const start = canvasPortPointFromElement(stage, sourcePort);
-    const end = canvasPortPointFromElement(stage, targetPort);
-    const path = canvasEdgePath(start, end);
-    edge.querySelectorAll("path").forEach((pathElement) => pathElement.setAttribute("d", path));
-  });
-}
-
-function canvasPortPointFromElement(stage, portElement) {
-  const flow = stage.querySelector?.(".canvas-flow");
-  const viewport = readCanvasViewportFromFlow(flow);
-  const portRect = portElement.getBoundingClientRect();
-  const centerClient = {
-    x: portRect.left + (portRect.width / 2),
-    y: portRect.top + (portRect.height / 2),
-  };
-  const point = canvasPointFromClient(stage, centerClient.x, centerClient.y, viewport);
-  return {
-    x: Math.round(point.x),
-    y: Math.round(point.y),
-  };
-}
-
-function canvasEdgePath(start, end) {
-  const delta = Math.max(110, Math.abs(end.x - start.x) * 0.48);
-  return `M ${start.x} ${start.y} C ${start.x + delta} ${start.y}, ${end.x - delta} ${end.y}, ${end.x} ${end.y}`;
-}
-
-function canvasReverseEdgePath(start, end) {
-  const delta = Math.max(110, Math.abs(end.x - start.x) * 0.48);
-  return `M ${start.x} ${start.y} C ${start.x - delta} ${start.y}, ${end.x + delta} ${end.y}, ${end.x} ${end.y}`;
 }
 
 function cssEscape(value) {
@@ -31553,6 +31241,311 @@ function collectCanvasMediaReferences(document, targetNodeId) {
     .filter((item) => (item.url || item.storageObjectId || item.assetVersionId) && (item.kind === "video" || item.kind === "audio"));
 }
 
+function collectCanvasFrameAnalysisVideoReference(document, targetNodeId) {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  return (Array.isArray(document?.edges) ? document.edges : [])
+    .filter((edge) => edge.targetNodeId === targetNodeId)
+    .map((edge) => canvasMediaReferenceFromNode(nodeMap.get(edge.sourceNodeId)))
+    .find((item) => item.kind === "video" && (item.url || item.storageObjectId || item.assetVersionId));
+}
+
+function addCanvasLocalResourceNode(workbench) {
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const template = resolveCanvasNodeTemplates(workbench.ui.episodeGenerationConfig)
+    .find((item) => item.id === "template-upload");
+  if (!template) return "";
+  const nextDocument = addCanvasNode(canvasDocument, {
+    type: template.type,
+    position: resolveCanvasNodePlacement(canvasDocument, { type: template.type, position: { x: 220, y: 180 } }),
+    template: applyCanvasSettingsToTemplate(template, workbench.ui.canvasSettingsRecord),
+  });
+  const nodeId = nextDocument.nodes.at(-1)?.id ?? "";
+  updateActiveCanvasDocument(workbench, nextDocument);
+  workbench.ui.selectedCanvasNodeId = nodeId;
+  workbench.ui.canvasSidebarMode = "nodes";
+  render(workbench);
+  return nodeId;
+}
+
+async function importCanvasLocalResourceFile(workbench, file) {
+  const nodeId = addCanvasLocalResourceNode(workbench);
+  if (!nodeId) return false;
+  await handleCanvasUploadNodeFile(workbench, nodeId, file);
+  return true;
+}
+
+async function loadCanvasLibTvImportPreview(workbench, file) {
+  if (!file || Number(file.size ?? 0) > 5 * 1024 * 1024) {
+    workbench.ui.toast = { tone: "error", message: "LibTV 画布 JSON 不能超过 5 MB。" };
+    render(workbench);
+    return false;
+  }
+  try {
+    const payload = JSON.parse(await file.text());
+    const preview = buildLibTvCanvasImportPreview(payload);
+    workbench.ui.canvasLibTvImportPreview = { ...preview, fileName: String(file.name ?? "") };
+    workbench.ui.toast = "";
+  } catch (error) {
+    workbench.ui.canvasLibTvImportPreview = null;
+    workbench.ui.toast = { tone: "error", message: `无法读取 LibTV 画布：${friendlyError(error)}` };
+  }
+  render(workbench);
+  return Boolean(workbench.ui.canvasLibTvImportPreview);
+}
+
+async function runCanvasFrameAnalysisNode(workbench, nodeId) {
+  const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
+  const node = canvasDocument.nodes?.find?.((item) => item.id === nodeId && isCanvasFrameAnalysisNode(item));
+  if (!node) return false;
+  const videoReference = collectCanvasFrameAnalysisVideoReference(canvasDocument, nodeId);
+  if (!videoReference?.url) {
+    workbench.ui.toast = { tone: "error", message: "请先把视频节点连接到逐帧拉片节点。" };
+    render(workbench);
+    return false;
+  }
+  if (typeof workbench.api?.runToolboxPromptReverse !== "function" || typeof workbench.api?.getToolboxPromptReverseModels !== "function") {
+    workbench.ui.toast = { tone: "error", message: "视频拉片服务尚未配置。" };
+    render(workbench);
+    return false;
+  }
+
+  workbench.canvasFrameAnalysisAbortController?.abort?.();
+  const abortController = new AbortController();
+  workbench.canvasFrameAnalysisAbortController = abortController;
+  let analysis = null;
+  let lastRenderedProgress = -10;
+  let activeStageLabel = "正在准备视频解析";
+  const setProgress = (progress, analysisStageLabel) => {
+    abortController.signal.throwIfAborted?.();
+    if (abortController.signal.aborted) throw new DOMException("Operation aborted", "AbortError");
+    activeStageLabel = analysisStageLabel;
+    const normalizedProgress = Math.max(0, Math.min(99, Math.round(Number(progress) || 0)));
+    const currentDocument = ensureWorkbenchCanvasDocument(workbench);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(currentDocument, nodeId, {
+      status: "running",
+      analysisProgress: normalizedProgress,
+      generationProgress: normalizedProgress,
+      analysisStageLabel,
+    }), { scheduleSave: false });
+    if (normalizedProgress - lastRenderedProgress >= 5) {
+      lastRenderedProgress = normalizedProgress;
+      refreshCanvasWorkflowNode(workbench, nodeId);
+    }
+  };
+
+  updateActiveCanvasDocument(workbench, updateCanvasNodeData(canvasDocument, nodeId, {
+    status: "running",
+    analysisProgress: 1,
+    generationProgress: 1,
+    analysisStageLabel: "正在准备视频解析",
+    failureMessage: "",
+  }), { scheduleSave: false });
+  workbench.ui.selectedCanvasNodeId = nodeId;
+  workbench.ui.canvasGeneratingNodeId = nodeId;
+  workbench.ui.canvasEditorOpen = false;
+  workbench.ui.toast = "";
+  render(workbench);
+
+  try {
+    const support = await checkBrowserVideoAnalysis();
+    if (!support.ready) throw new Error(support.error || "当前浏览器不支持视频解析");
+    if (!support.installed) {
+      await installBrowserVideoAnalysis({
+        signal: abortController.signal,
+        onProgress: ({ progress }) => setProgress(Math.round((Number(progress) || 0) * 0.15), "正在安装视频解析组件"),
+      });
+    }
+    setProgress(16, "正在读取视频素材");
+    const videoFile = await readCanvasVideoReferenceFile(videoReference, { signal: abortController.signal });
+    analysis = await runBrowserVideoAnalysis(videoFile, {
+      signal: abortController.signal,
+      onProgress: ({ progress }) => setProgress(16 + Math.round((Number(progress) || 0) * 0.5), "正在提取 6 FPS 时间线"),
+    });
+    const modelInput = await buildVideoModelFrameSheets(analysis.output, {
+      onProgress: ({ progress }) => setProgress(66 + Math.round((Number(progress) || 0) * 0.25), "正在整理关键帧与联系表"),
+    });
+    disposeBrowserVideoAnalysisResult(analysis);
+    analysis = null;
+    setProgress(92, "正在加载分析模型");
+    const models = normalizeToolboxPromptReverseModels(await workbench.api.getToolboxPromptReverseModels({ fresh: true }));
+    const selectedModelName = String(node.data?.analysisModelName ?? "").trim();
+    const modelName = models.some((model) => model.displayName === selectedModelName)
+      ? selectedModelName
+      : models[0]?.displayName ?? "";
+    if (!modelName) throw new Error("暂无可用于逐帧拉片的分析模型");
+    setProgress(94, "正在分析镜头、资产和衔接");
+    const payload = await workbench.api.runToolboxPromptReverse({
+      displayName: modelName,
+      mode: "video",
+      frameSheetDataUrls: modelInput.frameSheetDataUrls,
+      samplingMetadata: {
+        frameRate: modelInput.frameRate,
+        durationMs: modelInput.durationMs,
+        frameCount: modelInput.frameCount,
+        sheetCount: modelInput.frameSheetDataUrls.length,
+        timelineSheetCount: modelInput.timelineSheetCount,
+        keyFrameCount: modelInput.keyFrameCount,
+        columns: 8,
+        rows: 6,
+        framesPerSheet: 48,
+        segmentDurationMs: Math.round(Math.max(1, Number(node.data?.segmentDurationSeconds ?? 15) || 15) * 1000),
+      },
+    });
+    const result = normalizeToolboxPromptReverseResult(payload);
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
+      status: "completed",
+      analysisProgress: 100,
+      generationProgress: 100,
+      analysisStageLabel: "拉片完成",
+      analysisModelName: modelName,
+      analysisDurationMs: modelInput.durationMs,
+      analysisFrameCount: modelInput.frameCount,
+      analysisKeyFrameCount: modelInput.keyFrameCount,
+      analysisSegments: result.segments,
+      analysisResult: result,
+      text: formatToolboxPromptReverseResult(result),
+      failureMessage: "",
+    }));
+    workbench.ui.toast = `逐帧拉片完成，共识别 ${result.segments.length} 个分镜。`;
+    void refreshSessionCreditBalance(workbench, { fresh: true, renderOnChange: true });
+  } catch (error) {
+    disposeBrowserVideoAnalysisResult(analysis);
+    if (abortController.signal.aborted || isAbortError(error)) {
+      const currentNode = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId);
+      if (["queued", "running", "processing"].includes(String(currentNode?.data?.status ?? ""))) {
+        updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
+          status: "canceled",
+          analysisProgress: 0,
+          generationProgress: 0,
+          analysisStageLabel: "",
+          failureMessage: "",
+        }));
+      }
+      return true;
+    }
+    updateActiveCanvasDocument(workbench, updateCanvasNodeData(ensureWorkbenchCanvasDocument(workbench), nodeId, {
+      status: "failed",
+      analysisProgress: 0,
+      generationProgress: 0,
+      analysisStageLabel: activeStageLabel,
+      failureMessage: `${activeStageLabel}失败：${friendlyError(error)}`,
+    }));
+    workbench.ui.toast = { tone: "error", message: `逐帧拉片失败（${activeStageLabel}）：${friendlyError(error)}` };
+  } finally {
+    if (workbench.canvasFrameAnalysisAbortController === abortController) {
+      workbench.canvasFrameAnalysisAbortController = null;
+    }
+    if (String(workbench.ui.canvasGeneratingNodeId ?? "") === nodeId) workbench.ui.canvasGeneratingNodeId = null;
+    render(workbench);
+  }
+  return true;
+}
+
+async function readCanvasVideoReferenceFile(reference = {}, options = {}) {
+  const storageObjectId = String(reference.storageObjectId ?? "").trim();
+  const sourceUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?download=1`
+    : reference.url;
+  let response;
+  try {
+    response = await globalThis.fetch(resolveApiUrl(sourceUrl), {
+      credentials: "include",
+      cache: "no-store",
+      signal: options.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    throw new Error("无法连接视频素材服务，请确认素材仍可访问后重试", { cause: error });
+  }
+  if (!response.ok) throw new Error(`读取视频素材失败（${response.status}）`);
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES) {
+    throw new Error("视频大小不能超过 500 MB");
+  }
+  const blob = await response.blob();
+  if (blob.size > CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES) throw new Error("视频大小不能超过 500 MB");
+  const fileName = String(reference.name ?? "canvas-video.mp4");
+  const contentType = String(blob.type || response.headers.get("content-type") || "video/mp4").split(";")[0];
+  return new globalThis.File([blob], fileName, { type: contentType });
+}
+
+function expandCanvasFrameAnalysisSegments(workbench, nodeId) {
+  let document = ensureWorkbenchCanvasDocument(workbench);
+  const node = document.nodes?.find?.((item) => item.id === nodeId && isCanvasFrameAnalysisNode(item));
+  const segments = Array.isArray(node?.data?.analysisSegments) ? node.data.analysisSegments : [];
+  if (!node || !segments.length) {
+    workbench.ui.toast = "当前拉片节点还没有可展开的分镜。";
+    render(workbench);
+    return false;
+  }
+  const existingSegments = document.nodes.filter((item) => (
+    item?.data?.source === "frame_analysis"
+    && String(item?.data?.analysisParentNodeId ?? "") === String(nodeId)
+  ));
+  const retainedSegmentIds = new Set();
+  let created = 0;
+  segments.forEach((segment, index) => {
+    const expectedSegmentId = `${nodeId}-segment-${index + 1}`;
+    const existingSegment = existingSegments.find((item) => item.id === expectedSegmentId)
+      ?? existingSegments.find((item) => Number(item?.data?.analysisSegmentIndex) === index);
+    const segmentId = existingSegment?.id ?? expectedSegmentId;
+    const segmentData = {
+      title: `分镜 ${segment.index ?? index + 1}`,
+      status: "ready",
+      mediaKind: "text",
+      canvasMode: "analysis-segment",
+      source: "frame_analysis",
+      analysisParentNodeId: nodeId,
+      analysisSegmentIndex: index,
+      text: formatCanvasFrameAnalysisSegment(segment, index),
+    };
+    if (!existingSegment) {
+      document = addCanvasNode(document, {
+        id: segmentId,
+        type: "ai-text",
+        position: {
+          x: Number(node.position?.x ?? 0) + 520 + (index % 2) * 350,
+          y: Number(node.position?.y ?? 0) + Math.floor(index / 2) * 330,
+        },
+        data: segmentData,
+      });
+      created += 1;
+    } else {
+      document = updateCanvasNodeData(document, segmentId, segmentData);
+    }
+    retainedSegmentIds.add(segmentId);
+    const sourceNode = document.nodes.find((item) => item.id === nodeId);
+    const targetNode = document.nodes.find((item) => item.id === segmentId);
+    const sourcePortId = sourceNode?.data?.ports?.outputs?.[0]?.id;
+    const targetPortId = targetNode?.data?.ports?.inputs?.[0]?.id;
+    if (sourcePortId && targetPortId) {
+      const connection = connectCanvasNodes(document, { sourceNodeId: nodeId, sourcePortId, targetNodeId: segmentId, targetPortId });
+      if (connection.ok) document = connection.document;
+    }
+  });
+  existingSegments
+    .filter((item) => !retainedSegmentIds.has(item.id))
+    .forEach((item) => { document = removeCanvasNode(document, item.id); });
+  updateActiveCanvasDocument(workbench, document);
+  workbench.ui.selectedCanvasNodeId = [...retainedSegmentIds][0] ?? nodeId;
+  workbench.ui.toast = created ? `已展开 ${created} 个分镜节点。` : "分镜节点已经全部展开。";
+  render(workbench);
+  return true;
+}
+
+function formatCanvasFrameAnalysisSegment(segment = {}, index = 0) {
+  return [
+    `分镜 ${segment.index ?? index + 1}（${formatMilliseconds(segment.startMs)}-${formatMilliseconds(segment.endMs)}）`,
+    segment.description,
+    segment.positivePrompt ? `视频提示词：${segment.positivePrompt}` : "",
+    formatToolboxPromptReverseAssets("人物", segment.characters),
+    formatToolboxPromptReverseAssets("道具", segment.props),
+    formatToolboxPromptReverseAssets("场景", segment.scenes),
+    segment.continuity ? `衔接：${segment.continuity}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
 function canvasMediaReferenceFromNode(node, edgeKind = "") {
   const data = node?.data ?? {};
   const kind = String(edgeKind || data.mediaKind || (node?.type === "audio" ? "audio" : node?.type === "video" ? "video" : ""));
@@ -32198,6 +32191,10 @@ export function updateToolboxPromptReverseProgressForTest(workbench) {
   return updateToolboxPromptReverseProgress(workbench);
 }
 
+export function updateToolboxVideoToDirectorProgressForTest(workbench) {
+  return updateToolboxVideoToDirectorProgress(workbench);
+}
+
 export function updateToolboxPromptReversePluginProgressForTest(workbench) {
   return updateToolboxPromptReversePluginProgress(workbench);
 }
@@ -32338,12 +32335,32 @@ export function saveProjectCanvasNowForTest(workbench) {
   return saveProjectCanvasNow(workbench);
 }
 
+export function persistCanvasViewportBeforePageHideForTest(workbench) {
+  return persistCanvasViewportBeforePageHide(workbench);
+}
+
+export function writeCanvasRefreshDraftForTest(workbench, canvasProjectId, document) {
+  return writeCanvasRefreshDraft(workbench, canvasProjectId, document);
+}
+
+export function expandCanvasFrameAnalysisSegmentsForTest(workbench, nodeId) {
+  return expandCanvasFrameAnalysisSegments(workbench, nodeId);
+}
+
+export function openCanvasConnectionDropMenuForTest(workbench, input = {}) {
+  return openCanvasConnectionDropMenu(workbench, input);
+}
+
 export function persistCanvasNodePositionsForTest(workbench, positions = []) {
   return persistCanvasNodePositions(workbench, positions);
 }
 
 export function flushProjectCanvasSaveForTest(workbench) {
   return flushProjectCanvasSave(workbench);
+}
+
+export function resolveCanvasRevisionConflictForTest(workbench, version, options = {}) {
+  return resolveCanvasRevisionConflict(workbench, version, options);
 }
 
 export function persistCanvasSessionForTest(workbench, canvasProjectId, serverRevision) {
@@ -32372,10 +32389,6 @@ export function handleCanvasLiveEventForTest(workbench, canvasProjectId, event, 
 
 export function refreshCanvasAfterAgentPatchForTest(workbench) {
   return syncCanvasHeadFromLive(workbench, resolveCanvasSaveProjectId(workbench), 0, { force: true, render: false });
-}
-
-export function resolveCanvasRevisionConflictForTest(workbench, version, options = {}) {
-  return resolveCanvasRevisionConflict(workbench, version, options);
 }
 
 export function resolveCanvasGenerationPollDelayForTest(startedAt, immediate = false, now = Date.now()) {
@@ -41609,7 +41622,7 @@ function applyCanvasAudioGenerationMode(workbench, nodeId, mode) {
 }
 
 function normalizeCanvasVideoMode(mode) {
-  return ["first-frame", "first-last-frame", "reference-video"].includes(mode) ? mode : "first-frame";
+  return ["first-frame", "first-last-frame", "reference-video", "edit-video"].includes(mode) ? mode : "first-frame";
 }
 
 function isAssetScope(workbench) {
@@ -43751,7 +43764,7 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
       quickReferenceItems: [],
     }));
     clearEpisodeWorkbenchAttachmentComposer(workbench);
-    setCurrentScopePrompt(workbench, composerPrompt);
+    setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(composerPrompt));
     if (!storyboardOnly) {
       appendStoryboardMentionAudioAttachments(workbench, composerPrompt);
     }
@@ -43770,7 +43783,7 @@ function appendSelectedStoryboardToPrompt(workbench, options = {}) {
     references,
   );
   clearEpisodeWorkbenchAttachmentComposer(workbench);
-  setCurrentScopePrompt(workbench, normalizedPromptText);
+  setCurrentScopePrompt(workbench, stripUnresolvedStoryboardMentionTokens(normalizedPromptText, references));
   if (!storyboardOnly) {
     appendStoryboardMentionAudioAttachments(workbench, composerPrompt);
   }
@@ -43831,6 +43844,29 @@ function appendPromptLineOnce(currentPrompt, promptLine) {
     return currentText;
   }
   return `${currentText}\n${nextLine}`;
+}
+
+function stripUnresolvedStoryboardMentionTokens(prompt, references = []) {
+  const usableReferences = (Array.isArray(references) ? references : [])
+    .filter((reference) => resolveGenerationReferenceUrl(reference));
+  const referenceCounts = {
+    image: filterOrderedGenerationReferences(usableReferences, "image").length,
+    video: filterOrderedGenerationReferences(usableReferences, "video").length,
+    audio: filterOrderedGenerationReferences(usableReferences, "audio").length,
+  };
+  const isResolvedReferenceName = (name) => {
+    const match = /^(图|视频|音频)\s*(\d+)$/u.exec(String(name ?? "").trim());
+    if (!match) return false;
+    const mediaKind = match[1] === "图" ? "image" : match[1] === "视频" ? "video" : "audio";
+    const index = Number(match[2]);
+    return Number.isInteger(index) && index >= 1 && index <= referenceCounts[mediaKind];
+  };
+  const text = String(prompt ?? "").replace(/【@([^】]+)】/gu, (matched, rawName) => (
+    isResolvedReferenceName(rawName) ? matched : String(rawName ?? "").trim()
+  ));
+  return usableReferences.length
+    ? text
+    : text.replace(/(^|[=＝:：,，;；、\s(（])@(?=[^\s@【】])/gu, "$1");
 }
 
 function resolveStoryboardQuickReferencePrompt(storyboard) {
@@ -48328,7 +48364,7 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
         workbench.ui.canvasRunPreview = { ...workbench.ui.canvasRunPreview, task, taskId };
       }
     });
-    updateActiveCanvasDocument(workbench, document);
+    updateActiveCanvasDocument(workbench, document, { scheduleSave: false });
     canvasTargets.forEach((target) => syncCanvasScriptWorkflowGeneratedText(workbench, target.nodeId));
     const pendingCanvasTargets = resolveCanvasGenerationPollTargets(workbench);
     workbench.ui.canvasGeneratingNodeId = pendingCanvasTargets[0]?.nodeId ?? null;
@@ -51711,13 +51747,6 @@ function hydratePersistedWorkbenchState(workbench) {
 
 function syncWorkbenchRouteState(workbench, hash) {
   const token = String(hash || "").replace(/^#/, "");
-  if (["new-canvas", "new-canvas-canvas"].includes(token) && !isNewCanvasEnabled(workbench.session)) {
-    workbench.ui.activeNavTab = "home";
-    workbench.ui.canvasProjectView = "list";
-    workbench.ui.toast = "新画布当前未启用。";
-    globalThis.window?.history?.replaceState?.(null, "", "/");
-    return;
-  }
   if (parseEpisodeRouteToken(token)) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "episode-workbench";
@@ -51755,9 +51784,8 @@ function syncWorkbenchRouteState(workbench, hash) {
     return;
   }
   if (token === "home" || token === "director" || token === "script" || token === "prompts" || token === "library" || token === "tools" || token === "tools-canvas" || token === "new-canvas" || token === "new-canvas-canvas") {
-    workbench.ui.activeNavTab = token;
+    workbench.ui.activeNavTab = ["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token) ? "tools" : token;
     if (token === "tools-canvas" || token === "new-canvas-canvas") {
-      workbench.ui.activeNavTab = token === "new-canvas-canvas" ? "new-canvas" : "tools";
       workbench.ui.canvasProjectView = "detail";
     } else if (token === "tools" || token === "new-canvas") {
       workbench.ui.canvasProjectView = "list";
@@ -51802,10 +51830,7 @@ function syncCanvasRouteState(workbench, hash, locationLike = globalThis.window?
   if (!["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
     return;
   }
-  if (["new-canvas", "new-canvas-canvas"].includes(token) && !isNewCanvasEnabled(workbench.session)) {
-    return;
-  }
-  workbench.ui.activeNavTab = token.startsWith("new-canvas") ? "new-canvas" : "tools";
+  workbench.ui.activeNavTab = "tools";
   workbench.ui.projectPanelMode = "library";
   workbench.ui.canvasProjectView = deriveInitialCanvasProjectView(token);
   const routeProjectId = readCanvasProjectIdFromLocation(locationLike);
@@ -55864,6 +55889,7 @@ function resolveCanvasKeyboardAction(workbench, event, target) {
   }
   if (event.repeat || event.shiftKey) return "";
   const digit = /^(?:digit|numpad)?([1-7])$/.exec(String(event.code || key).toLowerCase())?.[1];
+  if (digit && workbench.ui.canvasContextMenu?.mode === "connection") return "";
   if (digit) return `add-canvas-shortcut-${event.altKey ? "source" : "generator"}-${digit}`;
   if (event.altKey) return "";
   if (key === "f") return "fit-canvas-view";
@@ -55910,6 +55936,7 @@ export function hasActiveWorkbenchTextSelection(target, selection = globalThis.w
 
 function findScopedInput(root, trigger, selector) {
   const scopes = [
+    trigger?.getRootNode?.(),
     trigger?.closest?.("[data-upload-panel]"),
     trigger?.closest?.(".console-block"),
     trigger?.closest?.(".stage-video-library"),
@@ -55917,7 +55944,7 @@ function findScopedInput(root, trigger, selector) {
     trigger?.closest?.(".cinematic-stage-empty"),
     trigger?.closest?.(".project-gallery-poster"),
     root,
-  ].filter(Boolean);
+  ].filter((scope) => scope?.querySelector);
 
   for (const scope of scopes) {
     const match = scope.querySelector(selector);
@@ -55980,15 +56007,15 @@ function normalizeRoutePath(pathname) {
 }
 
 function isCanvasNavTab(tab) {
-  return tab === "tools" || tab === "new-canvas";
+  return tab === "tools";
 }
 
 function canvasListRouteToken(workbench) {
-  return workbench?.ui?.activeNavTab === "new-canvas" ? "new-canvas" : "tools";
+  return "tools";
 }
 
 function canvasDetailRouteToken(workbench) {
-  return workbench?.ui?.activeNavTab === "new-canvas" ? "new-canvas-canvas" : "tools-canvas";
+  return "tools-canvas";
 }
 
 function readCanvasProjectIdFromLocation(locationLike = globalThis.window?.location) {
@@ -56064,11 +56091,8 @@ function deriveInitialNavTab(hash, session = {}) {
   if (token === "library") {
     return "library";
   }
-  if (token === "tools" || token === "tools-canvas") {
+  if (["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
     return "tools";
-  }
-  if (token === "new-canvas" || token === "new-canvas-canvas") {
-    return isNewCanvasEnabled(session) ? "new-canvas" : "home";
   }
   if (token === "team" || token.startsWith("team-dashboard")) {
     if (isTeamMemberSession(session)) {
@@ -57451,6 +57475,7 @@ async function syncCanvasProjectsFromApi(workbench) {
     return;
   }
   const selectedProjectIdBeforeLoad = workbench.ui.selectedCanvasProjectId;
+  let remoteProjectsLoaded = false;
   const directProjectId = workbench.ui.canvasProjectView === "detail"
     ? readCanvasProjectIdFromLocation()
     : null;
@@ -57481,8 +57506,10 @@ async function syncCanvasProjectsFromApi(workbench) {
         status: project?.status ?? "草稿",
       }))
       : [];
+    remoteProjectsLoaded = true;
     if (remoteProjects.length) {
       workbench.ui.canvasProjects = remoteProjects;
+      clearPendingCanvasCreateIdempotencyKey();
     } else {
       workbench.ui.canvasProjects = [];
     }
@@ -57521,6 +57548,14 @@ async function syncCanvasProjectsFromApi(workbench) {
     }
   }
   syncActiveCanvasDocument(workbench);
+  if (
+    remoteProjectsLoaded
+    && workbench.ui.canvasProjectView === "detail"
+    && !normalizeCanvasProjects(workbench.ui).length
+    && !isTeamMemberSession(workbench.session)
+  ) {
+    await saveProjectCanvasNow(workbench).catch(() => null);
+  }
   if (workbench.ui.canvasProjectView === "detail") {
     syncCanvasProjectIdInLocation(workbench.ui.selectedCanvasProjectId);
   }

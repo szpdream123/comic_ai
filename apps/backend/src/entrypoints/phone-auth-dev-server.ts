@@ -63,6 +63,12 @@ import {
   renderToolboxPromptReverseInstruction,
 } from "../modules/toolbox/prompt-reverse-prompt-config.ts";
 import {
+  completeVideoToDirectorWithProviderStreamRetry,
+  normalizeVideoShotSegments,
+  parseVideoToDirectorResult,
+  videoToDirectorInstruction,
+} from "../modules/toolbox/video-to-director-analysis.ts";
+import {
   AdminBackedTextModelResolver,
   CanvasAgentStateConflictError,
   CanvasAgentStepSkipError,
@@ -1769,6 +1775,7 @@ function localizeEnvelopeErrorMessage(message: string): string {
   if (/idempotency key required/i.test(value)) return "缺少幂等请求标识。";
   if (/request conflict|revision conflict/i.test(value)) return "请求发生冲突，请刷新后重试。";
   if (/still processing/i.test(value)) return "请求仍在处理中，请稍后刷新。";
+  if (/video_to_director_result_(?:invalid|empty)/i.test(value)) return "模型返回的导演台解析结果格式异常，请重新解析。";
   if (/required/i.test(value)) return "缺少必要参数，请检查后重试。";
   if (/invalid/i.test(value)) return "请求参数不合法，请检查后重试。";
   if (/upload/i.test(value)) return "上传处理失败，请检查文件后重试。";
@@ -2769,6 +2776,57 @@ async function executeIdempotentToolPresetCommand(
       ...started.record,
       responseResourceType: "creator_tool_preset",
       responseResourceId: preset.id,
+      responseSnapshot,
+      status: "succeeded",
+      updatedAt: new Date(),
+    });
+    return responseSnapshot;
+  } catch (error) {
+    await store.update({
+      ...started.record,
+      responseResourceType: undefined,
+      responseResourceId: undefined,
+      responseSnapshot: undefined,
+      status: "failed_terminal",
+      updatedAt: new Date(),
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function executeIdempotentCanvasProjectCreate(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    idempotencyKey: string;
+    request: Record<string, unknown>;
+    execute: () => Promise<CanvasProjectRecord>;
+  },
+) {
+  const store = new SqlIdempotencyRecordStore(db);
+  const started = await beginOrReplayCommand(store, {
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
+    operationName: operationNames.canvasProjectCreate,
+    idempotencyKey: input.idempotencyKey,
+    requestHash: hashJson(input.request),
+  });
+  if (started.kind === "processing") throw new IdempotencyProcessingError(started.record);
+  if (started.kind === "replayed") {
+    const project = started.record.responseSnapshot?.project;
+    if (project && typeof project === "object" && !Array.isArray(project)) {
+      return { project: project as unknown as CanvasProjectRecord };
+    }
+    throw new IdempotencyProcessingError(started.record);
+  }
+
+  try {
+    const project = await input.execute();
+    const responseSnapshot = { project };
+    await store.update({
+      ...started.record,
+      responseResourceType: "creator_canvas_project",
+      responseResourceId: project.id,
       responseSnapshot,
       status: "succeeded",
       updatedAt: new Date(),
@@ -4687,6 +4745,7 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
 }
 
 const promptReverseMaxTokens = 1600;
+const videoToDirectorMaxTokens = 4200;
 const promptReverseMinimumCreditBalance = 200;
 const promptReverseCreditReason = (mode: "image" | "video") => (
   mode === "video" ? "工具箱视频反推消耗积分" : "工具箱图片反推消耗积分"
@@ -4703,6 +4762,7 @@ function promptReverseReservationTokenLimit(
   model: AiModelConfigRecord,
   mode: "image" | "video",
   video: ReturnType<typeof parsePromptReverseVideoFrameSheets> | null,
+  maxTokens = promptReverseMaxTokens,
 ) {
   const configured = [
     model.capabilities.contextWindow,
@@ -4712,7 +4772,7 @@ function promptReverseReservationTokenLimit(
   ].map(Number).find((value) => Number.isFinite(value) && value > 0);
   if (configured) return Math.ceil(configured);
   const imageCount = mode === "video" ? Math.max(1, video?.frameSheets.length ?? 1) : 1;
-  return promptReverseMaxTokens + imageCount * 4096;
+  return maxTokens + imageCount * 4096;
 }
 
 function isPromptReverseModel(model: AiModelConfigRecord) {
@@ -5867,6 +5927,10 @@ async function listTaskCenterTasks(
     cursor?: { updatedAt: string; taskId: string } | null;
   },
 ) {
+  await reconcileTerminalTaskCenterSnapshots(db, {
+    userId: input.userId,
+    now: new Date(),
+  });
   await reconcileDefinitiveProviderSubmissionFailures(db, {
     userId: input.userId,
     now: new Date(),
@@ -8229,7 +8293,7 @@ async function reconcileDefinitiveProviderSubmissionFailures(
   }
 }
 
-async function repairTimedOutEpisodeGenerationTasks(
+export async function repairTimedOutEpisodeGenerationTasks(
   db: Awaited<ReturnType<typeof createDevDb>>,
   input: {
     now: Date;
@@ -11047,7 +11111,7 @@ function createImageGenerationTargetRegistry() {
             envelopedError(404, "canvas_node_not_found", "canvas node not found"),
           );
         }
-        if (!["image", "ai-image", "ai-animation", "ai-panorama", "ai-storyboard"].includes(requestedNode.type)) {
+        if (!["image", "source-image", "ai-image", "ai-animation", "ai-panorama", "ai-storyboard"].includes(requestedNode.type)) {
           throw new ImageGenerationTargetRouteError(
             envelopedError(400, "canvas_image_node_invalid", "Only an image generation node can run an image task"),
           );
@@ -15854,7 +15918,7 @@ async function serveVendorFile(pathname: string, response: ServerResponse) {
     "ort-wasm-simd-threaded.wasm",
     "ort-wasm-simd-threaded.asyncify.mjs",
     "ort-wasm-simd-threaded.asyncify.wasm",
-  ].includes(normalizedPath);
+  ].includes(normalizedPath) || normalizedPath.startsWith("pose-landmarker/");
   const filePath = resolve(
     servesWebVendorFile
       ? join(webVendorRoot, normalizedPath)
@@ -24018,10 +24082,14 @@ export function createPhoneAuthDevServer(
           }
           const displayName = readString(body.displayName);
           const requestedMode = readString(body.mode).toLowerCase();
+          const analysisTarget = readString(body.analysisTarget).toLowerCase() === "director" ? "director" : "prompt";
           if (!displayName || (requestedMode && !["image", "video"].includes(requestedMode))) {
             return writeJson(response, envelopedError(400, "prompt_reverse_input_invalid", "displayName is required and prompt reverse supports image or video mode"));
           }
           const mode = requestedMode === "video" ? "video" : "image";
+          if (analysisTarget === "director" && mode !== "video") {
+            return writeJson(response, envelopedError(400, "video_to_director_input_invalid", "video to director requires video mode"));
+          }
           let image: ReturnType<typeof parsePromptReverseImageDataUrl> | null = null;
           let video: ReturnType<typeof parsePromptReverseVideoFrameSheets> | null = null;
           try {
@@ -24050,11 +24118,14 @@ export function createPhoneAuthDevServer(
           if (!model) {
             return writeJson(response, envelopedError(404, "prompt_reverse_model_unavailable", "model is not enabled for prompt reverse"));
           }
-          const systemPrompt = await promptReverseInstructionFromRuntimeConfig(
-            db,
-            mode,
-            video?.sampling.segmentDurationMs ?? 15_000,
-          );
+          const systemPrompt = analysisTarget === "director"
+            ? videoToDirectorInstruction
+            : await promptReverseInstructionFromRuntimeConfig(
+              db,
+              mode,
+              video?.sampling.segmentDurationMs ?? 15_000,
+            );
+          const requestMaxTokens = analysisTarget === "director" ? videoToDirectorMaxTokens : promptReverseMaxTokens;
           const billing = new CanvasAgentBillingService(db);
           const creditReason = promptReverseCreditReason(mode);
           const billingMetadata = promptReverseBillingMetadata(mode);
@@ -24070,8 +24141,8 @@ export function createPhoneAuthDevServer(
               stepId: billingStepId,
               amount: billing.estimateRound({
                 pricing: model.pricing,
-                maxTokens: promptReverseMaxTokens,
-                contextWindow: promptReverseReservationTokenLimit(model, mode, video),
+                maxTokens: requestMaxTokens,
+                contextWindow: promptReverseReservationTokenLimit(model, mode, video, requestMaxTokens),
               }),
               reason: creditReason,
               metadata: billingMetadata,
@@ -24092,7 +24163,9 @@ export function createPhoneAuthDevServer(
                 ? [
                   {
                     type: "text",
-                    text: `前 ${video!.sampling.timelineSheetCount} 张图片是完整视频按顺序生成的连续 ${video!.sampling.frameRate} FPS 时间轴联系表，共 ${video!.sampling.frameCount} 帧${video!.sampling.durationMs ? `，视频时长 ${video!.sampling.durationMs} 毫秒` : ""}。请以每 ${Math.round(video!.sampling.segmentDurationMs / 1000)} 秒为分镜边界，严格按联系表数组顺序、每张图片从左到右再从上到下分析完整时间线，分别输出每段的人物、道具、场景资产提示词，并说明相邻分镜衔接。末尾 ${video!.sampling.keyFrameCount} 张图片是场景高清关键帧，只用于补充人物妆造、发型、神态、服饰和环境细节。`,
+                    text: analysisTarget === "director"
+                      ? `前 ${video!.sampling.timelineSheetCount} 张图片是完整视频按顺序生成的连续 ${video!.sampling.frameRate} FPS 时间轴联系表，共 ${video!.sampling.frameCount} 帧${video!.sampling.durationMs ? `，视频时长 ${video!.sampling.durationMs} 毫秒` : ""}。浏览器视觉差异检测给出的候选镜头区间为：${JSON.stringify(normalizeVideoShotSegments(body.shotSegments, video!.sampling.durationMs))}。请结合画面校正镜头边界，输出人物连续轨迹、动作、运镜和可匹配导演台模型的道具。末尾 ${video!.sampling.keyFrameCount} 张图片是高清关键帧。`
+                      : `前 ${video!.sampling.timelineSheetCount} 张图片是完整视频按顺序生成的连续 ${video!.sampling.frameRate} FPS 时间轴联系表，共 ${video!.sampling.frameCount} 帧${video!.sampling.durationMs ? `，视频时长 ${video!.sampling.durationMs} 毫秒` : ""}。请以每 ${Math.round(video!.sampling.segmentDurationMs / 1000)} 秒为分镜边界，严格按联系表数组顺序、每张图片从左到右再从上到下分析完整时间线，分别输出每段的人物、道具、场景资产提示词，并说明相邻分镜衔接。末尾 ${video!.sampling.keyFrameCount} 张图片是场景高清关键帧，只用于补充人物妆造、发型、神态、服饰和环境细节。`,
                   },
                   ...video!.frameSheets.map((sheet) => ({
                     type: "image_url" as const,
@@ -24111,16 +24184,20 @@ export function createPhoneAuthDevServer(
               model: model.modelCode,
               messages,
               responseFormat: "json_object",
-              maxTokens: promptReverseMaxTokens,
+              maxTokens: requestMaxTokens,
               createdByUserId: authenticated.user.id,
               payloadSummary: mode === "video"
                 ? "toolbox prompt reverse local 6fps frame sheet analysis"
                 : "toolbox prompt reverse image analysis",
               requestKeyPrefix: "toolbox-prompt-reverse",
             } as const;
-            const completion = canvasTextChatGateway.completeJsonWithUsage
-              ? await canvasTextChatGateway.completeJsonWithUsage(gatewayInput)
-              : { content: await canvasTextChatGateway.completeJson(gatewayInput), usage: null, providerRequestId: null };
+            const completeGatewayRequest = () => canvasTextChatGateway.completeJsonWithUsage
+              ? canvasTextChatGateway.completeJsonWithUsage(gatewayInput)
+              : canvasTextChatGateway.completeJson(gatewayInput)
+                .then((content) => ({ content, usage: null, providerRequestId: null }));
+            const completion = analysisTarget === "director"
+              ? await completeVideoToDirectorWithProviderStreamRetry(completeGatewayRequest)
+              : await completeGatewayRequest();
             const usage = promptReverseUsageFromProviderUsage(completion.usage);
             const credit = await billing.settleRound({
               ownerUserId: authenticated.user.id,
@@ -24146,7 +24223,9 @@ export function createPhoneAuthDevServer(
               }),
               credit,
               usage,
-              result: parsePromptReverseResult(completion.content),
+              result: analysisTarget === "director"
+                ? parseVideoToDirectorResult(completion.content, video?.sampling.durationMs)
+                : parsePromptReverseResult(completion.content),
             }));
           } catch (error) {
             const message = error instanceof Error ? error.message : "prompt_reverse_failed";
@@ -28277,17 +28356,36 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(403, "team_member_canvas_create_forbidden", "team member cannot create canvas projects"));
             }
             assertCapability(actor, capabilities.projectCreate);
+            const idempotencyKey = requiredIdempotencyKeyFromRequest(request) ?? randomUUID();
             const body = (await readJsonBody(request)) as { title?: unknown; status?: unknown };
             const nextIndex = visibleProjects.length + 1;
-            const project = await createCanvasProjectRecord(db, {
-              userId: authenticated.user.id,
+            const requestBody = {
               title: normalizeCanvasProjectTitle(body.title, `画布项目 ${nextIndex}`),
               status: String(body.status ?? "草稿").trim() || "草稿",
-              now: new Date(),
-            });
-            return writeJson(response, enveloped(201, {
-              project: serializeCanvasProject(project),
-            }));
+            };
+            try {
+              const result = await executeIdempotentCanvasProjectCreate(db, {
+                userId: authenticated.user.id,
+                idempotencyKey,
+                request: requestBody,
+                execute: () => createCanvasProjectRecord(db, {
+                  userId: authenticated.user.id,
+                  ...requestBody,
+                  now: new Date(),
+                }),
+              });
+              return writeJson(response, enveloped(201, {
+                project: serializeCanvasProject(result.project),
+              }));
+            } catch (error) {
+              if (error instanceof IdempotencyConflictError) {
+                return writeJson(response, envelopedError(409, error.code, "request conflict"));
+              }
+              if (error instanceof IdempotencyProcessingError) {
+                return writeJson(response, envelopedError(202, error.code, "request is still processing"));
+              }
+              throw error;
+            }
           }
         }
 

@@ -22,11 +22,14 @@ const [
   { processGenerationQueueJobCancellations },
   { reconcileActiveCanvasGenerationBatches },
   { restoreCanvasActorScope },
-  { createCanvasGenerationBatchDispatch },
+  { createCanvasGenerationBatchDispatch, repairTimedOutEpisodeGenerationTasks },
   { createStorageAdapterFromEnv },
   { reconcileCanvasMediaDerivations },
   { findGenerationArtifactHandoff },
   { repairFailedGptImageSubmissions },
+  { failOrphanedTeamAssetGenerations },
+  { failOrphanedCanvasAgentGenerationNodes },
+  { reconcileGenerationSurfaceConsistency },
 ] = await Promise.all([
     import("../apps/backend/src/modules/shared/db/dev-db.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-bullmq.publisher.ts"),
@@ -45,6 +48,9 @@ const [
     import("../apps/backend/src/modules/project/canvas-media-derivation.service.ts"),
     import("../apps/backend/src/modules/model-gateway/generation-artifact-handoff.service.ts"),
     import("../apps/backend/src/modules/model-gateway/gpt-image.worker.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-orphaned-surface-repair.service.ts"),
+    import("../apps/backend/src/modules/project/creator-canvas-record.service.ts"),
+    import("../apps/backend/src/modules/model-gateway/generation-consistency-reconciliation.service.ts"),
   ]);
 
 const config = loadGenerationQueueConfig(process.env);
@@ -190,6 +196,37 @@ try {
         resolveArtifact: (taskId) => findGenerationArtifactHandoff(db, taskId),
       }),
     );
+    const timedOutEpisodeGenerationRepair = await runMaintenanceStep(
+      "timed_out_episode_generation_repair",
+      () => repairTimedOutEpisodeGenerationTasks(db, {
+        now,
+        limit: config.outbox.dispatchBatchSize,
+      }),
+    );
+    const surfaceConsistencyReconciliation = await runMaintenanceStep(
+      "generation_surface_consistency",
+      () => reconcileGenerationSurfaceConsistency(db, {
+        now,
+        limit: config.outbox.dispatchBatchSize,
+      }),
+    );
+    const orphanedSurfaceStaleBefore = new Date(now.getTime() - Math.max(600_000, config.repair.staleDispatchMs));
+    const orphanedTeamAssetRepair = await runMaintenanceStep(
+      "orphaned_team_asset_repair",
+      () => failOrphanedTeamAssetGenerations(db, {
+        now,
+        staleBefore: orphanedSurfaceStaleBefore,
+        limit: config.outbox.dispatchBatchSize,
+      }),
+    );
+    const orphanedCanvasAgentNodeRepair = await runMaintenanceStep(
+      "orphaned_canvas_agent_node_repair",
+      () => failOrphanedCanvasAgentGenerationNodes(db, {
+        now,
+        staleBefore: orphanedSurfaceStaleBefore,
+        limit: config.outbox.dispatchBatchSize,
+      }),
+    );
     const adminCommandRecovery = await runMaintenanceStep(
       "admin_command_recovery",
       () => recoverGenerationQueueAdminCommands(db, {
@@ -219,6 +256,11 @@ try {
     if (leaseRepair && (leaseRepair.repairedTaskIds.length || leaseRepair.resultUnknownTaskIds.length)) {
       console.info(
         `[generation-maintenance] repairedSubmitLeases=${leaseRepair.repairedTaskIds.length} resultUnknown=${leaseRepair.resultUnknownTaskIds.length}`,
+      );
+    }
+    if (orphanedTeamAssetRepair?.failedAssetIds.length || orphanedCanvasAgentNodeRepair?.failedNodeKeys.length) {
+      console.info(
+        `[generation-maintenance] failedOrphanedTeamAssets=${orphanedTeamAssetRepair?.failedAssetIds.length ?? 0} failedOrphanedCanvasAgentNodes=${orphanedCanvasAgentNodeRepair?.failedNodeKeys.length ?? 0}`,
       );
     }
     if (repair?.repairedTaskIds.length) {
@@ -260,6 +302,16 @@ try {
       console.info(
         `[generation-maintenance] completedCanvasDerivations=${canvasDerivationReconciliation.completedDerivationIds.length} failedCanvasDerivations=${canvasDerivationReconciliation.failedDerivationIds.length} canceledCanvasDerivations=${canvasDerivationReconciliation.canceledDerivationIds.length}`,
       );
+    }
+    if (timedOutEpisodeGenerationRepair?.timedOutTaskIds.length) {
+      console.info(`[generation-maintenance] repairedTimedOutEpisodeTasks=${timedOutEpisodeGenerationRepair.timedOutTaskIds.length}`);
+    }
+    if (surfaceConsistencyReconciliation) {
+      const repairedSurfaceCount = Object.values(surfaceConsistencyReconciliation)
+        .reduce((total, ids) => total + ids.length, 0);
+      if (repairedSurfaceCount) {
+        console.info(`[generation-maintenance] reconciledGenerationSurfaces=${repairedSurfaceCount}`);
+      }
     }
     if (adminCommandRecovery && (
       adminCommandRecovery.recoveredCommandIds.length

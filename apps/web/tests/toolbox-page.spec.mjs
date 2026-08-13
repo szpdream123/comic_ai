@@ -36,26 +36,43 @@ test("toolbox page renders as an independent built-in tool directory", () => {
   assert.match(html, /data-toolbox-tool="prompt-reverse"/);
   assert.match(html, /data-toolbox-tool="video-depth"/);
   assert.match(html, /data-toolbox-tool="watermark-removal"/);
+  assert.match(html, /data-toolbox-tool="video-to-director"/);
   assert.match(html, /toolbox-watermark-card-flow/);
   assert.match(html, /原图[\s\S]*?水印[\s\S]*?清除/);
   assert.match(html, /视频转深度/);
   assert.match(html, /提示词反推/);
   assert.match(html, /图片\/视频去水印/);
+  assert.match(html, /视频转3D导演台/);
   assert.match(html, /toolbox-prompt-reverse-cover-v5\.png/);
   assert.match(html, /toolbox-video-depth-cover-v3\.png/);
   assert.match(html, /图片\/视频 → 提示词/);
   assert.match(html, /视频 → 深度视频/);
   assert.match(html, /图片\/视频 → 去水印/);
   assert.match(html, /scene-3d-studio\.png/);
-  assert.equal((html.match(/data-toolbox-tool=/g) ?? []).length, 3);
+  assert.equal((html.match(/data-toolbox-tool=/g) ?? []).length, 4);
   assert.doesNotMatch(html, /故事板线稿|图片拆格|字幕格式转换/);
   assert.match(html, /data-action="open-toolbox-prompt-reverse"/);
   assert.match(html, /data-action="open-toolbox-video-depth"/);
   assert.match(html, /data-action="open-toolbox-watermark-removal"/);
+  assert.match(html, /data-action="open-toolbox-video-to-director"/);
   assert.doesNotMatch(html, /待接入/);
   assert.match(toolboxCss, /\.toolbox-page\s*\{[\s\S]*?width:\s*100%;[\s\S]*?margin:\s*0;/);
   assert.match(toolboxCss, /\.toolbox-grid\s*\{[\s\S]*?repeat\(auto-fit, minmax\(min\(100%, 22rem\), 22rem\)\)/);
   assert.match(toolboxCss, /\.toolbox-card\s*\{[\s\S]*?max-width:\s*22rem;[\s\S]*?max-height:\s*22rem;/);
+});
+
+test("video to director opens in the shared centered toolbox modal", () => {
+  const html = renderToolboxPage({
+    toolboxVideoToDirector: { open: true, pluginStatus: "ready" },
+  });
+
+  assert.match(html, /class="toolbox-reverse-scrim toolbox-director-backdrop"/);
+  assert.match(html, /class="toolbox-director-modal" role="dialog" aria-modal="true"/);
+  assert.match(html, /class="toolbox-reverse-close" data-action="close-toolbox-video-to-director"/);
+  assert.match(html, /class="toolbox-director-header-plugin"[\s\S]*data-action="uninstall-toolbox-video-to-director-plugin"/);
+  assert.doesNotMatch(html, /中等精度 · 本机解码 \+ 视觉模型|3D预演草案/);
+  assert.doesNotMatch(html, /class="toolbox-director-source"[\s\S]*class="toolbox-director-plugin"/);
+  assert.doesNotMatch(html, /toolbox-modal-backdrop|toolbox-modal-close/);
 });
 
 test("watermark removal renders a local canvas editor and completed result", () => {

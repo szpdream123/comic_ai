@@ -282,14 +282,15 @@ export async function reconcileCanvasGenerationBatch(
     SET status = CASE
           WHEN task.status = 'succeeded' THEN 'succeeded'
           WHEN task.status = 'failed' THEN 'failed'
+          WHEN task.status IN ('result_unknown','manual_review_required') THEN 'failed'
           WHEN task.status = 'canceled' THEN 'canceled'
           WHEN task.status = 'cancel_requested' THEN 'cancel_requested'
-          WHEN task.status IN ('running','result_unknown','manual_review_required') THEN 'running'
+          WHEN task.status = 'running' THEN 'running'
           ELSE item.status
         END,
-        failure_json = CASE WHEN task.status = 'failed'
-          THEN jsonb_build_object('failureCode', task.failure_code) ELSE item.failure_json END,
-        completed_at = CASE WHEN task.status IN ('succeeded','failed','canceled') THEN $2 ELSE item.completed_at END,
+        failure_json = CASE WHEN task.status IN ('failed','result_unknown','manual_review_required')
+          THEN jsonb_build_object('failureCode', COALESCE(task.failure_code, task.status)) ELSE item.failure_json END,
+        completed_at = CASE WHEN task.status IN ('succeeded','failed','canceled','result_unknown','manual_review_required') THEN $2 ELSE item.completed_at END,
         updated_at = $2
     FROM tasks task
     WHERE item.batch_id = $1 AND item.task_id = task.id

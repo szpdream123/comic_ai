@@ -1,4 +1,5 @@
 import { CANVAS_NODE_SIZES, findCanvasPort } from "./canvas-default-document.js";
+import { removeCanvasNodeReferencesFromPrompt } from "./canvas-prompt-reference.js";
 
 export function canvasDocumentToX6Data(document) {
   const normalizedNodes = normalizeCanvasGrouping(Array.isArray(document?.nodes) ? document.nodes : []);
@@ -289,20 +290,35 @@ export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
     }
   }
   const normalizedNodes = normalizeCanvasGrouping(nodes, preferredParents);
+  const normalizedNodeIds = new Set(normalizedNodes.map((node) => String(node?.id ?? "")));
+  const removedNodeIds = [...previousNodes.keys()].filter((nodeId) => !normalizedNodeIds.has(String(nodeId)));
+  const reconciledNodes = removedNodeIds.length
+    ? normalizedNodes.map((node) => {
+        const prompt = node?.data?.prompt;
+        if (typeof prompt !== "string") return node;
+        const nextPrompt = removeCanvasNodeReferencesFromPrompt(prompt, removedNodeIds);
+        return nextPrompt === prompt ? node : { ...node, data: { ...(node.data ?? {}), prompt: nextPrompt } };
+      })
+    : normalizedNodes;
 
   const visibleEdgeIds = new Set((Array.isArray(x6Data?.edges) ? x6Data.edges : []).map((edge) => edge.id));
   const hiddenNodeIds = new Set(nodes.filter((node) => node?.data?.hiddenByCharacterId).map((node) => node.id));
-  const edges = (Array.isArray(x6Data?.edges) ? x6Data.edges : []).map((edge) => {
-    const previous = previousEdges.get(edge.id) ?? edge.data?.canvasEdge ?? {};
-    return {
-      ...structuredCloneSafe(previous),
-      id: edge.id,
-      sourceNodeId: edge.source?.cell ?? previous.sourceNodeId ?? "",
-      sourcePortId: edge.source?.port ?? previous.sourcePortId ?? "",
-      targetNodeId: edge.target?.cell ?? previous.targetNodeId ?? "",
-      targetPortId: edge.target?.port ?? previous.targetPortId ?? "",
-    };
-  }).concat(
+  const edges = (Array.isArray(x6Data?.edges) ? x6Data.edges : [])
+    .map((edge) => {
+      const previous = previousEdges.get(edge.id) ?? edge.data?.canvasEdge ?? {};
+      return {
+        ...structuredCloneSafe(previous),
+        id: edge.id,
+        sourceNodeId: edge.source?.cell ?? previous.sourceNodeId ?? "",
+        sourcePortId: edge.source?.port ?? previous.sourcePortId ?? "",
+        targetNodeId: edge.target?.cell ?? previous.targetNodeId ?? "",
+        targetPortId: edge.target?.port ?? previous.targetPortId ?? "",
+      };
+    })
+    .filter((edge) => Boolean(
+      edge.sourceNodeId && edge.sourcePortId && edge.targetNodeId && edge.targetPortId
+    ))
+    .concat(
     [...previousEdges.values()]
       .filter((edge) => !visibleEdgeIds.has(edge.id) && (
         hiddenNodeIds.has(edge.sourceNodeId) || hiddenNodeIds.has(edge.targetNodeId)
@@ -312,7 +328,7 @@ export function canvasDocumentFromX6Data(x6Data, previousDocument = {}) {
 
   return {
     ...structuredCloneSafe(previousDocument),
-    nodes: normalizedNodes,
+    nodes: reconciledNodes,
     edges,
     updatedAt: new Date(0).toISOString(),
   };

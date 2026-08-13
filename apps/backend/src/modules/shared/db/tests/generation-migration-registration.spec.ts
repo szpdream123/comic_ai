@@ -51,6 +51,8 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         db,
         process.cwd(),
         "20260902-merge-san-bao-gpt-image2-variants.sql",
+        "20260903-add-globalaiopc-model-center-and-soundclone.sql",
+        "20260904-create-provider-material-assets.sql",
       );
 
       const result = await db.query<{ pricing_json: Record<string, unknown> }>(`
@@ -1027,6 +1029,76 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       `);
       assert.equal(cumobPolicies.rows.every((row) => row.poll_queue_name === "generation-poll-image"), true);
       assert.equal(cumobPolicies.rows.every((row) => Number(row.polling_interval_ms) === 30000), true);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("registers the GlobalAiOpc Model Center and SoundClone models", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      const models = await db.query<{
+        model_code: string;
+        provider_model: string;
+        provider_protocol: string;
+        media_type: string;
+        create_endpoint: string;
+        query_endpoint: string;
+        api_key_env: string;
+        request_format: string;
+        submit_queue_name: string;
+        poll_queue_name: string;
+      }>(`
+        SELECT model.model_code, model.provider_model, model.provider_protocol, model.media_type,
+               model.provider_config_json->>'createTaskEndpoint' AS create_endpoint,
+               model.provider_config_json->>'queryTaskEndpoint' AS query_endpoint,
+               model.provider_config_json->>'apiKeyEnv' AS api_key_env,
+               model.provider_config_json->>'requestFormat' AS request_format,
+               policy.submit_queue_name, policy.poll_queue_name
+        FROM ai_model_configs model
+        JOIN ai_model_dispatch_policies policy ON policy.model_config_id=model.id
+        WHERE model.model_code IN ('seedance-2.5-c1','MiniMax-H3-c4','soundclone')
+        ORDER BY model.model_code
+      `);
+
+      assert.deepEqual(models.rows, [
+        {
+          model_code: "MiniMax-H3-c4",
+          provider_model: "MiniMax-H3-c4",
+          provider_protocol: "globalaiopc_video",
+          media_type: "video",
+          create_endpoint: "/v2/model-center/tasks",
+          query_endpoint: "/v2/model-center/tasks/{taskId}",
+          api_key_env: "GLOBAL_AI_OPC_API_KEY",
+          request_format: "globalaiopc_model_center_video",
+          submit_queue_name: "generation-submit-video",
+          poll_queue_name: "generation-poll-video",
+        },
+        {
+          model_code: "seedance-2.5-c1",
+          provider_model: "seedance-2.5-c1",
+          provider_protocol: "globalaiopc_video",
+          media_type: "video",
+          create_endpoint: "/v2/model-center/tasks",
+          query_endpoint: "/v2/model-center/tasks/{taskId}",
+          api_key_env: "GLOBAL_AI_OPC_API_KEY",
+          request_format: "globalaiopc_model_center_video",
+          submit_queue_name: "generation-submit-video",
+          poll_queue_name: "generation-poll-video",
+        },
+        {
+          model_code: "soundclone",
+          provider_model: "soundCloningAudio",
+          provider_protocol: "globalaiopc_sound_clone",
+          media_type: "audio",
+          create_endpoint: "/v1/soundCloning/audios",
+          query_endpoint: "/v1/result/{taskId}",
+          api_key_env: "GLOBAL_AI_OPC_API_KEY",
+          request_format: "globalaiopc_sound_clone_audio",
+          submit_queue_name: "generation-submit-image",
+          poll_queue_name: "generation-poll-audio",
+        },
+      ]);
     } finally {
       await db.close();
     }

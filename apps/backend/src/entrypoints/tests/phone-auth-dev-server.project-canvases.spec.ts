@@ -113,6 +113,25 @@ describe("removed project canvas HTTP routes", { concurrency: false }, () => {
       assert.equal(createResponse.status, 201, JSON.stringify(created));
       const canvasId = created.data.project.id;
 
+      const replayCreateResponse = await fetch(`${server.origin}/api/creator/canvases`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "formal-canvas-create",
+          cookie,
+        },
+        body: JSON.stringify({ title: "正式 Canvas API" }),
+      });
+      const replayCreated = await replayCreateResponse.json();
+      assert.equal(replayCreateResponse.status, 201, JSON.stringify(replayCreated));
+      assert.equal(replayCreated.data.project.id, canvasId);
+
+      const replayListResponse = await fetch(`${server.origin}/api/creator/canvases`, {
+        headers: { cookie },
+      });
+      const replayList = await replayListResponse.json();
+      assert.equal(replayList.data.projects.length, 1);
+
       const itemResponse = await fetch(`${server.origin}/api/creator/canvases/${canvasId}`, {
         headers: { cookie },
       });

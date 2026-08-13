@@ -588,7 +588,9 @@ function isVideoProviderExecutor(providerExecutor: string) {
 }
 
 function isAudioProviderExecutor(providerExecutor: string) {
-  return providerExecutor === "aliyun-bailian-audio" || providerExecutor === "apimart-audio";
+  return providerExecutor === "aliyun-bailian-audio"
+    || providerExecutor === "apimart-audio"
+    || providerExecutor === "globalaiopc-sound-clone";
 }
 
 async function acquireFinalizePermit(

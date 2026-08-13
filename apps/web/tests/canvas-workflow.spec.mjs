@@ -31,9 +31,12 @@ import {
   classifyCanvasNodeMotion,
   distributeSelectedCanvasNodes,
   duplicateCanvasNodeForModifierDrag,
+  handleCanvasBlankConnectionEvent,
   resolveCanvasGraphInteractionOptions,
   resolveCanvasGraphMountSize,
   resolveCanvasBlankConnection,
+  settleCanvasGraphBlankConnectionDraft,
+  validateCanvasGraphEdgeConnection,
   resolveCanvasStoryboardCutReference,
   reconcileCanvasWorkflowGraph,
   refreshCanvasWorkflowNode,
@@ -44,6 +47,7 @@ import {
 } from "../src/features/production-workbench/canvas/canvas-x6-graph.js";
 import {
   addCanvasNode,
+  addConnectedCanvasNode,
   arrangeCanvasDocumentOnGrid,
   applyCanvasRunResult,
   buildCanvasRunPreview,
@@ -376,16 +380,11 @@ describe("canvas workflow document", () => {
     }), { width: 1600, height: 900 });
   });
 
-  it("keeps the rich node layer aligned with the X6 viewport", () => {
+  it("keeps the X6 stage styles aligned with the graph viewport", () => {
     const style = new Map();
     let savedDocument = null;
     const workbench = {
       ui: { canvasDocument: createDefaultCanvasDocument({ canvasProjectId: "canvas-viewport" }) },
-      root: {
-        querySelector: () => ({
-          style: { setProperty: (key, value) => style.set(key, value) },
-        }),
-      },
       updateCanvasDocument: (document) => {
         savedDocument = document;
       },
@@ -393,6 +392,11 @@ describe("canvas workflow document", () => {
     const graph = {
       translate: () => ({ tx: 48, ty: -24 }),
       zoom: () => 1.5,
+      __comicAiCanvasMount: {
+        closest: () => ({
+          style: { setProperty: (key, value) => style.set(key, value) },
+        }),
+      },
     };
 
     assert.equal(syncCanvasGraphViewport(graph, workbench), true);
@@ -403,30 +407,200 @@ describe("canvas workflow document", () => {
       interactionMode: "default",
     });
     assert.deepEqual(workbench.ui.canvasDocument.viewport, savedDocument.viewport);
-    assert.equal(style.get("--canvas-pan-x"), "48px");
-    assert.equal(style.get("--canvas-pan-y"), "-24px");
-    assert.equal(style.get("--canvas-zoom"), "1.5");
     assert.equal(style.get("--canvas-grid-size"), "30px");
     assert.equal(style.get("--canvas-grid-major-size"), "150px");
+    assert.equal(style.get("--canvas-grid-dot-mix"), "14%");
     assert.equal(style.get("--canvas-grid-x"), "48px");
     assert.equal(style.get("--canvas-grid-y"), "-24px");
     assert.equal(style.get("--canvas-input-scale"), String(1 / 1.5));
   });
 
+  it("thins and fades the visual Canvas grid when zoomed out", () => {
+    const style = new Map();
+    const workbench = {
+      ui: { canvasDocument: createDefaultCanvasDocument({ canvasProjectId: "canvas-grid-zoom" }) },
+      updateCanvasDocument: () => {},
+    };
+    const graph = {
+      translate: () => ({ tx: 0, ty: 0 }),
+      zoom: () => 0.35,
+      __comicAiCanvasMount: {
+        closest: () => ({
+          style: { setProperty: (key, value) => style.set(key, value) },
+        }),
+      },
+    };
+
+    assert.equal(syncCanvasGraphViewport(graph, workbench), true);
+    assert.equal(style.get("--canvas-grid-size"), "20px");
+    assert.equal(style.get("--canvas-grid-dot-mix"), "4.9%");
+  });
+
   it("turns an X6 output released on blank canvas into a compatible-node menu request", () => {
+    const draftEdge = (source, target = { x: 480, y: 320 }) => ({
+      __comicAiCanvasConnectionDraft: true,
+      getSource: () => source,
+      getTarget: () => target,
+    });
     assert.deepEqual(resolveCanvasBlankConnection({
-      isNew: true,
       type: "target",
       currentCell: null,
       currentPoint: { x: 480, y: 320 },
-      edge: { getSource: () => ({ cell: "source-image-1", port: "out_image" }) },
+      edge: draftEdge({ cell: "source-image-1", port: "out_image" }),
     }), {
       sourceNodeId: "source-image-1",
       sourcePortId: "out_image",
       canvasX: 480,
       canvasY: 320,
     });
-    assert.equal(resolveCanvasBlankConnection({ isNew: true, type: "target", currentCell: { id: "node-2" } }), null);
+    assert.deepEqual(resolveCanvasBlankConnection({
+      edge: draftEdge({ cell: "source-image-1", port: "out_image" }),
+    }), {
+      sourceNodeId: "source-image-1",
+      sourcePortId: "out_image",
+      canvasX: 480,
+      canvasY: 320,
+    });
+    assert.equal(resolveCanvasBlankConnection({
+      type: "target",
+      currentCell: { id: "node-2" },
+      edge: draftEdge({ cell: "source-image-1", port: "out_image" }, { cell: "node-2", port: "in_image" }),
+    }), null);
+    assert.equal(resolveCanvasBlankConnection({
+      type: "target",
+      edge: { getSource: () => ({ cell: "source-image-1", port: "out_image" }), getTarget: () => ({ x: 1, y: 2 }) },
+    }), null);
+    assert.equal(resolveCanvasBlankConnection({ type: "source", edge: draftEdge({ cell: "source-image-1", port: "out_image" }, { x: 1, y: 2 }) }), null);
+    assert.equal(resolveCanvasBlankConnection({
+      type: "target",
+      currentPoint: { x: 1, y: 2 },
+      edge: draftEdge({ cell: "source-image-1" }),
+    }), null);
+  });
+
+  it("allows only new output drafts to end on blank canvas", () => {
+    const edge = (source, target, draft = false) => ({
+      __comicAiCanvasConnectionDraft: draft,
+      getSource: () => source,
+      getTarget: () => target,
+    });
+
+    assert.equal(validateCanvasGraphEdgeConnection({
+      edge: edge({ cell: "source", port: "out_image" }, { x: 480, y: 320 }, true),
+      type: "target",
+    }), true);
+    assert.equal(validateCanvasGraphEdgeConnection({
+      edge: edge({ cell: "source", port: "out_image" }, { x: 480, y: 320 }),
+      type: "target",
+    }), false);
+    assert.equal(validateCanvasGraphEdgeConnection({
+      edge: edge({ x: 120, y: 80 }, { cell: "target", port: "in_image" }),
+      type: "source",
+    }), false);
+    assert.equal(validateCanvasGraphEdgeConnection({
+      edge: edge({ cell: "source", port: "out_image" }, { cell: "target", port: "in_image" }),
+      type: "target",
+    }), true);
+  });
+
+  it("keeps a temporary blank X6 edge while the compatible-node menu is open", () => {
+    const calls = [];
+    const edge = {
+      id: "draft-edge-1",
+      __comicAiCanvasConnectionDraft: true,
+      getSource: () => ({ cell: "source-image-1", port: "out_image" }),
+      getTarget: () => ({ x: 480, y: 320 }),
+    };
+    const graph = {
+      localToClient: () => ({ x: 820, y: 440 }),
+      removeCell: (...args) => calls.push(["remove", ...args]),
+    };
+    const handled = handleCanvasBlankConnectionEvent({
+      graph,
+      workbench: { onCanvasBlankConnection: (input) => calls.push(["menu", input]) },
+      mount: {
+        closest: () => ({
+          clientWidth: 1600,
+          clientHeight: 1000,
+          getBoundingClientRect: () => ({ left: 100, top: 80, width: 1200, height: 750 }),
+        }),
+      },
+      event: { edge, e: { clientX: 610, clientY: 450 } },
+    });
+
+    assert.equal(handled, true);
+    assert.deepEqual(calls, [["menu", {
+      sourceNodeId: "source-image-1",
+      sourcePortId: "out_image",
+      draftEdgeId: "draft-edge-1",
+      canvasX: 480,
+      canvasY: 320,
+      x: 696,
+      y: 493,
+      stageWidth: 1600,
+      stageHeight: 1000,
+    }]]);
+    assert.equal(graph.__comicAiCanvasPendingConnectionEdge, edge);
+    assert.equal(settleCanvasGraphBlankConnectionDraft(graph, {
+      document: { edges: [] },
+      draftEdgeId: "draft-edge-1",
+    }), false);
+    assert.deepEqual(calls, [["menu", calls[0][1]]]);
+    assert.equal(settleCanvasGraphBlankConnectionDraft(graph, { document: { edges: [] } }), true);
+    assert.deepEqual(calls.at(-1), ["remove", edge, { canvasBlankConnectionDraft: true }]);
+
+    const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+    assert.match(source, /allowBlank:\s*true/);
+    assert.match(source, /graph\.on\("edge:mouseup"[\s\S]*?handleCanvasBlankConnectionEvent/);
+    assert.match(source, /options\?\.canvasBlankConnectionDraft/);
+  });
+
+  it("positions the compatible-node menu to the right of the arrow in the shared stage coordinate system", () => {
+    const detailSource = readFileSync(new URL("../src/features/production-workbench/project-detail.js", import.meta.url), "utf8");
+    const hostSource = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+
+    assert.match(detailSource, /const maxLeft = !isConnectionMenu && stageWidth > menuWidth/);
+    assert.match(detailSource, /const top = isConnectionMenu \? Number\(menu\.y \?\? 120\)/);
+    assert.match(detailSource, /const connectionPositionStyle = isConnectionMenu \? ";transform:translateY\(-50%\)"/);
+    assert.doesNotMatch(detailSource, /使用该节点作为输入|创建兼容的下游节点|showShortcuts: !isConnectionMenu/);
+    assert.match(detailSource, /data-action="paste-canvas-selection"/);
+    assert.doesNotMatch(hostSource, /portalCanvasConnectionDropMenu|new-canvas-layout > \.canvas-connection-drop-menu/);
+    assert.match(hostSource, /nextStage\.querySelectorAll\?\.\(`:scope > \$\{selector\}`\)\.forEach\(\(element\) => currentStage\.append\(element\)\)/);
+    assert.match(styles, /\.canvas-connection-drop-menu\s*\{[\s\S]*?z-index:\s*60/);
+    assert.doesNotMatch(styles, /\.canvas-connection-drop-menu > header|max-height:\s*min\(22\.5rem/);
+    assert.match(styles, /\.canvas-context-menu svg\s*\{[\s\S]*?fill:\s*none;[\s\S]*?stroke:\s*currentColor;/);
+  });
+
+  it("finalizes a pending blank X6 edge without removing it after the connection is committed", () => {
+    const removals = [];
+    const removedClasses = [];
+    const edge = { id: "draft-edge-2", __comicAiCanvasConnectionDraft: true };
+    const graph = {
+      __comicAiCanvasPendingConnectionEdge: edge,
+      findViewByCell: () => ({
+        container: {
+          classList: { remove: (...classNames) => removedClasses.push(...classNames) },
+        },
+      }),
+      removeCell: (...args) => removals.push(args),
+    };
+
+    assert.equal(settleCanvasGraphBlankConnectionDraft(graph, {
+      document: {
+        edges: [{
+          id: "draft-edge-2",
+          sourceNodeId: "source-image-1",
+          sourcePortId: "out_image",
+          targetNodeId: "ai-image-1",
+          targetPortId: "in_image",
+        }],
+      },
+    }), true);
+    assert.equal(edge.__comicAiCanvasConnectionDraft, undefined);
+    assert.equal(graph.__comicAiCanvasPendingConnectionEdge, undefined);
+    assert.deepEqual(removedClasses, ["is-canvas-edge-connecting"]);
+    assert.deepEqual(removals, []);
   });
 
   it("keeps a duplicate in place when Ctrl-dragging a non-group X6 node", () => {
@@ -550,7 +724,7 @@ describe("canvas workflow document", () => {
     );
     assert.deepEqual(
       { type: scriptNode?.type, title: scriptNode?.title },
-      { type: "script", title: "脚本节点" },
+      { type: "script", title: "脚本" },
     );
 
     const render = loadCanvasGenericX6Renderer();
@@ -577,6 +751,21 @@ describe("canvas workflow document", () => {
     assert.equal(nextDocument.nodes.length, document.nodes.length);
     assert.equal(nextDocument.edges.length, document.edges.length);
     assert.deepEqual(nextDocument.nodes.map((node) => node.position), document.nodes.map((node) => node.position));
+  });
+
+  it("does not persist incomplete X6 connection drafts", () => {
+    const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
+    const x6Data = canvasDocumentToX6Data(document);
+    x6Data.edges.push({
+      id: "connection-draft",
+      source: { cell: "script-source", port: "out_text" },
+      target: { x: 480, y: 320 },
+    });
+
+    const nextDocument = canvasDocumentFromX6Data(x6Data, document);
+
+    assert.equal(nextDocument.edges.length, document.edges.length);
+    assert.equal(nextDocument.edges.some((edge) => edge.id === "connection-draft"), false);
   });
 
   it("keeps ordinary source nodes square while giving the script workflow room for controls", () => {
@@ -818,6 +1007,26 @@ describe("canvas workflow document", () => {
     assert.equal(invalid.reason, "canvas_connection_direction_invalid");
   });
 
+  it("reuses the pending X6 edge id when a compatible downstream node is created", () => {
+    const document = addCanvasNode(createDefaultCanvasDocument({ canvasProjectId: "canvas-pending-edge" }), {
+      id: "source-image-pending",
+      type: "source-image",
+      position: { x: 120, y: 100 },
+    });
+    const result = addConnectedCanvasNode(document, {
+      id: "ai-image-pending",
+      type: "ai-image",
+      position: { x: 480, y: 320 },
+      edgeId: "draft-edge-pending",
+      sourceNodeId: "source-image-pending",
+      sourcePortId: "out_image",
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.edge.id, "draft-edge-pending");
+    assert.equal(result.edge.targetNodeId, "ai-image-pending");
+  });
+
   it("disconnects workflow edges when dragged back from input to output", () => {
     const document = createStarterCanvasDocument({ projectId: "project-1", episodeId: "episode-1" });
 
@@ -844,7 +1053,7 @@ describe("canvas workflow document", () => {
     assert.equal(missing.ok, false);
   });
 
-  it("exposes Liblib-like template groups for adding common workflow nodes", () => {
+  it("exposes the canonical Canvas catalog while retaining hidden legacy templates", () => {
     const templates = resolveCanvasNodeTemplates({
       models: [
         { modelCode: "image-live", modelLabel: "Image Live", supportedModes: ["single-image"] },
@@ -852,8 +1061,12 @@ describe("canvas workflow document", () => {
       ],
     });
 
-    const templateKeys = templates.map((template) => `${template.group}:${template.type}`);
-    assert.ok(["节点:script", "节点:send", "节点:video", "来源:upload"].every((key) => templateKeys.includes(key)));
+    assert.deepEqual(
+      templates.filter((template) => template.visible !== false).map((template) => template.title),
+      ["文本", "图片", "视频", "智能剪辑", "音频", "导演台", "逐帧拉片", "脚本"],
+    );
+    assert.equal(templates.find((template) => template.id === "template-upload").visible, false);
+    assert.equal(templates.find((template) => template.id === "template-ai-panorama").visible, false);
     assert.equal(templates.find((template) => template.type === "send").defaultData.modelCode, "image-live");
     assert.equal(templates.find((template) => template.type === "video").defaultData.modelCode, "video-live");
   });
@@ -1334,6 +1547,59 @@ describe("canvas workflow document", () => {
     assert.deepEqual(nextDocument.edges, []);
   });
 
+  it("removes prompt references to a deleted canvas node", () => {
+    const document = {
+      version: 2,
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: "source-image", type: "source-image", data: { mediaKind: "image" } },
+        {
+          id: "video-generator",
+          type: "ai-video",
+          data: { prompt: "参考 @node:source-image@4 @asset:hero", mediaKind: "video" },
+        },
+      ],
+      edges: [{
+        id: "edge-image-video",
+        sourceNodeId: "source-image",
+        sourcePortId: "out_image",
+        targetNodeId: "video-generator",
+        targetPortId: "in_asset",
+      }],
+    };
+
+    const nextDocument = removeCanvasNode(document, "source-image");
+
+    assert.equal(nextDocument.nodes[0].data.prompt, "参考 @asset:hero");
+    assert.deepEqual(nextDocument.edges, []);
+  });
+
+  it("removes prompt references when X6 deletes a canvas node", () => {
+    const document = {
+      version: 2,
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [
+        { id: "source-image", type: "source-image", data: { mediaKind: "image" } },
+        { id: "video-generator", type: "ai-video", data: { prompt: "参考 @node:source-image", mediaKind: "video" } },
+      ],
+      edges: [{
+        id: "edge-image-video",
+        sourceNodeId: "source-image",
+        sourcePortId: "out_image",
+        targetNodeId: "video-generator",
+        targetPortId: "in_asset",
+      }],
+    };
+    const x6Data = canvasDocumentToX6Data(document);
+    x6Data.nodes = x6Data.nodes.filter((node) => node.id !== "source-image");
+    x6Data.edges = [];
+
+    const nextDocument = canvasDocumentFromX6Data(x6Data, document);
+
+    assert.equal(nextDocument.nodes[0].data.prompt, "参考");
+    assert.deepEqual(nextDocument.edges, []);
+  });
+
   it("returns a legacy storyboard cut image to its source cell and removes attached edges", () => {
     let document = addCanvasNode(createDefaultCanvasDocument({ canvasProjectId: "canvas-storyboard-return" }), {
       id: "storyboard-source",
@@ -1588,7 +1854,7 @@ describe("canvas workflow document", () => {
     const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
     const workbenchStyles = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
     assert.match(graphSource, /setProperty\?\.\("--canvas-input-scale", String\(1 \/ Math\.max\(0\.1, normalizedZoom\)\)\)/);
-    assert.match(workbenchStyles, /\.canvas-stage\.is-x6-ready \.canvas-flow \.canvas-node-editor\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
+    assert.doesNotMatch(workbenchStyles, /\.canvas-flow/);
     assert.match(workbenchStyles, /\.canvas-stage\.is-x6-ready \.canvas-x6-editor-overlay\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
     assert.match(graphSource, /followLatest:\s*!textOutput\.matches\?\.\("\[data-canvas-source-text-output\]"\)/);
   });
@@ -1622,10 +1888,11 @@ describe("canvas workflow document", () => {
 
 it("enables X6 alignment reference lines with the Canvas snap preference", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
-  assert.match(source, /new X6\.Graph\(\{[\s\S]*?async:\s*false,[\s\S]*?moveThreshold:\s*0,[\s\S]*?clickThreshold:\s*0/);
+  assert.match(source, /new X6\.Graph\(\{[\s\S]*?async:\s*false,[\s\S]*?moveThreshold:\s*2,[\s\S]*?clickThreshold:\s*0/);
   assert.match(source, /snapline:\s*\{[\s\S]*?enabled:\s*viewport\.snapEnabled !== false[\s\S]*?sharp:\s*true/);
-  assert.match(source, /grid:\s*\{\s*size:\s*1,/);
-  assert.doesNotMatch(source, /size:\s*viewport\.snapEnabled !== false \? CANVAS_GRID_SIZE : 1/);
+  assert.match(source, /const CANVAS_GRID_SIZE = 20;/);
+  assert.match(source, /grid:\s*\{\s*size:\s*1,\s*visible:\s*false,\s*type:\s*"dot"/);
+  assert.match(source, /setGridSize\?\.\(snapEnabled \? CANVAS_GRID_SIZE : 1\)/);
 });
 
 it("mounts the X6 snapline plugin with the Canvas snap preference", () => {
@@ -1680,9 +1947,9 @@ it("matches the upstream default and classic Canvas interaction presets", () => 
   assert.deepEqual(classicOptions.selecting.multipleSelectionModifiers, ["shift"]);
 });
 
-it("requires a compatible target port before creating a Canvas edge", () => {
+it("requires a compatible target port while allowing a blank drop menu", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
-  assert.match(source, /connecting:\s*\{[\s\S]*?allowBlank:\s*false/);
+  assert.match(source, /connecting:\s*\{[\s\S]*?allowBlank:\s*true/);
   assert.match(source, /allowNode:\s*false,[\s\S]*?allowEdge:\s*false,[\s\S]*?allowPort:\s*true/);
   assert.match(source, /snap:\s*\{\s*radius:\s*CANVAS_CONNECTION_SNAP_RADIUS,\s*anchor:\s*"center"\s*\}/);
   assert.match(source, /validateMagnet\(\{ magnet \}\)[\s\S]*?inferCanvasPortDirection/);
@@ -1693,6 +1960,8 @@ it("requires a compatible target port before creating a Canvas edge", () => {
   assert.doesNotMatch(source, /if \(!targetCell && sourceCell && source\?\.direction === "out"\) return true;/);
   assert.match(source, /registerEdge\?\.\("comic-ai-canvas-edge"[\s\S]*?selector: "flow"/);
   assert.match(source, /createEdge\(\)[\s\S]*?shape: "comic-ai-canvas-edge"[\s\S]*?zIndex: 0/);
+  assert.match(source, /__comicAiCanvasConnectionDraft = true[\s\S]*?validateEdge\(\{ edge, type \}\)/);
+  assert.match(source, /validateEdge\(\{ edge, type \}\)[\s\S]*?source\.cell && target\.cell[\s\S]*?type === "target"/);
 });
 
 it("keeps animated X6 edges above the retired Canvas flow layer", () => {
@@ -1788,9 +2057,10 @@ it("coalesces X6 viewport persistence and commits edge changes before a host ref
   assert.doesNotMatch(wireSource, /syncCanvasGraphViewport\(graph, workbench\)[\s\S]*?persistCanvasSession/);
   assert.match(wireSource, /classList\?\.add\?\.\("is-panning"\)[\s\S]*?classList\?\.remove\?\.\("is-panning"\)/);
   assert.match(wireSource, /graph\.on\("edge:connected"[\s\S]*?sync\(\)/);
-  assert.match(wireSource, /graph\.on\("edge:removed", sync\)/);
+  assert.match(wireSource, /graph\.on\("edge:removed"[\s\S]*?canvasBlankConnectionDraft[\s\S]*?sync\(event\)/);
   assert.doesNotMatch(wireSource, /scheduleGraphSync/);
-  assert.match(source, /classList\?\.contains\?\.\("is-x6-ready"\)\) return true;/);
+  assert.match(source, /graph\?\.__comicAiCanvasMount\?\.closest\?\.\("\.canvas-stage"\)/);
+  assert.doesNotMatch(source, /\.canvas-flow|--canvas-pan-x|--canvas-zoom/);
   const hostCss = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
   assert.doesNotMatch(hostCss, /\.canvas-stage\.is-panning \.x6-graph-svg-viewport\s*\{[^}]*will-change:\s*transform/s);
 });
@@ -1931,7 +2201,7 @@ it("refreshes an uploading media node without synchronizing it back into the Can
   assert.equal(cellData.canvasNode.data.status, "uploading");
 });
 
-it("shows a scissors control at the midpoint of a hovered X6 edge and removes only that edge", () => {
+it("keeps the scissors control under the pointer on a hovered X6 edge and removes only that edge", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
   const bindStart = source.indexOf("function bindCanvasEdgeDisconnectControl");
   const bindEnd = source.indexOf("export function snapCanvasGraphNodesToGrid", bindStart);
@@ -1941,24 +2211,35 @@ it("shows a scissors control at the midpoint of a hovered X6 edge and removes on
   assert.match(bindSource, /getTotalLength\?\.\(\)/);
   assert.match(bindSource, /getPointAtLength\(length \/ 2\)/);
   assert.match(bindSource, /getScreenCTM\?\.\(\)/);
+  assert.match(bindSource, /graph\.clientToLocal\?\.\(clientX, clientY\)/);
+  assert.match(bindSource, /getClosestPointRatio\?\.\(localPoint\)/);
+  assert.match(bindSource, /activeTool\.options\.distance = distance/);
+  assert.match(bindSource, /className: "canvas-edge-disconnect-tool"/);
+  assert.match(bindSource, /const queueShow = \(request\) =>/);
+  assert.match(bindSource, /pendingShow = request/);
+  assert.match(bindSource, /}, 1000\)/);
+  assert.match(bindSource, /const scheduleHide = \(\) => \{[\s\S]*?clearShowTimer\(\)/);
   assert.match(bindSource, /Number\(rect\.width\) \/ width/);
   assert.match(bindSource, /Number\(rect\.height\) \/ height/);
   assert.match(bindSource, /\(clientY - Number\(rect\.top \?\? 0\)\) \/ scaleY/);
   assert.doesNotMatch(bindSource, /interactionMode === "hand"/);
   assert.match(bindSource, /classList\?\.contains\?\.\("x6-edge"\)/);
+  assert.match(bindSource, /if \(activeEdge\) show\(\{ edge: activeEdge, pointerClientX: event\.clientX, pointerClientY: event\.clientY \}\)/);
   assert.match(bindSource, /graph\.getCellById\?\.\(edgeId\)/);
   assert.match(bindSource, /mount\.addEventListener\("pointermove", trackPointer, true\)/);
   assert.match(bindSource, /mount\.addEventListener\("mousemove", trackPointer, true\)/);
   assert.match(bindSource, /mount\.addEventListener\("mouseleave", scheduleHide\)/);
   assert.match(bindSource, /if \(edge\) graph\.removeCell\?\.\(edge\)/);
   assert.match(bindSource, /edge\.addTools\(\[\{/);
-  assert.match(bindSource, /distance: "50%"/);
+  assert.match(bindSource, /queueShow\(\{ edge, edgeElement, pointerClientX: event\.clientX, pointerClientY: event\.clientY \}\)/);
+  assert.doesNotMatch(bindSource, /distance: "50%"/);
   assert.match(bindSource, /"canvas-edge-disconnect", \{ local: true, reset: true \}/);
   assert.match(bindSource, /onClick\(\{ cell \}\)[\s\S]*?graph\.removeCell\?\.\(cell\)/);
 
   const styles = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
   assert.match(styles, /\.canvas-edge-disconnect-button\s*\{[\s\S]*?width:\s*36px[\s\S]*?border-radius:\s*50%/);
   assert.match(styles, /\.canvas-edge-disconnect-button\[hidden\]\s*\{\s*display:\s*none/);
+  assert.match(styles, /\.canvas-edge-disconnect-tool\s*\{[\s\S]*?animation:\s*canvas-edge-disconnect-reveal 420ms ease-out forwards/);
 });
 
 it("checks distribution-handle state before querying the Canvas DOM", () => {
@@ -2100,22 +2381,22 @@ it("updates an already mounted X6 graph when the Canvas interaction mode changes
   assert.equal(edgeToolRemovals, 0);
 });
 
-it("keeps legacy Canvas pan and wheel fallbacks out of the X6 interaction surface", () => {
+it("delegates Canvas pan and wheel interactions entirely to X6", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
-  assert.match(source, /if \(isCanvasX6InteractionTarget\(eventTarget, event\)\) \{\s*return;\s*\}/);
-  assert.match(source, /!stage \|\| isCanvasX6InteractionTarget\(eventTarget, event\) \|\| isCanvasInteractionOverlayTarget/);
   assert.match(source, /event\?\.composedPath\?\.\(\)[\s\S]*?data-canvas-x6-mount/);
-  assert.match(source, /const allowedButtons = interactionMode === "classic" \? \[0\] : \[1, 2\]/);
   assert.match(source, /consumeCanvasRightPanContextMenuSuppression\(workbench\)/);
+  assert.doesNotMatch(source, /root\.addEventListener\("wheel"/);
+  assert.doesNotMatch(source, /function (?:startCanvasPan|shouldStartCanvasPan|canvasPointFromClient|readCanvasViewportFromFlow)/);
+  assert.match(source, /canvasGraph\?\.clientToLocal\?\.\(event\.clientX, event\.clientY\)/);
 });
 
-it("hides the legacy node layer while keeping rich controls above X6", () => {
+it("mounts rich controls on X6 without legacy flow styling", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
   const hostSource = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
-  assert.match(source, /\.canvas-stage\.is-x6-ready \.canvas-flow\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*none;[\s\S]*?visibility:\s*hidden;/);
-  assert.match(source, /\.canvas-stage\.is-x6-ready \.canvas-flow\s*\{[\s\S]*?will-change:\s*auto;/);
-  assert.match(source, /\.canvas-stage\.is-x6-ready \.canvas-flow-edge-glow\s*\{[\s\S]*?animation:\s*none;[\s\S]*?filter:\s*none;/);
-  assert.match(source, /\.canvas-stage\.is-x6-ready \.canvas-flow \.canvas-node-editor,[\s\S]*?\.canvas-node-action-toolbar\s*\{[\s\S]*?visibility:\s*visible;[\s\S]*?pointer-events:\s*auto;/);
+  const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\.canvas-flow/);
+  assert.doesNotMatch(source, /\.canvas-flow-edge(?:-glow)?/);
+  assert.match(graphSource, /function mountCanvasGraphNodeActionToolbar[\s\S]*?mount\.append\(toolbar\)[\s\S]*?positionCanvasNodeActionToolbar/);
   assert.doesNotMatch(hostSource, /\.canvas-stage\.is-panning \.x6-graph-svg-viewport\s*\{[^}]*will-change:\s*transform/s);
   assert.match(hostSource, /\.canvas-stage\.is-panning \.x6-node:not\(\.x6-node-selected\):hover rect\s*\{[\s\S]*?filter:\s*none;/);
   assert.match(source, /\.canvas-stage\.is-canvas-hand-mode \.x6-widget-selection-rubberband\s*\{[\s\S]*?display:\s*none !important;/);
@@ -2327,16 +2608,25 @@ it("toggles X6 edge visibility while keeping port snap independent from grid sna
     getEdges: () => edges,
     getPlugin: () => ({ enable: () => snapCalls.push("enable"), disable: () => snapCalls.push("disable") }),
     setGridSize: (size) => snapCalls.push(`grid-size:${size}`),
-    showGrid: () => snapCalls.push("show-grid"),
   };
   assert.equal(applyCanvasGraphEdgeVisibility(graph, false), true);
   assert.deepEqual(edgeCalls, ["hide", "visible:false"]);
   assert.equal(applyCanvasGraphViewportPreferences(graph, { snapEnabled: false }), true);
   assert.equal(graph.options.snapline.enabled, false);
   assert.deepEqual(graph.options.connecting.snap, { radius: 50, anchor: "center" });
-  assert.deepEqual(snapCalls, ["grid-size:1", "disable", "show-grid"]);
+  assert.deepEqual(snapCalls, ["grid-size:1", "disable"]);
 
   snapCalls.length = 0;
   assert.equal(applyCanvasGraphViewportPreferences(graph, { snapEnabled: true }), true);
-  assert.deepEqual(snapCalls, ["grid-size:1", "enable", "show-grid"]);
+  assert.deepEqual(snapCalls, ["grid-size:20", "enable"]);
+});
+
+it("renders a sparse dot-only Canvas grid", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  const gridRule = source.match(/\.new-canvas-root \.canvas-stage\.is-canvas-grid-visible\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(gridRule, /radial-gradient\(circle at 1px 1px,/);
+  assert.match(gridRule, /var\(--canvas-grid-dot-mix, 14%\)/);
+  assert.match(gridRule, /calc\(var\(--canvas-grid-x, 0px\) - 1px\) calc\(var\(--canvas-grid-y, 0px\) - 1px\)/);
+  assert.match(gridRule, /var\(--canvas-grid-size, 20px\) var\(--canvas-grid-size, 20px\)/);
+  assert.doesNotMatch(gridRule, /linear-gradient/);
 });

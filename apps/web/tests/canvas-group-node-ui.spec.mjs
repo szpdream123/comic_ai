@@ -179,7 +179,8 @@ test("reapplies absolute child positions after X6 embeds group members", () => {
     source.indexOf("export function applyCanvasGraphGrouping"),
     source.indexOf("export function detachCanvasGroupChildrenForRemoval"),
   );
-  assert.match(grouping, /parent\.addChild\?\.\(cell, options\);/);
+  assert.match(grouping, /ensureCanvasGraphChildEmbedding\(parent, cell, options\);/);
+  assert.match(grouping, /parent\?\.addChild\?\.\(cell, options\);/);
   assert.match(grouping, /embeddedPosition/);
   assert.match(grouping, /cell\.setPosition\?\.\(Number\(node\.x\), Number\(node\.y\), options\)/);
 });

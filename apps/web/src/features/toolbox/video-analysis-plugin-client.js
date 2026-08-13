@@ -51,9 +51,13 @@ export async function buildVideoModelFrameSheets(output, options = {}) {
     });
   }
 
+  const configuredMaxKeyFrameCount = Number(options.maxKeyFrameCount);
+  const maxKeyFrameCount = Number.isFinite(configuredMaxKeyFrameCount) && configuredMaxKeyFrameCount > 0
+    ? Math.round(configuredMaxKeyFrameCount)
+    : MAX_MODEL_FRAME_SHEET_COUNT;
   const keyFrames = selectSimilarityKeyFrames(output, {
     frameSignatures,
-    maxCount: Math.max(1, MAX_MODEL_FRAME_SHEET_COUNT - timelineSheets.length),
+    maxCount: Math.max(1, Math.min(maxKeyFrameCount, MAX_MODEL_FRAME_SHEET_COUNT - timelineSheets.length)),
   });
   const keyFrameSheets = [];
   const keyFramePreviews = [];
@@ -73,6 +77,9 @@ export async function buildVideoModelFrameSheets(output, options = {}) {
   }
 
   const durationMsValue = Number(output?.source?.durationMs);
+  const durationMs = Number.isFinite(durationMsValue) && durationMsValue > 0
+    ? durationMsValue
+    : Math.max(1, Number(frames.at(-1)?.timestampMs) || 1);
   return {
     frameSheetDataUrls: [...timelineSheets, ...keyFrameSheets],
     timelineSheetCount: timelineSheets.length,
@@ -80,8 +87,44 @@ export async function buildVideoModelFrameSheets(output, options = {}) {
     frameRate,
     frameCount: frames.length,
     durationMs: Number.isFinite(durationMsValue) && durationMsValue > 0 ? durationMsValue : null,
+    shotSegments: detectShotSegments(frameSignatures, durationMs),
     keyFramePreviews,
   };
+}
+
+function detectShotSegments(frameSignatures, durationMs) {
+  const entries = (Array.isArray(frameSignatures) ? frameSignatures : [])
+    .filter((entry) => Array.isArray(entry?.signature) && Number.isFinite(Number(entry?.timestampMs)))
+    .sort((left, right) => Number(left.timestampMs) - Number(right.timestampMs));
+  if (!entries.length) return [{ index: 1, startMs: 0, endMs: Math.max(1, Math.round(durationMs)), confidence: 0 }];
+  const differences = entries.slice(1).map((entry, index) => (
+    calculateSignatureDifference(entries[index].signature, entry.signature)
+  ));
+  const stableDifferenceThreshold = KEY_FRAME_DIFFERENCE_THRESHOLD * 0.75;
+  const boundaries = [{ timeMs: 0, confidence: 1 }];
+  for (let index = 1; index < entries.length; index += 1) {
+    const timeMs = Math.max(0, Math.round(Number(entries[index].timestampMs) || 0));
+    if (timeMs - boundaries.at(-1).timeMs < 500) continue;
+    const difference = differences[index - 1];
+    const previousDifference = differences[index - 2];
+    const nextDifference = differences[index];
+    const stableBefore = previousDifference == null || previousDifference < stableDifferenceThreshold;
+    const stableAfter = nextDifference == null || nextDifference < stableDifferenceThreshold;
+    if (difference >= KEY_FRAME_DIFFERENCE_THRESHOLD && stableBefore && stableAfter) {
+      boundaries.push({ timeMs, confidence: clamp01(difference / 0.6) });
+    }
+  }
+  const endMs = Math.max(boundaries.at(-1).timeMs + 1, Math.round(Number(durationMs) || 1));
+  return boundaries.map((boundary, index) => ({
+    index: index + 1,
+    startMs: boundary.timeMs,
+    endMs: boundaries[index + 1]?.timeMs ?? endMs,
+    confidence: Number(boundary.confidence.toFixed(3)),
+  }));
+}
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, Number(value) || 0));
 }
 
 async function renderKeyFramePreview(frame) {
@@ -337,5 +380,6 @@ export const __videoAnalysisPluginTestUtils = {
   formatTimestamp,
   isMostlyBlackSignature: isObscuredSignature,
   isObscuredSignature,
+  detectShotSegments,
   selectSimilarityKeyFrames,
 };

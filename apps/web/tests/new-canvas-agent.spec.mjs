@@ -1491,7 +1491,7 @@ test("Canvas Agent grants and revokes the selected persisted canvas file", async
   controller.dispose();
 });
 
-test("Canvas Agent reuses the video-node prompt editor for inline @ node references", async () => {
+test("Canvas Agent reuses the video-node prompt editor for inline @ canvas and uploaded references", async () => {
   const mounted = [];
   const promptInput = {
     addEventListener() {},
@@ -1522,6 +1522,16 @@ test("Canvas Agent reuses the video-node prompt editor for inline @ node referen
       canvasAgent: {
         promptDraft: "继续生成",
         promptNodeReferences: [{ nodeId: "node-image", title: "角色图", storageObjectId: "storage-image", mediaKind: "image" }],
+        promptAttachments: [{
+          id: "storage-uploaded-image",
+          storageObjectId: "storage-uploaded-image",
+          fileGrantId: "grant-uploaded-image",
+          name: "上传角色.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          kind: "image",
+          previewUrl: "/api/storage/objects/storage-uploaded-image/content?proxy=1",
+        }],
       },
     },
   };
@@ -1539,6 +1549,7 @@ test("Canvas Agent reuses the video-node prompt editor for inline @ node referen
   await controller.syncPromptEditor();
   assert.equal(mounted.length, 1);
   assert.equal(mounted[0].prompt, "【@角色图】 继续生成");
+  assert.equal(mounted[0].mentionReferences.length, 2);
   const suggestions = await mounted[0].getSuggestions();
   assert.equal(suggestions.length, 3);
   assert.equal(suggestions[0].assetKind, "text");
@@ -1547,10 +1558,13 @@ test("Canvas Agent reuses the video-node prompt editor for inline @ node referen
   assert.equal(suggestions[2].preview, "https://media.example.test/poster.jpg");
   assert.match(suggestions[2].source, /\/api\/storage\/objects\/storage-video\/content\?proxy=1/);
   mounted[0].onMentionSelect(suggestions[2]);
-  mounted[0].onMentionsChange([suggestions[1], suggestions[2]]);
-  mounted[0].onChange({ prompt: "【@角色图】 【@动作视频】 继续生成" });
+  mounted[0].onMentionsChange([suggestions[1], suggestions[2], mounted[0].mentionReferences[1]]);
+  mounted[0].onChange({ prompt: "【@角色图】 【@动作视频】 【@上传角色.png】 继续生成" });
   assert.deepEqual(workbench.ui.canvasAgent.promptNodeReferences.map((item) => item.nodeId), ["node-image", "node-video"]);
-  assert.equal(workbench.ui.canvasAgent.promptDraft, "【@角色图】 【@动作视频】 继续生成");
+  assert.equal(workbench.ui.canvasAgent.promptAttachments[0].fileGrantId, "grant-uploaded-image");
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "【@角色图】 【@动作视频】 【@上传角色.png】 继续生成");
+  mounted[0].onMentionsChange([suggestions[1], suggestions[2]]);
+  assert.equal(workbench.ui.canvasAgent.promptAttachments.length, 0);
   controller.dispose();
 });
 
@@ -1613,7 +1627,7 @@ test("Canvas Agent defers file grant loading until a storage object reference is
       },
       async listCanvasAgentModels() {
         calls.push("models");
-        return { models: [{ modelCode: "agent-lazy-grants", modelLabel: "Agent" }] };
+        return { models: [{ modelCode: "agent-lazy-grants", modelLabel: "Agent", capabilities: { vision: true } }] };
       },
       async listCanvasAgentFileGrants() {
         calls.push("list-grants");
@@ -1673,7 +1687,7 @@ test("Canvas Agent sends video node references with their media kind and grant m
         }],
         modelCode: "agent-model",
         modelsStatus: "ready",
-        models: [{ modelCode: "agent-model", modelLabel: "Agent" }],
+        models: [{ modelCode: "agent-model", modelLabel: "Agent", capabilities: { videoInput: true } }],
       },
     },
     api: {
@@ -1755,6 +1769,9 @@ test("Canvas Agent keeps @ node references when the user interjects from the pro
           storageObjectId: "storage-image",
         }],
         fileGrants: [{ id: "grant-image", storageObjectId: "storage-image", status: "active" }],
+        modelCode: "agent-model",
+        modelsStatus: "ready",
+        models: [{ modelCode: "agent-model", modelLabel: "Agent", capabilities: { input: ["image_url"] } }],
       },
     },
     api: {
@@ -2094,9 +2111,10 @@ test("Canvas Agent resumes a waiting task after skipping and hides the stale app
   controller.dispose();
 });
 
-test("Canvas Agent renders removable attachment previews outside the rich editor mount", () => {
+test("Canvas Agent renders uploaded references only inside the rich editor", () => {
   const html = renderCanvasAgentPanel({
     canvasAgent: {
+      promptDraft: "【@character.png】 【@notes.md】",
       promptAttachments: [
         { id: "image-1", fileGrantId: "grant-1", name: "character.png", kind: "image", previewUrl: "/image.png" },
         { id: "document-1", fileGrantId: "grant-2", name: "notes.md", kind: "document" },
@@ -2104,9 +2122,223 @@ test("Canvas Agent renders removable attachment previews outside the rich editor
     },
   });
 
-  assert.match(html, /class="canvas-agent-attachment-chips"/);
-  assert.match(html, /character\.png/);
-  assert.match(html, /notes\.md/);
-  assert.equal((html.match(/data-agent-action="remove-agent-attachment"/g) ?? []).length, 2);
-  assert.ok(html.indexOf("canvas-agent-attachment-chips") < html.indexOf("data-agent-prompt-editor"));
+  assert.match(html, /data-agent-prompt-editor/);
+  assert.doesNotMatch(html, /class="canvas-agent-attachment-chips"/);
+  assert.doesNotMatch(html, /data-agent-action="remove-agent-attachment"/);
+});
+
+test("Canvas Agent keeps the uploaded-reference editor visually unified", () => {
+  const css = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  const editorRule = css.match(/\.canvas-agent-prompt-editor-host \{[\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.match(editorRule, /min-height: 72px/);
+  assert.match(editorRule, /height: auto/);
+  assert.match(editorRule, /border-radius: 0/);
+  assert.match(editorRule, /background: transparent/);
+});
+
+test("prompt editor mention options select on pointer down without leaking the event", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/prompt-editor.js", import.meta.url), "utf8");
+  const optionSource = source.match(/function createMentionOption\([\s\S]*?\n\}/)?.[0] ?? "";
+
+  assert.match(optionSource, /addEventListener\("pointerdown"/);
+  assert.match(optionSource, /event\.preventDefault\(\)/);
+  assert.match(optionSource, /event\.stopPropagation\(\)/);
+  assert.match(optionSource, /onSelect\(index\)/);
+});
+
+test("prompt editor previews inline media above the reference only while hovered", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/prompt-editor.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+
+  assert.match(source, /installMentionHoverPreview\(editor, element\)/);
+  assert.match(source, /addEventListener\("pointerover", handlePointerOver\)/);
+  assert.match(source, /addEventListener\("pointerout", handlePointerOut\)/);
+  assert.match(source, /documentRef\.body\.append\(previewElement\)/);
+  assert.match(source, /previewElement\?\.remove\(\)/);
+  assert.match(css, /\.episode-prompt-editor-hover-preview \{/);
+  assert.match(css, /position: fixed/);
+  assert.match(css, /pointer-events: none/);
+});
+
+test("Canvas Agent snapshots selected files before clearing the attachment input", async () => {
+  const calls = [];
+  const selectedFiles = [
+    { name: "character.png", type: "image/png", size: 128 },
+    { name: "pose.png", type: "image/png", size: 256 },
+  ];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-attachment-upload",
+      canvasAgent: {
+        conversationId: "conversation-attachment-upload",
+        conversations: [{ id: "conversation-attachment-upload", title: "附件上传" }],
+      },
+    },
+    api: {
+      async uploadFile(file, options) {
+        calls.push(["upload", file, options]);
+        return { upload: { storageObjectId: `storage-${file.name}` } };
+      },
+      async createCanvasAgentFileGrant(canvasId, conversationId, input) {
+        calls.push(["grant", canvasId, conversationId, input]);
+        return { grant: { id: `grant-${input.storageObjectId}` } };
+      },
+      async listCanvasAgentFileGrants() {
+        return { grants: [
+          { id: "grant-storage-character.png", storageObjectId: "storage-character.png", status: "active" },
+          { id: "grant-storage-pose.png", storageObjectId: "storage-pose.png", status: "active" },
+        ] };
+      },
+    },
+  };
+  const input = {
+    matches(selector) { return selector === "[data-agent-attachment-input]"; },
+    get files() { return selectedFiles; },
+    set value(_value) { selectedFiles.length = 0; },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+
+  assert.equal(controller.handleInput(input), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls[0][0], "upload");
+  assert.equal(calls[0][1].name, "character.png");
+  assert.equal(calls.filter((call) => call[0] === "upload").length, 2);
+  assert.equal(workbench.ui.canvasAgent.promptAttachments[0].fileGrantId, "grant-storage-character.png");
+  assert.equal(workbench.ui.canvasAgent.promptAttachments[1].fileGrantId, "grant-storage-pose.png");
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "【@character.png】 【@pose.png】");
+
+  await controller.handleAction({
+    dataset: { agentAction: "remove-agent-attachment", attachmentId: "storage-character.png" },
+  });
+  assert.equal(workbench.ui.canvasAgent.promptAttachments.length, 1);
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "【@pose.png】");
+  controller.dispose();
+});
+
+test("Canvas Agent attachment button renders a single paperclip icon", () => {
+  const html = renderCanvasAgentPanel({ canvasAgent: {} });
+  const button = html.match(/<button[^>]*canvas-agent-attachment-button[\s\S]*?<\/button>/)?.[0] ?? "";
+
+  assert.match(button, /data-agent-action="pick-attachments"/);
+  assert.match(button, /M19 16\.5/);
+  assert.doesNotMatch(button, /M12 5v14M5 12h14/);
+  assert.equal((button.match(/<path\b/g) ?? []).length, 1);
+});
+
+test("Canvas Agent persists a temporary canvas before loading models", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-project-main",
+      canvasAgent: {},
+    },
+    async saveCanvasNow() {
+      calls.push("save-canvas");
+      workbench.ui.selectedCanvasProjectId = "93000000-0000-4000-8000-000000000001";
+    },
+    api: {
+      async listCanvasAgentModels(canvasId) {
+        calls.push(["models", canvasId]);
+        return { models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek" }] };
+      },
+      async listCanvasAgentConversations(canvasId) {
+        calls.push(["conversations", canvasId]);
+        return { conversations: [] };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+
+  await controller.resume();
+
+  assert.deepEqual(calls, [
+    "save-canvas",
+    ["models", "93000000-0000-4000-8000-000000000001"],
+    ["conversations", "93000000-0000-4000-8000-000000000001"],
+  ]);
+  assert.equal(workbench.ui.canvasAgent.models[0].modelCode, "deepseek-noval");
+  controller.dispose();
+});
+
+test("Canvas Agent blocks image and video input when the selected model lacks those capabilities", async () => {
+  const cases = [
+    {
+      mediaKind: "image",
+      promptAttachments: [{ id: "image-1", fileGrantId: "grant-image", name: "character.png", kind: "image" }],
+      promptNodeReferences: [],
+      error: "当前 Agent 模型不支持图片分析，请切换支持图片输入的模型。",
+    },
+    {
+      mediaKind: "video",
+      promptAttachments: [],
+      promptNodeReferences: [{ nodeId: "video-1", title: "动作参考", mediaKind: "video", storageObjectId: "storage-video" }],
+      error: "当前 Agent 模型不支持视频分析，请切换支持视频输入的模型。",
+    },
+  ];
+
+  for (const input of cases) {
+    let sendCount = 0;
+    const workbench = {
+      ui: {
+        selectedCanvasProjectId: `canvas-unsupported-${input.mediaKind}`,
+        canvasAgent: {
+          conversationId: `conversation-unsupported-${input.mediaKind}`,
+          promptDraft: "分析这个素材",
+          promptAttachments: input.promptAttachments,
+          promptNodeReferences: input.promptNodeReferences,
+          modelCode: "text-only",
+          modelsStatus: "ready",
+          models: [{ modelCode: "text-only", modelLabel: "Text only", capabilities: { input: ["text"] } }],
+        },
+      },
+      api: {
+        async sendCanvasAgentMessage() {
+          sendCount += 1;
+          return { task: { id: "unexpected-task", status: "queued" } };
+        },
+      },
+    };
+    const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+    await controller.handleAction({ dataset: { agentAction: "send" } });
+    assert.equal(sendCount, 0);
+    assert.equal(workbench.ui.canvasAgent.error, input.error);
+    controller.dispose();
+  }
+});
+
+test("Canvas Agent still sends document attachments through a text-only model", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-document-attachment",
+      canvasAgent: {
+        conversationId: "conversation-document-attachment",
+        promptDraft: "分析文档",
+        promptAttachments: [{
+          id: "document-1",
+          fileGrantId: "grant-document",
+          name: "notes.md",
+          contentType: "text/markdown",
+          sizeBytes: 128,
+          kind: "document",
+        }],
+        modelCode: "text-only",
+        modelsStatus: "ready",
+        models: [{ modelCode: "text-only", modelLabel: "Text only", capabilities: { input: ["text"] } }],
+      },
+    },
+    api: {
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        calls.push(input);
+        return { task: { id: "task-document", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].message.attachments[0].kind, "document");
+  controller.dispose();
 });

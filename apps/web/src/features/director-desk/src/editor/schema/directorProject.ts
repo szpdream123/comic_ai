@@ -108,6 +108,8 @@ export interface DirectorObjectMotionKeyframe {
   transform: DirectorTransform;
   /** Character action played from this route point until the next point. */
   actionPresetId?: string | null;
+  /** Optional joint controls sampled from the source performance at this route point. */
+  poseControls?: Record<string, number>;
   /** Path-facing turns toward the next route point; manual keeps the point rotation. */
   facingMode?: "path" | "manual";
 }

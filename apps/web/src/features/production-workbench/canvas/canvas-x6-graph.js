@@ -3,6 +3,10 @@ import { validateCanvasConnection } from "./canvas-edge-rules.js";
 import { duplicateCanvasNodes } from "./canvas-state.js";
 import { renderCanvasAnimationNodeBody } from "./canvas-animation-node.js";
 import { renderCanvasDirectorNodeBody } from "./canvas-director-node.js";
+import {
+  isCanvasFrameAnalysisNode,
+  renderCanvasFrameAnalysisNodeBody,
+} from "./canvas-frame-analysis-node.js";
 import { canvasGroupChildIds, renderCanvasGroupNodeBody } from "./canvas-group-node.js";
 import {
   renderCanvasMediaNodeBody,
@@ -24,10 +28,12 @@ const X6_VENDOR_SRC = "/vendor/@antv/x6/dist/x6.min.js";
 const X6_READY_KEY = "__comicAiX6Ready";
 const CANVAS_EDITOR_OVERLAY_ID = "__comic-ai-canvas-editor-overlay__";
 const CANVAS_CONNECTION_SNAP_RADIUS = 50;
+const CANVAS_CONNECTION_MENU_GAP = 12;
 const CANVAS_GRID_SIZE = 20;
 const CANVAS_SELECTION_BOUNDS_PADDING = 8;
 const CANVAS_VIEWPORT_COMMIT_DELAY_MS = 600;
 const canvasTextNodeScrollState = new Map();
+const canvasStoryboardScrollState = new Map();
 let x6LoadPromise = null;
 
 export async function mountCanvasWorkflowIfPresent(workbench) {
@@ -424,7 +430,7 @@ function loadX6() {
     return window[X6_READY_KEY];
   }
   if (!x6LoadPromise) {
-    x6LoadPromise = new Promise((resolve, reject) => {
+    const pendingLoad = new Promise((resolve, reject) => {
       const existingScript = document.querySelector(`script[src="${X6_VENDOR_SRC}"]`);
       if (existingScript) {
         existingScript.addEventListener("load", () => resolve(window.X6), { once: true });
@@ -437,6 +443,11 @@ function loadX6() {
       script.onload = () => (window.X6?.Graph ? resolve(window.X6) : reject(new Error("X6 global was not created")));
       script.onerror = () => reject(new Error(`Unable to load ${X6_VENDOR_SRC}`));
       document.head.appendChild(script);
+    });
+    x6LoadPromise = pendingLoad.catch((error) => {
+      x6LoadPromise = null;
+      delete window[X6_READY_KEY];
+      throw error;
     });
     window[X6_READY_KEY] = x6LoadPromise;
   }
@@ -594,7 +605,8 @@ function createCanvasSpecialMediaX6Node(node = {}) {
   const wrapper = document.createElement("div");
   wrapper.innerHTML = renderCanvasSpecialMediaX6Node(node);
   const element = wrapper.firstElementChild;
-  element?.querySelectorAll?.("button, input, textarea, select, a, [role='application'], [data-canvas-text-output]").forEach((control) => {
+  applyCanvasX6NodePresentation(element, node);
+  element?.querySelectorAll?.("button, input, textarea, select, a, [contenteditable='true'], [role='application'], [data-canvas-text-output]").forEach((control) => {
     control.addEventListener("pointerdown", (event) => event.stopPropagation());
     control.addEventListener("mousedown", (event) => event.stopPropagation());
   });
@@ -609,7 +621,25 @@ function createCanvasSpecialMediaX6Node(node = {}) {
     });
   });
   const storyboardBody = element?.querySelector?.("[data-canvas-storyboard-body]");
-  storyboardBody?.addEventListener?.("wheel", (event) => event.stopPropagation(), { passive: true });
+  if (storyboardBody) {
+    const nodeId = String(node?.id ?? "");
+    const previousScrollTop = canvasStoryboardScrollState.get(nodeId) ?? 0;
+    storyboardBody.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+    storyboardBody.addEventListener("scroll", () => {
+      canvasStoryboardScrollState.set(nodeId, storyboardBody.scrollTop);
+    });
+    const restoreScroll = () => {
+      storyboardBody.scrollTop = Math.min(
+        previousScrollTop,
+        Math.max(0, storyboardBody.scrollHeight - storyboardBody.clientHeight),
+      );
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(restoreScroll);
+    } else {
+      queueMicrotask(restoreScroll);
+    }
+  }
   const textOutput = element?.querySelector?.("[data-canvas-text-output]");
   if (textOutput) {
     const nodeId = String(node?.id ?? "");
@@ -652,7 +682,7 @@ function createCanvasSpecialMediaX6Node(node = {}) {
     });
   });
   element?.addEventListener("click", (event) => {
-    const interactive = event.target?.closest?.("button, input, textarea, select, a, [role='application'], [data-canvas-text-output]");
+    const interactive = event.target?.closest?.("button, input, textarea, select, a, [contenteditable='true'], [role='application'], [data-canvas-text-output]");
     if (interactive && element.contains?.(interactive)) return;
     element.dispatchEvent(new CustomEvent("comic-ai-canvas-node-select", {
       bubbles: true,
@@ -661,6 +691,51 @@ function createCanvasSpecialMediaX6Node(node = {}) {
     }));
   });
   return element ?? wrapper;
+}
+
+function applyCanvasX6NodePresentation(element, node = {}) {
+  if (!element) return;
+  const status = String(node?.data?.status ?? "ready").trim().toLowerCase() || "ready";
+  const origin = node?.data?.source === "canvas_agent" || String(node?.id ?? "").startsWith("canvas-agent-")
+    ? "agent"
+    : node?.data?.externalSource === "libtv" ? "libtv" : "user";
+  element.dataset.nodeStatus = status;
+  element.dataset.nodeOrigin = origin;
+  const header = element.querySelector?.(":scope > header");
+  if (!header) return;
+  const badges = document.createElement("span");
+  badges.className = "canvas-x6-node-badges";
+  if (origin !== "user") {
+    const originBadge = document.createElement("small");
+    originBadge.className = `canvas-node-origin-badge${origin === "libtv" ? " is-libtv" : ""}`;
+    originBadge.textContent = origin === "libtv" ? "LibTV" : "Agent";
+    badges.append(originBadge);
+  }
+  const statusBadge = document.createElement("small");
+  statusBadge.className = `canvas-node-status-badge ${status}`;
+  statusBadge.textContent = ({
+    empty: "待输入",
+    ready: "就绪",
+    queued: "排队中",
+    pending: "等待中",
+    running: "运行中",
+    processing: "处理中",
+    uploading: "上传中",
+    completed: "已完成",
+    succeeded: "已完成",
+    failed: "失败",
+    canceled: "已取消",
+    outdated: "需重跑",
+    manual_review_required: "待复核",
+    result_unknown: "待复核",
+  })[status] ?? status;
+  badges.append(statusBadge);
+  const typeBadge = Array.from(header.children).find((child) => child.tagName === "SMALL");
+  if (typeBadge) {
+    typeBadge.classList.add("canvas-x6-node-type-badge");
+    badges.append(typeBadge);
+  }
+  header.append(badges);
 }
 
 export function resolveCanvasHtmlShape(X6) {
@@ -698,9 +773,12 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
   ].includes(requestedType) ? requestedType : requestedType === "ai-panorama" ? "ai-panorama" : "generic";
   if (specialType === "generic") return renderCanvasGenericX6Node(node);
   const type = specialType;
+  const frameAnalysis = isCanvasFrameAnalysisNode(node);
   const storyboardCut = Boolean(resolveCanvasStoryboardCutReference(node));
   const configuredTitle = String(node?.data?.title ?? "").trim();
-  const replacementTitle = type === "ai-storyboard"
+  const replacementTitle = frameAnalysis
+    ? "逐帧拉片"
+    : type === "ai-storyboard"
     ? "图片切分"
     : type === "ai-director" ? "导演台"
       : type === "ai-panorama" ? "全景预览" : "";
@@ -724,7 +802,7 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
   const body = type === "ai-animation"
     ? renderCanvasAnimationNodeBody(node)
     : type === "ai-storyboard"
-      ? renderCanvasStoryboardNodeBody(node)
+      ? frameAnalysis ? renderCanvasFrameAnalysisNodeBody(node) : renderCanvasStoryboardNodeBody(node)
       : type === "ai-director"
         ? renderCanvasDirectorNodeBody(node)
         : type === "group"
@@ -738,7 +816,7 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
                   ? renderCanvasSourceMediaNodeBody(node, type === "source-video" ? "video" : "audio")
                   : renderCanvasMediaNodeBody(node)
                 : renderCanvasPanoramaNodeBody(node);
-  const badge = ({
+  const badge = frameAnalysis ? "ANALYSIS" : ({
     "ai-animation": "SPRITE",
     "ai-storyboard": "STORYBOARD",
     "ai-director": "DIRECTOR",
@@ -758,7 +836,7 @@ function renderCanvasSpecialMediaX6Node(node = {}) {
   const badgeMarkup = storyboardCut
     ? `<span class="canvas-storyboard-cut-header-actions"><small>${badge}</small><button class="canvas-storyboard-return-action" type="button" data-action="return-canvas-storyboard-image" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}" aria-label="放回原分镜" data-tooltip="放回原分镜"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 14-5-5 5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg></button></span>`
     : `<small>${badge}</small>`;
-  return `<article class="canvas-x6-special-node is-${type}${storyboardCut ? " is-storyboard-cut" : ""}" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">
+  return `<article class="canvas-x6-special-node is-${type}${frameAnalysis ? " is-frame-analysis" : ""}${storyboardCut ? " is-storyboard-cut" : ""}" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">
     <header><strong>${escapeCanvasX6Html(title)}</strong>${badgeMarkup}</header>
     ${body}
   </article>`;
@@ -855,9 +933,13 @@ function renderCanvasGenericX6Node(node = {}) {
         <button class="danger" type="button" data-action="delete-canvas-node" data-node-id="${escapeCanvasX6Html(node?.id ?? "")}">删除</button>
       </div>`
     : "";
+  const markdownText = markdownNode ? String(data.text ?? summary ?? "") : "";
+  const markdownMode = data.markdownViewMode === "preview" ? "preview" : "edit";
   const sourceTextContent = type === "source-text"
     ? `<textarea class="canvas-x6-source-text-input" data-canvas-text-input data-canvas-source-text-input data-node-id="${escapeCanvasX6Html(node?.id ?? "")}" aria-label="文本内容" placeholder="请输入文本">${escapeCanvasX6Html(sourceTextValue)}</textarea>`
-    : `<p${markdownNode ? ' class="canvas-x6-text-output" data-canvas-text-output tabindex="0" aria-live="polite" aria-atomic="false"' : sourceTextNode ? ' class="canvas-x6-source-text-output" data-canvas-text-output data-canvas-source-text-output tabindex="0"' : ""}>${escapeCanvasX6Html(summary || "选择节点后配置内容")}</p>`;
+    : markdownNode
+      ? renderCanvasMarkdownX6Content(node, markdownText, markdownMode)
+      : `<p${sourceTextNode ? ' class="canvas-x6-source-text-output" data-canvas-text-output data-canvas-source-text-output tabindex="0"' : ""}>${escapeCanvasX6Html(summary || "选择节点后配置内容")}</p>`;
   const genericNodeTypeLabel = sourceTextNode
     ? ""
     : `<span>${escapeCanvasX6Html(canvasGenericNodeLabel(type))}</span>`;
@@ -874,6 +956,7 @@ function renderCanvasGenericX6Node(node = {}) {
     <header><strong>${escapeCanvasX6Html(title)}</strong><small>${escapeCanvasX6Html(statusLabel)}</small></header>
     <div class="canvas-x6-generic-body${generationState ? " has-generation-state" : ""}${textGenerationMask ? " has-generation-mask" : ""}">
       ${genericNodeTypeLabel}
+      ${markdownNode ? renderCanvasMarkdownX6Toolbar(node) : ""}
       ${sourceTextContent}
       ${sourceTextActions}
       ${generationState}
@@ -881,6 +964,141 @@ function renderCanvasGenericX6Node(node = {}) {
     </div>
     <footer><span>${inputCount} 个输入</span><span>${outputCount} 个输出</span></footer>
   </article>`;
+}
+
+function renderCanvasMarkdownX6Toolbar(node = {}) {
+  const nodeId = escapeCanvasX6Html(node?.id ?? "");
+  const text = String(node?.data?.text ?? "");
+  const mode = node?.data?.markdownViewMode === "preview" ? "preview" : "edit";
+  return `<div class="canvas-markdown-toolbar" role="toolbar" aria-label="Markdown 工具栏">
+    <div class="canvas-markdown-parity-tools">
+      <span class="canvas-markdown-mode" role="group" aria-label="Markdown 视图">
+        <button type="button" class="${mode === "edit" ? "active" : ""}" data-action="set-canvas-markdown-mode" data-node-id="${nodeId}" data-mode="edit" aria-pressed="${mode === "edit"}">编辑</button>
+        <button type="button" class="${mode === "preview" ? "active" : ""}" data-action="set-canvas-markdown-mode" data-node-id="${nodeId}" data-mode="preview" aria-pressed="${mode === "preview"}">预览</button>
+      </span>
+      <button type="button" data-action="copy-canvas-markdown-text" data-node-id="${nodeId}" aria-label="复制文本" title="复制文本">复制</button>
+      <button type="button" data-action="toggle-canvas-markdown-fullscreen" data-node-id="${nodeId}" aria-label="全屏编辑" title="全屏编辑">全屏</button>
+      <output class="canvas-markdown-text-stats" data-canvas-markdown-text-stats aria-label="Markdown 字数统计">${escapeCanvasX6Html(formatCanvasMarkdownX6Stats(text))}</output>
+    </div>
+    <span class="canvas-markdown-file-actions">
+      <button type="button" data-action="pick-canvas-markdown-file" data-node-id="${nodeId}">导入</button>
+      <button type="button" data-action="export-canvas-markdown" data-node-id="${nodeId}">导出</button>
+    </span>
+    <input type="file" accept=".md,.markdown,text/markdown,text/plain" data-canvas-markdown-input data-node-id="${nodeId}" tabindex="-1" aria-hidden="true" hidden />
+  </div>`;
+}
+
+function renderCanvasMarkdownX6Content(node = {}, text = "", mode = "edit") {
+  const nodeId = escapeCanvasX6Html(node?.id ?? "");
+  if (mode === "preview") {
+    return `<div class="canvas-markdown-preview" data-canvas-text-output tabindex="0" aria-label="Markdown 预览">${renderCanvasMarkdownX6Preview(text)}</div>`;
+  }
+  const html = sanitizeCanvasX6RichTextHtml(node?.data?.textHtml, text);
+  return `<div class="canvas-text-format-toolbar" aria-label="文本格式工具条">
+      ${[["clear-format", "clear-format"], ["heading-1", "H1"], ["heading-2", "H2"], ["heading-3", "H3"], ["paragraph", "paragraph"], ["bold", "B"], ["italic", "italic"], ["bullet", "list"], ["numbered", "ordered-list"], ["divider", "divider"]].map(([command, label]) => `<button type="button" data-action="format-canvas-text-node" data-node-id="${nodeId}" data-format-command="${command}" aria-label="${label}">${label}</button>`).join("")}
+    </div>
+    <div class="canvas-inline-richtext canvas-x6-text-output" role="textbox" contenteditable="true" aria-label="Markdown 内容" data-canvas-text-input data-canvas-text-output data-node-id="${nodeId}" data-placeholder="输入内容..." aria-live="polite" aria-atomic="false">${html}</div>`;
+}
+
+function sanitizeCanvasX6RichTextHtml(value, fallbackText = "") {
+  const source = String(value ?? "").trim();
+  if (!source) return escapeCanvasX6Html(fallbackText).replace(/\n/g, "<br>");
+  return source
+    .replace(/<\/?(?:script|style|iframe|object|embed|form|math|svg)[^>]*>/gi, "")
+    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/javascript\s*:/gi, "");
+}
+
+function formatCanvasMarkdownX6Stats(value) {
+  const text = String(value ?? "").replace(/\r\n?/g, "\n");
+  const words = text.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) ?? [];
+  return `${words.length.toLocaleString("zh-CN")} 字词 · ${Array.from(text).length.toLocaleString("zh-CN")} 字符`;
+}
+
+function renderCanvasMarkdownX6Preview(rawText = "") {
+  const lines = String(rawText ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const output = [];
+  let paragraph = [];
+  let listType = "";
+  let codeLines = null;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    output.push(`<p>${renderCanvasMarkdownX6Inline(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+  const closeList = () => {
+    if (!listType) return;
+    output.push(`</${listType}>`);
+    listType = "";
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (codeLines !== null) {
+      if (/^```/.test(trimmed)) {
+        output.push(`<pre><code>${escapeCanvasX6Html(codeLines.join("\n"))}</code></pre>`);
+        codeLines = null;
+      } else codeLines.push(line);
+      continue;
+    }
+    if (/^```/.test(trimmed)) {
+      flushParagraph();
+      closeList();
+      codeLines = [];
+      continue;
+    }
+    if (!trimmed) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      closeList();
+      output.push(`<h${heading[1].length}>${renderCanvasMarkdownX6Inline(heading[2])}</h${heading[1].length}>`);
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const nextListType = unordered ? "ul" : "ol";
+      if (listType !== nextListType) {
+        closeList();
+        output.push(`<${nextListType}>`);
+        listType = nextListType;
+      }
+      output.push(`<li>${renderCanvasMarkdownX6Inline((unordered ?? ordered)[1])}</li>`);
+      continue;
+    }
+    if (/^>\s?/.test(trimmed)) {
+      flushParagraph();
+      closeList();
+      output.push(`<blockquote>${renderCanvasMarkdownX6Inline(trimmed.replace(/^>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+    if (/^(---+|___+|\*\s*\*\s*\*)$/.test(trimmed)) {
+      flushParagraph();
+      closeList();
+      output.push("<hr>");
+      continue;
+    }
+    closeList();
+    paragraph.push(trimmed);
+  }
+  flushParagraph();
+  closeList();
+  if (codeLines !== null) output.push(`<pre><code>${escapeCanvasX6Html(codeLines.join("\n"))}</code></pre>`);
+  return output.join("") || `<p class="canvas-markdown-fullscreen-empty">暂无内容</p>`;
+}
+
+function renderCanvasMarkdownX6Inline(value) {
+  return escapeCanvasX6Html(value)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/_([^_]+)_/g, "<em>$1</em>");
 }
 
 function renderCanvasScriptWorkflowX6Node(node = {}) {
@@ -1095,6 +1313,11 @@ export function refreshCanvasWorkflowGraph(workbench) {
   if (!graph || !document) {
     return false;
   }
+  const contextMenu = workbench?.ui?.canvasContextMenu;
+  settleCanvasGraphBlankConnectionDraft(graph, {
+    document,
+    draftEdgeId: contextMenu?.mode === "connection" ? String(contextMenu.draftEdgeId ?? "") : null,
+  });
   if (graph.__comicAiCanvasDocument === document) {
     applyCanvasGraphInteractionMode(graph, document.viewport);
     applyCanvasGraphEdgeStyle(graph, workbench?.ui?.canvasEdgeStyle);
@@ -1152,6 +1375,9 @@ export function reconcileCanvasWorkflowGraph(graph, nextData = {}) {
   const run = () => {
     for (const edge of graph.getEdges?.() ?? []) {
       if (!nextEdgeIds.has(String(edge?.id ?? ""))) {
+        if (edge === graph.__comicAiCanvasPendingConnectionEdge && edge.__comicAiCanvasConnectionDraft === true) {
+          continue;
+        }
         graph.removeCell?.(edge);
         stats.removed += 1;
       }
@@ -1584,12 +1810,12 @@ function createGraph(X6, mount, workbench, size = {}) {
     // Draw position changes in the same pointer event so dragged nodes do not
     // queue behind the cursor when the canvas contains many rich HTML nodes.
     async: false,
-    moveThreshold: 0,
+    moveThreshold: 2,
     clickThreshold: 0,
     background: { color: "transparent" },
     grid: {
       size: 1,
-      visible: true,
+      visible: false,
       type: "dot",
       args: { color: "rgba(129, 146, 152, 0.18)", thickness: 1 },
     },
@@ -1615,7 +1841,7 @@ function createGraph(X6, mount, workbench, size = {}) {
     keyboard: { enabled: true, global: false },
     history: { enabled: true },
     connecting: {
-      allowBlank: false,
+      allowBlank: true,
       allowLoop: false,
       allowNode: false,
       allowEdge: false,
@@ -1632,11 +1858,16 @@ function createGraph(X6, mount, workbench, size = {}) {
         ) === "out";
       },
       createEdge() {
-        return this.createEdge({
+        const edge = this.createEdge({
           shape: "comic-ai-canvas-edge",
           attrs: buildEdgeAttrs("idle"),
           zIndex: 0,
         });
+        edge.__comicAiCanvasConnectionDraft = true;
+        return edge;
+      },
+      validateEdge({ edge, type }) {
+        return validateCanvasGraphEdgeConnection({ edge, type });
       },
       validateConnection({ sourceCell, targetCell, sourcePort, targetPort }) {
         const source = resolveCanvasGraphConnectionPort(sourceCell, sourcePort, "out");
@@ -1684,6 +1915,7 @@ function resolveCanvasStoryboardReturnTarget(mount, graphNode, event = {}) {
 }
 
 function wireGraphSync(graph, workbench, mount) {
+  const stage = mount?.closest?.(".canvas-stage");
   const sync = (options = {}) => {
     if (graph.__comicAiReconciling === true) return;
     const syncOptions = options?.edge ? { ...options, immediateSave: true } : options;
@@ -1720,6 +1952,8 @@ function wireGraphSync(graph, workbench, mount) {
   let viewportCommitTimer = null;
   let viewportFrame = null;
   let storyboardReturnCell = null;
+  let activeDraggedNode = null;
+  const draggedGroupChildIds = new Map();
   const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis)
     ?? ((callback) => globalThis.setTimeout?.(callback, 16));
   const scheduleSelectionPresentation = () => {
@@ -1727,6 +1961,7 @@ function wireGraphSync(graph, workbench, mount) {
     selectionPresentationFrame = requestFrame(() => {
       selectionPresentationFrame = null;
       positionCanvasSelectionActionToolbar(graph, mount);
+      positionCanvasNodeActionToolbar(graph, mount);
     });
   };
   const setConnectingEdgeMotion = (edge, connecting) => {
@@ -1741,13 +1976,13 @@ function wireGraphSync(graph, workbench, mount) {
     graph.findViewByCell?.(node)?.container?.classList?.toggle?.("is-canvas-node-flowing", dragging);
   };
   const scheduleViewportSync = ({ panning = false } = {}) => {
-    const stage = mount?.closest?.(".canvas-stage");
     if (panning) stage?.classList?.add?.("is-panning");
     if (viewportFrame == null) {
       viewportFrame = requestFrame(() => {
         viewportFrame = null;
         applyCanvasGraphViewportStyles(graph, workbench);
         positionCanvasSelectionActionToolbar(graph, mount);
+        positionCanvasNodeActionToolbar(graph, mount);
       });
     }
     if (viewportCommitTimer != null) globalThis.clearTimeout?.(viewportCommitTimer);
@@ -1799,13 +2034,17 @@ function wireGraphSync(graph, workbench, mount) {
     ) {
       const groupId = String(event.node.id ?? "");
       const documentNodes = workbench.ui.canvasDocument?.nodes ?? [];
-      const documentGroup = documentNodes.find((node) => String(node?.id ?? "") === groupId);
-      const childIds = new Set([
-        ...(documentGroup?.data?.childNodeIds ?? []).map(String),
-        ...documentNodes
-          .filter((node) => String(node?.parentGroupId ?? "") === groupId)
-          .map((node) => String(node.id ?? "")),
-      ]);
+      let childIds = draggedGroupChildIds.get(groupId);
+      if (!childIds) {
+        const documentGroup = documentNodes.find((node) => String(node?.id ?? "") === groupId);
+        childIds = new Set([
+          ...(documentGroup?.data?.childNodeIds ?? []).map(String),
+          ...documentNodes
+            .filter((node) => String(node?.parentGroupId ?? "") === groupId)
+            .map((node) => String(node.id ?? "")),
+        ]);
+        draggedGroupChildIds.set(groupId, childIds);
+      }
       for (const childId of childIds) {
         const child = graph.getCellById?.(childId);
         if (child && child !== event.node) {
@@ -1819,12 +2058,17 @@ function wireGraphSync(graph, workbench, mount) {
     }
   });
   graph.on("node:move", ({ node } = {}) => {
-    mount?.closest?.(".canvas-stage")?.classList?.add?.("is-node-dragging");
+    if (activeDraggedNode === node) return;
+    if (activeDraggedNode) setNodeDragMotion(activeDraggedNode, false);
+    activeDraggedNode = node ?? null;
+    stage?.classList?.add?.("is-node-dragging");
     setNodeDragMotion(node, true);
   });
   graph.on("node:moved", (event) => {
-    mount?.closest?.(".canvas-stage")?.classList?.remove?.("is-node-dragging");
+    stage?.classList?.remove?.("is-node-dragging");
     setNodeDragMotion(event?.node, false);
+    activeDraggedNode = null;
+    draggedGroupChildIds.delete(String(event?.node?.id ?? ""));
     restoreDragSnapline();
     const storyboardReturnTarget = updateStoryboardReturnTarget(event);
     clearStoryboardReturnTarget();
@@ -1841,6 +2085,7 @@ function wireGraphSync(graph, workbench, mount) {
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasConnectedEdgeMotion(graph);
     positionCanvasSelectionActionToolbar(graph, mount);
+    positionCanvasNodeActionToolbar(graph, mount);
     const positionNodeIds = canvasGraphCellAndDescendantIds([
       ...canvasSelectedGraphCells(graph),
       event?.node,
@@ -1850,6 +2095,7 @@ function wireGraphSync(graph, workbench, mount) {
   });
   graph.on("node:resized", () => {
     positionCanvasSelectionActionToolbar(graph, mount);
+    positionCanvasNodeActionToolbar(graph, mount);
     sync({ clearToast: true });
   });
   graph.on("translate", () => scheduleViewportSync({ panning: true }));
@@ -1861,17 +2107,27 @@ function wireGraphSync(graph, workbench, mount) {
     if (!edge?.getTargetCellId?.()) setConnectingEdgeMotion(edge, true);
   });
   graph.on("edge:connected", (event = {}) => {
+    const blankConnection = resolveCanvasBlankConnection(event);
+    if (blankConnection) return;
+    if (event.edge) delete event.edge.__comicAiCanvasConnectionDraft;
     setConnectingEdgeMotion(event.edge, false);
     if (workbench.ui.canvasEdgesHidden === true) event.edge?.hide?.();
     sync({ immediateSave: true, edge: event.edge });
     refreshCanvasConnectedEdgeMotion(graph);
   });
-  graph.on("edge:removed", sync);
+  graph.on("edge:mouseup", (event = {}) => {
+    handleCanvasBlankConnectionEvent({ graph, workbench, mount, event });
+  });
+  graph.on("edge:removed", (event = {}) => {
+    if (event?.options?.canvasBlankConnectionDraft) return;
+    sync(event);
+  });
   graph.on("cell:change:data", (event = {}) => {
     if (event?.options?.canvasNodeRefresh) return;
     sync();
   });
-  graph.on("cell:removed", ({ cell } = {}) => {
+  graph.on("cell:removed", ({ cell, options } = {}) => {
+    if (options?.canvasBlankConnectionDraft) return;
     if (cell?.getData?.()?.canvasTransientEditor === true) return;
     sync();
   });
@@ -2032,52 +2288,79 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
 
   let activeEdge = null;
   let hideTimer = null;
+  let showTimer = null;
+  let pendingShow = null;
   const clearHideTimer = () => {
     if (hideTimer == null) return;
     globalThis.clearTimeout?.(hideTimer);
     hideTimer = null;
   };
+  const clearShowTimer = () => {
+    if (showTimer != null) globalThis.clearTimeout?.(showTimer);
+    showTimer = null;
+    pendingShow = null;
+  };
   const hide = () => {
     clearHideTimer();
+    clearShowTimer();
     activeEdge?.removeTools?.();
     activeEdge = null;
     button.hidden = true;
   };
   const scheduleHide = () => {
     clearHideTimer();
+    clearShowTimer();
     hideTimer = globalThis.setTimeout?.(hide, 100);
   };
-  const show = ({ edge, edgeElement } = {}) => {
+  const show = ({ edge, edgeElement, pointerClientX, pointerClientY } = {}) => {
     if (!edge || workbench?.ui?.canvasEdgesHidden === true) {
       hide();
       return;
     }
     const edgePath = edgeElement?.querySelector?.("path");
     const pathRect = edgePath?.getBoundingClientRect?.() ?? {};
-    let clientX = Number(pathRect.left) + Number(pathRect.width) / 2;
-    let clientY = Number(pathRect.top) + Number(pathRect.height) / 2;
-    try {
-      const length = edgePath?.getTotalLength?.();
-      const point = Number.isFinite(length) ? edgePath.getPointAtLength(length / 2) : null;
-      const matrix = point ? edgePath.getScreenCTM?.() : null;
-      if (point && matrix) {
-        clientX = point.x * matrix.a + point.y * matrix.c + matrix.e;
-        clientY = point.x * matrix.b + point.y * matrix.d + matrix.f;
+    let clientX = Number(pointerClientX);
+    let clientY = Number(pointerClientY);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+      clientX = Number(pathRect.left) + Number(pathRect.width) / 2;
+      clientY = Number(pathRect.top) + Number(pathRect.height) / 2;
+      try {
+        const length = edgePath?.getTotalLength?.();
+        const point = Number.isFinite(length) ? edgePath.getPointAtLength(length / 2) : null;
+        const matrix = point ? edgePath.getScreenCTM?.() : null;
+        if (point && matrix) {
+          clientX = point.x * matrix.a + point.y * matrix.c + matrix.e;
+          clientY = point.x * matrix.b + point.y * matrix.d + matrix.f;
+        }
+      } catch {
+        // Keep the bounding-box midpoint fallback for incomplete SVG implementations.
       }
-    } catch {
-      // Keep the bounding-box midpoint fallback for incomplete SVG implementations.
     }
     if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
     clearHideTimer();
     if (typeof edge.addTools === "function") {
-      if (activeEdge === edge && edge.hasTools?.("canvas-edge-disconnect")) return;
+      const edgeView = graph.findViewByCell?.(edge);
+      const localPoint = graph.clientToLocal?.(clientX, clientY);
+      const closestRatio = edgeView?.getClosestPointRatio?.(localPoint);
+      const distance = Number.isFinite(closestRatio)
+        ? `${Math.max(0, Math.min(1, closestRatio)) * 100}%`
+        : "50%";
+      if (activeEdge === edge && edge.hasTools?.("canvas-edge-disconnect")) {
+        const activeTool = edgeView?.tools?.tools?.find?.((tool) => tool?.name === "button");
+        if (activeTool?.options) {
+          activeTool.options.distance = distance;
+          activeTool.update?.();
+          return;
+        }
+      }
       activeEdge?.removeTools?.();
       activeEdge = edge;
       button.hidden = true;
       edge.addTools([{
         name: "button",
         args: {
-          distance: "50%",
+          className: "canvas-edge-disconnect-tool",
+          distance,
           markup: [
             { tagName: "circle", selector: "button", attrs: { r: 18, fill: "#181e22", stroke: "#91a0a8", strokeWidth: 1, cursor: "pointer" } },
             { tagName: "circle", selector: "handleTop", attrs: { cx: -6, cy: -5, r: 3, fill: "none", stroke: "#dfe7ea", strokeWidth: 1.9, pointerEvents: "none" } },
@@ -2108,6 +2391,23 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
     button.style.top = `${top}px`;
     button.hidden = false;
   };
+  const queueShow = (request) => {
+    clearHideTimer();
+    if (activeEdge === request?.edge) {
+      show(request);
+      return;
+    }
+    if (activeEdge) hide();
+    if (pendingShow?.edge !== request?.edge) clearShowTimer();
+    pendingShow = request;
+    if (showTimer != null) return;
+    showTimer = globalThis.setTimeout?.(() => {
+      const nextShow = pendingShow;
+      showTimer = null;
+      pendingShow = null;
+      show(nextShow);
+    }, 1000);
+  };
 
   button.addEventListener("pointerenter", clearHideTimer);
   button.addEventListener("pointerleave", scheduleHide);
@@ -2126,13 +2426,14 @@ function bindCanvasEdgeDisconnectControl(graph, workbench, mount) {
     const path = event.composedPath?.() ?? [];
     if (path.includes(button)) {
       clearHideTimer();
+      if (activeEdge) show({ edge: activeEdge, pointerClientX: event.clientX, pointerClientY: event.clientY });
       return;
     }
     const edgeElement = path.find((candidate) => candidate?.classList?.contains?.("x6-edge"))
       ?? event.target?.closest?.(".x6-edge[data-cell-id]");
     const edgeId = String(edgeElement?.getAttribute?.("data-cell-id") ?? "");
     const edge = edgeId ? graph.getCellById?.(edgeId) : null;
-    if (edge) show({ edge, edgeElement });
+    if (edge) queueShow({ edge, edgeElement, pointerClientX: event.clientX, pointerClientY: event.clientY });
     else scheduleHide();
   };
   mount.addEventListener("pointermove", trackPointer, true);
@@ -2282,14 +2583,13 @@ export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   const snapEnabled = viewport.snapEnabled !== false;
   if (graph.__comicAiCanvasSnapEnabled === snapEnabled) return true;
   if (graph.options?.snapline) graph.options.snapline.enabled = snapEnabled;
-  graph.setGridSize?.(1);
+  graph.setGridSize?.(snapEnabled ? CANVAS_GRID_SIZE : 1);
   if (graph.options?.connecting) {
     graph.options.connecting.snap = { radius: CANVAS_CONNECTION_SNAP_RADIUS, anchor: "center" };
   }
   const snapline = graph.getPlugin?.("snapline");
   if (snapEnabled) snapline?.enable?.();
   else snapline?.disable?.();
-  graph.showGrid?.();
   graph.__comicAiCanvasSnapEnabled = snapEnabled;
   return true;
 }
@@ -2320,17 +2620,97 @@ export function duplicateCanvasNodeForModifierDrag(graph, workbench, node, event
 }
 
 export function resolveCanvasBlankConnection(event = {}) {
-  if (!event.isNew || event.type !== "target" || event.currentCell || !event.currentPoint) return null;
-  const source = event.edge?.getSource?.() ?? event.edge?.source ?? {};
+  const edge = event.edge;
+  if (edge?.__comicAiCanvasConnectionDraft !== true) return null;
+  if ((event.type && event.type !== "target") || event.currentCell) return null;
+  const source = edge.getSource?.() ?? edge.source ?? {};
+  const target = event.currentPoint ?? edge.getTarget?.() ?? edge.target ?? {};
   const sourceNodeId = String(source?.cell ?? "");
   const sourcePortId = String(source?.port ?? "");
-  if (!sourceNodeId || !sourcePortId) return null;
+  const canvasX = Number(target?.x);
+  const canvasY = Number(target?.y);
+  if (!sourceNodeId || !sourcePortId || target?.cell || !Number.isFinite(canvasX) || !Number.isFinite(canvasY)) {
+    return null;
+  }
+  const draftEdgeId = String(edge?.id ?? edge?.getProp?.("id") ?? "");
   return {
     sourceNodeId,
     sourcePortId,
-    canvasX: Number(event.currentPoint.x ?? 0),
-    canvasY: Number(event.currentPoint.y ?? 0),
+    ...(draftEdgeId ? { draftEdgeId } : {}),
+    canvasX,
+    canvasY,
   };
+}
+
+export function settleCanvasGraphBlankConnectionDraft(graph, { document = null, draftEdgeId = null } = {}) {
+  const edge = graph?.__comicAiCanvasPendingConnectionEdge;
+  if (!edge) return false;
+  const pendingEdgeId = String(edge?.id ?? edge?.getProp?.("id") ?? "");
+  if (draftEdgeId !== null && String(draftEdgeId ?? "") === pendingEdgeId) {
+    return false;
+  }
+  const committed = pendingEdgeId && Array.isArray(document?.edges)
+    ? document.edges.some((item) => (
+        String(item?.id ?? "") === pendingEdgeId
+        && item?.sourceNodeId
+        && item?.sourcePortId
+        && item?.targetNodeId
+        && item?.targetPortId
+      ))
+    : false;
+  delete graph.__comicAiCanvasPendingConnectionEdge;
+  if (committed) {
+    delete edge.__comicAiCanvasConnectionDraft;
+    graph.findViewByCell?.(edge)?.container?.classList?.remove?.("is-canvas-edge-connecting");
+    return true;
+  }
+  graph.removeCell?.(edge, { canvasBlankConnectionDraft: true });
+  return true;
+}
+
+export function handleCanvasBlankConnectionEvent({ graph, workbench, mount, event = {} } = {}) {
+  const blankConnection = resolveCanvasBlankConnection(event);
+  if (!blankConnection) return false;
+  const convertedPoint = graph?.localToClient?.({
+    x: blankConnection.canvasX,
+    y: blankConnection.canvasY,
+  }) ?? { x: blankConnection.canvasX, y: blankConnection.canvasY };
+  const pointerClientX = Number(event.e?.clientX);
+  const pointerClientY = Number(event.e?.clientY);
+  const clientPoint = {
+    x: Number.isFinite(pointerClientX) ? pointerClientX : Number(convertedPoint.x ?? 0),
+    y: Number.isFinite(pointerClientY) ? pointerClientY : Number(convertedPoint.y ?? 0),
+  };
+  const stage = mount?.closest?.(".canvas-stage");
+  const stageRect = stage?.getBoundingClientRect?.() ?? {};
+  const stageWidth = Number(stage?.clientWidth ?? stageRect.width ?? 0);
+  const stageHeight = Number(stage?.clientHeight ?? stageRect.height ?? 0);
+  const scaleX = Number(stageRect.width) > 0 && stageWidth > 0 ? Number(stageRect.width) / stageWidth : 1;
+  const scaleY = Number(stageRect.height) > 0 && stageHeight > 0 ? Number(stageRect.height) / stageHeight : 1;
+  const previousDraft = graph?.__comicAiCanvasPendingConnectionEdge;
+  if (previousDraft && previousDraft !== event.edge) {
+    graph.removeCell?.(previousDraft, { canvasBlankConnectionDraft: true });
+  }
+  graph.__comicAiCanvasPendingConnectionEdge = event.edge;
+  workbench?.onCanvasBlankConnection?.({
+    ...blankConnection,
+    x: Math.round((clientPoint.x - Number(stageRect.left ?? 0) + CANVAS_CONNECTION_MENU_GAP) / scaleX),
+    y: Math.round((clientPoint.y - Number(stageRect.top ?? 0)) / scaleY),
+    stageWidth: Math.round(stageWidth),
+    stageHeight: Math.round(stageHeight),
+  });
+  return true;
+}
+
+export function validateCanvasGraphEdgeConnection({ edge, type } = {}) {
+  const source = edge?.getSource?.() ?? {};
+  const target = edge?.getTarget?.() ?? {};
+  if (source.cell && target.cell) return true;
+  return edge?.__comicAiCanvasConnectionDraft === true
+    && type === "target"
+    && Boolean(source.cell && source.port)
+    && Number.isFinite(Number(target.x))
+    && Number.isFinite(Number(target.y));
 }
 
 export function syncCanvasGraphViewport(graph, workbench) {
@@ -2375,24 +2755,21 @@ export function syncCanvasGraphViewport(graph, workbench) {
 }
 
 function applyCanvasGraphViewportStyles(graph, workbench, viewport = null) {
-  const stage = workbench.root?.querySelector?.(".canvas-stage");
+  const stage = graph?.__comicAiCanvasMount?.closest?.(".canvas-stage");
   const translation = viewport ?? graph?.translate?.() ?? {};
   const zoom = Number(viewport?.zoom ?? graph?.zoom?.() ?? 1);
   const x = Number(viewport?.x ?? translation.tx ?? 0);
   const y = Number(viewport?.y ?? translation.ty ?? 0);
   const normalizedZoom = Number.isFinite(zoom) ? zoom : 1;
-  const gridSize = Math.max(6, Math.round(CANVAS_GRID_SIZE * normalizedZoom * 100) / 100);
+  const visualZoom = Math.max(0.1, normalizedZoom);
+  const gridSize = Math.max(CANVAS_GRID_SIZE, Math.round(CANVAS_GRID_SIZE * visualZoom * 100) / 100);
+  const gridDotMix = Math.min(14, Math.max(2, Math.round(14 * visualZoom * 100) / 100));
   stage?.style?.setProperty?.("--canvas-grid-size", `${gridSize}px`);
   stage?.style?.setProperty?.("--canvas-grid-major-size", `${gridSize * 5}px`);
+  stage?.style?.setProperty?.("--canvas-grid-dot-mix", `${gridDotMix}%`);
   stage?.style?.setProperty?.("--canvas-grid-x", `${x}px`);
   stage?.style?.setProperty?.("--canvas-grid-y", `${y}px`);
   stage?.style?.setProperty?.("--canvas-input-scale", String(1 / Math.max(0.1, normalizedZoom)));
-  if (stage?.classList?.contains?.("is-x6-ready")) return true;
-  const flow = workbench.root?.querySelector?.(".canvas-flow");
-  flow?.style?.setProperty?.("--canvas-pan-x", `${x}px`);
-  flow?.style?.setProperty?.("--canvas-pan-y", `${y}px`);
-  flow?.style?.setProperty?.("--canvas-zoom", String(normalizedZoom));
-  flow?.style?.setProperty?.("--canvas-toolbar-scale", String(1 / Math.max(0.1, normalizedZoom)));
   return true;
 }
 
@@ -2461,6 +2838,43 @@ function canvasSelectedGraphCells(graph) {
   return (graph?.getSelectedCells?.() ?? []).filter((cell) => (
     cell?.isNode?.() && cell?.getData?.()?.canvasTransientEditor !== true
   ));
+}
+
+export function mountCanvasGraphNodeActionToolbar(graph, nodeId, toolbarHtml, mount = graph?.__comicAiCanvasMount) {
+  mount?.querySelector?.("[data-canvas-node-action-toolbar]")?.remove?.();
+  const node = graph?.getCellById?.(nodeId);
+  if (!mount || !node?.isNode?.() || !String(toolbarHtml ?? "").trim() || typeof document === "undefined") {
+    return false;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = String(toolbarHtml);
+  const toolbar = template.content.firstElementChild;
+  if (!toolbar) return false;
+  toolbar.dataset.canvasNodeActionToolbar = "true";
+  toolbar.dataset.nodeId = String(nodeId);
+  toolbar.removeAttribute?.("style");
+  toolbar.addEventListener("pointerdown", (event) => event.stopPropagation());
+  toolbar.addEventListener("mousedown", (event) => event.stopPropagation());
+  mount.append(toolbar);
+  return positionCanvasNodeActionToolbar(graph, mount);
+}
+
+function positionCanvasNodeActionToolbar(graph, mount = graph?.__comicAiCanvasMount) {
+  const toolbar = mount?.querySelector?.("[data-canvas-node-action-toolbar]");
+  if (!toolbar) return false;
+  const bounds = resolveCanvasNodeMountBounds(graph, mount, toolbar.dataset?.nodeId);
+  if (!bounds) {
+    toolbar.remove?.();
+    return false;
+  }
+  const width = Math.max(1, Number(toolbar.offsetWidth ?? 1));
+  const height = Math.max(1, Number(toolbar.offsetHeight ?? 1));
+  const centerX = Number(bounds.left ?? 0) + Number(bounds.width ?? 0) / 2;
+  const left = Math.max(8, Math.min(Math.max(8, Number(mount.clientWidth ?? 0) - width - 8), centerX - width / 2));
+  const top = Math.max(8, Number(bounds.top ?? 0) - height - 8);
+  toolbar.style.left = `${Math.round(left)}px`;
+  toolbar.style.top = `${Math.round(top)}px`;
+  return true;
 }
 
 export function resolveCanvasSelectionActionState(canvasDocument, selectedIds = []) {
@@ -3013,6 +3427,11 @@ function syncCanvasGraphDocument(graph, workbench, options = {}) {
   }
   graph.__comicAiCanvasDocument = nextDocument;
   return nextDocument;
+}
+
+export function flushCanvasGraphDocument(graph, workbench) {
+  if (!graph || !workbench?.ui?.canvasDocument) return null;
+  return syncCanvasGraphDocument(graph, workbench, { scheduleSave: false });
 }
 
 export function synchronizeCanvasGraphGroupGeometry(graph, previousDocument = {}) {

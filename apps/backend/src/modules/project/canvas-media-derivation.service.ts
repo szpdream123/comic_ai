@@ -201,10 +201,10 @@ export async function reconcileCanvasMediaDerivations(
       completedDerivationIds.push(row.id);
       continue;
     }
-    if (row.task_status === "failed") {
+    if (["failed", "result_unknown", "manual_review_required"].includes(row.task_status)) {
       await failCanvasMediaDerivation(db, {
         derivationId: row.id,
-        failure: { failureCode: row.failure_code ?? "generation_task_failed" },
+        failure: { failureCode: row.failure_code ?? row.task_status },
         now: input.now,
       });
       failedDerivationIds.push(row.id);

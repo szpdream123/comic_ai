@@ -47,6 +47,7 @@ export async function readBrowserVideoSourceFrameRate(file) {
 }
 
 export async function decodeBrowserVideoTimeline(file, options = {}) {
+  throwIfAborted(options.signal);
   if (!(file instanceof Blob)) throw new Error("未找到可处理的视频文件");
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
   try {
@@ -71,6 +72,7 @@ export async function decodeBrowserVideoTimeline(file, options = {}) {
 
     let extracted = 0;
     for await (const decoded of sink.canvasesAtTimestamps(plan.frames.map((frame) => frame.timestamp))) {
+      throwIfAborted(options.signal);
       const frame = plan.frames[extracted];
       if (!decoded || !frame) throw new Error("浏览器读取视频帧失败");
       await options.onFrame?.({
@@ -80,9 +82,11 @@ export async function decodeBrowserVideoTimeline(file, options = {}) {
         timestamp: decoded.timestamp,
         timestampMs: frame.timestampMs,
       });
+      throwIfAborted(options.signal);
       extracted += 1;
       options.onProgress?.({ index: extracted, frameCount: plan.frames.length });
     }
+    throwIfAborted(options.signal);
     if (extracted !== plan.frames.length) throw new Error("浏览器没有生成完整的 6 FPS 时间轴");
 
     const audioTrack = await input.getPrimaryAudioTrack();
@@ -105,6 +109,13 @@ export async function decodeBrowserVideoTimeline(file, options = {}) {
   } finally {
     input.dispose();
   }
+}
+
+function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  const error = new Error("视频分析已取消");
+  error.name = "AbortError";
+  throw error;
 }
 
 function constrainFrameSize(width, height, maxEdge) {

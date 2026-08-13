@@ -232,6 +232,9 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         state.cameraPromptCopied = false;
         syncCameraStudioLiveElements(surface, state, field);
       }
+      if (state.tool === "crop" && field.startsWith("crop")) {
+        syncCropVisualElements(surface, state);
+      }
       return true;
     },
     handlePointerDown(event, target) {

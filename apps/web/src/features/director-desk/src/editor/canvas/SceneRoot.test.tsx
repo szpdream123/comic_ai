@@ -403,6 +403,40 @@ it("moves a character on the same normalized timeline as the camera", () => {
   expect(screen.getByTestId("mock-character-model")).toHaveAttribute("data-motion-walking", "true");
 });
 
+it("does not render a motion character or label before its first appearance", async () => {
+  const state = useDirectorStore.getState();
+  useDirectorStore.setState({
+    ...state,
+    cameraMotionProgress: 0,
+    project: {
+      ...state.project,
+      objects: state.project.objects.map((object) => object.id === "char_default_a" ? {
+        ...object,
+        motionPath: {
+          interpolation: "linear",
+          keyframes: [
+            { id: "char_hidden_1", time: 0, transform: { ...object.transform, scale: [0.001, 0.001, 0.001] } },
+            { id: "char_hidden_2", time: 0.4, transform: { ...object.transform, scale: [0.001, 0.001, 0.001] } },
+            { id: "char_visible_1", time: 0.5, transform: { ...object.transform, scale: [1, 1, 1] } },
+          ],
+        },
+      } : object),
+    },
+  });
+
+  const { container } = render(<SceneRoot />);
+
+  expect(container.querySelector('group[name="director-object-char_default_a"]')).not.toBeInTheDocument();
+  expect(screen.queryByText("角色01")).not.toBeInTheDocument();
+
+  act(() => useDirectorStore.setState({ cameraMotionProgress: 0.5 }));
+
+  await waitFor(() => {
+    expect(container.querySelector('group[name="director-object-char_default_a"]')).toBeInTheDocument();
+    expect(screen.getByText("角色01")).toBeInTheDocument();
+  });
+});
+
 it("keeps the character frozen at the paused action time while piloting", () => {
   const state = useDirectorStore.getState();
   useDirectorStore.setState({

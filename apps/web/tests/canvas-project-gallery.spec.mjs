@@ -64,7 +64,7 @@ test("canvas project gallery searches titles and exposes an input bridge", () =>
   assert.match(emptyHtml, /没有匹配“角色”的画布/);
 });
 
-test("opened Canvas renders recent tabs and complete generation-history controls", () => {
+test("opened Canvas renders complete generation-history controls", () => {
   const html = renderCanvasSurfaceForHost({
     ui: {
       selectedCanvasProjectId: "canvas-b",
@@ -79,9 +79,6 @@ test("opened Canvas renders recent tabs and complete generation-history controls
       canvasAssets: [{ id: "artifact-1", runId: "run-1", type: "asset", kind: "image", title: "结果图", meta: "image", status: "可用" }],
     },
   });
-  assert.match(html, /aria-label="最近打开的画布"/);
-  assert.match(html, /角色探索/);
-  assert.match(html, /场景探索/);
   assert.match(html, /data-action="export-canvas-generation-history"/);
   assert.match(html, /data-action="delete-canvas-node-generation-history"/);
   assert.match(html, /data-action="delete-all-canvas-generation-history"/);

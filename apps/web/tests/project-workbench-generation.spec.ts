@@ -14,6 +14,7 @@ import {
   buildVideoGenerationPayload,
   createEpisodeExportPreviewWithKindForTest,
   createProjectShotImageBatchForTest,
+  expandCanvasFrameAnalysisSegmentsForTest,
   friendlyError,
   generateAssetImages,
   generateStoryboardImages,
@@ -31,12 +32,14 @@ import {
   isTaskCenterPollDeadlineExceededForTest,
   mapEpisodeAssetContractsForTest,
   mapEpisodeStoryboardContractForTest,
+  openCanvasConnectionDropMenuForTest,
   loadSelectedAssetConversationHistory,
   loadCanvasGenerationAssetsForTest,
   loadStandaloneCanvasProjectForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
   persistCanvasNodePositionsForTest,
+  persistCanvasViewportBeforePageHideForTest,
   persistCanvasSessionForTest,
   persistStoryboardCardDescriptionForTest,
   persistStoryboardDescriptionFromCardForTest,
@@ -79,6 +82,7 @@ import {
   uploadAssetGeneratorRetryImageForTest,
   uploadStoryboardGeneratorReferenceImagesForTest,
   uploadProjectCoverFile,
+  writeCanvasRefreshDraftForTest,
   syncStoryboards,
 } from "../src/features/production-workbench/index.js";
 import {
@@ -1342,22 +1346,22 @@ describe("episode workbench asset list layout", () => {
     assert.doesNotMatch(iconRuleSelectors, /\.canvas-stage\s+svg\s*(?:,|$)/);
   });
 
-  it("keeps Liblib canvas connection SVGs visible instead of icon-sized", () => {
+  it("keeps X6 canvas connection SVGs visible instead of icon-sized", () => {
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    const edgeLayerBlock = css.match(
-      /\.canvas-stage svg\.canvas-lib-edge-layer\s*\{(?<body>[^}]*)\}/,
-    )?.groups?.body ?? "";
+    const mountBlock = css.match(/\.canvas-x6-mount\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const graphSvgBlock = css.match(/\.canvas-x6-mount \.x6-graph-svg\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
     const iconRuleIndex = css.indexOf(".canvas-stage svg:not(.x6-graph-svg)");
-    const edgeLayerIndex = css.indexOf(".canvas-stage svg.canvas-lib-edge-layer");
+    const graphSvgIndex = css.indexOf(".canvas-x6-mount .x6-graph-svg");
 
-    assert.match(edgeLayerBlock, /width:\s*6400px/);
-    assert.match(edgeLayerBlock, /height:\s*4800px/);
-    assert.match(edgeLayerBlock, /max-width:\s*none/);
-    assert.match(edgeLayerBlock, /overflow:\s*visible/);
-    assert.ok(edgeLayerIndex > iconRuleIndex);
+    assert.match(mountBlock, /inset:\s*0/);
+    assert.match(mountBlock, /width:\s*100%\s*!important/);
+    assert.match(mountBlock, /height:\s*100%\s*!important/);
+    assert.match(graphSvgBlock, /width:\s*100%/);
+    assert.match(graphSvgBlock, /height:\s*100%/);
+    assert.ok(graphSvgIndex < iconRuleIndex);
   });
 
 
@@ -6845,6 +6849,90 @@ describe("workbench generation payloads and inspectors", () => {
     assert.doesNotMatch(promptDockHtml, /episode-replica-ref-card quick-reference/);
     assert.doesNotMatch(promptDockHtml, />分镜 1</);
     assert.doesNotMatch(workbench.ui.prompt, /任小野人物固定文本/);
+  });
+
+  it("removes unresolved @ markers when importing a storyboard without materials", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-text-only-mentions",
+      description: "视频场景对照表：水岸=【@城郊居民撤离的水岸】\n视频角色对照表：任小野=@任小野",
+      references: [],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: { character: [], scene: [], prop: [] },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.equal(
+      workbench.ui.prompt,
+      "视频场景对照表：水岸=城郊居民撤离的水岸\n视频角色对照表：任小野=任小野",
+    );
+    assert.doesNotMatch(workbench.ui.prompt, /@/u);
+    assert.deepEqual(result.references, []);
+  });
+
+  it("keeps matched storyboard mentions while removing missing material markers", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      id: "storyboard-mixed-mentions",
+      description: "视频场景对照表：水岸=【@城郊居民撤离的水岸】\n视频角色对照表：任小野=【@任小野】的角色形象",
+      references: [{
+        role: "character",
+        assetId: "character-ren",
+        name: "任小野",
+        previewUrl: "/uploads/ren-xiaoye.png",
+      }],
+      previewImageUrl: null,
+      currentImageAssetVersionId: null,
+      uploadedImages: [],
+    };
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "video",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboard.id,
+        storyboards: [storyboard],
+        episodeStoryboardMap: { "episode-new": [storyboard] },
+        prompt: "",
+        importedAssets: {
+          character: [{
+            id: "character-ren",
+            name: "任小野",
+            previewUrl: "/uploads/ren-xiaoye.png",
+          }],
+          scene: [],
+          prop: [],
+        },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench, { storyboardId: storyboard.id });
+
+    assert.equal(result.ok, true);
+    assert.equal(
+      workbench.ui.prompt,
+      "视频场景对照表：水岸=城郊居民撤离的水岸\n视频角色对照表：任小野=【@图1】的角色形象",
+    );
+    assert.doesNotMatch(workbench.ui.prompt, /【@城郊居民撤离的水岸】/u);
+    assert.match(workbench.ui.prompt, /【@图1】/u);
+    assert.equal(result.references.length, 1);
   });
 
   it("shows a non-blocking yellow warning when importing a storyboard without its own image", async () => {
@@ -33347,7 +33435,7 @@ describe("production workbench project tab", () => {
     assert.match(html, /canvas-panel/);
     assert.match(html, /canvas-sidebar/);
     assert.match(html, /canvas-x6-mount/);
-    assert.match(html, /canvas-flow/);
+    assert.match(html, /data-canvas-node-action-toolbar-template/);
     assert.doesNotMatch(html, /canvas-lib-node/);
     assert.match(html, /暂无画布节点/);
     assert.match(html, /共 0 节点/);
@@ -33475,6 +33563,9 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /data-canvas-sidebar-mode="assets"/);
+    assert.match(html, /canvas-resource-actions/);
+    assert.match(html, /data-action="trigger-canvas-local-resource-upload"/);
+    assert.match(html, /data-action="trigger-canvas-libtv-import"/);
     assert.match(html, /主角正面设定/);
     assert.match(html, /角色资产/);
     assert.match(html, /节点模板/);
@@ -33560,9 +33651,30 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /canvas-stage[^>]+--canvas-grid-size:27px;--canvas-grid-major-size:135px;--canvas-grid-x:-120px;--canvas-grid-y:48px/);
-    assert.match(html, /canvas-flow[^>]+--canvas-pan-x:-120px;--canvas-pan-y:48px;--canvas-zoom:1\.35/);
+    assert.match(html, /canvas-stage[^>]+--canvas-grid-size:27px;--canvas-grid-major-size:135px;--canvas-grid-dot-mix:14%;--canvas-grid-x:-120px;--canvas-grid-y:48px/);
+    assert.doesNotMatch(html, /canvas-flow|--canvas-pan-x|--canvas-zoom/);
     assert.match(html, /135%/);
+  });
+
+  it("renders a thinned and faded Canvas grid for a zoomed-out initial viewport", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "episode-primary",
+          viewport: { x: 0, y: 0, zoom: 0.35 },
+          nodes: [],
+          edges: [],
+        },
+      }),
+    });
+
+    assert.match(html, /canvas-stage[^>]+--canvas-grid-size:20px;--canvas-grid-major-size:100px;--canvas-grid-dot-mix:4.9%/);
   });
 
   it("renders generated canvas videos with playback controls and download links", () => {
@@ -33610,19 +33722,20 @@ describe("production workbench project tab", () => {
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    const glowBlocks = [...css.matchAll(/\.canvas-flow-edge-glow\s*\{(?<body>[^}]*)\}/g)];
-    const glowBlock = glowBlocks.at(-1)?.groups?.body ?? "";
-    const ribbonKeyframes =
-      css.match(/@keyframes canvas-flow-edge-ribbon\s*\{(?<body>[\s\S]*?)\n\}/)?.groups?.body ?? "";
+    const flowBlock = css.match(
+      /\.canvas-x6-mount \.x6-edge:is\(\.is-canvas-edge-connecting, \.is-canvas-edge-flowing\) path:nth-child\(3\)\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const connectingBlock = css.match(
+      /\.canvas-x6-mount \.x6-edge\.is-canvas-edge-connecting path:nth-child\(2\)\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? "";
+    const flowKeyframes =
+      css.match(/@keyframes canvas-x6-edge-flow\s*\{(?<body>[\s\S]*?)\n\}/)?.groups?.body ?? "";
 
-    assert.match(glowBlock, /stroke-dasharray:\s*72 148/);
-    assert.match(glowBlock, /animation:\s*canvas-flow-edge-ribbon 1\.45s linear infinite/);
-    assert.match(ribbonKeyframes, /stroke-dashoffset:\s*-220/);
-    assert.doesNotMatch(glowBlock, /stroke-dasharray:\s*24 18/);
-    assert.doesNotMatch(glowBlock, /stroke-dasharray:\s*64 92/);
-    assert.doesNotMatch(glowBlock, /stroke-dasharray:\s*168 592/);
-    assert.doesNotMatch(glowBlock, /stroke-dasharray:\s*58 145/);
-    assert.doesNotMatch(glowBlock, /animation:\s*canvas-edge-flow/);
+    assert.match(flowBlock, /opacity:\s*1/);
+    assert.match(flowBlock, /animation:\s*canvas-x6-edge-flow 2\.2s linear infinite/);
+    assert.match(flowKeyframes, /stroke-dashoffset:\s*-100/);
+    assert.match(connectingBlock, /stroke-dasharray:\s*9 7/);
+    assert.match(connectingBlock, /animation:\s*canvas-x6-edge-connecting 720ms linear infinite/);
   });
 
   it("keeps the selected canvas editor inside the transformed canvas flow", () => {
@@ -33659,13 +33772,16 @@ describe("production workbench project tab", () => {
         },
       }),
     });
-    const flowStart = html.indexOf('<div class="canvas-flow"');
-    const editorIndex = html.indexOf("canvas-node-editor generation-editor");
-    const flowEnd = html.indexOf("</div>", editorIndex);
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+    const editorBlock = source.match(/export function mountCanvasGraphEditorOverlay[\s\S]*?export function clearCanvasGraphEditorOverlay/)?.[0] ?? "";
 
-    assert.ok(flowStart >= 0);
-    assert.ok(editorIndex > flowStart);
-    assert.ok(flowEnd > editorIndex);
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.match(html, /<template data-canvas-node-editor-template>[\s\S]*canvas-node-editor generation-editor[\s\S]*<\/template>/);
+    assert.match(editorBlock, /x:\s*position\.x \+ \(size\.width - editorSize\.width\) \/ 2/);
+    assert.match(editorBlock, /y:\s*position\.y \+ size\.height/);
     assert.match(html, /--canvas-zoom:0\.35/);
   });
 
@@ -33820,6 +33936,7 @@ describe("production workbench project tab", () => {
     assert.match(videoHtml, /data-action="set-canvas-video-generation-mode" data-node-id="video-send" data-mode="first-frame">首帧生视频/);
     assert.match(videoHtml, /data-mode="first-last-frame">首尾帧生视频/);
     assert.match(videoHtml, /data-mode="reference-video">全能参考/);
+    assert.doesNotMatch(videoHtml, /data-mode="edit-video">智能剪辑/);
     assert.match(videoHtml, /data-mode="first-last-frame">首尾帧生视频<\/button>/);
     assert.match(videoHtml, /class="episode-replica-control[^"]*"/);
     assert.match(videoHtml, /data-action="toggle-generation-select-menu"/);
@@ -34495,7 +34612,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-b");
   });
 
-  it("keeps the Canvas open when navigation flush hits a revision conflict", async () => {
+  it("preserves the local Canvas draft when navigation flush hits a revision conflict", async () => {
     const localDocument = {
       version: 2,
       canvasProjectId: "canvas-a",
@@ -34530,14 +34647,23 @@ describe("production workbench project tab", () => {
       root: { innerHTML: "", querySelector() { return null; } },
     };
 
-    await handleWorkbenchActionForTest(workbench, { dataset: { action: "back-to-canvas-projects" } });
+    const previousWindow = globalThis.window;
+    globalThis.window = { location: { hash: "" } } as typeof globalThis.window;
+    try {
+      await handleWorkbenchActionForTest(workbench, { dataset: { action: "back-to-canvas-projects" } });
 
-    assert.equal(workbench.ui.canvasProjectView, "detail");
-    assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-a");
-    assert.equal(workbench.ui.canvasDocument.nodes[0].data.text, "本地草稿");
-    assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].data.text, "服务端版本");
-    assert.equal(workbench.ui.canvasSaveStatus, "conflict");
-    assert.match(String(workbench.ui.toast), /本地草稿已保留/);
+      assert.equal(workbench.ui.canvasProjectView, "detail");
+      assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-a");
+      assert.equal(workbench.ui.canvasDocument.nodes[0].data.text, "本地草稿");
+      assert.equal(workbench.ui.canvasRevisionConflict.serverRevision, 3);
+      assert.equal(workbench.ui.canvasSaveStatus, "conflict");
+      await resolveCanvasRevisionConflictForTest(workbench, "server", { render: false });
+      assert.equal(workbench.ui.canvasDocument.nodes[0].data.text, "服务端版本");
+      assert.equal(workbench.ui.canvasRevisionConflict, null);
+      assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    } finally {
+      globalThis.window = previousWindow;
+    }
   });
 
   it("restores the selected standalone canvas document when refreshing the tools canvas detail route", async () => {
@@ -34975,20 +35101,125 @@ describe("production workbench project tab", () => {
     );
 
     assert.doesNotMatch(menuHtml, /data-action="delete-canvas-selection"/);
-    assert.match(generatorGroup, /生成节点/);
+    assert.match(generatorGroup, /生成与分析/);
     assert.match(generatorGroup, /data-template-id="template-ai-text"[\s\S]*?<kbd[^>]*>1<\/kbd>/);
+    assert.doesNotMatch(generatorGroup, /data-template-id="template-smart-edit"|智能剪辑/);
+    assert.doesNotMatch(generatorGroup, /data-template-id="template-frame-analysis"|逐帧拉片/);
     assert.doesNotMatch(generatorGroup, /data-template-id="template-script"/);
     assert.doesNotMatch(generatorGroup, /data-template-id="template-ai-director"/);
-    assert.match(sourceGroup, /来源节点/);
-    assert.match(sourceGroup, /data-template-id="template-source-text"[\s\S]*?<kbd[^>]*>Alt\+1<\/kbd>/);
-    assert.match(sourceGroup, /data-template-id="template-script"[\s\S]*?剧本源[\s\S]*?<kbd[^>]*>Alt\+2<\/kbd>/);
+    assert.match(sourceGroup, /文本与编排/);
+    assert.doesNotMatch(sourceGroup, /data-template-id="template-source-text"/);
+    assert.match(sourceGroup, /data-template-id="template-script"[\s\S]*?脚本[\s\S]*?<kbd[^>]*>Alt\+2<\/kbd>/);
     assert.match(sourceGroup, /data-template-id="template-ai-director"[\s\S]*?<kbd[^>]*>Alt\+7<\/kbd>/);
-    assert.match(sourceGroup, /data-template-id="template-upload"[\s\S]*?上传/);
+    assert.match(sourceGroup, /data-template-id="template-upload"[\s\S]*?上传[\s\S]*?<\/button>\s*$/);
     assert.doesNotMatch(sourceGroup, /template-source-image|template-source-video|template-source-audio/);
     assert.doesNotMatch(sourceGroup, /data-template-id="template-group"/);
     assert.doesNotMatch(menuHtml, /template-ai-markdown|template-markdown|template-ai-animation/);
     assert.doesNotMatch(menuHtml, /undo-canvas-change|redo-canvas-change|撤销|重做/);
     assert.doesNotMatch(menuHtml, /data-action="add-canvas-template" data-template-id="template-group"/);
+  });
+
+  it("shows the complete grouped node menu and disables incompatible downstream nodes", () => {
+    const html = renderProductionWorkbench({
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        canvasContextMenu: {
+          mode: "connection",
+          sourceNodeId: "source-video",
+          compatibleTemplateIds: ["template-ai-video"],
+          x: 180,
+          y: 120,
+        },
+      }),
+    });
+    const menuHtml = html.slice(
+      html.indexOf('data-canvas-context-menu'),
+      html.indexOf("</aside>", html.indexOf('data-canvas-context-menu')),
+    );
+
+    const compatibleButton = menuHtml.match(/<button[^>]*data-template-id="template-ai-video"[^>]*>/)?.[0] ?? "";
+    const uploadButton = menuHtml.match(/<button[^>]*data-template-id="template-upload"[^>]*>/)?.[0] ?? "";
+
+    assert.match(menuHtml, /data-canvas-node-group="generator"[\s\S]*?生成与分析/);
+    assert.match(menuHtml, /data-canvas-node-group="source"[\s\S]*?文本与编排/);
+    assert.doesNotMatch(menuHtml, /data-template-id="template-smart-edit"|智能剪辑/);
+    assert.doesNotMatch(menuHtml, /data-template-id="template-frame-analysis"|逐帧拉片/);
+    assert.match(compatibleButton, /data-action="add-canvas-template"/);
+    assert.doesNotMatch(compatibleButton, /disabled|aria-disabled/);
+    assert.match(uploadButton, /disabled aria-disabled="true"/);
+    assert.doesNotMatch(menuHtml, /<kbd/);
+  });
+
+  it("opens a compatible-node menu at an X6 blank connection drop", () => {
+    const canvasDocument = {
+      version: 2,
+      canvasProjectId: "canvas-connection-drop",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{
+        id: "source-image",
+        type: "source-image",
+        position: { x: 120, y: 100 },
+        data: { ports: { inputs: [], outputs: [{ id: "out_image", direction: "out", kind: "image" }] } },
+      }],
+      edges: [],
+    };
+    const updates = [];
+    const workbench = {
+      state: {},
+      session: {},
+      api: {},
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-connection-drop",
+        canvasDocument,
+      }),
+      newCanvasMount: {
+        isConnected: true,
+        dataset: { canvasProjectId: "canvas-connection-drop" },
+        shadowRoot: null,
+      },
+      newCanvasInstance: {
+        update(input) {
+          updates.push(input);
+          return Promise.resolve();
+        },
+      },
+    };
+
+    assert.equal(openCanvasConnectionDropMenuForTest(workbench, {
+      sourceNodeId: "source-image",
+      sourcePortId: "out_image",
+      x: 620,
+      y: 360,
+      canvasX: 880,
+      canvasY: 440,
+      stageWidth: 1400,
+      stageHeight: 900,
+      draftEdgeId: "draft-edge-image",
+    }), true);
+    assert.equal(workbench.ui.canvasContextMenu.mode, "connection");
+    assert.equal(workbench.ui.canvasContextMenu.canvasX, 880);
+    assert.equal(workbench.ui.canvasContextMenu.canvasY, 440);
+    assert.equal(workbench.ui.canvasContextMenu.draftEdgeId, "draft-edge-image");
+    assert.equal(workbench.ui.canvasContextMenu.compatibleTemplateIds.includes("template-ai-image"), true);
+    assert.equal(updates.at(-1).interactionOnly, true);
+  });
+
+  it("clears a pending blank connection when the outer canvas dismisses overlays", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      "utf8",
+    );
+    const helperStart = source.indexOf("function closeCanvasEditorWithoutRender");
+    const helperEnd = source.indexOf("function trackCanvasRightPanGesture", helperStart);
+    const helperBlock = source.slice(helperStart, helperEnd);
+
+    assert.match(helperBlock, /dismissCanvasSurfaceOverlays\(workbench\?\.ui \?\? \{\}\)/);
+    assert.match(helperBlock, /settleCanvasGraphBlankConnectionDraft\(workbench\?\.canvasGraph, \{[\s\S]*?document: workbench\?\.ui\?\.canvasDocument/);
   });
 
   it("shows the batch delete action only when Canvas nodes are selected", () => {
@@ -35121,7 +35352,14 @@ describe("production workbench project tab", () => {
       session: { user: { phone: "+86 13800138000" } },
       ui: workbench.ui,
     });
-    assert.match(html, /class="canvas-flow-edge-line" d="M [^" ]+ [^" ]+ H [^" ]+ V [^" ]+ H [^" ]+"/);
+    const x6Source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.doesNotMatch(html, /canvas-flow-edge-line/);
+    assert.match(x6Source, /router: edgeStyle === "curve" \? \{ name: "normal" \} : \{ name: "orth", args: \{ padding: 26 \} \}/);
+    assert.match(x6Source, /connector: edgeStyle === "curve" \? \{ name: "smooth" \} : \{ name: "rounded", args: \{ radius: 12 \} \}/);
   });
 
   it("deletes the canvas node selected from the node context menu", async () => {
@@ -35222,7 +35460,7 @@ describe("production workbench project tab", () => {
     assert.match(workbench.ui.toast, /已删除 2 个画布节点/);
   });
 
-  it("renders upload canvas nodes as a single media upload box", () => {
+  it("renders upload canvas nodes as a single X6 mixed-media upload box", () => {
     const emptyHtml = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
@@ -35253,11 +35491,20 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(emptyHtml, /canvas-upload-node/);
-    assert.match(emptyHtml, /data-action="pick-canvas-upload-file"/);
-    assert.match(emptyHtml, /data-canvas-upload-input/);
-    assert.match(emptyHtml, /上传图片、视频或音频/);
-    assert.match(emptyHtml, /accept="image\/\*,video\/\*,audio\/\*"/);
+    const x6Source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+    const uploadRenderer = x6Source.match(/function renderCanvasSourceMediaNodeBody[\s\S]*?function renderCanvasGenericX6Node/)?.[0] ?? "";
+
+    assert.match(emptyHtml, /data-canvas-x6-mount/);
+    assert.doesNotMatch(emptyHtml, /canvas-upload-node/);
+    assert.match(x6Source, /type === "upload"[\s\S]*?renderCanvasSourceMediaNodeBody\(node, resolveCanvasUploadMediaKind\(node\), \{ mixed: true \}\)/);
+    assert.match(uploadRenderer, /canvas-x6-source-media-body[\s\S]*?is-upload/);
+    assert.match(uploadRenderer, /data-action="pick-canvas-upload-file"/);
+    assert.equal((uploadRenderer.match(/data-canvas-upload-input/g) ?? []).length, 1);
+    assert.match(uploadRenderer, /上传图片、视频或音频/);
+    assert.match(uploadRenderer, /image\/\*,video\/\*,audio\/\*/);
     assert.doesNotMatch(emptyHtml, /data-action="edit-canvas-text-node"/);
     assert.doesNotMatch(emptyHtml, /data-action="open-canvas-script-picker"/);
     assert.doesNotMatch(emptyHtml, /canvas-node-editor text-editor/);
@@ -35297,9 +35544,9 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(mediaHtml, /canvas-upload-card has-media/);
-    assert.match(mediaHtml, /<img src="\/uploads\/frame\.png"/);
-    assert.match(mediaHtml, /frame\.png/);
+    assert.match(mediaHtml, /data-canvas-x6-mount/);
+    assert.doesNotMatch(mediaHtml, /canvas-upload-card|<img src="\/uploads\/frame\.png"/);
+    assert.match(uploadRenderer, /<img src="\$\{escapeCanvasX6Html\(mediaUrl\)\}"/);
   });
 
   it("distinguishes source nodes from generic uploads by media type", () => {
@@ -35336,17 +35583,13 @@ describe("production workbench project tab", () => {
     assert.doesNotMatch(html, /canvas-node-editor/);
   });
 
-  it("zooms canvas controls around the stage center", async () => {
-    const stage = {
-      getBoundingClientRect() {
-        return { left: 0, top: 0, width: 1000, height: 600 };
-      },
-    };
+  it("zooms canvas controls around the X6 viewport center", async () => {
+    let zoom = 1;
+    let translation = { tx: 0, ty: 0 };
+    const zoomCalls = [];
     const root = {
       innerHTML: "",
-      querySelector(selector) {
-        return selector === ".canvas-stage" ? stage : null;
-      },
+      querySelector() { return null; },
     };
     const workbench = {
       state: buildProjectState(),
@@ -35366,6 +35609,15 @@ describe("production workbench project tab", () => {
         },
       }),
       root,
+      canvasGraph: {
+        zoom: () => zoom,
+        translate: () => translation,
+        zoomTo(nextZoom, options) {
+          zoomCalls.push({ nextZoom, options });
+          translation = { tx: -50, ty: -30 };
+          zoom = nextZoom;
+        },
+      },
     };
 
     await handleWorkbenchActionForTest(workbench, {
@@ -35375,26 +35627,25 @@ describe("production workbench project tab", () => {
       },
     });
 
+    assert.deepEqual(zoomCalls, [{ nextZoom: 1.1, options: undefined }]);
     assert.equal(workbench.ui.canvasDocument.viewport.zoom, 1.1);
     assert.equal(workbench.ui.canvasDocument.viewport.x, -50);
     assert.equal(workbench.ui.canvasDocument.viewport.y, -30);
   });
 
-  it("commits canvas pan state only once when the pointer is released", () => {
+  it("uses X6 viewport events instead of legacy host pan state", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
     );
-    const panBlock = source.match(/function startCanvasPan[\s\S]*?function startEpisodeWorkbenchLayoutResize/)?.[0] ?? "";
-    const moveBlock = panBlock.match(/const onPointerMove = \(moveEvent\) => \{[\s\S]*?\n  \};/)?.[0] ?? "";
-    const upBlock = panBlock.match(/const onPointerUp = \(\) => \{[\s\S]*?\n  \};/)?.[0] ?? "";
+    const graphSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
 
-    assert.match(moveBlock, /--canvas-pan-x/);
-    assert.match(moveBlock, /translate3d/);
-    assert.doesNotMatch(moveBlock, /canvasGraph\?\.translate/);
-    assert.doesNotMatch(moveBlock, /updateCanvasViewportAndRender/);
-    assert.match(upBlock, /removeProperty\?\.\("transform"\)/);
-    assert.match(upBlock, /updateCanvasViewportAndRender\(workbench, latestViewport\)/);
+    assert.doesNotMatch(source, /function startCanvasPan|translate3d|--canvas-pan-x/);
+    assert.match(graphSource, /graph\.on\("translate", \(\) => scheduleViewportSync/);
+    assert.match(graphSource, /syncCanvasGraphViewport\(graph, workbench\)/);
   });
 
   it("debounces canvas text saves until idle and flushes them on focusout", () => {
@@ -35442,42 +35693,36 @@ describe("production workbench project tab", () => {
 
   it("allows canvas nodes to be dragged beyond the canvas origin", () => {
     const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
     );
-    const dragBlock = source.match(/function startCanvasNodeDrag[\s\S]*?function startCanvasEdgeDisconnectDrag/)?.[0] ?? "";
+    const graphBlock = source.match(/translating:\s*\{[\s\S]*?\n\s*\},\n\s*embedding:/)?.[0] ?? "";
 
-    assert.match(dragBlock, /x:\s*Math\.round\(startPosition\.x \+ dx\)/);
-    assert.match(dragBlock, /y:\s*Math\.round\(startPosition\.y \+ dy\)/);
-    assert.doesNotMatch(dragBlock, /[xy]:\s*Math\.max\((?:0|8),\s*Math\.round\(startPosition\.[xy] \+ d[xy]\)\)/);
+    assert.match(graphBlock, /restrict\(view\)\s*\{[\s\S]*?return resolveCanvasGraphTranslationRestriction\(view\)/);
+    assert.match(source, /graph\.on\("node:moved", \(event\) => \{/);
+    assert.match(source, /syncMovedNodeEditor\(event\)/);
+    assert.doesNotMatch(source, /Math\.max\((?:0|8),\s*Math\.round\([^)]*position/);
   });
 
   it("keeps the canvas editor centered below nodes while dragging at a non-default zoom", () => {
     const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
     );
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    const dragBlock = source.match(/function startCanvasNodeDrag[\s\S]*?function startCanvasUploadNodeLongPressDrag/)?.[0] ?? "";
-    const draggingZIndex = Number(css.match(/\.canvas-lib-node\.is-dragging\s*\{[\s\S]*?z-index:\s*(\d+)/)?.[1] ?? 0);
-    const editorZIndex = Number(css.match(/\.canvas-node-editor\s*\{[\s\S]*?z-index:\s*(\d+)/)?.[1] ?? 0);
+    const editorBlock = source.match(/export function mountCanvasGraphEditorOverlay[\s\S]*?export function clearCanvasGraphEditorOverlay/)?.[0] ?? "";
+    const editorCssBlock = css.match(/\.canvas-x6-editor-overlay\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
 
-    assert.match(dragBlock, /const startViewport = readCanvasViewportFromFlow\(nodeElement\.closest\?\.\("\.canvas-flow"\)\)/);
-    assert.match(dragBlock, /const visualScale = resolveCanvasElementVisualScale\(nodeElement, startViewport\.zoom\)/);
-    assert.match(dragBlock, /const nodeStyle = getComputedStyle\(nodeElement\)/);
-    assert.match(dragBlock, /const editorStyle = getComputedStyle\(editor\)/);
-    assert.match(dragBlock, /Number\.parseFloat\(nodeStyle\.width\) \|\| nodeRect\.width \/ visualScale/);
-    assert.match(dragBlock, /Number\.parseFloat\(nodeStyle\.height\) \|\| nodeRect\.height \/ visualScale/);
-    assert.match(dragBlock, /Number\.parseFloat\(editorStyle\.width\) \|\| editorRectWidth \/ visualScale/);
-    assert.match(dragBlock, /moveEvent\.clientX - startClient\.x\) \/ visualScale/);
-    assert.match(dragBlock, /moveEvent\.clientY - startClient\.y\) \/ visualScale/);
-    assert.match(dragBlock, /latestPosition\.x \+ \(nodeWidth \/ 2\) - \(editorWidth \/ 2\)/);
-    assert.match(dragBlock, /latestPosition\.y \+ nodeHeight \+ 2/);
-    assert.doesNotMatch(dragBlock, /Math\.max\(8,\s*latestPosition\.x/);
-    assert.ok(editorZIndex > draggingZIndex);
+    assert.match(editorBlock, /x:\s*position\.x \+ \(size\.width - editorSize\.width\) \/ 2/);
+    assert.match(editorBlock, /y:\s*position\.y \+ size\.height/);
+    assert.match(source, /graph\.on\("node:moved", \(event\) => \{/);
+    assert.match(source, /syncMovedNodeEditor\(event\)/);
+    assert.match(editorCssBlock, /width:\s*100%/);
+    assert.match(editorCssBlock, /height:\s*100%/);
+    assert.match(editorBlock, /zIndex:\s*1002/);
   });
 
   it("centers the canvas editor using the persisted node width", () => {
@@ -35510,10 +35755,15 @@ describe("production workbench project tab", () => {
         },
       }),
     });
-    const editorIndex = html.indexOf("canvas-node-editor generation-editor image");
-    const editorHtml = html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+    const editorBlock = source.match(/export function mountCanvasGraphEditorOverlay[\s\S]*?export function clearCanvasGraphEditorOverlay/)?.[0] ?? "";
 
-    assert.match(editorHtml, /style="left:265px;top:480px;--editor-width:600px"/);
+    assert.match(html, /data-canvas-node-editor-template/);
+    assert.match(editorBlock, /const size = parent\.getSize\?\.\(\)/);
+    assert.match(editorBlock, /x:\s*position\.x \+ \(size\.width - editorSize\.width\) \/ 2/);
   });
 
   it("keeps the canvas editor centered when its node moves left of the canvas origin", () => {
@@ -35546,10 +35796,15 @@ describe("production workbench project tab", () => {
         },
       }),
     });
-    const editorIndex = html.indexOf("canvas-node-editor generation-editor image");
-    const editorHtml = html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+    const editorBlock = source.match(/export function mountCanvasGraphEditorOverlay[\s\S]*?export function clearCanvasGraphEditorOverlay/)?.[0] ?? "";
 
-    assert.match(editorHtml, /style="left:-335px;top:480px;--editor-width:600px"/);
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.match(editorBlock, /x:\s*position\.x \+ \(size\.width - editorSize\.width\) \/ 2/);
+    assert.doesNotMatch(editorBlock, /Math\.max\([^,]+,\s*position\.x/);
   });
 
   it("builds existing Canvas batch requests for selected media nodes and preserves their DAG dependency", () => {
@@ -35615,6 +35870,8 @@ describe("production workbench project tab", () => {
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: " ", code: "Space" }), "open-canvas-node-editor");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "2", code: "Digit2" }), "add-canvas-shortcut-generator-2");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "2", code: "Digit2", altKey: true }), "add-canvas-shortcut-source-2");
+    workbench.ui.canvasContextMenu = { mode: "connection" };
+    assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "2", code: "Digit2" }), "");
     assert.equal(resolveCanvasKeyboardActionForTest(workbench, { key: "f" }, { matches: () => true }), "");
   });
 
@@ -35662,38 +35919,26 @@ describe("production workbench project tab", () => {
   });
 
   it("clears stale canvas run toasts when moving or resizing canvas nodes", () => {
-    const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
-      "utf8",
-    );
-    const dragBlock = source.match(/function startCanvasNodeDrag[\s\S]*?function startCanvasNodeResize/)?.[0] ?? "";
-    const resizeBlock = source.match(/function startCanvasNodeResize[\s\S]*?function resolveCanvasNodeMinSize/)?.[0] ?? "";
     const x6Source = readFileSync(
       new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
     );
 
-    assert.match(dragBlock, /workbench\.ui\.canvasRunPreview = null;[\s\S]*?workbench\.ui\.toast = "";/);
-    assert.match(resizeBlock, /workbench\.ui\.canvasRunPreview = null;[\s\S]*?workbench\.ui\.toast = "";/);
     assert.match(x6Source, /graph\.on\("node:moved"/);
-    assert.match(x6Source, /sync\(\{ clearToast: true \}\)/);
+    assert.match(x6Source, /scheduleGraphCommit\(\{ clearToast: true \}\)/);
     assert.match(x6Source, /graph\.on\("node:resized", \(\) => sync\(\{ clearToast: true \}\)\)/);
   });
 
-  it("keeps inline text node editable body from starting node drag", () => {
+  it("keeps X6 inline controls from starting node drag", () => {
     const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
     );
-    const mouseBlock = source.match(/root\.addEventListener\("mousedown"[\s\S]*?root\.addEventListener\("click"/)?.[0] ?? "";
+    const nodeBlock = source.match(/function createCanvasSpecialMediaX6Node[\s\S]*?return element \?\? wrapper;/)?.[0] ?? "";
 
-    assert.match(mouseBlock, /blockedCanvasNodeDragTarget/);
-    assert.match(mouseBlock, /canvasNodeDragHandleTarget/);
-    assert.match(mouseBlock, /\[data-canvas-node-drag-handle\]/);
-    assert.match(mouseBlock, /\.canvas-text-format-toolbar/);
-    assert.match(mouseBlock, /\[data-canvas-node-resize-handle\]/);
-    assert.match(mouseBlock, /\[contenteditable='true'\]/);
-    assert.match(mouseBlock, /startCanvasNodeDrag\(workbench, event, canvasNodeTarget\)/);
+    assert.match(nodeBlock, /button, input, textarea, select, a, \[contenteditable='true'\], \[role='application'\], \[data-canvas-text-output\]/);
+    assert.match(nodeBlock, /control\.addEventListener\("pointerdown", \(event\) => event\.stopPropagation\(\)\)/);
+    assert.match(nodeBlock, /control\.addEventListener\("mousedown", \(event\) => event\.stopPropagation\(\)\)/);
   });
 
   it("closes canvas generation settings when clicking outside the popup inside the editor", () => {
@@ -35709,36 +35954,29 @@ describe("production workbench project tab", () => {
     assert.match(clickBlock, /workbench\.ui\.openGenerationSelectMenu = null;[\s\S]*?render\(workbench\);/);
   });
 
-  it("supports long-press dragging empty canvas upload cards while preserving upload clicks", () => {
+  it("keeps X6 upload controls clickable without starting node drag", () => {
     const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
     );
-    const pointerBlock = source.match(/root\.addEventListener\("pointerdown"[\s\S]*?root\.addEventListener\("pointermove"/)?.[0] ?? "";
-    const longPressBlock = source.match(/function startCanvasUploadNodeLongPressDrag[\s\S]*?function startCanvasNodeResize/)?.[0] ?? "";
+    const nodeBlock = source.match(/function createCanvasSpecialMediaX6Node[\s\S]*?return element \?\? wrapper;/)?.[0] ?? "";
 
-    assert.match(source, /CANVAS_UPLOAD_LONG_PRESS_DRAG_MS = 250/);
-    assert.match(pointerBlock, /uploadCardDragTarget/);
-    assert.match(pointerBlock, /\.canvas-upload-card/);
-    assert.match(pointerBlock, /startCanvasUploadNodeLongPressDrag\(workbench, event, canvasNodeTarget\)/);
-    assert.match(longPressBlock, /setTimeout\(beginDrag, CANVAS_UPLOAD_LONG_PRESS_DRAG_MS\)/);
-    assert.match(longPressBlock, /Math\.abs\(dx\) \+ Math\.abs\(dy\) > 6/);
-    assert.match(longPressBlock, /workbench\.ui\.lastCanvasNodeDrag/);
-    assert.match(longPressBlock, /startCanvasNodeDrag\(workbench, event, nodeElement\)/);
-    assert.match(longPressBlock, /onPointerUp[\s\S]*?cleanup\(\)/);
-    assert.match(pointerBlock, /\[data-canvas-node-drag-handle\]/);
-    assert.match(pointerBlock, /canvasNodeDragHandleTarget[\s\S]*?startCanvasUploadNodeLongPressDrag\(workbench, event, canvasNodeTarget\)/);
+    assert.match(nodeBlock, /\[data-action="pick-canvas-upload-file"\]/);
+    assert.match(nodeBlock, /event\.preventDefault\(\);[\s\S]*?event\.stopPropagation\(\)/);
+    assert.match(nodeBlock, /\[data-canvas-upload-input\]/);
+    assert.match(nodeBlock, /input\?\.click\?\.\(\)/);
+    assert.match(source, /graph\.on\("node:moved"/);
   });
 
-  it("renders an inline text node title as a drag handle while the body stays editable", () => {
+  it("renders X6 inline text content as an editable body without stealing node drag", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       ui: buildProjectUi({
         activeNavTab: "tools",
         canvasProjectView: "detail",
-        selectedCanvasNodeId: "script-source",
-        editingCanvasTextNodeId: "script-source",
+        selectedCanvasNodeId: "markdown-source",
+        editingCanvasTextNodeId: "markdown-source",
         canvasDocument: {
           version: 1,
           projectId: "canvas-project-main",
@@ -35746,8 +35984,8 @@ describe("production workbench project tab", () => {
           viewport: { x: 0, y: 0, zoom: 0.5 },
           nodes: [
             {
-              id: "script-source",
-              type: "script",
+              id: "markdown-source",
+              type: "markdown",
               position: { x: 120, y: 120 },
               data: {
                 text: "第一幕剧本",
@@ -35760,19 +35998,28 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /class="canvas-inline-editor-title" data-canvas-node-drag-handle data-node-id="script-source"/);
-    assert.match(html, /class="canvas-inline-richtext"[\s\S]*contenteditable="true"[\s\S]*data-canvas-text-input/);
-    assert.match(html, /--canvas-zoom:0\.5;--canvas-toolbar-scale:2/);
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.doesNotMatch(html, /canvas-inline-editor-title|canvas-lib-node/);
+    assert.match(source, /function renderCanvasMarkdownX6Content[\s\S]*class="canvas-inline-richtext canvas-x6-text-output"[\s\S]*contenteditable="true"[\s\S]*data-canvas-text-input/);
+    assert.match(source, /button, input, textarea, select, a, \[contenteditable='true'\]/);
+    assert.match(source, /control\.addEventListener\("pointerdown", \(event\) => event\.stopPropagation\(\)\)/);
+    assert.match(source, /control\.addEventListener\("mousedown", \(event\) => event\.stopPropagation\(\)\)/);
+    assert.doesNotMatch(html, /--canvas-zoom|--canvas-toolbar-scale/);
     const css = readFileSync(
       new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
       "utf8",
     );
-    assert.match(css, /\.canvas-text-format-toolbar\s*\{[\s\S]*?transform:\s*translateX\(-50%\) scale\(var\(--canvas-toolbar-scale, 1\)\)/);
+    assert.match(css, /\.canvas-text-format-toolbar\s*\{[\s\S]*?transform:\s*translateX\(-50%\) scale\(var\(--canvas-input-scale, 1\)\)/);
   });
 
-  it("renders canvas edge layer across negative canvas coordinates", () => {
-    const css = readFileSync(
-      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+  it("mounts X6 canvas edges across negative canvas coordinates", () => {
+    const x6DocumentSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-document.js", import.meta.url),
       "utf8",
     );
     const html = renderProductionWorkbench({
@@ -35796,15 +36043,14 @@ describe("production workbench project tab", () => {
         },
       }),
     });
-    const edgeLayerBlock = css.match(/\.canvas-stage svg\.canvas-lib-edge-layer\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
-
-    assert.match(html, /viewBox="-3200 -2400 6400 4800"/);
-    assert.match(html, /left:-120px;top:-80px/);
-    assert.match(edgeLayerBlock, /left:\s*-3200px/);
-    assert.match(edgeLayerBlock, /top:\s*-2400px/);
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.doesNotMatch(html, /canvas-lib-edge-layer|canvas-flow-edge-line/);
+    assert.match(x6DocumentSource, /x:\s*Number\(canvasNode\.position\?\.x \?\? 0\)/);
+    assert.match(x6DocumentSource, /y:\s*Number\(canvasNode\.position\?\.y \?\? 0\)/);
+    assert.match(x6DocumentSource, /sourceNodeId:|source:\s*\{\s*cell:/);
   });
 
-  it("anchors generation edges to the rendered port height instead of legacy stored node heights", () => {
+  it("anchors generation edges through X6 ports instead of legacy stored node heights", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
@@ -35839,24 +36085,28 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /class="canvas-flow-edge-line" d="M 460 307 C [^"]+, 730 307"/);
-    assert.doesNotMatch(html, /class="canvas-flow-edge-line" d="M 460 180 C/);
-  });
-
-  it("maps live canvas port centers through page zoom before drawing edges", () => {
-    const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
+    const x6DocumentSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-document.js", import.meta.url),
       "utf8",
     );
-    const coordinateBlock = source.match(/function canvasPointFromClient[\s\S]*?function updateCanvasViewportAndRender/)?.[0] ?? "";
-    const portBlock = source.match(/function canvasPortPointFromElement[\s\S]*?function canvasEdgePath/)?.[0] ?? "";
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.doesNotMatch(html, /canvas-flow-edge-line/);
+    assert.match(x6DocumentSource, /port:\s*edge\.sourcePortId/);
+    assert.match(x6DocumentSource, /port:\s*edge\.targetPortId/);
+    assert.match(x6DocumentSource, /shape:\s*"comic-ai-canvas-edge"/);
+  });
 
-    assert.match(coordinateBlock, /const visualScale = resolveCanvasElementVisualScale\(stage, 1\)/);
-    assert.match(coordinateBlock, /const localX = \(clientX - stageRect\.left\) \/ visualScale/);
-    assert.match(coordinateBlock, /const localY = \(clientY - stageRect\.top\) \/ visualScale/);
-    assert.match(coordinateBlock, /x:\s*\(localX - normalized\.x\) \/ normalized\.zoom/);
-    assert.match(coordinateBlock, /y:\s*\(localY - normalized\.y\) \/ normalized\.zoom/);
-    assert.match(portBlock, /canvasPointFromClient\(stage, centerClient\.x, centerClient\.y, viewport\)/);
+  it("maps canvas connections through X6 ports at any page zoom", () => {
+    const source = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(source, /allowPort:\s*true/);
+    assert.match(source, /snap:\s*\{ radius:\s*CANVAS_CONNECTION_SNAP_RADIUS, anchor:\s*"center" \}/);
+    assert.match(source, /const source = resolveCanvasGraphConnectionPort\(sourceCell, sourcePort, "out"\)/);
+    assert.match(source, /const target = resolveCanvasGraphConnectionPort\(targetCell, targetPort, "in"\)/);
+    assert.match(source, /graph\.on\("scale"/);
   });
 
   it("keeps generation queue health hidden from the canvas tab", () => {
@@ -36208,8 +36458,8 @@ describe("production workbench project tab", () => {
       ui: buildProjectUi({
         activeNavTab: "tools",
         canvasProjectView: "detail",
-        selectedCanvasNodeId: "script-source",
-        editingCanvasTextNodeId: "script-source",
+        selectedCanvasNodeId: "markdown-source",
+        editingCanvasTextNodeId: "markdown-source",
         canvasEditorOpen: false,
         canvasDocument: {
           version: 1,
@@ -36218,8 +36468,8 @@ describe("production workbench project tab", () => {
           viewport: { x: 0, y: 0, zoom: 1 },
           nodes: [
             {
-              id: "script-source",
-              type: "script",
+              id: "markdown-source",
+              type: "markdown",
               position: { x: 80, y: 120 },
               data: {
                 title: "导演节点备注",
@@ -36547,19 +36797,14 @@ describe("production workbench project tab", () => {
     assert.match(listBlock, /overscroll-behavior:\s*contain/);
   });
 
-  it("keeps canvas script picker scrolling isolated from canvas pan and zoom handlers", () => {
+  it("keeps canvas script picker outside the X6 interaction surface", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
       "utf8",
     );
-    const wheelBlock = source.match(/root\.addEventListener\("wheel"[\s\S]*?\}, \{ passive: false \}\);/)?.[0] ?? "";
-    const panBlock = source.match(/function shouldStartCanvasPan[\s\S]*?function canvasPointFromClient/)?.[0] ?? "";
-    const overlayBlock = source.match(/function isCanvasInteractionOverlayTarget[\s\S]*?\n\}/)?.[0] ?? "";
-
-    assert.match(wheelBlock, /isCanvasInteractionOverlayTarget\(eventTarget\)/);
-    assert.match(panBlock, /\.canvas-script-picker/);
-    assert.match(overlayBlock, /\.canvas-script-picker/);
-    assert.match(overlayBlock, /\.selection-picker-layer/);
+    assert.doesNotMatch(source, /root\.addEventListener\("wheel"/);
+    assert.doesNotMatch(source, /function shouldStartCanvasPan|function isCanvasInteractionOverlayTarget/);
+    assert.match(source, /function isCanvasX6InteractionTarget[\s\S]*?data-canvas-x6-mount/);
   });
 
   it("copies selected independent script episode text into the canvas node", async () => {
@@ -37032,15 +37277,16 @@ describe("production workbench project tab", () => {
         },
       }),
     });
-    const imageNodeHtml = html.slice(
-      html.indexOf('data-canvas-node-id="image-a"'),
-      html.indexOf("</article>", html.indexOf('data-canvas-node-id="image-a"')),
+    const editorHtml = html.match(/<template data-canvas-node-editor-template>([\s\S]*?)<\/template>/)?.[1] ?? "";
+    const projectDetailSource = readFileSync(
+      new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
+      "utf8",
     );
-    const editorIndex = html.indexOf("canvas-node-editor generation-editor");
-    const editorHtml = html.slice(editorIndex, html.indexOf("</aside>", editorIndex));
 
-    assert.doesNotMatch(imageNodeHtml, /canvas-generation-references/);
-    assert.match(imageNodeHtml, /生成节点/);
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.doesNotMatch(html, /canvas-flow-edge|canvas-lib-node/);
+    assert.match(projectDetailSource, /function resolveCanvasUploadReferences[\s\S]*edge\.targetNodeId === targetNodeId[\s\S]*edge\.sourceNodeId/);
+    assert.match(projectDetailSource, /function renderCanvasGenerationReferences[\s\S]*class="canvas-generation-references"/);
     assert.match(editorHtml, /canvas-editor-reference-row/);
     assert.match(editorHtml, /data-action="pick-canvas-generation-reference-file"/);
     assert.match(editorHtml, /aria-label="添加参考素材"/);
@@ -37504,7 +37750,7 @@ describe("production workbench project tab", () => {
       new URL("../src/features/production-workbench/project-detail.js", import.meta.url),
       "utf8",
     );
-    const referenceBlock = source.match(/function renderCanvasGenerationReferences[\s\S]*?function renderLiblibTextNode/)?.[0] ?? "";
+    const referenceBlock = source.match(/function renderCanvasGenerationReferences[\s\S]*?export function renderCanvasMarkdownPreview/)?.[0] ?? "";
     const resolverBlock = source.match(/function resolveCanvasReferenceMedia[\s\S]*?function renderCanvasGenerationReferences/)?.[0] ?? "";
 
     assert.match(resolverBlock, /kind === "video"/);
@@ -37807,15 +38053,15 @@ describe("production workbench project tab", () => {
     );
   });
 
-  it("renders resized text nodes with saved dimensions and resize handle", () => {
+  it("renders resized text nodes from persisted X6 dimensions", () => {
     const html = renderProductionWorkbench({
       state: buildProjectState(),
       session: { user: { phone: "+86 13800138000" } },
       ui: buildProjectUi({
         activeNavTab: "tools",
         canvasProjectView: "detail",
-        selectedCanvasNodeId: "script-source",
-        editingCanvasTextNodeId: "script-source",
+        selectedCanvasNodeId: "markdown-source",
+        editingCanvasTextNodeId: "markdown-source",
         canvasEditorOpen: false,
         canvasDocument: {
           version: 1,
@@ -37824,8 +38070,8 @@ describe("production workbench project tab", () => {
           viewport: { x: 0, y: 0, zoom: 1 },
           nodes: [
             {
-              id: "script-source",
-              type: "script",
+              id: "markdown-source",
+              type: "markdown",
               position: { x: 80, y: 120 },
               size: { width: 760, height: 520 },
               data: {
@@ -37839,29 +38085,56 @@ describe("production workbench project tab", () => {
       }),
     });
 
-    assert.match(html, /--node-width:760px;--node-height:520px/);
-    assert.match(html, /data-canvas-node-resize-handle/);
+    const x6DocumentSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-document.js", import.meta.url),
+      "utf8",
+    );
+    const x6GraphSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+      "utf8",
+    );
+
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.doesNotMatch(html, /data-canvas-node-resize-handle|--node-width/);
+    assert.match(x6DocumentSource, /function normalizeCanvasX6NodeSize[\s\S]*requestedWidth[\s\S]*requestedHeight/);
+    assert.match(x6DocumentSource, /const size = normalizeCanvasX6NodeSize\(canvasNode\)/);
+    assert.match(x6DocumentSource, /width:\s*size\.width/);
+    assert.match(x6DocumentSource, /height:\s*size\.height/);
+    assert.match(x6GraphSource, /graph\.on\("node:resized", \(\) =>/);
+    assert.match(x6GraphSource, /sync\(\{ clearToast: true \}\)/);
   });
 
   it("keeps canvas text node sizing driven by node dimensions", () => {
-    const css = readFileSync(
-      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    const x6DocumentSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-document.js", import.meta.url),
       "utf8",
     );
-    const source = readFileSync(
-      new URL("../src/features/production-workbench/index.js", import.meta.url),
+    const x6GraphSource = readFileSync(
+      new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
     );
-    const textNodeBlock = css.match(/\.canvas-text-node\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
-    const cardBlock =
-      css.match(/\.canvas-text-node\.is-text-editing \.canvas-text-card\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
-    const resizeBlock = source.match(/function startCanvasNodeResize[\s\S]*?function resolveCanvasNodeMinSize/)?.[0] ?? "";
 
-    assert.match(textNodeBlock, /width:\s*var\(--node-width/);
-    assert.match(cardBlock, /height:\s*calc\(var\(--node-height\) - 44px\)/);
-    assert.match(resizeBlock, /updateCanvasNodeSize/);
-    assert.match(resizeBlock, /setProperty\("--node-width"/);
-    assert.match(resizeBlock, /setProperty\("--node-height"/);
+    const normalizeSizeBlock = x6DocumentSource.match(
+      /function normalizeCanvasX6NodeSize[\s\S]*?\n\}/,
+    )?.[0] ?? "";
+    const nodeAttrsBlock = x6DocumentSource.match(/function buildX6NodeAttrs[\s\S]*?\n\}/)?.[0] ?? "";
+    const htmlNodeBlock = x6GraphSource.match(
+      /function createCanvasSpecialMediaX6Node[\s\S]*?return element \?\? wrapper;/,
+    )?.[0] ?? "";
+    const syncBlock = x6GraphSource.match(
+      /function syncCanvasGraphDocument[\s\S]*?return nextDocument;/,
+    )?.[0] ?? "";
+
+    assert.match(normalizeSizeBlock, /requestedWidth/);
+    assert.match(normalizeSizeBlock, /requestedHeight/);
+    assert.match(nodeAttrsBlock, /body:\s*\{[\s\S]*?refWidth:\s*"100%"[\s\S]*?refHeight:\s*"100%"/);
+    assert.match(nodeAttrsBlock, /fo:\s*\{[\s\S]*?refWidth:\s*"100%"[\s\S]*?refHeight:\s*"100%"/);
+    assert.match(htmlNodeBlock, /wrapper\.innerHTML = renderCanvasSpecialMediaX6Node\(node\)/);
+    assert.match(x6GraphSource, /class="canvas-x6-special-node/);
+    assert.match(x6GraphSource, /graph\.on\("node:resized", \(\) => \{[\s\S]*?sync\(\{ clearToast: true \}\)/);
+    assert.match(syncBlock, /const size = node\.getSize\?\.\(\) \?\? canvasNode\.size \?\? \{\}/);
+    assert.match(syncBlock, /size:\s*\{ width: Number\(size\.width\), height: Number\(size\.height\) \}/);
+    assert.match(syncBlock, /workbench\.updateCanvasDocument\(nextDocument, options\)/);
   });
 
   it("submits canvas image runs as independent canvas tasks and writes task state back to the graph", async () => {
@@ -39480,7 +39753,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasDocument.canvasProjectId, "server-canvas-project-id");
   });
 
-  it("ignores an older canvas save response that arrives after a newer connection save", async () => {
+  it("serializes canvas saves so a newer connection save uses the latest revision", async () => {
     const pendingSaves = [];
     const initialDocument = {
       version: 1,
@@ -39516,14 +39789,144 @@ describe("production workbench project tab", () => {
     };
     const secondSave = saveProjectCanvasNowForTest(workbench);
 
-    pendingSaves[1].resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 3, document: pendingSaves[1].payload.document } });
-    await secondSave;
+    assert.equal(pendingSaves.length, 1);
     pendingSaves[0].resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 2, document: pendingSaves[0].payload.document } });
     await firstSave;
+    await Promise.resolve();
+    assert.equal(pendingSaves.length, 2);
+    assert.equal(pendingSaves[1].payload.clientRevision, 2);
+    pendingSaves[1].resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 3, document: pendingSaves[1].payload.document } });
+    await secondSave;
 
     assert.equal(workbench.ui.canvasDocument.nodes.find((node) => node.id === "image-a").position.x, 500);
     assert.equal(workbench.ui.canvasDocument.edges[0]?.id, "edge-1");
     assert.equal(workbench.ui.canvasServerRevision, 3);
+  });
+
+  it("reuses the pending Canvas project idempotency key across simultaneous first saves", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    const createCalls = [];
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-project-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{ id: "node-before-refresh", type: "comment", position: { x: 120, y: 80 }, data: { text: "保留" } }],
+      edges: [],
+    };
+    const api = {
+      async createCanvasProject(input) {
+        createCalls.push(input);
+        return { project: { id: "server-canvas-project-id", title: input.title, status: input.status } };
+      },
+      async saveStandaloneCanvas(canvasProjectId, input) {
+        return { canvas: { canvasProjectId, serverRevision: 2, document: input.document } };
+      },
+    };
+    const buildWorkbench = () => ({
+      api,
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-project-main",
+        activeCanvasProjectId: "canvas-project-main",
+        canvasServerRevision: 1,
+        canvasProjects: [],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-project-main": document },
+      }),
+    });
+
+    try {
+      await Promise.all([
+        saveProjectCanvasNowForTest(buildWorkbench()),
+        saveProjectCanvasNowForTest(buildWorkbench()),
+      ]);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+
+    assert.equal(createCalls.length, 2);
+    assert.match(createCalls[0].idempotencyKey, /^canvas-project\.create:/);
+    assert.equal(createCalls[1].idempotencyKey, createCalls[0].idempotencyKey);
+  });
+
+  it("updates retained frame-analysis nodes in place and removes surplus segments", () => {
+    const analysisNode = {
+      id: "analysis-node",
+      type: "ai-storyboard",
+      position: { x: 120, y: 80 },
+      data: {
+        canvasMode: "frame-analysis",
+        mediaKind: "video",
+        analysisSegments: [
+          { index: 1, startMs: 0, endMs: 12000, description: "更新后的镜头" },
+        ],
+      },
+    };
+    const retainedSegment = {
+      id: "analysis-node-segment-1",
+      type: "ai-text",
+      position: { x: 640, y: 260 },
+      data: {
+        source: "frame_analysis",
+        analysisParentNodeId: "analysis-node",
+        analysisSegmentIndex: 0,
+        text: "旧内容",
+      },
+    };
+    const surplusSegment = {
+      id: "analysis-node-segment-2",
+      type: "ai-text",
+      position: { x: 990, y: 260 },
+      data: {
+        source: "frame_analysis",
+        analysisParentNodeId: "analysis-node",
+        analysisSegmentIndex: 1,
+        text: "多余内容",
+      },
+    };
+    const document = {
+      version: 2,
+      canvasProjectId: "canvas-frame-analysis",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [analysisNode, retainedSegment, surplusSegment],
+      edges: [
+        { id: "edge-retained", sourceNodeId: "analysis-node", targetNodeId: "analysis-node-segment-1" },
+        { id: "edge-surplus", sourceNodeId: "analysis-node", targetNodeId: "analysis-node-segment-2" },
+      ],
+    };
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: { async saveStandaloneCanvas() { return null; } },
+      ui: buildProjectUi({
+        activeNavTab: "new-canvas",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-frame-analysis",
+        activeCanvasProjectId: "canvas-frame-analysis",
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-frame-analysis": document },
+      }),
+      root: {
+        innerHTML: "",
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+      },
+    };
+
+    assert.equal(expandCanvasFrameAnalysisSegmentsForTest(workbench, "analysis-node"), true);
+    const updated = workbench.ui.canvasDocument;
+    const retained = updated.nodes.find((node) => node.id === "analysis-node-segment-1");
+    assert.deepEqual(retained.position, { x: 640, y: 260 });
+    assert.match(retained.data.text, /更新后的镜头/);
+    assert.equal(updated.nodes.some((node) => node.id === "analysis-node-segment-2"), false);
+    assert.deepEqual(updated.edges.map((edge) => edge.id), ["edge-retained"]);
   });
 
   it("does not persist an unchanged Canvas workspace session after every document revision", async () => {
@@ -39592,7 +39995,7 @@ describe("production workbench project tab", () => {
     assert.deepEqual(persistedViewport, { x: -291, y: -468, zoom: 0.6 });
   });
 
-  it("applies the loaded Canvas session viewport to an already mounted graph", async () => {
+  it("restores the canonical Canvas document viewport while loading session UI state", async () => {
     const applied = [];
     const zoomTrigger = {
       textContent: "100%",
@@ -39615,7 +40018,13 @@ describe("production workbench project tab", () => {
           };
         },
         async getCanvasSession() {
-          return { session: { viewport: { x: -350, y: 136.5, zoom: 0.7 } } };
+          return {
+            session: {
+              viewport: { x: -350, y: 136.5, zoom: 0.7 },
+              selectedNodeKeys: ["node-1"],
+              uiState: { sidebar: "history" },
+            },
+          };
         },
       },
       canvasGraph: {
@@ -39639,16 +40048,77 @@ describe("production workbench project tab", () => {
 
     assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-main"), true);
     assert.deepEqual(workbench.ui.canvasDocument.viewport, {
-      x: -350,
-      y: 136.5,
-      zoom: 0.7,
+      x: 0,
+      y: 0,
+      zoom: 0.6,
       gridVisible: false,
       snapEnabled: true,
     });
-    assert.deepEqual(applied, [["zoom", 0.7], ["translate", -350, 136.5], ["grid", "show"]]);
-    assert.equal(zoomTrigger.textContent, "70%");
-    assert.equal(zoomTrigger["aria-label"], "画布缩放比例 70%");
-    assert.equal(zoomInput.value, "70");
+    assert.deepEqual(applied, [["zoom", 0.6], ["translate", 0, 0], ["grid", "show"]]);
+    assert.equal(workbench.ui.selectedCanvasNodeId, "node-1");
+    assert.deepEqual(workbench.ui.canvasSessionUiState, { sidebar: "history" });
+    assert.equal(zoomTrigger.textContent, "60%");
+    assert.equal(zoomTrigger["aria-label"], "画布缩放比例 60%");
+    assert.equal(zoomInput.value, "60");
+  });
+
+  it("does not let a same-revision Canvas session overwrite the server viewport", async () => {
+    const applied = [];
+    const workbench = {
+      api: {
+        async getStandaloneCanvas() {
+          return {
+            canvas: {
+              serverRevision: 8,
+              document: {
+                canvasProjectId: "canvas-main",
+                viewport: { x: 336, y: 280, zoom: 0.4, gridVisible: true, snapEnabled: true },
+                nodes: [],
+                edges: [],
+              },
+            },
+          };
+        },
+        async getCanvasSession() {
+          return {
+            session: {
+              viewport: { x: 0, y: 0, zoom: 1 },
+              lastSeenRevision: 8,
+              selectedNodeKeys: [],
+              uiState: {},
+            },
+          };
+        },
+      },
+      canvasGraph: {
+        zoomTo(zoom) { applied.push(["zoom", zoom]); },
+        translate(x, y) { applied.push(["translate", x, y]); },
+        showGrid() { applied.push(["grid", "show"]); },
+      },
+      ui: {
+        canvasDocumentsByProject: {},
+      },
+    };
+
+    assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-main"), true);
+    assert.deepEqual(workbench.ui.canvasDocument.viewport, {
+      x: 336,
+      y: 280,
+      zoom: 0.4,
+      gridVisible: true,
+      snapEnabled: true,
+    });
+    assert.deepEqual(applied, [["zoom", 0.4], ["translate", 336, 280], ["grid", "show"]]);
+  });
+
+  it("persists settled Canvas viewport changes to the canonical document immediately", () => {
+    const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+    const viewportUpdate = source.match(
+      /workbench\.updateCanvasViewport = \(canvasDocument\) => \{[\s\S]*?\n  \};/,
+    )?.[0] ?? "";
+
+    assert.match(viewportUpdate, /updateActiveCanvasDocument\(workbench, canvasDocument, \{ immediateSave: true \}\)/);
+    assert.match(viewportUpdate, /persistCanvasSession\(/);
   });
 
   it("loads the Canvas document and user session concurrently", async () => {
@@ -39682,34 +40152,209 @@ describe("production workbench project tab", () => {
     assert.equal(await loading, true);
   });
 
-  it("flushes the current Canvas viewport before the page is hidden", () => {
+  it("flushes the current Canvas viewport and saves a refresh draft before the page is hidden", async () => {
     const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
-    const functionSource = source.match(/function persistCanvasViewportBeforePageHide\(workbench\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    let persistedDocument = null;
-    const persistCanvasViewportBeforePageHide = Function(
-      "syncCanvasGraphViewport",
-      `"use strict";\n${functionSource}\nreturn persistCanvasViewportBeforePageHide;`,
-    )((graph, owner) => {
-      const translation = graph.translate();
-      persistedDocument = {
-        ...owner.ui.canvasDocument,
-        viewport: { ...owner.ui.canvasDocument.viewport, x: translation.tx, y: translation.ty, zoom: graph.zoom() },
-      };
-      return true;
-    });
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    const saveCalls = [];
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
     const workbench = {
+      api: {
+        async saveStandaloneCanvas(canvasProjectId, input, options) {
+          saveCalls.push({ canvasProjectId, input, options });
+          return { canvas: { canvasProjectId, serverRevision: 4, document: input.document } };
+        },
+      },
       canvasGraph: {
+        getNodes: () => [],
+        getEdges: () => [],
         translate: () => ({ tx: 48, ty: -24 }),
         zoom: () => 0.37,
       },
       ui: {
-        canvasDocument: { canvasProjectId: "canvas-main", viewport: { x: 0, y: 0, zoom: 1 } },
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 4,
+        canvasDocumentsByProject: {},
+        canvasDocument: { canvasProjectId: "canvas-main", viewport: { x: 0, y: 0, zoom: 1 }, nodes: [], edges: [] },
       },
     };
 
-    assert.equal(persistCanvasViewportBeforePageHide(workbench), true);
-    assert.deepEqual(persistedDocument.viewport, { x: 48, y: -24, zoom: 0.37 });
-    assert.match(source, /addEventListener\?\.\("pagehide", workbench\.persistCanvasViewportBeforePageHide, \{ once: true \}\)/);
+    try {
+      assert.equal(persistCanvasViewportBeforePageHideForTest(workbench), true);
+      const draft = JSON.parse(stored.get("comic-ai:canvas-refresh-draft:canvas-main"));
+      assert.deepEqual(draft.document.viewport, { x: 48, y: -24, zoom: 0.37, interactionMode: "default" });
+      await Promise.resolve();
+      assert.equal(saveCalls.length, 1);
+      assert.equal(saveCalls[0].options.keepalive, true);
+      assert.match(source, /addEventListener\?\.\("pagehide", workbench\.persistCanvasViewportBeforePageHide, \{ once: true \}\)/);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("uses the server document and clears a same-revision Canvas refresh draft", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    const saveCalls = [];
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const serverDocument = {
+      canvasProjectId: "canvas-refresh",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [],
+      edges: [],
+    };
+    const localDocument = {
+      ...serverDocument,
+      viewport: { x: 120, y: -40, zoom: 0.8 },
+      nodes: [{ id: "node-before-refresh", type: "comment", position: { x: 240, y: 180 }, data: { text: "未保存操作" } }],
+    };
+    const workbench = {
+      api: {
+        async getStandaloneCanvas() {
+          return { canvas: { serverRevision: 7, document: serverDocument } };
+        },
+        async saveStandaloneCanvas(canvasProjectId, input) {
+          saveCalls.push({ canvasProjectId, input });
+          return { canvas: { canvasProjectId, serverRevision: 8, document: input.document } };
+        },
+      },
+      ui: {
+        selectedCanvasProjectId: "canvas-refresh",
+        canvasServerRevision: 7,
+        canvasDocumentsByProject: {},
+        canvasDocument: localDocument,
+      },
+    };
+
+    try {
+      assert.equal(writeCanvasRefreshDraftForTest(workbench, "canvas-refresh", localDocument), true);
+      assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-refresh"), true);
+      assert.deepEqual(workbench.ui.canvasDocument.nodes.map((node) => node.id), []);
+      assert.deepEqual(workbench.ui.canvasDocument.viewport, {
+        x: 0,
+        y: 0,
+        zoom: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(saveCalls.length, 0);
+      assert.equal(stored.has("comic-ai:canvas-refresh-draft:canvas-refresh"), false);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("clears a different-revision refresh draft when the server document only reorders object fields", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const serverDocument = {
+      canvasProjectId: "canvas-saved-refresh",
+      viewport: { zoom: 0.8, y: -40, x: 120 },
+      nodes: [],
+      edges: [],
+      version: 2,
+      createdAt: "2026-08-10T10:00:00.000Z",
+      updatedAt: "2026-08-10T10:05:00.000Z",
+    };
+    const localDocument = {
+      version: 2,
+      edges: [],
+      nodes: [],
+      viewport: { x: 120, y: -40, zoom: 0.8 },
+      canvasProjectId: "canvas-saved-refresh",
+      createdAt: "2026-08-10T10:00:00.000Z",
+      updatedAt: "2026-08-10T10:04:59.000Z",
+    };
+    const workbench = {
+      api: {
+        async getStandaloneCanvas() {
+          return { canvas: { serverRevision: 539, document: serverDocument } };
+        },
+      },
+      ui: {
+        selectedCanvasProjectId: "canvas-saved-refresh",
+        canvasServerRevision: 538,
+        canvasDocumentsByProject: {},
+        canvasDocument: localDocument,
+      },
+    };
+
+    try {
+      assert.equal(writeCanvasRefreshDraftForTest(workbench, "canvas-saved-refresh", localDocument), true);
+      assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-saved-refresh"), true);
+      assert.equal(workbench.ui.canvasServerRevision, 538);
+      assert.equal(workbench.ui.canvasSaveStatus, "idle");
+      assert.equal(workbench.ui.canvasRevisionConflict, null);
+      assert.equal(stored.has("comic-ai:canvas-refresh-draft:canvas-saved-refresh"), false);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("uses the server Canvas document when a refresh draft has an older revision", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    let saveCount = 0;
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const serverDocument = { canvasProjectId: "canvas-conflict", viewport: {}, nodes: [], edges: [] };
+    const localDocument = {
+      ...serverDocument,
+      nodes: [{ id: "local-node", type: "comment", position: { x: 20, y: 30 }, data: { text: "本地" } }],
+    };
+    const workbench = {
+      api: {
+        async getStandaloneCanvas() {
+          return { canvas: { serverRevision: 6, document: serverDocument } };
+        },
+        async saveStandaloneCanvas() {
+          saveCount += 1;
+          return null;
+        },
+      },
+      ui: {
+        selectedCanvasProjectId: "canvas-conflict",
+        canvasServerRevision: 5,
+        canvasDocumentsByProject: {},
+        canvasDocument: localDocument,
+      },
+    };
+
+    try {
+      assert.equal(writeCanvasRefreshDraftForTest(workbench, "canvas-conflict", localDocument), true);
+      assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-conflict"), true);
+      assert.equal(workbench.ui.canvasDocument.nodes.length, 0);
+      assert.equal(workbench.ui.canvasSaveStatus, "idle");
+      assert.equal(workbench.ui.canvasRevisionConflict, null);
+      assert.equal(saveCount, 0);
+      assert.equal(stored.has("comic-ai:canvas-refresh-draft:canvas-conflict"), false);
+    } finally {
+      globalThis.window = previousWindow;
+    }
   });
 
   it("retries Canvas position saves once with the latest server revision", async () => {
@@ -39747,7 +40392,94 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasSaveError, "");
   });
 
-  it("preserves the local Canvas draft and exposes recovery data on a revision conflict", async () => {
+  it("keeps position-save failures silent in the Canvas status", async () => {
+    const workbench = {
+      api: {
+        async saveCanvasNodePositions() {
+          throw new Error("temporary position save failure");
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 7,
+        canvasSaveStatus: "pending",
+        canvasSaveError: "",
+      }),
+    };
+
+    await assert.rejects(
+      persistCanvasNodePositionsForTest(workbench, [{ nodeKey: "image-node", x: 240, y: 180 }]),
+      /temporary position save failure/,
+    );
+    assert.equal(workbench.ui.canvasSaveStatus, "idle");
+    assert.equal(workbench.ui.canvasSaveError, "");
+  });
+
+  it("accepts a Canvas save conflict when the server already contains the same document", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 120, y: -40, zoom: 0.8 },
+      nodes: [],
+      edges: [],
+      createdAt: "2026-08-10T10:00:00.000Z",
+      updatedAt: "2026-08-10T10:04:59.000Z",
+    };
+    const serverDocument = {
+      edges: [],
+      nodes: [],
+      viewport: { zoom: 0.8, y: -40, x: 120 },
+      canvasProjectId: "canvas-main",
+      version: 2,
+      updatedAt: "2026-08-10T10:05:00.000Z",
+      createdAt: "2026-08-10T10:00:00.000Z",
+    };
+    const workbench = {
+      api: {
+        async saveStandaloneCanvas() {
+          const error = new Error("revision conflict");
+          error.errorCode = "canvas_revision_conflict";
+          error.details = { serverRevision: 539, serverDocument };
+          throw error;
+        },
+      },
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 538,
+        canvasSaveStatus: "pending",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+      }),
+    };
+
+    try {
+      assert.equal(writeCanvasRefreshDraftForTest(workbench, "canvas-main", localDocument), true);
+      await assert.rejects(() => saveProjectCanvasNowForTest(workbench), /revision conflict/);
+      assert.equal(workbench.ui.canvasServerRevision, 538);
+      assert.equal(workbench.ui.canvasSaveStatus, "conflict");
+      assert.equal(workbench.ui.canvasRevisionConflict.serverRevision, 539);
+      await resolveCanvasRevisionConflictForTest(workbench, "server", { render: false });
+      assert.equal(workbench.ui.canvasServerRevision, 539);
+      assert.equal(workbench.ui.canvasSaveStatus, "saved");
+      assert.equal(workbench.ui.canvasRevisionConflict, null);
+      assert.equal(stored.has("comic-ai:canvas-refresh-draft:canvas-main"), false);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("preserves the local Canvas document when a save hits a revision conflict", async () => {
     const localDocument = {
       version: 2,
       canvasProjectId: "canvas-main",
@@ -39791,19 +40523,20 @@ describe("production workbench project tab", () => {
       }),
     };
 
-    await assert.rejects(saveProjectCanvasNowForTest(workbench), (error) => error?.errorCode === "canvas_revision_conflict");
-
+    await assert.rejects(() => saveProjectCanvasNowForTest(workbench), /请求发生冲突/);
     assert.equal(workbench.ui.canvasServerRevision, 527);
     assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "running");
-    assert.equal(workbench.ui.canvasDocument.nodes[0].data.generationProgress, 10);
-    assert.equal("projectId" in workbench.ui.canvasDocument, false);
     assert.equal(workbench.ui.canvasSaveStatus, "conflict");
-    assert.match(workbench.ui.canvasSaveError, /本地草稿已保留/);
-    assert.equal(workbench.ui.canvasRevisionConflict.serverRevision, 528);
-    assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].data.status, "failed");
+    await resolveCanvasRevisionConflictForTest(workbench, "server", { render: false });
+    assert.equal(workbench.ui.canvasServerRevision, 528);
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "failed");
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.generationProgress, 100);
+    assert.equal("projectId" in workbench.ui.canvasDocument, false);
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
   });
 
-  it("refreshes a clean Canvas from a live revision and protects an unsaved draft", async () => {
+  it("refreshes a Canvas from a live revision and uses the server document", async () => {
     const localDocument = {
       version: 2,
       canvasProjectId: "canvas-main",
@@ -39855,10 +40588,56 @@ describe("production workbench project tab", () => {
       data: { type: "revision", eventId: "revision-event-4", serverRevision: 4 },
     }, { render: false });
 
-    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "local-node");
-    assert.equal(workbench.ui.canvasSaveStatus, "conflict");
-    assert.equal(workbench.ui.canvasRevisionConflict.serverRevision, 4);
-    assert.equal(workbench.ui.canvasRevisionConflict.serverDocument.nodes[0].id, "remote-node");
+    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "remote-node");
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
+  });
+
+  it("accepts a live Canvas revision when the pending local document already matches the server", async () => {
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 120, y: -40, zoom: 0.8 },
+      nodes: [],
+      edges: [],
+      createdAt: "2026-08-10T10:00:00.000Z",
+      updatedAt: "2026-08-10T10:04:59.000Z",
+    };
+    const serverDocument = {
+      edges: [],
+      nodes: [],
+      viewport: { zoom: 0.8, y: -40, x: 120 },
+      canvasProjectId: "canvas-main",
+      version: 2,
+      updatedAt: "2026-08-10T10:05:00.000Z",
+      createdAt: "2026-08-10T10:00:00.000Z",
+    };
+    const workbench = {
+      api: {
+        async getCanvasHead() {
+          return { head: { canvasProjectId: "canvas-main", serverRevision: 539, document: serverDocument } };
+        },
+        async *streamCanvasLive() {},
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 538,
+        canvasSaveStatus: "pending",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+      }),
+    };
+
+    await handleCanvasLiveEventForTest(workbench, "canvas-main", {
+      data: { type: "revision", eventId: "revision-event-539", serverRevision: 539 },
+    }, { render: false });
+
+    assert.equal(workbench.ui.canvasServerRevision, 539);
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
   });
 
   it("refreshes the Canvas head immediately after an Agent patch without a live stream", async () => {
@@ -39898,24 +40677,105 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.canvasRevisionConflict, null);
   });
 
-  it("resolves a Canvas revision conflict only after an explicit local or server choice", async () => {
+  it("accepts the persisted Canvas generation result without creating a local revision conflict", async () => {
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    globalThis.setTimeout = (callback, delayMs) => {
+      const timer = { callback, delayMs };
+      timers.push(timer);
+      return timer;
+    };
+    globalThis.clearTimeout = () => {};
     const localDocument = {
       version: 2,
       canvasProjectId: "canvas-main",
       viewport: { x: 0, y: 0, zoom: 1 },
-      nodes: [{ id: "local-node", type: "text", data: { title: "本地草稿" } }],
+      nodes: [{
+        id: "image-node",
+        type: "image",
+        data: { status: "running", taskId: "task-image", lastTaskId: "task-image" },
+      }],
       edges: [],
     };
     const serverDocument = {
       ...localDocument,
-      nodes: [{ id: "server-node", type: "text", data: { title: "服务端版本" } }],
+      nodes: [{
+        ...localDocument.nodes[0],
+        data: {
+          ...localDocument.nodes[0].data,
+          status: "completed",
+          imageUrl: "https://example.test/result.png",
+        },
+      }],
     };
-    const savedPayloads = [];
     const workbench = {
       api: {
-        async saveStandaloneCanvas(_canvasProjectId, input) {
-          savedPayloads.push(input);
-          return { canvas: { canvasProjectId: "canvas-main", serverRevision: 6, document: input.document } };
+        async getCanvasHead() {
+          return { head: { canvasProjectId: "canvas-main", serverRevision: 12, document: serverDocument } };
+        },
+        async saveStandaloneCanvas() {
+          throw new Error("generation projection must not be persisted as a local edit");
+        },
+      },
+      taskCenterAppliedVersions: new Map(),
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-main",
+        activeCanvasProjectId: "canvas-main",
+        canvasServerRevision: 11,
+        canvasSaveStatus: "saved",
+        canvasDocument: localDocument,
+        canvasDocumentsByProject: { "canvas-main": localDocument },
+      }),
+    };
+
+    try {
+      await applyTaskCenterTaskProjectionForTest(workbench, {
+        taskId: "task-image",
+        status: "completed",
+        workflowStatus: "completed",
+        kind: "image",
+        mediaKind: "image",
+        result: { imageUrl: "https://example.test/result.png" },
+      });
+      await refreshCanvasAfterAgentPatchForTest(workbench);
+    } finally {
+      globalThis.setTimeout = previousSetTimeout;
+      globalThis.clearTimeout = previousClearTimeout;
+    }
+
+    assert.equal(timers.length, 0);
+    assert.equal(workbench.ui.canvasServerRevision, 12);
+    assert.equal(workbench.ui.canvasSaveStatus, "saved");
+    assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "completed");
+    assert.equal(workbench.ui.canvasRevisionConflict, null);
+  });
+
+  it("waits for a generated Canvas node position save before refreshing the server head", async () => {
+    const positionSaveDeferred = createDeferred();
+    const localDocument = {
+      version: 2,
+      canvasProjectId: "canvas-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [{
+        id: "image-node",
+        type: "image",
+        position: { x: 240, y: 180 },
+        data: { status: "completed", imageUrl: "https://example.test/result.png" },
+      }],
+      edges: [],
+    };
+    let headRequestCount = 0;
+    const workbench = {
+      api: {
+        async saveCanvasNodePositions() {
+          return positionSaveDeferred.promise;
+        },
+        async getCanvasHead() {
+          headRequestCount += 1;
+          return { head: { canvasProjectId: "canvas-main", serverRevision: 12, document: localDocument } };
         },
       },
       ui: buildProjectUi({
@@ -39923,44 +40783,31 @@ describe("production workbench project tab", () => {
         canvasProjectView: "detail",
         selectedCanvasProjectId: "canvas-main",
         activeCanvasProjectId: "canvas-main",
-        canvasServerRevision: 4,
-        canvasSaveStatus: "conflict",
+        canvasServerRevision: 11,
+        canvasSaveStatus: "saved",
+        canvasRevisionConflict: null,
         canvasDocument: localDocument,
         canvasDocumentsByProject: { "canvas-main": localDocument },
-        canvasRevisionConflict: {
-          canvasProjectId: "canvas-main",
-          clientRevision: 4,
-          serverRevision: 5,
-          localDocument,
-          serverDocument,
-        },
       }),
     };
 
-    await resolveCanvasRevisionConflictForTest(workbench, "server", { render: false });
-    assert.equal(workbench.ui.canvasDocument.nodes[0].id, "server-node");
-    assert.equal(workbench.ui.canvasServerRevision, 5);
+    const positionSave = persistCanvasNodePositionsForTest(workbench, [
+      { nodeKey: "image-node", x: 240, y: 180 },
+    ]);
+    const headRefresh = refreshCanvasAfterAgentPatchForTest(workbench);
+    await Promise.resolve();
+
+    assert.equal(headRequestCount, 0);
+    positionSaveDeferred.resolve({ canvas: { canvasProjectId: "canvas-main", serverRevision: 13 } });
+    await Promise.all([positionSave, headRefresh]);
+
+    assert.equal(headRequestCount, 1);
+    assert.equal(workbench.ui.canvasServerRevision, 13);
     assert.equal(workbench.ui.canvasSaveStatus, "saved");
-    assert.equal(savedPayloads.length, 0);
-
-    workbench.ui.canvasRevisionConflict = {
-      canvasProjectId: "canvas-main",
-      clientRevision: 4,
-      serverRevision: 5,
-      localDocument,
-      serverDocument,
-    };
-    workbench.ui.canvasSaveStatus = "conflict";
-    await resolveCanvasRevisionConflictForTest(workbench, "local", { render: false });
-
-    assert.equal(savedPayloads.length, 1);
-    assert.equal(savedPayloads[0].clientRevision, 5);
-    assert.equal(savedPayloads[0].document.nodes[0].id, "local-node");
-    assert.equal(workbench.ui.canvasServerRevision, 6);
     assert.equal(workbench.ui.canvasRevisionConflict, null);
   });
 
-  it("renders local and server Canvas summaries with explicit recovery choices", () => {
+  it("renders the Canvas revision conflict dialog above the X6 host", () => {
     const localDocument = {
       version: 2,
       canvasProjectId: "canvas-main",
@@ -39988,11 +40835,46 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /画布版本发生冲突/);
-    assert.match(html, /当前画布已被修改，请确认是否保存到最新版本。/);
     assert.match(html, /本地草稿节点/);
     assert.match(html, /服务端图片节点/);
     assert.match(html, /data-canvas-conflict-version="server"/);
     assert.match(html, /data-canvas-conflict-version="local"/);
+  });
+
+  it("renders the hosted Canvas with X6 only and keeps its editor markup inert", () => {
+    const html = renderCanvasSurfaceForHost({
+      ui: buildProjectUi({
+        selectedCanvasProjectId: "canvas-main",
+        selectedCanvasNodeId: "video-node",
+        canvasEditorOpen: true,
+        canvasDocument: {
+          version: 2,
+          canvasProjectId: "canvas-main",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [{
+            id: "video-node",
+            type: "video",
+            position: { x: 120, y: 80 },
+            data: {
+              mediaKind: "video",
+              title: "视频节点",
+              resultUrl: "https://example.test/generated-video.mp4",
+            },
+          }],
+          edges: [{
+            id: "legacy-edge",
+            sourceNodeId: "source-node",
+            targetNodeId: "video-node",
+          }],
+        },
+      }),
+    });
+
+    assert.match(html, /data-canvas-x6-mount/);
+    assert.match(html, /<template data-canvas-node-editor-template>[\s\S]*canvas-node-editor/);
+    assert.match(html, /data-canvas-node-action-toolbar-template/);
+    assert.doesNotMatch(html, /canvas-lib-node|canvas-flow-edge/);
+    assert.doesNotMatch(html, /<video[^>]+generated-video\.mp4/);
   });
 
   it("reconnects Canvas live with the last event id and aborts it when leaving", async () => {
