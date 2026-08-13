@@ -101,6 +101,9 @@ import {
   type CanvasAgentMode,
 } from "../modules/canvas-agent/index.ts";
 import { TextModelGatewayError } from "../modules/model-gateway/text-model-gateway.errors.ts";
+import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
+import { createGeoGenerationService, parseGeoGeneratedDocument } from "../modules/geo/geo-generation.service.ts";
+import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { createAdminUserService } from "../modules/admin-users/admin-user.service.ts";
 import { createMembershipOrderService } from "../modules/membership/membership-order.service.ts";
 import { createMembershipPlanService } from "../modules/membership/membership-plan.service.ts";
@@ -1285,7 +1288,37 @@ const adminRouteRoles = {
   storyboardPromptExport: ["super_admin"],
   membershipPlanManage: ["super_admin", "finance_admin"],
   announcementManage: ["super_admin", "ops_admin"],
+  geoManage: ["super_admin"],
 } as const;
+
+function isGeoContentType(value: string): value is GeoContentType {
+  return value === "guide" || value === "case" || value === "report" || value === "answer";
+}
+
+function isGeoDocumentInput(value: unknown): value is GeoDocument {
+  try {
+    parseGeoGeneratedDocument(JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGeoSettings(value: unknown) {
+  const input = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    brandName: readString(input.brandName) || "灵曦AI",
+    enabled: input.enabled !== false,
+    defaultModelCode: readString(input.defaultModelCode) || null,
+    configRevisionId: readString(input.configRevisionId) || "geo-default-v1",
+    similarityThreshold: Math.min(1, Math.max(0.5, Number(input.similarityThreshold ?? 0.86))),
+    allowedContentTypes: readStringArray(input.allowedContentTypes).filter(isGeoContentType).length > 0
+      ? readStringArray(input.allowedContentTypes).filter(isGeoContentType)
+      : ["guide", "case", "report", "answer"],
+  };
+}
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
   if (error instanceof Error && error.message === "request_body_too_large") {
@@ -17913,6 +17946,168 @@ export function createPhoneAuthDevServer(
           env: runtimeEnv,
         }),
       });
+      if (pathname === "/api/admin/geo" || pathname.startsWith("/api/admin/geo/")) {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.geoManage],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+
+        const actorAdminAccountId = adminRoute.session.admin_account_id;
+        const geoContentService = createGeoContentService({ db });
+        const geoGenerationService = createGeoGenerationService({
+          db,
+          gateway: canvasTextChatGateway,
+          contentService: geoContentService,
+        });
+
+        if (request.method === "GET" && pathname === "/api/admin/geo/questions") {
+          return writeJson(response, await geoContentService.listQuestions());
+        }
+        if (request.method === "POST" && pathname === "/api/admin/geo/questions") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          return writeJson(response, await geoContentService.saveQuestion({
+            rawQuestion: readString(body.rawQuestion),
+            topic: readString(body.topic),
+            intent: readString(body.intent),
+            targetPlatforms: readStringArray(body.targetPlatforms),
+            priority: Number(body.priority ?? 50),
+            productCapabilities: readStringArray(body.productCapabilities),
+            notes: readString(body.notes),
+            actorAdminAccountId,
+          }));
+        }
+        if (request.method === "GET" && pathname === "/api/admin/geo/evidence") {
+          return writeJson(response, await geoContentService.listEvidence());
+        }
+        if (request.method === "POST" && pathname === "/api/admin/geo/evidence") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const reviewStatus = readString(body.reviewStatus) || "pending";
+          if (!["pending", "approved", "rejected"].includes(reviewStatus)) {
+            return writeJson(response, envelopedError(400, "geo_evidence_invalid", "Invalid evidence review status"));
+          }
+          return writeJson(response, await geoContentService.saveEvidence({
+            type: readString(body.type),
+            name: readString(body.name),
+            factText: readString(body.factText),
+            sourceUrl: readString(body.sourceUrl) || null,
+            reviewStatus: reviewStatus as "pending" | "approved" | "rejected",
+            validUntil: readString(body.validUntil) || null,
+            publicUseAllowed: body.publicUseAllowed === true,
+            modelName: readString(body.modelName) || null,
+            modelVersion: readString(body.modelVersion) || null,
+            actorAdminAccountId,
+          }));
+        }
+        if (request.method === "GET" && pathname === "/api/admin/geo/content") {
+          return writeJson(response, await geoContentService.listContent());
+        }
+        if (request.method === "POST" && pathname === "/api/admin/geo/content") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const contentType = readString(body.contentType);
+          if (!isGeoContentType(contentType) || !isGeoDocumentInput(body.document)) {
+            return writeJson(response, envelopedError(400, "geo_content_invalid", "Invalid GEO content document"));
+          }
+          return writeJson(response, await geoContentService.createDraftFromDocument({
+            contentItemId: readString(body.contentItemId) || undefined,
+            contentType,
+            topic: readString(body.topic),
+            slug: readString(body.slug),
+            questionIds: readStringArray(body.questionIds),
+            evidenceIds: readStringArray(body.evidenceIds),
+            document: body.document,
+            generationRunId: null,
+            configRevisionId: readString(body.configRevisionId) || "geo-default-v1",
+            actorAdminAccountId,
+          }));
+        }
+        const geoContentDetailMatch = pathname.match(/^\/api\/admin\/geo\/content\/([^/]+)$/);
+        if (request.method === "GET" && geoContentDetailMatch) {
+          return writeJson(response, await geoContentService.getContent(geoContentDetailMatch[1]!));
+        }
+        if (request.method === "POST" && pathname === "/api/admin/geo/generate") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const contentType = readString(body.contentType);
+          if (!isGeoContentType(contentType)) {
+            return writeJson(response, envelopedError(400, "geo_content_type_invalid", "Invalid GEO content type"));
+          }
+          return writeJson(response, await geoGenerationService.generateDraft({
+            questionId: readString(body.questionId),
+            evidenceIds: readStringArray(body.evidenceIds),
+            contentType,
+            topic: readString(body.topic),
+            slug: readString(body.slug),
+            modelCode: readString(body.modelCode),
+            actorAdminAccountId,
+          }));
+        }
+        const geoContentActionMatch = pathname.match(/^\/api\/admin\/geo\/content\/([^/]+)\/(submit-review|publish|rollback|archive)$/);
+        if (request.method === "POST" && geoContentActionMatch) {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const contentItemId = geoContentActionMatch[1]!;
+          const action = geoContentActionMatch[2]!;
+          if (action === "submit-review") {
+            return writeJson(response, await geoContentService.submitForReview({
+              contentItemId,
+              expectedLockVersion: Number(body.expectedLockVersion),
+              actorAdminAccountId,
+            }));
+          }
+          if (action === "publish") {
+            return writeJson(response, await geoContentService.publish({
+              contentItemId,
+              actorAdminAccountId,
+              reason: readString(body.reason) || "人工审核通过",
+            }));
+          }
+          if (action === "rollback") {
+            return writeJson(response, await geoContentService.rollback({
+              contentItemId,
+              versionId: readString(body.versionId),
+              actorAdminAccountId,
+              reason: readString(body.reason) || "人工回滚",
+            }));
+          }
+          return writeJson(response, await geoContentService.archive({
+            contentItemId,
+            actorAdminAccountId,
+            reason: readString(body.reason) || "人工归档",
+          }));
+        }
+        if (request.method === "GET" && pathname === "/api/admin/geo/settings") {
+          const stored = await db.query<{ value_json: Record<string, unknown> }>(
+            `SELECT value_json FROM runtime_config_entries WHERE key='geo.operations.settings'`,
+          );
+          return writeJson(response, {
+            status: 200,
+            body: { data: normalizeGeoSettings(stored.rows[0]?.value_json) },
+          });
+        }
+        if (request.method === "PATCH" && pathname === "/api/admin/geo/settings") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const previous = await db.query<{ value_json: Record<string, unknown> }>(
+            `SELECT value_json FROM runtime_config_entries WHERE key='geo.operations.settings'`,
+          );
+          const settings = normalizeGeoSettings(body.value);
+          if (settings.brandName !== "灵曦AI") {
+            return writeJson(response, envelopedError(400, "geo_brand_invalid", "GEO brand must be 灵曦AI"));
+          }
+          const changedAt = new Date();
+          await db.query(
+            `WITH saved AS (
+               INSERT INTO runtime_config_entries (key,value_json,value_type,scope,description,updated_by_admin_id,updated_at)
+               VALUES ('geo.operations.settings',$1::jsonb,'json','admin','GEO运营配置',$2,$3)
+               ON CONFLICT (key) DO UPDATE SET value_json=EXCLUDED.value_json,updated_by_admin_id=EXCLUDED.updated_by_admin_id,updated_at=EXCLUDED.updated_at
+               RETURNING key
+             ) INSERT INTO runtime_config_revisions (id,config_key,previous_value_json,next_value_json,changed_by_admin_id,reason,created_at)
+               SELECT $4,'geo.operations.settings',$5::jsonb,$1::jsonb,$2,$6,$3 FROM saved`,
+            [JSON.stringify(settings), actorAdminAccountId, changedAt, randomUUID(), JSON.stringify(previous.rows[0]?.value_json ?? null), readString(body.reason) || "更新GEO运营配置"],
+          );
+          return writeJson(response, { status: 200, body: { data: settings } });
+        }
+        return writeJson(response, envelopedError(404, "geo_route_not_found", "GEO route not found"));
+      }
       if (pathname.startsWith("/uploads/")) {
         return await serveUploadedFile(request, pathname, response);
       }

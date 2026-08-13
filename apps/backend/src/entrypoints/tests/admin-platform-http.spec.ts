@@ -7,6 +7,91 @@ import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
 describe("admin management platform HTTP routes", { concurrency: false }, () => {
+  it("restricts GEO operations to super admins and publishes an evidence-bound draft", async () => {
+    const db = await createMigratedTestDb();
+    const gateway = {
+      async completeJsonWithUsage(input: { prompt?: string }) {
+        if (String(input.prompt).includes("独立内容审查员")) {
+          return { content: JSON.stringify({ issues: [] }), usage: { total_tokens: 10 }, providerRequestId: "geo-review-request" };
+        }
+        const evidenceId = String(input.prompt).match(/"evidence":\[\{"id":"([^"]+)"/)?.[1] ?? "";
+        return {
+          content: JSON.stringify({
+            title: "AI短剧角色一致性指南",
+            summary: "从角色资料、参考素材和分镜引用三个环节建立可复核的一致性流程。",
+            directAnswer: "先确认角色资料，再让每个分镜复用同一份已审核参考素材。",
+            blocks: [{ type: "paragraph", text: "灵曦AI支持按角色保存参考素材。", evidenceIds: [evidenceId] }],
+            faq: [{ question: "何时更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
+            socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+            seo: { title: "AI短剧角色一致性指南 | 灵曦AI", description: "介绍角色资料、参考素材和分镜引用的可复核操作流程。" },
+          }),
+          usage: { total_tokens: 20 },
+          providerRequestId: "geo-writer-request",
+        };
+      },
+      async completeJson() { throw new Error("unexpected fallback"); },
+    };
+    const { server, cookie } = await createLoggedInAdminServer(db, { serverOptions: { textChatGateway: gateway } });
+    try {
+      const anonymous = await fetch(`${server.origin}/api/admin/geo/questions`);
+      assert.equal(anonymous.status, 401);
+
+      const opsDb = await createMigratedTestDb();
+      const { server: opsServer, cookie: opsCookie } = await createLoggedInAdminServer(opsDb, { role: "ops_admin" });
+      try {
+        const forbidden = await fetch(`${opsServer.origin}/api/admin/geo/questions`, { headers: { cookie: opsCookie } });
+        assert.equal(forbidden.status, 403);
+      } finally {
+        await opsServer.close();
+        await opsDb.close();
+      }
+
+      const questionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "" }),
+      });
+      const question = await questionResponse.json();
+      assert.equal(questionResponse.status, 201, JSON.stringify(question));
+
+      const evidenceResponse = await fetch(`${server.origin}/api/admin/geo/evidence`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ type: "product_feature", name: "角色素材管理", factText: "灵曦AI支持按角色保存参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true }),
+      });
+      const evidence = await evidenceResponse.json();
+      assert.equal(evidenceResponse.status, 201, JSON.stringify(evidence));
+
+      const generatedResponse = await fetch(`${server.origin}/api/admin/geo/generate`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ questionId: question.data.id, evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "geo-writer-model" }),
+      });
+      const generated = await generatedResponse.json();
+      assert.equal(generatedResponse.status, 201, JSON.stringify(generated));
+
+      const reviewResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/submit-review`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ expectedLockVersion: generated.data.item.lockVersion }),
+      });
+      assert.equal(reviewResponse.status, 200, await reviewResponse.text());
+      const publishResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/publish`, {
+        method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ reason: "HTTP流程验证" }),
+      });
+      assert.equal(publishResponse.status, 200, await publishResponse.text());
+
+      const settingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, { headers: { cookie } });
+      const settings = await settingsResponse.json();
+      assert.equal(settingsResponse.status, 200, JSON.stringify(settings));
+      assert.equal(settings.data.brandName, "灵曦AI");
+      const rejectedBrand = await fetch(`${server.origin}/api/admin/geo/settings`, {
+        method: "PATCH", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ value: { brandName: "灵曦剧场" }, reason: "错误品牌验证" }),
+      });
+      assert.equal(rejectedBrand.status, 400);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("serves the standalone admin shell without using the creator app shell", async () => {
     const server = createPhoneAuthDevServer();
 
