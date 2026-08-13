@@ -103,6 +103,8 @@ const migrations = [
   ["20260901-add-san-bao-media-models.sql", "packages/db/migrations/20260901-add-san-bao-media-models.sql"],
   ["20260902-merge-san-bao-gpt-image2-variants.sql", "packages/db/migrations/20260902-merge-san-bao-gpt-image2-variants.sql"],
   ["20260903-add-globalaiopc-model-center-and-soundclone.sql", "packages/db/migrations/20260903-add-globalaiopc-model-center-and-soundclone.sql"],
+  ["20260904-create-provider-material-assets.sql", "packages/db/migrations/20260904-create-provider-material-assets.sql"],
+  ["20260905-create-geo-operations.sql", "packages/db/migrations/20260905-create-geo-operations.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);

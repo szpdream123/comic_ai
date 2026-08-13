@@ -323,6 +323,184 @@ CREATE TABLE IF NOT EXISTS "audit_events" (
   "actor_admin_account_id" uuid
 );
 
+CREATE TABLE IF NOT EXISTS "geo_questions" (
+  "id" uuid NOT NULL,
+  "raw_question" text NOT NULL,
+  "normalized_question" text NOT NULL,
+  "topic" text NOT NULL,
+  "intent" text NOT NULL,
+  "target_platforms_json" jsonb DEFAULT '[]'::jsonb NOT NULL,
+  "priority" integer DEFAULT 50 NOT NULL,
+  "product_capabilities_json" jsonb DEFAULT '[]'::jsonb NOT NULL,
+  "coverage_status" text DEFAULT 'uncovered'::text NOT NULL,
+  "notes" text DEFAULT ''::text NOT NULL,
+  "last_monitored_at" timestamp with time zone,
+  "created_by_admin_id" uuid NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  PRIMARY KEY ("id"),
+  UNIQUE ("normalized_question"),
+  CHECK (priority BETWEEN 0 AND 100),
+  CHECK (coverage_status = ANY (ARRAY['uncovered'::text, 'drafted'::text, 'covered'::text])),
+  CHECK (btrim(raw_question) <> ''::text),
+  CHECK (btrim(normalized_question) <> ''::text),
+  CHECK (btrim(topic) <> ''::text),
+  CHECK (btrim(intent) <> ''::text),
+  CHECK (jsonb_typeof(target_platforms_json) = 'array'::text),
+  CHECK (jsonb_typeof(product_capabilities_json) = 'array'::text)
+);
+
+CREATE TABLE IF NOT EXISTS "geo_evidence_items" (
+  "id" uuid NOT NULL,
+  "evidence_type" text NOT NULL,
+  "name" text NOT NULL,
+  "fact_text" text NOT NULL,
+  "source_url" text,
+  "attachment_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "collected_at" timestamp with time zone NOT NULL,
+  "model_name" text,
+  "model_version" text,
+  "review_status" text DEFAULT 'pending'::text NOT NULL,
+  "valid_until" timestamp with time zone,
+  "public_use_allowed" boolean DEFAULT false NOT NULL,
+  "reviewed_by_admin_id" uuid,
+  "reviewed_at" timestamp with time zone,
+  "created_by_admin_id" uuid NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  PRIMARY KEY ("id"),
+  CHECK (evidence_type = ANY (ARRAY['product_feature'::text, 'screenshot'::text, 'case_result'::text, 'model_test'::text, 'time_cost'::text, 'authoritative_source'::text, 'downloadable_template'::text])),
+  CHECK (review_status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])),
+  CHECK (btrim(name) <> ''::text),
+  CHECK (btrim(fact_text) <> ''::text),
+  CHECK (jsonb_typeof(attachment_json) = 'object'::text)
+);
+
+CREATE TABLE IF NOT EXISTS "geo_content_items" (
+  "id" uuid NOT NULL,
+  "content_type" text NOT NULL,
+  "topic" text NOT NULL,
+  "slug" text NOT NULL,
+  "status" text DEFAULT 'draft'::text NOT NULL,
+  "current_draft_version_id" uuid,
+  "current_published_version_id" uuid,
+  "redirect_path" text,
+  "lock_version" integer DEFAULT 1 NOT NULL,
+  "created_by_admin_id" uuid NOT NULL,
+  "updated_by_admin_id" uuid NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  PRIMARY KEY ("id"),
+  UNIQUE ("content_type", "slug"),
+  CHECK (content_type = ANY (ARRAY['guide'::text, 'case'::text, 'report'::text, 'answer'::text])),
+  CHECK (status = ANY (ARRAY['draft'::text, 'in_review'::text, 'published'::text, 'archived'::text])),
+  CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'::text),
+  CHECK (lock_version > 0)
+);
+
+CREATE TABLE IF NOT EXISTS "geo_generation_runs" (
+  "id" uuid NOT NULL,
+  "content_item_id" uuid,
+  "run_type" text NOT NULL,
+  "status" text NOT NULL,
+  "model_code" text NOT NULL,
+  "prompt_template_revision" text NOT NULL,
+  "input_snapshot_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "evidence_ids_json" jsonb DEFAULT '[]'::jsonb NOT NULL,
+  "provider_request_ids_json" jsonb DEFAULT '[]'::jsonb NOT NULL,
+  "usage_json" jsonb,
+  "error_code" text,
+  "error_summary" text,
+  "created_by_admin_id" uuid NOT NULL,
+  "started_at" timestamp with time zone,
+  "completed_at" timestamp with time zone,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  PRIMARY KEY ("id"),
+  CHECK (run_type = ANY (ARRAY['generate'::text, 'revise'::text, 'review'::text])),
+  CHECK (status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text])),
+  CHECK (jsonb_typeof(input_snapshot_json) = 'object'::text),
+  CHECK (jsonb_typeof(evidence_ids_json) = 'array'::text),
+  CHECK (jsonb_typeof(provider_request_ids_json) = 'array'::text),
+  FOREIGN KEY ("content_item_id") REFERENCES "geo_content_items"("id") ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS "geo_content_versions" (
+  "id" uuid NOT NULL,
+  "content_item_id" uuid NOT NULL,
+  "version_number" integer NOT NULL,
+  "title" text NOT NULL,
+  "summary" text NOT NULL,
+  "document_json" jsonb NOT NULL,
+  "faq_json" jsonb DEFAULT '[]'::jsonb NOT NULL,
+  "seo_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "social_drafts_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "quality_report_json" jsonb DEFAULT '{"blockers": [], "warnings": []}'::jsonb NOT NULL,
+  "config_revision_id" text NOT NULL,
+  "generation_run_id" uuid,
+  "created_by_admin_id" uuid NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "published_at" timestamp with time zone,
+  PRIMARY KEY ("id"),
+  UNIQUE ("content_item_id", "version_number"),
+  CHECK (version_number > 0),
+  CHECK (btrim(title) <> ''::text),
+  CHECK (btrim(summary) <> ''::text),
+  CHECK (jsonb_typeof(document_json) = 'object'::text),
+  CHECK (jsonb_typeof(faq_json) = 'array'::text),
+  CHECK (jsonb_typeof(seo_json) = 'object'::text),
+  CHECK (jsonb_typeof(social_drafts_json) = 'object'::text),
+  CHECK (jsonb_typeof(quality_report_json) = 'object'::text),
+  FOREIGN KEY ("content_item_id") REFERENCES "geo_content_items"("id") ON DELETE CASCADE,
+  FOREIGN KEY ("generation_run_id") REFERENCES "geo_generation_runs"("id") ON DELETE SET NULL
+);
+
+ALTER TABLE "geo_content_items"
+  ADD CONSTRAINT "geo_content_items_current_draft_fk"
+  FOREIGN KEY ("current_draft_version_id") REFERENCES "geo_content_versions"("id") ON DELETE SET NULL;
+ALTER TABLE "geo_content_items"
+  ADD CONSTRAINT "geo_content_items_current_published_fk"
+  FOREIGN KEY ("current_published_version_id") REFERENCES "geo_content_versions"("id") ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS "geo_content_question_links" (
+  "content_version_id" uuid NOT NULL,
+  "question_id" uuid NOT NULL,
+  PRIMARY KEY ("content_version_id", "question_id"),
+  FOREIGN KEY ("content_version_id") REFERENCES "geo_content_versions"("id") ON DELETE CASCADE,
+  FOREIGN KEY ("question_id") REFERENCES "geo_questions"("id") ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS "geo_content_evidence_links" (
+  "content_version_id" uuid NOT NULL,
+  "evidence_id" uuid NOT NULL,
+  "citation_key" text DEFAULT ''::text NOT NULL,
+  PRIMARY KEY ("content_version_id", "evidence_id"),
+  FOREIGN KEY ("content_version_id") REFERENCES "geo_content_versions"("id") ON DELETE CASCADE,
+  FOREIGN KEY ("evidence_id") REFERENCES "geo_evidence_items"("id") ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS "geo_audit_events" (
+  "id" uuid NOT NULL,
+  "actor_admin_account_id" uuid NOT NULL,
+  "event_type" text NOT NULL,
+  "target_type" text NOT NULL,
+  "target_id" uuid NOT NULL,
+  "reason" text,
+  "metadata_json" jsonb DEFAULT '{}'::jsonb NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  PRIMARY KEY ("id"),
+  CHECK (btrim(event_type) <> ''::text),
+  CHECK (btrim(target_type) <> ''::text),
+  CHECK (jsonb_typeof(metadata_json) = 'object'::text)
+);
+
+CREATE INDEX IF NOT EXISTS "geo_questions_priority_idx" ON "geo_questions" ("coverage_status", "priority" DESC, "updated_at" DESC);
+CREATE INDEX IF NOT EXISTS "geo_evidence_review_idx" ON "geo_evidence_items" ("review_status", "public_use_allowed", "valid_until", "updated_at" DESC);
+CREATE INDEX IF NOT EXISTS "geo_content_status_idx" ON "geo_content_items" ("status", "updated_at" DESC, "id" DESC);
+CREATE INDEX IF NOT EXISTS "geo_content_versions_item_idx" ON "geo_content_versions" ("content_item_id", "version_number" DESC);
+CREATE INDEX IF NOT EXISTS "geo_generation_runs_status_idx" ON "geo_generation_runs" ("status", "created_at" DESC);
+CREATE INDEX IF NOT EXISTS "geo_audit_events_target_idx" ON "geo_audit_events" ("target_type", "target_id", "created_at" DESC);
+
 CREATE TABLE IF NOT EXISTS "auth_sessions" (
   "id" uuid NOT NULL,
   "user_id" uuid NOT NULL,
@@ -3541,3 +3719,20 @@ WHERE version.id = generated.asset_version_id
       AND version.metadata_json ->> 'previewUrl' IS DISTINCT FROM generated.result_preview_url
     )
   );
+
+ALTER TABLE "geo_questions" ADD CONSTRAINT "geo_questions_created_by_admin_fk"
+  FOREIGN KEY ("created_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_evidence_items" ADD CONSTRAINT "geo_evidence_reviewed_by_admin_fk"
+  FOREIGN KEY ("reviewed_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_evidence_items" ADD CONSTRAINT "geo_evidence_created_by_admin_fk"
+  FOREIGN KEY ("created_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_content_items" ADD CONSTRAINT "geo_content_created_by_admin_fk"
+  FOREIGN KEY ("created_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_content_items" ADD CONSTRAINT "geo_content_updated_by_admin_fk"
+  FOREIGN KEY ("updated_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_generation_runs" ADD CONSTRAINT "geo_generation_created_by_admin_fk"
+  FOREIGN KEY ("created_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_content_versions" ADD CONSTRAINT "geo_versions_created_by_admin_fk"
+  FOREIGN KEY ("created_by_admin_id") REFERENCES "admin_accounts"("id");
+ALTER TABLE "geo_audit_events" ADD CONSTRAINT "geo_audit_actor_admin_fk"
+  FOREIGN KEY ("actor_admin_account_id") REFERENCES "admin_accounts"("id");
