@@ -179,7 +179,7 @@ export function openLoginModal() {
   modal.className = "app-login-modal";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
-  modal.setAttribute("aria-label", "登录灵曦剧场");
+  modal.setAttribute("aria-label", "登录灵曦AI");
   modal.innerHTML = renderLoginModalMarkup();
   document.body.appendChild(modal);
   modal.querySelectorAll("[data-login-modal-close]").forEach((button) => {

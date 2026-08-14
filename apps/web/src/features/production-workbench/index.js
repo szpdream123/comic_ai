@@ -296,7 +296,7 @@ const PUBLIC_PATH_TOKENS = new Map([
 const PUBLIC_NAV_SEO = Object.fromEntries(
   ["home", "tools", "script", "project", "library", "team"].map((id) => {
     const page = PUBLIC_SEO_PAGE_BY_ID.get(id);
-    return [id, page ? { ...page, title: `${page.title} | 灵曦剧场` } : null];
+    return [id, page ? { ...page, title: `${page.title} | 灵曦AI` } : null];
   }),
 );
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {

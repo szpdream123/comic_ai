@@ -673,7 +673,7 @@ const publicSeoRoutes = new Map<string, PublicSeoRoute>(
     page.path,
     {
       ...page,
-      title: `${page.title} | 灵曦剧场`,
+      title: `${page.title} | 灵曦AI`,
       heading: page.title,
     },
   ]),
@@ -16236,7 +16236,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     "@graph": [
       {
         "@type": "SoftwareApplication",
-        name: "灵曦剧场",
+        name: "灵曦AI",
         applicationCategory: "MultimediaApplication",
         operatingSystem: "Web",
         url: canonicalUrl,
@@ -16255,7 +16255,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
   const content = `
     <section class="public-seo-content" aria-labelledby="public-seo-heading">
       <nav class="public-seo-nav" aria-label="公开创作页面">
-        <a class="public-seo-brand" href="/">灵曦剧场</a>
+        <a class="public-seo-brand" href="/">灵曦AI</a>
         <div>${navigation}</div>
       </nav>
       <header class="public-seo-intro">
@@ -16302,7 +16302,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
         <div><h2>${escapeSeoHtml(route.ctaTitle)}</h2><p>${escapeSeoHtml(route.ctaBody)}</p></div>
         <button type="button" data-public-seo-login>登录并开始</button>
       </section>
-      <footer class="public-seo-footer"><span>灵曦剧场 · AI短剧与漫剧创作平台</span><a href="/">返回首页</a></footer>
+      <footer class="public-seo-footer"><span>灵曦AI · AI短剧与漫剧创作平台</span><a href="/">返回首页</a></footer>
     </section>`;
 
   return template
@@ -16322,7 +16322,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     )
     .replace(
       "</head>",
-      `    <meta property="og:type" content="website" />\n    <meta property="og:site_name" content="灵曦剧场" />\n    <meta property="og:title" content="${escapeSeoHtml(route.title)}" />\n    <meta property="og:description" content="${escapeSeoHtml(route.description)}" />\n    <meta property="og:url" content="${escapeSeoHtml(canonicalUrl)}" />\n    <script type="application/ld+json">${structuredData}</script>\n  </head>`,
+      `    <meta property="og:type" content="website" />\n    <meta property="og:site_name" content="灵曦AI" />\n    <meta property="og:title" content="${escapeSeoHtml(route.title)}" />\n    <meta property="og:description" content="${escapeSeoHtml(route.description)}" />\n    <meta property="og:url" content="${escapeSeoHtml(canonicalUrl)}" />\n    <script type="application/ld+json">${structuredData}</script>\n  </head>`,
     )
     .replace("\n    <script type=\"module\"", `${content}\n\n    <script type=\"module\"`);
 }

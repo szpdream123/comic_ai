@@ -102,7 +102,7 @@ describe("app login modal shell", () => {
       /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/brand\/lingxi-theater-favicon\.png\?v=20260710-wing" \/>/,
     );
     assert.doesNotMatch(html, /lingxi-theater-favicon\.svg/);
-    assert.match(html, /灵曦剧场/);
+    assert.match(html, /灵曦AI/);
     assert.doesNotMatch(html, /灵曦剧厂/);
     assert.match(html, /id="creator-app"/);
     assert.match(html, /production-workbench\.css/);
@@ -122,9 +122,9 @@ describe("app login modal shell", () => {
     assert.match(detailJs, /id: "home", label:/);
     assert.match(detailJs, /id: "script", label:/);
     assert.match(detailJs, /id: "project", label:/);
-    assert.match(indexJs, /灵曦剧场/);
+    assert.match(indexJs, /灵曦AI/);
     assert.doesNotMatch(indexJs, /灵曦剧厂/);
-    assert.match(detailJs, /灵曦剧场/);
+    assert.match(detailJs, /灵曦AI/);
     assert.doesNotMatch(detailJs, /灵曦剧厂/);
   });
 });
