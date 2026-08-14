@@ -44,6 +44,10 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /showCanvasGraphMountFailure\(surface\)/);
   assert.match(source, /action === "retry-canvas-x6-mount"[\s\S]*?void render\(\)/);
   assert.match(source, /createCanvasAgentController/);
+  assert.match(source, /data-agent-media-composer-resize/);
+  assert.match(source, /mediaComposerResize\.startHeight \+ mediaComposerResize\.startY - Number\(event\.clientY \?\? 0\)/);
+  assert.match(source, /"--canvas-agent-media-composer-height", `\$\{nextHeight\}px`/);
+  assert.match(source, /async submitAgentPrompt\(input = \{\}\) \{[\s\S]*?await agentController\.stagePrompt\(input\);[\s\S]*?await agentReady;[\s\S]*?submitPrompt\(input, \{ staged: true \}\)/);
   assert.match(source, /let renderToken = 0/);
   assert.match(source, /token !== renderToken/);
   assert.match(source, /CANVAS_STYLE_RETRY_DELAYS_MS = \[250, 500, 1_000, 2_000, 4_000, 8_000\]/);
@@ -1369,6 +1373,84 @@ test("canvas detail hands rendering to the in-project shadow host while the host
   assert.match(workbenchCss, /\.canvas-x6-editor-overlay \.canvas-node-editor\s*\{[\s\S]*?position:\s*relative !important;/);
   assert.match(newCanvasCss, /\.canvas-storyboard-cell-extract::after\s*\{[\s\S]*?content:\s*attr\(data-tooltip\)/);
   assert.doesNotMatch(newCanvasCss, /\.new-canvas-root \.canvas-zoom-tools\s*\{/);
+});
+
+test("free generation keeps the application shell around the standalone Agent host", () => {
+  const workbenchCss = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  const html = renderProjectDetail({
+    ui: {
+      activeNavTab: "free-generation",
+      canvasProjectView: "detail",
+      canvasAgentOnly: true,
+      canvasHostMount: true,
+      homeBackground: { status: "active", videoUrl: "https://example.com/home.mp4" },
+    },
+  });
+
+  assert.match(html, /workbench-main home-mode/);
+  assert.match(html, /class="home-hero has-background-video has-free-generation"/);
+  assert.match(html, /class="home-background-video"/);
+  assert.match(html, /new-canvas-workbench-host is-agent-only/);
+  assert.match(html, /data-new-canvas-mount/);
+  assert.match(html, /aria-label="自由生成对话"/);
+  assert.match(html, /class="home-creation-mode-introduction"/);
+  assert.doesNotMatch(html, /AI 创作工作台/);
+  assert.match(html, /从一个想法，开始你的作品/);
+  assert.match(html, /class="home-creation-mode-switch"/);
+  assert.match(html, /data-creation-mode="agent"[^>]*data-tooltip="在画布中通过对话协同创建和编辑内容"[^>]*>画布Agent/);
+  assert.match(html, /data-creation-mode="workflow"[^>]*data-tooltip="上传剧本，自动解析并生成资产与分镜"[^>]*>项目工作流/);
+  assert.match(html, /data-creation-mode="free"[^>]*data-tooltip="在独立会话中直接生成图片、视频和音频"[^>]*>自由会话/);
+  assert.match(html, /<button(?=[^>]*data-creation-mode="free")(?=[^>]*class="active")(?=[^>]*aria-selected="true")[^>]*>/);
+  assert.match(html, /workbench-rail persistent/);
+  assert.match(html, /rail-item active[\s\S]*?data-action="set-nav-tab"[\s\S]*?data-tab="home"/);
+  assert.match(html, /global-statusbar/);
+  assert.doesNotMatch(html, /画布编辑器/);
+  assert.doesNotMatch(html, /data-canvas-x6-mount/);
+  assert.match(html, /class="home-hero/);
+  assert.doesNotMatch(html, /home-capability-grid/);
+  assert.doesNotMatch(html, /class="home-projects"/);
+  assert.match(workbenchCss, /\.home-free-generation-dialog\s*\{[\s\S]*?width:\s*min\(1800px, 100%\)[\s\S]*?height:\s*min\(42rem, calc\(100dvh - 24rem\)\)/);
+  assert.match(workbenchCss, /\.home-creation-mode-switch button::after\s*\{[\s\S]*?content:\s*attr\(data-tooltip\)[\s\S]*?visibility:\s*hidden/);
+  assert.match(workbenchCss, /\.home-creation-mode-switch button:hover::after,[\s\S]*?transition-delay:\s*0\.5s,\s*0\.5s,\s*0\.5s/);
+});
+
+test("home creation mode tabs update only the home creation surface", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const handler = source.match(/if \(action === "set-home-creation-mode"\)[\s\S]*?if \(action === "remove-home-agent-attachment"\)/)?.[0] ?? "";
+  assert.match(handler, /renderHomeCreationModeSurface\(workbench\)/);
+  assert.doesNotMatch(handler, /render\(workbench\)/);
+  const surfaceRenderer = source.match(/function renderHomeCreationModeSurface[\s\S]*?function render\(workbench, options = \{\}\)/)?.[0] ?? "";
+  assert.match(surfaceRenderer, /currentModeSurface\.replaceWith\(nextModeSurface\)/);
+  assert.doesNotMatch(surfaceRenderer, /\.seo-home-scroll\)/);
+  assert.match(surfaceRenderer, /modeSurfaceOpen/);
+  assert.match(surfaceRenderer, /template\.innerHTML = nextMarkup\.slice/);
+  assert.match(surfaceRenderer, /nextHeroClassName/);
+  assert.match(surfaceRenderer, /syncNewCanvasMount\(workbench\)/);
+  assert.match(source, /function preserveHomeBackgroundVideo[\s\S]*?homeBackgroundVideoUrl[\s\S]*?currentSource !== nextSource/);
+  assert.match(source, /const HOME_BACKGROUND_VIDEO_CACHE_NAME/);
+  assert.match(source, /function syncHomeBackgroundVideoLocalCache[\s\S]*?readCachedHomeBackgroundVideo/);
+  assert.match(source, /function playHomeBackgroundVideoFromMediaSource[\s\S]*?addSourceBuffer[\s\S]*?endOfStream/);
+});
+
+test("initial home project creation entry is centered with a compact responsive width", () => {
+  const html = renderProjectDetail({
+    ui: {
+      activeNavTab: "home",
+      homeRecentProjects: [],
+    },
+  });
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /class="home-project-empty home-project-create-empty"/);
+  assert.match(css, /\.home-project-create-empty\s*\{[\s\S]*?width:\s*min\(20rem, 100%\)[\s\S]*?margin-inline:\s*auto/);
 });
 
 test("canvas startup preserves a pending shadow host across follow-up renders", () => {

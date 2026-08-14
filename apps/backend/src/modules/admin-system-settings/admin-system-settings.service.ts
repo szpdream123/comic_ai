@@ -32,6 +32,7 @@ import {
 
 export const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_prompt_preset_categories";
 export const customerSupportConfigKey = "creator.customer_support";
+export const videoBatchDouyinCookieSecretKey = "VIDEO_BATCH_DOUYIN_COOKIE";
 
 export interface CustomerSupportConfig {
   onlineServiceLabel: string;
@@ -338,6 +339,70 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
         secretReferences: secretReferences.rows.map(secretReferenceFromRow),
       },
     };
+  }
+
+  async function getVideoBatchCookie() {
+    await ensureAdminSecretValueStore(deps.db);
+    const row = await queryOne<{ secret_value: string | null }>(
+      deps.db,
+      `SELECT secret_value FROM admin_secret_values WHERE secret_key = $1 LIMIT 1`,
+      [videoBatchDouyinCookieSecretKey],
+    );
+    return {
+      data: {
+        configured: Boolean(String(row?.secret_value ?? "").trim()),
+        cookie: String(row?.secret_value ?? ""),
+      },
+    };
+  }
+
+  async function updateVideoBatchCookie(input: {
+    cookie: string;
+    reason: string;
+    actorAdminAccountId: string;
+    now: Date;
+  }) {
+    await ensureAdminSecretValueStore(deps.db);
+    const cookie = input.cookie.trim();
+    if (cookie.length > 128 * 1024) {
+      return error(400, "video_batch_cookie_too_large", "Cookie 内容不能超过 128KB");
+    }
+    const existing = await queryOne<{ id: string }>(
+      deps.db,
+      `SELECT id FROM admin_secret_values WHERE secret_key = $1 LIMIT 1`,
+      [videoBatchDouyinCookieSecretKey],
+    );
+    if (!cookie) {
+      if (existing) {
+        await deps.db.query("DELETE FROM admin_secret_values WHERE id = $1", [existing.id]);
+        await deps.db.query("UPDATE admin_secret_references SET secret_value = NULL WHERE id = $1", [existing.id]);
+      }
+      return { status: 200, body: { data: { configured: false, cookie: "" } } };
+    }
+    const result = existing
+      ? await updateSecretReference({
+        id: existing.id,
+        secretRef: "video_batch.douyin_cookie",
+        envName: videoBatchDouyinCookieSecretKey,
+        secretValue: cookie,
+        purpose: "视频解析服务端抖音 Cookie",
+        providerName: "douyin",
+        requestDomain: "https://www.douyin.com",
+        actorAdminAccountId: input.actorAdminAccountId,
+        now: input.now,
+      })
+      : await createSecretReference({
+        secretRef: "video_batch.douyin_cookie",
+        envName: videoBatchDouyinCookieSecretKey,
+        secretValue: cookie,
+        purpose: "视频解析服务端抖音 Cookie",
+        providerName: "douyin",
+        requestDomain: "https://www.douyin.com",
+        actorAdminAccountId: input.actorAdminAccountId,
+        now: input.now,
+      });
+    if (result.status >= 400) return result;
+    return { status: 200, body: { data: { configured: Boolean(cookie), cookie } } };
   }
 
   async function getPublicLegalDocuments() {
@@ -1584,6 +1649,8 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
 
   return {
     listSettings,
+    getVideoBatchCookie,
+    updateVideoBatchCookie,
     getBatchImagePromptPresetCategories,
     getPublicLegalDocuments,
     getPublicCustomerSupportConfig,

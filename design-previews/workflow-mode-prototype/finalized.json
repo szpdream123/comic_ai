@@ -1,0 +1,12 @@
+{
+  "source_mockup": null,
+  "source_plan": "docs/product/three-mode-creation-workbench-design.md",
+  "mode": "plan-driven",
+  "html_file": "design-previews/workflow-mode-prototype/index.html",
+  "layout_tier": "dense-dashboard",
+  "framework": "vanilla",
+  "iterations": 11,
+  "date": "2026-08-13",
+  "screen": "workflow-mode-production-console",
+  "prototype_only": true
+}

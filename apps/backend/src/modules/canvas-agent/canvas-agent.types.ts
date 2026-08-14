@@ -1,6 +1,9 @@
 export const canvasAgentModes = ["b", "c", "plan", "expert"] as const;
 export type CanvasAgentMode = (typeof canvasAgentModes)[number];
 
+export const canvasAgentCapabilityProfiles = ["canvas", "media_generation_only"] as const;
+export type CanvasAgentCapabilityProfile = (typeof canvasAgentCapabilityProfiles)[number];
+
 export const canvasAgentTaskStatuses = [
   "queued",
   "running",
@@ -101,6 +104,7 @@ export interface CanvasAgentModelSnapshot {
   version: 1;
   modelConfigId: string;
   modelCode: string;
+  displayName?: string;
   providerName: string;
   providerModel: string;
   providerProtocol: string;
@@ -122,6 +126,7 @@ export interface CanvasAgentGenerationIntake {
     actorTeamMemberId: string | null;
     idempotencyKey: string;
     kind: "image" | "video" | "audio";
+    placement?: "canvas" | "detached";
     targetNodeId?: string | null;
     request: Record<string, unknown>;
   }): Promise<{ generationTaskId: string; workflowId?: string }>;

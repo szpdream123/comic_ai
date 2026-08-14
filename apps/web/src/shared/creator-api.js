@@ -61,7 +61,7 @@ function normalizeErrorResponse(payload, fallbackCode, fallbackMessage = fallbac
 }
 
 async function fetchJson(url, options = {}) {
-  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 10000;
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 60000;
   const unwrapEnvelope = options.unwrapEnvelope !== false;
   const dedupeKey = options.dedupeKey ?? null;
   const dedupeTtlMs = Number.isFinite(options.dedupeTtlMs) ? options.dedupeTtlMs : 1500;
@@ -1101,6 +1101,10 @@ export const creatorApi = {
     return fetchJson("/api/announcements", { dedupeKey: "GET /api/announcements" });
   },
 
+  getHomeRecommendations() {
+    return fetchJson("/api/home-recommendations", { dedupeKey: "GET /api/home-recommendations" });
+  },
+
   getToolboxPromptReverseModels(options = {}) {
     return fetchJsonWithTtl("/api/toolbox/prompt-reverse/models", {
       cacheKey: "GET /api/toolbox/prompt-reverse/models",
@@ -1805,6 +1809,84 @@ export const creatorApi = {
       `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-tasks/${encodeURIComponent(taskId)}/rewind`,
       input,
     );
+  },
+
+  listFreeGenerationEvents(taskId, input = {}) {
+    const after = Number(input.after ?? 0);
+    const limit = Number(input.limit ?? 200);
+    const params = new URLSearchParams({
+      after: String(Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0),
+      limit: String(Number.isFinite(limit) ? Math.min(1000, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return fetchJson(`/api/free-generation/agent-tasks/${encodeURIComponent(taskId)}/events?${params}`, { cache: "no-store" });
+  },
+
+  streamFreeGenerationEvents(taskId, input = {}) {
+    const after = Number(input.after ?? 0);
+    const limit = Number(input.limit ?? 200);
+    const cursor = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+    const params = new URLSearchParams({
+      live: "1",
+      limit: String(Number.isFinite(limit) ? Math.min(1000, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return getSse(`/api/free-generation/agent-tasks/${encodeURIComponent(taskId)}/events?${params}`, {
+      signal: input.signal,
+      headers: cursor > 0 ? { "last-event-id": String(cursor) } : {},
+    });
+  },
+
+  listFreeGenerationModels() {
+    return fetchJson("/api/free-generation/agent-models", { cache: "no-store" });
+  },
+
+  createFreeGenerationConversation(input = {}) {
+    return postJson("/api/free-generation/conversations", input);
+  },
+
+  listFreeGenerationConversations(input = {}) {
+    const params = new URLSearchParams();
+    if (input.limit != null) params.set("limit", String(input.limit));
+    const query = params.toString();
+    return fetchJson(`/api/free-generation/conversations${query ? `?${query}` : ""}`, { cache: "no-store" });
+  },
+
+  updateFreeGenerationConversation(input = {}) {
+    return patchJson("/api/free-generation/conversations", input);
+  },
+
+  deleteFreeGenerationConversation(conversationId) {
+    return fetchJson(`/api/free-generation/conversations?conversationId=${encodeURIComponent(conversationId)}`, { method: "DELETE" });
+  },
+
+  sendFreeGenerationMessage(conversationId, input = {}) {
+    return postJson(`/api/free-generation/conversations/${encodeURIComponent(conversationId)}/messages`, input);
+  },
+
+  listFreeGenerationMessages(conversationId, input = {}) {
+    const limit = Number(input.limit ?? 200);
+    const params = new URLSearchParams({
+      limit: String(Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.trunc(limit))) : 200),
+    });
+    return fetchJson(`/api/free-generation/conversations/${encodeURIComponent(conversationId)}/messages?${params}`, { cache: "no-store" });
+  },
+
+  listFreeGenerationFileGrants(conversationId, input = {}) {
+    const params = new URLSearchParams();
+    if (input.includeInactive === true) params.set("includeInactive", "true");
+    const query = params.toString();
+    return fetchJson(`/api/free-generation/conversations/${encodeURIComponent(conversationId)}/file-grants${query ? `?${query}` : ""}`, { cache: "no-store" });
+  },
+
+  createFreeGenerationFileGrant(conversationId, input = {}) {
+    return postJson(`/api/free-generation/conversations/${encodeURIComponent(conversationId)}/file-grants`, input);
+  },
+
+  revokeFreeGenerationFileGrant(conversationId, grantId) {
+    return fetchJson(`/api/free-generation/conversations/${encodeURIComponent(conversationId)}/file-grants/${encodeURIComponent(grantId)}`, { method: "DELETE" });
+  },
+
+  controlFreeGenerationTask(taskId, action, input = {}) {
+    return postJson(`/api/free-generation/agent-tasks/${encodeURIComponent(taskId)}/${encodeURIComponent(action)}`, input);
   },
 
   listCanvasUserConfigs(input = {}) {

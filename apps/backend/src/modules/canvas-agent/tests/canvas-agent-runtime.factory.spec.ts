@@ -17,6 +17,13 @@ import {
 } from "../canvas-agent-runtime-config.service.ts";
 
 describe("Canvas Agent runtime composition", () => {
+  it("uses the tool grant id when resolving an authorized media attachment", () => {
+    const source = readFileSync(join(process.cwd(), "apps/backend/src/modules/canvas-agent/canvas-agent-runtime.factory.ts"), "utf8");
+
+    assert.match(source, /grantId:\s*request\.grantId/);
+    assert.doesNotMatch(source, /grantId:\s*request\.fileGrantId/);
+  });
+
   it("keeps image billing modes distinct without changing video billing", () => {
     const pricing = {
       baseCredits: 90,
@@ -28,6 +35,38 @@ describe("Canvas Agent runtime composition", () => {
     assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "duration" }, parameters, "image"), 160);
     assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "fixed" }, parameters, "video"), 160);
     assert.equal(__canvasAgentRuntimeTestUtils.generationCredits({ ...pricing, billingMode: "duration" }, parameters, "video"), 1600);
+  });
+
+  it("keeps detached audio on the existing generation task and billing path", () => {
+    const source = readFileSync(join(process.cwd(), "apps/backend/src/modules/canvas-agent/canvas-agent-runtime.factory.ts"), "utf8");
+
+    assert.doesNotMatch(source, /detached\s*&&\s*input\.kind\s*===\s*["']audio["']/);
+    assert.match(source, /detached\s*&&\s*input\.targetNodeId/);
+    assert.match(source, /episode_generate_audio/);
+    assert.match(source, /reserveCreditsInTransaction/);
+  });
+
+  it("normalizes free-generation references to SanBao's ordinal prompt format", () => {
+    const request = __canvasAgentRuntimeTestUtils.normalizeSanBaoGenerationRequest({
+      model: "sanbao-video",
+      prompt: "让人物跳舞 【@角色.png】 【@图1】 【@视频1】 【@音频1】 @",
+      parameters: {
+        referenceImages: [{ storageObjectId: "image-storage", tag: "图1", url: "https://signed.example/image.png" }],
+        sourceVideo: { storageObjectId: "video-storage", tag: "视频1", url: "https://signed.example/video.mp4" },
+        referenceAudio: { storageObjectId: "audio-storage", tag: "音频1", url: "https://signed.example/audio.mp3" },
+      },
+    });
+
+    assert.equal(request.prompt, "让人物跳舞 @图片1 @视频1 @音频1");
+    assert.deepEqual((request.parameters as Record<string, unknown>).referenceImages, [{
+      storageObjectId: "image-storage", tag: "图片1", url: "https://signed.example/image.png",
+    }]);
+    assert.deepEqual((request.parameters as Record<string, unknown>).sourceVideo, {
+      storageObjectId: "video-storage", tag: "视频1", url: "https://signed.example/video.mp4",
+    });
+    assert.deepEqual((request.parameters as Record<string, unknown>).referenceAudio, {
+      storageObjectId: "audio-storage", tag: "音频1", url: "https://signed.example/audio.mp3",
+    });
   });
 
   it("applies bounded JSON patch operations without mutating the input", () => {

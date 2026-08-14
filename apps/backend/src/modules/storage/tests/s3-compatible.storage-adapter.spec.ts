@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { S3CompatibleStorageAdapter } from "../s3-compatible.storage-adapter.ts";
 
 describe("S3 compatible storage adapter", () => {
-  it("returns permanent public object urls without signing parameters", async () => {
+  it("returns an expiring signed object url", async () => {
     const adapter = new S3CompatibleStorageAdapter({
       endpoint: "https://storage.example.com/root",
       region: "ap-guangzhou",
@@ -18,14 +18,16 @@ describe("S3 compatible storage adapter", () => {
     const result = await adapter.createSignedReadUrl({
       bucket: "creator-test",
       objectKey: "generated/file name.png",
-      expiresAt: new Date("2026-08-08T12:00:00.000Z"),
+      expiresAt: new Date(Date.now() + 60 * 60_000),
     });
 
-    assert.equal(
-      result.url,
-      "https://storage.example.com/root/creator-test/generated/file%20name.png",
-    );
-    assert.doesNotMatch(result.url, /X-Amz-|expires/i);
+    const url = new URL(result.url);
+    assert.equal(url.origin, "https://storage.example.com");
+    assert.equal(url.pathname, "/root/creator-test/generated/file%20name.png");
+    assert.equal(url.searchParams.get("X-Amz-Algorithm"), "AWS4-HMAC-SHA256");
+    assert.match(url.searchParams.get("X-Amz-Signature") ?? "", /^[a-f0-9]{64}$/i);
+    const expiresIn = Number(url.searchParams.get("X-Amz-Expires"));
+    assert.ok(expiresIn >= 3_598 && expiresIn <= 3_600);
   });
 
   it("treats an empty 404 HeadObject response as a missing object", async () => {
@@ -99,6 +101,47 @@ describe("S3 compatible storage adapter", () => {
       assert.equal(capturedLength, "9");
       assert.equal(capturedBody, "hello ark");
       assert.equal(result.eTag, "s3-compatible-etag");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("forwards cache-control metadata when uploading an immutable media object", async () => {
+    let capturedCacheControl = "";
+    const server = createServer((request, response) => {
+      capturedCacheControl = request.headers["cache-control"] ?? "";
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, {
+          "content-type": "application/xml",
+          etag: '"s3-compatible-etag"',
+        });
+        response.end("<PutObjectResult><ETag>\"s3-compatible-etag\"</ETag></PutObjectResult>");
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.equal(typeof address, "object");
+
+    try {
+      const adapter = new S3CompatibleStorageAdapter({
+        endpoint: `http://127.0.0.1:${address!.port}`,
+        region: "ap-guangzhou",
+        accessKeyId: "test-access-key",
+        secretAccessKey: "test-secret-key",
+        forcePathStyle: true,
+      });
+
+      await adapter.putObject({
+        bucket: "creator-test",
+        objectKey: "officialAssets/homeBackgroundVideos/background.mp4",
+        body: new Uint8Array([1]),
+        contentType: "video/mp4",
+        cacheControl: "public, max-age=31536000, immutable",
+      });
+
+      assert.equal(capturedCacheControl, "public, max-age=31536000, immutable");
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

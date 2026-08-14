@@ -6,13 +6,13 @@ Replace only the browser-tab favicon with the user-provided 256×256 PNG. Preser
 
 ## Selected Approach
 
-Use the supplied PNG as `apps/web/assets/brand/lingxi-theater-favicon.png`. Update the favicon declaration in `apps/web/app.html` from the existing SVG resource to the PNG resource and append a version query parameter so browsers do not keep showing the cached icon.
+Use the supplied PNG as `apps/web/assets/brand/lingxi-ai-favicon.png`. Update the favicon declaration in `apps/web/app.html` from the existing SVG resource to the PNG resource and append a version query parameter so browsers do not keep showing the cached icon.
 
 The existing SVG file remains unchanged and unused. This keeps the change reversible and avoids converting or tracing the supplied artwork.
 
 ## Files
 
-- Replace: `apps/web/assets/brand/lingxi-theater-favicon.png`
+- Replace: `apps/web/assets/brand/lingxi-ai-favicon.png`
 - Update: `apps/web/app.html`
 - Update test: `apps/web/tests/login-page.spec.ts`
 

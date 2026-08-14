@@ -5,7 +5,7 @@ import { test } from "node:test";
 import * as productionWorkbench from "../src/features/production-workbench/index.js";
 import { renderEpisodeAssetCardForTest } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 
-test("episode asset title is rendered as an enabled text editor", () => {
+test("episode asset title enters editing only after a double click", () => {
   const html = renderEpisodeAssetCardForTest({
     id: "asset-1",
     name: "玄衣修士",
@@ -17,7 +17,8 @@ test("episode asset title is rendered as an enabled text editor", () => {
   assert.match(input, /data-asset-kind="character"/);
   assert.match(input, /value="玄衣修士"/);
   assert.match(input, /maxlength="20"/);
-  assert.doesNotMatch(input, /\b(?:disabled|readonly)\b/);
+  assert.match(input, /\breadonly\b/);
+  assert.match(input, /title="双击修改名称"/);
   assert.match(html, /class="episode-replica-asset-title-row"/);
   assert.match(html, /episode-replica-asset-title-row[\s\S]*episode-replica-asset-name-input/);
   const actionsRow = html.match(/<div class="episode-replica-asset-actions-row">(?<body>[\s\S]*?)<\/div>/)?.groups?.body ?? "";

@@ -5,6 +5,7 @@ import type { CanvasAgentPromptPreferenceService } from "./canvas-agent-prompt-p
 import { assertNoCanvasAgentSensitiveValue } from "./canvas-agent-sensitive-data.ts";
 import type {
   CanvasAgentActor,
+  CanvasAgentCapabilityProfile,
   CanvasAgentGenerationIntake,
   CanvasAgentMode,
   CanvasAgentToolEffect,
@@ -29,6 +30,7 @@ export interface CanvasAgentToolExecutionContext {
   actor: CanvasAgentActor;
   callId: string;
   referencedNodeIds?: string[];
+  capabilityProfile?: CanvasAgentCapabilityProfile;
 }
 
 export interface CanvasAgentToolResult {
@@ -114,6 +116,12 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   }) => Promise<{ revision: number; summary?: Record<string, unknown> }>;
   generationIntake: CanvasAgentGenerationIntake;
   context?: Pick<CanvasAgentContextService, "resolveFileGrant">;
+  resolveFileAttachment?: (input: {
+    grantId: string;
+    canvasId: string;
+    conversationId: string;
+    actor: CanvasAgentActor;
+  }) => Promise<{ url: string }>;
   inspectVideo?: (input: {
     grantId: string;
     canvasId: string;
@@ -551,7 +559,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
   });
   registry.register({
     id: "generation.create",
-    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass fileGrantIds to use image or video files explicitly authorized in the current conversation as generation references; document grants remain prompt context and are not media references. Pass targetNodeId only when the user explicitly asks to regenerate or replace that compatible existing node. A referenced input node does not automatically become the output target. Do not change Canvas provider defaults merely to run this tool.",
+    description: "Submit media generation through the platform generation intake. request.model must contain an active administrator model code. Pass fileGrantIds to use image, video, or audio files explicitly authorized in the current conversation as generation references; document grants remain prompt context and are not media references. Pass targetNodeId only when the user explicitly asks to regenerate or replace that compatible existing node. A referenced input node does not automatically become the output target. Do not change Canvas provider defaults merely to run this tool.",
     effect: "media_generation",
     requiredCapability: "canvas:run",
     inputSchema: {
@@ -577,12 +585,18 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
       additionalProperties: false,
     },
     execute: async (input, context) => {
+      const mediaGenerationOnly = context.capabilityProfile === "media_generation_only";
+      if (mediaGenerationOnly && !["image", "video", "audio"].includes(String(input.kind ?? ""))) {
+        throw new Error("canvas_agent_media_generation_kind_not_allowed");
+      }
+      if (mediaGenerationOnly && String(input.targetNodeId ?? "").trim()) {
+        throw new Error("canvas_agent_generation_target_not_allowed");
+      }
       const fileGrantIds = Array.isArray(input.fileGrantIds)
         ? [...new Set(input.fileGrantIds.map((value) => String(value ?? "").trim()).filter(Boolean))].slice(0, 8)
         : [];
-      if (fileGrantIds.length && input.kind === "audio") throw new Error("canvas_agent_file_grant_media_kind_unsupported");
       if (fileGrantIds.length && !deps.context) throw new Error("canvas_agent_file_grant_unavailable");
-      const grantedFiles: Array<{ storageObjectId: string; contentType: string }> = [];
+      const grantedFiles: Array<{ storageObjectId: string; contentType: string; url?: string }> = [];
       for (const grantId of fileGrantIds) {
         const grant = await deps.context!.resolveFileGrant({
           grantId,
@@ -591,9 +605,18 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
           actor: context.actor,
           now: deps.now?.() ?? new Date(),
         });
+        const attachment = deps.resolveFileAttachment
+          ? await deps.resolveFileAttachment({
+            grantId,
+            canvasId: context.canvasId,
+            conversationId: context.conversationId,
+            actor: context.actor,
+          })
+          : null;
         grantedFiles.push({
           storageObjectId: grant.storageObjectId,
           contentType: String(grant.contentType ?? "").trim().toLowerCase(),
+          ...(attachment?.url ? { url: attachment.url } : {}),
         });
       }
       const request = { ...(input.request as Record<string, unknown>) };
@@ -601,26 +624,42 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
         const parameters = request.parameters && typeof request.parameters === "object" && !Array.isArray(request.parameters)
           ? request.parameters as Record<string, unknown>
           : {};
-        const videoReferences = grantedFiles.filter((file) => file.contentType.startsWith("video/"));
-        const unsupportedReferences = grantedFiles.filter((file) => file.contentType.startsWith("audio/"));
-        if (unsupportedReferences.length || (input.kind === "image" && videoReferences.length)) {
-          throw new Error("canvas_agent_file_grant_media_kind_unsupported");
-        }
-        if (videoReferences.length > 1) throw new Error("canvas_agent_video_reference_limit_exceeded");
+        const videoReferences = grantedFiles.filter((file) => file.contentType.startsWith("video/")).slice(0, 1);
+        const audioReferences = grantedFiles.filter((file) => file.contentType.startsWith("audio/")).slice(0, 1);
         const imageReferences = grantedFiles.filter((file) => file.contentType.startsWith("image/"));
         const existingReferences = Array.isArray(parameters.referenceImages) ? parameters.referenceImages : [];
+        const toMediaReference = ({ storageObjectId, url }: { storageObjectId: string; url?: string }, tag: string) => ({
+          storageObjectId,
+          tag,
+          ...(url ? { url } : {}),
+        });
+        const referenceTokens = [
+          ...imageReferences.map((_file, index) => `图${index + 1}`),
+          ...videoReferences.map((_file, index) => `视频${index + 1}`),
+          ...audioReferences.map((_file, index) => `音频${index + 1}`),
+        ];
+        const prompt = String(request.prompt ?? request.text ?? request.motionPrompt ?? "");
+        const promptWithReferenceTokens = appendGenerationReferenceTokens(prompt, referenceTokens);
         request.parameters = {
           ...parameters,
           ...(imageReferences.length ? {
             referenceImages: [
               ...existingReferences,
-              ...imageReferences.map(({ storageObjectId }) => ({ storageObjectId })),
+              ...imageReferences.map((file, index) => toMediaReference(file, `图${index + 1}`)),
             ],
           } : {}),
           ...(videoReferences.length ? {
-            sourceVideo: { storageObjectId: videoReferences[0].storageObjectId },
+            sourceVideo: toMediaReference(videoReferences[0], "视频1"),
+          } : {}),
+          ...(audioReferences.length ? {
+            referenceAudio: toMediaReference(audioReferences[0], "音频1"),
           } : {}),
         };
+        if (promptWithReferenceTokens && promptWithReferenceTokens !== prompt) {
+          if (typeof request.prompt === "string") request.prompt = promptWithReferenceTokens;
+          else if (typeof request.text === "string") request.text = promptWithReferenceTokens;
+          else request.motionPrompt = promptWithReferenceTokens;
+        }
       }
       const targetNodeId = String(input.targetNodeId ?? "").trim() || null;
       const created = await deps.generationIntake.create({
@@ -632,6 +671,7 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
         actorTeamMemberId: context.actor.actorTeamMemberId ?? null,
         idempotencyKey: `canvas-agent:${context.agentTaskId}:${context.callId}`,
         kind: input.kind as "image" | "video" | "audio",
+        placement: mediaGenerationOnly ? "detached" : "canvas",
         targetNodeId,
         request,
       });
@@ -823,6 +863,20 @@ export function createDefaultCanvasAgentToolRegistry(deps: {
     });
   }
   return registry;
+}
+
+function appendGenerationReferenceTokens(prompt: string, tokens: string[]) {
+  const missing = tokens.filter((token) => !hasGenerationReferenceToken(prompt, token));
+  if (!missing.length) return prompt;
+  const separator = prompt && !/\s$/u.test(prompt) ? " " : "";
+  return `${prompt}${separator}${missing.map((token) => `【@${token}】`).join(" ")}`;
+}
+
+function hasGenerationReferenceToken(prompt: string, token: string) {
+  const aliases = token.startsWith("图")
+    ? [`图${token.slice(1)}`, `图片${token.slice(1)}`]
+    : [token];
+  return aliases.some((alias) => new RegExp(`(?:【)?@${alias}(?:】|(?=\\s|$|[，。；;、:：!?！？)）\\]】}]))`, "u").test(prompt));
 }
 
 function analyzeCanvasStructure(canvas: Record<string, unknown>) {

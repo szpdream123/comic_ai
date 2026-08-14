@@ -1419,12 +1419,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.doesNotMatch(sitemap, /http:\/\/www\.lingxiyunai\.com:443/);
 
       const publicRoutes = [
-        ["/", "AI视频生成工具，串联剧本、分镜、素材与成片 | 灵曦剧场", "AI视频生成工具，串联剧本、分镜、素材与成片", "从一个剧本或故事想法开始"],
-        ["/canvas", "AI视频生成画布，让素材、提示词和结果保持上下文 | 灵曦剧场", "AI视频生成画布，让素材、提示词和结果保持上下文", "打开画布，组织第一条视频生成流程"],
-        ["/script", "剧本转分镜工具，把故事拆成可拍、可生成的镜头 | 灵曦剧场", "剧本转分镜工具，把故事拆成可拍、可生成的镜头", "把现有小说或剧本转成分镜初稿"],
-        ["/projects", "视频短剧制作工具，管理从剧本到成片的完整项目 | 灵曦剧场", "视频短剧制作工具，管理从剧本到成片的完整项目", "创建你的第一个AI短剧项目"],
-        ["/assets", "短剧素材库，让角色与场景在连续镜头中反复使用 | 灵曦剧场", "短剧素材库，让角色与场景在连续镜头中反复使用", "建立可复用的角色与场景素材"],
-        ["/team", "AI短剧团队协作，把项目资源和制作分工放在一起 | 灵曦剧场", "AI短剧团队协作，把项目资源和制作分工放在一起", "为短剧制作建立清晰的团队分工"],
+        ["/", "AI视频生成工具，串联剧本、分镜、素材与成片 | 灵曦AI", "AI视频生成工具，串联剧本、分镜、素材与成片", "从一个剧本或故事想法开始"],
+        ["/canvas", "AI视频生成画布，让素材、提示词和结果保持上下文 | 灵曦AI", "AI视频生成画布，让素材、提示词和结果保持上下文", "打开画布，组织第一条视频生成流程"],
+        ["/script", "剧本转分镜工具，把故事拆成可拍、可生成的镜头 | 灵曦AI", "剧本转分镜工具，把故事拆成可拍、可生成的镜头", "把现有小说或剧本转成分镜初稿"],
+        ["/projects", "视频短剧制作工具，管理从剧本到成片的完整项目 | 灵曦AI", "视频短剧制作工具，管理从剧本到成片的完整项目", "创建你的第一个AI短剧项目"],
+        ["/assets", "短剧素材库，让角色与场景在连续镜头中反复使用 | 灵曦AI", "短剧素材库，让角色与场景在连续镜头中反复使用", "建立可复用的角色与场景素材"],
+        ["/team", "AI短剧团队协作，把项目资源和制作分工放在一起 | 灵曦AI", "AI短剧团队协作，把项目资源和制作分工放在一起", "为短剧制作建立清晰的团队分工"],
       ] as const;
       for (const [path, title, heading, ctaTitle] of publicRoutes) {
         const routeResponse = await fetch(`${server.origin}${path}`, { headers: proxyHeaders });
@@ -5329,6 +5329,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         ),
       );
       assert.equal(
+        generationConfigEnvelope.data.models.some((model: { providerGroup?: string }) => "providerGroup" in model),
+        false,
+      );
+      assert.equal(
         generationConfigEnvelope.data.models.some((model: { modelCode?: string }) => model.modelCode === "video_mock_1"),
         false,
       );
@@ -6050,6 +6054,78 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.deepEqual(envelope.data.commitPayload.scenes, []);
       assert.deepEqual(envelope.data.commitPayload.characters, []);
       assert.deepEqual(envelope.data.commitPayload.props, []);
+      assert.deepEqual(envelope.data.commitPayload.storyboards, []);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("resolves a home workflow instruction before running only the selected stage", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 5);
+    const skillIds = {
+      script: "71717171-7171-4171-8171-717171717171",
+      scene_extract: "72727272-7272-4272-8272-727272727272",
+      character_extract: "73737373-7373-4373-8373-737373737373",
+      prop_extract: "74747474-7474-4474-8474-747474747474",
+      shot: "75757575-7575-4575-8575-757575757575",
+    };
+    await db.query(
+      `INSERT INTO prompts (
+         id, prompt_category, name, summary, prompt_content, status,
+         is_official, is_published, price_credits, published_at
+       ) VALUES
+         ($1, 'script', '主页剧本技能', '', '小说转剧本', 'enabled', true, true, 0, NOW()),
+         ($2, 'scene_extract', '主页场景技能', '', '提取场景', 'enabled', true, true, 0, NOW()),
+         ($3, 'character_extract', '主页人物技能', '', '提取人物提示词 {{script}}', 'enabled', true, true, 0, NOW()),
+         ($4, 'prop_extract', '主页道具技能', '', '提取道具', 'enabled', true, true, 0, NOW()),
+         ($5, 'shot', '主页分镜技能', '', '生成分镜', 'enabled', true, true, 0, NOW())`,
+      [skillIds.script, skillIds.scene_extract, skillIds.character_extract, skillIds.prop_extract, skillIds.shot],
+    );
+    const textChatGateway = new FakeAiStoryboardTextGateway([
+      JSON.stringify({ stages: ["character"] }),
+      JSON.stringify({
+        characters: [{ characterName: "萧炎", characterDescription: "黑发少年。", characterImagePrompt: "黑发少年，黑色劲装。" }],
+      }),
+    ]);
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138242");
+      await seedGenerationAccessForPhone(db, "13800138242", 5000);
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "home-character-intent");
+      const response = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-home-character-intent",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "萧炎在乌坦城修炼。",
+            instruction: "帮我解析出其中的人物提示词",
+            resolveInstructionIntent: true,
+            skills: skillIds,
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const envelope = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(textChatGateway.calls.length, 2);
+      assert.match(String(textChatGateway.calls[0]?.messages?.[1]?.content ?? ""), /人物提示词/);
+      assert.match(textChatGateway.calls[1]?.prompt ?? "", /提取人物提示词/);
+      assert.deepEqual(envelope.data.resolvedIntent, { stages: ["character"], skipScriptStage: true });
+      assert.deepEqual(
+        envelope.data.selectedSkills.map((item: { id: string; category: string }) => [item.category, item.id]),
+        [["character_extract", skillIds.character_extract]],
+      );
+      assert.equal(envelope.data.modelRunCount, 2);
+      assert.equal(envelope.data.displayTables.characters.rows[0]?.characterName, "萧炎");
       assert.deepEqual(envelope.data.commitPayload.storyboards, []);
     } finally {
       await server.close();
@@ -6845,6 +6921,74 @@ describe("phone auth dev server", { concurrency: false }, () => {
           { mode: "video", prompt: "动态视频提示词" },
         ],
       );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("commits an asset-only AI workflow without requiring storyboards", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138213");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "http-ai-asset-only-commit-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "AI asset only commit project",
+          scriptInput: "任小野角色设定。",
+          aspectRatio: "9:16",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+
+      const commitResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview/commit`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({
+            episodeTitle: "角色资产",
+            commitPayload: {
+              scriptText: "任小野角色设定。",
+              characters: [{
+                characterName: "任小野",
+                characterDescription: "灰晶收割者少年。",
+                characterImagePrompt: "任小野角色设定图",
+              }],
+              scenes: [],
+              props: [],
+              storyboards: [],
+            },
+          }),
+        },
+      );
+      const commitEnvelope = await commitResponse.json();
+      const episodeId = commitEnvelope.episode?.id;
+      const [assetsResponse, storyboardsResponse] = await Promise.all([
+        fetch(`${server.origin}/api/episodes/${episodeId}/assets?assetType=role&page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+        fetch(`${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=20`, {
+          headers: { cookie },
+        }),
+      ]);
+      const assetsEnvelope = await assetsResponse.json();
+      const storyboardsEnvelope = await storyboardsResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(commitResponse.status, 200, JSON.stringify(commitEnvelope));
+      assert.equal(commitEnvelope.episode.title, "角色资产");
+      assert.equal(commitEnvelope.storyboards.length, 0);
+      assert.equal(assetsEnvelope.data.items[0].name, "任小野");
+      assert.equal(storyboardsEnvelope.data.items.length, 0);
     } finally {
       await server.close();
     }

@@ -121,10 +121,10 @@ export function createCanvasAgentWorkerRuntime(input: {
     canvasId: string;
     conversationId: string;
     actor: CanvasAgentActor;
-    fileGrantId: string;
+    grantId: string;
   }) => {
     const grant = await context.resolveFileGrant({
-      grantId: request.fileGrantId,
+      grantId: request.grantId,
       canvasId: request.canvasId,
       conversationId: request.conversationId,
       actor: request.actor,
@@ -150,12 +150,13 @@ export function createCanvasAgentWorkerRuntime(input: {
     generationIntake,
     now,
     context,
+    resolveFileAttachment,
     inspectVideo: async ({ grantId, canvasId, conversationId, actor }) => {
       const attachment = await resolveFileAttachment({
         canvasId,
         conversationId,
         actor,
-        fileGrantId: grantId,
+        grantId,
       });
       if (!attachment || !String(attachment.contentType ?? "").toLowerCase().startsWith("video/")) {
         throw new Error("canvas_agent_video_grant_required");
@@ -315,6 +316,8 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
   constructor(private readonly deps: { db: SqlDatabase; env: NodeJS.ProcessEnv; now: () => Date }) {}
 
   async create(input: Parameters<CanvasAgentGenerationIntake["create"]>[0]) {
+    const detached = input.placement === "detached";
+    if (detached && input.targetNodeId) throw new Error("canvas_agent_generation_target_not_allowed");
     const existing = await queryOne<{
       id: string;
       workflow_id: string;
@@ -324,7 +327,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     if (existing) {
       const existingSnapshot = readRecord(existing.input_snapshot_json);
       const existingNodeKey = readString(existingSnapshot.targetId);
-      if (existingNodeKey && existingNodeKey !== input.canvasId) {
+      if (!detached && existingNodeKey && existingNodeKey !== input.canvasId) {
         await upsertCanvasAgentGenerationNode(this.deps.db, {
           ...input,
           kind: readGenerationKind(existingSnapshot.kind, input.kind),
@@ -344,7 +347,10 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     const policy = await findActiveAiModelDispatchPolicyByModelCode(this.deps.db, modelCode);
     const queueConfig = loadGenerationQueueConfig(this.deps.env);
     const fallbackQueue = input.kind === "video" ? queueConfig.queues.submitVideo : queueConfig.queues.submitImage;
-    const rawParameters = asRecord(input.request.parameters);
+    const generationRequest = model?.providerProtocol === "san_bao"
+      ? normalizeSanBaoGenerationRequest(input.request)
+      : input.request;
+    const rawParameters = asRecord(generationRequest.parameters);
     const execution = resolveGenerationModelExecution({
       kind: input.kind,
       modelCode,
@@ -355,7 +361,7 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     });
     if (!model) throw new Error("canvas_agent_generation_model_not_configured");
     const executionParameters = execution.parameters;
-    const prompt = readString(input.request.prompt ?? input.request.text ?? input.request.motionPrompt);
+    const prompt = readString(generationRequest.prompt ?? generationRequest.text ?? generationRequest.motionPrompt);
     validateGenerationModelRequest({ kind: input.kind, modelCode, modelConfig: model, parameters: executionParameters, prompt });
     if (!queueConfig.outboxDispatcherEnabled || !queueConfig.workersEnabled) {
       throw new Error("canvas_agent_generation_queue_unavailable");
@@ -373,14 +379,16 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
     const snapshot = await createGenerationModelConfigSnapshotForTask(this.deps.db, model);
     const generationTaskId = randomUUID();
     const { nodeKey, scopeTargetId } = resolveCanvasAgentGenerationTargets(input);
-    await upsertCanvasAgentGenerationNode(this.deps.db, {
-      ...input,
-      taskId: generationTaskId,
-      nodeKey,
-      modelCode,
-      prompt,
-      now,
-    });
+    if (!detached) {
+      await upsertCanvasAgentGenerationNode(this.deps.db, {
+        ...input,
+        taskId: generationTaskId,
+        nodeKey,
+        modelCode,
+        prompt,
+        now,
+      });
+    }
     await this.deps.db.query("BEGIN");
     try {
       const duplicate = await queryOne<{ id: string; workflow_id: string }>(this.deps.db,
@@ -392,9 +400,9 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
       const requestSnapshot = {
         kind: input.kind,
         canvasProjectId: input.canvasId,
-        targetType: "canvas",
-        targetId: nodeKey,
-        canvasNodeId: nodeKey,
+        targetType: detached ? "canvas_agent_conversation" : "canvas",
+        targetId: detached ? input.conversationId : nodeKey,
+        ...(!detached ? { canvasNodeId: nodeKey } : {}),
         prompt,
         text: input.kind === "audio" ? prompt : undefined,
         model: modelCode,
@@ -422,28 +430,30 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
               ? "episode_generate_video"
               : "episode_generate_audio",
           queueName: execution.queueName,
-          targetEntityType: "canvas",
-          targetEntityId: input.canvasId,
+          targetEntityType: detached ? "canvas_agent_conversation" : "canvas",
+          targetEntityId: detached ? input.conversationId : input.canvasId,
           inputSnapshot: { ...requestSnapshot, cost: estimatedCredits, modelConfigSnapshot: snapshot, providerExecutor: execution.providerExecutor },
         }],
       });
       const task = workflow.tasks[0]!;
       await this.deps.db.query("UPDATE workflows SET idempotency_key=$2 WHERE id=$1", [workflow.workflow.id, input.idempotencyKey]);
       await this.deps.db.query("UPDATE tasks SET idempotency_key=$2 WHERE id=$1", [task.id, input.idempotencyKey]);
-      await createCanvasNodeRun(this.deps.db, {
-        canvasProjectId: input.canvasId,
-        nodeKey,
-        idempotencyKey: input.idempotencyKey,
-        status: "queued",
-        mediaKind: input.kind,
-        modelCode,
-        targetType: "canvas",
-        targetId: nodeKey,
-        inputSnapshot: requestSnapshot,
-        taskId: task.id,
-        actorScope: canvasAgentGenerationActorScope(input),
-        now,
-      });
+      if (!detached) {
+        await createCanvasNodeRun(this.deps.db, {
+          canvasProjectId: input.canvasId,
+          nodeKey,
+          idempotencyKey: input.idempotencyKey,
+          status: "queued",
+          mediaKind: input.kind,
+          modelCode,
+          targetType: "canvas",
+          targetId: nodeKey,
+          inputSnapshot: requestSnapshot,
+          taskId: task.id,
+          actorScope: canvasAgentGenerationActorScope(input),
+          now,
+        });
+      }
       let creditReservationId: string | null = null;
       if (input.actorTeamMemberId) {
         const member = await queryOne<{ member_credits: number | string }>(this.deps.db,
@@ -472,7 +482,9 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
       }
       await upsertQueuedGenerationTaskSnapshot(this.deps.db, {
         projectId: null, canvasProjectId: input.canvasId, episodeId: null,
-        targetType: "canvas", targetId: scopeTargetId, workflowId: workflow.workflow.id, taskId: task.id,
+        targetType: detached ? "canvas_agent_conversation" : "canvas",
+        targetId: detached ? input.conversationId : scopeTargetId,
+        workflowId: workflow.workflow.id, taskId: task.id,
         modelConfigId: model.id, providerConfigRevisionId: String(snapshot.providerConfigRevisionId ?? "") || null,
         credentialVersionRef: String(snapshot.credentialVersionRef ?? "") || null,
         creditReservationId, modelCode, mediaType: input.kind, taskMode: execution.taskMode,
@@ -481,7 +493,9 @@ class PlatformGenerationIntake implements CanvasAgentGenerationIntake {
       });
       await appendGenerationTaskCreatedOutboxEvent(this.deps.db, {
         userId: input.ownerUserId, workflowId: workflow.workflow.id, taskId: task.id, kind: input.kind,
-        modelCode, queueName: execution.queueName, targetType: "canvas", targetId: nodeKey,
+        modelCode, queueName: execution.queueName,
+        targetType: detached ? "canvas_agent_conversation" : "canvas",
+        targetId: detached ? input.conversationId : nodeKey,
         providerExecutor: execution.providerExecutor,
         providerRouteIdentity: createGenerationProviderRouteIdentity({ modelConfigSnapshot: snapshot }) ?? null,
         providerConfigRevisionId: String(snapshot.providerConfigRevisionId ?? "") || null,
@@ -662,6 +676,41 @@ function readGenerationKind(value: unknown, fallback: CanvasAgentGenerationInput
   return value === "image" || value === "video" || value === "audio" ? value : fallback;
 }
 
+function normalizeSanBaoGenerationRequest(request: Record<string, unknown>) {
+  const parameters = asRecord(request.parameters);
+  const promptKey = typeof request.prompt === "string"
+    ? "prompt"
+    : typeof request.text === "string"
+      ? "text"
+      : "motionPrompt";
+  const prompt = readString(request[promptKey]);
+  const normalizedPrompt = prompt
+    .replace(/【@(?:图|图片)(\d+)】/gu, "@图片$1")
+    .replace(/【@(视频|音频)(\d+)】/gu, "@$1$2")
+    .replace(/@(图|图片)(\d+)(?![\p{L}\p{N}_])/gu, "@图片$2")
+    .replace(/【@[^】]+】/gu, "")
+    .replace(/@(?!(?:图片|视频|音频)\d+(?![\p{L}\p{N}_]))/gu, "")
+    .replace(/\s{2,}/gu, " ")
+    .trim();
+  return {
+    ...request,
+    [promptKey]: normalizedPrompt,
+    parameters: {
+      ...parameters,
+      ...(Array.isArray(parameters.referenceImages) ? {
+        referenceImages: parameters.referenceImages.map((reference, index) => withSanBaoReferenceTag(reference, `图片${index + 1}`)),
+      } : {}),
+      ...(parameters.sourceVideo ? { sourceVideo: withSanBaoReferenceTag(parameters.sourceVideo, "视频1") } : {}),
+      ...(parameters.referenceAudio ? { referenceAudio: withSanBaoReferenceTag(parameters.referenceAudio, "音频1") } : {}),
+    },
+  };
+}
+
+function withSanBaoReferenceTag(reference: unknown, tag: string) {
+  const record = asRecord(reference);
+  return Object.keys(record).length ? { ...record, tag } : reference;
+}
+
 function applyCanvasPatch(document: CanvasDocument, operations: unknown[]) {
   const next = structuredClone(document) as Record<string, unknown>;
   for (const rawOperation of operations) {
@@ -756,6 +805,7 @@ function readStringArray(value: unknown) {
 export const __canvasAgentRuntimeTestUtils = {
   applyCanvasPatch,
   generationCredits,
+  normalizeSanBaoGenerationRequest,
   resolveCanvasAgentGenerationTargets,
   resolveRuntimeActor,
   upsertCanvasAgentGenerationNode,

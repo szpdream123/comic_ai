@@ -26,6 +26,7 @@ it("re-signs stable canvas storage references before provider dispatch without d
     referenceImages: [imageProxy],
     parameters: {
       referenceImages: [{ url: imageProxy, storageObjectId: imageObjectId }],
+      imageReference: { storageObjectId: imageObjectId, tag: "图1" },
       referenceVideos: [{ url: "https://expired.example/video.mp4", storageObjectId: videoObjectId }],
       videoFilePaths: [videoProxy],
     },
@@ -34,6 +35,8 @@ it("re-signs stable canvas storage references before provider dispatch without d
   assert.equal(resolved.referenceImages[0], `https://signed.example/${imageObjectId}`);
   assert.equal(resolved.parameters.referenceImages[0].url, `https://signed.example/${imageObjectId}`);
   assert.equal(resolved.parameters.referenceImages[0].storageObjectId, imageObjectId);
+  assert.equal(resolved.parameters.imageReference.url, `https://signed.example/${imageObjectId}`);
+  assert.equal(resolved.parameters.imageReference.storageObjectId, imageObjectId);
   assert.equal(resolved.parameters.referenceVideos[0].url, `https://signed.example/${videoObjectId}`);
   assert.equal(resolved.parameters.videoFilePaths[0], `https://signed.example/${videoObjectId}`);
   assert.deepEqual(calls.sort(), [imageObjectId, videoObjectId].sort());

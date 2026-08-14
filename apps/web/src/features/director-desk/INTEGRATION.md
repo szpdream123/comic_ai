@@ -1,6 +1,6 @@
-# Lingxi Theater Director Desk Integration
+# Lingxi AI Director Desk Integration
 
-The director desk is only supported as an embedded Lingxi Theater module. The production
+The director desk is only supported as an embedded Lingxi AI module. The production
 build is emitted to `apps/web/director-desk/` and loaded when the user opens the director route.
 There is no standalone HTML page, iframe entry, dev server, or preview server.
 

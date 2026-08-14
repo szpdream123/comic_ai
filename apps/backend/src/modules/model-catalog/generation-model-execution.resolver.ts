@@ -177,6 +177,7 @@ function pruneParametersToSchema(
     "mentionReferences",
     "firstFrame",
     "lastFrame",
+    "sourceVideo",
     "editSourceVideo",
     "referenceUploads",
     "referenceVideos",

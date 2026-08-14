@@ -1,7 +1,8 @@
 import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
+import { renderEpisodeBatchModal, renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
 import {
   CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES,
+  normalizeCanvasTextSkills,
   renderCanvasTextSkillModal,
   resolveCanvasGenerationSkillCategories,
 } from "./canvas-text-skill-modal.js";
@@ -9,9 +10,9 @@ import { renderCanvasScriptBatchModal } from "./canvas-script-batch-modal.js";
 import { renderCanvasScriptStartModal } from "./canvas-script-start-modal.js";
 import { renderExportPanel } from "./export-panel.js";
 import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu, renderGenerationSettingsControl, renderGenerationSubmitButton, resolveGenerationCreditCost } from "./generation-control-menu.js";
+import { normalizeHomeAgentGenerationModel } from "./home-agent-model-picker.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
-import { renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
   EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
@@ -19,6 +20,7 @@ import {
   renderEpisodePromptSkillModal,
   sumEpisodePromptSkillCredits,
 } from "./episode-prompt-skill-modal.js";
+import { renderSelectionPickerModal } from "./selection-picker-modal.js";
 import {
   renderOriginalScriptModal,
   renderScriptManagementPage,
@@ -184,7 +186,7 @@ const SEO_LANDING_PAGES = {
     eyebrow: "AI视频生成工具",
     title: "专为短剧和漫剧创作的AI视频生成工具",
     summary:
-      "灵曦剧场面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
+      "灵曦AI面向做漫剧和视频短剧的创作者，提供AI视频生成、剧本转分镜、小说改短剧、角色场景资产和短剧项目生产工作流。",
     keywords: ["AI视频生成", "剧本转分镜", "小说改短剧", "AI短剧/漫剧项目"],
     features: [
       ["AI视频生成", "围绕提示词、分镜图和角色参考生成短剧视频片段。"],
@@ -193,9 +195,9 @@ const SEO_LANDING_PAGES = {
     ],
     workflow: ["导入剧本", "生成分镜", "配置角色场景", "生成视频片段", "导出项目"],
     faqs: [
-      ["灵曦剧场适合做什么？", "适合用来制作AI短剧、AI漫剧、视频短剧、漫画视频和批量分镜内容。"],
+      ["灵曦AI适合做什么？", "适合用来制作AI短剧、AI漫剧、视频短剧、漫画视频和批量分镜内容。"],
       ["不登录能看到哪些内容？", "公开页面展示产品能力、素材方向和制作流程，实际创建项目和生成内容需要登录。"],
-      ["它和普通AI视频生成工具有什么区别？", "灵曦剧场更强调剧本、分镜、资产和项目管理的连续工作流，适合持续做短剧和漫剧。"],
+      ["它和普通AI视频生成工具有什么区别？", "灵曦AI更强调剧本、分镜、资产和项目管理的连续工作流，适合持续做短剧和漫剧。"],
     ],
   },
 };
@@ -1132,6 +1134,7 @@ export function renderProjectDetail(context = {}) {
   }
 
   if (activeNavTab === "project" && ui.projectPanelMode === "episode-workbench") {
+    const isHomeWorkflow = ui.homeWorkflowOrigin === true && ui.episodeWorkbenchLayout === "workflow";
     const episodeWorkbenchContent = renderPageBoundary("剧集工作台", activeNavTab, () =>
       renderEpisodeWorkbenchScreen({ state, ui, session }),
     );
@@ -1141,8 +1144,11 @@ export function renderProjectDetail(context = {}) {
         <section class="workbench-main detail-mode episode-workbench-main">
           ${renderGlobalStatusbar(session, {
             showEpisodeReturn: true,
-            showEpisodeStoryboardJump: ui.museScopeMode === "assets",
-            showEpisodeAssetJump: ui.museScopeMode !== "assets",
+            episodeReturnLabel: isHomeWorkflow ? "返回首页" : "返回剧集",
+            episodeReturnAction: isHomeWorkflow ? "back-to-home-from-workflow" : "back-to-episode-hub",
+            showEpisodeStoryboardJump: ui.episodeWorkbenchLayout !== "workflow" && ui.museScopeMode === "assets",
+            showEpisodeAssetJump: ui.episodeWorkbenchLayout !== "workflow" && ui.museScopeMode !== "assets",
+            showEpisodeBatchAction: ui.episodeWorkbenchLayout === "workflow",
             creditBalance,
             membershipStatus: ui.membershipStatus ?? null,
             selectedThemeId: ui.selectedWorkbenchTheme,
@@ -1191,9 +1197,9 @@ export function renderProjectDetail(context = {}) {
   const directorModeClass = activeNavTab === "director" ? " director-mode" : "";
   return `
     <section class="production-workbench">
-      ${renderWorkbenchRail(activeNavTab, session, ui)}
+      ${renderWorkbenchRail(activeNavTab === "free-generation" ? "home" : activeNavTab, session, ui)}
 
-      <section class="workbench-main ${activeNavTab === "home" ? "home-mode" : ""}${directorModeClass}${toolsModeClass}">
+      <section class="workbench-main ${["home", "free-generation"].includes(activeNavTab) ? "home-mode" : ""}${directorModeClass}${toolsModeClass}">
         ${renderGlobalStatusbar(session, {
           creditBalance,
           membershipStatus: ui.membershipStatus ?? null,
@@ -1272,6 +1278,7 @@ export function renderProjectDetail(context = {}) {
 
 function renderGlobalOverlays(ui = {}, session = {}) {
   return `<div data-workbench-global-overlays style="display:contents">
+    ${renderHomeAgentSkillPicker(ui)}
     ${renderScriptConversionSkillModal(ui)}
     ${renderEpisodePromptSkillModal({
       show: ui.episodePromptSkillModalOpen === true && ui.isSingleEpisodeModalOpen === true,
@@ -1629,6 +1636,9 @@ function taskCenterMediaKind(task = {}) {
 function taskCenterKindLabel(task = {}) {
   const targetType = String(task.targetType ?? "").trim().toLowerCase();
   if (targetType === "team_asset") return "团队资产";
+  if (targetType === "free_generation" || targetType === "canvas_agent_conversation") {
+    return taskCenterMediaKind(task) === "video" ? "会话生成视频" : "会话生成图片";
+  }
   if (targetType.includes("canvas")) return taskCenterMediaKind(task) === "video" ? "画布视频" : "画布图片";
   if (targetType.includes("storyboard")) return taskCenterMediaKind(task) === "video" ? "分镜视频" : "分镜图片";
   if (targetType.includes("asset")) return taskCenterMediaKind(task) === "video" ? "资产视频" : "资产图片";
@@ -1808,7 +1818,7 @@ function renderCommunityWindowHeader(session = {}, options = {}) {
       <div class="community-window-brand">
         <span class="statusbar-n-mark" aria-hidden="true">灵</span>
         <div>
-          <strong>灵曦剧场</strong>
+          <strong>灵曦AI</strong>
         </div>
       </div>
       <div class="community-window-title">${escapeHtml(title)}</div>
@@ -2144,7 +2154,7 @@ function translateCreditLedgerReason(reason, metadata = {}, sourceType = "") {
     return promptReverseLabel;
   }
   if (isCanvasAgentLedgerEntry(normalizedSourceType, normalized, metadata)) {
-    return "画布协作Agent操作消耗";
+    return "会话消息积分消耗";
   }
   if (!normalized) {
     return "";
@@ -2184,7 +2194,7 @@ function translateCreditLedgerContent(row = {}, metadata = {}, fallback = "") {
     return promptReverseLabel;
   }
   if (isCanvasAgentLedgerEntry(sourceType, reason, metadata)) {
-    return "画布协作Agent操作消耗";
+    return "会话消息积分消耗";
   }
   if (sourceType === "team_member_credit_allocation") {
     return "主账号分配积分";
@@ -2941,11 +2951,14 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
   const episodeStatus = activeEpisode?.status ?? "Draft";
   const storyboardCount = activeEpisode?.storyboardCount ?? activeStoryboards.length ?? 0;
   const episodeWorkbenchAssetLibrary = resolveEpisodeWorkbenchAssetLibrary(ui, state);
+  const isWorkflowLayout = ui.episodeWorkbenchLayout === "workflow";
 
   return `
     <section class="episode-workbench-screen" aria-label="episode-workbench">
       ${renderEpisodeWorkbench({
         session,
+        layoutMode: isWorkflowLayout ? "workflow" : "standard",
+        workflowWorkbenchOpen: isWorkflowLayout && ui.workflowGenerationWorkbenchOpen === true,
         episodeId: activeEpisode?.id ?? "",
         episodeTitle: activeEpisode?.title ?? "",
         storyboards: activeStoryboards,
@@ -3077,6 +3090,17 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
 
 function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
   const importedAssets = ui.importedAssets ?? {};
+  const resolveFallbackAssets = (kind) => {
+    const projectAssets =
+      ui.projectLibraryAssetsByType?.[kind] ??
+      ui.projectDetail?.assetsByType?.[kind] ??
+      state.projectDetail?.assetsByType?.[kind] ??
+      [];
+    if (Array.isArray(projectAssets) && projectAssets.length > 0) {
+      return mapDetailAssets(filterTemporaryEpisodeUploadAssets(projectAssets), kind, ui);
+    }
+    return applyConversationPreviewFallback(importedAssets[kind] ?? [], ui.assetConversationHistory ?? {});
+  };
   const resolvedContext = resolveEpisodeWorkbenchContextPayload(ui.episodeWorkbenchContext);
   const contextAssets =
     resolvedContext?.assetsByType ??
@@ -3107,22 +3131,22 @@ function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
       state,
       character: contextCharacterAssets.length
         ? contextCharacterAssets
-        : applyConversationPreviewFallback(importedAssets.character ?? [], ui.assetConversationHistory ?? {}),
+        : resolveFallbackAssets("character"),
       scene: contextSceneAssets.length
         ? contextSceneAssets
-        : applyConversationPreviewFallback(importedAssets.scene ?? [], ui.assetConversationHistory ?? {}),
+        : resolveFallbackAssets("scene"),
       prop: contextPropAssets.length
         ? contextPropAssets
-        : applyConversationPreviewFallback(importedAssets.prop ?? [], ui.assetConversationHistory ?? {}),
+        : resolveFallbackAssets("prop"),
     });
   }
 
   return hydrateEpisodeAssetLibraryFromProjectLibraryByName({
     ui,
     state,
-    character: applyConversationPreviewFallback(importedAssets.character ?? [], ui.assetConversationHistory ?? {}),
-    scene: applyConversationPreviewFallback(importedAssets.scene ?? [], ui.assetConversationHistory ?? {}),
-    prop: applyConversationPreviewFallback(importedAssets.prop ?? [], ui.assetConversationHistory ?? {}),
+    character: resolveFallbackAssets("character"),
+    scene: resolveFallbackAssets("scene"),
+    prop: resolveFallbackAssets("prop"),
   });
 }
 
@@ -4317,8 +4341,9 @@ function isScriptGenerationModel(model = {}) {
 
 export function renderSingleEpisodeAiPreview(ui) {
   const preview = ui.singleEpisodeAiPreview ?? { status: "idle", data: null, error: "" };
-  const previewTitle = preview.source === "single-episode-script-storyboard" ? "AI剧本分镜" : "AI小说分镜";
+  const previewTitle = resolveSingleEpisodeAiPreviewTitle(preview);
   const previewAriaLabel = preview.source === "single-episode-script-storyboard" ? "AI 剧本分镜" : "AI 小说分镜";
+  const canCreateEpisode = preview.source === "home-workflow" || !Array.isArray(preview.selectedStages) || preview.selectedStages.includes("shot");
   if (!preview || preview.status === "idle") {
     return "";
   }
@@ -4326,23 +4351,29 @@ export function renderSingleEpisodeAiPreview(ui) {
     return renderManualScriptAnalysisPreview(preview);
   }
   if (preview.status === "loading") {
+    const hasLiveContent = hasSingleEpisodeAiLiveContent(preview);
+    const liveResponseBlocks = renderSingleEpisodeAiResponseBlocks(preview, { mode: "loading" });
     return `
       <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(previewAriaLabel)}">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
-          <div class="single-episode-ai-top-status" aria-live="polite">
-            <p>AI Storyboard</p>
-            <h3>${resolveSingleEpisodeAiLoadingTitle(preview.activeStage)}</h3>
-          </div>
+          ${hasLiveContent ? `
+            <div class="single-episode-ai-top-status" aria-live="polite">
+              <p>灵曦AI</p>
+              <h3>${resolveSingleEpisodeAiLoadingTitle(preview.activeStage)}</h3>
+            </div>
+          ` : ""}
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" disabled>创建章节</button>
+            <button class="single-episode-ai-create" type="button" disabled>${preview.activeStage === "intent" ? "分析中" : canCreateEpisode ? "创建章节" : "生成中"}</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
-        <div class="single-episode-ai-loading-bar"><span></span></div>
         <div class="single-episode-ai-preview loading" aria-live="polite" data-single-episode-ai-preview-surface="true">
-          ${renderSingleEpisodeAiSentPrompts(preview)}
-          ${renderSingleEpisodeAiLiveTables(preview)}
+          ${hasLiveContent
+            ? `
+              ${liveResponseBlocks || renderSingleEpisodeAiLiveTables(preview)}
+            `
+            : renderSingleEpisodeAiLoadingCenter(preview)}
         </div>
       </section>
     `;
@@ -4359,7 +4390,7 @@ export function renderSingleEpisodeAiPreview(ui) {
         <div class="single-episode-ai-preview error" aria-live="polite">
           <div class="single-episode-ai-preview-head">
             <div>
-              <p>AI Storyboard</p>
+              <p>灵曦AI</p>
               <h3>生成失败</h3>
             </div>
           </div>
@@ -4374,21 +4405,21 @@ export function renderSingleEpisodeAiPreview(ui) {
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" disabled>‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" disabled>创建中...</button>
+            <button class="single-episode-ai-create" type="button" disabled>${preview.source === "home-workflow" ? "进入中..." : "创建中..."}</button>
             <button class="single-episode-ai-close" type="button" aria-label="创建中，暂时无法关闭" disabled>×</button>
           </div>
         </div>
         <div class="single-episode-ai-preview ready submitting">
           <div class="single-episode-ai-preview-head">
             <div>
-              <p>AI Storyboard</p>
+              <p>灵曦AI</p>
               <h3>${escapeHtml(previewTitle)}</h3>
             </div>
             <p>创建中，请稍候，完成后会自动进入分镜工作台。</p>
           </div>
           ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
           <div class="single-episode-ai-table-stack">
-            ${SINGLE_EPISODE_AI_TABLE_ORDER
+            ${resolveSingleEpisodeAiTableOrder(preview)
               .map((key) => renderSingleEpisodeAiTable(resolveSingleEpisodeAiRenderTables(preview)[key], key))
               .join("")}
           </div>
@@ -4397,8 +4428,8 @@ export function renderSingleEpisodeAiPreview(ui) {
           <div class="single-episode-ai-submitting-dialog" role="status" aria-live="assertive">
             <span class="single-episode-ai-submitting-spinner" aria-hidden="true"></span>
             <div>
-              <p>AI Storyboard</p>
-              <h3>正在创建章节</h3>
+              <p>灵曦AI</p>
+              <h3>${preview.source === "home-workflow" ? "正在进入工作流" : "正在创建章节"}</h3>
             </div>
             <p class="single-episode-ai-submitting-message">正在保存剧本、角色、场景和分镜，请稍候。</p>
           </div>
@@ -4412,20 +4443,20 @@ export function renderSingleEpisodeAiPreview(ui) {
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" data-action="commit-ai-storyboard-preview">创建章节</button>
+            <button class="single-episode-ai-create" type="button" data-action="${canCreateEpisode ? "commit-ai-storyboard-preview" : "close-ai-storyboard-preview"}">${canCreateEpisode ? (preview.source === "home-workflow" ? "进入工作流" : "创建章节") : "完成"}</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
         <div class="single-episode-ai-preview ready">
           <div class="single-episode-ai-preview-head">
             <div>
-              <p>AI Storyboard</p>
+              <p>灵曦AI</p>
               <h3>${escapeHtml(previewTitle)}</h3>
             </div>
           </div>
           ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
           <div class="single-episode-ai-table-stack">
-            ${SINGLE_EPISODE_AI_TABLE_ORDER
+            ${resolveSingleEpisodeAiTableOrder(preview)
               .map((key) => renderSingleEpisodeAiTable(tables[key], key, {
                 showRegenerate: true,
                 canRegenerate: !preview.regeneratingStage,
@@ -4504,12 +4535,29 @@ function resolveManualScriptAnalysisText(preview) {
 
 function resolveSingleEpisodeAiLoadingTitle(stage) {
   const normalized = String(stage ?? "");
+  if (normalized === "intent") return "正在分析创作指令";
   if (normalized === "scene") return "场景提示词生成中";
   if (normalized === "character") return "角色提示词生成中";
   if (normalized === "prop") return "道具提示词生成中";
   if (normalized === "shot" || normalized === "prompt") return "分镜提示词生成中";
   if (normalized === "complete") return "列表化数据生成中";
   return "剧本生成中";
+}
+
+function resolveSingleEpisodeAiPreviewTitle(preview) {
+  if (!Array.isArray(preview?.selectedStages) || preview.selectedStages.length === 0) {
+    return preview?.source === "single-episode-script-storyboard" ? "AI剧本分镜" : "AI小说分镜";
+  }
+  const labels = {
+    script: "剧本",
+    scene: "场景提示词",
+    character: "人物提示词",
+    prop: "道具提示词",
+    shot: "分镜提示词",
+  };
+  return preview.selectedStages.length === 1
+    ? labels[preview.selectedStages[0]] ?? "AI 创作结果"
+    : "AI 创作结果";
 }
 
 function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
@@ -4520,14 +4568,39 @@ function truncateSingleEpisodeAiPreviewText(value, maxChars = 0) {
   return `…已截断，仅展示最近 ${maxChars} 字符…\n${text.slice(-maxChars)}`;
 }
 
+function hasSingleEpisodeAiLiveContent(preview) {
+  if (String(preview?.scriptText ?? preview?.scriptRawText ?? "").trim()) {
+    return true;
+  }
+  if ((preview?.assetPromptSteps ?? []).some((step) => String(step?.rawResponseText ?? step?.responseText ?? "").trim())) {
+    return true;
+  }
+  return Object.values(resolveSingleEpisodeAiRenderTables(preview)).some(
+    (table) => Array.isArray(table?.rows) && table.rows.length > 0,
+  );
+}
+
+function renderSingleEpisodeAiLoadingCenter(preview) {
+  const detail = preview?.activeStage === "intent"
+    ? "正在识别需要生成的内容"
+    : "等待模型返回首段内容";
+  return `
+    <div class="single-episode-ai-loading-center" role="status">
+      <span class="single-episode-ai-loading-spinner" aria-hidden="true"></span>
+      <strong>${escapeHtml(resolveSingleEpisodeAiLoadingTitle(preview?.activeStage))}</strong>
+      <p>${escapeHtml(detail)}</p>
+    </div>
+  `;
+}
+
 function renderSingleEpisodeAiLiveTables(preview) {
   const tables = resolveSingleEpisodeAiRenderTables(preview);
-  const renderedTables = SINGLE_EPISODE_AI_TABLE_ORDER
+  const renderedTables = resolveSingleEpisodeAiTableOrder(preview)
     .map((key) => renderSingleEpisodeAiTable(tables[key], key, {
-      previewMode: "live",
-      showRegenerate: true,
-      canRegenerate: false,
-      regeneratingStage: preview.regeneratingStage,
+        previewMode: "live",
+        showRegenerate: true,
+        canRegenerate: false,
+        regeneratingStage: preview.regeneratingStage,
     }))
     .filter(Boolean)
     .join("");
@@ -4553,75 +4626,103 @@ function resolveSingleEpisodeAiRenderTables(preview) {
   return candidates.find((tables) => tables && typeof tables === "object") ?? {};
 }
 
+function resolveSingleEpisodeAiTableOrder(preview) {
+  if (!Array.isArray(preview?.selectedStages) || preview.selectedStages.length === 0) {
+    return SINGLE_EPISODE_AI_TABLE_ORDER;
+  }
+  const tableKeyByStage = {
+    script: "script",
+    scene: "scenes",
+    character: "characters",
+    prop: "props",
+    shot: "storyboards",
+  };
+  return preview.selectedStages.map((stage) => tableKeyByStage[stage]).filter(Boolean);
+}
+
 function renderSingleEpisodeAiSentPrompts(preview, options = {}) {
   return "";
 }
 
 function renderSingleEpisodeAiPromptBlocks(preview, options = {}) {
-  const mode = String(options.mode ?? "loading");
-  const promptEntries = resolveSingleEpisodeAiPromptEntries(preview, options);
-  if (!promptEntries.length) {
-    return "";
-  }
-  if (mode !== "ready") {
-    return "";
-  }
-  return promptEntries
-    .map((entry) => `
-      <section class="single-episode-ai-sent-prompt" data-prompt-stage="${escapeAttr(entry.stage)}-prompt">
-        <header>
-          <strong>${escapeHtml(entry.label)}</strong>
-        </header>
-        <div class="single-episode-ai-sent-prompt-body">
-          <div class="single-episode-ai-sent-block single-episode-ai-sent-block-prompt">
-            <p>发送给 DeepSeek 的完整提示词</p>
-            <pre>${escapeHtml(entry.promptText)}</pre>
-          </div>
-        </div>
-      </section>
-    `)
-    .join("");
+  return "";
 }
 
 function renderSingleEpisodeAiResponseBlocks(preview, options = {}) {
   const mode = String(options.mode ?? "loading");
-  const readyStage = mode === "ready"
-    ? resolveSingleEpisodeAiReadyResponseStage(preview)
-    : "";
+  if (mode !== "loading") {
+    return "";
+  }
   const steps = Array.isArray(preview?.assetPromptSteps) ? preview.assetPromptSteps : [];
   return steps
     .map((step) => {
       const stage = String(step?.stage ?? "").trim();
       const responseText = String(step?.rawResponseText ?? step?.responseText ?? "").trim();
-      if (!responseText) {
+      const { listText, detailsText } = splitSingleEpisodeAiLiveResponse(responseText);
+      const renderShotRawAsDetails = stage === "shot" && !detailsText
+        && splitSingleEpisodeAiPromptDetailEntries(stage, listText).some((entry) => entry.heading);
+      const renderedDetailsText = detailsText || (renderShotRawAsDetails ? listText : "");
+      const renderedListText = renderedDetailsText ? "" : listText;
+      if (!renderedListText && !renderedDetailsText) {
         return "";
       }
       if (stage === "shot" && shouldHideSingleEpisodeAiShotRawResponse(responseText)) {
         return "";
       }
-      if (mode === "ready" && stage !== readyStage) {
-        return "";
-      }
       return `
         <section class="single-episode-ai-sent-prompt" data-prompt-stage="${escapeAttr(stage)}-response">
-          ${mode === "ready"
-            ? `
-              <header>
-                <strong>${escapeHtml(resolveSingleEpisodeAiPromptStageLabel(stage, "response"))}</strong>
-              </header>
-            `
-            : ""}
+          <header>
+            <strong>${escapeHtml(resolveSingleEpisodeAiPromptStageLabel(stage, "response"))}</strong>
+            <span>${step?.status === "done" ? "已生成" : "生成中"}</span>
+          </header>
           <div class="single-episode-ai-sent-prompt-body">
-            <div class="single-episode-ai-sent-block single-episode-ai-sent-block-response">
-              ${mode === "ready" ? "<p>DeepSeek 完整返回</p>" : ""}
-              ${renderSingleEpisodeAiResponseMarkdown(responseText)}
-            </div>
+            ${renderedListText ? `
+              <div class="single-episode-ai-sent-block single-episode-ai-sent-block-response">
+                ${renderSingleEpisodeAiResponseMarkdown(renderedListText, {
+                  assetPromptDetail: ["scene", "character", "prop"].includes(stage),
+                })}
+              </div>
+            ` : ""}
+            ${renderedDetailsText ? `
+              <div class="single-episode-ai-sent-block single-episode-ai-sent-block-response single-episode-ai-sent-block-details">
+                ${renderSingleEpisodeAiPromptDetailEntries(stage, renderedDetailsText)}
+              </div>
+            ` : ""}
           </div>
         </section>
       `;
     })
     .filter(Boolean)
     .join("");
+}
+
+function extractSingleEpisodeAiLiveListText(responseText) {
+  return splitSingleEpisodeAiLiveResponse(responseText).listText;
+}
+
+function splitSingleEpisodeAiLiveResponse(responseText) {
+  const text = String(responseText ?? "").trim();
+  if (!text) {
+    return { listText: "", detailsText: "" };
+  }
+  const detailMarker = [
+    /(?:^|\n)\s*\[\[DETAILS\]\]\s*(?:\n|$)/g,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?第\s*[二2]\s*步\s*[：:][^\n]*(?:\n|$)/g,
+  ]
+    .map((pattern) => {
+      const match = pattern.exec(text);
+      return match ? { index: match.index, end: match.index + match[0].length } : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.index - right.index)[0];
+  const listText = (detailMarker ? text.slice(0, detailMarker.index) : text)
+    .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*第\s*[一1]\s*步\s*[：:][^\n]*(?:\*\*)?\s*(?:\n|$)/, "")
+    .replace(/\n\s*(?:---|\*\*\*)\s*$/, "")
+    .trim();
+  const detailsText = detailMarker
+    ? text.slice(detailMarker.end).replace(/^\s*(?:---|\*\*\*)\s*(?:\n|$)/, "").trim()
+    : "";
+  return { listText, detailsText };
 }
 
 function resolveSingleEpisodeAiReadyResponseStage(preview) {
@@ -4663,6 +4764,7 @@ function resolveSingleEpisodeAiPromptEntries(preview) {
 
 function resolveSingleEpisodeAiPromptStageLabel(stage, kind = "prompt") {
   const stageLabelMap = {
+    script: "剧本",
     scene: "场景",
     character: "角色",
     prop: "道具",
@@ -4670,7 +4772,10 @@ function resolveSingleEpisodeAiPromptStageLabel(stage, kind = "prompt") {
     prompt: "分镜",
   };
   const label = stageLabelMap[String(stage ?? "").trim()] ?? "内容";
-  return kind === "response" ? `${label}返回原文` : `发送${label}提示词`;
+  if (kind === "response") {
+    return `${label}提示词`;
+  }
+  return `发送${label}提示词`;
 }
 
 function shouldHideSingleEpisodeAiShotRawResponse(rawResponseText) {
@@ -4687,7 +4792,7 @@ function shouldHideSingleEpisodeAiShotRawResponse(rawResponseText) {
   }
 }
 
-function renderSingleEpisodeAiResponseMarkdown(rawText) {
+function renderSingleEpisodeAiResponseMarkdown(rawText, options = {}) {
   const blocks = parseSingleEpisodeAiResponseMarkdownBlocks(rawText);
   if (!blocks.length) {
     return `<pre>${renderSingleEpisodeAiSafeInlineMarkup(rawText)}</pre>`;
@@ -4696,9 +4801,12 @@ function renderSingleEpisodeAiResponseMarkdown(rawText) {
     <div class="single-episode-ai-response-markdown">
       ${blocks.map((block) => {
         if (block.type === "table") {
+          const promptDetailClass = options.assetPromptDetail === true && block.header.length === 2
+            ? " single-episode-ai-prompt-detail-table"
+            : "";
           return `
             <div class="single-episode-ai-response-table-wrap">
-              <table class="single-episode-ai-response-table">
+              <table class="single-episode-ai-response-table${promptDetailClass}">
                 <thead>
                   <tr>${block.header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr>
                 </thead>
@@ -4713,6 +4821,153 @@ function renderSingleEpisodeAiResponseMarkdown(rawText) {
       }).join("")}
     </div>
   `;
+}
+
+function renderSingleEpisodeAiPromptDetailEntries(stage, rawText) {
+  const entries = splitSingleEpisodeAiPromptDetailEntries(stage, rawText);
+  if (!entries.length) {
+    return renderSingleEpisodeAiResponseMarkdown(rawText, {
+      assetPromptDetail: ["scene", "character", "prop"].includes(String(stage ?? "").trim()),
+    });
+  }
+  const assetRows = resolveSingleEpisodeAiAssetPromptDetailRows(stage, entries);
+  if (assetRows.length) {
+    return `
+      <div class="single-episode-ai-response-table-wrap single-episode-ai-prompt-detail-table-wrap">
+        <table class="single-episode-ai-response-table single-episode-ai-prompt-detail-table">
+          <thead>
+            <tr>
+              <th>${escapeHtml(resolveSingleEpisodeAiAssetPromptDetailNameLabel(stage))}</th>
+              <th>提示词详情</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${assetRows.map((row) => `
+              <tr>
+                <td>${escapeHtml(row.name)}</td>
+                <td>${renderSingleEpisodeAiResponseMarkdown(row.content)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+  return `
+    <div class="single-episode-ai-prompt-entry-list">
+      ${entries.map((entry) => entry.heading ? `
+        <article class="single-episode-ai-prompt-entry">
+          <header>${renderSingleEpisodeAiSafeInlineMarkup(entry.heading)}</header>
+          ${entry.content ? `<div>${renderSingleEpisodeAiResponseMarkdown(entry.content)}</div>` : ""}
+        </article>
+      ` : `
+        <div class="single-episode-ai-prompt-entry-unlabeled">
+          ${renderSingleEpisodeAiResponseMarkdown(entry.content)}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function resolveSingleEpisodeAiAssetPromptDetailRows(stage, entries) {
+  const nameLabel = resolveSingleEpisodeAiAssetPromptDetailNameLabel(stage);
+  const nameAliases = resolveSingleEpisodeAiAssetPromptDetailNameAliases(stage);
+  if (!nameLabel || !nameAliases.length) {
+    return [];
+  }
+  const escapedNameLabels = nameAliases
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .sort((left, right) => right.length - left.length)
+    .join("|");
+  const headingPattern = new RegExp(
+    `^(?:(?:${escapedNameLabels})\\s*[:：]|(?:【|\\[)\\s*(?:${escapedNameLabels})\\s*(?:】|\\]))\\s*(.*)$`,
+  );
+  const rows = entries
+    .map((entry) => {
+      const heading = String(entry.heading ?? "")
+        .replace(/^\s*(?:#{1,6}\s*)?(?:(?:[-*+]\s*)|(?:\d+[.)、]\s*))?/, "")
+        .replace(/\*\*|__/g, "")
+        .trim();
+      const match = heading.match(headingPattern);
+      return match?.[1]?.trim()
+        ? { name: match[1].trim(), content: String(entry.content ?? "").trim() }
+        : null;
+    })
+    .filter(Boolean);
+  return rows.length === entries.filter((entry) => entry.heading).length ? rows : [];
+}
+
+function resolveSingleEpisodeAiAssetPromptDetailNameLabel(stage) {
+  const labels = {
+    scene: "场景名称",
+    character: "角色名称",
+    prop: "道具名称",
+  };
+  return labels[String(stage ?? "").trim()] ?? "";
+}
+
+function resolveSingleEpisodeAiAssetPromptDetailNameAliases(stage) {
+  const aliases = {
+    scene: ["场景名称"],
+    character: ["角色名称"],
+    prop: ["道具名称"],
+  };
+  return aliases[String(stage ?? "").trim()] ?? [];
+}
+
+function splitSingleEpisodeAiPromptDetailEntries(stage, rawText) {
+  const text = String(rawText ?? "").trim();
+  const markerPattern = resolveSingleEpisodeAiPromptDetailEntryMarker(stage);
+  if (!text || !markerPattern) {
+    return [];
+  }
+  const markers = Array.from(text.matchAll(markerPattern));
+  if (!markers.length) {
+    return [];
+  }
+  const entries = [];
+  const leadingText = text.slice(0, markers[0].index).trim();
+  if (leadingText) {
+    entries.push({ heading: "", content: leadingText });
+  }
+  for (let index = 0; index < markers.length; index += 1) {
+    const marker = markers[index];
+    const nextMarker = markers[index + 1];
+    const markerEnd = Number(marker.index ?? 0) + marker[0].length;
+    entries.push({
+      heading: String(marker[0] ?? "").trim(),
+      content: text.slice(markerEnd, nextMarker?.index).trim(),
+    });
+  }
+  return entries;
+}
+
+function resolveSingleEpisodeAiPromptDetailEntryMarker(stage) {
+  const normalizedStage = String(stage ?? "").trim();
+  const assetLabelByStage = {
+    scene: ["场景名称"],
+    character: ["角色名称"],
+    prop: ["道具名称"],
+  };
+  const assetLabels = assetLabelByStage[normalizedStage];
+  const prefix = "(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:(?:[-*+]\\s*)|(?:\\d+[.)、]\\s*))?(?:\\*\\*|__)?";
+  if (assetLabels) {
+    const escapedLabels = assetLabels
+      .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .sort((left, right) => right.length - left.length)
+      .join("|");
+    return new RegExp(
+      `${prefix}(?:(?:${escapedLabels})(?:\\*\\*|__)?\\s*[:：]|(?:【|\\[)\\s*(?:${escapedLabels})\\s*(?:】|\\]))\\s*[^\\n]*`,
+      "g",
+    );
+  }
+  if (normalizedStage === "shot") {
+    return new RegExp(
+      `${prefix}(?:【\\s*分镜\\s*[一二三四五六七八九十百千两零〇\\d]+\\s*】|分镜\\s*[一二三四五六七八九十百千两零〇\\d]+(?:\\*\\*|__)?)\\s*[:：-]?\\s*[^\\n]*`,
+      "gu",
+    );
+  }
+  return null;
 }
 
 function renderSingleEpisodeAiSafeInlineMarkup(value) {
@@ -8373,11 +8628,12 @@ function renderInteriorAssetCard(label, kind, accent, count, previews = []) {
 }
 
 function renderMainPanel({ state, ui, session, detailState, progress, activeNavTab }) {
-  if (activeNavTab === "home") {
+  if (["home", "free-generation"].includes(activeNavTab)) {
     return `
       <div class="seo-home-scroll">
-        ${renderHomeHero({ detailState, session, ui })}
+        ${renderHomeHero({ detailState, session, state, ui })}
       </div>
+      ${activeNavTab === "home" ? renderHomeProjectWorkflowModal({ state, ui, session }) : ""}
     `;
   }
 
@@ -8760,6 +9016,46 @@ function renderPromptPlazaPage(ui = {}) {
   `;
 }
 
+function renderHomeProjectWorkflowModal({ state, ui, session }) {
+  const projectId = String(ui.homeProjectWorkflowProjectId ?? "").trim();
+  if (!projectId) return "";
+  const projectName = String(
+    state?.projectDetail?.project?.name ??
+      state?.project?.name ??
+      ui.homeRecentProjects?.find?.((project) => String(project?.id ?? "") === projectId)?.name ??
+      "项目工作流",
+  );
+  const content = ui.homeProjectWorkflowLoading
+    ? `<div class="home-project-workflow-loading" role="status" aria-live="polite">正在加载项目数据…</div>`
+    : ui.homeProjectWorkflowNotice
+      ? `<div class="home-project-workflow-loading" role="alert">${escapeHtml(ui.homeProjectWorkflowNotice)}</div>`
+      : renderEpisodeWorkbenchScreen({
+          state,
+          ui: {
+            ...ui,
+            activeNavTab: "project",
+            projectPanelMode: "episode-workbench",
+            episodeWorkbenchLayout: "workflow",
+            workflowGenerationWorkbenchOpen: ui.workflowGenerationWorkbenchOpen === true,
+          },
+          session,
+        });
+  return `
+    <section class="home-project-workflow-backdrop" role="dialog" aria-modal="true" aria-label="${escapeAttr(projectName)}工作流">
+      <div class="home-project-workflow-modal">
+        <header class="home-project-workflow-head">
+          <div>
+            <strong>${escapeHtml(projectName)}</strong>
+          </div>
+          <button type="button" class="home-project-workflow-close" data-action="close-home-project-workflow" aria-label="关闭工作流">×</button>
+        </header>
+        <div class="home-project-workflow-body">${content}</div>
+      </div>
+      ${renderEpisodeBatchModal(ui.episodeBatchModal)}
+    </section>
+  `;
+}
+
   if (activeNavTab === "community") {
     return renderScrollableWorkbenchSurface("community", `
       ${renderCommunityPage({ ui, session })}
@@ -9002,7 +9298,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   }
   if (ui.canvasHostMount === true) {
     return `
-      <section class="new-canvas-workbench-host" data-new-canvas-mount aria-label="画布编辑器">
+      <section class="new-canvas-workbench-host${ui.canvasAgentOnly === true ? " is-agent-only" : ""}" data-new-canvas-mount aria-label="${ui.canvasAgentOnly === true ? "自由生成" : "画布编辑器"}">
         <div class="new-canvas-loading-skeleton" role="status" aria-live="polite" aria-label="正在加载画布">
           <span class="new-canvas-loading-skeleton__rail"></span>
           <div class="new-canvas-loading-skeleton__stage">
@@ -9012,8 +9308,8 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
             <span class="new-canvas-loading-skeleton__ghost new-canvas-loading-skeleton__ghost--four" aria-hidden="true"></span>
             <div class="new-canvas-loading-skeleton__copy">
               <span class="new-canvas-loading-skeleton__spinner" aria-hidden="true"></span>
-              <strong>正在打开画布</strong>
-              <small>正在载入节点与连接</small>
+              <strong>${ui.canvasAgentOnly === true ? "正在打开自由生成" : "正在打开画布"}</strong>
+              <small>${ui.canvasAgentOnly === true ? "正在载入 Agent 对话" : "正在载入节点与连接"}</small>
             </div>
           </div>
           <span class="new-canvas-loading-skeleton__panel"></span>
@@ -11433,6 +11729,7 @@ function renderCanvasIcon(icon) {
     map: '<path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2V6Z" /><path d="M9 4v14M15 6v14" />',
     markdown: '<path d="M4 6h16v12H4z" /><path d="M7 15V9l3 3 3-3v6M16 9v6m-2-2 2 2 2-2" />',
     minus: '<path d="M5 12h14" />',
+    model: '<rect x="6" y="6" width="12" height="12" rx="2" /><rect x="9" y="9" width="6" height="6" rx="1" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" />',
     panel: '<rect x="4" y="5" width="16" height="14" rx="2" /><path d="M9 5v14" />',
     plus: '<path d="M12 5v14M5 12h14" />',
     role: '<rect x="5" y="5" width="14" height="14" rx="2" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" />',
@@ -11563,8 +11860,11 @@ export function renderGlobalStatusbar(session, options = {}) {
   const {
     hideBrand = false,
     showEpisodeReturn = false,
+    episodeReturnLabel = "返回剧集",
+    episodeReturnAction = "back-to-episode-hub",
     showEpisodeStoryboardJump = false,
     showEpisodeAssetJump = false,
+    showEpisodeBatchAction = false,
     creditBalance = 0,
     membershipStatus = null,
     selectedThemeId = DEFAULT_WORKBENCH_THEME_ID,
@@ -11583,15 +11883,15 @@ export function renderGlobalStatusbar(session, options = {}) {
   const hasSupportPopover = Boolean(supportConfig.onlineServiceLabel || hasSupportCard);
   return `
     <header class="global-statusbar ${hideBrand ? "global-statusbar-hide-brand" : ""}" aria-label="全局状态栏">
-      <div class="statusbar-brand ${showEpisodeReturn ? "statusbar-episode-return" : ""}" aria-label="${showEpisodeReturn ? "剧集导航" : "品牌标识"}">
+      <div class="statusbar-brand ${showEpisodeReturn ? "statusbar-episode-return" : ""}" aria-label="${showEpisodeReturn ? (episodeReturnLabel === "返回首页" ? "首页导航" : "剧集导航") : "品牌标识"}">
         ${showEpisodeReturn
-          ? `<button class="statusbar-quick-action episode-replica-return episode-statusbar-return" type="button" data-action="back-to-episode-hub">
-              <span aria-hidden="true">←</span><strong>返回剧集</strong>
+          ? `<button class="statusbar-quick-action episode-replica-return episode-statusbar-return" type="button" data-action="${escapeAttr(episodeReturnAction)}">
+              <span aria-hidden="true">←</span><strong>${escapeHtml(episodeReturnLabel)}</strong>
             </button>`
           : `<div class="statusbar-wondershare">
               <span class="statusbar-n-mark" aria-hidden="true">灵</span>
               <div>
-                <strong>灵曦剧场</strong>
+                <strong>灵曦AI</strong>
               </div>
             </div>`}
       </div>
@@ -11601,6 +11901,7 @@ export function renderGlobalStatusbar(session, options = {}) {
           </div>`
         : ""}
       <div class="statusbar-actions">
+        ${showEpisodeBatchAction ? `<button class="statusbar-quick-action text-action" type="button" data-action="open-episode-batch-actions"><span class="statusbar-action-icon">✦</span><span>一键生成</span></button>` : ""}
         ${renderThemeSwitcher(selectedThemeId, themeMenuOpen)}
         <a class="statusbar-quick-action text-action" href="${escapeAttr(CREATOR_GUIDE_URL)}" target="_blank" rel="noopener noreferrer" aria-label="创作手册">
           <span class="statusbar-action-icon">${renderStatusbarActionIcon("handbook")}</span>
@@ -11677,62 +11978,136 @@ export function renderGlobalStatusbar(session, options = {}) {
   `;
 }
 
-function renderHomeHero({ detailState, session, ui = {} }) {
+function resolveActiveHomeBackgroundVideoUrl(ui = {}) {
+  const homeBackground = ui.homeBackground && typeof ui.homeBackground === "object" ? ui.homeBackground : null;
+  return homeBackground?.status === "active" ? String(homeBackground.videoUrl ?? "").trim() : "";
+}
+
+function renderHomeBackgroundVideo(ui = {}) {
+  const homeBackgroundVideoUrl = resolveActiveHomeBackgroundVideoUrl(ui);
+  return homeBackgroundVideoUrl
+    ? `<div class="home-background-video" aria-hidden="true"><video autoplay muted loop playsinline preload="auto" data-home-background-video-url="${escapeAttr(homeBackgroundVideoUrl)}"></video></div><div class="home-background-video-overlay" aria-hidden="true"></div>`
+    : "";
+}
+
+function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
   const isTeamMember = isTeamMemberSession(session);
   const snapshot = getProjectGallerySnapshot(ui);
-  const recentProjects = snapshot.pageProjects.slice(0, 4);
+  const homeProjects = Array.isArray(ui.homeRecentProjects) ? ui.homeRecentProjects : snapshot.pageProjects;
+  const recentProjects = sortProjectsByCreatedAt(homeProjects).slice(0, 8);
+  const homeProjectTotal = Number.isFinite(Number(ui.homeProjectTotal))
+    ? Math.max(0, Number(ui.homeProjectTotal))
+    : snapshot.totalProjects;
+  const homeProjectsLoading = ui.homeProjectsLoading === true;
+  const homeAgentAttachments = Array.isArray(ui.homeAgentAttachments) ? ui.homeAgentAttachments : [];
+  const homeWorkflowScriptFileName = String(ui.homeWorkflowScriptFileName ?? "").trim();
+  const homeAgentModels = resolveHomeAgentModels(ui);
+  const homeAgentSelectedModels = ui.homeAgentSelectedModels && typeof ui.homeAgentSelectedModels === "object"
+    ? ui.homeAgentSelectedModels
+    : {};
+  const selectedHomeAgentModels = ["image", "video"]
+    .map((mediaType) => {
+      const modelCode = String(homeAgentSelectedModels[mediaType] ?? "").trim();
+      if (!modelCode) return null;
+      return homeAgentModels.find((model) => model.mediaType === mediaType && model.modelCode === modelCode)
+        ?? { mediaType, modelCode, modelLabel: modelCode, description: "" };
+    })
+    .filter(Boolean);
+  const homeAgentComposerSegments = resolveHomeAgentComposerSegments(
+    ui,
+    selectedHomeAgentModels,
+    homeAgentAttachments,
+  );
+  const homeAgentMode = ["b", "c", "plan", "expert"].includes(ui.homeAgentMode) ? ui.homeAgentMode : "c";
+  const homeAgentModeLabels = {
+    b: "审核批准",
+    c: "自动执行",
+    plan: "计划模式",
+    expert: "分析模式",
+  };
+  const homeTvCategories = Array.isArray(ui.homeTvCategories) ? ui.homeTvCategories : [];
+  const homeTvCategory = homeTvCategories.some((item) => item.code === ui.homeTvCategory)
+    ? ui.homeTvCategory
+    : homeTvCategories[0]?.code ?? "";
+  const selectedHomeTvCategory = homeTvCategories.find((item) => item.code === homeTvCategory);
+  const homeTvItems = Array.isArray(selectedHomeTvCategory?.videos) ? selectedHomeTvCategory.videos : [];
+  const homeTvVisibleCount = Math.max(6, Number(ui.homeTvVisibleCounts?.[homeTvCategory] ?? 6) || 6);
+  const visibleHomeTvItems = homeTvItems.slice(0, homeTvVisibleCount);
+  const homeBackgroundVideoUrl = resolveActiveHomeBackgroundVideoUrl(ui);
+  const isFreeGeneration = ui.activeNavTab === "free-generation";
+  const homeCreationMode = isFreeGeneration
+    ? "free"
+    : ["agent", "workflow", "free"].includes(ui.homeCreationMode)
+    ? ui.homeCreationMode
+    : "agent";
+  const creationModeCopy = {
+    agent: {
+      label: "Agent",
+      placeholder: "说出你的创意，或者选一个 Skill 开始创作",
+      tip: "Agent 会进入画布，协助规划并执行完整创作流程",
+    },
+    workflow: {
+      label: "工作流",
+      placeholder: "上传剧本文件",
+      tip: "上传剧本后，AI 会解析内容并创建工作流",
+    },
+    free: {
+      label: "自由生成",
+      placeholder: "描述要生成的图片或视频，可添加参考素材和指定模型",
+      tip: "使用 Agent 对话生成图片或视频，不读取或修改画布内容",
+    },
+  }[homeCreationMode];
   return `
-    <section class="home-hero" aria-label="首页">
+    <section class="home-hero${homeBackgroundVideoUrl ? " has-background-video" : ""}${isFreeGeneration ? " has-free-generation" : ""}" aria-label="首页">
+      ${renderHomeBackgroundVideo(ui)}
       ${renderInlineStatusToast(ui, "home-hero-toast")}
       <div class="hero-content">
-        <header class="home-agent-heading">
-          <span class="home-agent-kicker">AI 创作工作台</span>
-          <h1 class="hero-title">从一个想法，开始你的作品</h1>
-          <p class="hero-subtitle">描述创作目标，或创建项目导入剧本，让 AI 协助完成解析、素材生成、分镜与视频制作。</p>
-        </header>
+        <section class="home-creation-mode-surface">
+        ${renderHomeCreationModeIntroduction(homeCreationMode)}
 
-        <button class="home-agent-composer" type="button" data-action="${isTeamMember ? "set-nav-tab" : "open-create-modal"}"${isTeamMember ? ` data-tab="project"` : ""} aria-label="开始 AI 创作">
-          <span class="home-agent-composer-icon" aria-hidden="true">${renderCanvasIcon("sparkles")}</span>
-          <span class="home-agent-composer-copy">
-            <strong>今天想创作什么？</strong>
-            <small>创建项目后，可由 Agent 分析剧本并调用画布内的生图、生视频等能力</small>
-          </span>
-          <span class="home-agent-composer-action" aria-hidden="true">${renderCanvasIcon("arrow-up")}</span>
-        </button>
-
-        <p class="home-agent-tip">建议先明确故事类型、角色设定与画面风格，Agent 将更准确地规划创作流程</p>
-
-        <nav class="home-capability-grid" aria-label="快捷创作入口">
-          <button type="button" data-action="set-nav-tab" data-tab="script">
-            <span class="home-capability-icon script">${renderCanvasIcon("book")}</span>
-            <span><strong>剧本解析</strong><small>导入文本，拆解角色、场景与分镜</small></span>
-          </button>
-          <button type="button" data-action="set-nav-tab" data-tab="library">
-            <span class="home-capability-icon library">${renderCanvasIcon("image")}</span>
-            <span><strong>素材创作</strong><small>生成与管理角色、场景和道具</small></span>
-          </button>
-          <button type="button" data-action="set-nav-tab" data-tab="tools">
-            <span class="home-capability-icon canvas">${renderCanvasIcon("connections")}</span>
-            <span><strong>画布创作</strong><small>使用 Agent、生图与视频生成节点</small></span>
-          </button>
-          <button type="button" data-action="set-nav-tab" data-tab="project">
-            <span class="home-capability-icon project">${renderCanvasIcon("story")}</span>
-            <span><strong>项目制作</strong><small>统筹剧集、分镜、素材与成片</small></span>
-          </button>
-        </nav>
+        ${isFreeGeneration ? renderHomeFreeGenerationDialog({ state, session, ui }) : `
+        ${homeCreationMode === "workflow" ? renderHomeWorkflowScriptUpload({
+          fileName: homeWorkflowScriptFileName,
+          disabled: isTeamMember,
+        }) : `<form class="home-agent-composer" data-home-agent-form aria-label="${escapeAttr(creationModeCopy.label)} 创作输入">
+          <div class="home-agent-composer-content" data-home-agent-attachment-list>
+            <div class="home-agent-rich-editor" data-home-agent-prompt contenteditable="${isTeamMember ? "false" : "true"}" role="textbox" aria-multiline="true" aria-label="${escapeAttr(creationModeCopy.label)} 创作指令" data-placeholder="${escapeAttr(creationModeCopy.placeholder)}" spellcheck="true">${renderHomeAgentComposerSegments(homeAgentComposerSegments, selectedHomeAgentModels, homeAgentAttachments, resolveHomeAgentSkillCatalog(ui))}</div>
+          </div>
+          <footer class="home-agent-composer-footer">
+            <div class="home-agent-tools">
+              <button type="button" class="home-agent-icon-button" data-action="pick-home-agent-attachments" aria-label="添加图片、视频或文件" title="添加图片、视频或文件" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("plus")}</button>
+              <input type="file" data-home-agent-attachment-input accept="image/*,video/*,.txt,.md,.markdown,.csv,.json,.docx,.pdf" multiple hidden />
+              ${homeCreationMode === "agent" ? `<div class="home-agent-mode-picker">
+                <button type="button" class="home-agent-mode-trigger${ui.homeAgentModeMenuOpen ? " active" : ""}" data-action="toggle-home-agent-mode-menu" aria-haspopup="listbox" aria-expanded="${ui.homeAgentModeMenuOpen === true}" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("sparkles")}<span>${escapeHtml(homeAgentModeLabels[homeAgentMode])}</span>${renderUiChevronIcon(ui.homeAgentModeMenuOpen ? "up" : "down")}</button>
+                ${ui.homeAgentModeMenuOpen ? `<div class="home-agent-mode-menu" role="listbox" aria-label="Agent 模式">
+                  ${Object.entries(homeAgentModeLabels).map(([mode, label]) => `<button type="button" role="option" aria-selected="${homeAgentMode === mode}" class="${homeAgentMode === mode ? "active" : ""}" data-action="set-home-agent-mode" data-agent-mode="${mode}"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(mode === "c" ? "分析并自动调用画布能力执行" : mode === "b" ? "修改前请求你的确认" : mode === "plan" ? "只生成执行计划" : "只读分析，不修改画布")}</small></button>`).join("")}
+                </div>` : ""}
+              </div>` : ""}
+            </div>
+            <div class="home-agent-submit-group">
+              <span data-home-agent-file-count>${Number(ui.homeAgentAttachmentCount ?? 0) > 0 ? `${Number(ui.homeAgentAttachmentCount)} 个附件` : ""}</span>
+              <button type="button" class="home-agent-composer-action" data-action="submit-home-agent-prompt" aria-label="发送${escapeAttr(creationModeCopy.label)}指令" title="发送${escapeAttr(creationModeCopy.label)}指令" ${isTeamMember ? "disabled" : ""}>${renderCanvasIcon("arrow-up")}</button>
+            </div>
+          </footer>
+        </form>`}
 
         <section class="home-projects" aria-label="我的项目">
           <header class="home-section-heading">
             <div>
               <h2>我的项目</h2>
-              <span>${snapshot.totalProjects} 个项目</span>
+              <span>${homeProjectTotal} 个项目</span>
             </div>
             <div class="home-section-actions">
               ${isTeamMember ? "" : `<button type="button" data-action="open-create-modal">${renderCanvasIcon("plus")}<span>新建项目</span></button>`}
               <button type="button" data-action="set-nav-tab" data-tab="project">查看全部</button>
             </div>
           </header>
-          ${recentProjects.length ? `
+          ${homeProjectsLoading ? `
+            <div class="home-project-empty" role="status" aria-live="polite">
+              <span>${renderCanvasIcon("story")}</span>
+              <strong>正在加载项目</strong>
+            </div>
+          ` : recentProjects.length ? `
             <div class="home-project-grid">
               ${recentProjects.map((project) => renderProjectCard(
                 project,
@@ -11748,7 +12123,7 @@ function renderHomeHero({ detailState, session, ui = {} }) {
               <small>请联系管理员分配项目</small>
             </div>
           ` : `
-            <button class="home-project-empty" type="button" data-action="open-create-modal">
+            <button class="home-project-empty home-project-create-empty" type="button" data-action="open-create-modal">
               <span>${renderCanvasIcon("plus")}</span>
               <strong>创建第一个项目</strong>
               <small>从剧本解析、空白画布或素材创作开始</small>
@@ -11760,41 +12135,187 @@ function renderHomeHero({ detailState, session, ui = {} }) {
           <header class="home-tv-heading">
             <h2>灵曦 TV</h2>
             <nav class="home-tv-tabs" aria-label="视频分类">
-              <span class="active" aria-current="page">推荐</span>
-              <span>热门</span>
-              <span>新晋</span>
+              ${homeTvCategories.map((category) => `<button type="button" class="${homeTvCategory === category.code ? "active" : ""}" data-action="set-home-tv-category" data-home-tv-category="${escapeAttr(category.code)}" aria-pressed="${homeTvCategory === category.code}">${escapeHtml(category.name)}</button>`).join("")}
             </nav>
           </header>
           <div class="home-tv-grid">
-            <article class="home-tv-card">
+            ${ui.homeTvLoading === true ? `<p class="home-tv-empty">正在加载推荐视频</p>` : visibleHomeTvItems.length ? visibleHomeTvItems.map((item) => `<article class="home-tv-card${item.videoUrl ? " has-video-preview" : ""}">
               <div class="home-tv-cover">
-                <img src="/assets/library/official/scenes/scene-3d-neon-street.png" alt="霓虹城市夜景作品封面" loading="lazy" />
+                <img src="${escapeAttr(item.coverUrl)}" alt="${escapeAttr(item.coverAlt || item.title)}" loading="lazy" />
+                ${item.videoUrl ? `<video class="home-tv-preview-video" data-home-tv-preview src="${escapeAttr(item.videoUrl)}" muted loop playsinline preload="metadata" aria-hidden="true"></video>` : ""}
                 <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
-                <small>00:32</small>
+                ${item.durationLabel ? `<small>${escapeHtml(item.durationLabel)}</small>` : ""}
               </div>
-              <div class="home-tv-copy"><strong>霓虹夜行</strong><span>都市幻想 · AI 短片</span></div>
-            </article>
-            <article class="home-tv-card">
-              <div class="home-tv-cover">
-                <img src="/assets/library/official/scenes/scene-3d-star-cliff.png" alt="星空仙境作品封面" loading="lazy" />
-                <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
-                <small>00:48</small>
-              </div>
-              <div class="home-tv-copy"><strong>云巅星河</strong><span>东方玄幻 · AI 漫剧</span></div>
-            </article>
-            <article class="home-tv-card">
-              <div class="home-tv-cover">
-                <img src="/assets/library/official/scenes/scene-2d-lotus.png" alt="荷塘仙境作品封面" loading="lazy" />
-                <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
-                <small>01:06</small>
-              </div>
-              <div class="home-tv-copy"><strong>莲境春深</strong><span>国风动画 · AI 短片</span></div>
-            </article>
+              <div class="home-tv-copy"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.subtitle)}</span></div>
+            </article>`).join("") : `<p class="home-tv-empty">该分类暂无推荐视频</p>`}
           </div>
+          ${visibleHomeTvItems.length < homeTvItems.length ? `<div class="home-tv-load-more-sentinel" data-home-tv-load-more-sentinel data-home-tv-category="${escapeAttr(homeTvCategory)}" data-home-tv-total="${homeTvItems.length}" aria-hidden="true"></div>` : ""}
+        </section>
+        `}
         </section>
       </div>
     </section>
   `;
+}
+
+function renderHomeFreeGenerationDialog({ state, session, ui }) {
+  return `
+    <section class="home-free-generation-dialog" aria-label="自由生成对话">
+      ${renderToolsPanel({ ...ui, canvasProjectView: "detail", canvasAgentOnly: true }, state, session)}
+    </section>
+  `;
+}
+
+function renderHomeCreationModeIntroduction(activeMode = "agent") {
+  return `
+    <div class="home-creation-mode-introduction">
+      <header class="home-agent-heading">
+        <h1 class="hero-title">从一个想法，开始你的作品</h1>
+        <p class="hero-subtitle">描述创作目标，或创建项目导入剧本，让 AI 协助完成解析、素材生成、分镜与视频制作。</p>
+      </header>
+      ${renderHomeCreationModeSwitch(activeMode)}
+    </div>
+  `;
+}
+
+function renderHomeCreationModeSwitch(activeMode = "agent") {
+  const selectedMode = ["agent", "workflow", "free"].includes(activeMode) ? activeMode : "agent";
+  const modes = [
+    ["agent", "画布Agent", "在画布中通过对话协同创建和编辑内容"],
+    ["workflow", "项目工作流", "上传剧本，自动解析并生成资产与分镜"],
+    ["free", "自由会话", "在独立会话中直接生成图片、视频和音频"],
+  ];
+  return `
+    <div class="home-creation-mode-switch" role="tablist" aria-label="创作模式">
+      ${modes.map(([mode, label, description]) => `<button type="button" role="tab" aria-label="${escapeAttr(`${label}：${description}`)}" aria-selected="${selectedMode === mode}" class="${selectedMode === mode ? "active" : ""}" data-action="set-home-creation-mode" data-creation-mode="${mode}" data-tooltip="${escapeAttr(description)}">${escapeHtml(label)}</button>`).join("")}
+    </div>
+  `;
+}
+
+function renderHomeWorkflowScriptUpload({ fileName = "", disabled = false } = {}) {
+  const hasFile = Boolean(fileName);
+  return `
+    <form class="home-agent-composer home-workflow-script-upload" data-home-workflow-script-form aria-label="上传剧本并解析">
+      <input type="file" data-home-workflow-script-input accept=".docx,.txt" hidden />
+      <div class="home-workflow-script-dropzone" data-dropzone="home-workflow-script-upload">
+        <button type="button" class="home-workflow-script-picker" data-action="pick-home-workflow-script" ${disabled ? "disabled" : ""}>
+          <span class="home-workflow-script-icon" aria-hidden="true">${renderCanvasIcon("upload")}</span>
+          <strong>${hasFile ? "已选择剧本" : "点击或拖拽上传剧本"}</strong>
+          <small>${hasFile ? escapeHtml(fileName) : "自动解析角色、场景和分镜，进入视频制作流程"}</small>
+          ${hasFile ? "" : "<em>支持 DOCX、TXT 格式</em>"}
+        </button>
+      </div>
+      <footer class="home-workflow-script-footer">
+        ${hasFile ? `<button type="button" class="home-workflow-script-clear" data-action="clear-home-workflow-script" ${disabled ? "disabled" : ""}>移除文件</button>` : "<span>仅支持上传剧本文件进行解析</span>"}
+        <button type="button" class="home-workflow-script-submit" data-action="submit-home-agent-prompt" ${hasFile && !disabled ? "" : "disabled"}>解析剧本</button>
+      </footer>
+    </form>
+  `;
+}
+
+function resolveHomeAgentComposerSegments(ui, selectedModels, attachments) {
+  if (
+    Array.isArray(ui.homeAgentComposerSegments)
+    && (
+      ui.homeAgentComposerSegments.length
+      || (!selectedModels.length && !attachments.length && !String(ui.homeAgentPromptDraft ?? ""))
+    )
+  ) {
+    return ui.homeAgentComposerSegments;
+  }
+  return [
+    ...selectedModels.map((model) => ({ type: "model", mediaType: model.mediaType })),
+    ...attachments.map((attachment) => ({ type: "attachment", attachmentId: String(attachment?.id ?? "") })),
+    { type: "text", text: String(ui.homeAgentPromptDraft ?? "") },
+  ];
+}
+
+function renderHomeAgentComposerSegments(segments, selectedModels, attachments, skills = []) {
+  const modelMap = new Map(selectedModels.map((model) => [model.mediaType, model]));
+  const attachmentMap = new Map(attachments.map((attachment) => [String(attachment?.id ?? ""), attachment]));
+  const skillMap = new Map((Array.isArray(skills) ? skills : []).map((skill) => [String(skill?.id ?? ""), skill]));
+  return segments.map((segment) => {
+    if (segment?.type === "text") {
+      return escapeHtml(String(segment.text ?? "")).replaceAll("\n", "<br>");
+    }
+    if (segment?.type === "model") {
+      const model = modelMap.get(String(segment.mediaType ?? ""));
+      if (!model) return "";
+      return `<span class="home-agent-model-chip" contenteditable="false" data-home-agent-inline-kind="model" data-home-agent-model-kind="${escapeAttr(model.mediaType)}">
+        <span class="home-agent-model-chip-icon" aria-hidden="true">${renderCanvasIcon(model.mediaType === "video" ? "video" : "image")}</span>
+        <span class="home-agent-attachment-name" title="${escapeAttr(model.modelLabel)}">${escapeHtml(model.modelLabel)}</span>
+        <button type="button" class="home-agent-attachment-remove" data-action="remove-home-agent-model" data-model-kind="${escapeAttr(model.mediaType)}" aria-label="移除${model.mediaType === "video" ? "视频" : "图片"}模型 ${escapeAttr(model.modelLabel)}" title="移除模型">×</button>
+      </span>&#8203;`;
+    }
+    if (segment?.type === "skill") {
+      const skill = skillMap.get(String(segment.skillId ?? ""));
+      if (!skill) return "";
+      return `<span class="home-agent-model-chip home-agent-skill-chip" contenteditable="false" data-home-agent-inline-kind="skill" data-home-agent-skill-id="${escapeAttr(skill.id)}">
+        <span class="home-agent-model-chip-icon" aria-hidden="true">${renderCanvasIcon("clipboard")}</span>
+        <span class="home-agent-attachment-name" title="${escapeAttr(skill.title)}">${escapeHtml(skill.title)}</span>
+        <button type="button" class="home-agent-attachment-remove" data-action="remove-home-agent-skill" data-skill-id="${escapeAttr(skill.id)}" aria-label="移除 Skill ${escapeAttr(skill.title)}" title="移除 Skill">×</button>
+      </span>&#8203;`;
+    }
+    if (segment?.type !== "attachment") return "";
+    const attachment = attachmentMap.get(String(segment.attachmentId ?? ""));
+    if (!attachment) return "";
+    const attachmentId = String(attachment.id ?? "");
+    const attachmentName = String(attachment.name ?? "未命名附件");
+    const attachmentKind = ["image", "video"].includes(attachment.kind) ? attachment.kind : "file";
+    const previewUrl = String(attachment.previewUrl ?? "");
+    return `<span class="home-agent-attachment ${attachmentKind}" contenteditable="false" data-home-agent-inline-kind="attachment" data-home-agent-attachment-id="${escapeAttr(attachmentId)}" tabindex="0" aria-label="${attachmentKind === "video" ? "视频" : attachmentKind === "image" ? "图片" : "文件"}附件 ${escapeAttr(attachmentName)}${["image", "video"].includes(attachmentKind) ? "，悬停或聚焦预览" : ""}">
+      <span class="home-agent-attachment-media" aria-hidden="true">
+        ${attachmentKind === "image" && previewUrl
+          ? `<img class="home-agent-attachment-thumb" src="${escapeAttr(previewUrl)}" alt="" />`
+          : attachmentKind === "video" && previewUrl
+            ? `<video class="home-agent-attachment-thumb" src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+            : renderCanvasIcon("clipboard")}
+      </span>
+      <span class="home-agent-attachment-name" title="${escapeAttr(attachmentName)}">${escapeHtml(attachmentName)}</span>
+      <button type="button" class="home-agent-attachment-remove" data-action="remove-home-agent-attachment" data-attachment-id="${escapeAttr(attachmentId)}" aria-label="移除附件 ${escapeAttr(attachmentName)}" title="移除附件">×</button>
+      ${attachmentKind === "image" && previewUrl ? `<span class="home-agent-attachment-hover-preview" aria-hidden="true"><img src="${escapeAttr(previewUrl)}" alt="" /></span>` : ""}
+      ${attachmentKind === "video" && previewUrl ? `<span class="home-agent-attachment-hover-preview video-preview" aria-hidden="true"><video data-home-agent-video-preview src="${escapeAttr(previewUrl)}" muted loop playsinline preload="metadata"></video></span>` : ""}
+    </span>&#8203;`;
+  }).join("");
+}
+
+function resolveHomeAgentSkillCatalog(ui = {}) {
+  return [
+    ...normalizeCanvasTextSkills(ui.homeAgentOfficialSkills, "official"),
+    ...normalizeCanvasTextSkills(ui.homeAgentPrivateSkills, "private"),
+  ];
+}
+
+function renderHomeAgentSkillPicker(ui = {}) {
+  return renderCanvasTextSkillModal({
+    show: ui.homeAgentSkillPickerOpen === true,
+    title: "选择生成技能",
+    sourceTab: ui.homeAgentSkillSource,
+    activeCategory: ui.homeAgentSkillCategory,
+    officialSkills: ui.homeAgentOfficialSkills,
+    privateSkills: ui.homeAgentPrivateSkills,
+    draftSkillId: ui.homeAgentSkillDraftId,
+    officialPagination: ui.homeAgentSkillPagination?.official,
+    privatePagination: ui.homeAgentSkillPagination?.private,
+    loading: ui.homeAgentSkillLoading,
+    actions: {
+      close: "close-home-agent-skill-picker",
+      source: "set-home-agent-skill-source",
+      category: "set-home-agent-skill-category",
+      page: "set-home-agent-skill-page",
+      select: "select-home-agent-skill",
+      clear: "clear-home-agent-skill-draft",
+      confirm: "confirm-home-agent-skill",
+    },
+    confirmLabel: "引用到输入框",
+  });
+}
+
+function resolveHomeAgentModels(ui = {}) {
+  const models = Array.isArray(ui.episodeGenerationConfig?.models) ? ui.episodeGenerationConfig.models : [];
+  return models
+    .map(normalizeHomeAgentGenerationModel)
+    .filter((model) => model && ["image", "video"].includes(model.mediaType));
 }
 
 function renderDirectorDeskSurface(ui = {}) {
@@ -12076,7 +12597,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
-    <article class="project-gallery-card ${isSelected ? "is-selected" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
+    <article class="project-gallery-card${isMenuOpen ? " is-menu-open" : ""} ${isSelected ? "is-selected" : ""}" data-action="open-project-detail" data-project-id="${escapeHtml(project.id)}">
       <button
         class="project-gallery-select-toggle"
         type="button"
@@ -12094,6 +12615,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
           <strong>上传封面</strong>
         </label>
         <img class="project-gallery-cover" src="${escapeHtml(getProjectCoverSrc(project))}" alt="${escapeHtml(project.name)} 封面" />
+        ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}" aria-label="替换 ${escapeHtml(project.name)} 的项目封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
       </div>
       <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
       <div class="project-gallery-meta">

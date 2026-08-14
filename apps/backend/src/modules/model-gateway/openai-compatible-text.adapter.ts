@@ -23,6 +23,7 @@ export type TextGatewayChatCompletionRequest = {
   max_tokens?: number;
   response_format?: Record<string, unknown>;
   stream_options?: { include_usage?: boolean };
+  thinking?: { type: "enabled" | "disabled" };
 };
 
 export type TextGatewayChatCompletionChunk = ChatCompletionChunk;

@@ -79,7 +79,9 @@ export function renderGenerationControlMenu({
   nodeId = "",
   keepMenuOpen = "",
   keepMenuOpenMenu = "",
+  actionAttribute = "data-action",
 } = {}) {
+  const actionAttr = actionAttribute === "data-agent-action" ? "data-agent-action" : "data-action";
   const normalizedField = String(field ?? "");
   const scopedField = scope ? `${scope}:${normalizedField}` : normalizedField;
   const open = openMenu === scopedField || (!scope && openMenu === normalizedField);
@@ -94,14 +96,14 @@ export function renderGenerationControlMenu({
 
   return `
     <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control ${open ? "active" : ""}" type="button" data-action="${escapeAttr(toggleAction)}" data-field="${escapeAttr(normalizedField)}"${scopeAttrs}${nodeAttrs}${titleAttr}>${escapeHtml(label)}</button>
+      <button class="episode-replica-control ${open ? "active" : ""}" type="button" ${actionAttr}="${escapeAttr(toggleAction)}" data-field="${escapeAttr(normalizedField)}"${scopeAttrs}${nodeAttrs}${titleAttr}>${escapeHtml(label)}</button>
       ${open ? `<span class="episode-replica-float-menu compact" data-field="${escapeAttr(normalizedField)}">${options.map((option) => {
         const [value, text, meta = "", preview = ""] = Array.isArray(option) ? option : ["", "", "", ""];
         const selected = selectedValue !== "" && String(value) === String(selectedValue);
-        if (action === "select-video-model" || action === "select-canvas-model") {
-          return `<button class="${selected ? "is-selected" : ""}" type="button" data-action="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"${scopeAttrs}${nodeAttrs}><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
+        if (["select-video-model", "select-canvas-model", "select-free-generation-model"].includes(action)) {
+          return `<button class="${selected ? "is-selected" : ""}" type="button" ${actionAttr}="${escapeAttr(action)}" data-model-id="${escapeAttr(value)}" data-model-name="${escapeAttr(text)}"${scopeAttrs}${nodeAttrs}><strong>${escapeHtml(text)}</strong>${meta ? `<small>${escapeHtml(meta)}</small>` : ""}</button>`;
         }
-        return `<button class="${[selected ? "is-selected" : "", preview ? "has-preview" : ""].filter(Boolean).join(" ")}" type="button" data-action="${escapeAttr(action)}" data-field="${escapeAttr(normalizedField)}" data-value="${escapeAttr(value)}"${scopeAttrs}${nodeAttrs}${keepOpenAttrs}>${preview ? `<img src="${escapeAttr(preview)}" alt="" loading="lazy" /><span>${escapeHtml(text)}</span>` : escapeHtml(text)}</button>`;
+        return `<button class="${[selected ? "is-selected" : "", preview ? "has-preview" : ""].filter(Boolean).join(" ")}" type="button" ${actionAttr}="${escapeAttr(action)}" data-field="${escapeAttr(normalizedField)}" data-value="${escapeAttr(value)}"${scopeAttrs}${nodeAttrs}${keepOpenAttrs}>${preview ? `<img src="${escapeAttr(preview)}" alt="" loading="lazy" /><span>${escapeHtml(text)}</span>` : escapeHtml(text)}</button>`;
       }).join("")}</span>` : ""}
     </span>
   `;
@@ -113,12 +115,16 @@ export function renderGenerationSettingsControl({
   settings = {},
   scope = "",
   nodeId = "",
+  toggleAction = "toggle-generation-select-menu",
+  optionAction = "select-generation-field-option",
+  actionAttribute = "data-action",
 } = {}) {
   const isImage = kind === "image";
+  const isAudio = kind === "audio";
   const configuredSections = Array.isArray(settings.sections)
     ? settings.sections.filter((section) => section && Array.isArray(section.options) && section.options.length)
     : [];
-  const field = isImage ? "image-settings-panel" : "video-settings-panel";
+  const field = isImage ? "image-settings-panel" : isAudio ? "audio-settings-panel" : "video-settings-panel";
   const scopedField = scope ? `${scope}:${field}` : field;
   const isOpen = openMenu === scopedField || (!scope && openMenu === field);
   const configuredFormatter = isImage ? formatImageSettingsOptionLabel : formatVideoSettingsOptionLabel;
@@ -144,15 +150,15 @@ export function renderGenerationSettingsControl({
   const scopeAttrs = scope ? ` data-scope="${escapeAttr(scope)}"` : "";
   const nodeAttrs = nodeId ? ` data-node-id="${escapeAttr(nodeId)}"` : "";
   const panelField = scopedField;
-  const ariaLabel = isImage ? "打开图片参数面板" : "打开视频参数面板";
-  const panelLabel = isImage ? "图片参数设置" : "视频参数设置";
+  const ariaLabel = isImage ? "打开图片参数面板" : isAudio ? "打开音频参数面板" : "打开视频参数面板";
+  const panelLabel = isImage ? "图片参数设置" : isAudio ? "音频参数设置" : "视频参数设置";
 
   return `
     <span class="episode-replica-video-settings-wrap ${isOpen ? "is-open" : ""}">
       <button
         class="episode-replica-video-settings-trigger ${isOpen ? "is-open" : ""}"
         type="button"
-        data-action="toggle-generation-select-menu"
+        ${actionAttribute === "data-agent-action" ? "data-agent-action" : "data-action"}="${escapeAttr(toggleAction)}"
         data-field="${escapeAttr(field)}"
         ${scopeAttrs}${nodeAttrs}
         aria-haspopup="dialog"
@@ -181,6 +187,8 @@ export function renderGenerationSettingsControl({
                         keepMenuOpenMenu: panelField,
                         formatter: configuredFormatter,
                         showAspectRatioIcon: !isImage && isGenerationAspectRatioField(section.field),
+                        optionAction,
+                        actionAttribute,
                       },
                     )
                   ).join("")
@@ -257,12 +265,15 @@ export function renderGenerationSubmitButton({
   costLabel = null,
   label = "生成",
   busy = false,
+  disabled = false,
   className = "",
   attrs = "",
+  actionAttribute = "data-action",
 } = {}) {
   const extraClass = className ? ` ${escapeAttr(className)}` : "";
+  const actionAttr = actionAttribute === "data-agent-action" ? "data-agent-action" : "data-action";
   return `
-    <button class="episode-replica-generate${extraClass}" type="button" data-action="${escapeAttr(action)}"${attrs ? ` ${attrs}` : ""} ${busy ? "disabled" : ""}>
+    <button class="episode-replica-generate${extraClass}" type="button" ${actionAttr}="${escapeAttr(action)}"${attrs ? ` ${attrs}` : ""} ${busy || disabled ? "disabled" : ""}>
       <span>${escapeHtml(String(costLabel ?? cost))}</span>
       <strong class="episode-replica-generate-label">${escapeHtml(busy ? "生成中" : label)}</strong>
     </button>
@@ -454,7 +465,7 @@ function firstGenerationValue(...candidates) {
   return "";
 }
 
-function renderGenerationSettingsSection(title, field, options = [], currentValue = "", { scope = "", nodeId = "", keepMenuOpenMenu = "", formatter = (_field, value) => value, showAspectRatioIcon = false } = {}) {
+function renderGenerationSettingsSection(title, field, options = [], currentValue = "", { scope = "", nodeId = "", keepMenuOpenMenu = "", formatter = (_field, value) => value, showAspectRatioIcon = false, optionAction = "select-generation-field-option", actionAttribute = "data-action" } = {}) {
   if (!Array.isArray(options) || !options.length) {
     return "";
   }
@@ -472,7 +483,7 @@ function renderGenerationSettingsSection(title, field, options = [], currentValu
             <button
               class="${[isGenerationSettingsOptionActive(value, currentValue) ? "is-active" : "", aspectRatioIcon ? "has-ratio-icon" : ""].filter(Boolean).join(" ")}"
               type="button"
-              data-action="select-generation-field-option"
+              ${actionAttribute === "data-agent-action" ? "data-agent-action" : "data-action"}="${escapeAttr(optionAction)}"
               data-field="${escapeAttr(field)}"
               data-value="${escapeAttr(value)}"
               data-keep-menu-open="true"

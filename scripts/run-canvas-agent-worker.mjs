@@ -44,7 +44,7 @@ const outboxFallbackIntervalMs = positiveInteger(
     ?? process.env.CANVAS_AGENT_WORKER_POLL_INTERVAL_MS,
   60_000,
 );
-const maintenanceIntervalMs = positiveInteger(process.env.CANVAS_AGENT_MAINTENANCE_INTERVAL_MS, 60_000);
+const maintenanceIntervalMs = positiveInteger(process.env.CANVAS_AGENT_MAINTENANCE_INTERVAL_MS, 5_000);
 const fallbackScanIntervalMs = positiveInteger(process.env.CANVAS_AGENT_FALLBACK_SCAN_INTERVAL_MS, 5_000);
 const batchSize = positiveInteger(process.env.CANVAS_AGENT_WORKER_BATCH_SIZE, 2);
 const outboxBatchSize = positiveInteger(process.env.CANVAS_AGENT_OUTBOX_BATCH_SIZE, 50);

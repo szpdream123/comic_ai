@@ -51,7 +51,7 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
   });
 }
 
-test("loading AI storyboard preview keeps inferred tables while hiding the live output card and prompt panels", () => {
+test("loading AI storyboard preview renders streamed stage output without duplicate inferred tables", () => {
   const cases = [
     {
       stage: "character",
@@ -82,27 +82,153 @@ test("loading AI storyboard preview keeps inferred tables while hiding the live 
   for (const item of cases) {
     const html = renderLoadingPreview(item.stage, item.responseText, item.options);
 
-    assert.match(html, /single-episode-ai-table-stack live/);
-    assert.doesNotMatch(html, /single-episode-ai-live-output/);
+    assert.match(html, new RegExp(`data-prompt-stage="${item.stage}-response"`));
+    assert.doesNotMatch(html, /single-episode-ai-table-stack live/);
     assert.doesNotMatch(html, /发送给 DeepSeek 的完整提示词/);
-    assert.doesNotMatch(html, /AI .*实时返回/);
-    assert.doesNotMatch(html, /data-prompt-stage=/);
     assert.match(html, item.marker);
   }
 });
 
-test("loading AI storyboard preview renders scene before character tables", () => {
+test("loading AI storyboard preview shows each streamed response body as it arrives", () => {
+  const rawMarker = "MODEL_PARTIAL_RESPONSE_NOW_VISIBLE";
+  const html = renderLoadingPreview("scene", `${rawMarker} 正在继续输出`);
+
+  assert.match(html, /data-prompt-stage="scene-response"/);
+  assert.match(html, new RegExp(rawMarker));
+  assert.match(html, /生成中/);
+});
+
+test("loading AI storyboard preview uses matching prompt detail columns before details arrive", () => {
+  for (const [stage, name] of [
+    ["scene", "城墙集市"],
+    ["character", "任小野"],
+    ["prop", "饭盒"],
+  ]) {
+    const html = renderLoadingPreview(stage, [
+      `| ${stage === "scene" ? "场景名称" : stage === "character" ? "角色名称" : "道具名称"} | 提示词详情 |`,
+      "| --- | --- |",
+      `| ${name} | 正在实时输出的提示词 |`,
+    ].join("\n"));
+
+    assert.match(html, /single-episode-ai-prompt-detail-table/);
+  }
+});
+
+test("loading AI storyboard preview replaces a staged list with the details", () => {
+  const html = renderLoadingPreview("scene", [
+    "## 第一步：场景提取清单",
+    "| 场景名称 | 氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "## 第二步：专业场景设定表",
+    "场景描述：这段详细原文不应显示在实时列表中。",
+  ].join("\n"));
+
+  assert.match(html, /场景提示词/);
+  assert.doesNotMatch(html, /城墙集市/);
+  assert.doesNotMatch(html, /第一步：场景提取清单/);
+  assert.match(html, /这段详细原文不应显示在实时列表中/);
+  assert.doesNotMatch(html, /第二步：专业场景设定表/);
+});
+
+test("loading AI storyboard preview hides the details marker and shows its content", () => {
+  const html = renderLoadingPreview("scene", [
+    "| 场景名称 | 氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "---",
+    "[[DETAILS]]",
+    "场景描述：这段详细原文不应显示在实时列表中。",
+  ].join("\n"));
+
+  assert.doesNotMatch(html, /城墙集市/);
+  assert.match(html, /这段详细原文不应显示在实时列表中/);
+  assert.doesNotMatch(html, /\[\[DETAILS\]\]/);
+  assert.doesNotMatch(html, /<pre>---<\/pre>/);
+});
+
+test("loading AI storyboard preview replaces the extracted list once prompt details arrive", () => {
+  const html = renderLoadingPreview("scene", [
+    "场景提取清单",
+    "| 场景名称 | 清单氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "[[DETAILS]]",
+    "【场景名称】城墙集市",
+    "图片提示词：城门阴影下的市集。",
+  ].join("\n"));
+
+  assert.match(html, /single-episode-ai-prompt-detail-table/);
+  assert.match(html, /提示词详情/);
+  assert.doesNotMatch(html, /场景提取清单/);
+  assert.doesNotMatch(html, /清单氛围/);
+});
+
+test("loading AI storyboard preview renders scene prompt details as name and prompt columns", () => {
+  const html = renderLoadingPreview("scene", [
+    "| 场景名称 | 氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "[[DETAILS]]",
+    "- **场景名称**：城墙集市",
+    "画面构图：城门阴影下的市集。",
+    "- **场景名称**：老旧木屋排巷",
+    "画面构图：狭窄巷道与木门。",
+  ].join("\n"));
+
+  assert.match(html, /single-episode-ai-prompt-detail-table/);
+  assert.match(html, /<th>场景名称<\/th>/);
+  assert.match(html, /<th>提示词详情<\/th>/);
+  assert.match(html, /<td>城墙集市<\/td>/);
+  assert.match(html, /<td>老旧木屋排巷<\/td>/);
+  assert.doesNotMatch(html, /\*\*场景名称\*\*/);
+});
+
+test("loading AI storyboard preview uses the required character and prop name labels", () => {
+  for (const [stage, label, headingLabel, firstName, secondName] of [
+    ["character", "角色名称", "角色名称", "任小野", "闵婶"],
+    ["prop", "道具名称", "道具名称", "饭盒", "旧木门"],
+  ]) {
+    const html = renderLoadingPreview(stage, [
+      "[[DETAILS]]",
+      `${headingLabel}：${firstName}`,
+      "图片提示词：细节一。",
+      `${headingLabel}：${secondName}`,
+      "图片提示词：细节二。",
+    ].join("\n"));
+
+    assert.match(html, /single-episode-ai-prompt-detail-table/);
+    assert.match(html, new RegExp(`<th>${label}<\\/th>`));
+    assert.match(html, /<th>提示词详情<\/th>/);
+    assert.match(html, new RegExp(`<td>${firstName}<\\/td>`));
+    assert.match(html, new RegExp(`<td>${secondName}<\\/td>`));
+  }
+});
+
+test("loading AI storyboard preview separates storyboard details using persisted shot markers", () => {
+  const html = renderLoadingPreview("shot", [
+    "【分镜1】任小野走进城门。",
+    "画面/动作：任小野停在城门阴影中。",
+    "【分镜2】闵婶接过饭盒。",
+    "画面/动作：闵婶伸手接过饭盒。",
+  ].join("\n"));
+
+  assert.match(html, /【分镜1】任小野走进城门。/);
+  assert.match(html, /【分镜2】闵婶接过饭盒。/);
+  assert.equal((html.match(/class="single-episode-ai-prompt-entry"/g) ?? []).length, 2);
+});
+
+test("loading AI storyboard preview keeps only streamed output while an asset stage is active", () => {
   const html = renderLoadingPreview("character", "{\"characters\":[{\"characterName\":\"任小野\"}]}", {
     characters: [{ characterName: "任小野", characterDescription: "黑色短衣" }],
     scenes: [{ sceneName: "闵婶家门口", sceneDescription: "傍晚微光" }],
     props: [{ propName: "饭盒", propDescription: "旧布包裹" }],
   });
 
-  assert.match(html, /single-episode-ai-table-stack live/);
-  assert.ok(
-    html.indexOf("single-episode-ai-table-card scenes") <
-      html.indexOf("single-episode-ai-table-card characters"),
-  );
+  assert.match(html, /data-prompt-stage="character-response"/);
+  assert.doesNotMatch(html, /single-episode-ai-table-stack live/);
+  assert.doesNotMatch(html, /single-episode-ai-table-card scenes/);
+  assert.doesNotMatch(html, /single-episode-ai-table-card characters/);
 });
 
 test("ready AI storyboard preview hides DeepSeek prompt and raw response sections while keeping final tables", () => {
@@ -175,7 +301,7 @@ test("ready AI storyboard preview hides DeepSeek prompt and raw response section
   );
 });
 
-test("AI storyboard preview hides all raw response blocks during streaming", () => {
+test("AI storyboard preview renders every streamed stage response", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -227,11 +353,13 @@ test("AI storyboard preview hides all raw response blocks during streaming", () 
     },
   });
 
-  assert.doesNotMatch(html, /data-prompt-stage="scene-response"/);
-  assert.doesNotMatch(html, /data-prompt-stage="character-response"/);
-  assert.doesNotMatch(html, /data-prompt-stage="prop-response"/);
-  assert.doesNotMatch(html, /single-episode-ai-live-output/);
-  assert.doesNotMatch(html, /AI .*实时返回/);
+  assert.match(html, /data-prompt-stage="scene-response"/);
+  assert.match(html, /data-prompt-stage="character-response"/);
+  assert.match(html, /data-prompt-stage="prop-response"/);
+  assert.match(html, /城门口/);
+  assert.match(html, /任小野/);
+  assert.match(html, /饭盒/);
+  assert.doesNotMatch(html, /发送给.*提示词/);
 });
 
 test("ready AI storyboard preview no longer renders markdown raw response tables", () => {
@@ -397,7 +525,7 @@ test("project panel keeps busy status toast visible until generation finishes", 
   assert.match(css, /\.global-workbench-toast\.is-persistent\s*\{[^}]*animation:\s*none/s);
 });
 
-test("loading AI storyboard preview no longer renders duplicated live storyboard tables", () => {
+test("loading AI storyboard preview keeps streamed storyboard output without a duplicate result table", () => {
   const longVideoPrompt = [
     "BEGIN_LONG_VIDEO_PROMPT",
     "动态视频提示词".repeat(4200),
@@ -422,8 +550,9 @@ test("loading AI storyboard preview no longer renders duplicated live storyboard
 
   assert.doesNotMatch(html, /single-episode-ai-live-output/);
   assert.doesNotMatch(html, /AI 分镜 实时返回/);
-  assert.match(html, /single-episode-ai-table-stack live/);
-  assert.equal((html.match(/single-episode-ai-table-card storyboards/g) ?? []).length, 1);
+  assert.match(html, /data-prompt-stage="shot-response"/);
+  assert.doesNotMatch(html, /single-episode-ai-table-stack live/);
+  assert.equal((html.match(/single-episode-ai-table-card storyboards/g) ?? []).length, 0);
 });
 
 test("ready AI storyboard preview shows full script text even without a final state package", () => {
