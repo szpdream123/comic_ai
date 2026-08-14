@@ -2328,9 +2328,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 400, body: { error: "ai_storyboard_commit_payload_required" } };
       }
       const storyboards = Array.isArray(payload.storyboards) ? payload.storyboards : [];
-      if (!storyboards.length) {
-        return { status: 400, body: { error: "ai_storyboard_storyboards_required" } };
-      }
       const title = input.body.episodeTitle?.trim() || "AI 分镜章节";
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,

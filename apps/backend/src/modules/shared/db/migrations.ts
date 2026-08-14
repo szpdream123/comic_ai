@@ -89,6 +89,10 @@ const SAN_BAO_MEDIA_MODELS_RELATIVE_PATH = ["packages", "db", "migrations", "202
 const SAN_BAO_GPT_IMAGE2_VARIANTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260902-merge-san-bao-gpt-image2-variants.sql"];
 const GLOBALAIOPC_MODEL_CENTER_SOUNDCLONE_RELATIVE_PATH = ["packages", "db", "migrations", "20260903-add-globalaiopc-model-center-and-soundclone.sql"];
 const PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH = ["packages", "db", "migrations", "20260904-create-provider-material-assets.sql"];
+const HOME_RECOMMENDATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260905-home-recommendations.sql"];
+const HOME_BACKGROUND_VIDEO_RELATIVE_PATH = ["packages", "db", "migrations", "20260906-home-background-video.sql"];
+const FREE_GENERATION_WORKSPACES_RELATIVE_PATH = ["packages", "db", "migrations", "20260907-free-generation-workspaces.sql"];
+const HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH = ["packages", "db", "migrations", "20260908-hide-soundclone-provider-parameters.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
@@ -489,6 +493,22 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260904-create-provider-material-assets.sql",
       sql: await readFile(join(rootDir, ...PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260905-home-recommendations.sql",
+      sql: await readFile(join(rootDir, ...HOME_RECOMMENDATIONS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260906-home-background-video.sql",
+      sql: await readFile(join(rootDir, ...HOME_BACKGROUND_VIDEO_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260907-free-generation-workspaces.sql",
+      sql: await readFile(join(rootDir, ...FREE_GENERATION_WORKSPACES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260908-hide-soundclone-provider-parameters.sql",
+      sql: await readFile(join(rootDir, ...HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

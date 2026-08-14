@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const MAX_BATCH_LINKS = 20;
@@ -26,9 +28,10 @@ export type VideoBatchTask = {
   title: string;
   error: string;
   streamUrl: string;
+  audioStreamUrl?: string;
 };
 
-type YtDlpRunner = (url: string) => Promise<Record<string, unknown>>;
+type YtDlpRunner = (url: string, cookie?: string) => Promise<Record<string, unknown>>;
 
 let activeResolutionCount = 0;
 const resolutionWaiters: Array<() => void> = [];
@@ -120,9 +123,33 @@ function releaseResolutionSlot() {
   resolutionWaiters.shift()?.();
 }
 
-async function runYtDlp(url: string): Promise<Record<string, unknown>> {
+function cookieHeaderToNetscape(cookie: string) {
+  const normalized = cookie.trim();
+  if (/^# Netscape HTTP Cookie File/im.test(normalized)) return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+  const rows = normalized.split(/[;\r\n]+/u).map((part) => part.trim()).filter(Boolean).flatMap((part) => {
+    const separator = part.indexOf("=");
+    if (separator <= 0) return [];
+    const name = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    return name && value ? [`.douyin.com\tTRUE\t/\tFALSE\t0\t${name}\t${value}`] : [];
+  });
+  return `# Netscape HTTP Cookie File\n${rows.join("\n")}\n`;
+}
+
+async function runYtDlp(url: string, cookie?: string): Promise<Record<string, unknown>> {
   const command = resolveYtDlpCommand();
-  const cookiesPath = resolveVideoBatchCookiesPath(url);
+  let temporaryCookieDir: string | null = null;
+  let cookiesPath = resolveVideoBatchCookiesPath(url);
+  if (cookie?.trim() && isDouyinUrl(url)) {
+    temporaryCookieDir = await mkdtemp(join(tmpdir(), "video-batch-cookie-"));
+    cookiesPath = join(temporaryCookieDir, "cookies.txt");
+    try {
+      await writeFile(cookiesPath, cookieHeaderToNetscape(cookie), { encoding: "utf8", mode: 0o600 });
+    } catch (error) {
+      await rm(temporaryCookieDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
   const args = [
     "--dump-single-json",
     "--skip-download",
@@ -130,48 +157,52 @@ async function runYtDlp(url: string): Promise<Record<string, unknown>> {
     "--no-warnings",
     "--no-cache-dir",
     "--socket-timeout", "15",
-    "--format", "best[ext=mp4][protocol!*=dash]/best[protocol!*=dash]/best",
+    "--format", "bestvideo*+bestaudio/best",
     ...(cookiesPath ? ["--cookies", cookiesPath] : []),
     "--",
     url,
   ];
-  const child = spawn(command.file, [...command.prefix, ...args], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  let outputBytes = 0;
-  const appendOutput = (chunks: Buffer[], chunk: Buffer) => {
-    outputBytes += chunk.length;
-    if (outputBytes <= MAX_PROCESS_OUTPUT_BYTES) chunks.push(chunk);
-  };
-  child.stdout.on("data", (chunk) => appendOutput(stdout, Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => appendOutput(stderr, Buffer.from(chunk)));
-
-  const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error("video_batch_resolve_timeout"));
-    }, RESOLUTION_TIMEOUT_MS);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") reject(new Error("video_batch_binary_missing"));
-      else reject(error);
-    });
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-  if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) throw new Error("video_batch_output_too_large");
-  if (exit.code !== 0) {
-    throw new Error(Buffer.concat(stderr).toString("utf8").trim() || `video_batch_resolver_exit_${exit.code ?? exit.signal ?? "unknown"}`);
-  }
   try {
-    const info = JSON.parse(Buffer.concat(stdout).toString("utf8")) as unknown;
-    if (info && typeof info === "object" && !Array.isArray(info)) return info as Record<string, unknown>;
-  } catch {
-    // Convert malformed resolver output to the same safe failure shown to users.
+    const child = spawn(command.file, [...command.prefix, ...args], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    const appendOutput = (chunks: Buffer[], chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes <= MAX_PROCESS_OUTPUT_BYTES) chunks.push(chunk);
+    };
+    child.stdout.on("data", (chunk) => appendOutput(stdout, Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => appendOutput(stderr, Buffer.from(chunk)));
+
+    const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error("video_batch_resolve_timeout"));
+      }, RESOLUTION_TIMEOUT_MS);
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") reject(new Error("video_batch_binary_missing"));
+        else reject(error);
+      });
+      child.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    });
+    if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) throw new Error("video_batch_output_too_large");
+    if (exit.code !== 0) {
+      throw new Error(Buffer.concat(stderr).toString("utf8").trim() || `video_batch_resolver_exit_${exit.code ?? exit.signal ?? "unknown"}`);
+    }
+    try {
+      const info = JSON.parse(Buffer.concat(stdout).toString("utf8")) as unknown;
+      if (info && typeof info === "object" && !Array.isArray(info)) return info as Record<string, unknown>;
+    } catch {
+      // Convert malformed resolver output to the same safe failure shown to users.
+    }
+    throw new Error("resolver_stream_url_missing");
+  } finally {
+    if (temporaryCookieDir) await rm(temporaryCookieDir, { recursive: true, force: true }).catch(() => undefined);
   }
-  throw new Error("resolver_stream_url_missing");
 }
 
 async function resolveOne(url: string, runner: YtDlpRunner): Promise<VideoBatchTask> {
@@ -182,7 +213,21 @@ async function resolveOne(url: string, runner: YtDlpRunner): Promise<VideoBatchT
     const parsed = streamUrl ? new URL(streamUrl) : null;
     if (!parsed || !["http:", "https:"].includes(parsed.protocol)) throw new Error("resolver_stream_url_missing");
     const title = typeof info.title === "string" && info.title.trim() ? info.title.trim() : "已解析视频";
-    return { sourceUrl: url, status: "ready", title, error: "", streamUrl };
+    const requestedFormats = Array.isArray(info.requested_formats) ? info.requested_formats : [];
+    const audioFormat = requestedFormats.find((format) => {
+      if (!format || typeof format !== "object" || Array.isArray(format)) return false;
+      const item = format as Record<string, unknown>;
+      return typeof item.url === "string" && item.url.trim() && item.vcodec === "none" && item.acodec !== "none";
+    }) as Record<string, unknown> | undefined;
+    const audioStreamUrl = typeof audioFormat?.url === "string" ? audioFormat.url.trim() : "";
+    return {
+      sourceUrl: url,
+      status: "ready",
+      title,
+      error: "",
+      streamUrl,
+      ...(audioStreamUrl ? { audioStreamUrl } : {}),
+    };
   } catch (error) {
     return { sourceUrl: url, status: "failed", title: "解析失败", error: resolveTaskError(error, url), streamUrl: "" };
   } finally {
@@ -192,9 +237,10 @@ async function resolveOne(url: string, runner: YtDlpRunner): Promise<VideoBatchT
 
 export async function resolveVideoBatchLinks(input: {
   links: unknown;
+  cookie?: string;
   runner?: YtDlpRunner;
 }) {
   const urls = extractVideoBatchUrls(input.links);
-  const runner = input.runner ?? runYtDlp;
+  const runner = input.runner ?? ((url: string) => runYtDlp(url, input.cookie));
   return Promise.all(urls.map((url) => resolveOne(url, runner)));
 }

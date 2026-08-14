@@ -11229,12 +11229,9 @@
         renderOfficialAssetDetailPreview(form);
       }
 
-      async function uploadAdminImage(file, uploadPath) {
+      async function uploadAdminFile(file, uploadPath) {
         if (!file) return null;
-        if (!String(file.type || "").startsWith("image/")) {
-          throw new Error("请选择图片文件");
-        }
-        const fileName = file.name || "admin-image.png";
+        const fileName = file.name || "admin-file";
         const response = await fetch(resolveAdminApiUrl(`${uploadPath}?fileName=${encodeURIComponent(fileName)}`), {
           method: "POST",
           credentials: "include",
@@ -11252,6 +11249,11 @@
           throw Object.assign(new Error(adminApiErrorMessage(payload, response)), { payload, status: response.status });
         }
         return payload.data || payload;
+      }
+
+      async function uploadAdminImage(file, uploadPath) {
+        if (!String(file?.type || "").startsWith("image/")) throw new Error("请选择图片文件");
+        return uploadAdminFile(file, uploadPath);
       }
 
       async function uploadOfficialAssetImage(file) {
@@ -11683,6 +11685,162 @@
       })();
       ADMIN_PAGE_LOADERS.announcements = loadAnnouncements;
 
+      function homeRecommendationState() {
+        if (!state.homeRecommendations) state.homeRecommendations = { background: { videoUrl: "", posterUrl: "", status: "inactive" }, categories: [], loadError: "" };
+        return state.homeRecommendations;
+      }
+
+      async function loadHomeRecommendations() {
+        const store = homeRecommendationState();
+        setPageLoading("homeRecommendations", true);
+        try {
+          const result = await api("/api/admin/home-recommendations");
+          const data = result.data || result;
+          store.background = data.background && typeof data.background === "object" ? data.background : { videoUrl: "", posterUrl: "", status: "inactive" };
+          store.categories = Array.isArray(data.categories) ? data.categories : [];
+          store.loadError = "";
+          clearPageForbidden("homeRecommendations");
+        } catch (error) {
+          if (!setPageForbidden("homeRecommendations", error)) store.loadError = error.payload?.error?.message || "首页推荐加载失败";
+          store.background = { videoUrl: "", posterUrl: "", status: "inactive" };
+          store.categories = [];
+        } finally {
+          setPageLoading("homeRecommendations", false);
+        }
+      }
+
+      function homeRecommendationsPage() {
+        const store = homeRecommendationState();
+        const background = store.background || { videoUrl: "", posterUrl: "", status: "inactive" };
+        const videos = store.categories.flatMap((category) => (category.videos || []).map((video) => ({ ...video, categoryName: category.name })));
+        const categoryRows = store.categories.length ? store.categories.map((category) => `<tr>
+          <td><strong>${escapeHtml(category.name)}</strong><div class="metric-note">${escapeHtml(category.code)}</div></td>
+          <td><span class="tag ${category.status === "active" ? "green" : "warn"}">${category.status === "active" ? "启用" : "停用"}</span></td>
+          <td>${Number(category.sortOrder || 100)}</td><td>${(category.videos || []).length}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑分类" onclick="openHomeCategoryDrawer('${escapeAttribute(category.id)}')">编</button><button class="icon-btn" title="删除分类" onclick="deleteHomeCategory('${escapeAttribute(category.id)}')">删</button></div></td>
+        </tr>`).join("") : `<tr><td colspan="5">${escapeHtml(store.loadError || "暂无分类")}</td></tr>`;
+        const videoRows = videos.length ? videos.map((video) => `<tr>
+          <td><div style="display:flex;align-items:center;gap:12px;"><img src="${escapeAttribute(video.coverUrl)}" alt="" style="width:96px;height:54px;object-fit:cover;border-radius:8px;background:#111827;" /><div><strong>${escapeHtml(video.title)}</strong><div class="metric-note">${escapeHtml(video.subtitle || "-")}</div></div></div></td>
+          <td>${escapeHtml(video.categoryName)}</td><td>${escapeHtml(video.durationLabel || "-")}</td>
+          <td><span class="tag ${video.status === "active" ? "green" : "warn"}">${video.status === "active" ? "启用" : "停用"}</span></td><td>${Number(video.sortOrder || 100)}</td>
+          <td class="actions"><div class="actions-row"><button class="icon-btn" title="编辑视频" onclick="openHomeVideoDrawer('${escapeAttribute(video.id)}')">编</button><button class="icon-btn" title="删除视频" onclick="deleteHomeVideo('${escapeAttribute(video.id)}')">删</button></div></td>
+        </tr>`).join("") : `<tr><td colspan="6">${escapeHtml(store.loadError || "暂无视频")}</td></tr>`;
+        return `<div class="section-stack">
+          <section class="grid cards"><article class="card"><div class="metric-label">首页分类</div><div class="metric-value">${store.categories.length}</div><div class="metric-note">启用分类会显示为灵曦 TV 标签</div></article><article class="card"><div class="metric-label">推荐视频</div><div class="metric-value">${videos.length}</div><div class="metric-note">分类与视频均启用时才会在首页展示</div></article></section>
+          <section class="card"><div class="toolbar"><div><h3>首页背景视频</h3><span class="metric-note">上传后保存并启用，首页加载时将直接静音循环播放。</span></div><span class="tag ${background.status === "active" ? "green" : "warn"}">${background.status === "active" ? "启用" : "停用"}</span></div>
+            <form id="home-background-form"><input type="hidden" name="videoUrl" value="${escapeAttribute(background.videoUrl || "")}" /><div class="form-grid"><label class="field"><span>背景视频</span><div class="actions-row"><label class="btn ghost">选择并上传视频<input type="file" accept="video/*" hidden onchange="uploadHomeBackgroundVideo(this)" /></label><span class="metric-note" id="home-background-upload-state">${background.videoUrl ? "已上传视频，可重新上传替换" : "尚未上传视频"}</span></div></label><label class="field"><span>状态</span><select name="status">${homeRecommendationStatusOptions(background.status)}</select></label></div>
+            ${background.videoUrl ? `<video src="${escapeAttribute(background.videoUrl)}" muted loop playsinline controls style="display:block;width:min(720px,100%);max-height:320px;object-fit:cover;border-radius:12px;background:#0d1117;margin:16px 0;"></video>` : ""}
+            <div class="error-text" id="home-background-error"></div><div class="toolbar"><span class="metric-note">支持系统允许的视频格式与大小，上传完成后点击保存生效。</span><button class="btn primary" type="submit">保存背景视频</button></div></form>
+          </section>
+          <section class="card"><div class="toolbar"><div><h3>分类管理</h3><span class="metric-note">可新增、改名、停用与调整首页标签顺序。</span></div><div class="actions-row"><button class="btn ghost" onclick="loadHomeRecommendations().then(renderShell)">刷新</button><button class="btn primary" onclick="openHomeCategoryDrawer()">新增分类</button></div></div><div class="table-wrap compact"><table><thead><tr><th>分类</th><th>状态</th><th>排序</th><th>视频数</th><th class="actions">操作</th></tr></thead><tbody>${categoryRows}</tbody></table></div></section>
+          <section class="card"><div class="toolbar"><div><h3>视频管理</h3><span class="metric-note">维护标题、封面、播放地址、分类与展示顺序。</span></div><button class="btn primary" onclick="openHomeVideoDrawer()" ${store.categories.length ? "" : "disabled"}>新增视频</button></div><div class="table-wrap compact"><table><thead><tr><th>视频</th><th>分类</th><th>时长</th><th>状态</th><th>排序</th><th class="actions">操作</th></tr></thead><tbody>${videoRows}</tbody></table></div></section>
+        </div>`;
+      }
+
+      function homeRecommendationStatusOptions(selected = "active") {
+        return [["active", "启用"], ["inactive", "停用"]].map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join("");
+      }
+
+      async function saveHomeBackground(event) {
+        event.preventDefault(); const form = new FormData(event.currentTarget); const error = document.getElementById("home-background-error");
+        await runAdminMutation(event.currentTarget, error, async () => {
+          await api("/api/admin/home-recommendations/background", { method: "PATCH", headers: { "idempotency-key": adminIdempotencyKey("home-background-save") }, body: JSON.stringify({ videoUrl: String(form.get("videoUrl") || "").trim(), posterUrl: "", status: form.get("status") }) });
+          await loadHomeRecommendations(); renderShell();
+        }, "首页背景视频已保存");
+      }
+
+      async function uploadHomeBackgroundVideo(input) {
+        const file = input.files?.[0]; if (!file) return;
+        const form = input.closest("form"); const error = document.getElementById("home-background-error"); const stateLabel = document.getElementById("home-background-upload-state");
+        if (!String(file.type || "").startsWith("video/")) { if (error) error.textContent = "请选择视频文件"; input.value = ""; return; }
+        try {
+          input.disabled = true; if (error) error.textContent = ""; if (stateLabel) stateLabel.textContent = "正在上传视频…";
+          const uploaded = await uploadAdminFile(file, "/api/admin/home-recommendations/background/upload");
+          const videoUrl = uploaded.sourceUrl || uploaded.previewUrl || ""; const valueInput = form?.querySelector('input[name="videoUrl"]');
+          if (valueInput) valueInput.value = videoUrl;
+          let preview = form?.querySelector("video");
+          if (!preview && videoUrl) { preview = document.createElement("video"); preview.muted = true; preview.loop = true; preview.playsInline = true; preview.controls = true; preview.style.cssText = "display:block;width:min(720px,100%);max-height:320px;object-fit:cover;border-radius:12px;background:#0d1117;margin:16px 0;"; form?.querySelector("#home-background-error")?.before(preview); }
+          if (preview) preview.src = videoUrl;
+          if (stateLabel) stateLabel.textContent = "视频上传完成，保存后生效"; showToast("背景视频已上传，保存后生效");
+        } catch (caught) { if (error) error.textContent = caught.message || "背景视频上传失败"; if (stateLabel) stateLabel.textContent = "上传失败，请重新选择"; }
+        finally { input.disabled = false; input.value = ""; }
+      }
+
+      function openHomeCategoryDrawer(categoryId = "") {
+        const category = homeRecommendationState().categories.find((item) => item.id === categoryId) || null;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(640px,100%);"><div class="drawer-head"><h3>${category ? "编辑分类" : "新增分类"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="home-category-form">
+          <div class="form-grid"><label class="field"><span>分类名称</span><input name="name" value="${escapeAttribute(category?.name || "")}" maxlength="40" required /></label><label class="field"><span>分类编码</span><input name="code" value="${escapeAttribute(category?.code || "")}" pattern="[a-z0-9][a-z0-9_-]{0,39}" placeholder="例如 featured" required /></label></div>
+          <div class="form-grid"><label class="field"><span>排序</span><input name="sortOrder" type="number" value="${Number(category?.sortOrder || 100)}" /></label><label class="field"><span>状态</span><select name="status">${homeRecommendationStatusOptions(category?.status)}</select></label></div>
+          <div class="error-text" id="home-category-error"></div><div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存分类</button></div>
+        </form></aside>`;
+        document.getElementById("home-category-form").addEventListener("submit", async (event) => {
+          event.preventDefault(); const form = new FormData(event.currentTarget); const error = document.getElementById("home-category-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            await api(category ? `/api/admin/home-recommendations/categories/${encodeURIComponent(category.id)}` : "/api/admin/home-recommendations/categories", { method: category ? "PATCH" : "POST", headers: { "idempotency-key": adminIdempotencyKey("home-category-save") }, body: JSON.stringify({ name: form.get("name"), code: form.get("code"), sortOrder: Number(form.get("sortOrder") || 100), status: form.get("status") }) });
+            await loadHomeRecommendations(); closeDrawer(); renderShell();
+          }, category ? "分类已更新" : "分类已新增");
+        });
+      }
+
+      function findHomeVideo(videoId) {
+        for (const category of homeRecommendationState().categories) { const video = (category.videos || []).find((item) => item.id === videoId); if (video) return video; }
+        return null;
+      }
+
+      function openHomeVideoDrawer(videoId = "") {
+        const categories = homeRecommendationState().categories; const video = findHomeVideo(videoId);
+        const drawer = document.getElementById("drawer"); drawer.classList.remove("hidden");
+        drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);"><div class="drawer-head"><h3>${video ? "编辑视频" : "新增视频"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="home-video-form">
+          <div class="form-grid"><label class="field"><span>视频标题</span><input name="title" value="${escapeAttribute(video?.title || "")}" maxlength="120" required /></label><label class="field"><span>所属分类</span><select name="categoryId">${categories.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === video?.categoryId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div>
+          <label class="field"><span>副标题</span><input name="subtitle" value="${escapeAttribute(video?.subtitle || "")}" maxlength="160" placeholder="例如：都市幻想 · AI 短片" /></label>
+          <label class="field"><span>封面地址</span><input name="coverUrl" value="${escapeAttribute(video?.coverUrl || "")}" placeholder="/assets/... 或 https://..." required /></label>
+          <label class="field"><span>视频播放地址</span><div class="actions-row"><input name="videoUrl" value="${escapeAttribute(video?.videoUrl || "")}" placeholder="/media/... 或 https://...，可暂留空" style="flex:1;min-width:0;" /><label class="btn ghost">选择并上传视频<input type="file" accept="video/*" hidden onchange="uploadHomeRecommendationVideo(this)" /></label></div><span class="metric-note" id="home-video-upload-state">${video?.videoUrl ? "已填写视频地址，可重新上传替换" : "可上传本地视频，或直接填写地址"}</span></label>
+          ${video?.videoUrl ? `<video src="${escapeAttribute(video.videoUrl)}" muted loop playsinline controls style="display:block;width:min(720px,100%);max-height:280px;object-fit:cover;border-radius:12px;background:#0d1117;margin:8px 0 16px;"></video>` : ""}
+          <div class="form-grid"><label class="field"><span>时长文字</span><input name="durationLabel" value="${escapeAttribute(video?.durationLabel || "")}" maxlength="20" placeholder="00:32" /></label><label class="field"><span>封面替代文字</span><input name="coverAlt" value="${escapeAttribute(video?.coverAlt || "")}" maxlength="160" /></label></div>
+          <div class="form-grid"><label class="field"><span>排序</span><input name="sortOrder" type="number" value="${Number(video?.sortOrder || 100)}" /></label><label class="field"><span>状态</span><select name="status">${homeRecommendationStatusOptions(video?.status)}</select></label></div>
+          <div class="error-text" id="home-video-error"></div><div class="toolbar"><button class="btn ghost" type="button" onclick="closeDrawer()">取消</button><button class="btn primary" type="submit">保存视频</button></div>
+        </form></aside>`;
+        document.getElementById("home-video-form").addEventListener("submit", async (event) => {
+          event.preventDefault(); const form = new FormData(event.currentTarget); const error = document.getElementById("home-video-error");
+          await runAdminMutation(event.currentTarget, error, async () => {
+            const payload = Object.fromEntries(["categoryId", "title", "subtitle", "coverUrl", "videoUrl", "durationLabel", "coverAlt", "status"].map((key) => [key, String(form.get(key) || "").trim()])); payload.sortOrder = Number(form.get("sortOrder") || 100);
+            await api(video ? `/api/admin/home-recommendations/videos/${encodeURIComponent(video.id)}` : "/api/admin/home-recommendations/videos", { method: video ? "PATCH" : "POST", headers: { "idempotency-key": adminIdempotencyKey("home-video-save") }, body: JSON.stringify(payload) });
+            await loadHomeRecommendations(); closeDrawer(); renderShell();
+          }, video ? "视频已更新" : "视频已新增");
+        });
+      }
+
+      async function uploadHomeRecommendationVideo(input) {
+        const file = input.files?.[0]; if (!file) return;
+        const form = input.closest("form"); const error = document.getElementById("home-video-error"); const stateLabel = document.getElementById("home-video-upload-state");
+        if (!String(file.type || "").startsWith("video/")) { if (error) error.textContent = "请选择视频文件"; input.value = ""; return; }
+        try {
+          input.disabled = true; if (error) error.textContent = ""; if (stateLabel) stateLabel.textContent = "正在上传视频…";
+          const uploaded = await uploadAdminFile(file, "/api/admin/home-recommendations/videos/upload");
+          const videoUrl = uploaded.sourceUrl || uploaded.previewUrl || ""; const valueInput = form?.querySelector('input[name="videoUrl"]');
+          if (valueInput) valueInput.value = videoUrl;
+          let preview = form?.querySelector("video");
+          if (!preview && videoUrl) { preview = document.createElement("video"); preview.muted = true; preview.loop = true; preview.playsInline = true; preview.controls = true; preview.style.cssText = "display:block;width:min(720px,100%);max-height:280px;object-fit:cover;border-radius:12px;background:#0d1117;margin:8px 0 16px;"; form?.querySelector("#home-video-error")?.before(preview); }
+          if (preview) preview.src = videoUrl;
+          if (stateLabel) stateLabel.textContent = "视频上传完成，保存后生效"; showToast("视频已上传，保存后生效");
+        } catch (caught) { if (error) error.textContent = caught.message || "视频上传失败"; if (stateLabel) stateLabel.textContent = "上传失败，请重新选择"; }
+        finally { input.disabled = false; input.value = ""; }
+      }
+
+      async function deleteHomeCategory(categoryId) { if (!confirm("确认删除该分类？分类下有视频时无法删除。")) return; await api(`/api/admin/home-recommendations/categories/${encodeURIComponent(categoryId)}`, { method: "DELETE", headers: { "idempotency-key": adminIdempotencyKey("home-category-delete") }, body: "{}" }); await loadHomeRecommendations(); renderShell(); showToast("分类已删除"); }
+      async function deleteHomeVideo(videoId) { if (!confirm("确认删除该视频？首页将立即停止展示。")) return; await api(`/api/admin/home-recommendations/videos/${encodeURIComponent(videoId)}`, { method: "DELETE", headers: { "idempotency-key": adminIdempotencyKey("home-video-delete") }, body: "{}" }); await loadHomeRecommendations(); renderShell(); showToast("视频已删除"); }
+
+      (function installHomeRecommendationsAdminPage() {
+        pages.homeRecommendations = "首页推荐"; homeRecommendationState();
+        const previousRouteFromPath = routeFromPath; routeFromPath = function routeFromPath() { if (location.pathname.includes("/home-recommendations")) return "homeRecommendations"; return previousRouteFromPath(); };
+        const previousNavigate = navigate; navigate = function navigate(page) { if (page !== "homeRecommendations") return previousNavigate(page); state.page = page; history.pushState(null, "", "/admin/home-recommendations"); renderShell(); ensureAdminPageData(page).catch(() => undefined); };
+        const previousRenderShell = renderShell; renderShell = function renderShell() { previousRenderShell(); if (state.page === "homeRecommendations") document.getElementById("home-background-form")?.addEventListener("submit", saveHomeBackground); const nav = document.querySelector(".nav"); if (!nav || nav.querySelector('[data-page="homeRecommendations"]')) return; const settingsButton = nav.querySelector('[data-page="settings"]'); const button = document.createElement("button"); button.dataset.page = "homeRecommendations"; button.innerHTML = "<span>首页推荐</span>"; if (state.page === "homeRecommendations") button.classList.add("active"); button.addEventListener("click", () => navigate("homeRecommendations")); nav.insertBefore(button, settingsButton); };
+        const previousRenderPage = renderPage; renderPage = function renderPage() { if (state.page === "homeRecommendations") return homeRecommendationsPage(); return previousRenderPage(); };
+      })();
+      ADMIN_PAGE_LOADERS.homeRecommendations = loadHomeRecommendations;
+
       function parameterTemplateConfig() {
         return state.settings.configs.find((config) => config.key === MODEL_PARAMETER_TEMPLATES_CONFIG_KEY) || {
           key: MODEL_PARAMETER_TEMPLATES_CONFIG_KEY,
@@ -11979,15 +12137,21 @@
         { value: "openai_compatible_chat", label: "OpenAI 兼容文本适配器", mediaTypes: ["text"] },
         { value: "cumob_chat", label: "酷模文本适配器", mediaTypes: ["text"] },
         { value: "modelflare_responses", label: "ModelFlare Responses 适配器", mediaTypes: ["text"] },
-        { value: "custom_http", label: "通用 HTTP 图片适配器", mediaTypes: ["image"] },
+        { value: "globalaiopc_sound_clone", label: "GlobalAiOpc 音频适配器", mediaTypes: ["audio"] },
+        { value: "aliyun_bailian_audio", label: "阿里云百炼音频适配器", mediaTypes: ["audio"] },
+        { value: "apimart_audio", label: "ApiMart 音频适配器", mediaTypes: ["audio"] },
+        { value: "custom_http", label: "通用 HTTP 适配器", mediaTypes: ["image", "audio"] },
       ];
 
       function defaultModelAdapter(mediaType, providerName = "") {
         const provider = String(providerName || "").trim().toLowerCase();
         const isVideo = mediaType === "video";
         const isText = mediaType === "text";
+        const isAudio = mediaType === "audio";
         return isText
           ? (isCumobProviderName(providerName) ? "cumob_chat" : "openai_compatible_chat")
+          : isAudio
+          ? (isGlobalAiOpcProviderName(providerName) ? "globalaiopc_sound_clone" : "custom_http")
           : isVideo
           ? (
             isBananaRouterProviderName(providerName)
@@ -12057,15 +12221,16 @@
         const protocol = String(adapterKey || defaultModelAdapter(mediaType, providerName)).trim();
         const isVideo = mediaType === "video";
         const isText = mediaType === "text";
+        const isAudio = mediaType === "audio";
         const isBananaRouterImage = mediaType === "image" && protocol === "banana_router";
         const isSanBaoMedia = protocol === "san_bao" && (mediaType === "image" || mediaType === "video");
         return {
           providerProtocol: protocol,
-          invocationMode: isText ? "stream" : isVideo || isBananaRouterImage || isSanBaoMedia ? "async_polling" : "sync",
-          taskModes: isText ? ["text.script"] : isVideo ? ["video.text_to_video", "video.image_to_video"] : ["image.generate", "image.edit", "image.reference_generate"],
+          invocationMode: isText ? "stream" : isAudio || isVideo || isBananaRouterImage || isSanBaoMedia ? "async_polling" : "sync",
+          taskModes: isText ? ["text.script"] : isAudio ? ["audio.text_to_speech"] : isVideo ? ["video.text_to_video", "video.image_to_video"] : ["image.generate", "image.edit", "image.reference_generate"],
           status: "disabled",
           sortOrder: 100,
-          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isVideo ? { input: ["prompt", "image"], output: ["video"], ...(isSanBaoMedia ? { asyncPolling: true } : {}) } : { input: ["prompt", "image"], output: ["image"], ...((isBananaRouterImage || isSanBaoMedia) ? { asyncPolling: true } : {}) },
+          capabilities: isText ? { input: ["prompt", "outline"], output: ["text", "json"] } : isAudio ? { input: ["prompt", "voice"], output: ["audio"], asyncPolling: true } : isVideo ? { input: ["prompt", "image"], output: ["video"], ...(isSanBaoMedia ? { asyncPolling: true } : {}) } : { input: ["prompt", "image"], output: ["image"], ...((isBananaRouterImage || isSanBaoMedia) ? { asyncPolling: true } : {}) },
           defaultParams: {},
           providerConfig: isText
             ? (protocol === "cumob_chat"
@@ -12073,6 +12238,10 @@
               : protocol === "modelflare_responses"
               ? { baseURL: "https://modelflare.dev/v1", requestPath: "/responses", apiKeyEnv: "MODELFLARE_API_KEY", requestFormat: "responses", timeoutMs: 120000 }
               : { baseURL: "", requestPath: "/chat/completions", apiKeyEnv: "", requestFormat: "openai_compatible_chat", timeoutMs: 120000 })
+            : isAudio
+            ? (protocol === "globalaiopc_sound_clone"
+              ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/soundCloning/audios", createTaskEndpoint: "/v1/soundCloning/audios", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_sound_clone_audio" }
+              : { baseURL: "", requestPath: "", createTaskEndpoint: "", queryTaskEndpoint: "", apiKeyEnv: "", requestFormat: "json" })
             : isVideo
             ? (
               protocol === "banana_router"
@@ -12108,12 +12277,12 @@
                 ? { baseURL: "https://ark.cn-beijing.volces.com", requestPath: "/api/v3/images/generations", endpoint: "/api/v3/images/generations", apiKeyEnv: "", requestFormat: "volcengine_ark_images_generation", resultFormat: "url" }
                 : { baseURL: "", requestPath: "/v1/images/edits", endpoint: "/v1/images/generations", editEndpoint: "/v1/images/edits", apiKeyEnv: "", requestFormat: protocol === "openai_images" ? "openai_images" : "json", resultFormat: "b64_json", contentType: "multipart/form-data" }
             ),
-          pricing: { unit: mediaType, baseCredits: isText ? 20 : isVideo ? 120 : 90 },
+          pricing: { unit: mediaType, baseCredits: isText ? 20 : isAudio ? 30 : isVideo ? 120 : 90 },
           limits: {},
-          uiConfig: isText ? { modelKind: "text.script", modelKindLabel: "\u5267\u672c\u6a21\u578b", supportedModes: ["script"] } : isVideo ? { videoCategory: "first_frame", videoCategoryLabel: "\u9996\u5e27\u89c6\u9891" } : {},
+          uiConfig: isText ? { modelKind: "text.script", modelKindLabel: "\u5267\u672c\u6a21\u578b", supportedModes: ["script"] } : isAudio ? { modelKind: "audio.text_to_speech", modelKindLabel: "\u6587\u672c\u8f6c\u8bed\u97f3", supportedModes: ["text_to_speech"] } : isVideo ? { videoCategory: "first_frame", videoCategoryLabel: "\u9996\u5e27\u89c6\u9891" } : {},
           dispatchPolicy: {
-            submitQueueName: isText ? "generation-submit-text" : isVideo ? "generation-submit-video" : "generation-submit-image",
-            pollQueueName: isVideo ? "generation-poll-video" : isBananaRouterImage || isSanBaoMedia ? "generation-poll-image" : null,
+            submitQueueName: isText ? "generation-submit-text" : isAudio ? "generation-submit-audio" : isVideo ? "generation-submit-video" : "generation-submit-image",
+            pollQueueName: isAudio ? "generation-poll-audio" : isVideo ? "generation-poll-video" : isBananaRouterImage || isSanBaoMedia ? "generation-poll-image" : null,
             providerRpmLimit: 60,
             providerConcurrentLimit: 5,
             submitConcurrencyLimit: 5,
@@ -12476,6 +12645,8 @@
         { value: "video.first_frame", mediaType: "video", label: "\u9996\u5e27\u751f\u89c6\u9891", videoCategory: "first_frame", taskModes: ["video.image_to_video"] },
         { value: "video.first_last_frame", mediaType: "video", label: "\u9996\u5c3e\u5e27\u751f\u89c6\u9891", videoCategory: "first_last_frame", taskModes: ["video.first_last_frame_to_video", "video.image_to_video"] },
         { value: "video.reference", mediaType: "video", label: "\u53c2\u8003\u751f\u89c6\u9891", videoCategory: "reference", taskModes: ["video.reference_image_to_video", "video.image_to_video"] },
+        { value: "audio.text_to_speech", mediaType: "audio", label: "\u6587\u672c\u8f6c\u8bed\u97f3", taskModes: ["audio.text_to_speech"] },
+        { value: "audio.music_generation", mediaType: "audio", label: "\u97f3\u4e50\u751f\u6210", taskModes: ["audio.music_generation"] },
         { value: "text.script", mediaType: "text", label: "\u5267\u672c\u6a21\u578b", taskModes: ["text.script"] },
       ];
 
@@ -12591,6 +12762,10 @@
           if (category === "video.reference" || category === "reference" || allModes.some((mode) => mode.includes("reference"))) return "video.reference";
           return "video.first_frame";
         }
+        if (mediaType === "audio") {
+          if (String(uiConfig.modelKind || "") === "audio.music_generation" || allModes.some((mode) => mode.includes("music"))) return "audio.music_generation";
+          return "audio.text_to_speech";
+        }
         if (String(uiConfig.modelKind || "").startsWith("image.")) return String(uiConfig.modelKind);
         if (allModes.some((mode) => mode.includes("reference") || mode.includes("image_to_image") || mode.includes("multi_reference") || mode.includes("edit"))) {
           return "image.reference_image";
@@ -12603,6 +12778,7 @@
       }
 
       function modelKindLabel(model) {
+        if (String(model?.mediaType || "").trim() === "audio") return "音频模型";
         return modelKindOption(inferModelKind(model)).label;
       }
 
@@ -12782,6 +12958,8 @@
           ? existingSupportedModes
           : kind.mediaType === "text"
           ? ["script"]
+          : kind.mediaType === "audio"
+          ? (kind.value === "audio.music_generation" ? ["music_generation"] : ["text_to_speech"])
           : kind.value.startsWith("image.")
           ? (kind.value === "image.text_to_image" ? ["text_to_image"] : ["reference_image", "multi_reference", "image_to_image"])
           : videoSupportedModesByTaskModes(kind.videoCategory, taskModes);
@@ -12982,6 +13160,7 @@
       const modelMediaTabs = [
         { key: "image", title: "图片模型", note: "查看全部图片模型。" },
         { key: "video", title: "视频模型", note: "查看全部视频模型。" },
+        { key: "audio", title: "音频模型", note: "查看全部音频模型。" },
         { key: "text", title: "文本模型", note: "查看全部文本模型。" },
       ];
 
@@ -12990,10 +13169,13 @@
         if (tabKey === "video") {
           return rows.filter((model) => String(model.mediaType || "").trim() === "video");
         }
+        if (tabKey === "audio") {
+          return rows.filter((model) => String(model.mediaType || "").trim() === "audio");
+        }
         if (tabKey === "text") {
           return rows.filter((model) => {
             const mediaType = String(model.mediaType || "").trim();
-            return mediaType !== "image" && mediaType !== "video";
+            return mediaType === "text" || mediaType === "multimodal";
           });
         }
         return rows.filter((model) => String(model.mediaType || "").trim() === "image");
@@ -13166,16 +13348,84 @@
           status: "idle",
           tasks: [],
           error: "",
+          cookie: "",
+          cookieDraft: "",
+          cookieLoaded: false,
+          cookieStatus: "idle",
+          cookieError: "",
+          cookieEditing: false,
+          cookieSaving: false,
+        };
+
+        async function loadAdminVideoBatchCookie() {
+          const current = state.adminVideoBatch;
+          if (current.cookieLoaded || current.cookieStatus === "loading") return;
+          current.cookieStatus = "loading";
+          try {
+            const result = await api("/api/admin/video-batch/cookie");
+            current.cookie = String(result.data?.cookie || "");
+            current.cookieLoaded = true;
+            current.cookieStatus = "ready";
+            current.cookieError = "";
+          } catch (error) {
+            current.cookieStatus = "error";
+            current.cookieError = error.payload?.error?.message || error.message || "Cookie 加载失败";
+          }
+          renderShell();
+        }
+
+        window.editAdminVideoBatchCookie = () => {
+          const current = state.adminVideoBatch;
+          current.cookieDraft = current.cookie;
+          current.cookieEditing = true;
+          current.cookieError = "";
+          renderShell();
+        };
+
+        window.updateAdminVideoBatchCookie = (value) => {
+          state.adminVideoBatch.cookieDraft = String(value || "");
+          state.adminVideoBatch.cookieError = "";
+        };
+
+        window.cancelAdminVideoBatchCookie = () => {
+          state.adminVideoBatch.cookieEditing = false;
+          state.adminVideoBatch.cookieError = "";
+          renderShell();
+        };
+
+        window.saveAdminVideoBatchCookie = async () => {
+          const current = state.adminVideoBatch;
+          current.cookieSaving = true;
+          current.cookieError = "";
+          renderShell();
+          try {
+            const result = await api("/api/admin/video-batch/cookie", {
+              method: "PATCH",
+              headers: { "idempotency-key": adminIdempotencyKey("video-batch-cookie") },
+              body: JSON.stringify({ cookie: current.cookieDraft, reason: "更新视频解析服务端 Cookie" }),
+            });
+            current.cookie = String(result.data?.cookie || "");
+            current.cookieLoaded = true;
+            current.cookieEditing = false;
+            current.cookieStatus = "ready";
+          } catch (error) {
+            current.cookieError = error.payload?.error?.message || error.message || "Cookie 保存失败";
+          } finally {
+            current.cookieSaving = false;
+          }
+          renderShell();
         };
 
         function renderTask(task, index) {
           const ready = task?.status === "ready" && task.streamUrl;
           const title = escapeHtml(task?.title || "未命名视频");
           const message = ready ? "已解析，可在播放器中手动保存" : escapeHtml(task?.error || "解析失败");
+          const playbackUrl = ready ? `/api/admin/video-batch/media?url=${encodeURIComponent(task.streamUrl)}${task.audioStreamUrl ? `&audio=${encodeURIComponent(task.audioStreamUrl)}` : ""}` : "";
+          const downloadUrl = ready ? `${playbackUrl}&download=1` : "";
           return `<article class="card" style="display:grid;gap:8px;padding:12px;">
             <strong>${index + 1}. ${title}</strong>
             <span class="metric-note">${message}</span>
-            ${ready ? `<video controls preload="metadata" src="${escapeAttribute(task.streamUrl)}" style="width:100%;max-height:360px;background:#0b1220;"></video><a href="${escapeAttribute(task.streamUrl)}" target="_blank" rel="noreferrer">在新标签页打开播放地址</a>` : ""}
+            ${ready ? `<video controls preload="metadata" src="${escapeAttribute(playbackUrl)}" style="width:100%;max-height:360px;background:#0b1220;"></video><div class="toolbar" style="justify-content:flex-start;"><a href="${escapeAttribute(downloadUrl)}" rel="noreferrer">下载视频</a><a href="${escapeAttribute(playbackUrl)}" target="_blank" rel="noreferrer">在新标签页打开播放</a></div>` : ""}
           </article>`;
         }
 
@@ -13190,7 +13440,8 @@
         };
 
         window.clearAdminVideoBatch = () => {
-          state.adminVideoBatch = { links: "", authorized: false, status: "idle", tasks: [], error: "" };
+          const current = state.adminVideoBatch;
+          state.adminVideoBatch = { ...current, links: "", authorized: false, status: "idle", tasks: [], error: "" };
           renderShell();
         };
 
@@ -13245,6 +13496,7 @@
             }
             const current = state.adminVideoBatch;
             const tasks = Array.isArray(current.tasks) ? current.tasks : [];
+            const cookieConfigured = Boolean(current.cookie.trim());
             return `<div class="section-stack">
               <section class="card">
                 <div class="toolbar"><div><h3 style="margin:0;">视频批量解析</h3><div class="metric-note">仅管理员使用。后端只解析播放地址，不暂存或转发视频。</div></div><span class="tag blue">服务端解析</span></div>
@@ -13252,6 +13504,11 @@
                 <label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;"><input type="checkbox" ${current.authorized ? "checked" : ""} onchange="setAdminVideoBatchAuthorized(this.checked)" />我确认对这些内容拥有下载或使用授权</label>
                 <div class="toolbar" style="justify-content:flex-start;margin-top:12px;"><button class="btn primary" onclick="resolveAdminVideoBatch()" ${current.status === "resolving" ? "disabled" : ""}>${current.status === "resolving" ? "正在解析…" : "解析播放地址"}</button><button class="btn ghost" onclick="clearAdminVideoBatch()">清空</button></div>
                 ${current.error ? `<div class="error-text">${escapeHtml(current.error)}</div>` : ""}
+              </section>
+              <section class="card">
+                <div class="toolbar"><div><h3 style="margin:0;">服务端 Cookie</h3><div class="metric-note">用于抖音等平台的服务端解析，仅管理员可见。</div></div><span class="tag ${cookieConfigured ? "green" : "blue"}">${cookieConfigured ? "已配置" : "未配置"}</span></div>
+                ${current.cookieEditing ? `<label class="field"><span>Cookie 内容</span><textarea rows="5" oninput="updateAdminVideoBatchCookie(this.value)" placeholder="粘贴浏览器复制的 Cookie（name=value; ...）">${escapeHtml(current.cookieDraft)}</textarea></label><div class="toolbar" style="justify-content:flex-start;"><button class="btn primary" onclick="saveAdminVideoBatchCookie()" ${current.cookieSaving ? "disabled" : ""}>${current.cookieSaving ? "保存中…" : "保存 Cookie"}</button><button class="btn ghost" onclick="cancelAdminVideoBatchCookie()">取消</button></div>` : `<div class="toolbar" style="justify-content:flex-start;"><span class="metric-note">${cookieConfigured ? "服务端解析将优先使用已保存 Cookie" : "尚未配置服务端 Cookie"}</span><button class="btn ghost" onclick="editAdminVideoBatchCookie()">${cookieConfigured ? "修改 Cookie" : "配置 Cookie"}</button></div>`}
+                ${current.cookieError ? `<div class="error-text">${escapeHtml(current.cookieError)}</div>` : ""}
               </section>
               <section class="card"><div class="toolbar"><h3 style="margin:0;">解析结果</h3><span class="metric-note">${tasks.length ? `已处理 ${tasks.length} 条` : "等待解析"}</span></div><div class="grid">${tasks.length ? tasks.map(renderTask).join("") : `<div class="state-panel" style="min-height:160px;"><span>解析结果将在这里显示</span></div>`}</div></section>
             </div>`;
@@ -13262,6 +13519,7 @@
         renderShell = function renderShell() {
           previousRenderShell();
           const nav = document.querySelector(".nav");
+          if (state.page === "videoBatch" && hasPermission("ops.task.retry")) loadAdminVideoBatchCookie();
           if (!nav || !hasPermission("ops.task.retry") || nav.querySelector('[data-page="videoBatch"]')) return;
           const settingsButton = nav.querySelector('[data-page="settings"]');
           const button = document.createElement("button");

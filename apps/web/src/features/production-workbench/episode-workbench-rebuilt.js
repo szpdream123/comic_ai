@@ -163,8 +163,10 @@ export function renderEpisodeWorkbench({
   projectDetail = null,
   membershipStatus = null,
   teamAssetLibraryEnabled = false,
-  firstLoginGuideTargetKey = "",
+  layoutMode = "standard",
+  workflowWorkbenchOpen = false,
 } = {}) {
+  const isWorkflowLayout = layoutMode === "workflow";
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
   const boardMode = generationUiState.museBoardMode ?? "operation";
   const storyboardVisibleMediaTabs = STORYBOARD_MEDIA_TABS;
@@ -281,13 +283,118 @@ export function renderEpisodeWorkbench({
   const selectAllDisabled = scopeMode === "storyboard" ? allStoryboardIds.length === 0 : allAssetIds.length === 0;
   const selectedCount = scopeMode === "storyboard" ? selectedStoryboardIds.length : selectedEpisodeAssetIds.length;
   const batchSelectionActions = renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled, selectedCount);
+  const workflowAssetBatchActions = renderBatchSelectionActions(
+    "assets",
+    allAssetIds.length > 0 && allAssetIds.every((id) => selectedEpisodeAssetIds.includes(id)),
+    allAssetIds.length === 0,
+    selectedEpisodeAssetIds.length,
+    { batchScope: "assets", batchLabel: "一键生图", showSetLatest: false },
+  );
+  const workflowStoryboardBatchActions = renderBatchSelectionActions(
+    "storyboard",
+    allStoryboardIds.length > 0 && allStoryboardIds.every((id) => selectedStoryboardIds.includes(id)),
+    allStoryboardIds.length === 0,
+    selectedStoryboardIds.length,
+    { batchScope: "storyboard", batchLabel: "一键生视频", showSetLatest: false },
+  );
   const quickAssetRailToggleLabel = isQuickAssetRailCollapsed ? "展开资产快捷栏" : "收起资产快捷栏";
+  const generationWorkbench = `
+    <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? `asset-scope ${hasAssetConversationEntries ? "has-generated-stage" : "empty-composer"}` : "storyboard-scope"}">
+      ${isWorkflowLayout ? `<div class="episode-replica-workflow-dock-head"><strong>${scopeMode === "assets" ? "图片生成" : "视频生成"}</strong><button type="button" class="episode-replica-workflow-dock-close" data-action="close-workflow-generation-workbench" aria-label="关闭生成工作台">×</button></div>` : ""}
+      ${isWorkflowLayout && scopeMode === "assets" ? "" : `<div class="episode-replica-stage-head">
+        ${isWorkflowLayout ? "" : `<div class="episode-replica-stage-tabs">
+          ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode, activeVideoGenerationMode)).join("")}
+          ${batchSelectionActions}
+        </div>`}
+        <p class="episode-replica-stage-title">${
+          scopeMode === "storyboard"
+            ? `分镜：${escapeHtml(currentStoryboard?.displayTitle ?? currentStoryboard?.title ?? "")}`
+            : escapeHtml(assetStageTitle)
+        }</p>
+      </div>`}
+      <div class="episode-replica-stage-body">
+        ${
+          scopeMode === "storyboard"
+            ? renderStoryboardStage(
+                currentStoryboard,
+                effectiveMediaMode,
+                imageGenerationResult,
+                videoGenerationResult,
+                storyboardConversationEntries,
+              )
+            : hasAssetConversationEntries
+              ? renderAssetGeneratedStage(
+                  selectedAsset,
+                  normalizedActiveAssetTab,
+                  imageGenerationResult,
+                  effectiveMediaMode,
+                  assetConversationEntries,
+                )
+              : ""
+        }
+      </div>
+      ${renderPromptDock({
+        selectedStoryboard: currentStoryboard,
+        selectedAsset,
+        selectedModelId: effectiveModelId,
+        prompt,
+        busy,
+        canGenerateCurrentMode,
+        validationMessage,
+        generationControls,
+        episodeGenerationConfig,
+        generationUiState: promptDockGenerationUiState,
+        mediaMode: effectiveMediaMode,
+        videoMode: activeVideoGenerationMode,
+        attachments: episodeWorkbenchAttachments,
+        selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
+        generationPollingActive: currentGenerationPollingActive,
+        scopeMode,
+      })}
+    </section>`;
   return `
     <section id="storyboard-workbench" class="episode-replica-shell" aria-label="分镜工作台" data-episode-id="${escapeAttr(episodeId)}" data-episode-title="${escapeAttr(episodeTitle)}">
-      <div class="episode-replica-layout ${scopeMode === "storyboard" ? "storyboard-mode" : "assets-mode"} ${isEmptyAssetComposer ? "empty-assets-mode" : ""}">
+      <div class="episode-replica-layout ${scopeMode === "storyboard" ? "storyboard-mode" : "assets-mode"} ${isEmptyAssetComposer ? "empty-assets-mode" : ""} ${isWorkflowLayout ? `workflow-layout ${workflowWorkbenchOpen ? "workflow-workbench-open" : ""}` : ""}">
         <section class="episode-replica-left">
           ${
-            scopeMode === "assets"
+            isWorkflowLayout
+              ? `<div class="episode-replica-workflow-content">
+                  <section class="episode-replica-workflow-section" aria-label="图片资产" data-workflow-asset-panel>
+                    <div class="episode-replica-workflow-section-head">
+                      <strong>图片资产</strong>
+                      ${workflowAssetBatchActions}
+                    </div>
+                    ${renderAssetPanel(
+                      assetGroups,
+                      normalizedActiveAssetTab,
+                      selectedEpisodeCardId,
+                      selectedEpisodeAssetIds,
+                      canShowTeamAssetLibrary,
+                    )}
+                  </section>
+                  <section class="episode-replica-workflow-section" aria-label="视频分镜" data-workflow-storyboard-panel>
+                    <div class="episode-replica-workflow-section-head">
+                      <strong>视频分镜</strong>
+                      ${workflowStoryboardBatchActions}
+                    </div>
+                    ${renderStoryboardPanel(
+                      normalizedStoryboards,
+                      currentStoryboard,
+                      boardMode,
+                      selectedStoryboardIds,
+                      assetGroups,
+                      {
+                        page: normalizedStoryboardPage,
+                        pageSize: normalizedStoryboardPageSize,
+                        totalPages: storyboardTotalPages,
+                        total: storyboardTotalCount,
+                        mode: storyboardPaginationMode,
+                      },
+                      batchSelectionActions,
+                    )}
+                  </section>
+                </div>`
+              : scopeMode === "assets"
               ? renderAssetPanel(
                   assetGroups,
                   normalizedActiveAssetTab,
@@ -314,60 +421,9 @@ export function renderEpisodeWorkbench({
           }
         </section>
 
-        <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? `asset-scope ${hasAssetConversationEntries ? "has-generated-stage" : "empty-composer"}` : "storyboard-scope"}">
-          <div class="episode-replica-stage-head">
-            <div class="episode-replica-stage-tabs">
-              ${visibleMediaTabs.map((tab) => renderMediaTab(tab, effectiveMediaMode, activeVideoGenerationMode)).join("")}
-              ${batchSelectionActions}
-            </div>
-            <p class="episode-replica-stage-title">${
-              scopeMode === "storyboard"
-                ? `分镜：${escapeHtml(currentStoryboard?.displayTitle ?? currentStoryboard?.title ?? "")}`
-                : escapeHtml(assetStageTitle)
-            }</p>
-          </div>
-          <div class="episode-replica-stage-body">
-            ${
-              scopeMode === "storyboard"
-                ? renderStoryboardStage(
-                    currentStoryboard,
-                    effectiveMediaMode,
-                    imageGenerationResult,
-                    videoGenerationResult,
-                    storyboardConversationEntries,
-                  )
-                : hasAssetConversationEntries
-                  ? renderAssetGeneratedStage(
-                      selectedAsset,
-                      normalizedActiveAssetTab,
-                      imageGenerationResult,
-                      effectiveMediaMode,
-                      assetConversationEntries,
-                    )
-                  : ""
-            }
-          </div>
-          ${renderPromptDock({
-            selectedStoryboard: currentStoryboard,
-            selectedAsset,
-            selectedModelId: effectiveModelId,
-            prompt,
-            busy,
-            canGenerateCurrentMode,
-            validationMessage,
-            generationControls,
-            episodeGenerationConfig,
-            generationUiState: promptDockGenerationUiState,
-            mediaMode: effectiveMediaMode,
-            videoMode: activeVideoGenerationMode,
-            attachments: episodeWorkbenchAttachments,
-            selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
-            generationPollingActive: currentGenerationPollingActive,
-            scopeMode,
-          })}
-        </section>
+        ${isWorkflowLayout ? (workflowWorkbenchOpen ? generationWorkbench : "") : generationWorkbench}
 
-        <aside class="episode-replica-right ${isQuickAssetRailCollapsed ? "is-collapsed" : ""}">
+        ${isWorkflowLayout ? "" : `<aside class="episode-replica-right ${isQuickAssetRailCollapsed ? "is-collapsed" : ""}">
           <button
             class="episode-replica-right-toggle ${isQuickAssetRailCollapsed ? "is-expand" : "is-collapse"}"
             type="button"
@@ -401,12 +457,12 @@ export function renderEpisodeWorkbench({
               }
             </div>
           </div>
-        </aside>
+        </aside>`}
       </div>
 
       ${renderEpisodeExportPreview(exportPreviewResult)}
       ${renderEpisodeExportOptionModal(exportOptionModal)}
-      ${renderEpisodeBatchModal(episodeBatchModal)}
+      ${isWorkflowLayout ? "" : renderEpisodeBatchModal(episodeBatchModal)}
       ${renderStoryboardDescriptionModal({
         show: isStoryboardDescriptionModalOpen,
         value: storyboardDescriptionDraft,
@@ -579,12 +635,15 @@ function renderAssetPanel(
   `;
 }
 
-export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled, selectedCount = 0) {
+export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled, selectedCount = 0, options = {}) {
+  const isStoryboardScope = scopeMode === "storyboard";
+  const batchScope = options.batchScope ? ` data-batch-scope="${escapeAttr(options.batchScope)}"` : "";
+  const batchLabel = options.batchLabel ?? (isStoryboardScope ? "批量生成视频" : "批量生图");
   return `
     <div class="episode-replica-batch-actions">
-      <button class="episode-replica-stage-tab" type="button" data-action="set-selected-latest-media" ${disabled(selectedCount === 0)} aria-disabled="${selectedCount === 0 ? "true" : "false"}">一键设置</button>
-      <button class="episode-replica-stage-tab episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${scopeMode === "storyboard" ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
-      <button class="episode-replica-stage-tab" type="button" data-action="open-episode-batch-actions">${scopeMode === "assets" ? "批量生图" : "批量生成视频"}</button>
+      ${options.showSetLatest === false ? "" : `<button class="episode-replica-stage-tab" type="button" data-action="set-selected-latest-media" ${disabled(selectedCount === 0)} aria-disabled="${selectedCount === 0 ? "true" : "false"}">一键设置</button>`}
+      <button class="episode-replica-stage-tab episode-replica-select-all ${isAllSelected ? "active" : ""}" type="button" data-action="${isStoryboardScope ? "toggle-storyboard-select-all" : "toggle-episode-asset-select-all"}" aria-pressed="${isAllSelected ? "true" : "false"}" ${disabled(selectAllDisabled)}>${isAllSelected ? "取消全选" : "全选"}</button>
+      <button class="episode-replica-stage-tab" type="button" data-action="open-episode-batch-actions"${batchScope}>${escapeHtml(batchLabel)}</button>
     </div>
   `;
 }
@@ -752,7 +811,7 @@ function renderAssetCard(asset, assetKind, active, checked) {
         <div class="episode-replica-asset-title-row">
           <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
           <label class="episode-replica-asset-select">
-            <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题" />
+            <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题，双击修改" title="双击修改名称" readonly />
           </label>
         </div>
         <div class="episode-replica-asset-actions-row">
@@ -3282,7 +3341,16 @@ function renderLipSyncAudioItem(item, index, previewAudioId) {
   `;
 }
 
-function renderAttachment(item, index, selected) {
+export function renderPromptAttachmentCard(item, index, selected, options = {}) {
+  const actionAttribute = options.actionAttribute === "data-agent-action" ? "data-agent-action" : "data-action";
+  const cardAction = String(options.cardAction ?? "toggle-episode-workbench-attachment-selection").trim();
+  const removeAction = String(options.removeAction ?? "remove-episode-workbench-attachment").trim();
+  const cardActionMarkup = cardAction
+    ? ` ${actionAttribute}="${escapeAttr(cardAction)}" data-attachment-id="${escapeAttr(item.id ?? "")}"`
+    : "";
+  const removeActionMarkup = removeAction
+    ? ` ${actionAttribute}="${escapeAttr(removeAction)}"`
+    : "";
   const mediaType = resolveComposerReferenceMediaType(item);
   const previewUrl = resolveReferencePreview(item);
   const imagePreviewUrl = resolvePromptEditorMentionPreview(item, mediaType);
@@ -3301,13 +3369,17 @@ function renderAttachment(item, index, selected) {
           ? `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
           : renderQuickPlaceholder(mediaType, item.name ?? "图片");
   return `
-    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}" title="${escapeAttr(tooltipName)}">
-      <button class="episode-replica-ref-remove" type="button" data-action="remove-episode-workbench-attachment" data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
+    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}"${cardActionMarkup} title="${escapeAttr(tooltipName)}">
+      <button class="episode-replica-ref-remove" type="button"${removeActionMarkup} data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(mediaType)}"${mediaType === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? title)}" data-image-preview-key="attachment:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? title)}" title="双击查看大图"` : ""}>${preview}</span>
       ${mediaType === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
       ${mediaType === "audio" || mediaType === "video" ? `<strong>${escapeHtml(title)}</strong>` : ""}
     </article>
   `;
+}
+
+function renderAttachment(item, index, selected) {
+  return renderPromptAttachmentCard(item, index, selected);
 }
 
 function resolveComposerReferenceMediaType(item) {

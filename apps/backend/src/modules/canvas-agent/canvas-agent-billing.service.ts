@@ -15,7 +15,7 @@ export interface CanvasAgentTextUsage {
   totalTokens: number;
 }
 
-export const CANVAS_AGENT_CREDIT_REASON = "画布协作Agent操作消耗";
+export const CANVAS_AGENT_CREDIT_REASON = "会话消息积分消耗";
 const CANVAS_AGENT_BILLING_MODE = "token";
 
 export class CanvasAgentBillingService {

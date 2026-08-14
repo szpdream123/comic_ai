@@ -38,7 +38,8 @@ test("Canvas Agent timeline collapses lifecycle events by step", () => {
   assert.equal((html.match(/data-event-status="step\.succeeded"/g) ?? []).length, 1);
   assert.equal((html.match(/data-event-status="step\.running"/g) ?? []).length, 1);
   assert.doesNotMatch(html, /data-event-status="step\.created"|data-event-status="policy\.decided"/);
-  assert.match(html, /工具 canvas\.patch/);
+  assert.match(html, /灵曦AI/);
+  assert.doesNotMatch(html, /canvas\.patch/);
 });
 
 test("Canvas Agent timeline shows failure codes instead of stale policy reasons", () => {
@@ -53,6 +54,135 @@ test("Canvas Agent timeline shows failure codes instead of stale policy reasons"
   assert.match(html, /canvas_agent_generation_model_required/);
   assert.match(html, /canvas_agent_duplicate_side_effect/);
   assert.doesNotMatch(html, />b_mode_effect</);
+});
+
+test("free generation model answers show public names and expose switchable public choices", async () => {
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        generationKind: "image",
+        generationModelCodes: { image: "cumo-gpt-image-2-pro" },
+        modelCode: "text-pro",
+        models: [{
+          modelCode: "text-pro",
+          modelLabel: "文本创作 Pro",
+        }, {
+          modelCode: "text-fast",
+          modelLabel: "文本创作 快速版",
+        }],
+        generationModels: [{
+        modelCode: "cumo-gpt-image-2-pro",
+        modelLabel: "Image-2（优惠）",
+        mediaType: "image",
+      }, {
+        modelCode: "cumo-gpt-image-3-pro",
+        modelLabel: "Image-3（高清）",
+        mediaType: "image",
+      }],
+      messages: [{
+        role: "assistant",
+        text: "我是灵曦AI，当前会话使用的模型为文本创作 Pro。",
+      }],
+      },
+    },
+    api: {},
+  };
+  const html = renderCanvasAgentPanel(workbench.ui);
+
+  assert.match(html, /我是灵曦AI，当前会话使用的模型为文本创作 Pro。/);
+  assert.match(html, /可用模型/);
+  assert.match(html, /文本创作 快速版/);
+  assert.match(html, /data-agent-action="select-agent-text-model" data-model-index="0"/);
+  assert.match(html, /data-agent-action="select-agent-text-model" data-model-index="1"/);
+  assert.doesNotMatch(html, /Image-3（高清）/);
+  assert.doesNotMatch(html, /cumo-gpt-image-2-pro/);
+
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+  await controller.handleAction({ dataset: { agentAction: "select-agent-text-model", modelIndex: "1" } });
+  assert.equal(workbench.ui.canvasAgent.modelCode, "text-fast");
+  const historyHtml = renderCanvasAgentPanel(workbench.ui);
+  assert.match(historyHtml, /我是灵曦AI，当前会话使用的模型为文本创作 Pro。/);
+  assert.match(historyHtml, /data-model-index="0" aria-pressed="true"/);
+  controller.dispose();
+});
+
+test("free generation sends text model switching requests to the current text model for analysis", async () => {
+  let sentInput = null;
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        promptDraft: "帮我将模型切换成 GPT",
+        modelCode: "deepseek",
+        generationModelsStatus: "ready",
+        generationModels: [{ modelCode: "image-model", modelLabel: "Image", mediaType: "image" }],
+      },
+    },
+    api: {
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-text-model-guidance" } };
+      },
+      async sendFreeGenerationMessage(_conversationId, input) {
+        sentInput = input;
+        return { task: { id: "text-model-guidance-task", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+
+  assert.equal(sentInput.modelCode, "deepseek");
+  assert.equal(sentInput.message.text, "帮我将模型切换成 GPT");
+  assert.equal(workbench.ui.canvasAgent.taskId, "text-model-guidance-task");
+  controller.dispose();
+});
+
+test("free generation sends media model switching requests to the current text model for analysis", async () => {
+  let sentInput = null;
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        promptDraft: "请切换视频模型",
+        modelCode: "deepseek",
+        generationKind: "video",
+        generationModelsStatus: "ready",
+        generationModels: [{ modelCode: "seedance", modelLabel: "Seedance", mediaType: "video" }],
+      },
+    },
+    api: {
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-media-model-analysis" } };
+      },
+      async sendFreeGenerationMessage(_conversationId, input) {
+        sentInput = input;
+        return { task: { id: "media-model-analysis-task", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+
+  assert.equal(sentInput.modelCode, "deepseek");
+  assert.equal(sentInput.message.preferredGenerationKind, "video");
+  assert.deepEqual(sentInput.message.preferredModels, { video: "seedance" });
+  controller.dispose();
 });
 
 test("Canvas Agent timeline shows a step identifier only once", () => {
@@ -126,6 +256,51 @@ test("Canvas Agent keeps the external generation status after an interjection", 
   });
   assert.match(html, /正在等待生成结果/);
   assert.doesNotMatch(html, /正在处理补充要求/);
+});
+
+test("free generation stops showing a waiting state as soon as every media task is terminal", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      taskId: "task-waiting",
+      status: "waiting_external",
+      events: [{ id: "generation-waiting", sequence: 1, eventType: "task.waiting_external", event: {} }],
+      messages: [{
+        id: "generation-message",
+        taskId: "task-waiting",
+        role: "tool",
+        generationTaskId: "generation-1",
+        media: { taskId: "generation-1", kind: "video", status: "succeeded", url: "/generated/clip.mp4" },
+      }],
+    },
+  });
+
+  assert.doesNotMatch(html, /正在等待生成结果/);
+  assert.match(html, /generated\/clip\.mp4/);
+});
+
+test("free generation displays the text-model analysis message for a new task after an earlier media result", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      taskId: "new-task",
+      status: "queued",
+      messages: [
+        {
+          id: "previous-generation",
+          taskId: "previous-task",
+          role: "tool",
+          generationTaskId: "generation-previous",
+          media: { taskId: "generation-previous", kind: "video", status: "succeeded", url: "/generated/previous.mp4" },
+        },
+        { id: "new-request", taskId: "new-task", role: "user", text: "生成新的参考视频" },
+      ],
+    },
+  });
+
+  assert.match(html, /data-event-role="assistant"/);
+  assert.match(html, /<strong>灵曦<\/strong>/);
+  assert.match(html, /正在思考中/);
 });
 
 test("Canvas Agent shows only a failure state for a failed current task", () => {
@@ -494,6 +669,664 @@ test("Canvas Agent restores and persists the session panel state", () => {
   agent.panelWidth = 520;
   persistCanvasAgentUiState(ui, agent);
   assert.deepEqual(ui.canvasSessionUiState.canvasAgent, { panelOpen: true, panelWidth: 520 });
+});
+
+test("media-only Agent renders a standalone conversation workspace with history and prior media", () => {
+  const css = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  const ui = { canvasAgentCapabilityProfile: "media_generation_only" };
+  persistCanvasAgentUiState(ui, { mediaComposerHeight: 396 });
+  assert.deepEqual(ui.canvasSessionUiState, { canvasAgent: { mediaComposerHeight: 396 } });
+
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      conversationId: "free-conversation",
+      conversations: [
+        { id: "free-conversation", title: "电影海报创作" },
+        { id: "free-conversation-2", title: "山谷追逐镜头" },
+      ],
+      messages: [
+        { role: "user", text: "生成电影海报", createdAt: "2026-08-14T09:05:00.000Z" },
+        { role: "tool", generationTaskId: "task-poster", media: {
+          taskId: "task-poster",
+          kind: "image",
+          status: "completed",
+          url: "https://example.test/poster.png",
+          title: "海报",
+        } },
+      ],
+    },
+  });
+
+  assert.match(html, /生成电影海报/);
+  assert.match(html, /class="canvas-agent-message-time" datetime="2026-08-14T09:05:00.000Z"/);
+  assert.match(html, /生成电影海报[\s\S]*class="canvas-agent-message-time"/);
+  assert.match(html, /poster\.png/);
+  assert.match(html, /class="canvas-agent-media-sidebar"/);
+  assert.match(html, /aria-label="创作会话"/);
+  assert.match(html, /开启创作/);
+  assert.match(html, /新对话/);
+  assert.match(html, /电影海报创作/);
+  assert.match(html, /山谷追逐镜头/);
+  assert.match(html, /class="canvas-agent-media-workspace"/);
+  assert.match(html, /canvas-agent-media-conversation-row active[\s\S]*?data-conversation-id="free-conversation"[^>]*aria-current="page"/);
+  assert.doesNotMatch(html, /data-conversation-id="free-conversation"[^>]*disabled/);
+  assert.match(html, /aria-label="生成记录"/);
+  assert.match(html, /class="home-agent-composer canvas-agent-media-composer"/);
+  assert.match(html, /--canvas-agent-media-composer-height: 272px/);
+  assert.match(html, /data-agent-media-composer-resize[^>]*aria-label="拖动调整输入框高度"/);
+  assert.match(html, /class="home-agent-composer-content canvas-agent-media-composer-content"/);
+  assert.match(html, /class="home-agent-composer-footer canvas-agent-generation-config"/);
+  assert.match(html, /canvas-agent-generation-config[\s\S]*?home-agent-submit-group canvas-agent-media-submit-group[\s\S]*?<button class="canvas-agent-send-button"[^>]*data-agent-action="send"[^>]*>\s*<svg[\s\S]*?<path d="M12 20V4"/);
+  assert.doesNotMatch(html, /episode-replica-generate-label/);
+  assert.doesNotMatch(html, /canvas-agent-generation-config[\s\S]*?<span>\d+<\/span>/);
+  assert.match(html, /data-agent-action="toggle-free-generation-menu"/);
+  assert.match(html, /class="canvas-agent-media-model-float"/);
+  assert.match(html, /class="canvas-agent-current-model"/);
+  assert.match(html, /当前 · 暂无文本模型/);
+  assert.match(html, /图片 · 未配置/);
+  assert.match(html, /视频 · 未配置/);
+  assert.match(html, /音频 · 未配置/);
+  assert.match(html, /data-field="model:image"/);
+  assert.match(html, /data-field="model:video"/);
+  assert.match(html, /data-field="model:audio"/);
+  assert.match(css, /\.canvas-agent-media-model-float \.home-agent-model-trigger\s*\{[\s\S]*?opacity:\s*\.5;/);
+  assert.match(css, /\.canvas-agent-media-model-float \.home-agent-model-picker:hover \.home-agent-model-trigger,[\s\S]*?opacity:\s*1;/);
+  assert.match(css, /\.canvas-agent-media-model-float \.home-agent-model-picker:has\(\.home-agent-model-menu\)\s*\{[\s\S]*?z-index:\s*31;/);
+  assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-media-model-float\s*\{[\s\S]*?right:\s*28px;/);
+  assert.match(css, /\.canvas-agent-media-model-float \.home-agent-model-menu\s*\{[\s\S]*?left:\s*auto;[\s\S]*?right:\s*calc\(100% \+ 8px\);/);
+  assert.match(css, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.canvas-agent-panel\.is-media-only \.canvas-agent-media-model-float\s*\{[\s\S]*?right:\s*22px;/);
+  assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-media-composer\s*\{[\s\S]*?height:\s*var\(--canvas-agent-media-composer-height, clamp\(13rem, 24dvh, 17rem\)\);[\s\S]*?min-height:\s*11rem;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(css, /\.canvas-agent-media-composer-resize\s*\{[\s\S]*?cursor:\s*ns-resize;[\s\S]*?touch-action:\s*none;/);
+  assert.match(css, /\.canvas-agent-media-composer \.episode-replica-textarea\.has-inline-attachments,[\s\S]*?background:\s*var\(--new-canvas-field\) !important;/);
+  assert.match(css, /\.canvas-agent-media-composer \.episode-replica-textarea\.has-inline-attachments\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?min-height:\s*0;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(css, /@media \(min-width: 761px\) \{[\s\S]*?\.canvas-agent-panel\.is-media-only\s*\{[\s\S]*?width:\s*min\(1568px, calc\(100% - 48px\)\);/);
+  assert.doesNotMatch(html, /data-field="generationKind"/);
+  assert.doesNotMatch(html, /class="home-agent-composer-footer canvas-agent-generation-config"[\s\S]*home-agent-model-picker/);
+  assert.doesNotMatch(html, /canvas-agent-generation-model"[^>]*>\s*<select|canvas-agent-generation-parameters/);
+  assert.doesNotMatch(html, /episode-replica-video-settings-trigger/);
+  assert.doesNotMatch(html, /class="canvas-agent-generation-kinds"|class="canvas-agent-mode-picker"|审核批准/);
+  assert.doesNotMatch(html, /添加到画布|定位节点/);
+  assert.doesNotMatch(html, /data-canvas-agent-resize|关闭 Agent 面板/);
+  assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-generation-config\s*\{[\s\S]*?justify-content:\s*flex-end;/);
+  assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-media-submit-group\s*\{[\s\S]*?margin-left:\s*auto;/);
+  assert.match(css, /\.canvas-agent-composer button\.canvas-agent-send-button,[\s\S]*?\.canvas-agent-media-composer button\.canvas-agent-send-button\s*\{[\s\S]*?width:\s*46px;[\s\S]*?border-radius:\s*50%;/);
+});
+
+test("media-only Agent restores the resized composer height", () => {
+  const ui = {
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasSessionUiState: { canvasAgent: { mediaComposerHeight: 428 } },
+  };
+  const agent = ensureCanvasAgentState(ui);
+
+  assert.equal(agent.mediaComposerHeight, 428);
+  assert.match(renderCanvasAgentPanel(ui), /--canvas-agent-media-composer-height: 428px/);
+});
+
+test("media-only Agent reuses the canvas arrow and stop button states", () => {
+  const idleHtml = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {},
+  });
+  const runningHtml = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: { taskId: "generation-running", status: "running" },
+  });
+
+  assert.match(idleHtml, /<button class="canvas-agent-send-button"[^>]*data-agent-action="send"[^>]*><svg[\s\S]*?<path d="M12 20V4"/);
+  assert.match(runningHtml, /<button class="canvas-agent-send-button is-running"[^>]*data-agent-action="stop"[^>]*><svg[\s\S]*?<rect x="6" y="6" width="12" height="12"/);
+  assert.doesNotMatch(runningHtml, /episode-replica-generate-label/);
+});
+
+test("media-only Agent keeps generation model pickers enabled while a conversation is busy or archived", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      conversationId: "free-conversation",
+      conversations: [{ id: "free-conversation", title: "已归档会话", status: "archived" }],
+      taskId: "generation-task",
+      status: "running",
+      busyAction: "send",
+      generationModelsStatus: "ready",
+      generationModels: [
+        { modelCode: "image-pro", modelLabel: "Image Pro", mediaType: "image", enabled: true },
+        { modelCode: "video-pro", modelLabel: "Video Pro", mediaType: "video", enabled: true },
+        { modelCode: "audio-pro", modelLabel: "Audio Pro", mediaType: "audio", enabled: true },
+      ],
+    },
+  });
+
+  assert.doesNotMatch(html, /data-field="model:image"[^>]*disabled/);
+  assert.doesNotMatch(html, /data-field="model:video"[^>]*disabled/);
+  assert.doesNotMatch(html, /data-field="model:audio"[^>]*disabled/);
+  assert.doesNotMatch(html, /data-field="text-model"[^>]*disabled/);
+});
+
+test("media-only Agent hides a generic failure message superseded by a successful generation", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      taskId: "agent-task-1",
+      status: "succeeded",
+      messages: [
+        {
+          id: "tool-success", taskId: "agent-task-1", role: "tool", generationTaskId: "generation-1",
+          media: { taskId: "generation-1", kind: "image", status: "succeeded", url: "/generated.png" },
+        },
+        {
+          id: "obsolete-failure", taskId: "agent-task-1", role: "assistant",
+          text: "Canvas service returned an internal message.",
+        },
+      ],
+    },
+  });
+
+  assert.doesNotMatch(html, /生成任务执行失败，请检查模型配置或参考素材后重试。/);
+  assert.match(html, /generated\.png/);
+});
+
+test("media-only Agent keeps a generation model menu open for option selection", async () => {
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        generationMenuOpen: "free-generation:model:image",
+        generationModelsStatus: "ready",
+        generationModels: [
+          { modelCode: "image-standard", modelLabel: "Image Standard", mediaType: "image", enabled: true },
+          { modelCode: "image-pro", modelLabel: "Image Pro", mediaType: "image", enabled: true },
+        ],
+      },
+    },
+    api: {},
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+  const menuOptionTarget = {
+    closest(selector) {
+      return selector.includes(".home-agent-model-picker") ? {} : null;
+    },
+  };
+
+  assert.equal(controller.handleClick(menuOptionTarget), false);
+  assert.equal(workbench.ui.canvasAgent.generationMenuOpen, "free-generation:model:image");
+  await controller.handleAction({
+    dataset: { agentAction: "select-free-generation-model", modelKind: "image", modelId: "image-pro" },
+  });
+  assert.equal(workbench.ui.canvasAgent.generationModelCodes.image, "image-pro");
+  assert.equal(workbench.ui.canvasAgent.generationMenuOpen, "");
+  controller.dispose();
+});
+
+test("media-only Agent keeps readable theme surfaces over the home background", () => {
+  const css = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
+  const standaloneOverrides = css.slice(css.lastIndexOf("/* Let the configured home background"));
+
+  assert.match(standaloneOverrides, /canvas-agent-media-workspace\s*\{\s*background: var\(--new-canvas-background\) !important;/);
+  assert.match(standaloneOverrides, /canvas-agent-media-sidebar,[\s\S]*?background: var\(--new-canvas-panel\) !important;/);
+  assert.match(standaloneOverrides, /canvas-agent-timeline\s*\{\s*background: var\(--new-canvas-background\) !important;/);
+  assert.match(standaloneOverrides, /canvas-agent-event p,[\s\S]*?color: var\(--new-canvas-foreground\) !important;/);
+  assert.doesNotMatch(standaloneOverrides, /canvas-agent-timeline\s*\{\s*background: transparent !important;/);
+  assert.match(css, /:host-context\(\[data-workbench-theme="daylight"\]\)[\s\S]*?textarea\.home-agent-rich-editor\s*\{\s*color: #1b2730 !important;[\s\S]*?caret-color: #1b2730;/);
+  assert.match(css, /textarea\.home-agent-rich-editor::placeholder\s*\{\s*color: #6c7e89 !important;\s*opacity: 1;/);
+  assert.match(css, /canvas-agent-media-prompt-editor \.episode-prompt-editor-content\s*\{\s*color: #1b2730 !important;\s*caret-color: #1b2730;/);
+  assert.match(css, /canvas-agent-media-prompt-editor \.episode-prompt-editor-content p\.is-editor-empty:first-child::before\s*\{\s*color: #6c7e89 !important;\s*opacity: 1;/);
+});
+
+test("media-only Agent reuses enabled generation models, remarks, parameters, and selected billing input", async () => {
+  let sentInput = null;
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "93000000-0000-4000-8000-000000000099",
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {},
+    },
+    api: {
+      async listFreeGenerationModels() {
+        return { models: [
+          { modelCode: "agent-text", modelLabel: "Agent text" },
+          { modelCode: "agent-text-fast", modelLabel: "Agent text Fast" },
+        ] };
+      },
+      async listGlobalGenerationConfig({ mediaType }) {
+        const models = {
+          image: [{ modelCode: "image-pro", modelLabel: "Image Pro", mediaType: "image", enabled: true, remark: "适合角色与场景", apiKeyName: "我的图片密钥" }],
+          video: [
+            { modelCode: "video-disabled", modelLabel: "Disabled Video", mediaType: "video", enabled: false, remark: "不应显示" },
+            { modelCode: "video-inactive", modelLabel: "Inactive Video", mediaType: "video", status: "inactive", description: "也不应显示" },
+            { modelCode: "video-pro", modelLabel: "Video Pro", mediaType: "video", status: "active", remark: "适合动态镜头" },
+            { modelCode: "video-fast", modelLabel: "Video Fast", mediaType: "video", status: "active" },
+          ],
+          audio: [{
+            modelCode: "audio-pro",
+            modelLabel: "Audio Pro",
+            mediaType: "audio",
+            enabled: true,
+            summary: "旁白与配音",
+            apiKeyName: "我的音频密钥",
+            displayBaseCost: 12,
+            parameterSchema: {
+              voice: { type: "string", label: "音色", enum: ["narrator", "warm"] },
+              speed: { type: "number", label: "语速", enum: [1, 1.2] },
+            },
+            defaultParams: { voice: "narrator", speed: 1 },
+          }],
+        };
+        return {
+          models: models[mediaType] ?? [],
+          [`default${mediaType[0].toUpperCase()}${mediaType.slice(1)}ModelCode`]: `${mediaType}-pro`,
+        };
+      },
+      async listFreeGenerationConversations() {
+        return { conversations: [] };
+      },
+      async listFreeGenerationMessages() {
+        return { messages: [] };
+      },
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-media-conversation" } };
+      },
+      async sendFreeGenerationMessage(_conversationId, input) {
+        sentInput = input;
+        return { task: { id: "free-media-task", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  let html = renderCanvasAgentPanel(workbench.ui);
+  assert.match(html, /当前 · Agent text/);
+  assert.match(html, /图片 · Image Pro/);
+  assert.match(html, /视频 · Video Pro/);
+  assert.match(html, /音频 · Audio Pro/);
+  await controller.handleAction({ dataset: { agentAction: "select-free-generation-model", modelKind: "video", modelId: "video-fast" } });
+  assert.equal(workbench.ui.canvasAgent.generationModelCodes.video, "video-fast");
+  html = renderCanvasAgentPanel(workbench.ui);
+  assert.match(html, /当前 · Agent text/);
+  assert.match(html, /描述想生成的视频/);
+  await controller.handleAction({ dataset: { agentAction: "select-free-generation-model", modelKind: "audio", modelId: "audio-pro" } });
+  assert.equal(workbench.ui.canvasAgent.mode, "c");
+  html = renderCanvasAgentPanel(workbench.ui);
+  assert.match(html, /Audio Pro/);
+  assert.doesNotMatch(html, /NARRATOR|打开音频参数面板|audio-settings-panel/);
+  assert.match(html, /<span>12<\/span>/);
+  assert.doesNotMatch(html, /Disabled Video|Inactive Video|我的图片密钥|我的音频密钥/);
+
+  assert.match(html, /当前 · Agent text/);
+  await controller.handleAction({ dataset: { agentAction: "toggle-free-generation-menu", field: "text-model" } });
+  html = renderCanvasAgentPanel(workbench.ui);
+  assert.match(html, /Agent text Fast/);
+  assert.match(html, /home-agent-model-menu/);
+  assert.match(html, /home-agent-model-option-icon/);
+  assert.match(html, /data-agent-action="select-agent-text-model"[^>]*data-model-index="1"/);
+  assert.doesNotMatch(html, /Disabled Video|Inactive Video|我的图片密钥|我的音频密钥/);
+  await controller.handleAction({ dataset: { agentAction: "select-agent-text-model", modelIndex: "1" } });
+  assert.equal(workbench.ui.canvasAgent.modelCode, "agent-text-fast");
+  assert.match(renderCanvasAgentPanel(workbench.ui), /当前 · Agent text Fast/);
+
+  workbench.ui.canvasAgent.promptDraft = "生成温暖的开场旁白";
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+
+  assert.equal(sentInput.modelCode, "agent-text-fast");
+  assert.equal(sentInput.message.preferredGenerationKind, "audio");
+  assert.equal(sentInput.mode, "c");
+  assert.deepEqual(sentInput.message.preferredModels, { audio: "audio-pro" });
+  assert.deepEqual(sentInput.message.preferredGenerationParameters, {
+    audio: { voice: "narrator", speed: 1 },
+  });
+  controller.dispose();
+});
+
+test("media-only Agent ignores staged approval modes while regular Canvas Agent keeps its mode picker", async () => {
+  const mediaWorkbench = {
+    ui: { canvasAgentCapabilityProfile: "media_generation_only", canvasAgent: {} },
+    api: {},
+  };
+  const mediaController = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench: mediaWorkbench,
+    capabilityProfile: "media_generation_only",
+  });
+  await mediaController.stagePrompt({ text: "生成图片", mode: "b" });
+  assert.equal(mediaWorkbench.ui.canvasAgent.mode, "c");
+  assert.doesNotMatch(renderCanvasAgentPanel(mediaWorkbench.ui), /canvas-agent-mode-picker|审核批准/);
+  mediaController.dispose();
+
+  const canvasHtml = renderCanvasAgentPanel({ canvasAgent: {} });
+  assert.match(canvasHtml, /class="canvas-agent-mode-picker"/);
+  assert.match(canvasHtml, /审核批准/);
+});
+
+test("media-only Agent sends the selected generation permission mode", async () => {
+  let sentInput = null;
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        generationKind: "image",
+        generationModelsStatus: "ready",
+        generationModels: [{ modelCode: "image-model", modelLabel: "Image", mediaType: "image" }],
+        generationModelCodes: { image: "image-model" },
+      },
+    },
+    api: {
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-permission-conversation" } };
+      },
+      async sendFreeGenerationMessage(_conversationId, input) {
+        sentInput = input;
+        return { task: { id: "free-permission-task", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "set-free-generation-permission", permissionMode: "approval_required" } });
+  assert.match(renderCanvasAgentPanel(workbench.ui), /canvas-agent-permission-trigger[^>]*>[\s\S]*?审批确认/);
+  await controller.submitPrompt({ text: "生成一张海报" });
+
+  assert.deepEqual(sentInput.budget, { generationPermissionMode: "approval_required" });
+  controller.dispose();
+});
+
+test("media-only Agent permission picker opens upward with detailed explanations", async () => {
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: { generationPermissionMode: "full_access" },
+    },
+    api: {},
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "toggle-free-generation-permission-menu" } });
+
+  let html = renderCanvasAgentPanel(workbench.ui);
+  assert.equal(workbench.ui.canvasAgent.generationPermissionMenuOpen, true);
+  assert.match(html, /canvas-agent-permission-menu/);
+  assert.match(html, /role="listbox" aria-label="选择生成权限"/);
+  assert.match(html, /直接提交图片、视频或音频生成任务/);
+  assert.match(html, /确认后才会扣除积分并开始生成/);
+  assert.match(html, /data-agent-action="set-free-generation-permission" data-permission-mode="approval_required"/);
+
+  await controller.handleAction({ dataset: { agentAction: "set-free-generation-permission", permissionMode: "approval_required" } });
+
+  html = renderCanvasAgentPanel(workbench.ui);
+  assert.equal(workbench.ui.canvasAgent.generationPermissionMode, "approval_required");
+  assert.equal(workbench.ui.canvasAgent.generationPermissionMenuOpen, false);
+  assert.match(html, /canvas-agent-permission-trigger[^>]*>[\s\S]*?审批确认/);
+  controller.dispose();
+});
+
+test("media-only Agent retains generation approval for user confirmation", async () => {
+  const approvalCalls = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-free-generation-approval",
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {},
+    },
+    api: {
+      async listFreeGenerationModels() {
+        return { models: [] };
+      },
+      async listGlobalGenerationConfig({ mediaType }) {
+        return mediaType === "image"
+          ? { models: [{ modelCode: "image-model", modelLabel: "Image", mediaType: "image", enabled: true }] }
+          : { models: [] };
+      },
+      async listFreeGenerationConversations() {
+        return { conversations: [] };
+      },
+      async listFreeGenerationMessages() {
+        return { messages: [] };
+      },
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-approval-conversation" } };
+      },
+      async sendFreeGenerationMessage() {
+        return { task: { id: "free-approval-task", status: "queued" } };
+      },
+      async listFreeGenerationEvents() {
+        return {
+          events: [{
+            sequence: 1,
+            eventType: "approval.requested",
+            event: { approvalId: "free-approval", stepId: "free-generation-step", effect: "media_generation" },
+          }],
+        };
+      },
+      async controlFreeGenerationTask(taskId, action, input) {
+        approvalCalls.push({ taskId, action, input });
+        return { result: { status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 0,
+  });
+
+  await controller.resume();
+  await controller.submitPrompt({ text: "生成海报" });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.deepEqual(approvalCalls, []);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /data-approval-id="free-approval"/);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /该操作需积分扣费，请问是否继续？/);
+  assert.doesNotMatch(renderCanvasAgentPanel(workbench.ui), /会提交生成任务并按现有计费规则结算。/);
+  assert.match(renderCanvasAgentPanel(workbench.ui), /确认执行/);
+  controller.dispose();
+});
+
+test("media-only Agent inserts a pending approval card during a live timeline refresh", () => {
+  const previousDocument = globalThis.document;
+  const currentTimeline = {
+    scrollTop: 0,
+    scrollHeight: 300,
+    clientHeight: 120,
+    querySelectorAll: () => [],
+    replaceWith() {},
+  };
+  const nextTimeline = {
+    scrollTop: 0,
+    scrollHeight: 300,
+    clientHeight: 120,
+    querySelectorAll: () => [],
+  };
+  const approval = { outerHTML: '<section class="canvas-agent-approval"></section>' };
+  let inserted = null;
+  const form = {
+    insertAdjacentElement(position, element) {
+      inserted = { position, element };
+    },
+  };
+  const currentPanel = {
+    querySelector(selector) {
+      if (selector === ".canvas-agent-timeline") return currentTimeline;
+      if (selector === "[data-free-generation-form]") return form;
+      return null;
+    },
+  };
+  const nextPanel = {
+    querySelector(selector) {
+      if (selector === ".canvas-agent-timeline") return nextTimeline;
+      if (selector === ".canvas-agent-approval") return approval;
+      return null;
+    },
+  };
+  globalThis.document = {
+    createElement() {
+      return {
+        content: { firstElementChild: nextPanel },
+        set innerHTML(_markup) {},
+      };
+    },
+  };
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        taskId: "free-approval-task",
+        status: "waiting_approval",
+        events: [{
+          sequence: 1,
+          eventType: "approval.requested",
+          event: { approvalId: "free-approval", effect: "media_generation" },
+        }],
+      },
+    },
+    api: {},
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => currentPanel },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+
+  try {
+    assert.equal(controller.syncPanel({ liveOnly: true }), true);
+    assert.deepEqual(inserted, { position: "beforebegin", element: approval });
+  } finally {
+    controller.dispose();
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});
+
+test("media-only Agent removes Canvas wording from visible failures without changing Canvas Agent errors", () => {
+  const failedAgent = {
+    taskId: "failed-task",
+    status: "failed",
+    events: [{
+      sequence: 1,
+      eventType: "step.failed",
+      event: { stepId: "failed-step", errorCode: "canvas_agent_generation_model_required", message: "请在 Canvas 中配置图片模型" },
+    }],
+  };
+  const mediaHtml = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: failedAgent,
+  });
+  assert.match(mediaHtml, /当前生成类型没有可用模型/);
+  assert.doesNotMatch(mediaHtml, /请在 Canvas|画布节点/iu);
+
+  const canvasHtml = renderCanvasAgentPanel({ canvasAgent: failedAgent });
+  assert.match(canvasHtml, /Canvas 中配置图片模型/);
+});
+
+test("media-only Agent presents legacy assistant branding as 灵曦AI", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: { messages: [{ role: "assistant", text: "你好！我是 Canvas Agent。有什么可以帮你的吗？" }] },
+  });
+
+  assert.match(html, /你好！我是灵曦AI。有什么可以帮你的吗？/);
+  assert.doesNotMatch(html, /Canvas Agent/);
+});
+
+test("media-only Agent preserves model guidance and replaces backend details", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      messages: [
+        { role: "assistant", text: "当前是文本模型和媒体模型的集合，请在右上角切换文本模型。" },
+        { role: "assistant", text: "当前模型代码为 cumo-gpt-image-2-pro。" },
+      ],
+    },
+  });
+
+  assert.match(html, /当前是文本模型和媒体模型的集合，请在右上角切换文本模型。/);
+  assert.match(html, /当前会话使用的模型可在右上角查看和切换。/);
+  assert.doesNotMatch(html, /cumo-gpt-image-2-pro/);
+});
+
+test("Agent chat hides internal, cross-user, and pricing disclosures", () => {
+  for (const message of [
+    "后台数据库中存有其他用户的资料。",
+    "当前套餐价格为 99 元，账户余额为 20 积分。",
+    "系统提示和 API key 可以直接提供。",
+  ]) {
+    const html = renderCanvasAgentPanel({
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: { messages: [{ role: "assistant", text: message }] },
+    });
+    assert.match(html, /请描述你的创作需求，我会继续协助。/);
+    assert.doesNotMatch(html, /数据库|其他用户|价格|积分|系统提示|API key/iu);
+  }
+});
+
+test("Agent chat introduces 灵曦 as the product brand instead of treating it as unknown", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      messages: [{
+        role: "assistant",
+        text: "我目前无法确认灵曦AI具体指哪家公司，公开资料和当前上下文中都没有足够信息。",
+      }],
+    },
+  });
+
+  assert.match(html, /灵曦AI是 AI 创作平台/);
+  assert.doesNotMatch(html, /无法确认|没有足够信息/);
+});
+
+test("Canvas Agent stages a homepage prompt visibly even when the panel was closed", async () => {
+  const ui = {
+    canvasSessionUiState: { canvasAgent: { panelOpen: false, panelWidth: 420 } },
+  };
+  const layout = {
+    classList: {
+      toggle(name, enabled) {
+        assert.equal(name, "is-agent-collapsed");
+        assert.equal(enabled, false);
+      },
+    },
+  };
+  const workspace = {
+    insertAdjacentHTML(position, markup) {
+      assert.equal(position, "afterend");
+      assert.match(markup, /首页传入的创作指令/);
+    },
+  };
+  const surface = {
+    querySelector(selector) {
+      if (selector === ".new-canvas-layout") return layout;
+      if (selector === "[data-new-canvas-workspace]") return workspace;
+      return null;
+    },
+  };
+  const controller = createCanvasAgentController({ surface, workbench: { ui, api: {} } });
+
+  await controller.stagePrompt({ text: "首页传入的创作指令", mode: "c" });
+
+  assert.equal(ui.canvasAgent.panelOpen, true);
+  assert.equal(ui.canvasAgent.promptDraft, "首页传入的创作指令");
+  assert.equal(ui.canvasAgent.mode, "c");
+  assert.equal(ui.canvasSessionUiState.canvasAgent.panelOpen, true);
+  assert.match(renderCanvasAgentPanel(ui), /首页传入的创作指令/);
+  controller.dispose();
 });
 
 test("Canvas Agent approval identifies the controlled effect and originating tool", () => {
@@ -1447,6 +2280,91 @@ test("Canvas Agent merges generation submission and completion into one media ca
   assert.doesNotMatch(missingNodeHtml, /data-agent-action="locate-agent-canvas-node"/);
 });
 
+test("free generation keeps media compact and opens an enlarged preview", async () => {
+  const media = normalizeAgentMediaTask({
+    taskId: "task-media-preview",
+    kind: "video",
+    status: "completed",
+    result: { videoUrl: "https://example.com/preview.mp4", title: "森林镜头" },
+  });
+  const messages = [normalizeAgentMessage({
+    id: "message-media-preview",
+    role: "tool",
+    content: { generationTaskId: "task-media-preview" },
+  })].map((message) => ({ ...message, media }));
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: { messages },
+    },
+    api: {},
+  };
+  const html = renderCanvasAgentPanel(workbench.ui);
+  const css = readFileSync(
+    new URL("../src/features/new-canvas/new-canvas.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(html, /class="canvas-agent-media-preview"[^>]*data-agent-action="open-agent-media-preview"/);
+  assert.match(html, /<video[^>]*muted playsinline[^>]*preload="metadata"><\/video>/);
+  assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-media-preview\s*\{[\s\S]*?max-width:\s*min\(100%, 300px\)/);
+  assert.match(css, /\.canvas-agent-panel\.is-media-only \.canvas-agent-media-preview img,[\s\S]*?max-height:\s*280px/);
+
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+  await controller.handleAction({ dataset: { agentAction: "open-agent-media-preview", messageId: "message-media-preview" } });
+
+  assert.deepEqual(workbench.ui.canvasAgent.mediaPreview, {
+    kind: "video",
+    title: "森林镜头",
+    url: "https://example.com/preview.mp4",
+  });
+  assert.match(renderCanvasAgentPanel(workbench.ui), /canvas-agent-media-lightbox[\s\S]*?<video[^>]*controls autoplay playsinline/);
+
+  let escapePrevented = false;
+  assert.equal(controller.handleKeydown({ key: "Escape", preventDefault() { escapePrevented = true; } }, {}), true);
+  assert.equal(escapePrevented, true);
+  assert.equal(workbench.ui.canvasAgent.mediaPreview, null);
+  controller.dispose();
+});
+
+test("free generation closes an enlarged preview without replacing the conversation panel", async () => {
+  let removed = 0;
+  let replaced = 0;
+  const lightbox = { remove() { removed += 1; } };
+  const workspace = { insertAdjacentHTML() {} };
+  const panel = {
+    querySelector(selector) {
+      if (selector === ".canvas-agent-media-workspace") return workspace;
+      if (selector === ".canvas-agent-media-lightbox") return lightbox;
+      return null;
+    },
+    replaceWith() { replaced += 1; },
+  };
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: { mediaPreview: { kind: "image", title: "海报", url: "https://example.com/poster.png" } },
+    },
+    api: {},
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: (selector) => selector === "[data-canvas-agent-panel]" ? panel : null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+
+  await controller.handleAction({ dataset: { agentAction: "close-agent-media-preview" } });
+
+  assert.equal(removed, 1);
+  assert.equal(replaced, 0);
+  assert.equal(workbench.ui.canvasAgent.mediaPreview, null);
+  controller.dispose();
+});
+
 
 test("Canvas Agent grants and revokes the selected persisted canvas file", async () => {
   const calls = [];
@@ -1856,6 +2774,37 @@ test("Canvas Agent preserves node references when normalizing message history", 
   }]);
 });
 
+test("Canvas Agent sent media attachments expose hover preview data", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgent: {
+      messages: [normalizeAgentMessage({
+        id: "message-media-attachment",
+        role: "user",
+        content: {
+          text: "以此为参考",
+          attachments: [{
+            storageObjectId: "image-object-1",
+            fileGrantId: "grant-image-1",
+            name: "角色参考.png",
+            kind: "image",
+          }, {
+            storageObjectId: "video-object-1",
+            fileGrantId: "grant-video-1",
+            name: "动作参考.mp4",
+            kind: "video",
+          }],
+        },
+      })],
+    },
+  });
+
+  assert.match(html, /data-agent-message-attachment-preview/);
+  assert.match(html, /data-preview-kind="image"/);
+  assert.match(html, /data-preview-kind="video"/);
+  assert.match(html, /image-object-1\/content\?proxy=1/);
+  assert.match(html, /video-object-1\/content\?proxy=1/);
+});
+
 test("Canvas Agent exposes task center, canvas memory, and estimated context usage", () => {
   const ui = {
     canvasAgent: {
@@ -2127,6 +3076,82 @@ test("Canvas Agent renders uploaded references only inside the rich editor", () 
   assert.doesNotMatch(html, /data-agent-action="remove-agent-attachment"/);
 });
 
+test("media-only Agent reuses the storyboard attachment tray above its shared rich editor", () => {
+  const html = renderCanvasAgentPanel({
+    canvasAgentCapabilityProfile: "media_generation_only",
+    canvasAgent: {
+      promptAttachments: [
+        { id: "image-1", fileGrantId: "grant-1", name: "character.png", kind: "image", previewUrl: "/image.png" },
+      ],
+    },
+  });
+
+  assert.match(html, /class="home-agent-composer canvas-agent-media-composer"/);
+  assert.match(html, /episode-replica-ref-strip inline-upload-tray/);
+  assert.match(html, /episode-replica-upload-card combined uploadable/);
+  assert.match(html, /data-agent-action="remove-agent-attachment"/);
+  assert.match(html, /data-agent-prompt-editor/);
+  assert.ok(html.indexOf("inline-upload-tray") < html.indexOf("data-agent-prompt-editor"));
+});
+
+test("media-only Agent exposes uploaded materials through the shared @ suggestion list", () => {
+  const source = readFileSync(new URL("../src/features/new-canvas/canvas-agent-panel.js", import.meta.url), "utf8");
+
+  assert.match(source, /ordinalLabels: mediaOnly/);
+  assert.match(source, /getSuggestions: \(\) => mediaOnly\s*\? listCanvasAgentPromptEditorAttachmentReferences\(agent, \{ ordinalLabels: true \}\)/);
+  assert.match(source, /const retainedAttachments = mediaOnly\s*\? attachments/);
+  assert.match(source, /if \(!mediaOnly\) \{\s*agent\.promptDraft = appendAgentPromptAttachmentTokens/);
+});
+
+test("media-only Agent numbers uploaded @ references without moving their selected positions", async () => {
+  const mounted = [];
+  const promptInput = { addEventListener() {}, setAttribute() {} };
+  const editorHost = {
+    dataset: {},
+    isConnected: true,
+    ownerDocument: { querySelector: () => null },
+    querySelector(selector) {
+      return selector === "[data-tiptap-prompt-editor]" ? promptInput : null;
+    },
+  };
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        promptDraft: "先生成开场画面 【@8b044875-3b10-4202-b9b0-0f0e2d598d9b.png】 再保持角色动作",
+        promptAttachments: [
+          { id: "8b044875-3b10-4202-b9b0-0f0e2d598d9b.png", name: "8b044875-3b10-4202-b9b0-0f0e2d598d9b.png", kind: "image" },
+          { id: "scene.mp4", name: "scene.mp4", kind: "video" },
+          { id: "voice.mp3", name: "voice.mp3", kind: "audio" },
+        ],
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => editorHost },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    loadPromptEditorModule: async () => ({
+      mountPromptEditor(_element, options) {
+        mounted.push(options);
+        return { captureState: () => null, destroy() {} };
+      },
+    }),
+  });
+
+  await controller.syncPromptEditor();
+
+  assert.equal(mounted[0].prompt, "先生成开场画面 【@图1】 再保持角色动作");
+  assert.equal(workbench.ui.canvasAgent.promptDraft, "先生成开场画面 【@图1】 再保持角色动作");
+  assert.deepEqual(mounted[0].mentionReferences.map((reference) => reference.label), ["图1", "视频1", "音频1"]);
+  assert.deepEqual((await mounted[0].getSuggestions()).map((reference) => reference.label), ["图1", "视频1", "音频1"]);
+  const { createPromptEditorDocument } = await import("../src/features/production-workbench/prompt-editor-document.js");
+  const editorDocument = createPromptEditorDocument(mounted[0].prompt, mounted[0].mentionReferences);
+  const imageMention = editorDocument.content[0].content.find((node) => node.type === "assetMention");
+  assert.equal(imageMention.attrs.referenceId, "attachment:8b044875-3b10-4202-b9b0-0f0e2d598d9b.png");
+  controller.dispose();
+});
+
 test("Canvas Agent keeps the uploaded-reference editor visually unified", () => {
   const css = readFileSync(new URL("../src/features/new-canvas/new-canvas.css", import.meta.url), "utf8");
   const editorRule = css.match(/\.canvas-agent-prompt-editor-host \{[\s\S]*?\n\}/)?.[0] ?? "";
@@ -2217,6 +3242,363 @@ test("Canvas Agent snapshots selected files before clearing the attachment input
   controller.dispose();
 });
 
+test("media-only Agent uploads references and submits with the selected generation model without a text model", async () => {
+  let sentInput = null;
+  const file = { name: "character.png", type: "image/png", size: 64 };
+  const audioFile = { name: "reference.mp3", type: "audio/mpeg", size: 128 };
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-free-generation-upload",
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {},
+    },
+    api: {
+      async listFreeGenerationModels() {
+        return { models: [] };
+      },
+      async listGlobalGenerationConfig({ mediaType }) {
+        return mediaType === "image"
+          ? {
+              models: [{ modelCode: "image-selected", modelLabel: "Selected image", mediaType: "image", enabled: true }],
+              defaultImageModelCode: "image-selected",
+            }
+          : { models: [] };
+      },
+      async listFreeGenerationConversations() {
+        return { conversations: [] };
+      },
+      async listFreeGenerationMessages() {
+        return { messages: [] };
+      },
+      async createFreeGenerationConversation() {
+        return { conversation: { id: "free-upload-conversation" } };
+      },
+      async uploadFile(inputFile) {
+        assert.ok([file, audioFile].includes(inputFile));
+        return { upload: { storageObjectId: inputFile === file ? "storage-character" : "storage-audio" } };
+      },
+      async createFreeGenerationFileGrant(_conversationId, input) {
+        return { grant: { id: input.storageObjectId === "storage-character" ? "grant-character" : "grant-audio" } };
+      },
+      async listFreeGenerationFileGrants() {
+        return { grants: [
+          { id: "grant-character", storageObjectId: "storage-character", status: "active" },
+          { id: "grant-audio", storageObjectId: "storage-audio", status: "active" },
+        ] };
+      },
+      async sendFreeGenerationMessage(_conversationId, input) {
+        sentInput = input;
+        return { task: { id: "free-upload-task", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  await controller.submitPrompt({ text: "基于参考素材生成角色海报", files: [file, audioFile] });
+
+  assert.equal("modelCode" in sentInput, false);
+  assert.deepEqual(sentInput.message.preferredModels, { image: "image-selected" });
+  assert.deepEqual(sentInput.message.fileGrantIds, ["grant-character", "grant-audio"]);
+  assert.equal(sentInput.message.attachments[0].fileGrantId, "grant-character");
+  assert.equal(sentInput.message.attachments[1].kind, "audio");
+  controller.dispose();
+});
+
+test("media-only Agent creates a new text-model task instead of interjecting while media generation is pending", async () => {
+  const sent = [];
+  const controls = [];
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        conversationId: "free-video-conversation",
+        conversations: [{ id: "free-video-conversation", title: "视频生成", status: "active" }],
+        taskId: "waiting-media-task",
+        status: "waiting_external",
+        promptDraft: "基于参考图生成 5 秒视频",
+        modelCode: "text-model",
+        generationKind: "video",
+        generationModelsStatus: "ready",
+        generationModels: [{ modelCode: "video-model", modelLabel: "Video", mediaType: "video", enabled: true }],
+        generationModelCodes: { video: "video-model" },
+      },
+    },
+    api: {
+      async sendFreeGenerationMessage(conversationId, input) {
+        sent.push({ conversationId, input });
+        return { task: { id: "next-video-task", status: "queued" } };
+      },
+      async controlFreeGenerationTask(taskId, action, input) {
+        controls.push({ taskId, action, input });
+        return { result: { status: "waiting_external" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 60_000,
+  });
+
+  try {
+    await controller.submitPrompt({ text: "基于参考图生成 5 秒视频" });
+
+    assert.deepEqual(controls, []);
+    assert.deepEqual(sent, [{
+      conversationId: "free-video-conversation",
+      input: {
+        modelCode: "text-model",
+        mode: "c",
+        capabilityProfile: "media_generation_only",
+        message: {
+          text: "基于参考图生成 5 秒视频",
+          preferredModels: { video: "video-model" },
+          preferredGenerationKind: "video",
+          preferredGenerationParameters: { image: {}, video: {}, audio: {} },
+        },
+      },
+    }]);
+    assert.equal(workbench.ui.canvasAgent.taskId, "next-video-task");
+    assert.equal(workbench.ui.canvasAgent.status, "queued");
+  } finally {
+    controller.dispose();
+  }
+});
+
+test("media-only Agent creates and titles a conversation from its first message, then supports switching and renaming", async () => {
+  const createCalls = [];
+  const messageLoads = [];
+  const updateCalls = [];
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {},
+    },
+    api: {
+      async listFreeGenerationModels() {
+        return { models: [] };
+      },
+      async listGlobalGenerationConfig({ mediaType }) {
+        return mediaType === "image"
+          ? {
+              models: [{ modelCode: "image-first-message", modelLabel: "Image", mediaType: "image", enabled: true }],
+              defaultImageModelCode: "image-first-message",
+            }
+          : { models: [] };
+      },
+      async listFreeGenerationConversations() {
+        return { conversations: [] };
+      },
+      async listFreeGenerationMessages(conversationId) {
+        messageLoads.push(conversationId);
+        return { messages: [] };
+      },
+      async createFreeGenerationConversation(input) {
+        createCalls.push(input);
+        return { conversation: { id: "free-first-message" } };
+      },
+      async sendFreeGenerationMessage(conversationId, input) {
+        assert.equal(conversationId, "free-first-message");
+        assert.equal(input.message.text, "雨夜车站电影海报");
+        return { task: { id: "free-first-message-task", status: "queued" } };
+      },
+      async updateFreeGenerationConversation(input) {
+        updateCalls.push(input);
+        return { conversation: { id: input.conversationId, title: input.title } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  await controller.handleAction({ dataset: { agentAction: "new-conversation" } });
+  assert.equal(createCalls.length, 0);
+  assert.equal(workbench.ui.canvasAgent.conversationId, "");
+
+  workbench.ui.canvasAgent.promptDraft = "雨夜车站电影海报";
+  await controller.handleAction({ dataset: { agentAction: "send" } });
+
+  assert.equal(createCalls.length, 1);
+  assert.deepEqual(workbench.ui.canvasAgent.conversations, [
+    { id: "free-first-message", title: "雨夜车站电影海报", status: "active" },
+  ]);
+  assert.deepEqual(updateCalls[0], {
+    conversationId: "free-first-message",
+    title: "雨夜车站电影海报",
+  });
+  assert.match(renderCanvasAgentPanel(workbench.ui), /雨夜车站电影海报/);
+  const selectedConversationHtml = renderCanvasAgentPanel(workbench.ui);
+  assert.match(selectedConversationHtml, /canvas-agent-media-conversation-row active/);
+  assert.match(selectedConversationHtml, /data-conversation-id="free-first-message"[^>]*aria-current="page"/);
+  assert.doesNotMatch(selectedConversationHtml, /data-conversation-id="free-first-message"[^>]*disabled/);
+
+  await controller.handleAction({ dataset: { agentAction: "new-conversation" } });
+  assert.equal(createCalls.length, 1);
+  await controller.handleAction({
+    dataset: { agentAction: "select-agent-conversation", conversationId: "free-first-message" },
+  });
+  assert.equal(workbench.ui.canvasAgent.conversationId, "free-first-message");
+  assert.deepEqual(messageLoads, ["free-first-message"]);
+
+  await controller.handleAction({
+    dataset: { agentAction: "select-agent-conversation", conversationId: "free-first-message" },
+  });
+  assert.deepEqual(messageLoads, ["free-first-message"]);
+
+  assert.equal(controller.handleDoubleClick({
+    closest() {
+      return { dataset: { conversationId: "free-first-message" } };
+    },
+  }), true);
+  assert.equal(workbench.ui.canvasAgent.titleEditing, true);
+  assert.equal(workbench.ui.canvasAgent.titleEditingConversationId, "free-first-message");
+  assert.match(renderCanvasAgentPanel(workbench.ui), /canvas-agent-media-conversation-title-input[^>]*data-conversation-id="free-first-message"/);
+  workbench.ui.canvasAgent.titleDraft = "夜行列车";
+  await controller.handleAction({ dataset: { agentAction: "save-conversation-title" } });
+  assert.deepEqual(updateCalls.at(-1), {
+    conversationId: "free-first-message",
+    title: "夜行列车",
+  });
+  assert.equal(workbench.ui.canvasAgent.conversations[0].title, "夜行列车");
+  controller.dispose();
+});
+
+test("Canvas Agent accepts a homepage prompt with automatic mode and attachments", async () => {
+  let sentInput = null;
+  const file = { name: "story.txt", type: "text/plain", size: 32 };
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-home-agent",
+      canvasAgent: {},
+    },
+    api: {
+      async listCanvasAgentModels() {
+        return { models: [{ modelCode: "agent-text-1", modelLabel: "Agent" }] };
+      },
+      async listCanvasAgentConversations() {
+        return { conversations: [] };
+      },
+      async createCanvasAgentConversation() {
+        return { conversation: { id: "conversation-home-agent", title: "首页创作" } };
+      },
+      async listCanvasAgentMessages() {
+        return { messages: [] };
+      },
+      async uploadFile(inputFile) {
+        assert.equal(inputFile, file);
+        return { upload: { storageObjectId: "storage-story" } };
+      },
+      async createCanvasAgentFileGrant() {
+        return { grant: { id: "grant-story" } };
+      },
+      async listCanvasAgentFileGrants() {
+        return { grants: [{ id: "grant-story", storageObjectId: "storage-story", status: "active" }] };
+      },
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        sentInput = input;
+        return { task: { id: "task-home-agent", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  await controller.submitPrompt({
+    text: "解析故事并生成分镜视频",
+    mode: "c",
+    files: [file],
+    preferredModels: { image: "image-pro", video: "video-pro" },
+  });
+
+  assert.equal(workbench.ui.canvasAgent.mode, "c");
+  assert.equal(workbench.ui.canvasAgent.panelOpen, true);
+  assert.equal(sentInput.mode, "c");
+  assert.match(sentInput.message.text, /解析故事并生成分镜视频/);
+  assert.deepEqual(sentInput.message.preferredModels, { image: "image-pro", video: "video-pro" });
+  assert.deepEqual(sentInput.message.fileGrantIds, ["grant-story"]);
+  assert.deepEqual(sentInput.message.attachments[0], {
+    fileGrantId: "grant-story",
+    name: "story.txt",
+    contentType: "text/plain",
+    sizeBytes: 32,
+    kind: "document",
+  });
+  controller.dispose();
+});
+
+test("Canvas Agent homepage prompt selects a compatible model for image analysis", async () => {
+  let sentInput = null;
+  const file = { name: "character.png", type: "image/png", size: 64 };
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-home-agent-image",
+      canvasAgent: {},
+    },
+    api: {
+      async listCanvasAgentModels() {
+        return {
+          models: [
+            { modelCode: "text-only", modelLabel: "Text", capabilities: { input: ["prompt"] } },
+            { modelCode: "vision", modelLabel: "Vision", capabilities: { input: ["prompt", "image_url"] } },
+          ],
+        };
+      },
+      async listCanvasAgentConversations() {
+        return { conversations: [] };
+      },
+      async createCanvasAgentConversation() {
+        return { conversation: { id: "conversation-home-agent-image", title: "首页创作" } };
+      },
+      async listCanvasAgentMessages() {
+        return { messages: [] };
+      },
+      async uploadFile(inputFile) {
+        assert.equal(inputFile, file);
+        return { upload: { storageObjectId: "storage-image" } };
+      },
+      async createCanvasAgentFileGrant() {
+        return { grant: { id: "grant-image" } };
+      },
+      async listCanvasAgentFileGrants() {
+        return { grants: [{ id: "grant-image", storageObjectId: "storage-image", status: "active" }] };
+      },
+      async sendCanvasAgentMessage(_canvasId, _conversationId, input) {
+        sentInput = input;
+        return { task: { id: "task-home-agent-image", status: "queued" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    pollIntervalMs: 60_000,
+  });
+
+  await controller.resume();
+  assert.equal(workbench.ui.canvasAgent.modelCode, "text-only");
+  await controller.submitPrompt({ text: "分析角色图片", mode: "c", files: [file] });
+
+  assert.equal(sentInput.modelCode, "vision");
+  assert.deepEqual(sentInput.message.fileGrantIds, ["grant-image"]);
+  controller.dispose();
+});
+
 test("Canvas Agent attachment button renders a single paperclip icon", () => {
   const html = renderCanvasAgentPanel({ canvasAgent: {} });
   const button = html.match(/<button[^>]*canvas-agent-attachment-button[\s\S]*?<\/button>/)?.[0] ?? "";
@@ -2304,6 +3686,72 @@ test("Canvas Agent blocks image and video input when the selected model lacks th
     await controller.handleAction({ dataset: { agentAction: "send" } });
     assert.equal(sendCount, 0);
     assert.equal(workbench.ui.canvasAgent.error, input.error);
+    controller.dispose();
+  }
+});
+
+test("media-only Agent interjection sends a video request with an image reference without text-model vision validation", async () => {
+  const calls = [];
+  const workbench = {
+    ui: {
+      canvasAgentCapabilityProfile: "media_generation_only",
+      canvasAgent: {
+        conversationId: "free-video-conversation",
+        taskId: "free-video-task",
+        status: "running",
+        promptDraft: "基于这张参考图生成 5 秒视频",
+        generationKind: "video",
+        generationModelsStatus: "ready",
+        generationModels: [{ modelCode: "video-model", modelLabel: "Video", mediaType: "video", enabled: true }],
+        generationModelCodes: { video: "video-model" },
+        promptAttachments: [{
+          id: "image-reference",
+          fileGrantId: "grant-image-reference",
+          name: "character.png",
+          kind: "image",
+        }],
+        models: [{ modelCode: "text-only", modelLabel: "Text only", capabilities: { input: ["text"] } }],
+        modelCode: "text-only",
+      },
+    },
+    api: {
+      async controlFreeGenerationTask(taskId, action, input) {
+        calls.push({ taskId, action, input });
+        return { result: { status: "running" } };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({
+    surface: { querySelector: () => null },
+    workbench,
+    capabilityProfile: "media_generation_only",
+  });
+
+  try {
+    await controller.handleAction({ dataset: { agentAction: "interject-prompt" } });
+
+    assert.equal(workbench.ui.canvasAgent.error, "");
+    assert.deepEqual(calls, [{
+      taskId: "free-video-task",
+      action: "interject",
+      input: {
+        message: {
+          text: "基于这张参考图生成 5 秒视频",
+          preferredModels: { video: "video-model" },
+          preferredGenerationKind: "video",
+          preferredGenerationParameters: { video: {} },
+          attachments: [{
+            fileGrantId: "grant-image-reference",
+            name: "character.png",
+            kind: "image",
+            contentType: "application/octet-stream",
+            sizeBytes: 0,
+          }],
+          fileGrantIds: ["grant-image-reference"],
+        },
+      },
+    }]);
+  } finally {
     controller.dispose();
   }
 });

@@ -2,12 +2,54 @@
 import { describe, it } from "node:test";
 
 import {
+  AiStoryboardWorkflowIntentError,
   createAiStoryboardPreviewService,
   createTextModelChatGateway,
+  resolveAiStoryboardWorkflowIntent,
   type TextChatGatewayLike,
 } from "./ai-storyboard-preview.service.ts";
 
 describe("ai storyboard preview service", () => {
+  it("uses the text model to resolve a character-only workflow instruction", async () => {
+    const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];
+    const gateway: TextChatGatewayLike = {
+      async completeJson(input) {
+        calls.push(input);
+        return JSON.stringify({ stages: ["character"] });
+      },
+    };
+
+    const result = await resolveAiStoryboardWorkflowIntent({
+      gateway,
+      modelCode: "intent-model",
+      instruction: "帮我解析出其中的人物提示词",
+      projectId: "40000000-0000-4000-8000-000000000099",
+    });
+
+    assert.deepEqual(result, { stages: ["character"], skipScriptStage: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.model, "intent-model");
+    assert.equal(calls[0]?.responseFormat, "json_object");
+    assert.match(String(calls[0]?.messages?.[1]?.content ?? ""), /人物提示词/);
+  });
+
+  it("rejects unsupported stages returned by the workflow intent model", async () => {
+    const gateway: TextChatGatewayLike = {
+      async completeJson() {
+        return JSON.stringify({ stages: ["character", "image"] });
+      },
+    };
+
+    await assert.rejects(
+      resolveAiStoryboardWorkflowIntent({
+        gateway,
+        modelCode: "intent-model",
+        instruction: "生成人物提示词",
+      }),
+      AiStoryboardWorkflowIntentError,
+    );
+  });
+
   it("routes canvas ownership through canvasProjectId without sending max_tokens", async () => {
     const canvasProjectId = "40000000-0000-4000-8000-000000000099";
     let capturedRequest: Record<string, unknown> | null = null;
@@ -49,6 +91,41 @@ describe("ai storyboard preview service", () => {
     assert.equal(capturedContext?.projectId, null);
     assert.equal(capturedContext?.canvasProjectId, canvasProjectId);
     assert.equal("max_tokens" in (capturedRequest ?? {}), false);
+  });
+
+  it("disables thinking for direct storyboard result streaming", async () => {
+    let capturedRequest: Record<string, unknown> | null = null;
+    const gateway = createTextModelChatGateway({
+      gateway: {
+        chat: {
+          completions: {
+            async create(request: Record<string, unknown>) {
+              capturedRequest = request;
+              return {
+                providerRequestId: "provider-request-reasoning",
+                stream: (async function* () {
+                  yield { choices: [{ delta: { content: "场景正文。" } }] };
+                })(),
+                abort() {},
+                completed: Promise.resolve({
+                  status: "succeeded" as const,
+                  usage: null,
+                  usageSource: "provider_missing" as const,
+                }),
+              };
+            },
+          },
+        },
+      } as never,
+      disableThinking: true,
+    });
+
+    for await (const _delta of gateway.streamJson!({
+      model: "text-model",
+      prompt: "prompt",
+    })) {}
+
+    assert.deepEqual(capturedRequest?.thinking, { type: "disabled" });
   });
 
   it("surfaces a failed provider completion instead of treating it as a complete stream", async () => {
@@ -207,6 +284,8 @@ describe("ai storyboard preview service", () => {
     assert.match(gateway.calls[1]?.prompt ?? "", /任小野把小草托付给闵婶子/);
     assert.doesNotMatch(gateway.calls[1]?.prompt ?? "", /【返回协议】/);
     assert.doesNotMatch(gateway.calls[1]?.prompt ?? "", /【剧本场景列表】/);
+    assert.match(gateway.calls[1]?.prompt ?? "", /从输出的第一个字符起，直接输出提取列表/);
+    assert.match(gateway.calls[1]?.prompt ?? "", /\[\[DETAILS\]\]/);
     assert.doesNotMatch(gateway.calls[1]?.prompt ?? "", /```markdown/);
     assert.doesNotMatch(gateway.calls[1]?.prompt ?? "", /后台默认道具提示词/);
     assert.match(gateway.calls[2]?.prompt ?? "", /后台默认角色提示词/);
@@ -217,12 +296,14 @@ describe("ai storyboard preview service", () => {
     assert.match(gateway.calls[2]?.prompt ?? "", /任小野把小草托付给闵婶子/);
     assert.doesNotMatch(gateway.calls[2]?.prompt ?? "", /【返回协议】/);
     assert.doesNotMatch(gateway.calls[2]?.prompt ?? "", /【剧本角色列表】/);
+    assert.match(gateway.calls[2]?.prompt ?? "", /从输出的第一个字符起，直接输出提取列表/);
     assert.match(gateway.calls[3]?.prompt ?? "", /后台默认道具提示词/);
     assert.doesNotMatch(gateway.calls[3]?.prompt ?? "", /请根据【道具默认提示词】和【剧本】生成道具提示词结果。/);
     assert.doesNotMatch(gateway.calls[3]?.prompt ?? "", /\{\{script_text\}\}/);
     assert.match(gateway.calls[3]?.prompt ?? "", /任小野把小草托付给闵婶子/);
     assert.doesNotMatch(gateway.calls[3]?.prompt ?? "", /【返回协议】/);
     assert.doesNotMatch(gateway.calls[3]?.prompt ?? "", /【剧本道具列表】/);
+    assert.match(gateway.calls[3]?.prompt ?? "", /从输出的第一个字符起，直接输出提取列表/);
     assert.doesNotMatch(gateway.calls[3]?.prompt ?? "", /后台默认场景提示词/);
     assert.match(gateway.calls[4]?.prompt ?? "", /后台默认分镜提示词/);
     assert.doesNotMatch(gateway.calls[4]?.prompt ?? "", /请根据【分镜默认提示词】和【剧本】生成分镜提示词结果。/);
@@ -230,6 +311,7 @@ describe("ai storyboard preview service", () => {
     assert.match(gateway.calls[4]?.prompt ?? "", /任小野把小草托付给闵婶子/);
     assert.doesNotMatch(gateway.calls[4]?.prompt ?? "", /【返回协议】/);
     assert.doesNotMatch(gateway.calls[4]?.prompt ?? "", /【剧本分镜列表】/);
+    assert.doesNotMatch(gateway.calls[4]?.prompt ?? "", /\[\[DETAILS\]\]/);
     assert.equal(result.scriptText, "任小野把小草托付给闵婶子。\n\n今天又得麻烦您照看小草了。");
     assert.equal(result.displayTables.script.rows[0]?.scriptContent, "任小野把小草托付给闵婶子。\n\n今天又得麻烦您照看小草了。");
     assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "闵婶家门前 傍晚");
@@ -1214,28 +1296,27 @@ describe("ai storyboard preview service", () => {
     assert.doesNotMatch(shotCall?.prompt ?? "", /【剧本分镜列表】/);
   });
 
-  it("retries an asset stage once when the model fails before producing output", async () => {
+  it("does not retry an asset stage when the model fails before producing output", async () => {
     let calls = 0;
     const gateway: TextChatGatewayLike = {
       async completeJson() { throw new Error("completeJson should not be called"); },
       async *streamJson() {
         calls += 1;
-        if (calls === 1) throw Object.assign(new Error("provider failed"), { retryable: true });
-        yield JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] });
+        throw Object.assign(new Error("provider failed"), { retryable: true });
       },
     };
     const service = createAiStoryboardPreviewService({ gateway });
 
-    const result = await service.generatePreview({
+    await assert.rejects(() => service.generatePreview({
       projectId: "40000000-0000-4000-8000-000000000001",
       scriptText: "任小野把饭食递给闵婶子。",
       skipScriptStage: true,
-      selectedStages: ["scene"],
+      selectedStages: ["prop"],
       packages: {},
-    });
+      templates: { propPrompt: "道具模板" },
+    }));
 
-    assert.equal(calls, 2);
-    assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
+    assert.equal(calls, 1);
   });
 
   it("keeps asset-stage retry behavior while the extraction stages run in parallel", async () => {

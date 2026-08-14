@@ -149,22 +149,35 @@ test("parseScript sends an idempotency key", async () => {
 
 test("task-center list forwards incremental query parameters", async () => {
   const calls = [];
+  const timeoutDelays = [];
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
     return { ok: true, text: async () => "{}" };
   };
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timeoutDelays.push(delay);
+    return previousSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout;
 
-  const { creatorApi } = await import("../src/shared/creator-api.js");
-  await creatorApi.listTaskCenterTasks({
-    pageSize: 50,
-    updatedAfter: "2026-07-22T08:00:00.000Z",
-    cursor: "cursor/value",
-  });
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.listTaskCenterTasks({
+      pageSize: 50,
+      updatedAfter: "2026-07-22T08:00:00.000Z",
+      cursor: "cursor/value",
+    });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
 
   assert.equal(
     calls[0].url,
     "/api/task-center/tasks?pageSize=50&updatedAfter=2026-07-22T08%3A00%3A00.000Z&cursor=cursor%2Fvalue",
   );
+  assert.deepEqual(timeoutDelays, [60_000]);
 });
 
 test("storyboard prompt packages request the compact creator payload", async () => {
@@ -2551,7 +2564,7 @@ test("jianying export waits for archive build without changing other export time
     globalThis.fetch = previousFetch;
   }
 
-  assert.deepEqual(scheduledDelays, [600_000, 10_000, 123_456]);
+  assert.deepEqual(scheduledDelays, [600_000, 60_000, 123_456]);
 });
 
 test("new envelope errors expose status code, error code, details, and request id", async () => {

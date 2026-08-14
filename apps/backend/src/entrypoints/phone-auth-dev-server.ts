@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -12,6 +13,7 @@ import { promisify } from "node:util";
 import { brotliCompress as brotliCompressCallback, constants as zlibConstants, gzip as gzipCallback } from "node:zlib";
 import mammoth from "mammoth";
 import sharp from "sharp";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { transform as transformStaticAsset } from "esbuild";
 
 import { maskCnPhone, shanghaiDayWindow, shanghaiMonthWindow } from "../modules/identity/phone-auth.utils.ts";
@@ -34,6 +36,7 @@ import {
   ensureDefaultStoryboardPromptData,
 } from "../modules/admin-storyboard-prompts/admin-storyboard-prompt.service.ts";
 import { createAnnouncementService } from "../modules/announcements/announcement.service.ts";
+import { createHomeRecommendationService } from "../modules/home-recommendations/home-recommendation.service.ts";
 import { createAdminCharacterPromptService, ensureDefaultCharacterPromptTemplates } from "../modules/admin-character-prompts/admin-character-prompt.service.ts";
 import { createAdminImagePromptService } from "../modules/admin-image-prompts/admin-image-prompt.service.ts";
 import { createAdminShotPromptService, ensureDefaultShotPromptTemplates } from "../modules/admin-shot-prompts/admin-shot-prompt.service.ts";
@@ -49,8 +52,10 @@ import {
   setUserPromptDefault,
 } from "../modules/prompt-marketplace/prompt-skill-default.service.ts";
 import {
+  AiStoryboardWorkflowIntentError,
   createAiStoryboardPreviewService,
   createTextModelChatGateway,
+  resolveAiStoryboardWorkflowIntent,
   type TextChatGatewayLike,
 } from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
 import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
@@ -1285,6 +1290,7 @@ const adminRouteRoles = {
   storyboardPromptExport: ["super_admin"],
   membershipPlanManage: ["super_admin", "finance_admin"],
   announcementManage: ["super_admin", "ops_admin"],
+  homeRecommendationManage: ["super_admin", "ops_admin"],
 } as const;
 
 function writeKnownError(response: ServerResponse, error: unknown): boolean {
@@ -1516,6 +1522,12 @@ function canvasAgentActorFromCanvasScope(scope: CanvasActorScope): CanvasAgentAc
 function normalizeCanvasAgentMode(value: unknown): CanvasAgentMode {
   const mode = String(value ?? "b").trim().toLowerCase();
   return mode === "c" || mode === "plan" || mode === "expert" ? mode : "b";
+}
+
+function normalizeCanvasAgentCapabilityProfile(value: unknown): "canvas" | "media_generation_only" | null {
+  const profile = String(value ?? "canvas").trim().toLowerCase();
+  if (profile === "canvas" || profile === "media_generation_only") return profile;
+  return null;
 }
 
 function normalizeCanvasAgentMessage(value: unknown, fallback: unknown): Record<string, unknown> {
@@ -1872,6 +1884,7 @@ interface CanvasProjectRow {
   deleted_at?: Date | string | null;
   server_revision?: number;
   latest_document_id?: string | null;
+  is_free_generation_workspace?: boolean;
 }
 
 function formatCanvasProjectDate(now = new Date()): string {
@@ -1952,6 +1965,7 @@ async function listCanvasProjects(
         deleted_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? "TRUE" : "created_by_user_id = $1"}
+        AND COALESCE(is_free_generation_workspace, false) = false
         ${ownerScopeSql}
         ${input.includeDeleted && !input.teamMemberId ? "" : "AND deleted_at IS NULL"}
         ${teamMemberVisibilitySql}
@@ -1960,6 +1974,39 @@ async function listCanvasProjects(
     params,
   );
   return result.rows.map(canvasProjectFromRow);
+}
+
+async function ensureFreeGenerationWorkspace(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+  now: Date,
+): Promise<{ id: string; serverRevision: number }> {
+  const existing = await queryOne<{ id: string; server_revision: number | string }>(db, `
+    SELECT id, server_revision
+    FROM creator_canvas_projects
+    WHERE created_by_user_id=$1
+      AND is_free_generation_workspace=true
+      AND deleted_at IS NULL
+    LIMIT 1
+  `, [userId]);
+  if (existing) return { id: existing.id, serverRevision: Number(existing.server_revision ?? 1) || 1 };
+  const created = await queryOne<{ id: string; server_revision: number | string }>(db, `
+    INSERT INTO creator_canvas_projects (
+      id,title,status,is_free_generation_workspace,created_by_user_id,updated_by_user_id,created_at,updated_at
+    ) VALUES ($1,'自由生成','draft',true,$2,$2,$3,$3)
+    ON CONFLICT (created_by_user_id) WHERE is_free_generation_workspace=true AND deleted_at IS NULL
+    DO UPDATE SET updated_at=EXCLUDED.updated_at
+    RETURNING id,server_revision
+  `, [randomUUID(), userId, now]);
+  return { id: created!.id, serverRevision: Number(created!.server_revision ?? 1) || 1 };
+}
+
+function freeGenerationAgentActor(userId: string): CanvasAgentActor {
+  return {
+    ownerUserId: userId,
+    actorTeamMemberId: null,
+    capabilities: new Set([capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun, capabilities.canvasManage]),
+  };
 }
 
 async function createCanvasProjectRecord(
@@ -2962,7 +3009,11 @@ export async function resolveGenerationStorageObjectReferences(
         ? signedUrl
         : await visit(item),
     ] as const));
-    return Object.fromEntries(entries);
+    const resolved = Object.fromEntries(entries);
+    if (signedUrl && !Object.keys(resolved).some((key) => generationMediaUrlKeys.has(key))) {
+      resolved.url = signedUrl;
+    }
+    return resolved;
   };
   return visit(value);
 }
@@ -3411,6 +3462,24 @@ function adminManagedUploadConfig(pathname: string, env: NodeJS.ProcessEnv) {
       sourceAction: "admin_settings_asset_upload",
     };
   }
+  if (pathname === "/api/admin/home-recommendations/background/upload") {
+    return {
+      kind: "home_background_video" as const,
+      rootPrefix,
+      subfolder: "homeBackgroundVideos",
+      policyPurpose: "home-background-video",
+      sourceAction: "admin_home_background_video_upload",
+    };
+  }
+  if (pathname === "/api/admin/home-recommendations/videos/upload") {
+    return {
+      kind: "home_recommendation_video" as const,
+      rootPrefix,
+      subfolder: "homeRecommendationVideos",
+      policyPurpose: "home-recommendation-video",
+      sourceAction: "admin_home_recommendation_video_upload",
+    };
+  }
   return null;
 }
 
@@ -3436,6 +3505,7 @@ async function uploadTrackedCloudObject(
     objectKey: string;
     bytes: Uint8Array;
     contentType: string;
+    cacheControl?: string | null;
     fileName: string;
     projectId?: string | null;
     canvasProjectId?: string | null;
@@ -3506,6 +3576,7 @@ async function uploadTrackedCloudObject(
       objectKey: input.objectKey,
       body: input.bytes,
       contentType: input.contentType,
+      cacheControl: input.cacheControl ?? null,
       contentLength: input.bytes.byteLength,
     });
     const publicUrl = buildStorageObjectPublicUrl(input.runtime, {
@@ -4385,6 +4456,15 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
       : readEnumValues(modelConfig.parameterSchema.resolution);
   const supportedRatios = schemaRatios.length ? schemaRatios : defaultRatios;
   const supportedDurations = readEnumValues(modelConfig.parameterSchema.durationSec);
+  const parameterSchema = Object.fromEntries(Object.entries(modelConfig.parameterSchema).filter(([, parameter]) => (
+    parameter &&
+    typeof parameter === "object" &&
+    !Array.isArray(parameter) &&
+    (parameter as Record<string, unknown>).visible !== false
+  )));
+  const defaultParams = Object.fromEntries(Object.entries(modelConfig.defaultParams).filter(([key]) =>
+    Object.prototype.hasOwnProperty.call(parameterSchema, key),
+  ));
   return {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
@@ -4394,14 +4474,13 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     modelKindLabel: readString(modelConfig.uiConfig.modelKindLabel),
     videoCategory,
     videoCategoryLabel: readString(modelConfig.uiConfig.videoCategoryLabel) || videoCategoryLabel(videoCategory),
-    providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
     pipeline: readString(modelConfig.uiConfig.pipeline) || modelConfig.mediaType,
     supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
     supportedRatios: supportedRatios.length ? supportedRatios : ["16:9", "9:16"],
     supportedQuality: schemaQuality.length ? schemaQuality : ["1080p"],
     supportedDurations,
-    parameterSchema: modelConfig.parameterSchema,
-    defaultParams: modelConfig.defaultParams,
+    parameterSchema,
+    defaultParams,
     pricing: modelConfig.pricing,
     baseCredits: modelConfig.pricing.baseCredits,
     billingMode: modelConfig.pricing.billingMode,
@@ -4451,17 +4530,8 @@ async function buildBatchImageModelOptions(db: Parameters<typeof listActiveAiMod
   const models = activeImageModels
     .filter(modelConfigSupportsBatchImage)
     .map(modelConfigToBatchImageModelOption);
-  const fallbackModels = [
-    {
-      modelId: "nano_banana_2",
-      modelName: "nano banana 2",
-      ratios: ["16:9", "9:16", "1:1"],
-      qualities: ["2K"],
-    },
-  ];
-  const resolvedModels = models.length ? models : fallbackModels;
   return {
-    models: resolvedModels,
+    models,
   };
 }
 
@@ -4495,40 +4565,8 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
   const audioModels = activeAudioModels.filter((modelConfig) =>
     modelConfigSupportsGenerationExecution("audio", modelConfig),
   ).map(modelConfigToGenerationConfigModel);
-  const imageModels = executableImageModels.length
-    ? executableImageModels.map(modelConfigToGenerationConfigModel)
-    : !requestedMediaType || requestedMediaType === "image"
-      ? [
-        {
-          modelCode: "nano_banana_2",
-          modelLabel: "nano banana 2",
-          providerGroup: "Nano banana",
-          pipeline: "G",
-          supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
-          supportedRatios: ["16:9", "9:16", "1:1"],
-          supportedQuality: ["2K"],
-          displayBaseCost: 90,
-          disabled: false,
-        },
-      ]
-      : [];
-  const videoModels = executableVideoModels.length
-    ? executableVideoModels.map(modelConfigToGenerationConfigModel)
-    : !requestedMediaType || requestedMediaType === "video"
-      ? [
-        {
-          modelCode: "video_mock_1",
-          modelLabel: "Video Mock",
-          providerGroup: "Mock",
-          pipeline: "mock",
-          supportedModes: ["video"],
-          supportedRatios: ["16:9", "9:16"],
-          supportedQuality: ["720p"],
-          displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
-          disabled: false,
-        },
-      ]
-      : [];
+  const imageModels = executableImageModels.map(modelConfigToGenerationConfigModel);
+  const videoModels = executableVideoModels.map(modelConfigToGenerationConfigModel);
   const defaultVideoModel =
     videoModels.find((model) => model.videoCategory === "reference") ??
     videoModels[0] ??
@@ -4543,8 +4581,8 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
     ],
     presets: [],
     uploadLimits: episodeUploadLimits,
-    defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
-    defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
+    defaultImageModelCode: imageModels[0]?.modelCode ?? null,
+    defaultVideoModelCode: defaultVideoModel?.modelCode ?? null,
     defaultAudioModelCode: audioModels[0]?.modelCode ?? null,
   };
 }
@@ -5950,6 +5988,7 @@ async function listTaskCenterTasks(
     progress_percent: number | string | null;
     project_id: string | null;
     project_name: string | null;
+    is_free_generation_workspace: boolean;
     episode_id: string | null;
     episode_title: string | null;
     target_type: string;
@@ -5992,6 +6031,7 @@ async function listTaskCenterTasks(
           END AS progress_percent,
           snapshot.project_id,
           project.name AS project_name,
+          COALESCE(canvas_project.is_free_generation_workspace, false) AS is_free_generation_workspace,
           snapshot.episode_id,
           episode.title AS episode_title,
           snapshot.target_type,
@@ -6048,6 +6088,7 @@ async function listTaskCenterTasks(
         JOIN tasks task ON task.id = snapshot.task_id
         LEFT JOIN projects project ON project.id = snapshot.project_id
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
+        LEFT JOIN creator_canvas_projects canvas_project ON canvas_project.id = snapshot.canvas_project_id
         LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
         ${diagnosticsSchema.providerRequests ? `LEFT JOIN LATERAL (
           SELECT request.task_center_diagnostics_json
@@ -6115,6 +6156,7 @@ async function listTaskCenterTasks(
           END AS progress_percent,
           NULL::uuid AS project_id,
           NULL::text AS project_name,
+          false AS is_free_generation_workspace,
           NULL::uuid AS episode_id,
           NULL::text AS episode_title,
           'team_asset'::text AS target_type,
@@ -6306,7 +6348,7 @@ async function listTaskCenterTasks(
       projectName: row.project_name,
       episodeId: row.episode_id,
       episodeTitle: row.episode_title,
-      targetType: row.target_type,
+      targetType: row.is_free_generation_workspace ? "free_generation" : row.target_type,
       targetId: row.target_id,
       assetId: row.target_type === "asset" || row.target_type === "team_asset" ? row.target_id : null,
       model: modelDisplayName,
@@ -9525,6 +9567,13 @@ async function createGenerationTask(
   const modelConfig = requestedModelCode
     ? await findActiveAiModelConfigByCode(db, requestedModelCode)
     : undefined;
+  const configuredModelSignedUrlExpiresInSeconds = Number(
+    input.env.MODEL_SIGNED_URL_EXPIRES_SECONDS,
+  );
+  const modelSignedUrlExpiresInSeconds = Number.isFinite(configuredModelSignedUrlExpiresInSeconds)
+    && configuredModelSignedUrlExpiresInSeconds > 0
+    ? Math.floor(configuredModelSignedUrlExpiresInSeconds)
+    : 6 * 60 * 60;
   const dispatchPolicy = requestedModelCode
     ? await findActiveAiModelDispatchPolicyByModelCode(db, requestedModelCode)
     : undefined;
@@ -9596,6 +9645,8 @@ async function createGenerationTask(
       assetVersionIds: referenceAssetVersionIds,
         modelConfig,
         runtime: input.runtime,
+        signedUrlExpiresInSeconds: modelSignedUrlExpiresInSeconds,
+        now: input.now,
       })
     : [];
   const resolveStorageObjectUrl = async (storageObjectId: string) => {
@@ -9614,7 +9665,7 @@ async function createGenerationTask(
           storageObjectId,
           adapter: input.runtime.adapter,
           now: input.now,
-          expiresInSeconds: input.signedUrlExpiresInSeconds,
+          expiresInSeconds: modelSignedUrlExpiresInSeconds,
         })).url;
       }
       return (await createSignedReadUrl(db, {
@@ -9622,7 +9673,7 @@ async function createGenerationTask(
         storageObjectId,
         adapter: input.runtime.adapter,
         now: input.now,
-        expiresInSeconds: input.signedUrlExpiresInSeconds,
+        expiresInSeconds: modelSignedUrlExpiresInSeconds,
       })).url;
     } catch (error) {
       if (error instanceof AuthorizationError) {
@@ -11984,6 +12035,8 @@ async function resolveGenerationReferenceImages(
     assetVersionIds: string[];
     modelConfig: AiModelConfigRecord | undefined;
     runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
   },
 ) {
   if (!input.assetVersionIds.length) {
@@ -12051,7 +12104,7 @@ async function resolveGenerationReferenceImages(
     ),
   );
 
-  return input.assetVersionIds.flatMap((assetVersionId) => {
+  return (await Promise.all(input.assetVersionIds.map(async (assetVersionId) => {
     const row = rowsById.get(assetVersionId);
     if (!row) {
       throw new GenerationRequestValidationError(
@@ -12084,11 +12137,17 @@ async function resolveGenerationReferenceImages(
     const bucket = readString(row.storage_bucket) || input.runtime.bucket;
     return [{
       assetVersionId,
-      url: buildGenerationReferenceObjectUrl(input.runtime, bucket, objectKey),
+      url: await buildGenerationReferenceObjectUrl({
+        runtime: input.runtime,
+        bucket,
+        objectKey,
+        expiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      }),
       mimeType,
       name: readString(metadata.label) || `reference-${assetVersionId}.png`,
     }];
-  });
+  }))).flat();
 }
 
 function parseMetadataJson(value: Record<string, unknown> | string | null | undefined): Record<string, unknown> {
@@ -12102,19 +12161,20 @@ function parseMetadataJson(value: Record<string, unknown> | string | null | unde
   }
 }
 
-function buildGenerationReferenceObjectUrl(
-  runtime: UploadSessionRuntime,
-  bucket: string,
-  objectKey: string,
+async function buildGenerationReferenceObjectUrl(
+  input: {
+    runtime: UploadSessionRuntime;
+    bucket: string;
+    objectKey: string;
+    expiresInSeconds: number;
+    now: Date;
+  },
 ) {
-  const publicBaseUrl = runtime.publicBaseUrl?.trim().replace(/\/+$/g, "") || "";
-  if (publicBaseUrl) {
-    return `${publicBaseUrl}/${objectKey}`;
-  }
-  if (bucket && runtime.region) {
-    return `https://${bucket}.cos.${runtime.region}.myqcloud.com/${objectKey}`;
-  }
-  return objectKey;
+  return (await input.runtime.adapter.createSignedReadUrl({
+    bucket: input.bucket,
+    objectKey: input.objectKey,
+    expiresAt: new Date(input.now.getTime() + input.expiresInSeconds * 1000),
+  })).url;
 }
 
 async function resolveEpisodeAssetVersion(
@@ -16357,6 +16417,7 @@ function proxyRemoteMedia(
   response: ServerResponse,
   targetUrl: string,
   headers: Record<string, string> = {},
+  responseHeaders: Record<string, string> = {},
 ) {
   return new Promise<void>((resolvePromise) => {
     const upstream = httpsRequest(
@@ -16382,6 +16443,9 @@ function proxyRemoteMedia(
             response.setHeader(headerName, headerValue);
           }
         }
+        for (const [headerName, headerValue] of Object.entries(responseHeaders)) {
+          response.setHeader(headerName, headerValue);
+        }
         response.setHeader("access-control-allow-origin", "*");
         upstreamResponse.pipe(response);
         upstreamResponse.on("end", () => resolvePromise());
@@ -16403,6 +16467,62 @@ function proxyRemoteMedia(
       resolvePromise();
     });
     upstream.end();
+  });
+}
+
+function isSafeVideoBatchMediaUrl(targetUrl: string) {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "[::1]" || hostname === "0.0.0.0" || hostname === "::1") return false;
+    if (/^(127\.|10\.|192\.168\.)/u.test(hostname)) return false;
+    const private172 = hostname.match(/^172\.(\d{1,3})\./u);
+    if (private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function proxyMergedVideoMedia(
+  response: ServerResponse,
+  videoUrl: string,
+  audioUrl: string,
+  download: boolean,
+) {
+  return new Promise<void>((resolvePromise) => {
+    const child = spawn(ffmpegInstaller.path, [
+      "-hide_banner",
+      "-loglevel", "error",
+      "-i", videoUrl,
+      "-i", audioUrl,
+      "-map", "0:v:0",
+      "-map", "1:a:0?",
+      "-c", "copy",
+      "-movflags", "frag_keyframe+empty_moov",
+      "-f", "mp4",
+      "pipe:1",
+    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    response.statusCode = 200;
+    response.setHeader("content-type", "video/mp4");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("access-control-allow-origin", "*");
+    if (download) response.setHeader("content-disposition", "attachment; filename=video-hq.mp4");
+    child.stdout.pipe(response);
+    child.stderr.resume();
+    child.once("error", () => {
+      if (!response.headersSent) response.statusCode = 502;
+      response.end();
+      resolvePromise();
+    });
+    child.once("close", () => {
+      if (!response.writableEnded) response.end();
+      resolvePromise();
+    });
+    response.once("close", () => {
+      if (!response.writableEnded) child.kill();
+    });
   });
 }
 
@@ -17894,16 +18014,18 @@ export function createPhoneAuthDevServer(
             resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
             env: runtimeEnv,
           }),
+          disableThinking: true,
         });
-      const aiScriptAnalysisTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+        const aiScriptAnalysisTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
         gateway: new TextModelGatewayService({
           db,
           adapter: new OpenAICompatibleTextAdapter(),
           modelflareAdapter: new ModelflareResponsesAdapter(),
           resolver: new AdminBackedTextModelResolver(db),
-          env: runtimeEnv,
-        }),
-      });
+            env: runtimeEnv,
+          }),
+          disableThinking: true,
+        });
       const canvasTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
         gateway: new TextModelGatewayService({
           db,
@@ -17955,6 +18077,11 @@ export function createPhoneAuthDevServer(
         const announcements = createAnnouncementService({ db });
         const result = await announcements.listActiveAnnouncements({ now: new Date() });
         return writeJson(response, enveloped(200, result.data));
+      }
+
+      if (request.method === "GET" && pathname === "/api/home-recommendations") {
+        const recommendations = createHomeRecommendationService({ db });
+        return writeJson(response, enveloped(200, (await recommendations.listPublicRecommendations()).data));
       }
 
       const generationWebhookMatch = pathname.match(/^\/api\/provider-webhooks\/generation\/([^/]+)$/);
@@ -18194,8 +18321,73 @@ export function createPhoneAuthDevServer(
         if (!urls.length) {
           return writeJson(response, envelopedError(400, "video_batch_links_required", "请粘贴至少一条受支持的视频链接。"));
         }
-        const tasks = await resolveVideoBatchLinks({ links: urls.join("\n") });
+        const videoBatchCookie = await createAdminSystemSettingsService({ db }).getVideoBatchCookie();
+        const tasks = await resolveVideoBatchLinks({ links: urls.join("\n"), cookie: videoBatchCookie.data.cookie });
         return writeJson(response, enveloped(200, { tasks }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/video-batch/cookie") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, {
+          status: 200,
+          body: await createAdminSystemSettingsService({ db }).getVideoBatchCookie(),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/video-batch/media") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const targetUrl = new URL(request.url ?? pathname, "http://localhost").searchParams.get("url") ?? "";
+        const audioUrl = new URL(request.url ?? pathname, "http://localhost").searchParams.get("audio") ?? "";
+        if (!isSafeVideoBatchMediaUrl(targetUrl)) {
+          return writeJson(response, envelopedError(400, "video_batch_media_url_invalid", "播放地址无效或不受支持。"));
+        }
+        const isDownload = new URL(request.url ?? pathname, "http://localhost").searchParams.get("download") === "1";
+        if (audioUrl) {
+          if (!isSafeVideoBatchMediaUrl(audioUrl)) {
+            return writeJson(response, envelopedError(400, "video_batch_audio_url_invalid", "音频地址无效或不受支持。"));
+          }
+          await proxyMergedVideoMedia(response, targetUrl, audioUrl, isDownload);
+          return;
+        }
+        await proxyRemoteMedia(
+          response,
+          targetUrl,
+          {
+            ...(typeof request.headers.range === "string" ? { Range: request.headers.range } : {}),
+            "User-Agent": String(request.headers["user-agent"] ?? "Mozilla/5.0"),
+            Referer: "https://www.douyin.com/",
+          },
+          isDownload ? { "content-disposition": "attachment; filename=video.mp4" } : {},
+        );
+        return;
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/video-batch/cookie") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as { cookie?: unknown; reason?: unknown };
+        return writeJson(response, await createAdminSystemSettingsService({ db }).updateVideoBatchCookie({
+          cookie: String(body.cookie ?? ""),
+          reason: String(body.reason ?? "更新视频解析服务端 Cookie"),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
       }
 
       if (request.method === "GET" && pathname === "/api/admin/dashboard/overview") {
@@ -20119,6 +20311,79 @@ export function createPhoneAuthDevServer(
         }));
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/home-recommendations") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.homeRecommendationManage],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const recommendations = createHomeRecommendationService({ db });
+        return writeJson(response, { status: 200, body: await recommendations.listAdminRecommendations() });
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/home-recommendations/background") {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveBackground({
+          videoUrl: body.videoUrl, posterUrl: body.posterUrl, status: body.status,
+          actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+
+      const adminHomeCategoryMatch = pathname.match(/^\/api\/admin\/home-recommendations\/categories\/([^/]+)$/);
+      if (request.method === "POST" && pathname === "/api/admin/home-recommendations/categories") {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveCategory({
+          code: body.code, name: body.name, status: body.status, sortOrder: body.sortOrder,
+          actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "PATCH" && adminHomeCategoryMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveCategory({
+          id: decodeURIComponent(adminHomeCategoryMatch[1]), code: body.code, name: body.name, status: body.status, sortOrder: body.sortOrder,
+          actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "DELETE" && adminHomeCategoryMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, await createHomeRecommendationService({ db }).deleteCategory({ id: decodeURIComponent(adminHomeCategoryMatch[1]) }));
+      }
+
+      const adminHomeVideoMatch = pathname.match(/^\/api\/admin\/home-recommendations\/videos\/([^/]+)$/);
+      if (request.method === "POST" && pathname === "/api/admin/home-recommendations/videos") {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveVideo({
+          categoryId: body.categoryId, title: body.title, subtitle: body.subtitle, coverUrl: body.coverUrl,
+          videoUrl: body.videoUrl, durationLabel: body.durationLabel, coverAlt: body.coverAlt,
+          status: body.status, sortOrder: body.sortOrder, actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "PATCH" && adminHomeVideoMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveVideo({
+          id: decodeURIComponent(adminHomeVideoMatch[1]), categoryId: body.categoryId, title: body.title, subtitle: body.subtitle,
+          coverUrl: body.coverUrl, videoUrl: body.videoUrl, durationLabel: body.durationLabel, coverAlt: body.coverAlt,
+          status: body.status, sortOrder: body.sortOrder, actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "DELETE" && adminHomeVideoMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, await createHomeRecommendationService({ db }).deleteVideo({ id: decodeURIComponent(adminHomeVideoMatch[1]) }));
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/membership/plans") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -20661,6 +20926,8 @@ export function createPhoneAuthDevServer(
           cookieHeader: request.headers.cookie,
           ...(adminUploadConfig.kind === "prompt_cover"
             ? { requiredRoles: [...adminRouteRoles.storyboardPromptWrite] }
+            : adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video"
+              ? { requiredRoles: [...adminRouteRoles.homeRecommendationManage] }
             : { requiredPermissions: ["settings.write" as const] }),
         });
         if (!adminRoute.ok) {
@@ -20708,10 +20975,12 @@ export function createPhoneAuthDevServer(
             ),
           );
         }
-        if (uploadPolicy.kind !== "image") {
+        const isVideoUpload = adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video";
+        const isBackgroundVideoUpload = adminUploadConfig.kind === "home_background_video";
+        if (uploadPolicy.kind !== (isVideoUpload ? "video" : "image")) {
           return writeJson(
             response,
-            envelopedError(400, "admin_asset_upload_image_required", "Admin asset uploads only support images"),
+            envelopedError(400, isVideoUpload ? (isBackgroundVideoUpload ? "home_background_video_required" : "home_recommendation_video_required") : "admin_asset_upload_image_required", isVideoUpload ? "请选择视频文件" : "Admin asset uploads only support images"),
           );
         }
         if (typeof storageRuntime.adapter.putObject !== "function") {
@@ -20721,19 +20990,21 @@ export function createPhoneAuthDevServer(
           );
         }
 
-        let normalizedImage: Awaited<ReturnType<typeof normalizeAdminManagedImageUpload>>;
-        try {
-          normalizedImage = await normalizeAdminManagedImageUpload({ bytes, fileName });
-        } catch {
-          return writeJson(
-            response,
-            envelopedError(400, "admin_asset_upload_image_invalid", "Admin asset upload image is invalid"),
-          );
+        let managedFile = { bytes, contentType, fileName };
+        if (!isVideoUpload) {
+          try {
+            managedFile = await normalizeAdminManagedImageUpload({ bytes, fileName });
+          } catch {
+            return writeJson(
+              response,
+              envelopedError(400, "admin_asset_upload_image_invalid", "Admin asset upload image is invalid"),
+            );
+          }
         }
 
         const now = new Date();
         const objectKey = buildManagedUploadObjectKey({
-          fileName: normalizedImage.fileName,
+          fileName: managedFile.fileName,
           rootPrefix: adminUploadConfig.rootPrefix,
           subfolder: adminUploadConfig.subfolder,
           now,
@@ -20742,9 +21013,10 @@ export function createPhoneAuthDevServer(
         const uploaded = await uploadTrackedCloudObject(db, {
           runtime: storageRuntime,
           objectKey,
-          bytes: normalizedImage.bytes,
-          contentType: normalizedImage.contentType,
-          fileName: normalizedImage.fileName,
+          bytes: managedFile.bytes,
+          contentType: managedFile.contentType,
+          cacheControl: isBackgroundVideoUpload ? "public, max-age=31536000, immutable" : null,
+          fileName: managedFile.fileName,
           actorUserId: null,
           actorDisplayName: adminRoute.session.display_name,
           pageKey: "admin",
@@ -20768,8 +21040,8 @@ export function createPhoneAuthDevServer(
               storageObjectKey: objectKey,
               previewUrl: uploaded.sourceUrl,
               sourceUrl: uploaded.sourceUrl,
-              mimeType: normalizedImage.contentType,
-              byteSize: normalizedImage.bytes.byteLength,
+              mimeType: managedFile.contentType,
+              byteSize: managedFile.bytes.byteLength,
               originalFileName: fileName,
               eTag: uploaded.eTag,
               versionId: uploaded.versionId,
@@ -23495,6 +23767,7 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             projectId?: string | null;
+            canvasProjectId?: string | null;
             purpose: string;
             fileName: string;
             contentType: string;
@@ -23541,11 +23814,14 @@ export function createPhoneAuthDevServer(
               );
             }
           }
+          const freeGenerationWorkspace = body.purpose === "free-generation-attachments"
+            ? await ensureFreeGenerationWorkspace(db, authenticated.user.id, new Date())
+            : null;
           const prepared = await createUploadSession(db, {
             actor,
             sessionToken: authenticated.sessionToken,
             projectId: body.projectId?.trim() || null,
-            canvasProjectId: body.canvasProjectId?.trim() || null,
+            canvasProjectId: (freeGenerationWorkspace?.id ?? body.canvasProjectId?.trim()) || null,
             purpose: body.purpose,
             fileName: body.fileName,
             contentType: body.contentType,
@@ -24024,6 +24300,7 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
         pathname.startsWith("/api/canvas/") ||
+        pathname.startsWith("/api/free-generation/") ||
         pathname === "/api/director-desks" ||
         pathname.startsWith("/api/director-desks/") ||
         pathname === "/api/creator/canvases" ||
@@ -24550,6 +24827,174 @@ export function createPhoneAuthDevServer(
           }
         }
 
+        const freeGenerationConversationMatch = pathname.match(/^\/api\/free-generation\/conversations$/);
+        const freeGenerationMessageMatch = pathname.match(/^\/api\/free-generation\/conversations\/([^/]+)\/messages$/);
+        const freeGenerationFileGrantMatch = pathname.match(/^\/api\/free-generation\/conversations\/([^/]+)\/file-grants(?:\/([^/]+))?$/);
+        const freeGenerationEventsMatch = pathname.match(/^\/api\/free-generation\/agent-tasks\/([^/]+)\/events$/);
+        const freeGenerationControlMatch = pathname.match(/^\/api\/free-generation\/agent-tasks\/([^/]+)\/(pause|resume|stop|replan|interject|approve|skip)$/);
+        if (pathname.startsWith("/api/free-generation/")) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "free_generation_owner_required", "free generation is only available to the account owner"));
+          }
+          const now = new Date();
+          const workspace = await ensureFreeGenerationWorkspace(db, authenticated.user.id, now);
+          const canvasProjectId = workspace.id;
+          const agentActor = freeGenerationAgentActor(authenticated.user.id);
+          if (request.method === "GET" && pathname === "/api/free-generation/agent-models") {
+            return writeJson(response, enveloped(200, { models: await listAvailableCanvasAgentModels(db) }));
+          }
+          if (freeGenerationConversationMatch) {
+            const body = request.method === "GET" ? {} : (await readJsonBody(request)) as Record<string, unknown>;
+            if (request.method === "GET") {
+              return writeJson(response, enveloped(200, { conversations: await listCanvasAgentConversations(db, {
+                canvasId: canvasProjectId, actor: agentActor, limit: Number(url.searchParams.get("limit") ?? 50),
+              }) }));
+            }
+            if (request.method === "POST") {
+              const conversation = await createCanvasAgentConversation(db, {
+                canvasId: canvasProjectId, actor: agentActor,
+                title: typeof body.title === "string" ? body.title : "自由生成", now,
+              });
+              return writeJson(response, enveloped(201, { conversation }));
+            }
+            if (request.method === "PATCH") {
+              return writeJson(response, enveloped(200, { conversation: await updateCanvasAgentConversation(db, {
+                canvasId: canvasProjectId, conversationId: String(body.conversationId ?? ""), actor: agentActor,
+                title: typeof body.title === "string" ? body.title : undefined,
+                status: body.status === "archived" ? "archived" : body.status === "active" ? "active" : undefined,
+                pinned: typeof body.pinned === "boolean" ? body.pinned : undefined, now,
+              }) }));
+            }
+            if (request.method === "DELETE") {
+              return writeJson(response, enveloped(200, { conversation: await deleteCanvasAgentConversation(db, {
+                canvasId: canvasProjectId, conversationId: String(url.searchParams.get("conversationId") ?? body.conversationId ?? ""), actor: agentActor, now,
+              }) }));
+            }
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          if (freeGenerationMessageMatch) {
+            const conversationId = decodeURIComponent(freeGenerationMessageMatch[1] ?? "");
+            if (request.method === "GET") {
+              try {
+                return writeJson(response, enveloped(200, { messages: await listCanvasAgentMessages(db, {
+                  canvasId: canvasProjectId, conversationId, actor: agentActor, limit: Number(url.searchParams.get("limit") ?? 200),
+                }) }));
+              } catch (error) {
+                if (error instanceof Error && error.message === "canvas_agent_conversation_not_found") {
+                  return writeJson(response, envelopedError(404, error.message, "Free generation conversation not found"));
+                }
+                throw error;
+              }
+            }
+            if (request.method !== "POST") return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            const runtimeConfiguration = await loadCanvasAgentRuntimeConfiguration(db);
+            const modelCode = selectCanvasAgentModelCode(runtimeConfiguration, "c", body.modelCode ?? body.model);
+            if (!modelCode) return writeJson(response, envelopedError(400, "agent_model_required", "modelCode is required"));
+            const model = await new AdminBackedTextModelResolver(db).resolve(modelCode);
+            const userMessage = await enrichCanvasAgentMessageAttachments(db, {
+              canvasId: canvasProjectId, conversationId, actor: agentActor,
+              message: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+              sessionToken: authenticated.sessionToken, runtime: storageRuntime, signedUrlExpiresInSeconds, now,
+            });
+            const task = await createCanvasAgentTask(db, {
+              canvasId: canvasProjectId, conversationId, actor: agentActor, mode: "c", modelCode: model.id,
+              modelConfigSnapshot: model.snapshot,
+              budget: { ...readJsonRecord(body.budget), capabilityProfile: "media_generation_only" },
+              baseRevision: workspace.serverRevision, userMessage, now,
+            });
+            return writeJson(response, enveloped(202, { task }));
+          }
+          if (freeGenerationFileGrantMatch) {
+            const route = {
+              canvasId: canvasProjectId,
+              conversationId: decodeURIComponent(freeGenerationFileGrantMatch[1] ?? ""),
+              grantId: freeGenerationFileGrantMatch[2] ? decodeURIComponent(freeGenerationFileGrantMatch[2]) : null,
+            };
+            const service = createCanvasAgentFileGrantHttpService(db);
+            try {
+              const result = await service.handle({
+                method: request.method ?? "GET", route, actor: agentActor,
+                body: request.method === "POST" ? (await readJsonBody(request)) as Record<string, unknown> : undefined,
+                includeInactive: url.searchParams.get("includeInactive") === "true", now,
+              });
+              return writeJson(response, enveloped(result.status, result.data));
+            } catch (error) {
+              const code = error instanceof Error ? error.message : "free_generation_file_grant_error";
+              const status = code === "method_not_allowed" ? 405 : code.includes("not_found") ? 404 : 400;
+              return writeJson(response, envelopedError(status, code, code));
+            }
+          }
+          const resolveTask = async (taskId: string) => {
+            const task = await findCanvasAgentTaskForActor(db, { taskId, canvasId: canvasProjectId, actor: agentActor });
+            if (!task) throw new CanvasAuthorizationError("canvas_not_found");
+            return task;
+          };
+          if (request.method === "GET" && freeGenerationEventsMatch) {
+            const taskId = decodeURIComponent(freeGenerationEventsMatch[1] ?? "");
+            await resolveTask(taskId);
+            const headerCursor = Array.isArray(request.headers["last-event-id"]) ? request.headers["last-event-id"]?.[0] : request.headers["last-event-id"];
+            const after = Number(headerCursor ?? url.searchParams.get("after") ?? 0);
+            const limit = Number(url.searchParams.get("limit") ?? 200);
+            const afterSequence = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+            const events = await listCanvasAgentEvents(db, { taskId, afterSequence, limit: Number.isFinite(limit) ? limit : 200 });
+            const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("live") === "1";
+            if (!wantsStream) return writeJson(response, enveloped(200, { events }));
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/event-stream; charset=utf-8");
+            response.setHeader("cache-control", "no-cache, no-transform");
+            response.setHeader("connection", "keep-alive");
+            response.setHeader("x-accel-buffering", "no");
+            response.flushHeaders?.();
+            response.write("retry: 1000\n\n");
+            let cursor = afterSequence;
+            for (const event of events) { response.write(formatCanvasAgentSseChunk(event)); cursor = Math.max(cursor, event.sequence); }
+            let closed = false;
+            const markClosed = () => { closed = true; };
+            request.on("aborted", markClosed); response.on("close", markClosed);
+            const stopHeartbeat = startSseHeartbeat(response, 10_000);
+            try {
+              const expiresAt = Date.now() + 25_000;
+              while (!closed && !response.writableEnded && Date.now() < expiresAt) {
+                await delay(500);
+                if (closed || response.writableEnded) break;
+                await resolveTask(taskId);
+                const nextEvents = await listCanvasAgentEvents(db, { taskId, afterSequence: cursor, limit: Number.isFinite(limit) ? limit : 200 });
+                for (const event of nextEvents) { response.write(formatCanvasAgentSseChunk(event)); cursor = Math.max(cursor, event.sequence); }
+                if (nextEvents.some((event) => isTerminalCanvasAgentEvent(event.eventType))) break;
+              }
+            } finally {
+              stopHeartbeat(); request.off("aborted", markClosed); response.off("close", markClosed);
+            }
+            response.end(); return;
+          }
+          if (request.method === "POST" && freeGenerationControlMatch) {
+            const taskId = decodeURIComponent(freeGenerationControlMatch[1] ?? "");
+            const action = freeGenerationControlMatch[2] ?? "";
+            const task = await resolveTask(taskId);
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            let result;
+            if (action === "pause") result = await pauseCanvasAgentTask(db, { taskId, now });
+            else if (action === "resume") result = await resumeCanvasAgentTask(db, { taskId, now });
+            else if (action === "stop") result = await stopCanvasAgentTask(db, { taskId, now });
+            else if (action === "replan") result = await replanCanvasAgentTask(db, { taskId, reason: typeof body.reason === "string" ? body.reason : undefined, now });
+            else if (action === "skip") result = await skipCanvasAgentStep(db, { taskId, stepId: typeof body.stepId === "string" ? body.stepId : null, actor: agentActor, reason: typeof body.reason === "string" ? body.reason : null, now });
+            else if (action === "interject") {
+              const content = await enrichCanvasAgentMessageAttachments(db, {
+                canvasId: canvasProjectId, conversationId: task.conversationId, actor: agentActor,
+                message: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+                sessionToken: authenticated.sessionToken, runtime: storageRuntime, signedUrlExpiresInSeconds, now,
+              });
+              result = await interjectCanvasAgentTask(db, { taskId, conversationId: task.conversationId, actor: agentActor, content, now });
+            } else result = await decideCanvasAgentApproval(db, {
+              taskId, approvalId: String(body.approvalId ?? ""), actor: agentActor,
+              decision: body.decision === "rejected" ? "rejected" : "approved", reason: typeof body.reason === "string" ? body.reason : null, now,
+            });
+            return writeJson(response, enveloped(200, { result }));
+          }
+          return writeJson(response, envelopedError(404, "free_generation_route_not_found", "free generation route not found"));
+        }
+
         const canvasAgentConversationMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/conversations$/);
         const canvasAgentModelsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/agent-models$/);
         if (request.method === "GET" && canvasAgentModelsMatch) {
@@ -24731,6 +25176,14 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const capabilityProfile = normalizeCanvasAgentCapabilityProfile(body.capabilityProfile);
+          if (!capabilityProfile) {
+            return writeJson(response, envelopedError(
+              400,
+              "canvas_agent_capability_profile_invalid",
+              "capabilityProfile must be canvas or media_generation_only",
+            ));
+          }
           const mode = normalizeCanvasAgentMode(body.mode);
           const runtimeConfiguration = await loadCanvasAgentRuntimeConfiguration(db);
           const modelCode = selectCanvasAgentModelCode(
@@ -24759,7 +25212,7 @@ export function createPhoneAuthDevServer(
             mode,
             modelCode: model.id,
             modelConfigSnapshot: model.snapshot,
-            budget: readJsonRecord(body.budget),
+            budget: { ...readJsonRecord(body.budget), capabilityProfile },
             baseRevision: canvas.serverRevision,
             userMessage,
             now: new Date(),
@@ -29244,6 +29697,8 @@ export function createPhoneAuthDevServer(
             scriptText?: string | null;
             skillId?: string | null;
             modelCode?: string | null;
+            instruction?: string | null;
+            resolveInstructionIntent?: boolean | null;
             skipScriptStage?: boolean | null;
             useDefaultWorkflowStages?: boolean | null;
             stages?: Array<"script" | "scene" | "character" | "prop" | "shot"> | null;
@@ -29259,6 +29714,49 @@ export function createPhoneAuthDevServer(
             } | null;
           };
           const scriptText = String(body.scriptText ?? "").trim();
+          const resolveInstructionIntent = body.resolveInstructionIntent === true;
+          const instruction = String(body.instruction ?? "").trim();
+          const bodyModelCode = String(body.modelCode ?? "").trim();
+          const requestedModelCode = bodyModelCode || (body.skipScriptStage === true ? "deepseek-noval" : "deepseek-script");
+          const scriptModelConfig = bodyModelCode
+            ? await findActiveAiModelConfigByCode(db, requestedModelCode)
+            : await findActiveScriptGenerationModelConfig(db, requestedModelCode);
+          if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
+            throw new TextModelGatewayError("model_not_configured");
+          }
+          const resolvedModelCode = scriptModelConfig.modelCode;
+          let resolvedIntent: Awaited<ReturnType<typeof resolveAiStoryboardWorkflowIntent>> | null = null;
+          if (resolveInstructionIntent) {
+            if (!instruction) {
+              return writeJson(response, envelopedError(400, "workflow_instruction_required", "workflow instruction is required"));
+            }
+            try {
+              resolvedIntent = await resolveAiStoryboardWorkflowIntent({
+                gateway: aiStoryboardTextChatGateway,
+                modelCode: resolvedModelCode,
+                instruction,
+                projectId,
+                createdByUserId: authenticated.user.id,
+              });
+            } catch (error) {
+              if (error instanceof AiStoryboardWorkflowIntentError) {
+                return writeJson(response, envelopedError(422, error.code, "模型未能识别需要生成的内容，请把要求说得更具体。"));
+              }
+              throw error;
+            }
+            body.stages = resolvedIntent.stages;
+            body.skipScriptStage = resolvedIntent.skipScriptStage;
+            const selectedCategories = new Set(resolvedIntent.stages.map((stage) => ({
+              script: "script",
+              scene: "scene_extract",
+              character: "character_extract",
+              prop: "prop_extract",
+              shot: "shot",
+            } as const)[stage]));
+            body.skills = Object.fromEntries(Object.entries(body.skills ?? {}).filter(([category]) => selectedCategories.has(
+              category as "script" | "scene_extract" | "character_extract" | "prop_extract" | "shot",
+            )));
+          }
           const skipScriptStage = body.skipScriptStage === true;
           const useDefaultWorkflowStages = skipScriptStage && body.useDefaultWorkflowStages === true;
           const workflowStages = ["script", "scene", "character", "prop", "shot"] as const;
@@ -29369,18 +29867,9 @@ export function createPhoneAuthDevServer(
           if (usesLegacyPackages && (!genrePackage || !emotionPackage)) {
             return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
           }
-          const bodyModelCode = String(body.modelCode ?? "").trim();
-          const requestedModelCode = bodyModelCode || (skipScriptStage ? "deepseek-noval" : "deepseek-script");
-          const scriptModelConfig = bodyModelCode
-            ? await findActiveAiModelConfigByCode(db, requestedModelCode)
-            : await findActiveScriptGenerationModelConfig(db, requestedModelCode);
-          if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
-            throw new TextModelGatewayError("model_not_configured");
-          }
-          const resolvedModelCode = scriptModelConfig.modelCode;
           const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages
             ? (requestedStages.length || (skipScriptStage ? 4 : 5))
-            : workflowSkills.length;
+            : workflowSkills.length + (resolvedIntent ? 1 : 0);
           const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
           const skillCreditCost = workflowSkills.reduce(
             (sum, item) => sum + Math.max(0, Math.round(Number(item.priceCredits) || 0)),
@@ -29509,13 +29998,16 @@ export function createPhoneAuthDevServer(
             response.setHeader("x-accel-buffering", "no");
             response.flushHeaders?.();
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
-            const abortController = createRequestAbortController(request, response);
+              const abortController = createRequestAbortController(request, response);
             try {
               let generationCompleted = false;
               const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
                 userId: authenticated.user.id,
                 teamMemberId: actor.teamMember?.id ?? null,
               });
+              if (resolvedIntent) {
+                writeSseData(response, { type: "intent_resolved", ...resolvedIntent });
+              }
               for await (const event of previewService.generatePreviewStream({
                 ...previewInput,
                 signal: abortController.signal,
@@ -29535,6 +30027,7 @@ export function createPhoneAuthDevServer(
                     modelRunCount,
                     skillCreditCost,
                     selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
+                    ...(resolvedIntent ? { resolvedIntent } : {}),
                     selectedPackages: genrePackage && emotionPackage ? {
                       genre: { id: genrePackage.id, name: genrePackage.name },
                       emotion: { id: emotionPackage.id, name: emotionPackage.name },
@@ -29564,22 +30057,27 @@ export function createPhoneAuthDevServer(
               stopHeartbeat();
               abortController.cleanup();
               if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+                const failureMessage = translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。");
                 if (actor.teamMember) {
-                  await releaseSimpleTeamMemberCredits(db, {
-                    teamMemberId: actor.teamMember.id,
-                    amount: creditCost,
-                    sourceId: idempotencyKey,
-                    reason: "剧本预览失败返还积分",
-                    metadata: {
-                      taskType: "ai_storyboard_preview",
-                      promptPreview: scriptText.slice(0, 200),
-                    },
-                    now: new Date(),
-                  });
+                  try {
+                    await releaseSimpleTeamMemberCredits(db, {
+                      teamMemberId: actor.teamMember.id,
+                      amount: creditCost,
+                      sourceId: idempotencyKey,
+                      reason: "剧本预览失败返还积分",
+                      metadata: {
+                        taskType: "ai_storyboard_preview",
+                        promptPreview: scriptText.slice(0, 200),
+                      },
+                      now: new Date(),
+                    });
+                  } catch {
+                    // The generation error must still reach the already-open event stream.
+                  }
                 }
                 writeSseData(response, {
                   type: "error",
-                  error: translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。"),
+                  error: failureMessage,
                 });
                 response.end();
               }
@@ -29607,6 +30105,7 @@ export function createPhoneAuthDevServer(
               modelRunCount,
               skillCreditCost,
               selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
+              ...(resolvedIntent ? { resolvedIntent } : {}),
               selectedPackages: genrePackage && emotionPackage ? {
                 genre: { id: genrePackage.id, name: genrePackage.name },
                 emotion: { id: emotionPackage.id, name: emotionPackage.name },

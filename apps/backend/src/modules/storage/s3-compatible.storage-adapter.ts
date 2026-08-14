@@ -1,10 +1,12 @@
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { Readable } from "node:stream";
 
@@ -51,14 +53,19 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     objectKey: string;
     expiresAt: Date;
   }): Promise<{ url: string; expiresAt: Date }> {
+    const expiresIn = Math.max(
+      1,
+      Math.floor((input.expiresAt.getTime() - Date.now()) / 1000),
+    );
     return {
-      url: buildPublicObjectUrl({
-        endpoint: this.publicEndpoint,
-        region: this.region,
-        forcePathStyle: this.forcePathStyle,
-        bucket: input.bucket,
-        objectKey: input.objectKey,
-      }),
+      url: await getSignedUrl(
+        this.client,
+        new GetObjectCommand({
+          Bucket: input.bucket,
+          Key: input.objectKey,
+        }),
+        { expiresIn },
+      ),
       expiresAt: input.expiresAt,
     };
   }
@@ -69,6 +76,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
     contentLength?: number | null;
+    cacheControl?: string | null;
     timeoutMs?: number | null;
   }) {
     const timeoutMs = normalizeTimeoutMs(input.timeoutMs, this.uploadTimeoutMs);
@@ -83,6 +91,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
             Key: input.objectKey,
             Body: body.value as never,
             ContentType: input.contentType ?? undefined,
+            CacheControl: input.cacheControl ?? undefined,
           },
           queueSize: 1,
           partSize: 5 * 1024 * 1024,
@@ -103,6 +112,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
               Key: input.objectKey,
               Body: body.value as never,
               ContentType: input.contentType ?? undefined,
+              CacheControl: input.cacheControl ?? undefined,
               ContentLength: body.contentLength ?? undefined,
             }),
             { abortSignal: abortController.signal },

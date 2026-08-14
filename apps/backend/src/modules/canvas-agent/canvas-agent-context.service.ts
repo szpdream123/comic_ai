@@ -4,7 +4,7 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 import type { CanvasAgentKnowledgeService } from "./canvas-agent-knowledge.service.ts";
 import type { CanvasAgentPromptPreferenceService } from "./canvas-agent-prompt-preference.service.ts";
-import type { CanvasAgentActor } from "./canvas-agent.types.ts";
+import type { CanvasAgentActor, CanvasAgentCapabilityProfile } from "./canvas-agent.types.ts";
 
 export class CanvasAgentContextService {
   constructor(
@@ -26,11 +26,16 @@ export class CanvasAgentContextService {
     canvasId: string;
     conversationId: string;
     actor: CanvasAgentActor;
+    taskId?: string;
+    capabilityProfile?: CanvasAgentCapabilityProfile;
   }) {
-    const canvas = await this.deps.loadCanvasContext({
-      canvasId: input.canvasId,
-      actor: input.actor,
-    });
+    const mediaGenerationOnly = input.capabilityProfile === "media_generation_only";
+    const canvas = mediaGenerationOnly
+      ? undefined
+      : await this.deps.loadCanvasContext({
+          canvasId: input.canvasId,
+          actor: input.actor,
+        });
     const conversation = await queryOne<{ summary_json: Record<string, unknown> }>(
       this.deps.db,
       `
@@ -43,7 +48,7 @@ export class CanvasAgentContextService {
       [input.conversationId, input.canvasId, input.actor.ownerUserId, input.actor.actorTeamMemberId ?? null],
     );
     if (!conversation) throw new Error("canvas_agent_conversation_not_found");
-    let summary = readRecord(conversation.summary_json);
+    let summary = mediaGenerationOnly ? {} : readRecord(conversation.summary_json);
     const throughSequence = Math.max(0, Number(summary.throughSequence ?? 0));
     const maxMessages = this.deps.maxMessages ?? 80;
     const result = await this.deps.db.query<{
@@ -55,17 +60,27 @@ export class CanvasAgentContextService {
         SELECT role, content_json, sequence
         FROM canvas_agent_messages
         WHERE conversation_id=$1 AND sequence>$2
+          AND ($4::text IS NULL OR EXISTS (
+            SELECT 1 FROM canvas_agent_tasks task
+            WHERE task.id=canvas_agent_messages.task_id
+              AND task.budget_json->>'capabilityProfile'=$4
+          ))
         ORDER BY sequence DESC
         LIMIT $3
       `,
-      [input.conversationId, throughSequence, Math.max(1, maxMessages + 1)],
+      [
+        input.conversationId,
+        throughSequence,
+        Math.max(1, maxMessages + 1),
+        mediaGenerationOnly ? "media_generation_only" : null,
+      ],
     );
     let messages = result.rows.reverse().map((row) => ({
       role: row.role,
       content: compactCanvasReadMessage(row.role, row.content_json),
       sequence: Number(row.sequence),
     }));
-    const memories = this.deps.knowledge
+    const memories = !mediaGenerationOnly && this.deps.knowledge
       ? await this.deps.knowledge.listMemories({
           canvasId: input.canvasId,
           conversationId: input.conversationId,
@@ -73,7 +88,7 @@ export class CanvasAgentContextService {
           limit: 100,
         })
       : [];
-    const mediaPromptPreferences = this.deps.promptPreferences
+    const mediaPromptPreferences = !mediaGenerationOnly && this.deps.promptPreferences
       ? await this.deps.promptPreferences.list({
           canvasId: input.canvasId,
           actor: input.actor,
@@ -91,7 +106,9 @@ export class CanvasAgentContextService {
       purpose: grant.purpose,
       expiresAt: grant.expiresAt,
     }));
-    let context = { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
+    let context = mediaGenerationOnly
+      ? { fileGrants, messages }
+      : { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     const serialized = JSON.stringify(context);
     const maxChars = this.deps.maxSerializedChars ?? 400_000;
     if (result.rows.length <= maxMessages && serialized.length <= maxChars) return context;
@@ -109,10 +126,20 @@ export class CanvasAgentContextService {
         SELECT role, content_json, sequence, COUNT(*) OVER() AS total_count
         FROM canvas_agent_messages
         WHERE conversation_id=$1 AND sequence>$2 AND sequence<$3
+          AND ($4::text IS NULL OR EXISTS (
+            SELECT 1 FROM canvas_agent_tasks task
+            WHERE task.id=canvas_agent_messages.task_id
+              AND task.budget_json->>'capabilityProfile'=$4
+          ))
         ORDER BY sequence DESC
         LIMIT 80
       `,
-      [input.conversationId, throughSequence, firstRetainedSequence],
+      [
+        input.conversationId,
+        throughSequence,
+        firstRetainedSequence,
+        mediaGenerationOnly ? "media_generation_only" : null,
+      ],
     );
     const compacted = compactedResult.rows.reverse().map((row) => ({
       role: row.role,
@@ -120,7 +147,7 @@ export class CanvasAgentContextService {
       sequence: Number(row.sequence),
     }));
     const compactedCount = Number(compactedResult.rows[0]?.total_count ?? 0);
-    if (compactedCount > 0) {
+    if (compactedCount > 0 && !mediaGenerationOnly) {
       const now = (this.deps.now ?? (() => new Date()))();
       summary = mergeSummary(summary, compacted, input.actor, now, {
         messageCount: compactedCount,
@@ -139,7 +166,9 @@ export class CanvasAgentContextService {
         ],
       );
     }
-    context = { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
+    context = mediaGenerationOnly
+      ? { fileGrants, messages }
+      : { canvas, summary, memories, mediaPromptPreferences, fileGrants, messages };
     return {
       ...context,
       truncated: true,

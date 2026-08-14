@@ -50,6 +50,7 @@ export function normalizeCanvasTextSkills(items = [], source = "") {
 
 export function renderCanvasTextSkillModal({
   show = false,
+  title = "选择生成技能",
   sourceTab = "official",
   activeCategory = "",
   officialSkills = [],
@@ -59,6 +60,8 @@ export function renderCanvasTextSkillModal({
   privatePagination = {},
   loading = false,
   allowedCategories = [],
+  actions = {},
+  confirmLabel = "确认选择",
 } = {}) {
   if (!show) return "";
   const source = sourceTab === "private" ? "private" : "official";
@@ -86,46 +89,56 @@ export function renderCanvasTextSkillModal({
   const visibleSkills = String(sourcePagination?.category ?? "all") === "all"
     ? sourceSkills.filter((item) => item.category === category)
     : sourceSkills;
+  const action = {
+    close: "close-canvas-text-skill-modal",
+    source: "set-canvas-text-skill-source",
+    category: "set-canvas-text-skill-category",
+    page: "set-canvas-text-skill-page",
+    select: "select-canvas-text-skill-draft",
+    clear: "clear-canvas-text-skill-draft",
+    confirm: "confirm-canvas-text-skill",
+    ...actions,
+  };
   return `
     <section class="canvas-text-skill-layer" data-canvas-text-skill-picker="true">
-      <button class="canvas-text-skill-scrim" type="button" data-action="close-canvas-text-skill-modal" aria-label="关闭技能选择"></button>
+      <button class="canvas-text-skill-scrim" type="button" data-action="${escapeAttr(action.close)}" aria-label="关闭技能选择"></button>
       <div class="canvas-text-skill-modal" role="dialog" aria-modal="true" aria-labelledby="canvas-text-skill-title">
         <header class="canvas-text-skill-header">
-          <div><span>GENERATION SKILLS</span><h2 id="canvas-text-skill-title">选择生成技能</h2></div>
-          <button type="button" data-action="close-canvas-text-skill-modal" aria-label="关闭" title="关闭">×</button>
+          <div><span>GENERATION SKILLS</span><h2 id="canvas-text-skill-title">${escapeHtml(title)}</h2></div>
+          <button type="button" data-action="${escapeAttr(action.close)}" aria-label="关闭" title="关闭">×</button>
         </header>
         <nav class="canvas-text-skill-tabs" aria-label="技能来源">
-          ${renderSourceTab("official", "官方技能", sourceSkillTotal(officialPagination, official, categoryWhitelist), source)}
-          ${renderSourceTab("private", "私人技能库", sourceSkillTotal(privatePagination, privateLibrary, categoryWhitelist), source)}
+          ${renderSourceTab("official", "官方技能", sourceSkillTotal(officialPagination, official, categoryWhitelist), source, action.source)}
+          ${renderSourceTab("private", "私人技能库", sourceSkillTotal(privatePagination, privateLibrary, categoryWhitelist), source, action.source)}
         </nav>
         <nav class="canvas-text-skill-category-tabs" aria-label="技能分类">
-          ${categories.map((item) => renderCategoryTab(item, category, sourceSkills, sourceCategoryCounts)).join("")}
+          ${categories.map((item) => renderCategoryTab(item, category, sourceSkills, sourceCategoryCounts, action.category)).join("")}
         </nav>
         <div class="canvas-text-skill-list" role="radiogroup" aria-label="${escapeAttr(categoryLabel(category))}技能">
           ${loading
             ? `<div class="canvas-text-skill-empty">正在加载技能...</div>`
             : visibleSkills.length
-              ? visibleSkills.map((skill) => renderSkillCard(skill, selected?.id ?? "")).join("")
+              ? visibleSkills.map((skill) => renderSkillCard(skill, selected?.id ?? "", action.select)).join("")
               : `<div class="canvas-text-skill-empty">${source === "private" ? "私人技能库" : "官方技能"}暂无${escapeHtml(categoryLabel(category))}技能</div>`}
         </div>
-        ${renderSkillPagination(source, sourcePagination, loading)}
+        ${renderSkillPagination(source, sourcePagination, loading, action.page)}
         <footer class="canvas-text-skill-footer">
           <div class="canvas-text-skill-selection">
             <small>当前选择</small>
             <strong>${escapeHtml(selected?.title ?? "未选择技能")}</strong>
             <span>${selected ? `${escapeHtml(categoryLabel(selected.category))} · ${formatCredits(selected.priceCredits)}` : "生成时仅使用模型提示词"}</span>
           </div>
-          ${selected ? `<button class="canvas-text-skill-clear" type="button" data-action="clear-canvas-text-skill-draft">清除</button>` : ""}
-          <button class="canvas-text-skill-cancel" type="button" data-action="close-canvas-text-skill-modal">取消</button>
-          <button class="canvas-text-skill-confirm" type="button" data-action="confirm-canvas-text-skill" ${disabled(loading)}>确认选择</button>
+          ${selected ? `<button class="canvas-text-skill-clear" type="button" data-action="${escapeAttr(action.clear)}">清除</button>` : ""}
+          <button class="canvas-text-skill-cancel" type="button" data-action="${escapeAttr(action.close)}">取消</button>
+          <button class="canvas-text-skill-confirm" type="button" data-action="${escapeAttr(action.confirm)}" ${disabled(loading)}>${escapeHtml(confirmLabel)}</button>
         </footer>
       </div>
     </section>
   `;
 }
 
-function renderSourceTab(id, label, count, activeSource) {
-  return `<button class="${id === activeSource ? "active" : ""}" type="button" data-action="set-canvas-text-skill-source" data-skill-source="${id}" aria-pressed="${id === activeSource}"><span>${label}</span><small>${count}</small></button>`;
+function renderSourceTab(id, label, count, activeSource, action) {
+  return `<button class="${id === activeSource ? "active" : ""}" type="button" data-action="${escapeAttr(action)}" data-skill-source="${id}" aria-pressed="${id === activeSource}"><span>${label}</span><small>${count}</small></button>`;
 }
 
 function sourceSkillTotal(pagination = {}, skills = [], categoryWhitelist = new Set()) {
@@ -135,13 +148,13 @@ function sourceSkillTotal(pagination = {}, skills = [], categoryWhitelist = new 
   return Math.max(0, Number(pagination?.total) || skills.length);
 }
 
-function renderCategoryTab(category, activeCategory, sourceSkills, categoryCounts = {}) {
+function renderCategoryTab(category, activeCategory, sourceSkills, categoryCounts = {}, action) {
   const active = category.id === activeCategory;
   const count = Math.max(0, Number(categoryCounts[category.id]) || sourceSkills.filter((item) => item.category === category.id).length);
-  return `<button class="${active ? "active" : ""}" type="button" data-action="set-canvas-text-skill-category" data-skill-category="${escapeAttr(category.id)}" aria-pressed="${active}"><span>${escapeHtml(category.label)}</span><small>${count}</small></button>`;
+  return `<button class="${active ? "active" : ""}" type="button" data-action="${escapeAttr(action)}" data-skill-category="${escapeAttr(category.id)}" aria-pressed="${active}"><span>${escapeHtml(category.label)}</span><small>${count}</small></button>`;
 }
 
-function renderSkillCard(skill, selectedId) {
+function renderSkillCard(skill, selectedId, action) {
   const selected = skill.id === selectedId;
   return `
     <button
@@ -149,7 +162,7 @@ function renderSkillCard(skill, selectedId) {
       type="button"
       role="radio"
       aria-checked="${selected}"
-      data-action="select-canvas-text-skill-draft"
+      data-action="${escapeAttr(action)}"
       data-skill-id="${escapeAttr(skill.id)}"
       data-skill-category="${escapeAttr(skill.category)}"
     >
@@ -187,15 +200,15 @@ function resolveCategoryTabs(skills, categoryCounts = {}, allowedCategories = []
   return categories.map((id) => ({ id, label: categoryLabel(id) }));
 }
 
-function renderSkillPagination(source, pagination = {}, loading = false) {
+function renderSkillPagination(source, pagination = {}, loading = false, action) {
   const page = Math.max(1, Number(pagination?.page) || 1);
   const totalPages = Math.max(1, Number(pagination?.totalPages) || 1);
   if (totalPages <= 1) return "";
   return `
     <nav class="canvas-text-skill-pagination" aria-label="技能分页">
       <span>第 ${page} / ${totalPages} 页</span>
-      <button type="button" data-action="set-canvas-text-skill-page" data-skill-page="${page - 1}" ${loading || page <= 1 ? "disabled" : ""}>上一页</button>
-      <button type="button" data-action="set-canvas-text-skill-page" data-skill-page="${page + 1}" ${loading || page >= totalPages ? "disabled" : ""}>下一页</button>
+      <button type="button" data-action="${escapeAttr(action)}" data-skill-page="${page - 1}" ${loading || page <= 1 ? "disabled" : ""}>上一页</button>
+      <button type="button" data-action="${escapeAttr(action)}" data-skill-page="${page + 1}" ${loading || page >= totalPages ? "disabled" : ""}>下一页</button>
     </nav>
   `;
 }

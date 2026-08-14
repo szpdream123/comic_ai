@@ -1099,6 +1099,16 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
           poll_queue_name: "generation-poll-audio",
         },
       ]);
+
+      const soundCloneSchema = await db.query<{ parameter_schema_json: Record<string, { visible?: boolean }> }>(`
+        SELECT parameter_schema_json
+        FROM ai_model_configs
+        WHERE model_code = 'soundclone'
+      `);
+      assert.deepEqual(
+        Object.values(soundCloneSchema.rows[0]?.parameter_schema_json ?? {}).map((parameter) => parameter.visible),
+        [false, false, false, false, false, false, false, false, false],
+      );
     } finally {
       await db.close();
     }

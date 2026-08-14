@@ -23,9 +23,9 @@ Inside `it("includes a creator workspace shell", ...)`, immediately after loadin
 ```ts
 assert.match(
   html,
-  /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/brand\/lingxi-theater-favicon\.png\?v=20260710-wing" \/>/,
+  /<link rel="icon" type="image\/png" sizes="256x256" href="\/assets\/brand\/lingxi-ai-favicon\.png\?v=20260710-wing" \/>/,
 );
-assert.doesNotMatch(html, /lingxi-theater-favicon\.svg/);
+assert.doesNotMatch(html, /lingxi-ai-favicon\.svg/);
 ```
 
 - [ ] **Step 2: Run the focused test and verify RED**
@@ -41,7 +41,7 @@ Expected: FAIL in `includes a creator workspace shell` because `app.html` still 
 ### Task 2: Replace the favicon asset and declaration
 
 **Files:**
-- Replace: `apps/web/assets/brand/lingxi-theater-favicon.png`
+- Replace: `apps/web/assets/brand/lingxi-ai-favicon.png`
 - Modify: `apps/web/app.html:13-14`
 - Test: `apps/web/tests/login-page.spec.ts`
 
@@ -50,7 +50,7 @@ Expected: FAIL in `includes a creator workspace shell` because `app.html` still 
 Run:
 
 ```powershell
-Copy-Item -LiteralPath 'C:\Users\索志朋\AppData\Local\Temp\codex-clipboard-a8e0c9d3-08ec-43e6-8576-60ff85d460a3.png' -Destination 'apps/web/assets/brand/lingxi-theater-favicon.png' -Force
+Copy-Item -LiteralPath 'C:\Users\索志朋\AppData\Local\Temp\codex-clipboard-a8e0c9d3-08ec-43e6-8576-60ff85d460a3.png' -Destination 'apps/web/assets/brand/lingxi-ai-favicon.png' -Force
 ```
 
 - [ ] **Step 2: Make the PNG the only active favicon**
@@ -58,10 +58,10 @@ Copy-Item -LiteralPath 'C:\Users\索志朋\AppData\Local\Temp\codex-clipboard-a8
 Replace the two current favicon declarations in `apps/web/app.html` with:
 
 ```html
-<link rel="icon" type="image/png" sizes="256x256" href="/assets/brand/lingxi-theater-favicon.png?v=20260710-wing" />
+<link rel="icon" type="image/png" sizes="256x256" href="/assets/brand/lingxi-ai-favicon.png?v=20260710-wing" />
 ```
 
-Do not modify `apps/web/assets/brand/lingxi-theater-favicon.svg`; it remains an unused, reversible legacy asset.
+Do not modify `apps/web/assets/brand/lingxi-ai-favicon.svg`; it remains an unused, reversible legacy asset.
 
 - [ ] **Step 3: Run the focused test and verify GREEN**
 
@@ -79,13 +79,13 @@ Run:
 
 ```powershell
 Add-Type -AssemblyName System.Drawing
-$image = [System.Drawing.Image]::FromFile((Resolve-Path 'apps/web/assets/brand/lingxi-theater-favicon.png'))
+$image = [System.Drawing.Image]::FromFile((Resolve-Path 'apps/web/assets/brand/lingxi-ai-favicon.png'))
 try {
   if ($image.Width -ne 256 -or $image.Height -ne 256) { throw 'Unexpected favicon dimensions' }
 } finally {
   $image.Dispose()
 }
-git diff --check -- apps/web/app.html apps/web/assets/brand/lingxi-theater-favicon.png apps/web/tests/login-page.spec.ts
+git diff --check -- apps/web/app.html apps/web/assets/brand/lingxi-ai-favicon.png apps/web/tests/login-page.spec.ts
 git status --short
 ```
 
@@ -95,7 +95,7 @@ Expected: the image is 256×256; Git reports changes only to the HTML, PNG, test
 
 **Files:**
 - Verify: `apps/web/app.html`
-- Verify: `apps/web/assets/brand/lingxi-theater-favicon.png`
+- Verify: `apps/web/assets/brand/lingxi-ai-favicon.png`
 
 - [ ] **Step 1: Verify the running server serves the new declaration and asset**
 
@@ -103,8 +103,8 @@ With the existing server at `http://127.0.0.1:4310`, run:
 
 ```powershell
 $html = (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:4310/app.html').Content
-if ($html -notmatch 'lingxi-theater-favicon\.png\?v=20260710-wing') { throw 'New favicon declaration is not being served' }
-$asset = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:4310/assets/brand/lingxi-theater-favicon.png?v=20260710-wing'
+if ($html -notmatch 'lingxi-ai-favicon\.png\?v=20260710-wing') { throw 'New favicon declaration is not being served' }
+$asset = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:4310/assets/brand/lingxi-ai-favicon.png?v=20260710-wing'
 if ($asset.StatusCode -ne 200) { throw 'Favicon asset is not being served' }
 ```
 
@@ -121,7 +121,7 @@ Expected: the tab shows the supplied neon wing icon; no in-page logo or navigati
 Run:
 
 ```powershell
-git add -- apps/web/app.html apps/web/assets/brand/lingxi-theater-favicon.png apps/web/tests/login-page.spec.ts docs/superpowers/plans/2026-07-10-favicon-replacement.md
+git add -- apps/web/app.html apps/web/assets/brand/lingxi-ai-favicon.png apps/web/tests/login-page.spec.ts docs/superpowers/plans/2026-07-10-favicon-replacement.md
 git commit -m "fix: replace browser favicon"
 ```
 

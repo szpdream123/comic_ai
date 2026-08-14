@@ -53,6 +53,7 @@ export interface StorageAdapter {
     body: Uint8Array | ReadableStream<Uint8Array> | NodeJS.ReadableStream;
     contentType?: string | null;
     contentLength?: number | null;
+    cacheControl?: string | null;
     timeoutMs?: number | null;
   }): Promise<{
     eTag?: string | null;

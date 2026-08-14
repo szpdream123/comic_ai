@@ -12,6 +12,35 @@ const actor = {
   capabilities: new Set(["canvas:view", "canvas:edit", "canvas:run"]),
 };
 
+test("media-only generation honors the selected confirmation mode", () => {
+  const approval = { decision: "require_approval" as const, reason: "b_mode_effect" };
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.effectivePolicyForCapabilityProfile(
+      approval,
+      "media_generation_only",
+      "generation.create",
+    ),
+    { decision: "allow", reason: "media_generation_policy" },
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.effectivePolicyForCapabilityProfile(
+      { decision: "allow", reason: "c_mode_effect" },
+      "media_generation_only",
+      "generation.create",
+      { generationPermissionMode: "approval_required" },
+    ),
+    { decision: "require_approval", reason: "generation_confirmation_required" },
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.effectivePolicyForCapabilityProfile(approval, "canvas", "generation.create"),
+    approval,
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.effectivePolicyForCapabilityProfile(approval, "media_generation_only", "canvas.patch"),
+    approval,
+  );
+});
+
 test("tool registry validates schemas and blocks local paths", async () => {
   const registry = createDefaultCanvasAgentToolRegistry({
     readCanvas: async () => ({ revision: 4 }),
@@ -99,6 +128,89 @@ test("media tool uses generation intake and never a provider adapter", async () 
   assert.equal(result.generationTaskId, "generation-1");
 });
 
+test("media-generation-only tools allow detached image, video, and audio generation only", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    generationIntake: { create: async (input) => { calls.push(input); return { generationTaskId: "generation-1" }; } },
+  });
+  const context = {
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    agentTaskId: "task-1",
+    agentStepId: "step-1",
+    actor: { ownerUserId: "user-1", capabilities: new Set<string>() },
+    callId: "call-1",
+    capabilityProfile: "media_generation_only" as const,
+  };
+
+  await registry.execute("generation.create", {
+    kind: "image",
+    request: { model: "image-model", prompt: "雨夜城市" },
+  }, context);
+  assert.equal(calls[0]?.placement, "detached");
+  await registry.execute("generation.create", {
+    kind: "audio",
+    request: { model: "audio-model", prompt: "旁白" },
+  }, context);
+  assert.equal(calls[1]?.placement, "detached");
+  assert.equal(calls[1]?.kind, "audio");
+  await assert.rejects(registry.execute("generation.create", {
+    kind: "video",
+    targetNodeId: "node-1",
+    request: { model: "video-model", prompt: "推进镜头" },
+  }, context), /canvas_agent_generation_target_not_allowed/);
+});
+
+test("executor exposes only detached media tools without changing Canvas Agent tools", () => {
+  const generationTool = {
+    id: "generation.create",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["image", "video", "audio"] },
+        targetNodeId: { type: "string" },
+        request: { type: "object" },
+      },
+    },
+  };
+  const tools = [{ id: "canvas.read" }, { id: "canvas.patch" }, generationTool];
+
+  const mediaTools = __canvasAgentExecutorTestUtils.toolsForCapabilityProfile(
+    tools,
+    "media_generation_only",
+  );
+  assert.deepEqual(mediaTools.map((tool) => tool.id), ["generation.create"]);
+  const mediaProperties = mediaTools[0]?.inputSchema?.properties as Record<string, unknown>;
+  assert.deepEqual(mediaProperties.kind, { type: "string", enum: ["image", "video", "audio"] });
+  assert.equal("targetNodeId" in mediaProperties, false);
+
+  assert.throws(
+    () => __canvasAgentExecutorTestUtils.assertToolAllowedForCapabilityProfile(
+      "canvas.patch", {}, "media_generation_only",
+    ),
+    /canvas_agent_tool_not_allowed/,
+  );
+  assert.doesNotThrow(
+    () => __canvasAgentExecutorTestUtils.assertToolAllowedForCapabilityProfile(
+      "generation.create", { kind: "audio" }, "media_generation_only",
+    ),
+  );
+  assert.throws(
+    () => __canvasAgentExecutorTestUtils.assertToolAllowedForCapabilityProfile(
+      "generation.create", { kind: "video", targetNodeId: "node-1" }, "media_generation_only",
+    ),
+    /canvas_agent_generation_target_not_allowed/,
+  );
+
+  const canvasTools = __canvasAgentExecutorTestUtils.toolsForCapabilityProfile(tools, "canvas");
+  assert.deepEqual(canvasTools, [{ id: "canvas.patch" }, generationTool]);
+  assert.doesNotThrow(() => __canvasAgentExecutorTestUtils.assertToolAllowedForCapabilityProfile(
+    "canvas.patch", {}, "canvas",
+  ));
+});
+
 test("media tool resolves authorized file grants into reference images", async () => {
   let request: Record<string, unknown> | undefined;
   let targetNodeId: string | null | undefined;
@@ -128,7 +240,11 @@ test("media tool resolves authorized file grants into reference images", async (
   }, {
     canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-1",
   });
-  assert.deepEqual((request?.parameters as Record<string, unknown>)?.referenceImages, [{ storageObjectId: "storage-1" }]);
+  assert.deepEqual((request?.parameters as Record<string, unknown>)?.referenceImages, [{
+    storageObjectId: "storage-1",
+    tag: "图1",
+  }]);
+  assert.equal(request?.prompt, "保持角色外观 【@图1】");
   assert.equal(targetNodeId, null);
 });
 
@@ -154,7 +270,7 @@ test("media tool does not reuse a referenced input node as its generation target
   assert.equal(targetNodeId, null);
 });
 
-test("executor persists referenced Canvas media on a generation step before approval", () => {
+test("executor persists every attached media grant on a generation step before approval", () => {
   const input = { kind: "image", request: { model: "image-model", prompt: "改成白天" } };
   assert.deepEqual(
     __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
@@ -178,11 +294,111 @@ test("executor persists referenced Canvas media on a generation step before appr
     input,
   );
   assert.deepEqual(
+    __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
+      "generation.create",
+      { ...input, fileGrantIds: ["model-file-grant"] },
+      [],
+      ["attached-image-grant", "attached-video-grant", "attached-audio-grant"],
+    ).fileGrantIds,
+    ["model-file-grant", "attached-image-grant", "attached-video-grant", "attached-audio-grant"],
+  );
+  assert.deepEqual(
     __canvasAgentExecutorTestUtils.fileGrantIdsFromContent({
       fileGrantIds: ["grant-one"],
       nodeReferences: [{ fileGrantId: "grant-one" }, { fileGrantId: "grant-two" }],
+      attachments: [{ fileGrantId: "grant-three" }],
     }),
-    ["grant-one", "grant-two"],
+    ["grant-one", "grant-two", "grant-three"],
+  );
+});
+
+test("executor binds the selected homepage kind, model, and parameters to media generation", () => {
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
+      "generation.create",
+      { kind: "image", request: { model: "agent-image", prompt: "生成角色图" } },
+      [],
+      [],
+      { image: "selected-image", video: "selected-video" },
+    ),
+    { kind: "image", request: { model: "selected-image", prompt: "生成角色图" } },
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
+      "generation.create",
+      { kind: "video", request: { model: "agent-video", prompt: "生成镜头" } },
+      [],
+      [],
+      { image: "selected-image", video: "selected-video" },
+    ),
+    { kind: "video", request: { model: "selected-video", prompt: "生成镜头" } },
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
+      "generation.create",
+      {
+        kind: "audio",
+        request: {
+          model: "agent-image",
+          prompt: "生成配音",
+          parameters: { voice: "agent-voice", speed: 0.8 },
+        },
+      },
+      [],
+      [],
+      { image: "selected-image", video: "selected-video", audio: "selected-audio" },
+      "audio",
+      { audio: { voice: "selected-voice", speed: 1.2 } },
+    ),
+    {
+      kind: "audio",
+      request: {
+        model: "selected-audio",
+        prompt: "生成配音",
+        parameters: { voice: "selected-voice", speed: 1.2 },
+      },
+    },
+  );
+});
+
+test("executor reads supported free-generation preferences without changing invalid values", () => {
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.preferredModelsFromContent({
+      preferredModels: { image: " image-pro ", video: "", audio: "audio-pro" },
+    }),
+    { image: "image-pro", audio: "audio-pro" },
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.preferredGenerationKindFromContent({ preferredGenerationKind: "audio" }),
+    "audio",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.preferredGenerationKindFromContent({ preferredGenerationKind: "document" }),
+    "",
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.preferredGenerationParametersFromContent({
+      preferredGenerationParameters: {
+        image: { ratio: "16:9" },
+        audio: { voice: "narrator" },
+        document: { pages: 2 },
+      },
+    }),
+    { image: { ratio: "16:9" }, audio: { voice: "narrator" } },
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.preferredModelsForCapabilityProfile(
+      { image: "image-pro", video: "video-pro", audio: "audio-pro" },
+      "canvas",
+    ),
+    { image: "image-pro", video: "video-pro" },
+  );
+  assert.deepEqual(
+    __canvasAgentExecutorTestUtils.preferredModelsForCapabilityProfile(
+      { image: "image-pro", video: "video-pro", audio: "audio-pro" },
+      "media_generation_only",
+    ),
+    { image: "image-pro", video: "video-pro", audio: "audio-pro" },
   );
 });
 
@@ -420,11 +636,49 @@ test("media tool resolves an authorized video grant into sourceVideo", async () 
   });
   assert.deepEqual((request?.parameters as Record<string, unknown>)?.sourceVideo, {
     storageObjectId: "storage-video",
+    tag: "视频1",
   });
+  assert.equal(request?.prompt, "保持参考动作 【@视频1】");
   assert.equal((request?.parameters as Record<string, unknown>)?.referenceImages, undefined);
 });
 
-test("media tool rejects a video grant for image generation", async () => {
+test("media tool resolves image, video, and audio grants into signed media references", async () => {
+  let request: Record<string, unknown> | undefined;
+  const registry = createDefaultCanvasAgentToolRegistry({
+    readCanvas: async () => ({}),
+    patchCanvas: async () => ({ revision: 2 }),
+    context: {
+      resolveFileGrant: async ({ grantId }) => ({
+        storageObjectId: `storage-${grantId}`,
+        purpose: "自由生成参考",
+        contentType: grantId === "image" ? "image/png" : grantId === "video" ? "video/mp4" : "audio/mpeg",
+      }),
+    },
+    resolveFileAttachment: async ({ grantId }) => ({ url: `https://signed.example/${grantId}` }),
+    generationIntake: {
+      create: async (input) => {
+        request = input.request;
+        return { generationTaskId: "generation-all-references" };
+      },
+    },
+  });
+  await registry.execute("generation.create", {
+    kind: "video",
+    fileGrantIds: ["image", "video", "audio"],
+    request: { model: "video-model", prompt: "按全部参考生成" },
+  }, {
+    canvasId: "free-generation", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-all-media",
+    capabilityProfile: "media_generation_only",
+  });
+  const parameters = request?.parameters as Record<string, unknown>;
+  assert.deepEqual(parameters.referenceImages, [{ storageObjectId: "storage-image", tag: "图1", url: "https://signed.example/image" }]);
+  assert.deepEqual(parameters.sourceVideo, { storageObjectId: "storage-video", tag: "视频1", url: "https://signed.example/video" });
+  assert.deepEqual(parameters.referenceAudio, { storageObjectId: "storage-audio", tag: "音频1", url: "https://signed.example/audio" });
+  assert.equal(request?.prompt, "按全部参考生成 【@图1】 【@视频1】 【@音频1】");
+});
+
+test("media tool retains an authorized video grant when generating an image", async () => {
+  let request: Record<string, unknown> | undefined;
   const registry = createDefaultCanvasAgentToolRegistry({
     readCanvas: async () => ({}),
     patchCanvas: async () => ({ revision: 2 }),
@@ -435,15 +689,21 @@ test("media tool rejects a video grant for image generation", async () => {
         contentType: "video/mp4",
       }),
     },
-    generationIntake: { create: async () => ({ generationTaskId: "generation-image" }) },
+    generationIntake: {
+      create: async (input) => {
+        request = input.request;
+        return { generationTaskId: "generation-image" };
+      },
+    },
   });
-  await assert.rejects(registry.execute("generation.create", {
+  await registry.execute("generation.create", {
     kind: "image",
     fileGrantIds: ["grant-video"],
-    request: { model: "image-model", prompt: "错误的视频参考" },
+    request: { model: "image-model", prompt: "保留参考视频的动作" },
   }, {
     canvasId: "canvas-1", conversationId: "conversation-1", agentTaskId: "task-1", agentStepId: "step-1", actor, callId: "call-image-video",
-  }), /canvas_agent_file_grant_media_kind_unsupported/);
+  });
+  assert.deepEqual((request?.parameters as Record<string, unknown>)?.sourceVideo, { storageObjectId: "storage-video", tag: "视频1" });
 });
 
 test("media tool requires an explicit model code", () => {
@@ -694,6 +954,100 @@ test("Canvas Agent adds granted visual attachments only for compatible model cap
   assert.ok(Array.isArray(userMessage.content));
   assert.equal(userMessage.content.filter((part) => part.type === "image_url").length, 1);
   assert.equal(userMessage.content.filter((part) => part.type === "video_url").length, 0);
+});
+
+test("model instructions use the 灵曦AI product identity", async () => {
+  const messages = await __canvasAgentExecutorTestUtils.buildCanvasAgentModelMessages({
+    modelInput: { protocol: { version: 1 }, context: {} },
+    context: {},
+    modelCapabilities: {},
+    modelDisplayName: "Image-2（优惠）",
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor: { ownerUserId: "user-1", capabilities: new Set<string>() },
+  });
+
+  assert.match(String(messages[0]?.content), /灵曦AI/);
+  assert.doesNotMatch(String(messages[0]?.content), /You are the Canvas Agent/);
+  assert.match(String(messages[0]?.content), /灵曦AI are this product brand/);
+  assert.doesNotMatch(String(messages[0]?.content), /当前会话使用的模型为Image-2（优惠）/);
+  assert.match(String(messages[0]?.content), /Never disclose model codes, provider names, model identifiers/);
+});
+
+test("assistant response sanitizer replaces internal, user, and pricing disclosures", () => {
+  for (const message of [
+    "后台数据库包含其他用户资料。",
+    "当前价格为 99 元，余额为 20 积分。",
+  ]) {
+    assert.equal(
+      __canvasAgentExecutorTestUtils.sanitizeAssistantMessage(message),
+      "请描述你的创作需求，我会继续协助。",
+    );
+  }
+});
+
+test("assistant response sanitizer preserves model guidance but hides model codes", () => {
+  assert.equal(
+    __canvasAgentExecutorTestUtils.sanitizeAssistantMessage(
+      "我是 Canvas Agent，当前会话是文本模型和媒体模型的组合，请在右上角切换文本模型。",
+    ),
+    "我是灵曦AI，当前会话是文本模型和媒体模型的组合，请在右上角切换文本模型。",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.sanitizeAssistantMessage("我是 Canvas Agent，当前模型为 cumo-gpt-image-2-pro。"),
+    "当前会话使用的模型可在右上角查看和切换。",
+  );
+});
+
+test("assistant response sanitizer replaces generation provider failures with public guidance", () => {
+  assert.equal(
+    __canvasAgentExecutorTestUtils.sanitizeAssistantMessage(
+      "音频生成失败：所选模型 soundclone 不受当前平台支持（model_provider_unsupported）。",
+    ),
+    "当前所选生成模型暂不可用，请在右侧切换可用模型后重试。",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.sanitizeAssistantMessage(
+      "任务返回 generation_queue_error 并标记为 manual_review_required。",
+    ),
+    "生成任务暂时无法完成，请稍后重试。",
+  );
+});
+
+test("text model switching is distinguished from media model switching", () => {
+  assert.equal(__canvasAgentExecutorTestUtils.isTextModelSwitchRequest("帮我切换当前模型"), true);
+  assert.equal(__canvasAgentExecutorTestUtils.isTextModelSwitchRequest("请将模型切换成 GPT"), true);
+  assert.equal(__canvasAgentExecutorTestUtils.isTextModelSwitchRequest("请切换视频模型"), false);
+  assert.equal(__canvasAgentExecutorTestUtils.isMediaModelSwitchRequest("帮我切换图片模型"), true);
+  assert.equal(__canvasAgentExecutorTestUtils.isMediaModelSwitchRequest("请切换视频模型"), true);
+  assert.equal(__canvasAgentExecutorTestUtils.isMediaModelSwitchRequest("请选择音频模型"), true);
+  assert.equal(
+    __canvasAgentExecutorTestUtils.mediaModelSwitchGuidanceFor("帮我切换图片模型"),
+    "可以切换图片模型，请在侧边栏的“图片”模型按钮中选择需要的模型。",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.mediaModelSwitchGuidanceFor("请切换视频模型"),
+    "可以切换视频模型，请在侧边栏的“视频”模型按钮中选择需要的模型。",
+  );
+  assert.equal(
+    __canvasAgentExecutorTestUtils.mediaModelSwitchGuidanceFor("请选择音频模型"),
+    "可以切换音频模型，请在侧边栏的“音频”模型按钮中选择需要的模型。",
+  );
+});
+
+test("model information requests return guidance without invoking media generation", () => {
+  assert.equal(
+    __canvasAgentExecutorTestUtils.modelInformationGuidanceFor("现在是什么模型？"),
+    "当前会话使用的模型可在右上角查看和切换。",
+  );
+  assert.equal(__canvasAgentExecutorTestUtils.modelInformationGuidanceFor("生成一个 5 秒视频"), "");
+});
+
+test("assistant response sanitizer introduces 灵曦 instead of presenting it as unknown", () => {
+  assert.equal(
+    __canvasAgentExecutorTestUtils.sanitizeAssistantMessage("我无法确认灵曦AI具体指哪家公司。"),
+    "灵曦AI是 AI 创作平台，为创作者提供从灵感和剧本，到角色、场景、分镜，以及图片、视频和音频生成的一体化创作能力。",
+  );
 });
 
 test("Canvas Agent recognizes array-based model input capabilities", async () => {
