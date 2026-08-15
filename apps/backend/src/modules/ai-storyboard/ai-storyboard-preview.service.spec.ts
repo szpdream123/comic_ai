@@ -1394,6 +1394,31 @@ describe("ai storyboard preview service", () => {
     assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
   });
 
+  it("does not retry a post-provider PostgreSQL persistence reset with empty output", async () => {
+    let calls = 0;
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        calls += 1;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+          { retrySafe: false },
+        );
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    await assert.rejects(() => service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene"],
+      packages: {},
+    }));
+
+    assert.equal(calls, 1);
+  });
+
   it("keeps transient database retry behavior while the extraction stages run in parallel", async () => {
     const calls = new Map<string, number>();
     const gateway: TextChatGatewayLike = {

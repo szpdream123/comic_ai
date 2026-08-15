@@ -82,12 +82,13 @@ export async function refundTeamMemberGenerationCreditsInTransaction(
       SELECT id
       FROM credit_ledger_entries
       WHERE user_id = $1
-        AND source_type = $2
-        AND source_id = $3
+        AND team_member_id = $2
+        AND source_type = $3
+        AND source_id = $4
         AND entry_type = 'grant'
       LIMIT 1
     `,
-    [member.user_id, TEAM_MEMBER_GENERATION_REFUND_SOURCE_TYPE, input.sourceId],
+    [member.user_id, input.teamMemberId, TEAM_MEMBER_GENERATION_REFUND_SOURCE_TYPE, input.sourceId],
   );
   if (existing) {
     return { refunded: false, amount: 0 };

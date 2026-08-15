@@ -84,20 +84,24 @@ export function isTransientDatabaseConnectionError(error: unknown) {
 export class TransientDatabasePersistenceError extends Error {
   readonly code = "transient_database_persistence_error";
 
-  constructor(error: unknown) {
+  constructor(error: unknown, readonly retrySafe = true) {
     super(error instanceof Error ? error.message : String(error), { cause: error });
     this.name = "TransientDatabasePersistenceError";
   }
 }
 
-export function markTransientDatabasePersistenceError(error: unknown) {
+export function markTransientDatabasePersistenceError(error: unknown, options?: { retrySafe?: boolean }) {
   return error instanceof TransientDatabasePersistenceError
     ? error
-    : new TransientDatabasePersistenceError(error);
+    : new TransientDatabasePersistenceError(error, options?.retrySafe ?? true);
 }
 
 export function isTransientDatabasePersistenceError(error: unknown) {
   return error instanceof TransientDatabasePersistenceError;
+}
+
+export function isRetrySafeTransientDatabasePersistenceError(error: unknown) {
+  return error instanceof TransientDatabasePersistenceError && error.retrySafe;
 }
 
 function isManagedProductionWorkerSchemaReady() {

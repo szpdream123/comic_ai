@@ -3114,6 +3114,47 @@ function hashJson(value: unknown) {
     .digest("hex");
 }
 
+async function beginAiStoryboardPreviewCommand(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    teamMemberId: string | null;
+    projectId: string;
+    idempotencyKey: string;
+    request: Record<string, unknown>;
+  },
+) {
+  const store = new SqlIdempotencyRecordStore(db);
+  const started = await beginOrReplayCommand(store, {
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
+    operationName: operationNames.scriptParse,
+    idempotencyKey: `storyboard-preview:${input.teamMemberId ?? "owner"}:${input.idempotencyKey}`,
+    requestHash: hashJson({
+      projectId: input.projectId,
+      teamMemberId: input.teamMemberId,
+      body: input.request,
+    }),
+  });
+  if (started.kind !== "created") {
+    throw new IdempotencyProcessingError(started.record);
+  }
+  return { store, record: started.record };
+}
+
+async function finishAiStoryboardPreviewCommand(
+  command: { store: SqlIdempotencyRecordStore; record: IdempotencyRecord } | null,
+  status: "succeeded" | "failed_terminal" | "expired",
+) {
+  if (!command) return;
+  command.record = await command.store.update({
+    ...command.record,
+    status,
+    ...(status === "expired" ? { expiresAt: new Date(0) } : {}),
+    updatedAt: new Date(),
+  });
+}
+
 async function executeIdempotentToolPresetCommand(
   db: SqlDatabase,
   input: {
@@ -4446,7 +4487,8 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
   }
-  const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+  const sourceId = uuidFromIdempotencyKey(`${input.idempotencyKey}:team-member:${input.teamMemberId}`);
+  const legacySourceId = uuidFromIdempotencyKey(input.idempotencyKey);
   const modelCode = String(input.modelConfig?.modelCode ?? "text.script").trim() || "text.script";
   const modelLabel = String(input.modelConfig?.displayName ?? "剧本模型").trim() || "剧本模型";
   const metadata = {
@@ -4492,9 +4534,9 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
          AND team_member_id = $2
          AND entry_type = 'transfer_out'
          AND source_type = 'team_member_generation_task'
-         AND source_id = $3
+          AND source_id = ANY($3::uuid[])
        LIMIT 1`,
-      [member.user_id, input.teamMemberId, sourceId],
+      [member.user_id, input.teamMemberId, [sourceId, legacySourceId]],
     );
     if (existingCharge && (
       Number(existingCharge.amount) !== amount
@@ -4550,6 +4592,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
 
     await db.query("COMMIT");
     return {
+      replayed: Boolean(existingCharge),
       reservation: {
         id: sourceId,
         userId: member.user_id,
@@ -4615,12 +4658,24 @@ async function reserveConsumeAndGrantUserScriptAnalysisCredits(
       "SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE",
       [walletUserIds],
     );
+    const sourceType = input.sourceType ?? "user_script_analysis";
+    const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    const existingReservation = await queryOne<{ id: string }>(
+      db,
+      `SELECT id
+       FROM credit_reservations
+       WHERE user_id = $1
+         AND source_type = $2
+         AND source_id = $3
+       LIMIT 1`,
+      [input.userId, sourceType, sourceId],
+    );
     const reservation = await reserveCreditsInTransaction(db, {
       userId: input.userId,
       projectId: input.projectId ?? null,
       amount: Math.round(input.amount),
-      sourceType: input.sourceType ?? "user_script_analysis",
-      sourceId: uuidFromIdempotencyKey(input.idempotencyKey),
+      sourceType,
+      sourceId,
       reason: input.reason ?? "小说转剧本分析",
       metadata: input.metadata,
       createdByUserId: input.userId,
@@ -4641,7 +4696,7 @@ async function reserveConsumeAndGrantUserScriptAnalysisCredits(
       now: input.now,
     });
     await db.query("COMMIT");
-    return reservation;
+    return { ...reservation, replayed: Boolean(existingReservation) };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -4671,17 +4726,25 @@ async function grantPromptSkillAuthorCredits(
     .filter((grant): grant is NonNullable<typeof grant> => Boolean(
       grant && grant.amount > 0 && grant.userId !== input.payerUserId,
     ));
-  for (const grant of grants) {
-    await grantCredits(db, {
-      userId: grant.userId,
-      amount: grant.amount,
-      sourceType: "prompt_skill_usage_earning",
-      sourceId: grant.sourceId,
-      reason: "私人提示词技能使用分成",
-      metadata: grant.metadata,
-      createdByUserId: input.payerUserId,
-      now: input.now,
-    });
+  if (!grants.length) return;
+  await db.query("BEGIN");
+  try {
+    for (const grant of grants.sort((left, right) => left.userId.localeCompare(right.userId))) {
+      await grantCreditsInTransaction(db, {
+        userId: grant.userId,
+        amount: grant.amount,
+        sourceType: "prompt_skill_usage_earning",
+        sourceId: grant.sourceId,
+        reason: "私人提示词技能使用分成",
+        metadata: grant.metadata,
+        createdByUserId: input.payerUserId,
+        now: input.now,
+      });
+    }
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
   }
 }
 
@@ -4730,8 +4793,10 @@ async function releaseAiStoryboardPreviewCredits(
   return true;
 }
 
-function aiStoryboardPreviewRefundSourceId(idempotencyKey: string) {
-  return uuidFromIdempotencyKey(`${idempotencyKey}:ai-storyboard-preview:refund`);
+function aiStoryboardPreviewRefundSourceId(idempotencyKey: string, teamMemberId?: string | null) {
+  return uuidFromIdempotencyKey(teamMemberId
+    ? `${idempotencyKey}:ai-storyboard-preview:refund:${teamMemberId}`
+    : `${idempotencyKey}:ai-storyboard-preview:refund`);
 }
 
 async function hasAiStoryboardPreviewRefund(
@@ -4745,7 +4810,12 @@ async function hasAiStoryboardPreviewRefund(
   const sourceType = input.teamMemberId
     ? "team_member_generation_refund"
     : "ai_storyboard_preview_refund";
-  const sourceId = aiStoryboardPreviewRefundSourceId(input.idempotencyKey);
+  const sourceIds = input.teamMemberId
+    ? [
+        aiStoryboardPreviewRefundSourceId(input.idempotencyKey, input.teamMemberId),
+        aiStoryboardPreviewRefundSourceId(input.idempotencyKey),
+      ]
+    : [aiStoryboardPreviewRefundSourceId(input.idempotencyKey)];
   const existing = await queryOne<{ id: string }>(
     db,
     `SELECT id
@@ -4754,9 +4824,9 @@ async function hasAiStoryboardPreviewRefund(
        AND team_member_id IS NOT DISTINCT FROM $2::uuid
        AND entry_type = 'grant'
        AND source_type = $3
-       AND source_id = $4
+       AND source_id = ANY($4::uuid[])
      LIMIT 1`,
-    [input.userId, input.teamMemberId, sourceType, sourceId],
+    [input.userId, input.teamMemberId, sourceType, sourceIds],
   );
   return Boolean(existing);
 }
@@ -4802,6 +4872,26 @@ async function hasActiveGenerationMembership(
     [input.userId, input.now],
   );
   return Boolean(activeMembership);
+}
+
+async function assertActiveGenerationMembership(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { userId: string; now: Date },
+) {
+  if (await hasActiveGenerationMembership(db, input)) return;
+  const existingMembership = await queryOne<{ id: string }>(
+    db,
+    `SELECT id
+     FROM user_memberships
+     WHERE user_id = $1
+       AND membership_tier IN ('experience', 'professional')
+     LIMIT 1`,
+    [input.userId],
+  );
+  if (existingMembership) {
+    throw new MembershipCreditGateError("membership_expired", "您的会员已过期，请前往续充。", 403);
+  }
+  throw new MembershipCreditGateError("membership_required", "请充值会员。", 403);
 }
 
 async function resolveActiveMembershipTier(
@@ -30189,6 +30279,7 @@ export function createPhoneAuthDevServer(
             actor = await resolveActorContext(db, {
               sessionToken: authenticated.sessionToken,
               projectId,
+              capability: capabilities.generationStart,
               now: new Date(),
             });
           } catch (error) {
@@ -30216,6 +30307,7 @@ export function createPhoneAuthDevServer(
               "该请求已失败并返还积分，请重新发起。",
             ));
           }
+          await assertActiveGenerationMembership(db, { userId: authenticated.user.id, now: new Date() });
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
             skillId?: string | null;
@@ -30236,6 +30328,16 @@ export function createPhoneAuthDevServer(
               emotionPackageId?: string | null;
             } | null;
           };
+          let storyboardCommand: Awaited<ReturnType<typeof beginAiStoryboardPreviewCommand>> | null = null;
+          const beginStoryboardCommand = async () => {
+            storyboardCommand ??= await beginAiStoryboardPreviewCommand(db, {
+              userId: authenticated.user.id,
+              teamMemberId: actor.teamMember?.id ?? null,
+              projectId,
+              idempotencyKey,
+              request: body,
+            });
+          };
           const scriptText = String(body.scriptText ?? "").trim();
           const resolveInstructionIntent = body.resolveInstructionIntent === true;
           const instruction = String(body.instruction ?? "").trim();
@@ -30254,6 +30356,7 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(400, "workflow_instruction_required", "workflow instruction is required"));
             }
             try {
+              await beginStoryboardCommand();
               resolvedIntent = await resolveAiStoryboardWorkflowIntent({
                 gateway: aiStoryboardTextChatGateway,
                 modelCode: resolvedModelCode,
@@ -30262,6 +30365,10 @@ export function createPhoneAuthDevServer(
                 createdByUserId: authenticated.user.id,
               });
             } catch (error) {
+              if (error instanceof IdempotencyConflictError || error instanceof IdempotencyProcessingError) {
+                return writeJson(response, envelopedError(409, error.code, "该请求已在处理中或已处理，请勿重复提交。"));
+              }
+              await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
               if (error instanceof AiStoryboardWorkflowIntentError) {
                 return writeJson(response, envelopedError(422, error.code, "模型未能识别需要生成的内容，请把要求说得更具体。"));
               }
@@ -30435,8 +30542,9 @@ export function createPhoneAuthDevServer(
                 },
               }));
           try {
-            if (actor.teamMember) {
-              await reserveAndConsumeSimpleTeamMemberCredits(db, {
+            await beginStoryboardCommand();
+            const billingClaim = actor.teamMember
+              ? await reserveAndConsumeSimpleTeamMemberCredits(db, {
                 projectId: billingProjectId,
                 teamMemberId: actor.teamMember.id,
                 idempotencyKey,
@@ -30452,9 +30560,8 @@ export function createPhoneAuthDevServer(
                 billingMetadata,
                 skillAuthorGrants,
                 now: new Date(),
-              });
-            } else {
-              await reserveAndConsumeAiStoryboardPreviewCredits(db, {
+              })
+              : await reserveAndConsumeAiStoryboardPreviewCredits(db, {
                 projectId: billingProjectId,
                 createdByUserId: authenticated.user.id,
                 idempotencyKey,
@@ -30466,11 +30573,24 @@ export function createPhoneAuthDevServer(
                 skillAuthorGrants,
                 now: new Date(),
               });
+            if (billingClaim?.replayed) {
+              return writeJson(response, envelopedError(
+                409,
+                "idempotency_processing",
+                "该请求已在处理中或已处理，请勿重复提交。",
+              ));
             }
           } catch (error) {
-            if (error instanceof IdempotencyConflictError) {
+            if (error instanceof IdempotencyConflictError || error instanceof IdempotencyProcessingError) {
               return writeJson(response, envelopedError(409, error.code, "幂等键已用于其他小说转剧本请求。"));
             }
+            if (error instanceof InsufficientCreditsError) {
+              await finishAiStoryboardPreviewCommand(storyboardCommand, "expired").catch(() => undefined);
+              return writeJson(response, actor.teamMember
+                ? envelopedError(402, "insufficient_credits", "积分不足，请联系管理员分配积分。")
+                : envelopedError(402, "insufficient_credits", "积分不足，请前往充值积分。"));
+            }
+            await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
             throw error;
           }
 
@@ -30522,8 +30642,10 @@ export function createPhoneAuthDevServer(
             response.flushHeaders?.();
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
               const abortController = createRequestAbortController(request, response);
+            let commandSucceeded = false;
             try {
               let generationCompleted = false;
+              let completePayload: Record<string, unknown> | null = null;
               const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
                 userId: authenticated.user.id,
                 teamMemberId: actor.teamMember?.id ?? null,
@@ -30540,7 +30662,7 @@ export function createPhoneAuthDevServer(
                 }
                 if (event.type === "complete") {
                   generationCompleted = true;
-                  writeSseData(response, {
+                  completePayload = {
                     type: "complete",
                     ...event.preview,
                     creditBalance: creditBalance.creditBalance,
@@ -30556,7 +30678,7 @@ export function createPhoneAuthDevServer(
                       emotion: { id: emotionPackage.id, name: emotionPackage.name },
                       taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
                     } : null,
-                  });
+                  };
                 } else {
                   writeSseData(response, event);
                 }
@@ -30570,6 +30692,9 @@ export function createPhoneAuthDevServer(
                   skillAuthorGrants,
                   now: new Date(),
                 });
+                await finishAiStoryboardPreviewCommand(storyboardCommand, "succeeded");
+                commandSucceeded = true;
+                writeSseData(response, completePayload!);
               }
               stopHeartbeat();
               abortController.cleanup();
@@ -30581,13 +30706,15 @@ export function createPhoneAuthDevServer(
               abortController.cleanup();
               if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
                 const failureMessage = aiStoryboardPreviewErrorDisplayMessage(error);
-                try {
-                  await retryAiStoryboardPreviewRefund(async () => {
+                if (!commandSucceeded) {
+                  await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
+                  try {
+                    await retryAiStoryboardPreviewRefund(async () => {
                     if (actor.teamMember) {
                       await releaseSimpleTeamMemberCredits(db, {
                         teamMemberId: actor.teamMember.id,
                         amount: creditCost,
-                        sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey),
+                        sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey, actor.teamMember.id),
                         reason: "剧本预览失败返还积分",
                         metadata: {
                           taskType: "ai_storyboard_preview",
@@ -30604,10 +30731,11 @@ export function createPhoneAuthDevServer(
                         now: new Date(),
                       });
                     }
-                  });
-                } catch (refundError) {
-                  // The generation error must still reach the already-open event stream.
-                  console.error("[ai-storyboard-preview] credit refund failed after retries", refundError);
+                    });
+                  } catch (refundError) {
+                    // The generation error must still reach the already-open event stream.
+                    console.error("[ai-storyboard-preview] credit refund failed after retries", refundError);
+                  }
                 }
                 writeSseData(response, {
                   type: "error",
@@ -30619,6 +30747,7 @@ export function createPhoneAuthDevServer(
             return;
           }
 
+          let nonStreamCommandSucceeded = false;
           try {
             const preview = await previewService.generatePreview(previewInput);
             await grantPromptSkillAuthorCredits(db, {
@@ -30630,6 +30759,8 @@ export function createPhoneAuthDevServer(
               userId: authenticated.user.id,
               teamMemberId: actor.teamMember?.id ?? null,
             });
+            await finishAiStoryboardPreviewCommand(storyboardCommand, "succeeded");
+            nonStreamCommandSucceeded = true;
             return writeJson(response, enveloped(200, {
               ...preview,
               creditBalance: creditBalance.creditBalance,
@@ -30647,13 +30778,15 @@ export function createPhoneAuthDevServer(
               } : null,
             }));
           } catch (error) {
+            if (nonStreamCommandSucceeded) throw error;
+            await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
             try {
               await retryAiStoryboardPreviewRefund(async () => {
                 if (actor.teamMember) {
                   await releaseSimpleTeamMemberCredits(db, {
                     teamMemberId: actor.teamMember.id,
                     amount: creditCost,
-                    sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey),
+                    sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey, actor.teamMember.id),
                     reason: "剧本预览失败返还积分",
                     metadata: {
                       taskType: "ai_storyboard_preview",

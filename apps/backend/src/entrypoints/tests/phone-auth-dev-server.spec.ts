@@ -6279,8 +6279,29 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const envelope = await response.json();
+      const replayResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-home-character-intent",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "萧炎在乌坦城修炼。",
+            instruction: "帮我解析出其中的人物提示词",
+            resolveInstructionIntent: true,
+            skills: skillIds,
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const replayEnvelope = await replayResponse.json();
 
       assert.equal(response.status, 200);
+      assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.errorCode, "idempotency_processing");
       assert.equal(textChatGateway.calls.length, 2);
       assert.match(String(textChatGateway.calls[0]?.messages?.[1]?.content ?? ""), /人物提示词/);
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /提取人物提示词/);
@@ -6921,10 +6942,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     await seedPreviewScriptModelConfig(db, 20);
     let gatewayCalls = 0;
+    let signalModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      signalModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelRelease = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
     const textChatGateway = {
       async completeJson() { throw new Error("completeJson should not be called"); },
       async *streamJson() {
         gatewayCalls += 1;
+        signalModelStarted();
+        await modelRelease;
         throw markTransientDatabasePersistenceError(
           Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
         );
@@ -6944,7 +6975,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [userId],
       );
 
-      const previewResponse = await fetch(
+      const previewResponsePromise = fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
         {
           method: "POST",
@@ -6962,7 +6993,29 @@ describe("phone auth dev server", { concurrency: false }, () => {
           }),
         },
       );
+      await modelStarted;
+      const concurrentResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      releaseModel();
+      const previewResponse = await previewResponsePromise;
       const responseText = await previewResponse.text();
+      const concurrentText = await concurrentResponse.text();
       const replayResponse = await fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
         {
@@ -6994,12 +7047,81 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(previewResponse.status, 200);
       assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(concurrentResponse.status, 409, concurrentText);
+      assert.equal(JSON.parse(concurrentText).errorCode, "idempotency_processing");
       assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
       assert.equal(replayEnvelope.errorCode, "ai_storyboard_preview_already_refunded");
       assert.equal(gatewayCalls, 1);
       assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
       assert.equal(Number(refundEntries.rows[0]?.amount), 20);
     } finally {
+      await server.close();
+    }
+  });
+
+  it("claims a zero-credit AI storyboard preview before a concurrent provider call", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    let gatewayCalls = 0;
+    let signalModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      signalModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelRelease = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        signalModelStarted();
+        await modelRelease;
+        throw new Error("injected zero-credit provider failure");
+      },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138245";
+      const cookie = await login(server.origin, phone);
+      await seedActiveGenerationMembership(db, {
+        userId: await readUserIdForPhone(db, normalizeCnPhone(phone)),
+      });
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "zero-credit-claim");
+      const requestPreview = () => fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-zero-credit-claim",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+
+      const firstResponsePromise = requestPreview();
+      await modelStarted;
+      const concurrentResponse = await requestPreview();
+      const concurrentText = await concurrentResponse.text();
+      releaseModel();
+      const firstResponse = await firstResponsePromise;
+      await firstResponse.text();
+
+      assert.equal(concurrentResponse.status, 409, concurrentText);
+      assert.equal(JSON.parse(concurrentText).errorCode, "idempotency_processing");
+      assert.equal(gatewayCalls, 1);
+    } finally {
+      releaseModel?.();
       await server.close();
     }
   });
@@ -7083,10 +7205,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     await seedPreviewScriptModelConfig(db, 20);
     let gatewayCalls = 0;
+    let signalModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      signalModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelRelease = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
     const textChatGateway = {
       async completeJson() { throw new Error("completeJson should not be called"); },
       async *streamJson() {
         gatewayCalls += 1;
+        signalModelStarted();
+        await modelRelease;
         throw markTransientDatabasePersistenceError(
           Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
         );
@@ -7119,7 +7251,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         createdMember.member.memberLoginAccount,
         createdMember.temporaryPassword,
       );
-      const requestPreview = () => fetch(
+      const requestPreview = (requestCookie = memberCookie) => fetch(
         `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
         {
           method: "POST",
@@ -7127,7 +7259,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
             accept: "text/event-stream",
             "content-type": "application/json",
             "idempotency-key": "http-ai-storyboard-preview-member-postgres-refund",
-            cookie: memberCookie,
+            cookie: requestCookie,
           },
           body: JSON.stringify({
             scriptText: "任小野把小草托付给闵婶子。",
@@ -7142,8 +7274,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
         [teamMemberId],
       );
 
-      const previewResponse = await requestPreview();
+      const previewResponsePromise = requestPreview();
+      await modelStarted;
+      const concurrentResponse = await requestPreview();
+      releaseModel();
+      const previewResponse = await previewResponsePromise;
       const responseText = await previewResponse.text();
+      const concurrentText = await concurrentResponse.text();
       const replayResponse = await requestPreview();
       const replayEnvelope = await replayResponse.json();
       const balanceAfter = await db.query<{ balance: number | string }>(
@@ -7158,11 +7295,48 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(previewResponse.status, 200, responseText);
       assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(concurrentResponse.status, 409, concurrentText);
+      assert.equal(JSON.parse(concurrentText).errorCode, "idempotency_processing");
       assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
       assert.equal(replayEnvelope.errorCode, "ai_storyboard_preview_already_refunded");
       assert.equal(gatewayCalls, 1);
       assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
       assert.equal(Number(refundEntries.rows[0]?.amount), 20);
+
+      const createSecondMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `preview_member_${randomUUID().slice(0, 8)}`,
+          displayName: "第二个分镜预览子账户",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const secondMember = await createSecondMemberResponse.json();
+      assert.equal(createSecondMemberResponse.status, 200, JSON.stringify(secondMember));
+      const secondMemberId = secondMember.member.membershipId;
+      await db.query("UPDATE team_members SET member_credits = 500 WHERE id = $1", [secondMemberId]);
+      const secondMemberCookie = await loginTeamMemberAccount(
+        server.origin,
+        secondMember.member.memberLoginAccount,
+        secondMember.temporaryPassword,
+      );
+      const secondBalanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [secondMemberId],
+      );
+      const secondResponse = await requestPreview(secondMemberCookie);
+      const secondText = await secondResponse.text();
+      const secondBalanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [secondMemberId],
+      );
+
+      assert.equal(secondResponse.status, 200, secondText);
+      assert.match(secondText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(gatewayCalls, 2);
+      assert.equal(Number(secondBalanceAfter.rows[0]?.balance), Number(secondBalanceBefore.rows[0]?.balance));
     } finally {
       await server.close();
     }
@@ -7177,7 +7351,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await server.listen(0);
       const cookieNoMembership = await login(server.origin, "13800138219");
       const noMembershipProject = await createAiStoryboardPreviewProject(server.origin, cookieNoMembership, "no-membership");
-      const packages = await readStoryboardPromptPackages(server.origin, cookieNoMembership);
+      const packages = { genrePackageId: "auto", emotionPackageId: "auto" };
 
       const noMembershipResponse = await postAiStoryboardPreview(server.origin, {
         cookie: cookieNoMembership,
@@ -7208,7 +7382,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         cookie: cookieExpired,
         projectId: expiredProject.project.id,
         idempotencyKey: "http-ai-storyboard-preview-expired-membership",
-        packages: await readStoryboardPromptPackages(server.origin, cookieExpired),
+        packages,
       });
       const expiredEnvelope = await expiredResponse.json();
 
@@ -7224,7 +7398,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         cookie: cookieNoCredits,
         projectId: noCreditsProject.project.id,
         idempotencyKey: "http-ai-storyboard-preview-no-credits",
-        packages: await readStoryboardPromptPackages(server.origin, cookieNoCredits),
+        packages,
       });
       const noCreditsEnvelope = await noCreditsResponse.json();
 
@@ -7237,6 +7411,75 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(noCreditsResponse.status, 402, JSON.stringify(noCreditsEnvelope));
       assert.equal(noCreditsEnvelope.errorCode, "insufficient_credits");
       assert.equal(noCreditsEnvelope.message, "积分不足，请前往充值积分。");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects viewer and membership-ineligible team-member storyboard generation", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    let gatewayCalls = 0;
+    const textChatGateway = {
+      async completeJson() { gatewayCalls += 1; return "{}"; },
+      async *streamJson() { gatewayCalls += 1; yield "{}"; },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138246");
+      const created = await createAiStoryboardPreviewProject(server.origin, ownerCookie, "member-preview-auth");
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `preview_auth_${randomUUID().slice(0, 8)}`,
+          displayName: "分镜权限子账户",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      const teamMemberId = createdMember.member.membershipId;
+      await db.query(
+        "UPDATE team_member_projects SET role = 'viewer' WHERE member_id = $1 AND project_id = $2",
+        [teamMemberId, created.project.id],
+      );
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const requestPreview = (idempotencyKey: string) => fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "idempotency-key": idempotencyKey, cookie: memberCookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+
+      const viewerResponse = await requestPreview("http-ai-storyboard-preview-viewer");
+      const viewerEnvelope = await viewerResponse.json();
+      await db.query(
+        "UPDATE team_member_projects SET role = 'creator' WHERE member_id = $1 AND project_id = $2",
+        [teamMemberId, created.project.id],
+      );
+      const membershipResponse = await requestPreview("http-ai-storyboard-preview-member-no-membership");
+      const membershipEnvelope = await membershipResponse.json();
+
+      assert.equal(viewerResponse.status, 403, JSON.stringify(viewerEnvelope));
+      assert.equal(viewerEnvelope.errorCode, "permission_denied");
+      assert.equal(membershipResponse.status, 403, JSON.stringify(membershipEnvelope));
+      assert.equal(membershipEnvelope.errorCode, "membership_required");
+      assert.equal(gatewayCalls, 0);
     } finally {
       await server.close();
     }
