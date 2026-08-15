@@ -1,4 +1,9 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import {
+  isTransientDatabaseConnectionError,
+  isTransientDatabasePersistenceError,
+  markTransientDatabasePersistenceError,
+} from "../shared/db/dev-db.ts";
 import type {
   OpenAICompatibleTextAdapter,
   TextGatewayChatCompletionChunk,
@@ -119,7 +124,7 @@ export class TextModelGatewayService {
           request.model,
           this.config.env,
         );
-    const prepared = await createOrReuseProviderRequest(this.config.db, {
+    const prepared = await persistTextGatewayState(() => createOrReuseProviderRequest(this.config.db, {
       projectId: context.projectId ?? null,
       canvasProjectId: context.canvasProjectId ?? null,
       workflowId: context.workflowId ?? null,
@@ -146,29 +151,29 @@ export class TextModelGatewayService {
       credentialVersionRef: model.credentialVersionRef ?? null,
       userId: context.createdByUserId!,
       now: now(),
-    });
+    }));
 
     if (prepared.request.externalSubmissionStartedAt) {
       throw new TextModelGatewayError("provider_request_already_started");
     }
 
-    const started = await markExternalSubmissionStarted(this.config.db, {
+    const started = await persistTextGatewayState(() => markExternalSubmissionStarted(this.config.db, {
       providerRequestId: prepared.request.id,
       externalRequestId: null,
       now: now(),
-    });
+    }));
     const upstreamRequest = prepareProviderChatCompletionRequest(
       request,
       model.providerModel,
       model.providerProtocol,
     );
     const auditRequest = redactTextGatewayVideoUrls(upstreamRequest);
-    await recordProviderRequestRedactedBody(this.config.db, {
+    await persistTextGatewayState(() => recordProviderRequestRedactedBody(this.config.db, {
       providerRequestId: started.id,
       request: auditRequest,
       now: now(),
-    });
-    await createUserModelRequestLog(this.config.db, {
+    }));
+    await persistTextGatewayState(() => createUserModelRequestLog(this.config.db, {
       providerRequestId: started.id,
       projectId: context.projectId ?? null,
       canvasProjectId: context.canvasProjectId ?? null,
@@ -189,7 +194,7 @@ export class TextModelGatewayService {
       requestBody: auditRequest,
       requestText: extractRequestText(upstreamRequest.messages),
       now: now(),
-    });
+    }));
     const abortController = new AbortController();
     let aborted = false;
     const abortFromContext = () => {
@@ -344,22 +349,31 @@ export class TextModelGatewayService {
         usageSource,
       };
 
-      await markProviderRequestSucceeded(this.config.db, {
+      await persistTextGatewayState(() => markProviderRequestSucceeded(this.config.db, {
         providerRequestId: input.providerRequestId,
         externalRequestId: input.tracker.externalRequestId,
         redactedResponse,
         now: input.now(),
-      });
-      await completeUserModelRequestLog(this.config.db, {
+      }));
+      await persistTextGatewayState(() => completeUserModelRequestLog(this.config.db, {
         providerRequestId: input.providerRequestId,
         status: "succeeded",
         responseText: input.tracker.responseText,
         responseUsage: usage,
         finishReasons: input.tracker.finishReasons,
         now: input.now(),
-      });
+      }));
       input.resolveCompleted(final);
     } catch (error) {
+      if (isTransientDatabasePersistenceError(error)) {
+        input.resolveCompleted({
+          status: "failed",
+          failureCode: error.code,
+          usage: input.tracker.usage,
+          usageSource: input.tracker.usage ? "provider" : "provider_missing",
+        });
+        throw error;
+      }
       const status = input.isAborted() ? "canceled" : "failed";
       const failureCode = input.isAborted()
         ? "client_aborted_stream"
@@ -415,6 +429,17 @@ export class TextModelGatewayService {
       });
       throw modelError ?? error;
     }
+  }
+}
+
+async function persistTextGatewayState<T>(operation: () => Promise<T>) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (isTransientDatabaseConnectionError(error)) {
+      throw markTransientDatabasePersistenceError(error);
+    }
+    throw error;
   }
 }
 

@@ -81,6 +81,25 @@ export function isTransientDatabaseConnectionError(error: unknown) {
     || /connection terminated(?: unexpectedly| due to connection timeout)/i.test(message);
 }
 
+export class TransientDatabasePersistenceError extends Error {
+  readonly code = "transient_database_persistence_error";
+
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error), { cause: error });
+    this.name = "TransientDatabasePersistenceError";
+  }
+}
+
+export function markTransientDatabasePersistenceError(error: unknown) {
+  return error instanceof TransientDatabasePersistenceError
+    ? error
+    : new TransientDatabasePersistenceError(error);
+}
+
+export function isTransientDatabasePersistenceError(error: unknown) {
+  return error instanceof TransientDatabasePersistenceError;
+}
+
 function isManagedProductionWorkerSchemaReady() {
   return process.env.CREATOR_DEV_STACK_MANAGED === "true"
     && process.env.CREATOR_DEV_SCHEMA_READY === "true";

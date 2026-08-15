@@ -27,7 +27,11 @@ import {
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
-import { createDevDb, runWithDatabaseContext } from "../../modules/shared/db/dev-db.ts";
+import {
+  createDevDb,
+  markTransientDatabasePersistenceError,
+  runWithDatabaseContext,
+} from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
@@ -6916,10 +6920,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
   it("refunds owner credits and reports a service interruption when AI storyboard preview loses PostgreSQL", async () => {
     const db = await createMigratedTestDb();
     await seedPreviewScriptModelConfig(db, 20);
+    let gatewayCalls = 0;
     const textChatGateway = {
       async completeJson() { throw new Error("completeJson should not be called"); },
       async *streamJson() {
-        throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        gatewayCalls += 1;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+        );
       },
     };
     const server = createPhoneAuthDevServer({ db, textChatGateway });
@@ -6955,6 +6963,25 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const responseText = await previewResponse.text();
+      const replayResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const replayEnvelope = await replayResponse.json();
       const balanceAfter = await db.query<{ balance: number | string }>(
         "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
         [userId],
@@ -6967,6 +6994,173 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(previewResponse.status, 200);
       assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.errorCode, "ai_storyboard_preview_already_refunded");
+      assert.equal(gatewayCalls, 1);
+      assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
+      assert.equal(Number(refundEntries.rows[0]?.amount), 20);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns the service interruption envelope and refunds a non-stream AI storyboard preview", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 20);
+    let gatewayCalls = 0;
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+        );
+      },
+    };
+    let refundConnectionFailures = 0;
+    const serverDb: PhoneAuthTestDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (
+          refundConnectionFailures === 0
+          && gatewayCalls > 0
+          && params.some((value) => value === "ai_storyboard_preview_refund")
+        ) {
+          refundConnectionFailures += 1;
+          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        }
+        return db.query<T>(sql, params);
+      },
+      close: () => db.close(),
+    };
+    const server = createPhoneAuthDevServer({ db: serverDb, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138243";
+      const cookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "postgres-non-stream-refund");
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-non-stream-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      assert.equal(previewResponse.status, 503, JSON.stringify(previewEnvelope));
+      assert.equal(previewEnvelope.errorCode, "ai_storyboard_preview_service_interrupted");
+      assert.equal(previewEnvelope.message, "服务连接暂时中断，请稍后重试。");
+      assert.equal(refundConnectionFailures, 1);
+      assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refunds a team member preview and blocks a same-key generation replay", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 20);
+    let gatewayCalls = 0;
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+        );
+      },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138244";
+      const ownerCookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const created = await createAiStoryboardPreviewProject(server.origin, ownerCookie, "member-postgres-refund");
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `preview_member_${randomUUID().slice(0, 8)}`,
+          displayName: "分镜预览子账户",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      const teamMemberId = createdMember.member.membershipId;
+      await db.query("UPDATE team_members SET member_credits = 500 WHERE id = $1", [teamMemberId]);
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const requestPreview = () => fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-member-postgres-refund",
+            cookie: memberCookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+
+      const previewResponse = await requestPreview();
+      const responseText = await previewResponse.text();
+      const replayResponse = await requestPreview();
+      const replayEnvelope = await replayResponse.json();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+      const refundEntries = await db.query<{ amount: number | string }>(
+        `SELECT amount FROM credit_ledger_entries
+         WHERE team_member_id = $1 AND source_type = 'team_member_generation_refund'`,
+        [teamMemberId],
+      );
+
+      assert.equal(previewResponse.status, 200, responseText);
+      assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.errorCode, "ai_storyboard_preview_already_refunded");
+      assert.equal(gatewayCalls, 1);
       assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
       assert.equal(Number(refundEntries.rows[0]?.amount), 20);
     } finally {

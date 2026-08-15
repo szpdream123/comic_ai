@@ -304,7 +304,12 @@ import {
   type CanvasActorScope,
 } from "../modules/identity/canvas-actor-scope.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
-import { createDevDb, isTransientDatabaseConnectionError, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
+import {
+  createDevDb,
+  isTransientDatabaseConnectionError,
+  isTransientDatabasePersistenceError,
+  runWithDatabaseContext,
+} from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
 import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError, type IdempotencyRecord } from "../modules/shared/idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
@@ -4712,7 +4717,7 @@ async function releaseAiStoryboardPreviewCredits(
     userId: input.userId,
     amount: Math.round(input.amount),
     sourceType: "ai_storyboard_preview_refund",
-    sourceId: uuidFromIdempotencyKey(`${input.sourceId}:ai-storyboard-preview:refund`),
+    sourceId: aiStoryboardPreviewRefundSourceId(input.sourceId),
     reason: "剧本预览失败返还积分",
     metadata: {
       ...input.metadata,
@@ -4725,8 +4730,55 @@ async function releaseAiStoryboardPreviewCredits(
   return true;
 }
 
+function aiStoryboardPreviewRefundSourceId(idempotencyKey: string) {
+  return uuidFromIdempotencyKey(`${idempotencyKey}:ai-storyboard-preview:refund`);
+}
+
+async function hasAiStoryboardPreviewRefund(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    teamMemberId: string | null;
+    idempotencyKey: string;
+  },
+) {
+  const sourceType = input.teamMemberId
+    ? "team_member_generation_refund"
+    : "ai_storyboard_preview_refund";
+  const sourceId = aiStoryboardPreviewRefundSourceId(input.idempotencyKey);
+  const existing = await queryOne<{ id: string }>(
+    db,
+    `SELECT id
+     FROM credit_ledger_entries
+     WHERE user_id = $1
+       AND team_member_id IS NOT DISTINCT FROM $2::uuid
+       AND entry_type = 'grant'
+       AND source_type = $3
+       AND source_id = $4
+     LIMIT 1`,
+    [input.userId, input.teamMemberId, sourceType, sourceId],
+  );
+  return Boolean(existing);
+}
+
+async function retryAiStoryboardPreviewRefund<T>(operation: () => Promise<T>) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await runWithDatabaseContext(operation);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3 || !isTransientDatabaseConnectionError(error)) {
+        throw error;
+      }
+      await delay(attempt * 100);
+    }
+  }
+  throw lastError;
+}
+
 function aiStoryboardPreviewErrorDisplayMessage(error: unknown) {
-  if (isTransientDatabaseConnectionError(error)) {
+  if (isTransientDatabasePersistenceError(error)) {
     return "服务连接暂时中断，请稍后重试。";
   }
   return translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。");
@@ -30153,6 +30205,17 @@ export function createPhoneAuthDevServer(
             });
             billingProjectId = null;
           }
+          if (await hasAiStoryboardPreviewRefund(db, {
+            userId: authenticated.user.id,
+            teamMemberId: actor.teamMember?.id ?? null,
+            idempotencyKey,
+          })) {
+            return writeJson(response, envelopedError(
+              409,
+              "ai_storyboard_preview_already_refunded",
+              "该请求已失败并返还积分，请重新发起。",
+            ));
+          }
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
             skillId?: string | null;
@@ -30519,29 +30582,32 @@ export function createPhoneAuthDevServer(
               if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
                 const failureMessage = aiStoryboardPreviewErrorDisplayMessage(error);
                 try {
-                  if (actor.teamMember) {
-                    await releaseSimpleTeamMemberCredits(db, {
-                      teamMemberId: actor.teamMember.id,
-                      amount: creditCost,
-                      sourceId: idempotencyKey,
-                      reason: "剧本预览失败返还积分",
-                      metadata: {
-                        taskType: "ai_storyboard_preview",
-                        promptPreview: scriptText.slice(0, 200),
-                      },
-                      now: new Date(),
-                    });
-                  } else {
-                    await releaseAiStoryboardPreviewCredits(db, {
-                      userId: authenticated.user.id,
-                      amount: creditCost,
-                      sourceId: idempotencyKey,
-                      metadata: billingMetadata,
-                      now: new Date(),
-                    });
-                  }
-                } catch {
+                  await retryAiStoryboardPreviewRefund(async () => {
+                    if (actor.teamMember) {
+                      await releaseSimpleTeamMemberCredits(db, {
+                        teamMemberId: actor.teamMember.id,
+                        amount: creditCost,
+                        sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey),
+                        reason: "剧本预览失败返还积分",
+                        metadata: {
+                          taskType: "ai_storyboard_preview",
+                          promptPreview: scriptText.slice(0, 200),
+                        },
+                        now: new Date(),
+                      });
+                    } else {
+                      await releaseAiStoryboardPreviewCredits(db, {
+                        userId: authenticated.user.id,
+                        amount: creditCost,
+                        sourceId: idempotencyKey,
+                        metadata: billingMetadata,
+                        now: new Date(),
+                      });
+                    }
+                  });
+                } catch (refundError) {
                   // The generation error must still reach the already-open event stream.
+                  console.error("[ai-storyboard-preview] credit refund failed after retries", refundError);
                 }
                 writeSseData(response, {
                   type: "error",
@@ -30581,26 +30647,39 @@ export function createPhoneAuthDevServer(
               } : null,
             }));
           } catch (error) {
-            if (actor.teamMember) {
-              await releaseSimpleTeamMemberCredits(db, {
-                teamMemberId: actor.teamMember.id,
-                amount: creditCost,
-                sourceId: idempotencyKey,
-                reason: "剧本预览失败返还积分",
-                metadata: {
-                  taskType: "ai_storyboard_preview",
-                  promptPreview: scriptText.slice(0, 200),
-                },
-                now: new Date(),
+            try {
+              await retryAiStoryboardPreviewRefund(async () => {
+                if (actor.teamMember) {
+                  await releaseSimpleTeamMemberCredits(db, {
+                    teamMemberId: actor.teamMember.id,
+                    amount: creditCost,
+                    sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey),
+                    reason: "剧本预览失败返还积分",
+                    metadata: {
+                      taskType: "ai_storyboard_preview",
+                      promptPreview: scriptText.slice(0, 200),
+                    },
+                    now: new Date(),
+                  });
+                } else {
+                  await releaseAiStoryboardPreviewCredits(db, {
+                    userId: authenticated.user.id,
+                    amount: creditCost,
+                    sourceId: idempotencyKey,
+                    metadata: billingMetadata,
+                    now: new Date(),
+                  });
+                }
               });
-            } else {
-              await releaseAiStoryboardPreviewCredits(db, {
-                userId: authenticated.user.id,
-                amount: creditCost,
-                sourceId: idempotencyKey,
-                metadata: billingMetadata,
-                now: new Date(),
-              });
+            } catch (refundError) {
+              console.error("[ai-storyboard-preview] credit refund failed after retries", refundError);
+            }
+            if (isTransientDatabasePersistenceError(error)) {
+              return writeJson(response, envelopedError(
+                503,
+                "ai_storyboard_preview_service_interrupted",
+                aiStoryboardPreviewErrorDisplayMessage(error),
+              ));
             }
             throw error;
           }

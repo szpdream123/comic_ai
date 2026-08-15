@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { isTransientDatabasePersistenceError } from "../../shared/db/dev-db.ts";
+import type { SqlDatabase } from "../../shared/db/sql.ts";
 import type {
   TextGatewayChatCompletionChunk,
   TextGatewayChatCompletionRequest,
@@ -132,6 +134,40 @@ describe("text model gateway service", () => {
           error instanceof TextModelGatewayError &&
           error.code === "model_not_configured",
       );
+      assert.equal(adapter.calls.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("marks a transient gateway persistence reset without calling the provider", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([]);
+    let injectedReset = false;
+    const resettingDb: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (!injectedReset && /INSERT INTO provider_requests/i.test(sql)) {
+          injectedReset = true;
+          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+    const gateway = createGateway(resettingDb, adapter);
+
+    try {
+      await assert.rejects(
+        gateway.chat.completions.create(
+          {
+            model: "deepseek-chat",
+            messages: [{ role: "user", content: "Say hi" }],
+            stream: true,
+          },
+          requestContext("persistence-reset"),
+        ),
+        isTransientDatabasePersistenceError,
+      );
+      assert.equal(injectedReset, true);
       assert.equal(adapter.calls.length, 0);
     } finally {
       await db.close();
@@ -296,7 +332,7 @@ describe("text model gateway service", () => {
 });
 
 function createGateway(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  db: SqlDatabase,
   adapter: FakeTextAdapter | ThrowingTextAdapter | AbortAwareTextAdapter,
 ) {
   return new TextModelGatewayService({

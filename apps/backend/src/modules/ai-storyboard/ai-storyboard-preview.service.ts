@@ -5,7 +5,7 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
-import { isTransientDatabaseConnectionError } from "../shared/db/dev-db.ts";
+import { isTransientDatabasePersistenceError } from "../shared/db/dev-db.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
 const AI_STORYBOARD_SHOT_MAX_TOKENS = 32_768;
@@ -364,7 +364,7 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
         }
         break;
       } catch (error) {
-        if (!raw && databaseRetryCount === 0 && isTransientDatabaseConnectionError(error)) {
+        if (!raw && databaseRetryCount === 0 && isTransientDatabasePersistenceError(error)) {
           databaseRetryCount += 1;
           continue;
         }

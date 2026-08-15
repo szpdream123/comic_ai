@@ -1,6 +1,8 @@
 ﻿import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { markTransientDatabasePersistenceError } from "../shared/db/dev-db.ts";
+
 import {
   AiStoryboardWorkflowIntentError,
   createAiStoryboardPreviewService,
@@ -1319,13 +1321,62 @@ describe("ai storyboard preview service", () => {
     assert.equal(calls, 1);
   });
 
-  it("retries an asset stage after a transient PostgreSQL connection reset", async () => {
+  it("does not retry a provider ECONNRESET before producing output", async () => {
     let calls = 0;
     const gateway: TextChatGatewayLike = {
       async completeJson() { throw new Error("completeJson should not be called"); },
       async *streamJson() {
         calls += 1;
-        if (calls === 1) throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    await assert.rejects(() => service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene"],
+      packages: {},
+    }));
+
+    assert.equal(calls, 1);
+  });
+
+  it("does not retry a provider ECONNRESET after partial output", async () => {
+    let calls = 0;
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        calls += 1;
+        yield "partial";
+        throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    await assert.rejects(() => service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene"],
+      packages: {},
+    }));
+
+    assert.equal(calls, 1);
+  });
+
+  it("retries an asset stage after a marked PostgreSQL persistence reset", async () => {
+    let calls = 0;
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        calls += 1;
+        if (calls === 1) {
+          throw markTransientDatabasePersistenceError(
+            Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+          );
+        }
         yield JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] });
       },
     };
@@ -1356,7 +1407,9 @@ describe("ai storyboard preview service", () => {
         const attempt = (calls.get(stage) ?? 0) + 1;
         calls.set(stage, attempt);
         if (stage === "scene" && attempt === 1) {
-          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+          throw markTransientDatabasePersistenceError(
+            Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+          );
         }
         yield {
           scene: JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
