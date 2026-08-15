@@ -692,8 +692,24 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       const retriedFinalizePayload = await retriedFinalize.json();
       const retriedPersistPayload = await retriedPersist.json();
       const retriedStoragePayload = await retriedStorage.json();
+      const attempts = await db.query<{ id: string; current_attempt_id: string }>(
+        `
+          SELECT id::text, current_attempt_id::text
+          FROM tasks
+          WHERE id = ANY($1::uuid[])
+        `,
+        [[uploadTask.taskId, persistTask.taskId, storageTask.taskId]],
+      );
+      const attemptIdByTaskId = new Map(
+        attempts.rows.map((row) => [row.id, row.current_attempt_id]),
+      );
       const outbox = await db.query<{
-        payload_json: { taskId: string; finalizeMode: string; providerExecutor: string };
+        payload_json: {
+          attemptId: string;
+          taskId: string;
+          finalizeMode: string;
+          providerExecutor: string;
+        };
       }>(
         `
           SELECT payload_json
@@ -717,6 +733,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           {
             workflowId: uploadTask.workflowId,
             taskId: uploadTask.taskId,
+            attemptId: attemptIdByTaskId.get(uploadTask.taskId),
             mediaType: "image",
             modelCode: "gpt-image-2-cn",
             providerExecutor: "gpt-image-2",
@@ -728,6 +745,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           {
             workflowId: persistTask.workflowId,
             taskId: persistTask.taskId,
+            attemptId: attemptIdByTaskId.get(persistTask.taskId),
             mediaType: "image",
             modelCode: "gpt-image-2-cn",
             providerExecutor: "gpt-image-2",
@@ -739,6 +757,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           {
             workflowId: storageTask.workflowId,
             taskId: storageTask.taskId,
+            attemptId: attemptIdByTaskId.get(storageTask.taskId),
             mediaType: "image",
             modelCode: "gpt-image-2-cn",
             providerExecutor: "gpt-image-2",
