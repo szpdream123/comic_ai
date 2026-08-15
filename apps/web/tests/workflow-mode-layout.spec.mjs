@@ -31,6 +31,9 @@ test("workflow layout reuses asset and storyboard panels on one page", () => {
   assert.match(html, /class="[^"]*workflow-layout/);
   assert.match(html, /data-workflow-asset-panel/);
   assert.match(html, /data-workflow-storyboard-panel/);
+  assert.match(html, /data-workflow-resource-progress/);
+  assert.match(html, /已完成 <b>0<\/b>/);
+  assert.match(html, /未完成 <b>1<\/b>/);
   assert.match(html, /data-workflow-asset-panel[\s\S]*?data-action="toggle-episode-asset-select-all"[\s\S]*?data-batch-scope="assets">一键生图/);
   assert.match(html, /data-workflow-storyboard-panel[\s\S]*?data-action="toggle-storyboard-select-all"[\s\S]*?data-batch-scope="storyboard">一键生视频/);
   assert.match(html, /episode-replica-asset-name-input/);
@@ -64,6 +67,10 @@ test("workflow generation workbench is the existing prompt dock and can be close
   assert.match(
     css,
     /\.episode-workbench-screen \.episode-replica-layout\.workflow-layout\.workflow-workbench-open\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) minmax\(22rem, var\(--episode-replica-center-width,/,
+  );
+  assert.match(
+    css,
+    /\.episode-workbench-screen \.episode-replica-layout\.workflow-layout \.episode-replica-shot-card-body\.storyboard-board-mode\s*\{[\s\S]*?grid-template-columns:\s*minmax\(6\.2rem, 0\.48fr\) minmax\(20rem, 1\.65fr\) minmax\(7\.4rem, 0\.58fr\) minmax\(6\.2rem, 0\.45fr\);/,
   );
 });
 
@@ -185,11 +192,22 @@ test("workflow state opens from cards and closes without changing standard handl
   assert.match(defaultAssetSelection, /episodeWorkbenchLayout === "workflow"/);
   assert.match(defaultAssetSelection, /museScopeMode === "assets"/);
   assert.match(defaultAssetSelection, /workflowGenerationWorkbenchOpen = true/);
+  const defaultStoryboardSelection = source.slice(
+    source.indexOf("function syncSelectedStoryboardId"),
+    source.indexOf("function hydratePersistedWorkbenchState"),
+  );
+  assert.match(defaultStoryboardSelection, /episodeWorkbenchLayout === "workflow"/);
+  assert.match(defaultStoryboardSelection, /const scopeMode = resolveWorkflowDefaultGenerationScopeMode\(workbench\)/);
+  assert.match(defaultStoryboardSelection, /museScopeMode = scopeMode/);
+  assert.match(defaultStoryboardSelection, /scopeMode === "storyboard" \? "video" : "image"/);
+  assert.match(defaultStoryboardSelection, /workflowGenerationWorkbenchOpen = true/);
+  assert.match(source, /function resolveWorkflowDefaultGenerationScopeMode/);
+  assert.match(source, /progress\.total > 0 && progress\.completed === progress\.total \? "storyboard" : "assets"/);
   const homeWorkflowProjectOpen = source.slice(
     source.indexOf('if (action === "open-project-detail")'),
     source.indexOf("const selectedProjectCard = findProjectLibraryCard"),
   );
-  assert.match(homeWorkflowProjectOpen, /scopeMode: "assets"/);
+  assert.match(homeWorkflowProjectOpen, /scopeMode: resolveWorkflowDefaultGenerationScopeMode\(workbench\)/);
   const batchAction = source.slice(
     source.indexOf('if (action === "open-episode-batch-actions")'),
     source.indexOf('if (action === "close-episode-batch-modal")'),

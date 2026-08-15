@@ -5,7 +5,7 @@ import { queryOne } from "../shared/db/sql.ts";
 
 export type AssetConversationMediaMode = "image" | "video";
 export type AssetConversationMessageType = "user_request" | "task_status" | "result";
-export type AssetConversationStatus = "queued" | "running" | "completed" | "failed" | "canceled";
+export type AssetConversationStatus = "queued" | "running" | "completed" | "failed" | "canceled" | "manual_review_required" | "result_unknown";
 
 const conversationTurnDeletedPayloadKey = "__conversationTurnDeleted";
 const conversationTurnDeletedMessageKeyPrefix = "__deleted_turn__:";
@@ -404,6 +404,39 @@ export async function markAssetConversationGenerationSucceeded(
   );
 }
 
+export async function markAssetConversationGenerationTerminal(
+  db: SqlDatabase,
+  input: {
+    taskId: string;
+    status: "failed" | "canceled" | "manual_review_required" | "result_unknown";
+    failureCode: string;
+    noticeType: "admin_action_required" | "error";
+    now: Date;
+  },
+) {
+  const patch = {
+    status: input.status,
+    taskId: input.taskId,
+    workflowStatus: input.status,
+    returnedAt: input.now.toISOString(),
+    failureCode: input.failureCode,
+    failure: { failureCode: input.failureCode },
+    noticeType: input.noticeType,
+  };
+  await db.query(
+    `
+      UPDATE episode_asset_conversation_messages
+      SET status = $2,
+          payload_json = (payload_json - 'failure' - 'failureCode' - 'noticeType') || $3::jsonb,
+          updated_at = $4
+      WHERE turn_id = $1
+         OR task_id = $1
+         OR payload_json->>'taskId' = $1
+    `,
+    [input.taskId, input.status, JSON.stringify(patch), input.now],
+  );
+}
+
 export async function listAssetConversationMessages(
   db: SqlDatabase,
   input: {
@@ -508,7 +541,20 @@ export async function listAssetConversationEntrySummaries(
           ["assetTab", "selectedAssetId", "selectedAssetName", "selectedStoryboardId", "storyboardId"],
         )} AS selection_context,
         COALESCE(results.task_id, task_statuses.task_id, user_requests.task_id, results.payload_json->>'taskId', task_statuses.payload_json->>'taskId', user_requests.payload_json->>'taskId') AS task_id,
-        COALESCE(results.status, task_statuses.status, user_requests.status, results.payload_json->>'status', task_statuses.payload_json->>'status', user_requests.payload_json->>'status') AS status,
+        COALESCE(
+          CASE WHEN results.status IN ('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown') THEN results.status END,
+          CASE WHEN results.payload_json->>'status' IN ('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown') THEN results.payload_json->>'status' END,
+          CASE WHEN task_statuses.status IN ('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown') THEN task_statuses.status END,
+          CASE WHEN task_statuses.payload_json->>'status' IN ('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown') THEN task_statuses.payload_json->>'status' END,
+          CASE WHEN user_requests.status IN ('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown') THEN user_requests.status END,
+          CASE WHEN user_requests.payload_json->>'status' IN ('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown') THEN user_requests.payload_json->>'status' END,
+          results.status,
+          task_statuses.status,
+          user_requests.status,
+          results.payload_json->>'status',
+          task_statuses.payload_json->>'status',
+          user_requests.payload_json->>'status'
+        ) AS status,
         COALESCE(results.payload_json->>'createdAt', task_statuses.payload_json->>'createdAt', user_requests.payload_json->>'createdAt') AS created_at,
         COALESCE(
           results.payload_json->>'returnedAt',

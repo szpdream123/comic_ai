@@ -185,6 +185,10 @@ describe("route auth policy registry", () => {
     const examples = [
       ["POST", "/api/auth/password/login", "public"],
       ["POST", "/api/auth/team-member/password/login", "public"],
+      ["GET", "/api/home-recommendations", "public"],
+      ["GET", "/api/home-recommendations/background/media", "public"],
+      ["GET", "/api/home-recommendations/videos/video-1/media", "public"],
+      ["GET", "/api/public/style-covers/animation", "public"],
       ["PATCH", "/api/auth/profile", "user"],
       ["POST", "/api/auth/logout", "optional-user"],
       ["POST", "/api/admin/auth/login", "public"],
@@ -240,7 +244,7 @@ describe("route auth policy registry", () => {
 
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 187);
+    assert.equal(signatures.length, 188);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");
@@ -253,7 +257,7 @@ describe("route auth policy registry", () => {
 
   it("covers every regex pathname matcher and each method handled by its branch", () => {
     const matchers = dynamicPathMatchers();
-    assert.equal(matchers.length, 140);
+    assert.equal(matchers.length, 142);
     const uncovered: string[] = [];
 
     for (const declaration of matchers) {
@@ -299,8 +303,8 @@ describe("route auth policy registry", () => {
 
     assert.equal(wideCompositePredicates.length, 57);
     assert.deepEqual(apiRouteAuthInventoryCoverage, {
-      explicitMethodPath: { discovered: 187, uncovered: 0 },
-      regexDynamicMatchers: { discovered: 140, uncovered: 0 },
+      explicitMethodPath: { discovered: 188, uncovered: 0 },
+      regexDynamicMatchers: { discovered: 141, uncovered: 0 },
       wideCompositePredicates: { unresolved: 55 },
       conditionalQueryPolicies: { unresolved: 1 },
       coverage: "partial",

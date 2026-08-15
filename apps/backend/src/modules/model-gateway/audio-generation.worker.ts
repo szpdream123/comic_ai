@@ -729,7 +729,7 @@ export async function persistAudioGenerationArtifactJob(
   await assertCanvasGenerationAssignmentActive(db, snapshot);
   const providerResponse = parseRecord(row.provider_response_redacted_json);
   const artifact = parseStoredAudioArtifact(providerResponse.artifact);
-  const url = buildAudioStorageUrl(input.runtime, storageObject.objectKey);
+  const url = buildAudioStorageUrl(storageObject.id);
   const persisted = {
     assetId: null,
     assetVersionId: null,
@@ -1305,16 +1305,8 @@ function parseStoredAudioArtifact(value: unknown): MediaGenerationArtifact | nul
   };
 }
 
-function buildAudioStorageUrl(runtime: UploadSessionRuntime, objectKey: string) {
-  const publicBaseUrl = runtime.publicBaseUrl?.trim().replace(/\/+$/g, "")
-    || process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "")
-    || process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "")
-    || "";
-  return publicBaseUrl
-    ? `${publicBaseUrl}/${objectKey}`
-    : runtime.bucket && runtime.region
-      ? `https://${runtime.bucket}.cos.${runtime.region}.myqcloud.com/${objectKey}`
-      : objectKey;
+function buildAudioStorageUrl(storageObjectId: string) {
+  return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
 }
 
 function parseRecord(value: unknown): Record<string, unknown> {

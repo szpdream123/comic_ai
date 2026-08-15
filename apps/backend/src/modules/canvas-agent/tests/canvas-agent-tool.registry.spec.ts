@@ -337,25 +337,25 @@ test("executor binds the selected homepage kind, model, and parameters to media 
     __canvasAgentExecutorTestUtils.bindReferencedGenerationInput(
       "generation.create",
       {
-        kind: "audio",
+        kind: "image",
         request: {
           model: "agent-image",
-          prompt: "生成配音",
-          parameters: { voice: "agent-voice", speed: 0.8 },
+          prompt: "生成 16:9 的 4K 角色图",
+          parameters: { aspectRatio: "16:9", quality: "4K" },
         },
       },
       [],
       [],
       { image: "selected-image", video: "selected-video", audio: "selected-audio" },
-      "audio",
-      { audio: { voice: "selected-voice", speed: 1.2 } },
+      "image",
+      { image: { aspectRatio: "auto", quality: "2K" } },
     ),
     {
-      kind: "audio",
+      kind: "image",
       request: {
-        model: "selected-audio",
-        prompt: "生成配音",
-        parameters: { voice: "selected-voice", speed: 1.2 },
+        model: "selected-image",
+        prompt: "生成 16:9 的 4K 角色图",
+        parameters: { aspectRatio: "16:9", quality: "4K" },
       },
     },
   );

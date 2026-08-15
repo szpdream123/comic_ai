@@ -519,16 +519,15 @@ test("opening a home project workflow renders its project assets and episode sto
   assert.equal(workbench.ui.homeWorkflowOrigin, true);
   assert.equal(workbench.ui.episodeWorkbenchLayout, "workflow");
   assert.equal(workbench.ui.selectedEpisodeId, "episode-1");
-  assert.equal(workbench.ui.museScopeMode, "assets");
-  assert.equal(workbench.ui.selectedEpisodeAssetId, "episode-asset-1");
-  assert.equal(workbench.ui.selectedEpisodeCardId, "episode-asset-1");
+  assert.equal(workbench.ui.museScopeMode, "storyboard");
+  assert.equal(workbench.ui.episodeMediaMode, "video");
+  assert.equal(workbench.ui.selectedStoryboardId, "storyboard-1");
   assert.equal(workbench.ui.workflowGenerationWorkbenchOpen, true);
   assert.deepEqual(calls.slice(0, 2), [
     ["assets", "project-1"],
     ["episodes", "project-1"],
   ]);
   assert.deepEqual(calls.slice(2).sort((left, right) => left[0].localeCompare(right[0])), [
-    ["episode-assets", "episode-1"],
     ["storyboards", "episode-1"],
     ["workbench", "episode-1"],
   ]);
@@ -1265,6 +1264,26 @@ test("clicking the free generation tab immediately opens the conversation page",
   assert.match(workbench.root.innerHTML, /new-canvas-workbench-host/);
 });
 
+test("anonymous users are prompted to log in before opening free generation", async () => {
+  const workbench = createWorkbench();
+  const loginReasons = [];
+  workbench.session = { authenticated: false, user: { id: "", phone: "" } };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.onRequireLogin = async (reason) => {
+    loginReasons.push(reason);
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-home-creation-mode", creationMode: "free" },
+  });
+
+  assert.deepEqual(loginReasons, ["free-generation"]);
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.homeCreationMode, "agent");
+  assert.notEqual(workbench.ui.canvasAgentOnly, true);
+});
+
 test("home free generation opens the standalone media conversation route", async () => {
   const workbench = createWorkbench();
   const pushedRoutes = [];
@@ -1501,6 +1520,40 @@ test("returning from free generation to workflow reloads the home project list",
   assert.equal(workbench.ui.homeProjectsLoading, false);
   assert.equal(workbench.ui.homeProjectTotal, 1);
   assert.equal(workbench.ui.homeRecentProjects[0]?.id, "project-returned");
+});
+
+test("returning from a project workflow reloads the latest home projects", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const projectRequests = [];
+  globalThis.window = { location: { hash: "#project" } };
+  workbench.ui.activeNavTab = "project";
+  workbench.ui.projectPanelMode = "episode-workbench";
+  workbench.ui.homeRecentProjects = [{ id: "stale-project", name: "旧项目" }];
+  workbench.ui.homeProjectTotal = 1;
+  workbench.api.getProjects = async (input) => {
+    projectRequests.push(input);
+    return {
+      projects: [{ id: "new-project", name: "刚创建的项目", status: "草稿", createdAt: "2026-08-15T12:00:00.000Z" }],
+      pagination: { page: 1, pageSize: 8, total: 2, totalPages: 1 },
+    };
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "back-to-home-from-workflow" },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.homeProjectsLoading, false);
+  assert.deepEqual(projectRequests, [{ page: 1, pageSize: 8, keyword: "" }]);
+  assert.equal(workbench.ui.homeProjectTotal, 2);
+  assert.equal(workbench.ui.homeRecentProjects[0]?.id, "new-project");
 });
 
 test("navigation tabs render before lazy surface requests finish", async () => {

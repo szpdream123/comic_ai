@@ -257,7 +257,7 @@ describe("ai storyboard preview service", () => {
     assert.equal(gateway.calls.length, 5);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text", "text", "text", "text", "text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined, undefined, undefined, undefined, undefined]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined, undefined, undefined, undefined, 32_768]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /短剧快节奏/);
@@ -1317,6 +1317,41 @@ describe("ai storyboard preview service", () => {
     }));
 
     assert.equal(calls, 1);
+  });
+
+  it("continues a truncated storyboard response from the prior output boundary", async () => {
+    const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];
+    const initialRows = [
+      "【剧本分镜列表】",
+      "| 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |",
+      "| --- | --- | --- | --- |",
+      "| 分镜1：白野走进营地。 | 无台词。 | 夜色营地，白野前行。 | 中景固定镜头，白野走进营地。 |",
+    ].join("\n");
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson(input) {
+        calls.push(input);
+        if (calls.length === 1) {
+          yield initialRows;
+          throw Object.assign(new Error("provider_output_truncated"), { code: "provider_output_truncated" });
+        }
+        yield "\n| 分镜2：白野避开守卫。 | 无台词。 | 守卫背后，白野潜行。 | 近景跟拍，白野避开守卫。 |";
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "白野潜入营地。",
+      skipScriptStage: true,
+      selectedStages: ["shot"],
+      packages: {},
+    });
+
+    assert.equal(result.commitPayload.storyboards.length, 2);
+    assert.deepEqual(calls.map((call) => call.maxTokens), [32_768, 32_768]);
+    assert.match(calls[1]?.prompt ?? "", /从上一段的断点继续输出/);
+    assert.match(calls[1]?.prompt ?? "", /分镜1：白野走进营地/);
   });
 
   it("yields each model chunk before the model stream is finished", async () => {

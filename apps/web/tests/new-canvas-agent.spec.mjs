@@ -1891,6 +1891,38 @@ test("Canvas Agent restores message history and manages archived conversations",
   controller.dispose();
 });
 
+test("Canvas Agent reuses loaded stable conversation history", async () => {
+  const requests = [];
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-cache",
+      canvasAgent: {
+        conversationId: "conversation-1",
+        conversations: [
+          { id: "conversation-1", title: "会话一", status: "active" },
+          { id: "conversation-2", title: "会话二", status: "active" },
+        ],
+      },
+    },
+    api: {
+      async listCanvasAgentMessages(_canvasId, conversationId) {
+        requests.push(conversationId);
+        return { messages: [{ id: `message-${conversationId}`, sequence: 1, role: "user", content: { text: conversationId } }] };
+      },
+    },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+
+  await controller.loadMessages("conversation-1");
+  await controller.handleAction({ dataset: { agentAction: "select-agent-conversation", conversationId: "conversation-2" } });
+  await controller.handleAction({ dataset: { agentAction: "select-agent-conversation", conversationId: "conversation-1" } });
+  await controller.handleAction({ dataset: { agentAction: "select-agent-conversation", conversationId: "conversation-2" } });
+
+  assert.deepEqual(requests, ["conversation-1", "conversation-2"]);
+  assert.equal(workbench.ui.canvasAgent.messages[0].text, "conversation-2");
+  controller.dispose();
+});
+
 test("Canvas Agent edits and persists the current conversation title", async () => {
   const calls = [];
   const workbench = {
@@ -2278,6 +2310,25 @@ test("Canvas Agent merges generation submission and completion into one media ca
   });
   assert.match(missingNodeHtml, /data-agent-action="add-media-to-canvas"/);
   assert.doesNotMatch(missingNodeHtml, /data-agent-action="locate-agent-canvas-node"/);
+});
+
+test("free generation media uses the authorized storage gateway when an object ID is available", () => {
+  const storageObjectId = "11111111-2222-4333-8444-555555555555";
+  const media = normalizeAgentMediaTask({
+    taskId: "task-storage-media",
+    kind: "image",
+    status: "completed",
+    result: {
+      storageObjectId,
+      imageUrl: "https://bucket.cos.ap-guangzhou.myqcloud.com/legacy/image.png",
+    },
+  });
+
+  assert.equal(
+    media.url,
+    `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+  );
+  assert.doesNotMatch(media.url, /myqcloud\.com/);
 });
 
 test("free generation keeps media compact and opens an enlarged preview", async () => {

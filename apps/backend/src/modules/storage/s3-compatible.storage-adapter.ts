@@ -52,6 +52,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     bucket: string;
     objectKey: string;
     expiresAt: Date;
+    responseContentDisposition?: string | null;
   }): Promise<{ url: string; expiresAt: Date }> {
     const expiresIn = Math.max(
       1,
@@ -63,6 +64,7 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
         new GetObjectCommand({
           Bucket: input.bucket,
           Key: input.objectKey,
+          ResponseContentDisposition: input.responseContentDisposition ?? undefined,
         }),
         { expiresIn },
       ),

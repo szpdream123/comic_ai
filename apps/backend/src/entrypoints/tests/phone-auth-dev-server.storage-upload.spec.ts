@@ -216,7 +216,10 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(importResponse.status, 200);
       assert.equal(coverResponse.status, 200);
       assert.equal(completed.storageObject.status, "available");
-      assert.match(String(completed.urls?.sourceUrl ?? ""), /^(?:https:\/\/|\/uploads\/storage\/)/);
+      assert.equal(
+        completed.urls?.sourceUrl,
+        `/api/storage/objects/${prepared.storageObjectId}/content?proxy=1`,
+      );
       assert.equal(coverUpdated.project?.coverStorageObjectId, prepared.storageObjectId);
       assert.equal(persistedCover.rows[0]?.cover_image_url, completed.urls?.sourceUrl);
       assert.equal(persistedCover.rows[0]?.cover_storage_object_id, prepared.storageObjectId);
@@ -232,7 +235,10 @@ describe("phone auth dev server storage uploads", () => {
         ),
       );
       assert.equal(detail.project?.coverStorageObjectId, prepared.storageObjectId);
-      assert.match(String(detail.project?.coverImageUrl ?? ""), /^(?:https:\/\/|\/uploads\/storage\/)/);
+      assert.equal(
+        detail.project?.coverImageUrl,
+        `/api/storage/objects/${prepared.storageObjectId}/content?proxy=1`,
+      );
     } finally {
       await server.close();
     }

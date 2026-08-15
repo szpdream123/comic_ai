@@ -27,7 +27,7 @@ import {
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
-import { createDevDb } from "../../modules/shared/db/dev-db.ts";
+import { createDevDb, runWithDatabaseContext } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
@@ -154,6 +154,140 @@ describe("phone auth dev server", { concurrency: false }, () => {
       }),
       "三宝影像账户积分不足，请联系管理员充值后重试。",
     );
+  });
+
+  it("serves active home media through a stable gateway path and a one-hour COS signature", async () => {
+    const db = await createMigratedTestDb();
+    const categoryId = randomUUID();
+    const videoId = randomUUID();
+    const bucket = "home-media-test-1310122982";
+    const region = "ap-guangzhou";
+    const backgroundSourceUrl = `https://${bucket}.cos.${region}.myqcloud.com/officialAssets/homeBackgroundVideos/test.mp4`;
+    const signedRequests: Array<{ bucket: string; objectKey: string; expiresAt: Date }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        STORAGE_ADAPTER_MODE: "cos",
+        STORAGE_BUCKET: bucket,
+        STORAGE_REGION: region,
+        STORAGE_SIGNED_URL_EXPIRES_SECONDS: "3600",
+      },
+      storageRuntime: {
+        adapter: {
+          async createSignedReadUrl(input) {
+            signedRequests.push(input);
+            return { url: "https://signed.example.test/home-background.mp4", expiresAt: input.expiresAt };
+          },
+        } as never,
+      },
+      fetchImpl: async (url) => {
+        assert.equal(String(url), "https://signed.example.test/home-background.mp4");
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        });
+      },
+    });
+    await db.query(`
+      INSERT INTO home_background_settings (id, video_url, poster_url, status, created_at, updated_at)
+      VALUES ('homepage', $1, '', 'active', now(), now())
+      ON CONFLICT (id) DO UPDATE SET video_url = EXCLUDED.video_url, poster_url = EXCLUDED.poster_url, status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+    `, [backgroundSourceUrl]);
+    await db.query(`
+      INSERT INTO home_recommendation_categories (id, code, name, status, sort_order, created_at, updated_at)
+      VALUES ($1, 'gateway-test', 'Gateway test', 'active', 1, now(), now())
+    `, [categoryId]);
+    await db.query(`
+      INSERT INTO home_recommendation_videos (id, category_id, title, subtitle, cover_url, video_url, duration_label, cover_alt, status, sort_order, created_at, updated_at)
+      VALUES ($1, $2, 'Gateway video', '', '', $3, '', '', 'active', 1, now(), now())
+    `, [videoId, categoryId, backgroundSourceUrl]);
+
+    try {
+      await server.listen(0);
+      const payload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
+      const backgroundMediaUrl = new URL(payload.data.background.videoUrl, server.origin);
+      assert.equal(backgroundMediaUrl.pathname, "/api/home-recommendations/background/media");
+      assert.ok(backgroundMediaUrl.searchParams.get("v"));
+      assert.equal(payload.data.categories[0]?.videos[0]?.videoUrl, `/api/home-recommendations/videos/${videoId}/media`);
+
+      const response = await fetch(backgroundMediaUrl);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
+      assert.deepEqual(new Uint8Array(await response.arrayBuffer()), new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]));
+      const videoResponse = await fetch(`${server.origin}${payload.data.categories[0]?.videos[0]?.videoUrl}`);
+      assert.equal(videoResponse.status, 200);
+      assert.deepEqual(signedRequests.map((request) => ({ bucket: request.bucket, objectKey: request.objectKey })), [
+        { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
+        { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
+      ]);
+      assert.ok(signedRequests[0]?.expiresAt.getTime() >= Date.now() + 59 * 60 * 1000);
+      assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
+
+      await db.query(
+        "UPDATE home_background_settings SET video_url = $1, updated_at = updated_at + interval '1 second' WHERE id = 'homepage'",
+        [`https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`],
+      );
+      const updatedPayload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string } } };
+      assert.notEqual(updatedPayload.data.background.videoUrl, payload.data.background.videoUrl);
+      const blockedResponse = await fetch(`${server.origin}${updatedPayload.data.background.videoUrl}`, { redirect: "manual" });
+      assert.equal(blockedResponse.status, 404);
+      assert.equal(signedRequests.length, 2);
+
+      const malformedResponse = await fetch(`${server.origin}/api/home-recommendations/videos/%E0%A4%A/media`, { redirect: "manual" });
+      assert.equal(malformedResponse.status, 400);
+      assert.equal(signedRequests.length, 2);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("limits repeated anonymous home media signing requests", async () => {
+    const db = await createMigratedTestDb();
+    const bucket = "home-media-rate-limit-1310122982";
+    const region = "ap-guangzhou";
+    const signedRequests: Array<{ bucket: string; objectKey: string; expiresAt: Date }> = [];
+    const server = createPhoneAuthDevServer({
+      db,
+      env: {
+        STORAGE_ADAPTER_MODE: "cos",
+        STORAGE_BUCKET: bucket,
+        STORAGE_REGION: region,
+        STORAGE_SIGNED_URL_EXPIRES_SECONDS: "3600",
+        HOME_MEDIA_SIGNING_PER_IP_PER_MINUTE: "1",
+      },
+      storageRuntime: {
+        adapter: {
+          async createSignedReadUrl(input) {
+            signedRequests.push(input);
+            return { url: "https://signed.example.test/home-background.mp4", expiresAt: input.expiresAt };
+          },
+        } as never,
+      },
+      fetchImpl: async () => new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      }),
+    });
+    await db.query(
+      `
+        INSERT INTO home_background_settings (id, video_url, poster_url, status, created_at, updated_at)
+        VALUES ('homepage', $1, '', 'active', now(), now())
+        ON CONFLICT (id) DO UPDATE SET video_url = EXCLUDED.video_url, status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+      `,
+      [`https://${bucket}.cos.${region}.myqcloud.com/officialAssets/homeBackgroundVideos/test.mp4`],
+    );
+
+    try {
+      await server.listen(0);
+      const first = await fetch(`${server.origin}/api/home-recommendations/background/media`, { redirect: "manual" });
+      assert.equal(first.status, 200);
+      const limited = await fetch(`${server.origin}/api/home-recommendations/background/media`, { redirect: "manual" });
+      assert.equal(limited.status, 429);
+      assert.ok(Number(limited.headers.get("retry-after")) > 0);
+      assert.equal(signedRequests.length, 1);
+    } finally {
+      await server.close();
+    }
   });
 
   it("does not settle a newly-created attempt from a stale legacy failure candidate", async () => {
@@ -7336,7 +7470,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.ok(Array.isArray(envelope.styles));
       assert.ok(envelope.styles.some((item: { code?: string }) => item.code === "animation"));
       assert.ok(envelope.styles.some((item: { name?: string }) => item.name));
-      assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.includes("/promptCovers/officialStyles/")));
+      assert.ok(envelope.styles.some((item: { coverImageUrl?: string }) => item.coverImageUrl?.startsWith("/api/public/style-covers/")));
       assert.ok(envelope.styles.some((item: { prompt_content?: string }) => item.prompt_content?.includes("二次元")));
       assert.equal(envelope.styles.every((item: { status?: string }) => item.status === "enabled"), true);
     } finally {
@@ -13970,7 +14104,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("repairs stale episode generation tasks from the storage repair endpoint", async () => {
+  it("skips locked stale episode generation tasks until their transaction finishes", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -14054,6 +14188,47 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `,
         [taskId, past],
       );
+
+      let releaseTaskLock!: () => void;
+      const taskLockReleased = new Promise<void>((resolve) => {
+        releaseTaskLock = resolve;
+      });
+      let taskLockHeld!: () => void;
+      const taskLocked = new Promise<void>((resolve) => {
+        taskLockHeld = resolve;
+      });
+      const lockTransaction = runWithDatabaseContext(async () => {
+        await db.query("BEGIN");
+        try {
+          await db.query("SELECT id FROM tasks WHERE id = $1 FOR UPDATE", [taskId]);
+          taskLockHeld();
+          await taskLockReleased;
+          await db.query("COMMIT");
+        } catch (error) {
+          await db.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        }
+      });
+      await taskLocked;
+
+      try {
+        const lockedRepairResponse = await fetch(`${server.origin}/api/storage/repair`, {
+          method: "POST",
+          headers: { cookie },
+        });
+        const lockedRepair = await lockedRepairResponse.json();
+        const lockedTask = await db.query<{ status: string }>(
+          "SELECT status FROM tasks WHERE id = $1",
+          [taskId],
+        );
+
+        assert.equal(lockedRepairResponse.status, 200);
+        assert.deepEqual(lockedRepair.episodeGeneration.timedOutTaskIds, []);
+        assert.equal(lockedTask.rows[0]?.status, "queued");
+      } finally {
+        releaseTaskLock();
+        await lockTransaction;
+      }
 
       const repairResponse = await fetch(`${server.origin}/api/storage/repair`, {
         method: "POST",

@@ -1156,7 +1156,7 @@ function bindPreferredGenerationInput(
     request: {
       ...request,
       ...(preferredModel ? { model: preferredModel } : {}),
-      ...(selectedParameters ? { parameters: { ...proposedParameters, ...selectedParameters } } : {}),
+      ...(selectedParameters ? { parameters: { ...selectedParameters, ...proposedParameters } } : {}),
     },
   };
 }

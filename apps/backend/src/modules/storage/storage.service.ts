@@ -46,6 +46,7 @@ export interface StorageAdapter {
     bucket: string;
     objectKey: string;
     expiresAt: Date;
+    responseContentDisposition?: string | null;
   }): Promise<{ url: string; expiresAt: Date }>;
   putObject?(input: {
     bucket: string;
@@ -385,6 +386,7 @@ export async function createSignedReadUrl(
     bucket: object.bucket,
     objectKey: object.objectKey,
     expiresAt,
+    responseContentDisposition: input.responseContentDisposition,
   });
 
   return {
@@ -463,26 +465,13 @@ export async function buildSignedObjectUrls(
   },
 ) {
   const signed = await createSignedReadUrl(db, input);
-  const publicBaseUrl =
-    input.publicBaseUrl?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
-    "";
-  const region = input.region?.trim() || process.env.STORAGE_REGION?.trim() || "";
-  const publicUrl = publicBaseUrl
-    ? `${publicBaseUrl}/${signed.object.objectKey}`
-    : signed.object.bucket && region
-      ? `https://${signed.object.bucket}.cos.${region}.myqcloud.com/${signed.object.objectKey}`
-      : signed.url;
-  const isVideo = signed.object.contentType?.startsWith("video/") ?? false;
-  const mediaUrl = isVideo ? signed.url : publicUrl;
   return {
     storageObjectId: signed.object.id,
     bucket: signed.object.bucket,
     objectKey: signed.object.objectKey,
-    previewUrl: mediaUrl,
-    sourceUrl: mediaUrl,
-    downloadUrl: mediaUrl,
+    previewUrl: signed.url,
+    sourceUrl: signed.url,
+    downloadUrl: signed.url,
     expiresAt: signed.expiresAt,
   };
 }

@@ -9025,11 +9025,44 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
       ui.homeRecentProjects?.find?.((project) => String(project?.id ?? "") === projectId)?.name ??
       "项目工作流",
   );
+  const episodes = Array.isArray(state?.projectDetail?.episodes)
+    ? state.projectDetail.episodes.filter((episode) => String(episode?.id ?? episode?.episodeId ?? "").trim())
+    : [];
+  const selectedEpisodeId = String(ui.selectedEpisodeId ?? "").trim();
+  const episodePicker = episodes.length
+    ? `
+        <div class="home-project-episode-picker" role="list" aria-label="选择分集">
+          ${episodes.map((episode) => {
+            const episodeId = String(episode.id ?? episode.episodeId ?? "").trim();
+            const title = String(episode.title ?? "未命名分集").trim() || "未命名分集";
+            const previewUrl = String(episode.previewUrl ?? episode.previewMedia?.url ?? "").trim();
+            return `
+              <button class="home-project-episode-option" type="button" data-action="select-home-project-workflow-episode" data-episode-id="${escapeAttr(episodeId)}">
+                <span class="home-project-episode-option-cover">
+                  ${previewUrl
+                    ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" onerror="this.remove()">`
+                    : ""}
+                </span>
+                <span class="home-project-episode-option-content">
+                  <span class="home-project-episode-option-title">${escapeHtml(title)}</span>
+                </span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+      `
+    : `<div class="home-project-workflow-loading" role="status">当前项目还没有可进入的分集。</div>`;
   const content = ui.homeProjectWorkflowLoading
     ? `<div class="home-project-workflow-loading" role="status" aria-live="polite">正在加载项目数据…</div>`
     : ui.homeProjectWorkflowNotice
       ? `<div class="home-project-workflow-loading" role="alert">${escapeHtml(ui.homeProjectWorkflowNotice)}</div>`
-      : renderEpisodeWorkbenchScreen({
+      : !selectedEpisodeId
+        ? `
+            <section class="home-project-episode-selection" aria-label="选择分集">
+              ${episodePicker}
+            </section>
+          `
+        : renderEpisodeWorkbenchScreen({
           state,
           ui: {
             ...ui,
@@ -9042,11 +9075,12 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
         });
   return `
     <section class="home-project-workflow-backdrop" role="dialog" aria-modal="true" aria-label="${escapeAttr(projectName)}工作流">
-      <div class="home-project-workflow-modal">
-        <header class="home-project-workflow-head">
+      <div class="home-project-workflow-modal${selectedEpisodeId ? "" : " is-episode-selection"}">
+        <header class="home-project-workflow-head${selectedEpisodeId ? "" : " is-episode-selection"}">
           <div>
-            <strong>${escapeHtml(projectName)}</strong>
+            <span>当前项目：</span><strong>${escapeHtml(projectName)}</strong>
           </div>
+          ${selectedEpisodeId ? "" : '<span class="home-project-workflow-selection-title">请选择进入的集数</span>'}
           <button type="button" class="home-project-workflow-close" data-action="close-home-project-workflow" aria-label="关闭工作流">×</button>
         </header>
         <div class="home-project-workflow-body">${content}</div>
@@ -10065,9 +10099,12 @@ function resolveCanvasLibraryAssets(ui = {}, state = {}, source = "outputs") {
   const metadata = latestVersion.metadata && typeof latestVersion.metadata === "object" ? latestVersion.metadata : {};
   const mediaType = String(asset.mediaType ?? asset.mimeType ?? metadata.mimeType ?? category).toLowerCase();
   const kind = mediaType.includes("video") || category === "video" ? "video" : mediaType.includes("audio") || category === "audio" || category === "voice" ? "audio" : "image";
-  const previewUrl = String(
-    asset.previewUrl ?? asset.preview ?? asset.sourceUrl ?? latestVersion.previewUrl ?? metadata.previewUrl ?? metadata.fixedImageUrl ?? "",
-  ).trim();
+  const storageObjectId = String(asset.storageObjectId ?? latestVersion.storageObjectId ?? metadata.storageObjectId ?? "").trim() || null;
+  const previewUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    : String(
+      asset.previewUrl ?? asset.preview ?? asset.sourceUrl ?? latestVersion.previewUrl ?? metadata.previewUrl ?? metadata.fixedImageUrl ?? "",
+    ).trim();
   return {
     id: `library:${source}:${id}`,
     sourceAssetId: id,
@@ -10084,7 +10121,7 @@ function resolveCanvasLibraryAssets(ui = {}, state = {}, source = "outputs") {
     status: "可用",
     url: previewUrl,
     previewUrl,
-    storageObjectId: String(asset.storageObjectId ?? latestVersion.storageObjectId ?? metadata.storageObjectId ?? "").trim() || null,
+    storageObjectId,
     assetId: id,
     assetVersionId: String(asset.assetVersionId ?? latestVersion.id ?? "").trim() || null,
   };
@@ -12614,7 +12651,7 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
           <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
           <strong>上传封面</strong>
         </label>
-        <img class="project-gallery-cover" src="${escapeHtml(getProjectCoverSrc(project))}" alt="${escapeHtml(project.name)} 封面" />
+        <img class="project-gallery-cover" src="${escapeHtml(getProjectCoverSrc(project))}" alt="${escapeHtml(project.name)} 封面" loading="lazy" decoding="async" />
         ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-project-cover" data-project-id="${escapeHtml(project.id)}" aria-label="替换 ${escapeHtml(project.name)} 的项目封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
       </div>
       <input id="${coverInputId}" class="project-cover-input" type="file" accept="image/*" data-action="upload-project-cover" data-project-id="${escapeHtml(project.id)}" />
@@ -12642,6 +12679,10 @@ function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = 
 }
 
 function getProjectCoverSrc(project) {
+  const storageObjectId = String(project?.coverStorageObjectId ?? project?.cover_storage_object_id ?? "").trim();
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
   if (project.coverImageUrl) {
     return resolveApiUrl(project.coverImageUrl);
   }

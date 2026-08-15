@@ -1049,6 +1049,7 @@ export function createCanvasAgentController({
   let fileGrantsConversationId = Array.isArray(agent.fileGrants) && agent.fileGrants.some((grant) => grant?.status === "active")
     ? String(agent.conversationId ?? "")
     : "";
+  const conversationCache = new Map();
   let disposed = false;
   const refreshedCanvasEventKeys = new Set();
   const canvasRefreshRetryTimers = new Set();
@@ -1266,6 +1267,35 @@ export function createCanvasAgentController({
     return agent.messages;
   };
 
+  const cacheConversation = (conversationId = agent.conversationId) => {
+    const id = String(conversationId ?? "").trim();
+    if (!id) return;
+    conversationCache.set(id, {
+      taskId: agent.taskId,
+      status: agent.status,
+      events: [...agent.events],
+      sequence: agent.sequence,
+      messages: [...agent.messages],
+      fileGrants: [...agent.fileGrants],
+      fileGrantsStatus: agent.fileGrantsStatus,
+    });
+  };
+
+  const restoreCachedConversation = (conversationId) => {
+    const cached = conversationCache.get(String(conversationId ?? "").trim());
+    if (!cached) return false;
+    agent.taskId = cached.taskId;
+    agent.status = cached.status;
+    agent.events = [...cached.events];
+    agent.sequence = cached.sequence;
+    agent.messages = [...cached.messages];
+    agent.messagesStatus = "ready";
+    agent.fileGrants = [...cached.fileGrants];
+    agent.fileGrantsStatus = cached.fileGrantsStatus;
+    fileGrantsConversationId = conversationId;
+    return true;
+  };
+
   const loadTaskEvents = async (canvasId, taskId) => {
     if (!canvasId || !taskId || typeof agentApi.listEvents !== "function") return [];
     try {
@@ -1284,6 +1314,12 @@ export function createCanvasAgentController({
 
   const loadMessages = async (conversationId) => {
     stopPolling();
+    const conversation = (agent.conversations ?? []).find((item) => String(item.id) === conversationId);
+    const cachedConversationIsStable = !conversation?.taskId || TERMINAL_STATUSES.has(String(conversation.taskStatus ?? ""));
+    if (cachedConversationIsStable && restoreCachedConversation(conversationId)) {
+      syncPanel();
+      return agent.messages;
+    }
     if (fileGrantsConversationId && fileGrantsConversationId !== conversationId) {
       agent.fileGrants = [];
       agent.fileGrantsStatus = "idle";
@@ -1311,7 +1347,7 @@ export function createCanvasAgentController({
     try {
       await refreshConversationMessages(conversationId);
       await loadFileGrants(conversationId);
-      const conversation = (agent.conversations ?? []).find((item) => String(item.id) === conversationId);
+      cacheConversation(conversationId);
       if (conversation?.taskId) {
         agent.taskId = String(conversation.taskId);
         agent.status = String(conversation.taskStatus ?? "queued");
@@ -1756,6 +1792,7 @@ export function createCanvasAgentController({
       if (!field || !Object.hasOwn(agent, field)) return false;
       const value = String(target.value ?? "");
       if (field === "conversationId" && value !== agent.conversationId) {
+        cacheConversation();
         agent.conversationId = value;
         void loadMessages(value);
         return true;
@@ -2031,6 +2068,7 @@ export function createCanvasAgentController({
         agent.historyOpen = false;
         agent.titleEditing = false;
         agent.titleEditingConversationId = "";
+        cacheConversation();
         agent.conversationId = conversationId;
         await loadMessages(conversationId);
         syncPanel();
@@ -3880,10 +3918,13 @@ export function normalizeAgentMediaTask(task = {}) {
   const audioItem = Array.isArray(task.generatedAudioItems) ? task.generatedAudioItems[0] : null;
   const rawKind = String(task.kind ?? result.mediaKind ?? (audioItem ? "audio" : "image")).toLowerCase();
   const kind = ["video", "audio"].includes(rawKind) ? rawKind : "image";
-  const url = normalizeAgentMediaUrl(
-    result.imageUrl ?? result.videoUrl ?? result.audioUrl ?? result.sourceUrl ?? result.previewUrl ??
-    audioItem?.audioUrl ?? task.url,
-  );
+  const storageObjectId = String(result.storageObjectId ?? "").trim();
+  const url = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    : normalizeAgentMediaUrl(
+      result.imageUrl ?? result.videoUrl ?? result.audioUrl ?? result.sourceUrl ?? result.previewUrl ??
+      audioItem?.audioUrl ?? task.url,
+    );
   const status = String(task.status ?? "queued").toLowerCase();
   return {
     taskId: String(task.taskId ?? task.id ?? ""),
@@ -3894,7 +3935,7 @@ export function normalizeAgentMediaTask(task = {}) {
     title: String(result.title ?? result.fileName ?? `${kind} 生成结果`).trim().slice(0, 160),
     error: String(task.failure?.displayMessage ?? task.failure?.providerMessage ?? task.failureCode ?? "").trim().slice(0, 500),
     artifactId: String(result.artifactId ?? ""),
-    storageObjectId: String(result.storageObjectId ?? ""),
+    storageObjectId,
     assetId: String(result.assetId ?? ""),
     assetVersionId: String(result.assetVersionId ?? ""),
     canvasNodeId: String(
