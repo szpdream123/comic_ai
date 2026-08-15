@@ -1238,6 +1238,30 @@ describe("ai storyboard preview service", () => {
     assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
   });
 
+  it("retries an asset stage after a transient PostgreSQL connection reset", async () => {
+    let calls = 0;
+    const gateway: TextChatGatewayLike = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        yield JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] });
+      },
+    };
+    const service = createAiStoryboardPreviewService({ gateway });
+
+    const result = await service.generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000001",
+      scriptText: "任小野把饭食递给闵婶子。",
+      skipScriptStage: true,
+      selectedStages: ["scene"],
+      packages: {},
+    });
+
+    assert.equal(calls, 2);
+    assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
+  });
+
   it("keeps asset-stage retry behavior while the extraction stages run in parallel", async () => {
     const calls = new Map<string, number>();
     const gateway: TextChatGatewayLike = {

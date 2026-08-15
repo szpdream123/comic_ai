@@ -5,6 +5,7 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
+import { isTransientDatabaseConnectionError } from "../shared/db/dev-db.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
 
@@ -359,7 +360,8 @@ function startCollectedAssetPromptStage(
 }
 
 function isRetryableAssetStageError(error: unknown) {
-  return typeof error === "object" && error !== null && "retryable" in error && error.retryable === true;
+  return (typeof error === "object" && error !== null && "retryable" in error && error.retryable === true)
+    || isTransientDatabaseConnectionError(error);
 }
 
 export function createTextModelChatGateway(deps: {

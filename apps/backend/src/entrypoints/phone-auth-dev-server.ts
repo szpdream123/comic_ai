@@ -299,7 +299,7 @@ import {
   type CanvasActorScope,
 } from "../modules/identity/canvas-actor-scope.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
-import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
+import { createDevDb, isTransientDatabaseConnectionError, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
 import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError, type IdempotencyRecord } from "../modules/shared/idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
@@ -4307,6 +4307,43 @@ async function releaseSimpleTeamMemberCredits(
 ) {
   const result = await refundTeamMemberGenerationCreditsIdempotently(db, input);
   return result.refunded;
+}
+
+async function releaseAiStoryboardPreviewCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    amount: number;
+    sourceId: string;
+    metadata: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return false;
+  }
+  await grantCredits(db, {
+    userId: input.userId,
+    amount: Math.round(input.amount),
+    sourceType: "ai_storyboard_preview_refund",
+    sourceId: uuidFromIdempotencyKey(`${input.sourceId}:ai-storyboard-preview:refund`),
+    reason: "剧本预览失败返还积分",
+    metadata: {
+      ...input.metadata,
+      billingEvent: "released",
+      outcome: "released",
+    },
+    createdByUserId: input.userId,
+    now: input.now,
+  });
+  return true;
+}
+
+function aiStoryboardPreviewErrorDisplayMessage(error: unknown) {
+  if (isTransientDatabaseConnectionError(error)) {
+    return "服务连接暂时中断，请稍后重试。";
+  }
+  return translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。");
 }
 
 async function hasActiveGenerationMembership(
@@ -29576,10 +29613,18 @@ export function createPhoneAuthDevServer(
                     },
                     now: new Date(),
                   });
+                } else {
+                  await releaseAiStoryboardPreviewCredits(db, {
+                    userId: authenticated.user.id,
+                    amount: creditCost,
+                    sourceId: idempotencyKey,
+                    metadata: billingMetadata,
+                    now: new Date(),
+                  });
                 }
                 writeSseData(response, {
                   type: "error",
-                  error: translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。"),
+                  error: aiStoryboardPreviewErrorDisplayMessage(error),
                 });
                 response.end();
               }
@@ -29617,13 +29662,21 @@ export function createPhoneAuthDevServer(
             if (actor.teamMember) {
               await releaseSimpleTeamMemberCredits(db, {
                 teamMemberId: actor.teamMember.id,
-                amount: generationCostFromModelConfig(0, scriptModelConfig),
+                amount: creditCost,
                 sourceId: idempotencyKey,
                 reason: "剧本预览失败返还积分",
                 metadata: {
                   taskType: "ai_storyboard_preview",
                   promptPreview: scriptText.slice(0, 200),
                 },
+                now: new Date(),
+              });
+            } else {
+              await releaseAiStoryboardPreviewCredits(db, {
+                userId: authenticated.user.id,
+                amount: creditCost,
+                sourceId: idempotencyKey,
+                metadata: billingMetadata,
                 now: new Date(),
               });
             }
