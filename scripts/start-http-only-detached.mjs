@@ -78,6 +78,7 @@ function readPidFile(path) {
 function isProcessAlive(pid) {
   const result = spawnSync("cmd.exe", ["/c", "tasklist", "/FI", `PID eq ${pid}`], {
     encoding: "utf8",
+    windowsHide: true,
   });
   return result.status === 0 && result.stdout.includes(String(pid));
 }
@@ -85,6 +86,7 @@ function isProcessAlive(pid) {
 function findListenerPid(targetPort) {
   const result = spawnSync("cmd.exe", ["/c", "netstat", "-ano", "-p", "tcp"], {
     encoding: "utf8",
+    windowsHide: true,
   });
   if (result.status !== 0) return null;
   for (const line of result.stdout.split(/\r?\n/)) {
@@ -99,6 +101,7 @@ function findListenerPid(targetPort) {
 function terminateProcessTree(pid) {
   const result = spawnSync("cmd.exe", ["/c", "taskkill", "/PID", String(pid), "/T", "/F"], {
     encoding: "utf8",
+    windowsHide: true,
   });
   if (result.status === 0) {
     console.log(`Stopped existing listener pid=${pid}`);
@@ -124,7 +127,7 @@ function findNodeRuntime(minMajor) {
 
   addCandidate(process.execPath);
 
-  const whereNode = spawnSync("where.exe", ["node"], { encoding: "utf8" });
+  const whereNode = spawnSync("where.exe", ["node"], { encoding: "utf8", windowsHide: true });
   if (whereNode.status === 0) {
     for (const line of whereNode.stdout.split(/\r?\n/)) {
       addCandidate(line.trim());
@@ -132,7 +135,7 @@ function findNodeRuntime(minMajor) {
   }
 
   for (const candidate of candidates) {
-    const version = spawnSync(candidate, ["--version"], { encoding: "utf8" });
+    const version = spawnSync(candidate, ["--version"], { encoding: "utf8", windowsHide: true });
     if (version.status !== 0) continue;
     const match = version.stdout.trim().match(/^v(\d+)\./);
     if (match && Number(match[1]) >= minMajor) {

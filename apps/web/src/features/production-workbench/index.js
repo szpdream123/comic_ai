@@ -9614,6 +9614,24 @@ function renderHomeCreationModeSurface(workbench) {
   return true;
 }
 
+export function reconcileFirstLoginGuideTargets(workbench) {
+  if (workbench.ui?.firstLoginGuide?.step !== "tip") return false;
+  const targetElements = workbench.root?.querySelectorAll?.("[data-first-login-target]") ?? [];
+  const availableTargetKeys = new Set(
+    [...targetElements]
+      .filter((element) =>
+        element?.hidden !== true &&
+        (typeof element?.getClientRects !== "function" || element.getClientRects().length > 0),
+      )
+      .map((element) => String(element?.dataset?.firstLoginTarget ?? "").trim())
+      .filter(Boolean),
+  );
+  const nextGuide = skipUnavailableFirstLoginTips(workbench.ui.firstLoginGuide, availableTargetKeys);
+  if (nextGuide === workbench.ui.firstLoginGuide) return false;
+  workbench.ui.firstLoginGuide = nextGuide;
+  return true;
+}
+
 function render(workbench, options = {}) {
   if (updateNewCanvasSurfaceForHostAction(workbench)) return;
   workbench.disposeHomeTvIncrementalLoading?.();

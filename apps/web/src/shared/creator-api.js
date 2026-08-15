@@ -1098,11 +1098,17 @@ export const creatorApi = {
   },
 
   getAnnouncements() {
-    return fetchJson("/api/announcements", { dedupeKey: "GET /api/announcements" });
+    return fetchJsonWithTtl("/api/announcements", {
+      cacheKey: "GET /api/announcements",
+      cacheTtlMs: 300000,
+    });
   },
 
   getHomeRecommendations() {
-    return fetchJson("/api/home-recommendations", { dedupeKey: "GET /api/home-recommendations" });
+    return fetchJsonWithTtl("/api/home-recommendations", {
+      cacheKey: "GET /api/home-recommendations",
+      cacheTtlMs: 300000,
+    });
   },
 
   getToolboxPromptReverseModels(options = {}) {
@@ -1903,7 +1909,11 @@ export const creatorApi = {
     if (input.includeArchived) params.set("includeArchived", "true");
     if (input.limit != null) params.set("limit", String(input.limit));
     const query = params.toString();
-    return fetchJson(`/api/canvas-library/configs${query ? `?${query}` : ""}`, { cache: "no-store" });
+    const path = `/api/canvas-library/configs${query ? `?${query}` : ""}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createCanvasUserConfig(input) {
@@ -1915,20 +1925,22 @@ export const creatorApi = {
     if (input.versionId) params.set("versionId", String(input.versionId));
     if (input.type) params.set("type", String(input.type));
     const query = params.toString();
-    return fetchJson(
-      `/api/canvas-library/configs/${encodeURIComponent(configId)}${query ? `?${query}` : ""}`,
-      { cache: "no-store" },
-    );
+    const path = `/api/canvas-library/configs/${encodeURIComponent(configId)}${query ? `?${query}` : ""}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   listCanvasUserConfigVersions(configId, input = {}) {
     const params = new URLSearchParams();
     if (input.limit != null) params.set("limit", String(input.limit));
     const query = params.toString();
-    return fetchJson(
-      `/api/canvas-library/configs/${encodeURIComponent(configId)}/versions${query ? `?${query}` : ""}`,
-      { cache: "no-store" },
-    );
+    const path = `/api/canvas-library/configs/${encodeURIComponent(configId)}/versions${query ? `?${query}` : ""}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createCanvasUserConfigVersion(configId, input) {
@@ -2401,7 +2413,10 @@ export const creatorApi = {
 
   getAssetVersions(assetId) {
     const path = `/api/creator/assets/versions/${encodeURIComponent(assetId)}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 60000,
+    });
   },
 
   getProjectEpisodes(projectId) {
@@ -2574,7 +2589,12 @@ export const creatorApi = {
     params.set("page", String(page));
     params.set("pageSize", String(pageSize));
     const source = input.source === "private" ? "library" : "catalog";
-    return fetchJson(`/api/creator/prompt-skills/${source}?${params.toString()}`, { cache: "no-store", unwrapEnvelope: false });
+    const path = `/api/creator/prompt-skills/${source}?${params.toString()}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: source === "catalog" ? 300000 : 30000,
+      unwrapEnvelope: false,
+    });
   },
 
   getPromptMarketplace(input = {}) {

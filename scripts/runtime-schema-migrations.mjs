@@ -9,6 +9,7 @@ export function runRuntimeSchemaMigrations(input) {
   const result = spawnSync(input.runtime, [migrationEntrypoint, "--apply", "--runtime-safe"], {
     cwd: input.cwd,
     env: input.env,
+    windowsHide: true,
     stdio: "inherit",
     timeout: RUNTIME_SCHEMA_MIGRATION_TIMEOUT_MS,
   });

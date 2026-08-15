@@ -13,6 +13,7 @@ import { buildConfiguredGenerationSettingsSections, renderGenerationControlMenu,
 import { normalizeHomeAgentGenerationModel } from "./home-agent-model-picker.js";
 import { resolveEpisodeWorkbenchPrompt } from "./episode-workbench-prompt.js";
 import { renderProjectCreateModal } from "./project-create-modal.js";
+import { renderFirstLoginGuide, resolveFirstLoginGuideTargetKey } from "./first-login-onboarding.js";
 import {
   EPISODE_PROMPT_SKILL_CATEGORIES,
   normalizeEpisodePromptSkills,
@@ -4349,6 +4350,7 @@ export function renderSingleEpisodeAiPreview(ui) {
   const preview = ui.singleEpisodeAiPreview ?? { status: "idle", data: null, error: "" };
   const previewTitle = resolveSingleEpisodeAiPreviewTitle(preview);
   const previewAriaLabel = preview.source === "single-episode-script-storyboard" ? "AI 剧本分镜" : "AI 小说分镜";
+  const guideTargetKey = resolveFirstLoginGuideTargetKey(ui.firstLoginGuide);
   const canCreateEpisode = preview.source === "home-workflow" || !Array.isArray(preview.selectedStages) || preview.selectedStages.includes("shot");
   if (!preview || preview.status === "idle") {
     return "";
@@ -4449,7 +4451,7 @@ export function renderSingleEpisodeAiPreview(ui) {
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" data-action="${canCreateEpisode ? "commit-ai-storyboard-preview" : "close-ai-storyboard-preview"}">${canCreateEpisode ? (preview.source === "home-workflow" ? "进入工作流" : "创建章节") : "完成"}</button>
+            <button class="single-episode-ai-create ${canCreateEpisode && guideTargetKey === "commit-storyboard-button" ? "first-login-guide-target" : ""}" type="button" data-action="${canCreateEpisode ? "commit-ai-storyboard-preview" : "close-ai-storyboard-preview"}"${canCreateEpisode ? ' data-first-login-target="commit-storyboard-button"' : ""}>${canCreateEpisode ? (preview.source === "home-workflow" ? "进入工作流" : "创建章节") : "完成"}</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>

@@ -258,7 +258,7 @@ it("serves an authenticated user's completed upload through the credentialed con
     });
     assert.equal(proxiedObjectContentResponse.status, 200);
     assert.equal(proxiedObjectContentResponse.headers.get("content-type"), "image/jpeg");
-    assert.equal(proxiedObjectContentResponse.headers.get("cache-control"), "private, max-age=300");
+    assert.equal(proxiedObjectContentResponse.headers.get("cache-control"), "private, max-age=3600");
     assert.deepEqual(Buffer.from(await proxiedObjectContentResponse.arrayBuffer()), panoramaBytes);
 
     const completedResponse = await fetch(

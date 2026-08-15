@@ -295,6 +295,51 @@ test("getAnnouncements reads the public announcement route", async () => {
   assert.equal(payload.version, "2026-07-17T05:56:48.039Z");
 });
 
+test("catalog reads reuse the TTL cache until a write invalidates it", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ configs: [], categories: [], requestId: "cache-test" }),
+    };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?catalog-cache=${Date.now()}`);
+  await creatorApi.getHomeRecommendations();
+  await creatorApi.getHomeRecommendations();
+  await creatorApi.listCanvasUserConfigs({ type: "character" });
+  await creatorApi.listCanvasUserConfigs({ type: "character" });
+  await creatorApi.createCanvasUserConfig({ type: "character", name: "角色配置" });
+  await creatorApi.listCanvasUserConfigs({ type: "character" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/home-recommendations",
+    "/api/canvas-library/configs?type=character",
+    "/api/canvas-library/configs",
+    "/api/canvas-library/configs?type=character",
+  ]);
+});
+
+test("prompt skill catalog uses a longer cache than a personal skill library", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ items: [] }) };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?prompt-skill-cache=${Date.now()}`);
+  await creatorApi.getPromptSkills({ source: "official", category: "script" });
+  await creatorApi.getPromptSkills({ source: "official", category: "script" });
+  await creatorApi.getPromptSkills({ source: "private", category: "script" });
+  await creatorApi.getPromptSkills({ source: "private", category: "script" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/creator/prompt-skills/catalog?category=script&page=1&pageSize=12",
+    "/api/creator/prompt-skills/library?category=script&page=1&pageSize=12",
+  ]);
+});
+
 test("prompt reverse allows image models enough time to complete", async () => {
   const timeoutCalls = [];
   const previousSetTimeout = globalThis.setTimeout;

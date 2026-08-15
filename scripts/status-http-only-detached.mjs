@@ -32,6 +32,7 @@ function readPidFile(path) {
 function isProcessAlive(targetPid) {
   const result = spawnSync("cmd.exe", ["/c", "tasklist", "/FI", `PID eq ${targetPid}`], {
     encoding: "utf8",
+    windowsHide: true,
   });
   return result.status === 0 && result.stdout.includes(String(targetPid));
 }
@@ -39,6 +40,7 @@ function isProcessAlive(targetPid) {
 function isPortListening(targetPort) {
   const result = spawnSync("cmd.exe", ["/c", "netstat", "-ano", "-p", "tcp"], {
     encoding: "utf8",
+    windowsHide: true,
   });
   if (result.status !== 0) return false;
   return result.stdout

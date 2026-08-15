@@ -3042,7 +3042,7 @@ async function streamStorageObjectContent(input: {
   input.response.statusCode = upstream.status;
   input.response.setHeader("content-type", input.contentType);
   input.response.setHeader("content-disposition", input.download ? "attachment" : "inline");
-  input.response.setHeader("cache-control", "private, max-age=300");
+  input.response.setHeader("cache-control", "private, max-age=3600");
   input.response.setHeader("x-content-type-options", "nosniff");
   for (const header of ["accept-ranges", "content-length", "content-range"] as const) {
     const value = upstream.headers.get(header);

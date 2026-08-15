@@ -165,6 +165,7 @@ export function renderEpisodeWorkbench({
   teamAssetLibraryEnabled = false,
   layoutMode = "standard",
   workflowWorkbenchOpen = false,
+  firstLoginGuideTargetKey = "",
 } = {}) {
   const isWorkflowLayout = layoutMode === "workflow";
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";

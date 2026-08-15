@@ -36,6 +36,7 @@ if (await waitForExit(pid, 12_000)) {
 console.warn(`creator-dev stack pid=${pid} did not stop within 12s; forcing process-tree termination.`);
 const result = spawnSync("cmd.exe", ["/c", "taskkill", "/PID", String(pid), "/T", "/F"], {
   encoding: "utf8",
+  windowsHide: true,
 });
 
 rmSync(pidFile, { force: true });
