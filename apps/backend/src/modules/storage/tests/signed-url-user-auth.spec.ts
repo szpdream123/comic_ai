@@ -240,7 +240,7 @@ describe("signed storage URLs", { concurrency: false }, () => {
     }
   });
 
-  it("returns signed source URLs for video objects when a public base URL is configured", async () => {
+  it("returns signed source URLs for every object when a public base URL is configured", async () => {
     const db = await createMigratedTestDb();
     const adapter = new DeterministicStorageAdapter();
     const previousPublicBaseUrl = process.env.STORAGE_PUBLIC_BASE_URL;
@@ -288,10 +288,13 @@ describe("signed storage URLs", { concurrency: false }, () => {
         expiresInSeconds: 60,
       });
 
-      assert.equal(imageUrls.sourceUrl, `https://cdn.example.test/${imageObject.objectKey}`);
+      assert.equal(
+        imageUrls.sourceUrl,
+        `signed://creator-assets/${imageObject.objectKey}?expires=2026-05-09T10:02:00.000Z`,
+      );
       assert.equal(
         runtimeOverrideUrls.sourceUrl,
-        `https://runtime-storage.example.test/${imageObject.objectKey}`,
+        `signed://creator-assets/${imageObject.objectKey}?expires=2026-05-09T10:02:00.000Z`,
       );
       assert.equal(
         videoUrls.sourceUrl,

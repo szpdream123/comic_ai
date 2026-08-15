@@ -36,6 +36,7 @@ import {
   loadSelectedAssetConversationHistory,
   loadCanvasGenerationAssetsForTest,
   loadStandaloneCanvasProjectForTest,
+  parseSingleEpisodeAiStageRowsForTest,
   parseEpisodeRouteForWorkbench,
   parseProjectRouteForWorkbench,
   persistCanvasNodePositionsForTest,
@@ -53,6 +54,7 @@ import {
   reconcilePromptMentionMediaItemsForTest,
   reconcileSelectedStoryboardPendingGenerationForTest,
   registerTaskCenterTaskForTest,
+  restorePendingAssetBatchGenerationTasksForTest,
   resolvePromptEditorMentionReferences,
   resumeCanvasGenerationPollingForTest,
   resolveCanvasGenerationPollDelayForTest,
@@ -138,6 +140,18 @@ it("keeps image billing modes distinct without changing video billing", () => {
   assert.equal(resolveGenerationCreditCost("image", controls, { pricing: { ...pricing, billingMode: "duration" } }), 160);
   assert.equal(resolveGenerationCreditCost("video", controls, { pricing: { ...pricing, billingMode: "fixed" } }), 160);
   assert.equal(resolveGenerationCreditCost("video", controls, { pricing: { ...pricing, billingMode: "duration" } }), 800);
+});
+
+it("splits plain character prompt paragraphs into the character prompt list", () => {
+  const rows = parseSingleEpisodeAiStageRowsForTest([
+    "伍小野：能源收割手，锋利危险的感知在迷雾鬼出没的城外生存。惯用特制迷雾鬼切割刀，主要工作是猎取迷雾鬼胸腔内的灰晶。",
+    "",
+    "迷雾鬼（类人型）：迷雾鬼中较为特殊的一类，外形比普通迷雾鬼更接近人类，但仍保留明显的非人特征。四肢修长、皮肤灰白、胸腔有洞。",
+  ].join("\n"), "characters");
+
+  assert.deepEqual(rows.map((row) => row.characterName), ["伍小野", "迷雾鬼（类人型）"]);
+  assert.match(rows[0].characterDescription, /能源收割手/);
+  assert.match(rows[1].characterDescription, /皮肤灰白/);
 });
 
 describe("production workbench home shell", () => {
@@ -14770,7 +14784,14 @@ describe("asset generator and imported asset modals", () => {
       },
     };
     const workbench = {
-      state: buildProjectState(),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-1", title: "真实剧集", status: "draft", storyboardCount: 0 }],
+          shots: [],
+        },
+      },
       session: { user: { phone: "+86 13800138000" } },
       ui: buildProjectUi({
         activeNavTab: "project",
@@ -15798,6 +15819,60 @@ describe("production workbench project tab", () => {
       dataset: { action: "open-single-episode-flow" },
     });
     assert.equal(calls.filter(([name]) => name === "getUserScripts").length, 1);
+  });
+
+  it("keeps homepage project entry on episode selection until an episode is confirmed", async () => {
+    const calls = [];
+    const projectId = "project-home-entry-1";
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildProjectUi({
+        activeNavTab: "home",
+        projectLibrary: [{ id: projectId, name: "首页分集选择项目" }],
+      }),
+      api: {
+        async selectProject(input) {
+          calls.push(["selectProject", input.projectId]);
+          return {
+            project: { id: projectId, projectId, name: "首页分集选择项目", phase: "asset_review" },
+            assetSummary: {},
+            episodes: [{ id: "episode-home-entry-1", title: "第一集", storyboardCount: 2 }],
+          };
+        },
+        async getAssetLibrary(inputProjectId) {
+          calls.push(["getAssetLibrary", inputProjectId]);
+          return { assets: [] };
+        },
+        async getProjectEpisodes(inputProjectId) {
+          calls.push(["getProjectEpisodes", inputProjectId]);
+          return { episodes: [{ id: "episode-home-entry-1", title: "第一集", storyboardCount: 2 }] };
+        },
+        async getEpisodeWorkbench() {
+          calls.push(["getEpisodeWorkbench"]);
+          return {};
+        },
+      },
+      root: {
+        innerHTML: "",
+        addEventListener() {},
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-project-detail", projectId },
+    });
+
+    assert.equal(workbench.ui.activeNavTab, "home");
+    assert.equal(workbench.ui.homeProjectWorkflowProjectId, projectId);
+    assert.equal(workbench.ui.selectedEpisodeId, null);
+    assert.equal(calls.some(([name]) => name === "getEpisodeWorkbench"), false);
   });
 
   it("centers resource-specific assignment notices for empty team member workspaces", () => {
@@ -24659,6 +24734,105 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-character-1-persisted");
   });
 
+  it("loads legacy source asset conversation history into the current library asset card", async () => {
+    const calls = [];
+    const workbench = {
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-1",
+        selectedEpisodeAssetId: "library-character-1",
+        selectedEpisodeCardId: "library-character-1",
+        importedAssets: {
+          character: [{
+            id: "library-character-1",
+            assetId: "library-character-1",
+            conversationAssetId: "episode-character-1",
+            name: "闻婶",
+          }],
+          scene: [],
+          prop: [],
+          other: { audio: [], image: [], video: [] },
+        },
+        assetConversationHistory: {},
+        episodeBatchResults: {},
+      }),
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-1", title: "真实剧集", status: "draft", storyboardCount: 0 }],
+          shots: [],
+        },
+      },
+      api: {
+        async getAssetConversationHistory(episodeId, assetId, mediaMode) {
+          calls.push({ episodeId, assetId, mediaMode });
+          return {
+            entries: [{
+              taskId: "legacy-asset-task",
+              status: "completed",
+              selectionContext: { selectedAssetId: "episode-character-1" },
+            }],
+          };
+        },
+      },
+    };
+
+    await loadSelectedAssetConversationHistory(workbench);
+
+    assert.deepEqual(calls, [{ episodeId: "episode-1", assetId: "episode-character-1", mediaMode: "image" }]);
+    assert.equal(workbench.ui.assetConversationHistory["image:library-character-1"]?.[0]?.taskId, "legacy-asset-task");
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "legacy-asset-task");
+  });
+
+  it("falls back to full asset conversation history when the compact response is empty", async () => {
+    const calls = [];
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "assets",
+        selectedEpisodeId: "episode-1",
+        selectedEpisodeAssetId: "character-1",
+        selectedEpisodeCardId: "character-1",
+        assetConversationHistory: {},
+        episodeBatchResults: {},
+      },
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-1", title: "真实剧集", status: "draft", storyboardCount: 0 }],
+          shots: [],
+        },
+      },
+      api: {
+        async getAssetConversationHistory(...args) {
+          calls.push(["compact", ...args]);
+          return { entries: [] };
+        },
+        async getAssetConversationFullHistory(...args) {
+          calls.push(["full", ...args]);
+          return {
+            entries: [{
+              taskId: "asset-image-character-1-persisted",
+              status: "completed",
+              selectionContext: { selectedAssetId: "character-1" },
+            }],
+          };
+        },
+      },
+    };
+
+    await loadSelectedAssetConversationHistory(workbench);
+
+    assert.deepEqual(calls, [
+      ["compact", "episode-1", "character-1", "image"],
+      ["full", "episode-1", "character-1", "image"],
+    ]);
+    assert.equal(workbench.ui.assetConversationHistory["image:character-1"]?.[0]?.taskId, "asset-image-character-1-persisted");
+  });
+
   it("keeps local asset conversation history when the history response is empty", async () => {
     const workbench = {
       ui: {
@@ -30389,6 +30563,57 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.imageGenerationResult?.status, "queued");
     assert.equal(workbench.ui.imageGenerationResult?.taskId, "task-prop-queued");
     assert.equal(workbench.ui.taskCenterTasksById?.["task-prop-queued"]?.targetId, "prop-1");
+  });
+
+  it("restores pending asset tasks into the selected generation panel after reopening the workbench", async () => {
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async listGenerationTasks(episodeId, params) {
+          assert.equal(episodeId, "episode-new");
+          assert.deepEqual(params, { page: 1, pageSize: 50, targetType: "asset" });
+          return {
+            items: [{
+              taskId: "task-prop-restored",
+              kind: "image",
+              status: "queued",
+              workflowStatus: "queued",
+              targetType: "asset",
+              targetId: "prop-1",
+              assetId: "prop-1",
+              prompt: "一把有磨损痕迹的黄铜钥匙。",
+              selectionContext: {
+                selectedAssetId: "prop-1",
+                selectedAssetName: "黄铜钥匙",
+              },
+              result: {},
+            }],
+          };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        selectedEpisodeAssetId: "prop-1",
+        selectedEpisodeCardId: "prop-1",
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [{ id: "prop-1", name: "黄铜钥匙", description: "旧钥匙" }],
+          other: { audio: [], image: [], video: [] },
+        },
+      }),
+    };
+
+    await restorePendingAssetBatchGenerationTasksForTest(workbench, "episode-new");
+
+    assert.equal(workbench.ui.episodeBatchResults?.["prop-1"]?.taskId, "task-prop-restored");
+    assert.equal(workbench.ui.assetConversationHistory?.["image:prop-1"]?.[0]?.taskId, "task-prop-restored");
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "task-prop-restored");
   });
 
   it("blocks asset batch image generation when membership is inactive", async () => {

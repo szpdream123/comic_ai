@@ -214,7 +214,7 @@ test("home renders the AI creation hub without changing the workbench navigation
     new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
     "utf8",
   );
-  assert.match(css, /\.workbench-main\.home-mode \.hero-content\s*\{[\s\S]*?width:\s*calc\(100% - clamp\(4rem, 12vw, 16rem\)\)/);
+  assert.match(css, /@media \(min-width: 861px\)\s*\{[\s\S]*?\.workbench-main\.home-mode \.hero-content\s*\{[\s\S]*?width:\s*calc\(100% - var\(--workbench-rail-width\) - 1\.5rem\)[\s\S]*?margin-left:\s*calc\(var\(--workbench-rail-width\) \+ 0\.75rem\)/);
   assert.match(css, /\.home-agent-composer\s*\{[\s\S]*?width:\s*min\(1280px, 100%\)/);
   assert.match(css, /\.home-agent-composer\s*\{[\s\S]*?min-height:\s*12\.5rem/);
   assert.match(css, /\.home-agent-composer\s*\{[\s\S]*?border-radius:\s*30px/);

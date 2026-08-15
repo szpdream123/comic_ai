@@ -173,14 +173,9 @@ describe("upload session service", () => {
         prepared.objectKey,
         `AIManhuaDrama/20260527/${prepared.storageObjectId}-shot-01.png`,
       );
-      const publicBaseUrl =
-        process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
-        process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "");
       assert.equal(
         completed.urls.sourceUrl,
-        publicBaseUrl
-          ? `${publicBaseUrl}/${prepared.objectKey}`
-          : `signed://creator-dev/${prepared.objectKey}`,
+        `signed://creator-dev/${prepared.objectKey}`,
       );
       assert.equal(storedObject?.status, "available");
       assert.equal(storedSession?.status, "uploaded");

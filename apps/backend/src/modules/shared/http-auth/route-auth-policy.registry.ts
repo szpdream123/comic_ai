@@ -207,11 +207,14 @@ export const criticalApiRouteAuthRegistrations = [
   { id: "community.read", method: "GET", path: "/api/community", policy: "public" },
   { id: "announcements.read", method: "GET", path: "/api/announcements", policy: "public" },
   { id: "home-recommendations.read", method: "GET", path: "/api/home-recommendations", policy: "public" },
+  { id: "home-recommendations.background-media.read", method: "GET", path: "/api/home-recommendations/background/media", policy: "public" },
+  { id: "home-recommendations.video-media.read", method: "GET", path: "/api/home-recommendations/videos/{videoId}/media", policy: "public" },
   { id: "community.feedback", method: "POST", path: "/api/community/feedback", policy: "public" },
   { id: "community.features.create", method: "POST", path: "/api/community/features", policy: "public" },
   { id: "community.features.vote", method: "POST", path: "/api/community/features/{featureId}/vote", policy: "public" },
   { id: "public.legal-documents", method: "GET", path: "/api/public/legal-documents", policy: "public" },
   { id: "public.customer-support", method: "GET", path: "/api/public/customer-support", policy: "public" },
+  { id: "public.style-covers.read", method: "GET", path: "/api/public/style-covers/{styleName}", policy: "public" },
   { id: "admin.login", method: "POST", path: "/api/admin/auth/login", policy: "public" },
   { id: "admin.me", method: "GET", path: "/api/admin/auth/me", policy: "admin" },
   { id: "admin.logout", method: "POST", path: "/api/admin/auth/logout", policy: "optional-admin" },
@@ -713,8 +716,8 @@ export const apiRouteAuthRegistrations = [
  * partial until the registry can represent their exact runtime semantics.
  */
 export const apiRouteAuthInventoryCoverage = {
-  explicitMethodPath: { discovered: 187, uncovered: 0 },
-  regexDynamicMatchers: { discovered: 140, uncovered: 0 },
+  explicitMethodPath: { discovered: 188, uncovered: 0 },
+  regexDynamicMatchers: { discovered: 141, uncovered: 0 },
   wideCompositePredicates: { unresolved: 55 },
   conditionalQueryPolicies: { unresolved: 1 },
   coverage: "partial" as const,

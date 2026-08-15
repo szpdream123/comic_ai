@@ -3869,6 +3869,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     const assetNameInput = eventTarget?.closest?.(".episode-replica-asset-name-input[readonly]");
     if (assetNameInput) {
       event.preventDefault();
+      assetNameInput.dataset.originalValue = assetNameInput.value;
+      assetNameInput.dataset.assetNameEditing = "true";
       assetNameInput.removeAttribute("readonly");
       assetNameInput.setAttribute("aria-readonly", "false");
       assetNameInput.focus();
@@ -3962,6 +3964,21 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       }
       return;
     }
+    if (
+      searchTarget?.matches?.(".episode-replica-asset-name-input") &&
+      !searchTarget.hasAttribute?.("readonly")
+    ) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        searchTarget.blur?.();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        searchTarget.value = searchTarget.dataset.originalValue ?? searchTarget.value;
+        searchTarget.dataset.assetNameEditing = "false";
+        searchTarget.blur?.();
+      }
+      return;
+    }
     if (searchTarget?.matches?.('[data-action="search-projects"]') && event.key === "Enter") {
       event.preventDefault();
       void applyProjectSearch(workbench, searchTarget.value).catch((error) => {
@@ -4025,6 +4042,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       workbench.ui.selectedProjectCardId = null;
       workbench.ui.selectedEpisodeId = null;
       workbench.ui.episodeWorkbenchLayout = "standard";
+      workbench.ui.homeWorkflowOrigin = false;
       workbench.ui.workflowGenerationWorkbenchOpen = false;
       render(workbench);
       return;
@@ -5569,9 +5587,23 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
     if (target?.matches?.(".episode-replica-asset-name-input")) {
+      const originalValue = target.dataset.originalValue ?? target.value;
+      const wasEditing = target.dataset.assetNameEditing === "true";
+      target.setAttribute("readonly", "");
+      target.setAttribute("aria-readonly", "true");
+      delete target.dataset.originalValue;
+      delete target.dataset.assetNameEditing;
+      if (!wasEditing) {
+        return;
+      }
+      const name = String(target.value ?? "").trim();
+      if (!name || name === String(originalValue ?? "").trim()) {
+        target.value = originalValue;
+        return;
+      }
       const assetId = target.dataset.assetId ?? "";
       const assetKind = target.dataset.assetKind ?? "character";
-      await saveEpisodeAssetName(workbench, assetKind, assetId, target.value);
+      await saveEpisodeAssetName(workbench, assetKind, assetId, name);
       return;
     }
     if (
@@ -12596,6 +12628,37 @@ function resolveEpisodeWorkbenchAssetLibraryFromState(workbench) {
   };
 }
 
+function resolveWorkflowAssetGenerationProgress(workbench) {
+  const importedAssets = resolveEpisodeWorkbenchAssetLibraryFromState(workbench);
+  const projectAssets =
+    workbench.ui.projectLibraryAssetsByType ??
+    workbench.ui.projectDetail?.assetsByType ??
+    workbench.state?.projectDetail?.assetsByType ??
+    {};
+  const assets = ["character", "scene", "prop"].flatMap((kind) => {
+    const imported = importedAssets[kind] ?? [];
+    return imported.length ? imported : (projectAssets[kind] ?? []);
+  });
+  const completed = assets.filter((asset) => {
+    const status = resolveWorkflowStatus(
+      asset?.generationStatus ??
+        asset?.generationResult?.status ??
+        asset?.generationResult?.workflowStatus ??
+        asset?.latestVersion?.metadata?.generationStatus,
+    );
+    return ["completed", "ready"].includes(status) || Boolean(resolveEpisodeAssetPreviewUrl(asset));
+  }).length;
+  return {
+    total: assets.length,
+    completed,
+  };
+}
+
+function resolveWorkflowDefaultGenerationScopeMode(workbench) {
+  const progress = resolveWorkflowAssetGenerationProgress(workbench);
+  return progress.total > 0 && progress.completed === progress.total ? "storyboard" : "assets";
+}
+
 function mergeGenerationState(currentState, nextState, options = {}) {
   const current = currentState ?? createEmptyGenerationState();
   const next = nextState ?? createEmptyGenerationState();
@@ -19326,6 +19389,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-home-creation-mode") {
     const mode = String(target.dataset.creationMode ?? "");
     if (["agent", "workflow", "free"].includes(mode)) {
+      if (mode === "free" && !hasActiveSessionUser(workbench.session)) {
+        await requireWorkbenchLogin(workbench, "free-generation");
+        return;
+      }
       workbench.ui.homeCreationMode = mode;
       workbench.ui.homeAgentModeMenuOpen = false;
       workbench.ui.homeAgentModelMenuOpen = false;
@@ -22452,9 +22519,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (workbench.ui.activeNavTab === "home" && projectId) {
       workbench.ui.selectedProjectCardId = projectId;
       workbench.ui.selectedEpisodeId = null;
-      workbench.ui.activeNavTab = "project";
-      workbench.ui.projectPanelMode = "episode-workbench";
-      workbench.ui.episodeWorkbenchLayout = "workflow";
+      workbench.ui.homeProjectWorkflowProjectId = projectId;
+      workbench.ui.homeProjectWorkflowLoading = true;
+      workbench.ui.homeProjectWorkflowNotice = "";
       workbench.ui.homeWorkflowOrigin = true;
       workbench.ui.workflowGenerationWorkbenchOpen = false;
       render(workbench);
@@ -22474,24 +22541,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           nextStoryboards,
           getDetailEpisodes(workbench.state),
         );
-        workbench.ui.selectedEpisodeId = getDefaultEpisodeWorkbenchId(workbench);
-        if (workbench.ui.selectedEpisodeId) {
-          await enterEpisodeWorkbench(workbench, workbench.ui.selectedEpisodeId, {
-            preserveRoute: true,
-            shouldRender: false,
-            scopeMode: "assets",
-          });
-          workbench.ui.episodeWorkbenchLayout = "workflow";
-          workbench.ui.homeWorkflowOrigin = true;
-        }
         syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
       } catch (error) {
-        workbench.ui.activeNavTab = "home";
-        workbench.ui.projectPanelMode = "library";
-        workbench.ui.episodeWorkbenchLayout = "standard";
-        workbench.ui.homeWorkflowOrigin = false;
-        workbench.ui.toast = `打开项目工作流失败：${friendlyError(error)}`;
+        workbench.ui.homeProjectWorkflowNotice = `加载项目失败：${friendlyError(error)}`;
       }
+      workbench.ui.homeProjectWorkflowLoading = false;
       render(workbench);
       return;
     }
@@ -22544,8 +22598,27 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.selectedProjectCardId = null;
     workbench.ui.selectedEpisodeId = null;
     workbench.ui.episodeWorkbenchLayout = "standard";
+    workbench.ui.homeWorkflowOrigin = false;
     workbench.ui.workflowGenerationWorkbenchOpen = false;
     render(workbench);
+    return;
+  }
+
+  if (action === "select-home-project-workflow-episode") {
+    const episodeId = String(target.dataset.episodeId ?? "").trim();
+    if (!episodeId) {
+      return;
+    }
+    workbench.ui.homeProjectWorkflowProjectId = null;
+    workbench.ui.homeProjectWorkflowLoading = false;
+    workbench.ui.homeProjectWorkflowNotice = "";
+    workbench.ui.episodeWorkbenchLayout = "workflow";
+    workbench.ui.homeWorkflowOrigin = true;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
+    await enterEpisodeWorkbench(workbench, episodeId, {
+      preserveRoute: true,
+      scopeMode: resolveWorkflowDefaultGenerationScopeMode(workbench),
+    });
     return;
   }
 
@@ -22576,10 +22649,20 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.isVideoModelMenuOpen = false;
     workbench.ui.musePromptMenu = null;
     workbench.ui.toast = "";
+    workbench.ui.homeProjectsLoading = true;
     if (globalThis.window?.location) {
       globalThis.window.location.hash = "home";
     }
     render(workbench);
+    runLazyWorkbenchTask(workbench, "home project library", async () => {
+      try {
+        await syncHomeProjectLibraryFromApi(workbench);
+      } finally {
+        if (workbench.ui.activeNavTab === "home") {
+          render(workbench);
+        }
+      }
+    });
     return;
   }
 
@@ -34428,12 +34511,7 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
       await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
     }
 
-    const createdEpisodeId =
-      created?.episode?.id ??
-      created?.episode?.episodeId ??
-      created?.body?.episode?.id ??
-      created?.body?.episode?.episodeId ??
-      null;
+    const createdEpisodeId = resolveCreatedEpisodeWorkbenchId(workbench, created?.episode ?? created?.body?.episode, title);
     resetSingleEpisodeModalState(workbench);
     workbench.ui.episodeCardMenuId = null;
     await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
@@ -34497,17 +34575,17 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     status: "submitting",
     error: "",
   };
+  const episodeTitle = workbench.ui.singleEpisodeName || buildSingleEpisodeTitle(
+    workbench.ui.singleEpisodeScript || commitPayload.scriptText || previewData?.scriptText || "",
+    getDetailEpisodes(workbench.state),
+  );
 
   await runAction(workbench, "正在创建章节...", async () => {
     const result = await workbench.api.commitAiStoryboardPreview(projectId, {
-      episodeTitle: workbench.ui.singleEpisodeName || buildSingleEpisodeTitle(
-        workbench.ui.singleEpisodeScript || commitPayload.scriptText || previewData?.scriptText || "",
-        getDetailEpisodes(workbench.state),
-      ),
+      episodeTitle,
       commitPayload,
     });
     const createdEpisode = result?.episode ?? result?.body?.episode ?? null;
-    const createdEpisodeId = createdEpisode?.id ?? createdEpisode?.episodeId ?? null;
     appendCommittedEpisodeToProjectDetail(workbench, createdEpisode);
     if (workbench.ui.selectedProjectCardId) {
       try {
@@ -34516,6 +34594,11 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
         console.warn("[creator-app] project episodes refresh after AI storyboard commit failed", error);
       }
     }
+    const createdEpisodeId = resolveCreatedEpisodeWorkbenchId(
+      workbench,
+      createdEpisode,
+      episodeTitle,
+    );
     hydrateEpisodeWorkbenchFromAiStoryboardCommit(workbench, {
       result,
       commitPayload,
@@ -34546,6 +34629,20 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
       };
     },
   });
+}
+
+function resolveCreatedEpisodeWorkbenchId(workbench, createdEpisode, fallbackTitle = "") {
+  const createdEpisodeId = String(
+    createdEpisode?.id ?? createdEpisode?.episodeId ?? "",
+  ).trim();
+  if (createdEpisodeId) {
+    return createdEpisodeId;
+  }
+  const normalizedTitle = String(fallbackTitle ?? "").trim();
+  const matchingEpisode = normalizedTitle
+    ? getDetailEpisodes(workbench.state).find((episode) => episode?.title === normalizedTitle)
+    : null;
+  return matchingEpisode?.id ?? getDefaultEpisodeWorkbenchId(workbench);
 }
 
 function appendCommittedEpisodeToProjectDetail(workbench, episode) {
@@ -36571,6 +36668,12 @@ function parseSingleEpisodeAiStageRows(raw, tableKey) {
     if (Array.isArray(labeledAssetRows) && labeledAssetRows.length > 0) {
       return labeledAssetRows;
     }
+    if (tableKey === "characters") {
+      const plainCharacterRows = parseSingleEpisodeAiPlainCharacterRows(raw);
+      if (Array.isArray(plainCharacterRows) && plainCharacterRows.length > 0) {
+        return plainCharacterRows;
+      }
+    }
     if (tableKey === "storyboards") {
       const sectionTableRows = parseSingleEpisodeAiStoryboardSectionTableRows(raw);
       if (Array.isArray(sectionTableRows) && sectionTableRows.length > 0) {
@@ -36672,6 +36775,46 @@ function parseSingleEpisodeAiLabeledAssetRows(raw, tableKey) {
   }
   flush();
   return records.length ? records : null;
+}
+
+function parseSingleEpisodeAiPlainCharacterRows(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody) {
+    return null;
+  }
+  const records = markdownBody
+    .split(/\r?\n\s*\r?\n/)
+    .map((block) => String(block ?? "").trim())
+    .filter(Boolean)
+    .map((block) => {
+      const lines = block.split("\n");
+      const firstLine = normalizeSingleEpisodeAiLabeledAssetLine(lines[0]);
+      const marker = firstLine.match(/^(.{1,48}?)\s*[:：]\s*(.+)$/);
+      if (!marker || isSingleEpisodeAiCharacterFieldLabel(marker[1])) {
+        return null;
+      }
+      const characterName = String(marker[1] ?? "").trim();
+      const description = [String(marker[2] ?? "").trim(), ...lines.slice(1)]
+        .map(normalizeSingleEpisodeAiLabeledAssetLine)
+        .filter(Boolean)
+        .join("\n");
+      if (!characterName || !description) {
+        return null;
+      }
+      return normalizeSingleEpisodeAiTableRecord({
+        characterName,
+        characterDescription: description,
+        characterImagePrompt: description,
+      }, "characters");
+    })
+    .filter(Boolean);
+  return records.length ? records : null;
+}
+
+function isSingleEpisodeAiCharacterFieldLabel(value) {
+  return /^(?:角色|人物|名称|描述|提示词|外貌|年龄|性别|服装|性格|场景|道具|画面|镜头|对白|动作|时间|地点|环境|背景)$/.test(
+    String(value ?? "").replace(/\s+/g, ""),
+  );
 }
 
 function normalizeSingleEpisodeAiLabeledAssetLine(line) {
@@ -37546,6 +37689,10 @@ function parseSingleEpisodeAiStoryboardMarkdownHeader(line) {
 
 export function parseSingleEpisodeAiStoryboardMarkdownForTest(raw) {
   return parseSingleEpisodeAiStoryboardMarkdown(raw);
+}
+
+export function parseSingleEpisodeAiStageRowsForTest(raw, tableKey) {
+  return parseSingleEpisodeAiStageRows(raw, tableKey);
 }
 
 function compactSingleEpisodeAiMarkdownSection(lines) {
@@ -39222,7 +39369,7 @@ async function restorePendingAssetBatchGenerationTasksForWorkbench(workbench, ep
   });
   const batchResults = { ...(workbench.ui.episodeBatchResults ?? {}) };
   let restoredCount = 0;
-  for (const task of tasks) {
+  for (const task of [...tasks].reverse()) {
     const mediaKind = task?.kind === "video" || task?.result?.mediaKind === "video" ? "video" : "image";
     const status = resolveWorkflowStatus(task?.status ?? task?.workflowStatus);
     const targetType = String(task?.targetType ?? "").trim();
@@ -39265,13 +39412,21 @@ async function restorePendingAssetBatchGenerationTasksForWorkbench(workbench, ep
       fixedImages: existing?.fixedImages ?? [],
       status: "running",
     };
-    batchResults[assetId] = normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind);
+    const restoredResult = normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind);
+    batchResults[assetId] = restoredResult;
+    appendAssetConversationHistoryEntry(workbench, restoredResult);
     restoredCount += 1;
   }
   if (!restoredCount) {
     return tasks;
   }
   workbench.ui.episodeBatchResults = batchResults;
+  const selectedAssetId = String(
+    workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? "",
+  ).trim();
+  if (selectedAssetId && batchResults[selectedAssetId]) {
+    syncSelectedAssetConversationResult(workbench, selectedAssetId, "image");
+  }
   workbench.ui.generationPollingActive = true;
   scheduleAssetBatchGenerationPolling(workbench, "image", { immediate: true });
   return tasks;
@@ -48227,6 +48382,7 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     workbench.ui.selectedEpisodeAssetId ??
     workbench.ui.selectedEpisodeCardId ??
     null;
+  const conversationAssetId = resolveAssetConversationSourceId(workbench, assetId);
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
   const historyKey = buildAssetConversationHistoryKey(assetId, mediaKind);
   const force = options.force === true;
@@ -48274,12 +48430,27 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}),
       [historyKey]: true,
     };
-    activeRequestPromise = historyLoader.call(
-      workbench.api,
-      workbench.ui.selectedEpisodeId,
-      assetId,
-      mediaKind,
-    );
+    activeRequestPromise = (async () => {
+      const compactResponse = await historyLoader.call(
+        workbench.api,
+        workbench.ui.selectedEpisodeId,
+        conversationAssetId,
+        mediaKind,
+      );
+      const compactEntries = Array.isArray(compactResponse?.entries) ? compactResponse.entries : [];
+      if (
+        compactEntries.length ||
+        options.fullHistory === true ||
+        typeof workbench.api?.getAssetConversationFullHistory !== "function"
+      ) {
+        return compactResponse;
+      }
+      return workbench.api.getAssetConversationFullHistory(
+        workbench.ui.selectedEpisodeId,
+        conversationAssetId,
+        mediaKind,
+      );
+    })();
     workbench.assetConversationHistoryRequestPromises = {
       ...(workbench.assetConversationHistoryRequestPromises ?? {}),
       [historyKey]: activeRequestPromise,
@@ -48326,6 +48497,19 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       workbench.ui.assetConversationHistoryPendingKeys = nextPending;
     }
   }
+}
+
+function resolveAssetConversationSourceId(workbench, assetId) {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  if (!normalizedAssetId) {
+    return normalizedAssetId;
+  }
+  const assets = ["character", "scene", "prop"].flatMap((kind) => workbench.ui.importedAssets?.[kind] ?? []);
+  const selectedAsset = assets.find((asset) => (
+    String(asset?.id ?? "").trim() === normalizedAssetId ||
+    String(asset?.assetId ?? "").trim() === normalizedAssetId
+  ));
+  return String(selectedAsset?.conversationAssetId ?? normalizedAssetId).trim() || normalizedAssetId;
 }
 
 function resolveAssetConversationActionResult(workbench, taskId, mediaKind = "image") {
@@ -53375,14 +53559,21 @@ function syncSelectedStoryboardId(workbench, storyboards) {
   if (!workbench.ui.selectedStoryboardId && storyboards.length > 0) {
     workbench.ui.selectedStoryboardId = storyboards[0].id;
     syncStoryboardPaginationForSelection(workbench);
-    return;
-  }
-
-  if (
+  } else if (
     workbench.ui.selectedStoryboardId &&
     !storyboards.some((storyboard) => storyboard.id === workbench.ui.selectedStoryboardId)
   ) {
     workbench.ui.selectedStoryboardId = storyboards[0]?.id ?? null;
+  }
+
+  if (workbench.ui.episodeWorkbenchLayout === "workflow" && workbench.ui.workflowGenerationWorkbenchOpen !== true) {
+    const scopeMode = resolveWorkflowDefaultGenerationScopeMode(workbench);
+    workbench.ui.museScopeMode = scopeMode;
+    workbench.ui.episodeMediaMode = scopeMode === "storyboard" ? "video" : "image";
+    if (scopeMode === "assets") {
+      syncSelectedEpisodeAssetForCurrentTab(workbench);
+    }
+    workbench.ui.workflowGenerationWorkbenchOpen = true;
   }
   syncStoryboardPaginationForSelection(workbench);
 }
@@ -58634,6 +58825,7 @@ function mapEpisodeAssetContracts(assets = [], kind) {
     return {
       id: asset?.assetId ?? asset?.id ?? `asset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       assetId: asset?.assetId ?? asset?.id ?? null,
+      conversationAssetId: resolveEpisodeAssetConversationSourceId(asset),
       name: asset?.name ?? asset?.label ?? "未命名资产",
       preview: resolvedPreview,
       previewUrl: resolvedPreview,
@@ -58703,6 +58895,7 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
       ? "episode"
       : asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import";
     const localEpisodeDerivedAsset = localAssetIsEpisode || isEpisodeDerivedProjectAsset(asset, localAsset);
+    const conversationAssetId = resolveEpisodeAssetConversationSourceId(asset, localAsset);
     const { generationResult, generationStatus, generationTaskId } = localEpisodeDerivedAsset
       ? { generationResult: null, generationStatus: "", generationTaskId: "" }
       : resolveProjectAssetGenerationSnapshot(asset, localAsset);
@@ -58726,6 +58919,7 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
     return {
       id: asset.id,
       assetId: asset.assetId ?? asset.id ?? null,
+      conversationAssetId,
       name: asset.label ?? asset.assetKey ?? localAsset?.name ?? "未命名资产",
       preview,
       previewUrl: preview,
@@ -58759,6 +58953,22 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
         null,
     };
   });
+}
+
+function resolveEpisodeAssetConversationSourceId(asset, fallbackAsset = null) {
+  const candidates = [
+    asset?.conversationAssetId,
+    fallbackAsset?.conversationAssetId,
+    asset?.generationResult?.assetId,
+    asset?.generationResult?.targetId,
+    asset?.latestVersion?.metadata?.generationResult?.assetId,
+    asset?.latestVersion?.metadata?.generationResult?.targetId,
+    asset?.metadata?.generationResult?.assetId,
+    asset?.metadata?.generationResult?.targetId,
+  ];
+  return candidates
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) ?? null;
 }
 
 function filterTemporaryEpisodeUploadAssets(assets = []) {
@@ -60288,6 +60498,10 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
 
 export function mapEpisodeAssetContractsForTest(assets = [], kind = "character") {
   return mapEpisodeAssetContracts(assets, kind);
+}
+
+export async function restorePendingAssetBatchGenerationTasksForTest(workbench, episodeId) {
+  return restorePendingAssetBatchGenerationTasksForWorkbench(workbench, episodeId);
 }
 
 export function clearTeamAssetSubmissionToastForTest(workbench) {

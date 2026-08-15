@@ -19,6 +19,7 @@ describe("S3 compatible storage adapter", () => {
       bucket: "creator-test",
       objectKey: "generated/file name.png",
       expiresAt: new Date(Date.now() + 60 * 60_000),
+      responseContentDisposition: "inline",
     });
 
     const url = new URL(result.url);
@@ -26,6 +27,7 @@ describe("S3 compatible storage adapter", () => {
     assert.equal(url.pathname, "/root/creator-test/generated/file%20name.png");
     assert.equal(url.searchParams.get("X-Amz-Algorithm"), "AWS4-HMAC-SHA256");
     assert.match(url.searchParams.get("X-Amz-Signature") ?? "", /^[a-f0-9]{64}$/i);
+    assert.equal(url.searchParams.get("response-content-disposition"), "inline");
     const expiresIn = Number(url.searchParams.get("X-Amz-Expires"));
     assert.ok(expiresIn >= 3_598 && expiresIn <= 3_600);
   });

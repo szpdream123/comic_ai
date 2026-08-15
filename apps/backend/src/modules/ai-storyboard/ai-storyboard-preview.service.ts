@@ -7,6 +7,8 @@ import {
 import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
+const AI_STORYBOARD_SHOT_MAX_TOKENS = 32_768;
+const AI_STORYBOARD_SHOT_CONTINUATION_LIMIT = 3;
 
 type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
 
@@ -340,18 +342,37 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     yield { type: "asset_start", stage, title };
     onModelStreamStart?.();
     let raw = "";
-    for await (const delta of streamJsonText({
-      gateway: deps.gateway,
-      model: modelCode,
-      prompt,
-      projectId: input.canvasProjectId ? null : input.projectId,
-      canvasProjectId: input.canvasProjectId,
-      createdByUserId: input.createdByUserId,
-      responseFormat: "text",
-      signal: input.signal,
-    })) {
-      raw += delta;
-      yield { type: "asset_delta", stage, title, text: delta };
+    let requestPrompt = prompt;
+    let continuationCount = 0;
+    while (true) {
+      try {
+        for await (const delta of streamJsonText({
+          gateway: deps.gateway,
+          model: modelCode,
+          prompt: requestPrompt,
+          projectId: input.canvasProjectId ? null : input.projectId,
+          canvasProjectId: input.canvasProjectId,
+          createdByUserId: input.createdByUserId,
+          responseFormat: "text",
+          maxTokens: stage === "shot" ? AI_STORYBOARD_SHOT_MAX_TOKENS : undefined,
+          signal: input.signal,
+        })) {
+          raw += delta;
+          yield { type: "asset_delta", stage, title, text: delta };
+        }
+        break;
+      } catch (error) {
+        if (
+          stage !== "shot" ||
+          !raw.trim() ||
+          !isAiStoryboardOutputTruncatedError(error) ||
+          continuationCount >= AI_STORYBOARD_SHOT_CONTINUATION_LIMIT
+        ) {
+          throw error;
+        }
+        continuationCount += 1;
+        requestPrompt = buildAiStoryboardShotContinuationPrompt(prompt, raw, continuationCount);
+      }
     }
     yield { type: "asset_done", stage, title, text: raw };
     return raw;
@@ -439,8 +460,12 @@ export function createTextModelChatGateway(deps: {
 
     async *streamJson(input) {
       const streamResult = await createStream(input);
+      const finishReasons = new Set<string>();
       for await (const chunk of streamResult.stream) {
         for (const choice of chunk.choices ?? []) {
+          if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+            finishReasons.add(choice.finish_reason);
+          }
           const delta = choice.delta?.content;
           if (typeof delta === "string" && delta) {
             yield delta;
@@ -451,8 +476,34 @@ export function createTextModelChatGateway(deps: {
       if (completed.status === "failed") {
         throw new Error(completed.failureCode || "provider_stream_error");
       }
+      if (finishReasons.has("length")) {
+        throw Object.assign(new Error("provider_output_truncated"), {
+          code: "provider_output_truncated",
+        });
+      }
     },
   } satisfies TextChatGatewayLike;
+}
+
+function isAiStoryboardOutputTruncatedError(error: unknown) {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "provider_output_truncated",
+  );
+}
+
+function buildAiStoryboardShotContinuationPrompt(prompt: string, raw: string, continuationCount: number) {
+  return [
+    prompt,
+    "",
+    `【已输出分镜，第 ${continuationCount} 次续接】`,
+    raw,
+    "",
+    "【续接规则】",
+    "从上一段的断点继续输出。若最后一条分镜未完成，先补完该条剩余内容；否则从下一条分镜开始。",
+    "不要重复已经完成的分镜，不要重写表头、代码块标记或前言，保持与上一段完全相同的输出结构。",
+  ].join("\n");
 }
 
 async function* streamJsonText(input: {

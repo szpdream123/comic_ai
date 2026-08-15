@@ -926,6 +926,268 @@ function redirect(response: ServerResponse, location: string) {
   response.end();
 }
 
+export function homeRecommendationMediaGatewayPayload(data: Record<string, unknown>) {
+  const background = data.background && typeof data.background === "object"
+    ? data.background as Record<string, unknown>
+    : null;
+  const backgroundCacheVersion = String(background?.updatedAt ?? "").trim();
+  const categories = Array.isArray(data.categories) ? data.categories : [];
+  return {
+    ...data,
+    background: background
+      ? {
+          ...background,
+          videoUrl: String(background.videoUrl ?? "").trim()
+            ? `/api/home-recommendations/background/media?v=${encodeURIComponent(backgroundCacheVersion)}`
+            : "",
+        }
+      : background,
+    categories: categories.map((category) => {
+      const record = category && typeof category === "object" ? category as Record<string, unknown> : category;
+      if (!record || !Array.isArray(record.videos)) return record;
+      return {
+        ...record,
+        videos: record.videos.map((video) => {
+          const media = video && typeof video === "object" ? video as Record<string, unknown> : video;
+          const id = String(media?.id ?? "").trim();
+          if (!media || !id || !String(media.videoUrl ?? "").trim()) return media;
+          return {
+            ...media,
+            videoUrl: `/api/home-recommendations/videos/${encodeURIComponent(id)}/media`,
+          };
+        }),
+      };
+    }),
+  };
+}
+
+export function cosObjectKeyFromPublicUrl(input: {
+  sourceUrl: string;
+  bucket: string;
+  region: string;
+}) {
+  try {
+    const url = new URL(input.sourceUrl);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== `${input.bucket}.cos.${input.region}.myqcloud.com`.toLowerCase()) {
+      return null;
+    }
+    const objectKey = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+    return objectKey || null;
+  } catch {
+    return null;
+  }
+}
+
+function isHomeRecommendationObjectKey(input: {
+  objectKey: string;
+  officialAssetRootPrefix: string;
+}) {
+  const rootPrefix = input.officialAssetRootPrefix.replace(/^\/+|\/+$/g, "");
+  if (!rootPrefix || input.objectKey.includes("\\") || input.objectKey.split("/").some((part) => !part || part === "." || part === "..")) {
+    return false;
+  }
+  return [
+    `${rootPrefix}/homeBackgroundVideos/`,
+    `${rootPrefix}/homeRecommendationVideos/`,
+  ].some((prefix) => input.objectKey.startsWith(prefix));
+}
+
+type HomeMediaRateLimitGrant =
+  | { granted: true; release: () => void }
+  | { granted: false; retryAfterSeconds: number };
+
+function createHomeMediaRateLimiter(env: NodeJS.ProcessEnv) {
+  const perMinute = positiveIntegerEnvValue(env.HOME_MEDIA_SIGNING_PER_IP_PER_MINUTE, 30, 1_000);
+  const perHour = positiveIntegerEnvValue(env.HOME_MEDIA_SIGNING_PER_IP_PER_HOUR, 600, 10_000);
+  const concurrent = positiveIntegerEnvValue(env.HOME_MEDIA_SIGNING_CONCURRENT_PER_IP, 4, 100);
+  const entries = new Map<string, {
+    minuteStartedAt: number;
+    minuteCount: number;
+    hourStartedAt: number;
+    hourCount: number;
+    inFlight: number;
+    lastSeenAt: number;
+  }>();
+
+  return {
+    acquire(ipAddress: string, now = Date.now()): HomeMediaRateLimitGrant {
+      if (entries.size > 10_000) {
+        for (const [key, entry] of entries) {
+          if (now - entry.lastSeenAt > 60 * 60 * 1000 && entry.inFlight === 0) entries.delete(key);
+        }
+      }
+      const entry = entries.get(ipAddress) ?? {
+        minuteStartedAt: now,
+        minuteCount: 0,
+        hourStartedAt: now,
+        hourCount: 0,
+        inFlight: 0,
+        lastSeenAt: now,
+      };
+      if (now - entry.minuteStartedAt >= 60 * 1000) {
+        entry.minuteStartedAt = now;
+        entry.minuteCount = 0;
+      }
+      if (now - entry.hourStartedAt >= 60 * 60 * 1000) {
+        entry.hourStartedAt = now;
+        entry.hourCount = 0;
+      }
+      entry.lastSeenAt = now;
+      entries.set(ipAddress, entry);
+      if (entry.inFlight >= concurrent) {
+        return { granted: false, retryAfterSeconds: 1 };
+      }
+      if (entry.minuteCount >= perMinute) {
+        return { granted: false, retryAfterSeconds: Math.max(1, Math.ceil((entry.minuteStartedAt + 60 * 1000 - now) / 1000)) };
+      }
+      if (entry.hourCount >= perHour) {
+        return { granted: false, retryAfterSeconds: Math.max(1, Math.ceil((entry.hourStartedAt + 60 * 60 * 1000 - now) / 1000)) };
+      }
+      entry.minuteCount += 1;
+      entry.hourCount += 1;
+      entry.inFlight += 1;
+      return {
+        granted: true,
+        release: () => {
+          entry.inFlight = Math.max(0, entry.inFlight - 1);
+          entry.lastSeenAt = Date.now();
+        },
+      };
+    },
+  };
+}
+
+function positiveIntegerEnvValue(value: unknown, fallback: number, maximum: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0
+    ? Math.min(parsed, maximum)
+    : fallback;
+}
+
+class StorageMediaLimitError extends Error {
+  constructor(
+    readonly code: "rate_limited" | "queue_full",
+    readonly retryAfterSeconds: number,
+  ) {
+    super(`storage_media_${code}`);
+  }
+}
+
+function createKeyedConcurrencyGate(maxConcurrent: number, maxQueueSize: number) {
+  const entries = new Map<string, { active: number; waiting: Array<() => void>; lastSeenAt: number }>();
+
+  return {
+    async acquire(key: string) {
+      const now = Date.now();
+      if (entries.size > 10_000) {
+        for (const [entryKey, entry] of entries) {
+          if (entry.active === 0 && entry.waiting.length === 0 && now - entry.lastSeenAt > 60 * 60 * 1000) {
+            entries.delete(entryKey);
+          }
+        }
+      }
+      const entry = entries.get(key) ?? { active: 0, waiting: [], lastSeenAt: now };
+      entries.set(key, entry);
+      const release = () => {
+        const next = entry.waiting.shift();
+        entry.lastSeenAt = Date.now();
+        if (next) {
+          next();
+          return;
+        }
+        entry.active = Math.max(0, entry.active - 1);
+      };
+      if (entry.active < maxConcurrent) {
+        entry.active += 1;
+        return release;
+      }
+      if (entry.waiting.length >= maxQueueSize) {
+        throw new StorageMediaLimitError("queue_full", 1);
+      }
+      await new Promise<void>((resolve) => entry.waiting.push(resolve));
+      return release;
+    },
+  };
+}
+
+function createStorageMediaLimiter(env: NodeJS.ProcessEnv) {
+  const config = {
+    image: {
+      userConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_IMAGE_CONCURRENT_PER_USER, 12, 100),
+      ipConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_IMAGE_CONCURRENT_PER_IP, 20, 200),
+      queueSize: positiveIntegerEnvValue(env.STORAGE_MEDIA_IMAGE_QUEUE_SIZE, 80, 500),
+    },
+    video: {
+      userConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_VIDEO_CONCURRENT_PER_USER, 4, 50),
+      ipConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_VIDEO_CONCURRENT_PER_IP, 6, 100),
+      queueSize: positiveIntegerEnvValue(env.STORAGE_MEDIA_VIDEO_QUEUE_SIZE, 24, 200),
+    },
+    userPerMinute: positiveIntegerEnvValue(env.STORAGE_MEDIA_REQUESTS_PER_USER_PER_MINUTE, 120, 10_000),
+    ipPerMinute: positiveIntegerEnvValue(env.STORAGE_MEDIA_REQUESTS_PER_IP_PER_MINUTE, 180, 10_000),
+  };
+  const userGates = {
+    image: createKeyedConcurrencyGate(config.image.userConcurrent, config.image.queueSize),
+    video: createKeyedConcurrencyGate(config.video.userConcurrent, config.video.queueSize),
+  };
+  const ipGates = {
+    image: createKeyedConcurrencyGate(config.image.ipConcurrent, config.image.queueSize),
+    video: createKeyedConcurrencyGate(config.video.ipConcurrent, config.video.queueSize),
+  };
+  const rateEntries = new Map<string, { startedAt: number; count: number; lastSeenAt: number }>();
+
+  const consumeRate = (key: string, limit: number, now: number) => {
+    const entry = rateEntries.get(key) ?? { startedAt: now, count: 0, lastSeenAt: now };
+    if (now - entry.startedAt >= 60_000) {
+      entry.startedAt = now;
+      entry.count = 0;
+    }
+    entry.lastSeenAt = now;
+    rateEntries.set(key, entry);
+    if (entry.count >= limit) {
+      return Math.max(1, Math.ceil((entry.startedAt + 60_000 - now) / 1000));
+    }
+    entry.count += 1;
+    return 0;
+  };
+
+  return {
+    async acquire(input: { kind: "image" | "video"; userId: string; ipAddress: string }) {
+      const now = Date.now();
+      const userRetryAfter = consumeRate(`user:${input.userId}`, config.userPerMinute, now);
+      const ipRetryAfter = consumeRate(`ip:${input.ipAddress}`, config.ipPerMinute, now);
+      if (userRetryAfter || ipRetryAfter) {
+        throw new StorageMediaLimitError("rate_limited", Math.max(userRetryAfter, ipRetryAfter));
+      }
+      const releaseUser = await userGates[input.kind].acquire(input.userId);
+      try {
+        const releaseIp = await ipGates[input.kind].acquire(input.ipAddress);
+        return () => {
+          releaseIp();
+          releaseUser();
+        };
+      } catch (error) {
+        releaseUser();
+        throw error;
+      }
+    },
+  };
+}
+
+function homeMediaRequestIpAddress(
+  request: {
+    headers: Record<string, string | string[] | undefined>;
+    socket?: { remoteAddress?: string };
+  },
+  trustProxy: boolean,
+) {
+  if (trustProxy) return requestIpAddress(request) ?? "unknown";
+  return request.socket?.remoteAddress ?? "unknown";
+}
+
 function requestIpAddress(request: {
   headers: Record<string, string | string[] | undefined>;
   socket?: { remoteAddress?: string };
@@ -2755,6 +3017,64 @@ async function readUploadedStorageObjectBytes(
   }
 }
 
+async function streamStorageObjectContent(input: {
+  response: ServerResponse;
+  signedUrl: string;
+  requestOrigin: string;
+  range: string | null;
+  contentType: string;
+  download: boolean;
+  fetchImpl: typeof fetch;
+}) {
+  let upstream: Response;
+  try {
+    upstream = await input.fetchImpl(
+      new URL(input.signedUrl, input.requestOrigin),
+      input.range ? { headers: { range: input.range } } : undefined,
+    );
+  } catch {
+    return false;
+  }
+  if (!upstream.ok || !upstream.body) {
+    await upstream.body?.cancel().catch(() => undefined);
+    return false;
+  }
+  input.response.statusCode = upstream.status;
+  input.response.setHeader("content-type", input.contentType);
+  input.response.setHeader("content-disposition", input.download ? "attachment" : "inline");
+  input.response.setHeader("cache-control", "private, max-age=300");
+  input.response.setHeader("x-content-type-options", "nosniff");
+  for (const header of ["accept-ranges", "content-length", "content-range"] as const) {
+    const value = upstream.headers.get(header);
+    if (value) input.response.setHeader(header, value);
+  }
+  await new Promise<void>((resolve) => {
+    const body = Readable.fromWeb(upstream.body as never);
+    let completed = false;
+    const complete = () => {
+      if (completed) return;
+      completed = true;
+      input.response.off("finish", complete);
+      input.response.off("close", close);
+      body.off("error", fail);
+      resolve();
+    };
+    const close = () => {
+      body.destroy();
+      complete();
+    };
+    const fail = () => {
+      input.response.destroy();
+      complete();
+    };
+    input.response.once("finish", complete);
+    input.response.once("close", close);
+    body.once("error", fail);
+    body.pipe(input.response);
+  });
+  return true;
+}
+
 async function extractTextFromScriptDocumentBytes(bytes: Buffer, extension: string) {
   if (extension === ".txt") {
     return bytes.toString("utf8");
@@ -3579,15 +3899,7 @@ async function uploadTrackedCloudObject(
       cacheControl: input.cacheControl ?? null,
       contentLength: input.bytes.byteLength,
     });
-    const publicUrl = buildStorageObjectPublicUrl(input.runtime, {
-      bucket: input.runtime.bucket,
-      objectKey: input.objectKey,
-    });
-    const sourceUrl = publicUrl || (await input.runtime.adapter.createSignedReadUrl({
-      bucket: input.runtime.bucket,
-      objectKey: input.objectKey,
-      expiresAt: new Date(input.now.getTime() + input.signedUrlExpiresInSeconds * 1000),
-    })).url;
+    const sourceUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
     await db.query(
       `
         UPDATE storage_objects
@@ -3602,7 +3914,7 @@ async function uploadTrackedCloudObject(
         SET public_url = $2, status = 'uploaded', error_message = NULL, completed_at = $3
         WHERE id = $1
       `,
-      [uploadRecord.id, sourceUrl, input.now],
+      [uploadRecord.id, null, input.now],
     );
     return {
       storageObjectId,
@@ -3610,7 +3922,7 @@ async function uploadTrackedCloudObject(
       bucket: input.runtime.bucket,
       provider: input.runtime.provider,
       sourceUrl,
-      publicUrl,
+      publicUrl: null,
       eTag: putResult?.eTag ?? null,
       versionId: putResult?.versionId ?? null,
     };
@@ -3739,7 +4051,10 @@ async function readTeamAssetArtifactBytes(
 
 function teamAssetRow(row: Record<string, unknown>) {
   const storedAssetStatus = readString(row.asset_status);
-  const assetUrl = readString(row.asset_url);
+  const storageObjectId = readString(row.storage_object_id) || null;
+  const assetUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    : readString(row.asset_url);
   const generationTaskId = readString(row.generation_task_id) || readString(row.provider_request_id) || null;
   const providerStatus = readString(row.generation_task_status) || readString(row.provider_request_status);
   const assetStatus = storedAssetStatus === "generating" && ["failed", "canceled", "manual_review_required", "result_unknown"].includes(providerStatus)
@@ -3783,7 +4098,7 @@ function teamAssetRow(row: Record<string, unknown>) {
     sourceUrl: assetUrl,
     resourceType: readString(row.resource_type),
     resourceSize: Number(row.resource_size ?? 0),
-    storageObjectId: readString(row.storage_object_id) || null,
+    storageObjectId,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdByName: readString(row.created_by_name),
@@ -5813,27 +6128,45 @@ async function mapGenerationTaskResponse(
   const mockImageUrl = kind === "image" ? pickMockEpisodeImageUrl(row.task_id) : null;
   const storyboardVideoUrl = kind === "video" ? mockEpisodeStoryboardVideoUrl : null;
 
-  const snapshotResult = snapshotResultAsset
+  const rawSnapshotResult = snapshotResultAsset
     ? generationResultFromSnapshotAsset(snapshotResultAsset, kind, generatedAudioItems)
     : null;
   const metadataSourceUrl = readGenerationPublicAssetUrl(metadata.sourceUrl);
   const metadataPreviewUrl = readGenerationPublicAssetUrl(metadata.previewUrl);
   const metadataDownloadUrl = readGenerationPublicAssetUrl(metadata.downloadUrl);
-  const storageSourceUrl = readGenerationPublicAssetUrl(urls?.sourceUrl, urls?.downloadUrl, urls?.previewUrl);
-  const storagePreviewUrl = readGenerationPublicAssetUrl(urls?.previewUrl, urls?.sourceUrl, urls?.downloadUrl);
-  const storageDownloadUrl = readGenerationPublicAssetUrl(urls?.downloadUrl, urls?.sourceUrl, urls?.previewUrl);
+  const storageContentUrl = row.storage_object_id
+    ? `/api/storage/objects/${encodeURIComponent(row.storage_object_id)}/content`
+    : "";
+  const storageSourceUrl = storageContentUrl || readGenerationPublicAssetUrl(urls?.sourceUrl, urls?.downloadUrl, urls?.previewUrl);
+  const storagePreviewUrl = storageContentUrl
+    ? `${storageContentUrl}?proxy=1`
+    : readGenerationPublicAssetUrl(urls?.previewUrl, urls?.sourceUrl, urls?.downloadUrl);
+  const storageDownloadUrl = storageContentUrl || readGenerationPublicAssetUrl(urls?.downloadUrl, urls?.sourceUrl, urls?.previewUrl);
   const resultSourceUrl =
     kind === "image"
-      ? metadataSourceUrl || storageSourceUrl || mockImageUrl
+      ? storageSourceUrl || metadataSourceUrl || mockImageUrl
       : storageSourceUrl || metadataSourceUrl || storyboardVideoUrl;
   const resultPreviewUrl =
     kind === "image"
-      ? metadataPreviewUrl || storagePreviewUrl || resultSourceUrl || mockImageUrl
+      ? storagePreviewUrl || metadataPreviewUrl || resultSourceUrl || mockImageUrl
       : storagePreviewUrl || metadataPreviewUrl || resultSourceUrl;
   const resultDownloadUrl =
     kind === "image"
-      ? metadataDownloadUrl || storageDownloadUrl || resultSourceUrl || mockImageUrl
+      ? storageDownloadUrl || metadataDownloadUrl || resultSourceUrl || mockImageUrl
       : storageDownloadUrl || metadataDownloadUrl || resultSourceUrl;
+  const snapshotResult = rawSnapshotResult && urls && rawSnapshotResult.storageObjectId === row.storage_object_id
+    ? {
+        ...rawSnapshotResult,
+        imageUrl: kind === "image" ? resultSourceUrl : rawSnapshotResult.imageUrl,
+        videoUrl: kind === "video" ? resultSourceUrl : rawSnapshotResult.videoUrl,
+        audioUrl: kind === "audio" ? resultSourceUrl : rawSnapshotResult.audioUrl,
+        thumbnailUrl: kind === "image" ? resultPreviewUrl : rawSnapshotResult.thumbnailUrl,
+        coverImageUrl: kind === "image" ? resultPreviewUrl : rawSnapshotResult.coverImageUrl,
+        sourceUrl: resultSourceUrl,
+        downloadUrl: resultDownloadUrl,
+        expiresAt: urls.expiresAt,
+      }
+    : rawSnapshotResult;
 
   const result =
     snapshotResult ??
@@ -7883,6 +8216,8 @@ async function settleTimedOutEpisodeGenerationTask(
 ) {
   await db.query("BEGIN");
   try {
+    await db.query("SET LOCAL lock_timeout = '500ms'");
+    await db.query("SET LOCAL idle_in_transaction_session_timeout = '15s'");
     const row = await queryOne<{
       task_id: string;
       workflow_id: string;
@@ -7915,7 +8250,7 @@ async function settleTimedOutEpisodeGenerationTask(
         WHERE t.id = $1
           AND t.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
         LIMIT 1
-        FOR UPDATE OF t
+        FOR UPDATE OF t SKIP LOCKED
       `,
       [input.taskId],
     );
@@ -8253,6 +8588,7 @@ async function settleTimedOutEpisodeGenerationTask(
     return true;
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
+    if ((error as { code?: unknown })?.code === "55P03") return false;
     throw error;
   }
 }
@@ -8639,9 +8975,9 @@ async function syncSeedanceVideoTaskOnRead(
         taskId: row.task_id,
         targetType: snapshot.targetType ?? "episode",
         targetId: snapshot.targetId ?? snapshot.episodeId ?? null,
-        previewUrl: urls.previewUrl,
-        sourceUrl: urls.sourceUrl,
-        downloadUrl: urls.downloadUrl,
+        previewUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content?proxy=1`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content`,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content`,
         provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
         externalRequestId: row.external_request_id,
       },
@@ -10891,9 +11227,9 @@ async function createGenerationTask(
           taskId: task.id,
           targetType: requestSnapshot.targetType,
           targetId: requestSnapshot.targetId,
-          previewUrl: urls.previewUrl,
-          sourceUrl: urls.sourceUrl,
-          downloadUrl: urls.downloadUrl,
+          previewUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content?proxy=1`,
+          sourceUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
+          downloadUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
         },
         sourceTaskId: task.id,
         sourceAttemptId: claim.attempt.id,
@@ -10945,10 +11281,10 @@ async function createGenerationTask(
         storageObjectKey: storageObject.object_key,
         mediaKind: input.kind,
         mimeType: config.contentType,
-        url: urls.previewUrl,
-        previewUrl: urls.previewUrl,
-        sourceUrl: urls.sourceUrl,
-        downloadUrl: urls.downloadUrl,
+        url: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content?proxy=1`,
+        previewUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content?proxy=1`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
       },
     ],
     providerStatus: {
@@ -14850,8 +15186,8 @@ async function createEpisodeOriginalVideoExport(
         status: "succeeded",
         mode: "storyboard_video_package",
         storageObjectId: archiveObject.id,
-        downloadUrl: urls.downloadUrl,
-        sourceUrl: urls.sourceUrl,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
         fileName: `${sanitizePortableFileName(`${context.project.name}-${context.episode.title}-MP4`, "episode-MP4")}.zip`,
         expiresAt: urls.expiresAt,
         createdAt: record.createdAt,
@@ -15069,8 +15405,8 @@ async function createEpisodeJianyingDraftExport(
         status: "succeeded",
         mode: "jianying_draft",
         storageObjectId: archiveObject.id,
-        downloadUrl: urls.downloadUrl,
-        sourceUrl: urls.sourceUrl,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
         fileName: `${packageResult.folderName}.zip`,
         expiresAt: urls.expiresAt,
         createdAt: record.createdAt,
@@ -17858,8 +18194,13 @@ export function createPhoneAuthDevServer(
   const signedUrlExpiresInSeconds = Number(
     runtimeEnv.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
     runtimeEnv.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
-    900,
+    3600,
   );
+  const homeMediaRateLimiter = createHomeMediaRateLimiter(runtimeEnv);
+  const storageMediaLimiter = createStorageMediaLimiter(runtimeEnv);
+  const officialAssetRootPrefix = runtimeEnv.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets";
+  const trustProxyForHomeMedia = String(runtimeEnv.HOME_MEDIA_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
+  const trustProxyForStorageMedia = String(runtimeEnv.STORAGE_MEDIA_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
   const storageAdapter = (() => {
     try {
       return createStorageAdapterFromEnv(runtimeEnv);
@@ -17878,10 +18219,7 @@ export function createPhoneAuthDevServer(
     provider: storageMode === "cos" ? "tencent_cos" : storageMode === "s3_compatible" ? "s3_compatible" : "creator-dev",
     bucket: storageBucket,
     region: storageRegion,
-    publicBaseUrl:
-      runtimeEnv.STORAGE_PUBLIC_BASE_URL?.trim() ||
-      runtimeEnv.STORAGE_ENDPOINT?.trim() ||
-      null,
+    publicBaseUrl: runtimeEnv.STORAGE_PUBLIC_BASE_URL?.trim() || null,
     adapter: storageAdapter,
     stsSecretId: runtimeEnv.STORAGE_COS_SECRET_ID?.trim() ?? null,
     stsSecretKey: runtimeEnv.STORAGE_COS_SECRET_KEY?.trim() ?? null,
@@ -17903,50 +18241,16 @@ export function createPhoneAuthDevServer(
     sessionToken: string,
     adminUserId: string,
   ): Promise<BrandKitDetailRecord> => {
-    const db = await getDb();
-    const sign = async (storageObjectId: string | null) => {
-      if (!storageObjectId) return null;
-      try {
-        const urls = await buildSignedObjectUrls(db, {
-          sessionToken,
-          storageObjectId,
-          adapter: storageRuntime.adapter,
-          now: new Date(),
-          expiresInSeconds: signedUrlExpiresInSeconds,
-          publicBaseUrl: storageRuntime.publicBaseUrl,
-          region: storageRuntime.region,
-        });
-        return urls.previewUrl;
-      } catch {
-        try {
-          const object = await findStorageObject(db, storageObjectId);
-          if (
-            !object ||
-            object.createdByUserId !== adminUserId ||
-            object.status !== "available" ||
-            object.deletedAt !== null
-          ) {
-            return null;
-          }
-          const expiresAt = new Date(Date.now() + signedUrlExpiresInSeconds * 1000);
-          const signed = await storageRuntime.adapter.createSignedReadUrl({
-            bucket: object.bucket,
-            objectKey: object.objectKey,
-            expiresAt,
-          });
-          return signed.url;
-        } catch {
-          return null;
-        }
-      }
-    };
+    const contentUrl = (storageObjectId: string | null) => storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+      : null;
     return {
       ...brandKit,
-      cover_url: await sign(brandKit.cover_storage_object_id),
-      assets: await Promise.all(brandKit.assets.map(async (asset) => ({
+      cover_url: contentUrl(brandKit.cover_storage_object_id),
+      assets: brandKit.assets.map((asset) => ({
         ...asset,
-        file_url: await sign(asset.storage_object_id),
-      }))),
+        file_url: contentUrl(asset.storage_object_id),
+      })),
     };
   };
   const httpServer = createServer((request, response) => {
@@ -18079,9 +18383,117 @@ export function createPhoneAuthDevServer(
         return writeJson(response, enveloped(200, result.data));
       }
 
+      const styleCoverMatch = pathname.match(/^\/api\/public\/style-covers\/([^/]+)$/);
+      if (request.method === "GET" && styleCoverMatch) {
+        const rateLimit = homeMediaRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForHomeMedia),
+        );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "official_asset_rate_limited", "Too many official asset signing requests"));
+        }
+        try {
+          let styleName = "";
+          try {
+            styleName = decodeURIComponent(styleCoverMatch[1] ?? "");
+          } catch {
+            return writeJson(response, envelopedError(400, "official_asset_invalid", "Official asset is invalid"));
+          }
+          if (!styleName || /[\\/\0]/.test(styleName)) {
+            return writeJson(response, envelopedError(404, "official_asset_not_found", "Official asset was not found"));
+          }
+          const location = (await storageRuntime.adapter.createSignedReadUrl({
+            bucket: storageBucket,
+            objectKey: `${officialAssetRootPrefix.replace(/^\/+|\/+$/g, "")}/promptCovers/officialStyles/${styleName}.webp`,
+            expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+          })).url;
+          response.statusCode = 307;
+          response.setHeader("location", location);
+          response.setHeader("cache-control", "no-store");
+          response.setHeader("referrer-policy", "no-referrer");
+          response.end();
+          return;
+        } finally {
+          rateLimit.release();
+        }
+      }
+
       if (request.method === "GET" && pathname === "/api/home-recommendations") {
         const recommendations = createHomeRecommendationService({ db });
-        return writeJson(response, enveloped(200, (await recommendations.listPublicRecommendations()).data));
+        return writeJson(
+          response,
+          enveloped(
+            200,
+            homeRecommendationMediaGatewayPayload((await recommendations.listPublicRecommendations()).data),
+          ),
+        );
+      }
+
+      const homeRecommendationVideoMediaMatch = pathname.match(/^\/api\/home-recommendations\/videos\/([^/]+)\/media$/);
+      if (
+        request.method === "GET" &&
+        (pathname === "/api/home-recommendations/background/media" || homeRecommendationVideoMediaMatch)
+      ) {
+        const rateLimit = homeMediaRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForHomeMedia),
+        );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "home_recommendation_media_rate_limited", "Too many home media signing requests"));
+        }
+        try {
+        const recommendations = createHomeRecommendationService({ db });
+        const publicRecommendations = (await recommendations.listPublicRecommendations()).data;
+        let videoId = "";
+        if (homeRecommendationVideoMediaMatch) {
+          try {
+            videoId = decodeURIComponent(homeRecommendationVideoMediaMatch[1] ?? "");
+          } catch {
+            return writeJson(response, envelopedError(400, "home_recommendation_media_invalid", "Home recommendation media is invalid"));
+          }
+        }
+        const sourceUrl = pathname === "/api/home-recommendations/background/media"
+          ? String(publicRecommendations.background?.videoUrl ?? "").trim()
+          : publicRecommendations.categories
+            .flatMap((category) => category.videos)
+            .find((video) => video.id === videoId)
+            ?.videoUrl ?? "";
+        if (!sourceUrl) {
+          return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
+        }
+
+        const objectKey = storageMode === "cos"
+          ? cosObjectKeyFromPublicUrl({ sourceUrl, bucket: storageBucket, region: storageRegion })
+          : null;
+        if (!objectKey || !isHomeRecommendationObjectKey({ objectKey, officialAssetRootPrefix })) {
+          return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
+        }
+        const location = (await storageRuntime.adapter.createSignedReadUrl({
+          bucket: storageBucket,
+          objectKey,
+          expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+        })).url;
+        let upstream: Response;
+        try {
+          upstream = await (options.fetchImpl ?? fetch)(location);
+        } catch {
+          return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
+        }
+        if (!upstream.ok || !upstream.body) {
+          await upstream.body?.cancel().catch(() => undefined);
+          return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
+        }
+        response.statusCode = 200;
+        response.setHeader("content-type", upstream.headers.get("content-type") ?? "video/mp4");
+        response.setHeader("cache-control", "public, max-age=31536000, immutable");
+        response.setHeader("referrer-policy", "no-referrer");
+        const contentLength = upstream.headers.get("content-length");
+        if (contentLength) response.setHeader("content-length", contentLength);
+        Readable.fromWeb(upstream.body as never).pipe(response);
+        return;
+        } finally {
+          rateLimit.release();
+        }
       }
 
       const generationWebhookMatch = pathname.match(/^\/api\/provider-webhooks\/generation\/([^/]+)$/);
@@ -22079,42 +22491,39 @@ export function createPhoneAuthDevServer(
           )?.total_count ?? 0,
         );
 
+        const data = rows.rows.map((row) => {
+          const contentUrl = `/api/storage/objects/${encodeURIComponent(row.id)}/content`;
+          const previewUrl = row.status === "available" ? `${contentUrl}?proxy=1` : null;
+          return {
+            id: row.id,
+            bucket: row.bucket,
+            objectKey: row.object_key,
+            contentType: row.content_type,
+            mediaKind: row.content_type.startsWith("video/") ? "video" : "image",
+            sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+            provider: row.provider,
+            status: row.status,
+            previewUrl,
+            sourceUrl: row.status === "available" ? contentUrl : null,
+            downloadUrl: row.status === "available" ? `${contentUrl}?download=1` : null,
+            projectId: row.project_id,
+            projectName: row.project_name,
+            pageKey: row.page_key,
+            pageUrl: row.page_url,
+            sourceAction: row.source_action,
+            fileName: row.file_name,
+            actorDisplayName: row.actor_display_name,
+            actorPhoneE164: row.actor_phone_e164,
+            uploadStatus: row.upload_status,
+            createdAt: row.created_at.toISOString(),
+            uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
+            uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
+          };
+        });
         return writeJson(response, {
           status: 200,
           body: {
-            data: rows.rows.map((row) => {
-              const previewUrl =
-                row.public_url ||
-                buildStorageObjectPublicUrl(storageRuntime, {
-                  bucket: row.bucket,
-                  objectKey: row.object_key,
-                });
-              return {
-                id: row.id,
-                bucket: row.bucket,
-                objectKey: row.object_key,
-                contentType: row.content_type,
-                mediaKind: row.content_type.startsWith("video/") ? "video" : "image",
-                sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
-                provider: row.provider,
-                status: row.status,
-                previewUrl,
-                sourceUrl: previewUrl,
-                downloadUrl: previewUrl,
-                projectId: row.project_id,
-                projectName: row.project_name,
-                pageKey: row.page_key,
-                pageUrl: row.page_url,
-                sourceAction: row.source_action,
-                fileName: row.file_name,
-                actorDisplayName: row.actor_display_name,
-                actorPhoneE164: row.actor_phone_e164,
-                uploadStatus: row.upload_status,
-                createdAt: row.created_at.toISOString(),
-                uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
-                uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
-              };
-            }),
+            data,
             meta: {
               page,
               pageSize,
@@ -22359,44 +22768,41 @@ export function createPhoneAuthDevServer(
           )?.total_count ?? 0,
         );
 
+        const data = await Promise.all(rows.rows.map(async (row) => {
+          const contentUrl = `/api/storage/objects/${encodeURIComponent(row.id)}/content`;
+          const previewUrl = `${contentUrl}?proxy=1`;
+          return {
+            id: row.id,
+            storageObjectId: row.id,
+            bucket: row.bucket,
+            objectKey: row.object_key,
+            contentType: row.content_type,
+            mediaKind: row.content_type.startsWith("video/")
+              ? "video"
+              : row.content_type.startsWith("audio/") ? "audio" : "image",
+            sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+            provider: row.provider,
+            status: row.status,
+            previewUrl,
+            sourceUrl: contentUrl,
+            downloadUrl: `${contentUrl}?download=1`,
+            projectId: row.project_id,
+            projectName: row.project_name,
+            pageKey: row.page_key,
+            pageUrl: row.page_url,
+            sourceAction: row.source_action,
+            fileName: row.file_name,
+            actorDisplayName: row.actor_display_name,
+            uploadStatus: row.upload_status,
+            createdAt: row.created_at.toISOString(),
+            uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
+            uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
+          };
+        }));
         return writeJson(response, {
           status: 200,
           body: {
-            data: rows.rows.map((row) => {
-              const previewUrl =
-                row.public_url ||
-                buildStorageObjectPublicUrl(storageRuntime, {
-                  bucket: row.bucket,
-                  objectKey: row.object_key,
-                });
-              return {
-                id: row.id,
-                storageObjectId: row.id,
-                bucket: row.bucket,
-                objectKey: row.object_key,
-                contentType: row.content_type,
-                mediaKind: row.content_type.startsWith("video/")
-                  ? "video"
-                  : row.content_type.startsWith("audio/") ? "audio" : "image",
-                sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
-                provider: row.provider,
-                status: row.status,
-                previewUrl,
-                sourceUrl: previewUrl,
-                downloadUrl: previewUrl,
-                projectId: row.project_id,
-                projectName: row.project_name,
-                pageKey: row.page_key,
-                pageUrl: row.page_url,
-                sourceAction: row.source_action,
-                fileName: row.file_name,
-                actorDisplayName: row.actor_display_name,
-                uploadStatus: row.upload_status,
-                createdAt: row.created_at.toISOString(),
-                uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
-                uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
-              };
-            }),
+            data,
             meta: {
               page,
               pageSize,
@@ -23885,31 +24291,48 @@ export function createPhoneAuthDevServer(
               adapter: storageRuntime.adapter,
               now: new Date(),
               expiresInSeconds: signedUrlExpiresInSeconds,
+              responseContentDisposition: object.contentType.startsWith("video/") ? "inline" : undefined,
             });
             if (object.status !== "available") {
               return writeJson(response, envelopedError(409, "storage_object_not_ready", "Storage object is not ready"));
             }
-            if (
-              url.searchParams.get("download") === "1"
-              || (url.searchParams.get("proxy") === "1" && object.contentType.startsWith("image/"))
-            ) {
-              const bytes = await readUploadedStorageObjectBytes(db, {
-                sessionToken: authenticated.sessionToken,
-                storageObjectId: object.id,
-                bucket: object.bucket,
-                objectKey: object.objectKey,
-                runtime: storageRuntime,
-                signedUrlExpiresInSeconds,
-                now: new Date(),
-                fetchImpl: options.fetchImpl ?? fetch,
-              });
-              response.statusCode = 200;
-              response.setHeader("content-type", object.contentType);
-              response.setHeader("content-length", String(bytes.byteLength));
-              response.setHeader("cache-control", "private, max-age=300");
-              response.setHeader("x-content-type-options", "nosniff");
-              response.end(bytes);
-              return;
+            const proxyRequested = url.searchParams.get("proxy") === "1";
+            const downloadRequested = url.searchParams.get("download") === "1";
+            const image = object.contentType.startsWith("image/");
+            const video = object.contentType.startsWith("video/");
+            if (downloadRequested || (proxyRequested && (image || video))) {
+              let release: (() => void) | null = null;
+              try {
+                release = await storageMediaLimiter.acquire({
+                  kind: image ? "image" : "video",
+                  userId: authenticated.user.id,
+                  ipAddress: homeMediaRequestIpAddress(request, trustProxyForStorageMedia),
+                });
+                const streamed = await streamStorageObjectContent({
+                  response,
+                  signedUrl: signed.url,
+                  requestOrigin: serverOriginFromRequest(request),
+                  range: typeof request.headers.range === "string" ? request.headers.range : null,
+                  contentType: object.contentType,
+                  download: downloadRequested,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                });
+                if (!streamed) {
+                  return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+                }
+                return;
+              } catch (error) {
+                if (error instanceof StorageMediaLimitError) {
+                  response.setHeader("retry-after", String(error.retryAfterSeconds));
+                  return writeJson(
+                    response,
+                    envelopedError(429, `storage_media_${error.code}`, "Storage media request is temporarily queued"),
+                  );
+                }
+                throw error;
+              } finally {
+                release?.();
+              }
             }
             response.statusCode = 307;
             response.setHeader("location", signed.url);
@@ -24231,10 +24654,6 @@ export function createPhoneAuthDevServer(
             runtime: storageRuntime,
             signedUrlExpiresInSeconds,
           });
-          const publicUrl = buildStorageObjectPublicUrl(storageRuntime, {
-            bucket: completed.storageObject.bucket,
-            objectKey: completed.storageObject.objectKey,
-          });
           const uploadRecord = await completeProjectUploadRecord(db, {
             uploadSessionId,
             storageObjectId: completed.storageObject.id,
@@ -24243,7 +24662,7 @@ export function createPhoneAuthDevServer(
             provider: completed.storageObject.provider,
             contentType: completed.storageObject.contentType,
             sizeBytes: completed.storageObject.sizeBytes ?? null,
-            publicUrl,
+            publicUrl: null,
             status: "uploaded",
             errorMessage: null,
             now: new Date(),
@@ -24252,6 +24671,12 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: {
               ...completed,
+              urls: {
+                previewUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`,
+                sourceUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`,
+                downloadUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?download=1`,
+                expiresAt: null,
+              },
               uploadRecord,
             },
           });
@@ -25619,16 +26044,14 @@ export function createPhoneAuthDevServer(
             limit: Number(url.searchParams.get("limit") ?? 50),
             cursor,
           });
-          const hydratedHistory = await hydrateCanvasGenerationHistoryArtifactUrls(history, (storageObjectId) =>
-            buildSignedObjectUrls(db, {
-              actorScope: canvasScope,
-              storageObjectId,
-              adapter: storageRuntime.adapter,
-              now: new Date(),
-              expiresInSeconds: signedUrlExpiresInSeconds,
-              publicBaseUrl: storageRuntime.publicBaseUrl,
-              region: storageRuntime.region,
-            }));
+          const hydratedHistory = await hydrateCanvasGenerationHistoryArtifactUrls(history, async (storageObjectId) => {
+            const contentUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
+            return {
+              previewUrl: `${contentUrl}?proxy=1`,
+              sourceUrl: contentUrl,
+              downloadUrl: `${contentUrl}?download=1`,
+            };
+          });
           return writeJson(response, enveloped(200, {
             ...hydratedHistory,
             nextCursor: hydratedHistory.nextCursor ? encodeCanvasGenerationHistoryCursor(hydratedHistory.nextCursor) : null,

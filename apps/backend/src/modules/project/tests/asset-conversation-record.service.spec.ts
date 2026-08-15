@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import type { SqlDatabase } from "../../shared/db/sql.ts";
-import { listAssetConversationEntrySummaries } from "../asset-conversation-record.service.ts";
+import {
+  listAssetConversationEntrySummaries,
+  markAssetConversationGenerationTerminal,
+} from "../asset-conversation-record.service.ts";
 
 describe("asset conversation history summaries", () => {
   it("loads only the latest 10 conversation turns and keeps them in chronological order", () => {
@@ -52,6 +55,44 @@ describe("asset conversation history summaries", () => {
     assert.match(capturedSql, /field\.key IN \('failureCode', 'displayMessage', 'providerMessage', 'errorMessage', 'noticeType'\)/);
     assert.match(capturedSql, /returnedAt/);
     assert.match(capturedSql, /completedAt/);
+    assert.match(
+      capturedSql,
+      /CASE WHEN user_requests\.payload_json->>'status' IN \('completed', 'failed', 'canceled', 'manual_review_required', 'result_unknown'\) THEN user_requests\.payload_json->>'status' END[\s\S]*user_requests\.status/,
+    );
+  });
+
+  it("marks matching conversation messages as requiring manual review", async () => {
+    let capturedSql = "";
+    let capturedParams: unknown[] = [];
+    const db: SqlDatabase = {
+      async query<T>(sql: string, params?: unknown[]) {
+        capturedSql = sql;
+        capturedParams = params ?? [];
+        return { rows: [] as T[] };
+      },
+    };
+
+    await markAssetConversationGenerationTerminal(db, {
+      taskId: "task-1",
+      status: "manual_review_required",
+      failureCode: "provider_output_persist_failed",
+      noticeType: "admin_action_required",
+      now: new Date("2026-07-16T00:00:00.000Z"),
+    });
+
+    assert.match(capturedSql, /SET status = \$2/);
+    assert.match(capturedSql, /OR payload_json->>'taskId' = \$1/);
+    assert.equal(capturedParams[0], "task-1");
+    assert.equal(capturedParams[1], "manual_review_required");
+    assert.deepEqual(JSON.parse(String(capturedParams[2])), {
+      status: "manual_review_required",
+      taskId: "task-1",
+      workflowStatus: "manual_review_required",
+      returnedAt: "2026-07-16T00:00:00.000Z",
+      failureCode: "provider_output_persist_failed",
+      failure: { failureCode: "provider_output_persist_failed" },
+      noticeType: "admin_action_required",
+    });
   });
 
   it("returns only the configured display name for conversation models", async () => {

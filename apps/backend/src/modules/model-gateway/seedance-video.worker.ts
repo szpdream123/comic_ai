@@ -13,7 +13,10 @@ import {
   resolveGenerationBillingAmount,
 } from "../credit-billing/team-member-generation-credit.service.ts";
 import { createAssetVersionSnapshot } from "../project/asset-version-record.service.ts";
-import { markAssetConversationGenerationSucceeded } from "../project/asset-conversation-record.service.ts";
+import {
+  markAssetConversationGenerationSucceeded,
+  markAssetConversationGenerationTerminal,
+} from "../project/asset-conversation-record.service.ts";
 import { ensureProjectUploadRecordForStorageObject } from "../project/project-upload-record.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
@@ -2369,6 +2372,13 @@ async function markSeedanceTaskResultUnknown(
   } else {
     await settleCredits(false);
   }
+  await markAssetConversationGenerationTerminal(db, {
+    taskId: input.row.task_id,
+    status: "result_unknown",
+    failureCode: input.failureCode,
+    noticeType: "admin_action_required",
+    now: input.now,
+  });
 }
 
 async function markSeedanceTaskManualReview(
@@ -2417,6 +2427,13 @@ async function markSeedanceTaskManualReview(
   } else {
     await settleCredits(false);
   }
+  await markAssetConversationGenerationTerminal(db, {
+    taskId: input.row.task_id,
+    status: "manual_review_required",
+    failureCode: input.failureCode,
+    noticeType: "admin_action_required",
+    now: input.now,
+  });
 }
 
 async function findSeedanceTaskForSubmit(db: SqlDatabase, taskId: string) {
@@ -2764,6 +2781,13 @@ async function failSeedanceArtifactStorageAfterRetryLimit(
       reserved: amount,
       settledAt: input.now.toISOString(),
     },
+    now: input.now,
+  });
+  await markAssetConversationGenerationTerminal(db, {
+    taskId: input.row.task_id,
+    status: "manual_review_required",
+    failureCode: SEEDANCE_ARTIFACT_STORAGE_FAILURE_CODE,
+    noticeType: "admin_action_required",
     now: input.now,
   });
 }
@@ -3645,6 +3669,13 @@ async function failSeedanceTask(
       throw error;
     }
   }
+  await markAssetConversationGenerationTerminal(db, {
+    taskId: input.row.task_id,
+    status: "failed",
+    failureCode: input.failureCode,
+    noticeType: "error",
+    now: input.now,
+  });
   return true;
 }
 
@@ -3977,19 +4008,8 @@ function fallbackSeedanceModelConfig(env: NodeJS.ProcessEnv) {
   };
 }
 
-function buildPlatformStorageUrl(runtime: UploadSessionRuntime, object: StorageObjectRecord) {
-  const publicBaseUrl =
-    runtime.publicBaseUrl?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
-    "";
-  if (publicBaseUrl) {
-    return `${publicBaseUrl}/${object.objectKey}`;
-  }
-  if (object.bucket && runtime.region) {
-    return `https://${object.bucket}.cos.${runtime.region}.myqcloud.com/${object.objectKey}`;
-  }
-  return object.objectKey;
+function buildPlatformStorageUrl(_runtime: UploadSessionRuntime, object: StorageObjectRecord) {
+  return `/api/storage/objects/${encodeURIComponent(object.id)}/content`;
 }
 
 export function readGenerationArtifactUploadConfig(env: NodeJS.ProcessEnv) {

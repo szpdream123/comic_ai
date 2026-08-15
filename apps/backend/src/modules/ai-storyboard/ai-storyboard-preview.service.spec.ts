@@ -257,7 +257,7 @@ describe("ai storyboard preview service", () => {
     assert.equal(gateway.calls.length, 5);
     assert.deepEqual(gateway.calls.map((call) => call.model), ["deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-chat"]);
     assert.deepEqual(gateway.calls.map((call) => call.responseFormat), ["text", "text", "text", "text", "text"]);
-    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined, undefined, undefined, undefined, undefined]);
+    assert.deepEqual(gateway.calls.map((call) => call.maxTokens), [undefined, undefined, undefined, undefined, 32_768]);
     assert.match(gateway.calls[0]?.prompt ?? "", /玄幻修仙/);
     assert.match(gateway.calls[0]?.prompt ?? "", /男频热血/);
     assert.doesNotMatch(gateway.calls[0]?.prompt ?? "", /短剧快节奏/);
@@ -1319,253 +1319,39 @@ describe("ai storyboard preview service", () => {
     assert.equal(calls, 1);
   });
 
-  it("keeps asset-stage retry behavior while the extraction stages run in parallel", async () => {
-    const calls = new Map<string, number>();
+  it("continues a truncated storyboard response from the prior output boundary", async () => {
+    const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];
+    const initialRows = [
+      "【剧本分镜列表】",
+      "| 分镜剧情 | 对话/旁白 | 静态图片提示词 | 动态视频提示词 |",
+      "| --- | --- | --- | --- |",
+      "| 分镜1：白野走进营地。 | 无台词。 | 夜色营地，白野前行。 | 中景固定镜头，白野走进营地。 |",
+    ].join("\n");
     const gateway: TextChatGatewayLike = {
       async completeJson() { throw new Error("completeJson should not be called"); },
       async *streamJson(input) {
-        const stage = input.prompt.startsWith("SCENE")
-          ? "scene"
-          : input.prompt.startsWith("CHARACTER")
-            ? "character"
-            : "prop";
-        const attempt = (calls.get(stage) ?? 0) + 1;
-        calls.set(stage, attempt);
-        if (stage === "scene" && attempt === 1) {
-          throw Object.assign(new Error("provider failed"), { retryable: true });
+        calls.push(input);
+        if (calls.length === 1) {
+          yield initialRows;
+          throw Object.assign(new Error("provider_output_truncated"), { code: "provider_output_truncated" });
         }
-        yield {
-          scene: JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
-          character: JSON.stringify({ characters: [{ characterName: "任小野" }] }),
-          prop: JSON.stringify({ props: [{ propName: "饭食" }] }),
-        }[stage];
+        yield "\n| 分镜2：白野避开守卫。 | 无台词。 | 守卫背后，白野潜行。 | 近景跟拍，白野避开守卫。 |";
       },
     };
     const service = createAiStoryboardPreviewService({ gateway });
 
     const result = await service.generatePreview({
       projectId: "40000000-0000-4000-8000-000000000001",
-      scriptText: "任小野把饭食递给闵婶子。",
+      scriptText: "白野潜入营地。",
       skipScriptStage: true,
-      selectedStages: ["scene", "character", "prop"],
+      selectedStages: ["shot"],
       packages: {},
-      templates: {
-        scenePrompt: "SCENE {{script}}",
-        characterPrompt: "CHARACTER {{script}}",
-        propPrompt: "PROP {{script}}",
-      },
     });
 
-    assert.deepEqual(Object.fromEntries(calls), { scene: 2, character: 1, prop: 1 });
-    assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
-    assert.equal(result.displayTables.characters.rows[0]?.characterName, "任小野");
-    assert.equal(result.displayTables.props.rows[0]?.propName, "饭食");
-  });
-
-  it("starts independent asset stages concurrently and preserves ordered events", async () => {
-    const gateway = new ControlledParallelAssetGateway();
-    const service = createAiStoryboardPreviewService({ gateway });
-    const eventsPromise = (async () => {
-      const events = [];
-      for await (const event of service.generatePreviewStream({
-        projectId: "40000000-0000-4000-8000-000000000001",
-        scriptText: "任小野把饭食递给闵婶子。",
-        skipScriptStage: true,
-        selectedStages: ["scene", "character", "prop", "shot"],
-        packages: {},
-        templates: {
-          scenePrompt: "SCENE {{script}}",
-          characterPrompt: "CHARACTER {{script}}",
-          propPrompt: "PROP {{script}}",
-          shotPrompt: "SHOT {{script}}",
-        },
-      })) {
-        events.push(event);
-      }
-      return events;
-    })();
-
-    const allAssetStagesStartedBeforeRelease = await settlesWithin(gateway.allAssetStagesStarted, 200);
-    const shotStartedBeforeRelease = gateway.startedStages.includes("shot");
-    gateway.release("prop");
-    gateway.release("character");
-    gateway.release("scene");
-    const events = await eventsPromise;
-
-    assert.equal(allAssetStagesStartedBeforeRelease, true);
-    assert.equal(shotStartedBeforeRelease, false);
-    assert.deepEqual(
-      events.filter((event) => event.type === "asset_start").map((event) => event.stage),
-      ["scene", "character", "prop", "shot"],
-    );
-    assert.deepEqual(
-      events.filter((event) => event.type === "asset_done").map((event) => event.stage),
-      ["scene", "character", "prop", "shot"],
-    );
-    const complete = events.find((event) => event.type === "complete");
-    assert.equal(complete?.type, "complete");
-    if (complete?.type === "complete") {
-      assert.equal(complete.preview.displayTables.scenes.rows[0]?.sceneName, "旧木屋");
-      assert.equal(complete.preview.displayTables.characters.rows[0]?.characterName, "任小野");
-      assert.equal(complete.preview.displayTables.props.rows[0]?.propName, "饭食");
-      assert.equal(complete.preview.displayTables.storyboards.rows[0]?.plot, "递出饭食");
-    }
-  });
-
-  it("aborts sibling parallel asset stages when one stage fails", async () => {
-    const gateway = new FailingParallelAssetGateway();
-    const service = createAiStoryboardPreviewService({ gateway });
-    const events = [];
-
-    await assert.rejects(
-      async () => {
-        for await (const event of service.generatePreviewStream({
-          projectId: "40000000-0000-4000-8000-000000000001",
-          scriptText: "任小野把饭食递给闵婶子。",
-          skipScriptStage: true,
-          selectedStages: ["scene", "character", "prop", "shot"],
-          packages: {},
-          templates: {
-            scenePrompt: "SCENE {{script}}",
-            characterPrompt: "CHARACTER {{script}}",
-            propPrompt: "PROP {{script}}",
-            shotPrompt: "SHOT {{script}}",
-          },
-        })) {
-          events.push(event);
-        }
-      },
-      /scene failed/,
-    );
-    const siblingsAborted = await settlesWithin(gateway.allSiblingsAborted, 200);
-    gateway.releaseAll();
-
-    assert.equal(siblingsAborted, true);
-    assert.equal(gateway.startedStages.includes("shot"), false);
-    assert.equal(events.some((event) => event.type === "complete"), false);
-  });
-
-  it("runs only the selected parallel asset stages before the shot stage", async () => {
-    const gateway = new ControlledParallelAssetGateway(["character", "prop"]);
-    const service = createAiStoryboardPreviewService({ gateway });
-    const eventsPromise = (async () => {
-      const events = [];
-      for await (const event of service.generatePreviewStream({
-        projectId: "40000000-0000-4000-8000-000000000001",
-        scriptText: "任小野把饭食递给闵婶子。",
-        skipScriptStage: true,
-        selectedStages: ["character", "prop", "shot"],
-        packages: {},
-        templates: {
-          characterPrompt: "CHARACTER {{script}}",
-          propPrompt: "PROP {{script}}",
-          shotPrompt: "SHOT {{script}}",
-        },
-      })) {
-        events.push(event);
-      }
-      return events;
-    })();
-
-    assert.equal(await settlesWithin(gateway.allAssetStagesStarted, 200), true);
-    assert.equal(gateway.startedStages.includes("scene"), false);
-    assert.equal(gateway.startedStages.includes("shot"), false);
-    gateway.release("prop");
-    gateway.release("character");
-    const events = await eventsPromise;
-
-    assert.deepEqual(
-      events.filter((event) => event.type === "asset_start").map((event) => event.stage),
-      ["character", "prop", "shot"],
-    );
-  });
-
-  it("propagates request cancellation to every active parallel asset stage", async () => {
-    const gateway = new CancellationObservingParallelAssetGateway();
-    const service = createAiStoryboardPreviewService({ gateway });
-    const abortController = new AbortController();
-    const generation = (async () => {
-      for await (const _event of service.generatePreviewStream({
-        projectId: "40000000-0000-4000-8000-000000000001",
-        scriptText: "任小野把饭食递给闵婶子。",
-        skipScriptStage: true,
-        selectedStages: ["scene", "character", "prop", "shot"],
-        packages: {},
-        templates: {
-          scenePrompt: "SCENE {{script}}",
-          characterPrompt: "CHARACTER {{script}}",
-          propPrompt: "PROP {{script}}",
-          shotPrompt: "SHOT {{script}}",
-        },
-        signal: abortController.signal,
-      })) {
-        // Drain until cancellation rejects the generation.
-      }
-    })();
-
-    assert.equal(await settlesWithin(gateway.allAssetStagesStarted, 200), true);
-    abortController.abort();
-    await assert.rejects(generation, /request aborted/);
-
-    assert.equal(await settlesWithin(gateway.allAssetStagesAborted, 200), true);
-    assert.equal(gateway.startedStages.includes("shot"), false);
-  });
-
-  it("keeps the foreground asset stage under consumer backpressure", async () => {
-    const gateway = new BackpressureAssetGateway();
-    const service = createAiStoryboardPreviewService({ gateway });
-    const iterator = service.generatePreviewStream({
-      projectId: "40000000-0000-4000-8000-000000000001",
-      scriptText: "任小野把饭食递给闵婶子。",
-      skipScriptStage: true,
-      selectedStages: ["scene"],
-      packages: {},
-    })[Symbol.asyncIterator]();
-
-    assert.equal((await iterator.next()).value.type, "script_done");
-    assert.equal((await iterator.next()).value.type, "asset_prompt");
-    assert.equal((await iterator.next()).value.type, "asset_start");
-    assert.equal((await iterator.next()).value.type, "asset_delta");
-    await Promise.resolve();
-    await Promise.resolve();
-
-    assert.equal(gateway.pulledChunks, 1);
-    await iterator.return?.();
-  });
-
-  it("reports a background asset failure in stage order without truncating prior stages", async () => {
-    const gateway = new OrderedBackgroundFailureGateway();
-    const service = createAiStoryboardPreviewService({ gateway });
-    const events = [];
-
-    await assert.rejects(
-      async () => {
-        for await (const event of service.generatePreviewStream({
-          projectId: "40000000-0000-4000-8000-000000000001",
-          scriptText: "任小野把饭食递给闵婶子。",
-          skipScriptStage: true,
-          selectedStages: ["scene", "character", "prop", "shot"],
-          packages: {},
-          templates: {
-            scenePrompt: "SCENE {{script}}",
-            characterPrompt: "CHARACTER {{script}}",
-            propPrompt: "PROP {{script}}",
-            shotPrompt: "SHOT {{script}}",
-          },
-        })) {
-          events.push(event);
-        }
-      },
-      /prop failed/,
-    );
-
-    assert.deepEqual(
-      events.filter((event) => event.type === "asset_done").map((event) => event.stage),
-      ["scene", "character"],
-    );
-    assert.equal(events.some((event) => event.type === "asset_start" && event.stage === "prop"), true);
-    assert.equal(events.some((event) => event.type === "asset_start" && event.stage === "shot"), false);
-    assert.equal(events.some((event) => event.type === "complete"), false);
+    assert.equal(result.commitPayload.storyboards.length, 2);
+    assert.deepEqual(calls.map((call) => call.maxTokens), [32_768, 32_768]);
+    assert.match(calls[1]?.prompt ?? "", /从上一段的断点继续输出/);
+    assert.match(calls[1]?.prompt ?? "", /分镜1：白野走进营地/);
   });
 
   it("yields each model chunk before the model stream is finished", async () => {

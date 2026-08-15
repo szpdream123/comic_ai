@@ -2320,6 +2320,7 @@ async function appendCanvasRevision(
              AND operation = 'autosave'
              AND created_at >= $9::timestamptz - interval '30 seconds'
          )
+      ON CONFLICT (canvas_project_id, server_revision) DO NOTHING
     `,
     [
       randomUUID(),

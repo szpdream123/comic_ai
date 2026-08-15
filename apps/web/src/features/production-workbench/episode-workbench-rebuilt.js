@@ -196,6 +196,7 @@ export function renderEpisodeWorkbench({
     scene: mergeAssetGroup(assetLibrary.scene ?? []),
     prop: mergeAssetGroup(assetLibrary.prop ?? []),
   };
+  const workflowAssetProgress = getWorkflowAssetGenerationProgress(assetGroups);
   const normalizedActiveAssetTab = normalizeEpisodeAssetTab(activeAssetTab);
   const canShowTeamAssetLibrary = isActiveMembershipStatus(membershipStatus);
   const canUseTeamAssetLibrary = canShowTeamAssetLibrary && teamAssetLibraryEnabled === true;
@@ -360,8 +361,9 @@ export function renderEpisodeWorkbench({
             isWorkflowLayout
               ? `<div class="episode-replica-workflow-content">
                   <section class="episode-replica-workflow-section" aria-label="图片资产" data-workflow-asset-panel>
-                    <div class="episode-replica-workflow-section-head">
+                    <div class="episode-replica-workflow-section-head has-resource-progress">
                       <strong>图片资产</strong>
+                      ${renderWorkflowAssetProgress(workflowAssetProgress)}
                       ${workflowAssetBatchActions}
                     </div>
                     ${renderAssetPanel(
@@ -635,6 +637,36 @@ function renderAssetPanel(
   `;
 }
 
+function getWorkflowAssetGenerationProgress(assetGroups = {}) {
+  const assets = ["character", "scene", "prop"].flatMap((kind) => assetGroups[kind] ?? []);
+  const completed = assets.filter((asset) => {
+    const status = String(
+      asset?.generationStatus ??
+        asset?.generationResult?.status ??
+        asset?.generationResult?.workflowStatus ??
+        asset?.latestVersion?.metadata?.generationStatus ??
+        "",
+    ).toLowerCase();
+    return ["completed", "succeeded", "ready"].includes(status) || Boolean(resolveReferencePreview(asset));
+  }).length;
+  return {
+    total: assets.length,
+    completed,
+    pending: Math.max(0, assets.length - completed),
+  };
+}
+
+function renderWorkflowAssetProgress({ completed = 0, pending = 0, total = 0 } = {}) {
+  return `
+    <div class="episode-replica-workflow-resource-progress" data-workflow-resource-progress role="status" aria-label="图片资源进度：已完成 ${completed} 项，未完成 ${pending} 项">
+      <span class="is-completed">已完成 <b>${completed}</b></span>
+      <i aria-hidden="true"></i>
+      <span class="is-pending">未完成 <b>${pending}</b></span>
+      <small>${completed} / ${total}</small>
+    </div>
+  `;
+}
+
 export function renderBatchSelectionActions(scopeMode, isAllSelected, selectAllDisabled, selectedCount = 0, options = {}) {
   const isStoryboardScope = scopeMode === "storyboard";
   const batchScope = options.batchScope ? ` data-batch-scope="${escapeAttr(options.batchScope)}"` : "";
@@ -771,7 +803,7 @@ function renderEpisodeLibraryCategoryTab(id, label, activeCategory) {
 }
 
 function renderEpisodeLibraryAssetCard(asset, category, selected = false) {
-  const preview = asset.previewUrl ?? asset.preview ?? "";
+  const preview = asset.previewUrl || asset.preview || resolveStorageObjectContentUrl(asset) || "";
   const assetName = String(asset.name ?? "").trim();
   const assetFolder = String(asset.folder ?? resolveAssetLabel(category)).trim();
   return `
@@ -810,7 +842,7 @@ function renderAssetCard(asset, assetKind, active, checked) {
       <div class="episode-replica-asset-card-head">
         <div class="episode-replica-asset-title-row">
           <button class="pick ${checked ? "checked" : ""}" type="button" data-action="toggle-episode-asset-selection" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" aria-label="选择素材"></button>
-          <label class="episode-replica-asset-select">
+          <label class="episode-replica-asset-select episode-replica-asset-name-edit-hint" data-tooltip="双击修改名称">
             <input class="episode-replica-asset-name-input name" type="text" data-asset-id="${escapeAttr(asset?.id ?? "")}" data-asset-kind="${escapeAttr(assetKind)}" value="${escapeAttr(asset?.name ?? "测试素材")}" maxlength="20" aria-label="素材标题，双击修改" title="双击修改名称" readonly />
           </label>
         </div>
@@ -1959,6 +1991,11 @@ function resolveGeneratedVideoUrl(generationResult, selectedStoryboard = null) {
     generationResult?.fixedVideos?.[0]?.url,
     generationResult?.fixedVideos?.[0]?.src,
     selectedStoryboard?.previewVideo,
+  ) || resolveStorageObjectContentUrl(
+    generationResult?.result,
+    generationResult,
+    generationResult?.fixedVideos?.[0],
+    selectedStoryboard,
   );
 }
 
@@ -2560,21 +2597,25 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
   }
   return `
     <div class="episode-replica-fixed-results">
-      ${images.map((item) => `
+      ${images.map((item) => {
+        const imageUrl = readPublicMediaUrl(item.url, item.src, item.previewUrl, item.sourceUrl)
+          || resolveStorageObjectContentUrl(item, generationResult?.result, generationResult);
+        return `
         <article class="episode-replica-fixed-image-card">
           <span class="episode-replica-fixed-image-badge">${escapeHtml(item.label ?? "图片")}</span>
           <button
             class="episode-replica-fixed-image-preview"
             type="button"
             data-action="open-generation-image-preview"
-            data-image-url="${escapeAttr(item.url ?? "")}"
+            data-image-url="${escapeAttr(imageUrl)}"
             data-image-name="${escapeAttr(item.label ?? "生成图片")}"
             aria-label="放大查看${escapeAttr(item.label ?? "生成图片")}"
           >
-            <img src="${escapeAttr(item.url ?? "")}" alt="${escapeAttr(item.label ?? "generated image")}" />
+            <img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(item.label ?? "generated image")}" />
           </button>
         </article>
-      `).join("")}
+      `;
+      }).join("")}
       <div class="episode-replica-fixed-actions">
         <button type="button" data-action="episode-fixed-result-action" data-result-action="edit" data-task-id="${escapeAttr(String(taskId))}">重新编辑</button>
         <button type="button" data-action="episode-fixed-result-action" data-result-action="set-character" data-task-id="${escapeAttr(String(taskId))}" data-asset-kind="${escapeAttr(assetKind)}">${escapeHtml(resolveAssetSetLabel(assetKind))}</button>
@@ -5236,7 +5277,7 @@ function resolveReferencePreview(item) {
     item?.latestVersion?.previewUrl,
     item?.latestVersion?.metadata?.previewUrl,
   ];
-  return (
+  const publicUrl = (
     candidates.find((candidate) => {
       if (typeof candidate !== "string") {
         return false;
@@ -5254,6 +5295,25 @@ function resolveReferencePreview(item) {
       return true;
     }) ?? ""
   );
+  return publicUrl || resolveStorageObjectContentUrl(item);
+}
+
+function resolveStorageObjectContentUrl(...items) {
+  for (const item of items) {
+    const storageObjectId = [
+      item?.storageObjectId,
+      item?.fixedImageStorageObjectId,
+      item?.latestVersion?.storageObjectId,
+      item?.metadata?.storageObjectId,
+      item?.latestVersion?.metadata?.storageObjectId,
+    ]
+      .map((value) => String(value ?? "").trim())
+      .find((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+    if (storageObjectId) {
+      return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+    }
+  }
+  return "";
 }
 
 function resolveSelectedImageSource(storyboard) {

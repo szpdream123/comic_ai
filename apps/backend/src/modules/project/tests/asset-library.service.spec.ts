@@ -128,6 +128,61 @@ describe("asset library service", { concurrency: false }, () => {
     }
   });
 
+  it("seeds official assets with COS URLs when COS storage is configured", async () => {
+    const previousStorageMode = process.env.STORAGE_ADAPTER_MODE;
+    const previousBucket = process.env.STORAGE_BUCKET;
+    const previousRegion = process.env.STORAGE_REGION;
+    const previousPrefix = process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX;
+    const previousPublicBaseUrl = process.env.STORAGE_PUBLIC_BASE_URL;
+    process.env.STORAGE_ADAPTER_MODE = "cos";
+    process.env.STORAGE_BUCKET = "official-assets-test";
+    process.env.STORAGE_REGION = "ap-shanghai";
+    process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX = "officialAssets";
+    delete process.env.STORAGE_PUBLIC_BASE_URL;
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedUserAndProject(db);
+      await ensureDefaultOfficialLibraryAssets(db, {
+        now: new Date("2026-05-23T09:01:40.000Z"),
+      });
+
+      const listed = await listLibraryAssetsForActor(db, {
+        actor,
+        scope: "official",
+        category: "character",
+        query: "医生",
+        now: new Date("2026-05-23T09:01:45.000Z"),
+      });
+      const doctor = listed.assets[0];
+      assert.equal(
+        doctor?.previewUrl,
+        "https://official-assets-test.cos.ap-shanghai.myqcloud.com/officialAssets/library/characters/doctor.png",
+      );
+      assert.equal(
+        doctor?.latestVersion.storageObjectKey,
+        "officialAssets/library/characters/doctor.png",
+      );
+      const detailViews = doctor?.latestVersion.metadata.detailViews as Record<string, unknown> | undefined;
+      assert.equal(
+        detailViews?.turnaround,
+        "https://official-assets-test.cos.ap-shanghai.myqcloud.com/officialAssets/library/characters/detail/doctor-sheet.png",
+      );
+    } finally {
+      await db.close();
+      if (previousStorageMode === undefined) delete process.env.STORAGE_ADAPTER_MODE;
+      else process.env.STORAGE_ADAPTER_MODE = previousStorageMode;
+      if (previousBucket === undefined) delete process.env.STORAGE_BUCKET;
+      else process.env.STORAGE_BUCKET = previousBucket;
+      if (previousRegion === undefined) delete process.env.STORAGE_REGION;
+      else process.env.STORAGE_REGION = previousRegion;
+      if (previousPrefix === undefined) delete process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX;
+      else process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX = previousPrefix;
+      if (previousPublicBaseUrl === undefined) delete process.env.STORAGE_PUBLIC_BASE_URL;
+      else process.env.STORAGE_PUBLIC_BASE_URL = previousPublicBaseUrl;
+    }
+  });
+
   it("skips replaying official seed writes when the seed is current", async () => {
     const db = await createMigratedTestDb();
 

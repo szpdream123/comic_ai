@@ -1528,6 +1528,45 @@ function generatedOfficialCharacterDetailPath(asset: {
   return slug ? `/assets/library/official/characters/detail/${slug}-sheet.png` : null;
 }
 
+function officialSeedAssetLocation(staticPath: string) {
+  const storageMode = process.env.STORAGE_ADAPTER_MODE?.trim();
+  const bucket = process.env.STORAGE_BUCKET?.trim();
+  const region = process.env.STORAGE_REGION?.trim();
+  const relativePath = staticPath.replace(/^\/assets\/library\/official\//, "");
+  if (storageMode !== "cos" || !bucket || !region || relativePath === staticPath) {
+    return {
+      previewUrl: staticPath,
+      storageObjectKey: staticPath.replace(/^\/assets\/library\//, ""),
+    };
+  }
+
+  const rootPrefix = (process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets")
+    .replace(/^\/+|\/+$/g, "");
+  const objectKey = `${rootPrefix}/library/${relativePath}`;
+  const encodedObjectKey = objectKey.split("/").map(encodeURIComponent).join("/");
+  const configuredBaseUrl = process.env.STORAGE_PUBLIC_BASE_URL?.trim();
+  if (configuredBaseUrl) {
+    const url = new URL(configuredBaseUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/g, "")}/${encodedObjectKey}`;
+    url.search = "";
+    url.hash = "";
+    return { previewUrl: url.toString(), storageObjectKey: objectKey };
+  }
+
+  return {
+    previewUrl: `https://${bucket}.cos.${region}.myqcloud.com/${encodedObjectKey}`,
+    storageObjectKey: objectKey,
+  };
+}
+
+function officialSeedDetailViewItems(staticPreviewPath: string) {
+  return buildOfficialCharacterDetailViewItems(staticPreviewPath).map((item) => ({
+    ...item,
+    imageUrl: officialSeedAssetLocation(item.imageUrl).previewUrl,
+    thumbnailUrl: officialSeedAssetLocation(item.thumbnailUrl).previewUrl,
+  }));
+}
+
 const officialCharacterDetailViewDefinitions = [
   { key: "turnaround", label: "方位图", suffix: "sheet", sortOrder: 10, isDefault: true },
   { key: "front", label: "正面", suffix: "front", sortOrder: 20, isDefault: false },
@@ -1642,9 +1681,10 @@ async function ensureDefaultOfficialLibraryAssetsUncached(
     const generatedPreviewPath = asset.previewAssetPath ?? generatedOfficialPreviewPath(asset);
     const generatedDetailAssetPath =
       asset.detailAssetPath ?? generatedOfficialCharacterDetailPath(asset);
-    const previewUrl = generatedPreviewPath ?? buildOfficialPreviewSvg(asset);
-    const storageObjectKey = generatedPreviewPath
-      ? generatedPreviewPath.replace(/^\/assets\/library\//, "")
+    const seededPreview = generatedPreviewPath ? officialSeedAssetLocation(generatedPreviewPath) : null;
+    const previewUrl = seededPreview?.previewUrl ?? buildOfficialPreviewSvg(asset);
+    const storageObjectKey = seededPreview
+      ? seededPreview.storageObjectKey
       : `official/${asset.category}/${asset.name}.svg`;
     const mimeType = generatedPreviewPath ? "image/png" : "image/svg+xml";
     const metadata: Record<string, unknown> = {
@@ -1653,7 +1693,7 @@ async function ensureDefaultOfficialLibraryAssetsUncached(
     };
 
     if (generatedDetailAssetPath) {
-      const detailViewItems = buildOfficialCharacterDetailViewItems(previewUrl);
+      const detailViewItems = officialSeedDetailViewItems(generatedPreviewPath ?? "");
       if (detailViewItems.length > 0) {
         metadata.detailViewItems = detailViewItems;
         metadata.detailViews = officialCharacterDetailViewsFromItems(detailViewItems);
