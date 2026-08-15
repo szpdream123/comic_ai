@@ -50,7 +50,7 @@ export async function createDevDb(): Promise<DevDatabase> {
       return db;
     } catch (error) {
       await pool.end().catch(() => undefined);
-      if (attempt < 3 && isTransientDatabaseStartupError(error)) {
+      if (attempt < 3 && isTransientDatabaseConnectionError(error)) {
         const delayMs = attempt * 500;
         console.warn(`[database] PostgreSQL startup connection failed; retrying in ${delayMs}ms (attempt ${attempt + 1}/3).`);
         await sleep(delayMs);
@@ -65,7 +65,7 @@ export async function createDevDb(): Promise<DevDatabase> {
   throw new Error("PostgreSQL database initialization failed: startup retry limit reached");
 }
 
-function isTransientDatabaseStartupError(error: unknown) {
+export function isTransientDatabaseConnectionError(error: unknown) {
   const code = typeof (error as { code?: unknown })?.code === "string"
     ? (error as { code: string }).code
     : "";

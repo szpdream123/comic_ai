@@ -6913,6 +6913,67 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("refunds owner credits and reports a service interruption when AI storyboard preview loses PostgreSQL", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 20);
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+      },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138242";
+      const cookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "postgres-refund");
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const responseText = await previewResponse.text();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+      const refundEntries = await db.query<{ amount: number | string }>(
+        `SELECT amount FROM credit_ledger_entries
+         WHERE user_id = $1 AND source_type = 'ai_storyboard_preview_refund'`,
+        [userId],
+      );
+
+      assert.equal(previewResponse.status, 200);
+      assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
+      assert.equal(Number(refundEntries.rows[0]?.amount), 20);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("blocks AI storyboard preview when membership or credits are invalid", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
