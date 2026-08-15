@@ -13545,7 +13545,7 @@
       function geoOperationsState() {
         if (!state.geoOperations) {
           state.geoOperations = {
-            questions: [], evidence: [], content: [], details: {}, settings: null,
+            platforms: [], questions: [], evidence: [], content: [], details: {}, settings: null,
             selectedQuestionId: "", selectedEvidenceIds: [], loadError: "",
           };
         }
@@ -13556,12 +13556,14 @@
         const store = geoOperationsState();
         setPageLoading("geoOperations", true);
         try {
-          const [questions, evidence, content, settings] = await Promise.all([
+          const [platforms, questions, evidence, content, settings] = await Promise.all([
+            api("/api/admin/geo/platforms"),
             api("/api/admin/geo/questions"),
             api("/api/admin/geo/evidence"),
             api("/api/admin/geo/content"),
             api("/api/admin/geo/settings"),
           ]);
+          store.platforms = platforms.data || [];
           store.questions = questions.data || [];
           store.evidence = evidence.data || [];
           store.content = content.data || [];
@@ -13581,6 +13583,22 @@
         }
       }
 
+      const geoPlatformGroups = [
+        { id: "general_model", label: "综合大模型" },
+        { id: "ai_search", label: "AI搜索" },
+      ];
+
+      function geoPlatformPicker(platforms) {
+        const enabled = (platforms || []).filter((item) => item.enabled === true);
+        return `<fieldset class="geo-platform-picker"><legend>目标平台</legend><p class="metric-note">选择希望内容重点覆盖的大模型与 AI 搜索平台，至少选择一个。</p><div class="geo-platform-groups">${geoPlatformGroups.map((group) => `<section class="geo-platform-group"><strong>${escapeHtml(group.label)}</strong><div class="geo-platform-options">${enabled.filter((item) => item.group === group.id).map((item) => `<label class="checkbox-row"><input type="checkbox" name="targetPlatforms" value="${escapeAttribute(item.id)}" ${item.defaultSelected ? "checked" : ""} />${escapeHtml(item.label)}</label>`).join("")}</div></section>`).join("")}</div></fieldset>`;
+      }
+
+      function geoPlatformTags(ids, platforms) {
+        const labels = new Map((platforms || []).map((item) => [item.id, item.label]));
+        const values = Array.isArray(ids) ? ids : [];
+        return values.length ? `<div class="geo-platform-tags">${values.map((id) => `<span class="tag">${escapeHtml(labels.get(id) || id)}</span>`).join("")}</div>` : "";
+      }
+
       function geoQualityCounts(item) {
         const detail = geoOperationsState().details[item.id];
         const version = detail?.versions?.find((entry) => entry.id === item.currentDraftVersionId) || detail?.versions?.[0];
@@ -13594,7 +13612,7 @@
       function geoOperationsPage() {
         const store = geoOperationsState();
         if (store.loadError) return `<section class="state-panel" data-state="error"><strong>GEO运营暂不可用</strong><span>${escapeHtml(store.loadError)}</span><button class="btn ghost" onclick="loadGeoOperations().then(renderShell)">重新加载</button></section>`;
-        const questionRows = store.questions.length ? store.questions.map((item) => `<tr><td><input type="radio" name="geoQuestion" ${store.selectedQuestionId === item.id ? "checked" : ""} onchange="geoSelectQuestion('${item.id}')" /></td><td><strong>${escapeHtml(item.rawQuestion)}</strong><div class="metric-note">${escapeHtml(item.topic)} · ${escapeHtml(item.intent)}</div></td><td>${item.priority}</td><td><span class="tag blue">${escapeHtml(item.coverageStatus)}</span></td></tr>`).join("") : `<tr><td colspan="4">暂无问题，请先新增目标问题。</td></tr>`;
+        const questionRows = store.questions.length ? store.questions.map((item) => `<tr><td><input type="radio" name="geoQuestion" ${store.selectedQuestionId === item.id ? "checked" : ""} onchange="geoSelectQuestion('${item.id}')" /></td><td><strong>${escapeHtml(item.rawQuestion)}</strong><div class="metric-note">${escapeHtml(item.topic)} · ${escapeHtml(item.intent)}</div>${geoPlatformTags(item.targetPlatforms, store.platforms)}</td><td>${item.priority}</td><td><span class="tag blue">${escapeHtml(item.coverageStatus)}</span></td></tr>`).join("") : `<tr><td colspan="4">暂无问题，请先新增目标问题。</td></tr>`;
         const evidenceRows = store.evidence.length ? store.evidence.map((item) => `<tr><td><input type="checkbox" ${store.selectedEvidenceIds.includes(item.id) ? "checked" : ""} ${item.reviewStatus === "approved" && item.publicUseAllowed ? "" : "disabled"} onchange="geoToggleEvidence('${item.id}', this.checked)" /></td><td><strong>${escapeHtml(item.name)}</strong><div class="metric-note">${escapeHtml(item.factText)}</div></td><td><span class="tag ${item.reviewStatus === "approved" ? "blue" : "warn"}">${escapeHtml(item.reviewStatus)}</span></td><td>${item.publicUseAllowed ? "允许公开" : "仅内部"}</td></tr>`).join("") : `<tr><td colspan="4">暂无证据，请先录入并审核证据。</td></tr>`;
         const contentRows = store.content.length ? store.content.map((item) => {
           const quality = geoQualityCounts(item);
@@ -13603,10 +13621,20 @@
           const route = { guide: "guides", case: "cases", report: "reports", answer: "answers" }[item.contentType];
           return `<tr><td><strong>${escapeHtml(quality.title)}</strong><div class="metric-note">/${route}/${escapeHtml(item.slug)}</div></td><td><span class="tag blue">${escapeHtml(item.status)}</span></td><td><span class="tag ${quality.blockers ? "danger" : "blue"}">阻断 ${quality.blockers}</span> <span class="tag warn">警告 ${quality.warnings}</span></td><td><div class="row-actions"><button class="btn ghost" ${canReview ? "" : "disabled"} onclick="geoSubmitReview('${item.id}', ${item.lockVersion})">提交审核</button><button class="btn primary" ${canPublish ? "" : "disabled"} onclick="geoPublishContent('${item.id}')">发布官网</button>${item.currentPublishedVersionId ? `<a class="btn ghost" href="/${route}/${encodeURIComponent(item.slug)}" target="_blank">预览</a>` : ""}</div></td></tr>`;
         }).join("") : `<tr><td colspan="4">暂无内容草稿。</td></tr>`;
-        return `<div class="section-stack">
+        return `<style>
+          .geo-platform-picker{margin:0;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-subtle,#f8fafc)}
+          .geo-platform-picker legend{padding:0 6px;font-weight:700;color:var(--text,#172635)}
+          .geo-platform-picker>.metric-note{margin:0 0 12px}
+          .geo-platform-groups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+          .geo-platform-group{display:grid;gap:8px;align-content:start}
+          .geo-platform-options{display:grid;gap:7px}
+          .geo-platform-options .checkbox-row{margin:0}
+          .geo-platform-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+          @media(max-width:720px){.geo-platform-groups{grid-template-columns:1fr}}
+        </style><div class="section-stack">
           <section class="card"><div class="toolbar"><div><div class="eyebrow">灵曦AI · 国内GEO</div><h2>GEO运营</h2><p class="metric-note">从目标问题和审核证据生成草稿，经自动质检后由人工审核发布。</p></div><button class="btn ghost" onclick="loadGeoOperations().then(renderShell)">刷新</button></div></section>
           <section class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));align-items:start">
-            <article class="card"><div class="toolbar"><h3>问题库</h3><span class="tag blue">${store.questions.length}</span></div><form onsubmit="geoCreateQuestion(event)" class="section-stack"><label class="field"><span>目标问题</span><input name="rawQuestion" required placeholder="例如：AI短剧怎样保持角色一致？" /></label><div class="form-grid"><label class="field"><span>主题</span><input name="topic" required /></label><label class="field"><span>意图</span><select name="intent"><option value="tutorial">教程</option><option value="comparison">对比</option><option value="decision">决策</option></select></label></div><label class="field"><span>优先级</span><input name="priority" type="number" min="0" max="100" value="80" /></label><button class="btn ghost" type="submit">新增问题</button></form></article>
+            <article class="card"><div class="toolbar"><h3>问题库</h3><span class="tag blue">${store.questions.length}</span></div><form onsubmit="geoCreateQuestion(event)" class="section-stack"><label class="field"><span>目标问题</span><input name="rawQuestion" required placeholder="例如：AI短剧怎样保持角色一致？" /></label><div class="form-grid"><label class="field"><span>主题</span><input name="topic" required /></label><label class="field"><span>意图</span><select name="intent"><option value="tutorial">教程</option><option value="comparison">对比</option><option value="decision">决策</option></select></label></div><label class="field"><span>优先级</span><input name="priority" type="number" min="0" max="100" value="80" /></label>${geoPlatformPicker(store.platforms)}<div class="form-error" role="alert"></div><button class="btn ghost" type="submit">新增问题</button></form></article>
             <article class="card"><div class="toolbar"><h3>证据库</h3><span class="tag blue">${store.evidence.length}</span></div><form onsubmit="geoCreateEvidence(event)" class="section-stack"><label class="field"><span>证据名称</span><input name="name" required /></label><label class="field"><span>可公开事实</span><textarea name="factText" required></textarea></label><label class="field"><span>来源网址</span><input name="sourceUrl" type="url" /></label><label class="checkbox-row"><input name="publicUseAllowed" type="checkbox" checked />允许公开引用并直接审核通过</label><button class="btn ghost" type="submit">新增证据</button></form></article>
             <article class="card"><div class="toolbar"><h3>生成草稿</h3><span class="tag blue">自动质检</span></div><form onsubmit="geoGenerateDraft(event)" class="section-stack"><label class="field"><span>内容类型</span><select name="contentType"><option value="guide">指南</option><option value="answer">问答</option><option value="case">案例</option><option value="report">报告</option></select></label><label class="field"><span>英文slug</span><input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="character-consistency" /></label><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><p class="metric-note">需选择1个问题和至少1条已审核、允许公开的证据。</p><button class="btn primary" type="submit">生成草稿</button></form></article>
           </section>
@@ -13621,7 +13649,12 @@
         const form = event.currentTarget;
         const data = new FormData(form);
         const error = form.querySelector(".form-error") || { textContent: "" };
-        await runAdminMutation(form, error, () => api("/api/admin/geo/questions", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-question-${Date.now()}` }, body: JSON.stringify({ rawQuestion: data.get("rawQuestion"), topic: data.get("topic"), intent: data.get("intent"), priority: Number(data.get("priority")), targetPlatforms: ["deepseek", "doubao", "baidu"], productCapabilities: [], notes: "" }) }), "问题已新增");
+        const targetPlatforms = data.getAll("targetPlatforms").map(String).filter(Boolean);
+        if (!targetPlatforms.length) {
+          error.textContent = "至少选择一个目标平台";
+          return;
+        }
+        await runAdminMutation(form, error, () => api("/api/admin/geo/questions", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-question-${Date.now()}` }, body: JSON.stringify({ rawQuestion: data.get("rawQuestion"), topic: data.get("topic"), intent: data.get("intent"), priority: Number(data.get("priority")), targetPlatforms, productCapabilities: [], notes: "" }) }), "问题已新增");
         form.reset(); await loadGeoOperations(); renderShell();
       }
       async function geoCreateEvidence(event) {

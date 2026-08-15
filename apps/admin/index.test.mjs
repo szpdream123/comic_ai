@@ -16,6 +16,82 @@ test("admin shell exposes the super-admin GEO workflow", () => {
   assert.doesNotMatch(script, /一键发布/);
 });
 
+test("admin GEO platform picker loads the catalog, submits selections, and preserves unknown labels", async () => {
+  const runtimeStart = script.indexOf("function geoOperationsState");
+  const runtimeEnd = script.indexOf("function geoQualityCounts", runtimeStart);
+  const submitStart = script.indexOf("async function geoCreateQuestion");
+  const submitEnd = script.indexOf("async function geoCreateEvidence", submitStart);
+  assert.notEqual(runtimeStart, -1, "GEO runtime exists");
+  assert.notEqual(runtimeEnd, -1, "GEO platform helpers are followed by quality helpers");
+  assert.notEqual(submitStart, -1, "GEO question submission exists");
+  assert.notEqual(submitEnd, -1, "GEO question submission has a stable boundary");
+
+  const requests = [];
+  const result = {};
+  const platforms = [
+    { id: "deepseek", label: "DeepSeek", group: "general_model", enabled: true, defaultSelected: true },
+    { id: "baidu", label: "百度文心助手", group: "general_model", enabled: true, defaultSelected: true },
+    { id: "quark", label: "夸克AI", group: "ai_search", enabled: true, defaultSelected: true },
+  ];
+  const context = {
+    result,
+    requests,
+    state: {},
+    Date,
+    escapeHtml: (value) => String(value),
+    escapeAttribute: (value) => String(value),
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+      getAll(name) { return this.form.values[name] ?? []; }
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: options?.body ? JSON.parse(options.body) : null });
+      if (path === "/api/admin/geo/platforms") return { data: platforms };
+      if (path === "/api/admin/geo/settings") return { data: { defaultModelCode: "test-model" } };
+      return { data: [] };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    setPageLoading: () => undefined,
+    setPageForbidden: () => undefined,
+    clearPageForbidden: () => undefined,
+    renderShell: () => undefined,
+  };
+  const runtimeSource = script.slice(runtimeStart, runtimeEnd);
+  const submitSource = script.slice(submitStart, submitEnd);
+  vm.runInNewContext(`${runtimeSource}\n${submitSource}\nresult.load = loadGeoOperations; result.state = geoOperationsState; result.picker = geoPlatformPicker; result.tags = geoPlatformTags; result.create = geoCreateQuestion;`, context);
+
+  await result.load();
+  assert.equal(requests.some((request) => request.path === "/api/admin/geo/platforms"), true);
+  assert.deepEqual(Array.from(result.state().platforms, (item) => item.id), ["deepseek", "baidu", "quark"]);
+
+  const picker = result.picker(platforms);
+  assert.match(picker, /综合大模型/);
+  assert.match(picker, /AI搜索/);
+  assert.match(picker, /name="targetPlatforms"/);
+  assert.match(picker, /value="baidu" checked/);
+  const tags = result.tags(["baidu", "legacy-platform"], platforms);
+  assert.match(tags, /百度文心助手/);
+  assert.match(tags, /legacy-platform/);
+
+  requests.length = 0;
+  const error = { textContent: "" };
+  const form = {
+    values: { rawQuestion: "问题", topic: "主题", intent: "tutorial", priority: "80", targetPlatforms: ["deepseek", "quark"] },
+    querySelector: () => error,
+    reset: () => undefined,
+  };
+  await result.create({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests[0].path, "/api/admin/geo/questions");
+  assert.deepEqual(Array.from(requests[0].payload.targetPlatforms), ["deepseek", "quark"]);
+
+  requests.length = 0;
+  form.values.targetPlatforms = [];
+  await result.create({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests.length, 0);
+  assert.equal(error.textContent, "至少选择一个目标平台");
+});
+
 test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);
