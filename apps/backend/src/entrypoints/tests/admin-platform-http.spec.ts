@@ -37,16 +37,29 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     try {
       const anonymous = await fetch(`${server.origin}/api/admin/geo/questions`);
       assert.equal(anonymous.status, 401);
+      const anonymousPlatforms = await fetch(`${server.origin}/api/admin/geo/platforms`);
+      assert.equal(anonymousPlatforms.status, 401);
 
       const opsDb = await createMigratedTestDb();
       const { server: opsServer, cookie: opsCookie } = await createLoggedInAdminServer(opsDb, { role: "ops_admin" });
       try {
         const forbidden = await fetch(`${opsServer.origin}/api/admin/geo/questions`, { headers: { cookie: opsCookie } });
         assert.equal(forbidden.status, 403);
+        const forbiddenPlatforms = await fetch(`${opsServer.origin}/api/admin/geo/platforms`, { headers: { cookie: opsCookie } });
+        assert.equal(forbiddenPlatforms.status, 403);
       } finally {
         await opsServer.close();
         await opsDb.close();
       }
+
+      const platformsResponse = await fetch(`${server.origin}/api/admin/geo/platforms`, { headers: { cookie } });
+      const platforms = await platformsResponse.json();
+      assert.equal(platformsResponse.status, 200, JSON.stringify(platforms));
+      assert.deepEqual(platforms.data.map((item: { id: string }) => item.id), [
+        "deepseek", "doubao", "baidu", "yuanbao", "kimi", "tongyi",
+        "zhipu", "xinghuo", "quark", "metaso", "nami",
+      ]);
+      assert.equal(platforms.data.find((item: { id: string }) => item.id === "baidu")?.label, "百度文心助手");
 
       const questionBody = JSON.stringify({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "" });
       const missingIdempotency = await fetch(`${server.origin}/api/admin/geo/questions`, {

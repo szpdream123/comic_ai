@@ -103,6 +103,7 @@ import {
 import { TextModelGatewayError } from "../modules/model-gateway/text-model-gateway.errors.ts";
 import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
 import { createGeoGenerationService, parseGeoGeneratedDocument, recoverStaleGeoGenerationRuns } from "../modules/geo/geo-generation.service.ts";
+import { listGeoPlatforms } from "../modules/geo/geo-platforms.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
 import { geoRuntimeConfigKey, loadGeoRuntimeSettings, loadGeoRuntimeSettingsRevision, normalizeGeoRuntimeSettings } from "../modules/geo/geo-settings.ts";
@@ -18143,6 +18144,9 @@ export function createPhoneAuthDevServer(
           contentService: geoContentService,
         });
 
+        if (request.method === "GET" && pathname === "/api/admin/geo/platforms") {
+          return writeJson(response, { status: 200, body: { data: listGeoPlatforms() } });
+        }
         if (request.method === "GET" && pathname === "/api/admin/geo/questions") {
           return writeJson(response, await geoContentService.listQuestions());
         }
