@@ -92,6 +92,37 @@ test("admin GEO platform picker loads the catalog, submits selections, and prese
   assert.equal(error.textContent, "至少选择一个目标平台");
 });
 
+test("admin GEO entry cards expose a narrow-screen single-column layout", () => {
+  const pageStart = script.indexOf("function geoOperationsPage");
+  const pageEnd = script.indexOf("async function geoCreateQuestion", pageStart);
+  assert.notEqual(pageStart, -1, "GEO page renderer exists");
+  assert.notEqual(pageEnd, -1, "GEO page renderer has a stable boundary");
+
+  const context = {
+    result: "",
+    geoOperationsState: () => ({
+      loadError: "",
+      platforms: [],
+      questions: [],
+      evidence: [],
+      content: [],
+      details: {},
+      settings: {},
+      selectedQuestionId: "",
+      selectedEvidenceIds: [],
+    }),
+    escapeHtml: (value) => String(value ?? ""),
+    geoPlatformTags: () => "",
+    geoPlatformPicker: () => "",
+    geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+  };
+  vm.runInNewContext(`${script.slice(pageStart, pageEnd)}\nresult = geoOperationsPage();`, context);
+
+  assert.match(context.result, /class="grid geo-operation-entry-grid"/);
+  assert.match(context.result, /@media\(max-width:720px\)\{\.geo-operation-entry-grid\{grid-template-columns:1fr\}\}/);
+  assert.doesNotMatch(context.result, /class="grid" style="grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+});
+
 test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);
