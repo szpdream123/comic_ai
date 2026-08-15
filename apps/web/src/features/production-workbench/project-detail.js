@@ -1394,6 +1394,7 @@ function renderGlobalOverlays(ui = {}, session = {}) {
     ${renderAnnouncementPanel(ui)}
     ${renderAccountSettingsDrawer(ui, session)}
     ${renderInviteGiftDrawer(ui)}
+    ${renderFirstLoginGuide(ui.firstLoginGuide)}
   </div>`;
 }
 
@@ -2916,7 +2917,7 @@ export function renderWorkbenchRail(activeNavTab, session = {}, ui = {}) {
   return `
     <aside class="workbench-rail persistent" aria-label="工作台导航">
       <nav class="rail-nav" role="tablist" aria-label="主导航">
-        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab)).join("")}
+        ${railTabs.map((tab) => renderRailTab(tab, activeNavTab, resolveFirstLoginGuideTargetKey(ui.firstLoginGuide))).join("")}
       </nav>
       <button class="rail-item rail-bottom" type="button" data-action="logout">${isAnonymous ? "登录" : "退出"}</button>
     </aside>
@@ -2954,7 +2955,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
   const isWorkflowLayout = ui.episodeWorkbenchLayout === "workflow";
 
   return `
-    <section class="episode-workbench-screen" aria-label="episode-workbench">
+    <section class="episode-workbench-screen ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "storyboard-workbench" ? "first-login-guide-target" : ""}" aria-label="episode-workbench" data-first-login-target="storyboard-workbench">
       ${renderEpisodeWorkbench({
         session,
         layoutMode: isWorkflowLayout ? "workflow" : "standard",
@@ -3082,6 +3083,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         projectLibraryAssetsByType: ui.projectLibraryAssetsByType ?? null,
         projectOtherAssetMediaType: normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
         projectDetail: ui.projectDetail ?? null,
+        firstLoginGuideTargetKey: resolveFirstLoginGuideTargetKey(ui.firstLoginGuide),
       })}
       ${renderInlineStatusToast(ui, "interior-toast")}
     </section>
@@ -3321,7 +3323,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
 
   return `
     <section class="project-interior" aria-label="项目内部工作台">
-      ${renderProjectWorkbenchNav(activeInteriorSection, detailState)}
+      ${renderProjectWorkbenchNav(activeInteriorSection, detailState, resolveFirstLoginGuideTargetKey(ui.firstLoginGuide))}
 
       <main class="project-interior-main ${activeInteriorSection === "assets" ? "asset-library-mode" : ""}">
         ${
@@ -3587,7 +3589,7 @@ function renderProjectOverviewInterior({ state, ui, detailState, aspectRatio, ha
                   <div class="episode-canvas-copy always-visible">
                     <strong>从这里开始创建第一集</strong>
                     <p class="episode-canvas-description">创建一个单集，开始安排剧本、分镜和生成内容。</p>
-                    <button type="button" class="episode-empty-create-button" data-action="open-single-episode-flow">
+                    <button type="button" class="episode-empty-create-button ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "create-first-episode-button" ? "first-login-guide-target" : ""}" data-action="open-single-episode-flow" data-first-login-target="create-first-episode-button">
                       <span aria-hidden="true">＋</span>
                       创建第一集
                     </button>
@@ -3650,7 +3652,7 @@ function renderOverviewSingleEpisodeLaunch() {
         <div class="episode-launch-copy">
           <h2>单集创建</h2>
           <p>手动创建单集文件，先搭建目录，再补充分镜和生成内容。</p>
-          <button class="episode-launch-button" type="button" data-action="open-single-episode-flow">
+          <button class="episode-launch-button" type="button" data-action="open-single-episode-flow" data-first-login-target="create-first-episode-button">
             <span aria-hidden="true">⊕</span>
             单集创建
           </button>
@@ -3669,7 +3671,7 @@ function renderEpisodeCreationHub(ui) {
           <div class="episode-launch-copy">
             <h2>单集创建</h2>
             <p>手动创建单集文件，先搭建目录，再补充分镜和生成内容。</p>
-            <button class="episode-launch-button" type="button" data-action="open-single-episode-flow">
+            <button class="episode-launch-button ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "create-first-episode-button" ? "first-login-guide-target" : ""}" type="button" data-action="open-single-episode-flow" data-first-login-target="create-first-episode-button">
               <span aria-hidden="true">⊕</span>
               单集创建
             </button>
@@ -3694,7 +3696,7 @@ function renderEpisodeHub({ episodes = [], ui }) {
             <div class="episode-launch-copy">
               <h2>单集创建</h2>
               <p>手动创建单集文件，先搭建目录，再补充分镜和生成内容。</p>
-              <button class="episode-launch-button" type="button" data-action="open-single-episode-flow">
+              <button class="episode-launch-button ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "create-first-episode-button" ? "first-login-guide-target" : ""}" type="button" data-action="open-single-episode-flow" data-first-login-target="create-first-episode-button">
                 <span aria-hidden="true">⊕</span>
                 单集创建
               </button>
@@ -3762,6 +3764,7 @@ function renderSingleEpisodeModal(ui, state = {}) {
   const selectedTextModelCode = resolveSingleEpisodeTextModelCode(ui);
   const scriptPicker = resolveSingleEpisodeScriptPicker(state, ui);
   const scriptInput = truncateScriptTextByCharacters(ui.singleEpisodeScript, 5000);
+  const guideTargetKey = resolveFirstLoginGuideTargetKey(ui.firstLoginGuide);
   return `
     <section class="modal-backdrop" role="dialog" aria-modal="true" aria-label="新建剧集">
       <div class="single-episode-modal single-episode-studio">
@@ -3772,7 +3775,7 @@ function renderSingleEpisodeModal(ui, state = {}) {
           <button class="modal-close" type="button" data-action="close-single-episode-modal" aria-label="关闭">×</button>
         </div>
         ${renderSingleEpisodeScriptImport(scriptPicker, isCheckingAiStoryboard, ui.singleEpisodeScriptImportMenu)}
-        <label class="single-episode-field single-episode-script-field">
+        <label class="single-episode-field single-episode-script-field ${guideTargetKey === "script-input" ? "first-login-guide-target" : ""}" data-first-login-target="script-input">
           <textarea id="single-episode-script-input" maxlength="5000" placeholder="例如：深夜暴雨中，女主在便利店门口第一次遇见失忆的男主，空气里有霓虹反光和一点危险感。">${escapeHtml(scriptInput)}</textarea>
           <span class="single-episode-count">${[...scriptInput].length}/5000</span>
         </label>
@@ -3790,16 +3793,18 @@ function renderSingleEpisodeModal(ui, state = {}) {
           <div class="single-episode-toolbar-left">
             <div class="single-episode-look-controls single-episode-skill-controls">
               ${renderSingleEpisodeTextModelControl(ui)}
-              ${renderEpisodePromptSkillControl({
-                skills: resolveEpisodePromptSkillItems(ui),
-                selectedByCategory: ui.selectedEpisodePromptSkillIds,
-                loading: ui.episodePromptSkillLoading,
-              })}
+              <div class="${guideTargetKey === "prompt-skill-selector" ? "first-login-guide-target" : ""}" data-first-login-target="prompt-skill-selector">
+                ${renderEpisodePromptSkillControl({
+                  skills: resolveEpisodePromptSkillItems(ui),
+                  selectedByCategory: ui.selectedEpisodePromptSkillIds,
+                  loading: ui.episodePromptSkillLoading,
+                })}
+              </div>
             </div>
           </div>
           <div class="single-episode-actions">
             <button class="single-episode-ghost-action" type="button" data-action="create-empty-single-episode" ${isCheckingAiStoryboard ? "disabled" : ""}>创建空白章节</button>
-            <button class="primary-action single-episode-ai-action" type="button" data-action="confirm-single-episode" ${isCheckingAiStoryboard || !selectedSkillCount || !selectedTextModelCode ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
+            <button class="primary-action single-episode-ai-action ${guideTargetKey === "generate-storyboard-button" ? "first-login-guide-target" : ""}" type="button" data-action="confirm-single-episode" data-first-login-target="generate-storyboard-button" ${isCheckingAiStoryboard || !selectedSkillCount || !selectedTextModelCode ? "disabled" : ""}>${escapeHtml(isCheckingAiStoryboard ? "正在分析中..." : aiStoryboardActionLabel)}</button>
           </div>
         </div>
       </div>
@@ -3812,8 +3817,9 @@ function renderSingleEpisodeTextModelControl(ui = {}) {
   const selectedModelCode = resolveSingleEpisodeTextModelCode(ui);
   const selectedModel = models.find((model) => model.modelCode === selectedModelCode) ?? models[0];
   const isOpen = ui.singleEpisodeLookPanel === "text-model";
+  const isGuideTarget = resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "text-model-selector";
   return `
-    <section class="single-episode-look-select single-episode-text-model-control ${isOpen ? "open" : ""}" aria-label="文本模型">
+    <section class="single-episode-look-select single-episode-text-model-control ${isOpen ? "open" : ""} ${isGuideTarget ? "first-login-guide-target" : ""}" aria-label="文本模型" data-first-login-target="text-model-selector">
       <div class="single-episode-look-label"><span>文本模型</span></div>
       <button
         class="single-episode-look-trigger single-episode-text-model-trigger"
@@ -4447,7 +4453,7 @@ export function renderSingleEpisodeAiPreview(ui) {
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
-        <div class="single-episode-ai-preview ready">
+        <div class="single-episode-ai-preview ready ${guideTargetKey === "storyboard-preview-surface" ? "first-login-guide-target" : ""}" data-first-login-target="storyboard-preview-surface">
           <div class="single-episode-ai-preview-head">
             <div>
               <p>灵曦AI</p>
@@ -4461,6 +4467,7 @@ export function renderSingleEpisodeAiPreview(ui) {
                 showRegenerate: true,
                 canRegenerate: !preview.regeneratingStage,
                 regeneratingStage: preview.regeneratingStage,
+                guideTargetKey,
               }))
               .join("")}
           </div>
@@ -5069,17 +5076,26 @@ function renderSingleEpisodeAiTable(table, key, options = {}) {
   if (options.previewMode === "live" && !hasSingleEpisodeAiLiveTableContent(table, key)) {
     return "";
   }
+  const guideTargetByTable = {
+    scenes: "scene-preview-table",
+    characters: "character-preview-table",
+    props: "prop-preview-table",
+    storyboards: "storyboard-preview-table",
+  };
+  const guideTargetKey = guideTargetByTable[key] ?? "";
+  const isGuideTarget = guideTargetKey && options.guideTargetKey === guideTargetKey;
   const tableCardClasses = [
     "single-episode-ai-table-card",
     escapeAttr(key),
     key === "storyboards" && isChapterStoryboardTable(columns) ? "chapter-storyboards" : "",
+    isGuideTarget ? "first-login-guide-target" : "",
   ].filter(Boolean).join(" ");
   if (key === "script") {
     return renderSingleEpisodeAiScriptText(table, options);
   }
   const regenerateAction = renderSingleEpisodeAiStageRegenerateAction(key, options);
   return `
-    <article class="${tableCardClasses}">
+    <article class="${tableCardClasses}"${guideTargetKey ? ` data-first-login-target="${guideTargetKey}"` : ""}>
       <header>
         <strong>${escapeHtml(title)}</strong>
         <div class="single-episode-ai-table-actions">
@@ -5934,13 +5950,15 @@ function truncateEpisodeTitle(value, maxLength = 10) {
   return [...title].length > maxLength ? `${[...title].slice(0, maxLength).join("")}...` : title;
 }
 
-function renderInteriorNavItem(item, active = false) {
+function renderInteriorNavItem(item, active = false, guideTargetKey = "") {
+  const isGuideTarget = item.id === "episodes" && guideTargetKey === "episode-module-entry";
   return `
     <button
-      class="interior-nav-item ${active ? "active" : ""}"
+      class="interior-nav-item ${active ? "active" : ""} ${isGuideTarget ? "first-login-guide-target" : ""}"
       type="button"
       data-action="set-project-interior-section"
       data-section="${escapeHtml(item.id)}"
+      ${item.id === "episodes" ? 'data-first-login-target="episode-module-entry"' : ""}
     >
       <span class="interior-nav-item__icon" aria-hidden="true">${item.icon}</span>
       <span class="interior-nav-item__copy">
@@ -5950,12 +5968,12 @@ function renderInteriorNavItem(item, active = false) {
   `;
 }
 
-function renderProjectWorkbenchNav(activeInteriorSection, detailState) {
+function renderProjectWorkbenchNav(activeInteriorSection, detailState, guideTargetKey = "") {
   return `
     <section class="project-workbench-nav-shell" aria-label="项目工作台导航">
       <nav class="project-workbench-nav" aria-label="项目内导航">
         ${INTERIOR_NAV_ITEMS.map((item) =>
-          renderInteriorNavItem(item, activeInteriorSection === item.id),
+          renderInteriorNavItem(item, activeInteriorSection === item.id, guideTargetKey),
         ).join("")}
       </nav>
     </section>
@@ -12484,6 +12502,7 @@ function renderProjectGallery({ ui, session }) {
                 ui.projectCardMenuId === project.id,
                 selectedIds.has(String(project.id ?? "")),
                 !isTeamMember,
+                resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "recent-project-card" && ui.selectedProjectCardId === project.id,
               )).join("")
             : isTeamMember && !searchQuery
               ? renderTeamMemberAssignmentEmptyState("项目")
@@ -12493,7 +12512,7 @@ function renderProjectGallery({ ui, session }) {
       ${renderInlineStatusToast(ui)}
       ${snapshot.totalProjects ? renderProjectGalleryPagination(snapshot.totalProjects, snapshot.currentPage, snapshot.totalPages, snapshot.projectsPerPage) : ""}
       <div class="project-gallery-footer">
-        ${isTeamMember ? "" : `<button class="hero-cta gallery-create-button" type="button" data-action="open-create-modal">创建项目</button>`}
+        ${isTeamMember ? "" : `<button class="hero-cta gallery-create-button ${resolveFirstLoginGuideTargetKey(ui.firstLoginGuide) === "create-project-button" ? "first-login-guide-target" : ""}" type="button" data-action="open-create-modal" data-first-login-target="create-project-button">创建项目</button>`}
       </div>
     </section>
   `;
@@ -12630,7 +12649,7 @@ function buildProjectPageItems(currentPage, totalPages) {
   return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
 }
 
-function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true) {
+function renderProjectCard(project, isMenuOpen, isSelected = false, canDelete = true, isGuideTarget = false) {
   const hasCover = Boolean(project.coverImageUrl);
   const coverInputId = `project-cover-input-${escapeHtml(project.id)}`;
   return `
@@ -13031,15 +13050,17 @@ function getProjectCreatedAtValue(project) {
   return 0;
 }
 
-function renderRailTab(tab, activeNavTab) {
+function renderRailTab(tab, activeNavTab, guideTargetKey = "") {
+  const isGuideTarget = tab.id === "project" && guideTargetKey === "project-module-entry";
   const tabButton = `
     <button
-      class="rail-item ${tab.id === activeNavTab ? "active" : ""}"
+      class="rail-item ${tab.id === activeNavTab ? "active" : ""} ${isGuideTarget ? "first-login-guide-target" : ""}"
       type="button"
       role="tab"
       aria-selected="${tab.id === activeNavTab}"
       data-action="set-nav-tab"
       data-tab="${tab.id}"
+      ${tab.id === "project" ? 'data-first-login-target="project-module-entry"' : ""}
     >
       <span class="rail-glyph" aria-hidden="true">${renderRailIcon(tab.icon)}</span>
       <span class="rail-label">${tab.label}</span>

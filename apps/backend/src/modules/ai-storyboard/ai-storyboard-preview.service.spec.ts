@@ -1476,3 +1476,231 @@ class ManualStreamGateway implements TextChatGatewayLike {
     }
   }
 }
+
+class ControlledParallelAssetGateway implements TextChatGatewayLike {
+  readonly startedStages: string[] = [];
+  readonly allAssetStagesStarted: Promise<void>;
+  private readonly releaseStage: Record<"scene" | "character" | "prop", () => void>;
+  private readonly releasedStage: Record<"scene" | "character" | "prop", Promise<void>>;
+  private resolveAllAssetStagesStarted!: () => void;
+  private readonly expectedStages: Array<"scene" | "character" | "prop">;
+
+  constructor(expectedStages: Array<"scene" | "character" | "prop"> = ["scene", "character", "prop"]) {
+    this.expectedStages = expectedStages;
+    this.allAssetStagesStarted = new Promise((resolve) => {
+      this.resolveAllAssetStagesStarted = resolve;
+    });
+    const releases = ["scene", "character", "prop"].map((stage) => {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return [stage, { release, released }] as const;
+    });
+    const controls = Object.fromEntries(releases) as Record<
+      "scene" | "character" | "prop",
+      { release: () => void; released: Promise<void> }
+    >;
+    this.releaseStage = {
+      scene: controls.scene.release,
+      character: controls.character.release,
+      prop: controls.prop.release,
+    };
+    this.releasedStage = {
+      scene: controls.scene.released,
+      character: controls.character.released,
+      prop: controls.prop.released,
+    };
+  }
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    this.startedStages.push(stage);
+    if (this.expectedStages.every((item) => this.startedStages.includes(item))) {
+      this.resolveAllAssetStagesStarted();
+    }
+    if (stage !== "shot") {
+      await this.releasedStage[stage];
+    }
+    yield {
+      scene: JSON.stringify({ scenes: [{ sceneName: "旧木屋" }] }),
+      character: JSON.stringify({ characters: [{ characterName: "任小野" }] }),
+      prop: JSON.stringify({ props: [{ propName: "饭食" }] }),
+      shot: JSON.stringify({ storyboards: [{ shotNo: 1, plot: "递出饭食" }] }),
+    }[stage];
+  }
+
+  release(stage: "scene" | "character" | "prop") {
+    this.releaseStage[stage]();
+  }
+}
+
+class FailingParallelAssetGateway implements TextChatGatewayLike {
+  readonly startedStages: string[] = [];
+  readonly allSiblingsAborted: Promise<void>;
+  private readonly allAssetStagesStarted: Promise<void>;
+  private resolveAllAssetStagesStarted!: () => void;
+  private resolveAllSiblingsAborted!: () => void;
+  private releaseWaiting!: () => void;
+  private readonly waitingReleased: Promise<void>;
+  private readonly abortedStages = new Set<string>();
+
+  constructor() {
+    this.allAssetStagesStarted = new Promise((resolve) => {
+      this.resolveAllAssetStagesStarted = resolve;
+    });
+    this.allSiblingsAborted = new Promise((resolve) => {
+      this.resolveAllSiblingsAborted = resolve;
+    });
+    this.waitingReleased = new Promise((resolve) => {
+      this.releaseWaiting = resolve;
+    });
+  }
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string; signal?: AbortSignal }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    this.startedStages.push(stage);
+    if (["scene", "character", "prop"].every((item) => this.startedStages.includes(item))) {
+      this.resolveAllAssetStagesStarted();
+    }
+    if (stage === "scene") {
+      await this.allAssetStagesStarted;
+      throw new Error("scene failed");
+    }
+    if (stage === "character" || stage === "prop") {
+      await Promise.race([
+        this.waitingReleased,
+        new Promise<void>((resolve) => {
+          input.signal?.addEventListener("abort", () => {
+            this.abortedStages.add(stage);
+            if (this.abortedStages.has("character") && this.abortedStages.has("prop")) {
+              this.resolveAllSiblingsAborted();
+            }
+            resolve();
+          }, { once: true });
+        }),
+      ]);
+      return;
+    }
+    yield JSON.stringify({ storyboards: [{ shotNo: 1, plot: "不应生成" }] });
+  }
+
+  releaseAll() {
+    this.releaseWaiting();
+  }
+}
+
+class CancellationObservingParallelAssetGateway implements TextChatGatewayLike {
+  readonly startedStages: string[] = [];
+  readonly allAssetStagesStarted: Promise<void>;
+  readonly allAssetStagesAborted: Promise<void>;
+  private resolveAllAssetStagesStarted!: () => void;
+  private resolveAllAssetStagesAborted!: () => void;
+  private readonly abortedStages = new Set<string>();
+
+  constructor() {
+    this.allAssetStagesStarted = new Promise((resolve) => {
+      this.resolveAllAssetStagesStarted = resolve;
+    });
+    this.allAssetStagesAborted = new Promise((resolve) => {
+      this.resolveAllAssetStagesAborted = resolve;
+    });
+  }
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string; signal?: AbortSignal }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    this.startedStages.push(stage);
+    if (["scene", "character", "prop"].every((item) => this.startedStages.includes(item))) {
+      this.resolveAllAssetStagesStarted();
+    }
+    if (stage === "shot") {
+      yield JSON.stringify({ storyboards: [] });
+      return;
+    }
+    await new Promise<void>((_resolve, reject) => {
+      input.signal?.addEventListener("abort", () => {
+        this.abortedStages.add(stage);
+        if (["scene", "character", "prop"].every((item) => this.abortedStages.has(item))) {
+          this.resolveAllAssetStagesAborted();
+        }
+        reject(new Error("request aborted"));
+      }, { once: true });
+    });
+  }
+}
+
+class BackpressureAssetGateway implements TextChatGatewayLike {
+  pulledChunks = 0;
+
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson() {
+    this.pulledChunks += 1;
+    yield '{"scenes":[';
+    this.pulledChunks += 1;
+    yield '{"sceneName":"旧木屋"}]}';
+  }
+}
+
+class OrderedBackgroundFailureGateway implements TextChatGatewayLike {
+  async completeJson() {
+    throw new Error("completeJson should not be called");
+  }
+
+  async *streamJson(input: { prompt: string; signal?: AbortSignal }) {
+    const stage = input.prompt.startsWith("SCENE")
+      ? "scene"
+      : input.prompt.startsWith("CHARACTER")
+        ? "character"
+        : input.prompt.startsWith("PROP")
+          ? "prop"
+          : "shot";
+    if (stage === "scene") {
+      yield '{"scenes":[';
+      await Promise.resolve();
+      if (input.signal?.aborted) throw new Error("scene aborted");
+      yield '{"sceneName":"旧木屋"}]}';
+      return;
+    }
+    if (stage === "character") {
+      yield JSON.stringify({ characters: [{ characterName: "任小野" }] });
+      return;
+    }
+    if (stage === "prop") {
+      throw new Error("prop failed");
+    }
+    yield JSON.stringify({ storyboards: [{ shotNo: 1, plot: "不应生成" }] });
+  }
+}

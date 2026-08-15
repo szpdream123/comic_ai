@@ -85,6 +85,57 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("reads and updates first-login onboarding copy through fixed public and admin contracts", async () => {
+    const db = await createMigratedTestDb();
+    const { server, cookie } = await createLoggedInAdminServer(db);
+
+    try {
+      const publicDefaultResponse = await fetch(`${server.origin}/api/public/first-login-onboarding`);
+      const publicDefault = await publicDefaultResponse.json();
+      assert.equal(publicDefaultResponse.status, 200, JSON.stringify(publicDefault));
+      assert.equal(publicDefault.data.welcome.title, "2分钟完成你的第一组分镜");
+
+      const anonymousAdminResponse = await fetch(`${server.origin}/api/admin/first-login-onboarding`);
+      assert.equal(anonymousAdminResponse.status, 401);
+
+      const adminResponse = await fetch(`${server.origin}/api/admin/first-login-onboarding`, {
+        headers: { cookie },
+      });
+      const adminPayload = await adminResponse.json();
+      assert.equal(adminResponse.status, 200, JSON.stringify(adminPayload));
+      assert.equal(adminPayload.data.steps.createProject.title, "创建一个项目");
+
+      const updateResponse = await fetch(`${server.origin}/api/admin/first-login-onboarding`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+          "idempotency-key": `first-login-onboarding-${randomUUID()}`,
+        },
+        body: JSON.stringify({
+          value: {
+            welcome: { title: "三分钟完成第一组分镜", unknown: "ignored" },
+            steps: { createProject: { description: "从创建第一个项目开始。" } },
+          },
+          reason: "更新新手引导验收文案",
+        }),
+      });
+      const updatePayload = await updateResponse.json();
+      assert.equal(updateResponse.status, 200, JSON.stringify(updatePayload));
+      assert.equal(updatePayload.data.welcome.title, "三分钟完成第一组分镜");
+
+      const publicUpdatedResponse = await fetch(`${server.origin}/api/public/first-login-onboarding`);
+      const publicUpdated = await publicUpdatedResponse.json();
+      assert.equal(publicUpdatedResponse.status, 200, JSON.stringify(publicUpdated));
+      assert.equal(publicUpdated.data.welcome.title, "三分钟完成第一组分镜");
+      assert.equal(publicUpdated.data.steps.createProject.description, "从创建第一个项目开始。");
+      assert.equal(Object.hasOwn(publicUpdated.data.welcome, "unknown"), false);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("lets a bootstrapped admin login, inspect the session, and logout", async () => {
     const db = await createMigratedTestDb();
     const loginName = `admin_${randomUUID().slice(0, 8)}`;

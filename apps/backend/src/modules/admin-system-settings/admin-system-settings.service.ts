@@ -29,6 +29,13 @@ import {
   toolboxPromptReverseConfigKey,
   type ToolboxPromptReverseConfig,
 } from "../toolbox/prompt-reverse-prompt-config.ts";
+import {
+  defaultFirstLoginOnboardingConfig,
+  firstLoginOnboardingConfigKey,
+  firstLoginOnboardingPlacements,
+  firstLoginOnboardingTargets,
+  normalizeFirstLoginOnboardingConfig,
+} from "./first-login-onboarding-config.ts";
 
 export const batchImagePromptPresetCategoriesConfigKey = "creator.batch_image_prompt_preset_categories";
 export const customerSupportConfigKey = "creator.customer_support";
@@ -94,6 +101,14 @@ const DEFAULT_RUNTIME_CONFIGS: RuntimeConfigRow[] = [
     value_type: "json",
     scope: "creator",
     description: "前台客服与联系商务二维码配置",
+    updated_at: null,
+  },
+  {
+    key: firstLoginOnboardingConfigKey,
+    value_json: defaultFirstLoginOnboardingConfig,
+    value_type: "json",
+    scope: "creator",
+    description: "新用户首次登录引导文案与提示步骤",
     updated_at: null,
   },
   {
@@ -275,6 +290,48 @@ async function ensureAdminSecretValueStore(db: SqlDatabase) {
 }
 
 export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
+  async function getFirstLoginOnboardingConfig() {
+    return {
+      data: await readFirstLoginOnboardingConfigFromDb(deps.db),
+      meta: {
+        placements: firstLoginOnboardingPlacements,
+        targets: firstLoginOnboardingTargets,
+      },
+    };
+  }
+
+  async function updateFirstLoginOnboardingConfig(input: {
+    value: unknown;
+    reason: string;
+    idempotencyKey: string;
+    actorAdminAccountId: string;
+    now: Date;
+  }) {
+    const normalized = normalizeFirstLoginOnboardingConfig(input.value);
+    const result = await updateRuntimeConfig({
+      key: firstLoginOnboardingConfigKey,
+      value: normalized,
+      valueType: "json",
+      scope: "creator",
+      description: "新用户首次登录引导文案与提示步骤",
+      reason: input.reason,
+      idempotencyKey: input.idempotencyKey,
+      actorAdminAccountId: input.actorAdminAccountId,
+      now: input.now,
+    });
+    if (result.status !== 200) return result;
+    return {
+      status: 200,
+      body: {
+        data: normalized,
+        meta: {
+          placements: firstLoginOnboardingPlacements,
+          targets: firstLoginOnboardingTargets,
+        },
+      },
+    };
+  }
+
   async function getBatchImagePromptPresetCategories() {
     return {
       data: await readBatchImagePromptPresetCategoriesFromDb(deps.db),
@@ -1660,6 +1717,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     enableLegalDocument,
     deleteLegalDocument,
     updateBatchImagePromptPresetCategories,
+    updateFirstLoginOnboardingConfig,
     updateRuntimeConfig,
     listRuntimeConfigRevisions,
     rollbackRuntimeConfig,
@@ -1760,6 +1818,9 @@ function normalizeRuntimeConfigValue(key: string, value: unknown) {
   }
   if (key === customerSupportConfigKey) {
     return normalizeCustomerSupportConfig(value);
+  }
+  if (key === firstLoginOnboardingConfigKey) {
+    return normalizeFirstLoginOnboardingConfig(value);
   }
   if (key === toolboxPromptReverseConfigKey) {
     return normalizeToolboxPromptReverseConfig(value);
@@ -1901,6 +1962,22 @@ export async function readCustomerSupportConfigFromDb(
     return normalizeCustomerSupportConfig(defaultCustomerSupportConfig);
   }
   return normalizeCustomerSupportConfig(normalizeJson(row.value_json));
+}
+
+export async function readFirstLoginOnboardingConfigFromDb(
+  db: SqlDatabase,
+) {
+  const row = await queryOne<RuntimeConfigRow>(
+    db,
+    `
+      SELECT key, value_json, value_type, scope, description, updated_at
+      FROM runtime_config_entries
+      WHERE key = $1
+      LIMIT 1
+    `,
+    [firstLoginOnboardingConfigKey],
+  );
+  return normalizeFirstLoginOnboardingConfig(row ? normalizeJson(row.value_json) : undefined);
 }
 
 export async function readPublicCustomerSupportConfigFromDb(

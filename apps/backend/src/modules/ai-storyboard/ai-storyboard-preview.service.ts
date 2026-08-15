@@ -227,15 +227,73 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     }
 
     const shouldRunStage = (stage: AssetPromptStage) => !selectedStages || selectedStages.has(stage);
-    const sceneRaw = shouldRunStage("scene")
-      ? yield* runAssetPromptStage("scene", "场景提示词生成", buildScenePrompt(scriptText, input), input, modelCode)
-      : "";
-    const characterRaw = shouldRunStage("character")
-      ? yield* runAssetPromptStage("character", "角色提示词生成", buildCharacterPrompt(scriptText, input), input, modelCode)
-      : "";
-    const propRaw = shouldRunStage("prop")
-      ? yield* runAssetPromptStage("prop", "道具提示词生成", buildPropPrompt(scriptText, input), input, modelCode)
-      : "";
+    const extractStageDefinitions: Array<{
+      stage: ExtractAssetPromptStage;
+      title: string;
+      prompt: string;
+    }> = [
+      { stage: "scene", title: "场景提示词生成", prompt: buildScenePrompt(scriptText, input) },
+      { stage: "character", title: "角色提示词生成", prompt: buildCharacterPrompt(scriptText, input) },
+      { stage: "prop", title: "道具提示词生成", prompt: buildPropPrompt(scriptText, input) },
+    ];
+    const extractStageRaws: Record<ExtractAssetPromptStage, string> = {
+      scene: "",
+      character: "",
+      prop: "",
+    };
+    const selectedExtractStageDefinitions = extractStageDefinitions
+      .filter(({ stage }) => shouldRunStage(stage));
+    if (selectedExtractStageDefinitions.length) {
+      const extractAbortController = new AbortController();
+      const abortFromInput = () => extractAbortController.abort();
+      if (input.signal?.aborted) {
+        abortFromInput();
+      } else {
+        input.signal?.addEventListener("abort", abortFromInput, { once: true });
+      }
+      const extractInput = { ...input, signal: extractAbortController.signal };
+      const [foregroundStage, ...backgroundStages] = selectedExtractStageDefinitions;
+      let runningBackgroundStages: Array<{
+        stage: ExtractAssetPromptStage;
+        stream: ReturnType<typeof startCollectedAssetPromptStage>;
+      }> = [];
+      const startBackgroundStages = () => {
+        if (runningBackgroundStages.length || !backgroundStages.length) return;
+        runningBackgroundStages = backgroundStages.map((definition) => ({
+          stage: definition.stage,
+          stream: startCollectedAssetPromptStage(runAssetPromptStage(
+            definition.stage,
+            definition.title,
+            definition.prompt,
+            extractInput,
+            modelCode,
+          )),
+        }));
+      };
+      try {
+        extractStageRaws[foregroundStage.stage] = yield* runAssetPromptStage(
+          foregroundStage.stage,
+          foregroundStage.title,
+          foregroundStage.prompt,
+          extractInput,
+          modelCode,
+          startBackgroundStages,
+        );
+        startBackgroundStages();
+        for (const runningStage of runningBackgroundStages) {
+          extractStageRaws[runningStage.stage] = yield* runningStage.stream.events();
+        }
+      } catch (error) {
+        extractAbortController.abort();
+        throw error;
+      } finally {
+        input.signal?.removeEventListener("abort", abortFromInput);
+        extractAbortController.abort();
+      }
+    }
+    const sceneRaw = extractStageRaws.scene;
+    const characterRaw = extractStageRaws.character;
+    const propRaw = extractStageRaws.prop;
     const assetStageOutput = [sceneRaw, characterRaw, propRaw];
     let scenes = resolveAssetStageRecords(sceneRaw, assetStageOutput, "scenes");
     let characters = resolveAssetStageRecords(characterRaw, assetStageOutput, "characters");
@@ -278,9 +336,11 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     prompt: string,
     input: AiStoryboardPreviewInput,
     modelCode: string,
-  ): AsyncIterable<AiStoryboardPreviewStreamEvent> {
+    onModelStreamStart?: () => void,
+  ): AsyncGenerator<AiStoryboardPreviewStreamEvent, string> {
     yield { type: "asset_prompt", stage, title, text: prompt };
     yield { type: "asset_start", stage, title };
+    onModelStreamStart?.();
     let raw = "";
     let requestPrompt = prompt;
     let continuationCount = 0;
