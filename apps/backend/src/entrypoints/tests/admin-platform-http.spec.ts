@@ -750,7 +750,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(summaryPayload.imageBytes, 12345);
       assert.equal(summaryPayload.videoBytes, 67890);
       assert.deepEqual(payload.data.map((item: { mediaKind: string }) => item.mediaKind).sort(), ["image", "video"]);
-      assert.ok(payload.data.every((item: { previewUrl: string }) => /\/uploads\/storage\/creator-test\//.test(item.previewUrl)));
+      assert.ok(payload.data.every((item: { previewUrl: string }) =>
+        /\/api\/storage\/objects\/60000000-0000-4000-8000-00000000010[12]\/content\?proxy=1$/.test(item.previewUrl),
+      ));
     } finally {
       await server.close();
     }
@@ -6385,7 +6387,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(uploadResponse.status, 200);
       assert.equal(uploadPayload.data.bucket, "official-assets-bucket");
       assert.match(uploadPayload.data.storageObjectKey, /^officialAssets\/\d{8}\/[0-9a-f-]+-alchemist\.jpg$/);
-      assert.equal(uploadPayload.data.previewUrl, `https://cdn.example.test/${uploadPayload.data.storageObjectKey}`);
+      assert.equal(
+        uploadPayload.data.previewUrl,
+        `/api/storage/objects/${encodeURIComponent(uploadPayload.data.storageObjectId)}/content?proxy=1`,
+      );
       assert.equal(uploadPayload.data.mimeType, "image/jpeg");
       assert.equal(uploadedObjects.length, 1);
       assert.equal(uploadedObjects[0].bucket, "official-assets-bucket");
