@@ -16,6 +16,44 @@ test("admin shell exposes the super-admin GEO workflow", () => {
   assert.doesNotMatch(script, /一键发布/);
 });
 
+test("admin keeps the GEO entry in the immediately visible primary navigation", () => {
+  const installStart = script.indexOf("(function installGeoOperationsPage()");
+  const installEnd = script.indexOf("      })();", installStart) + "      })();".length;
+  assert.notEqual(installStart, -1, "GEO page installer exists");
+
+  const buttons = ["dashboard", "models", "settings"].map((page) => ({ dataset: { page } }));
+  const nav = {
+    querySelector(selector) {
+      const page = selector.match(/data-page=\"([^\"]+)\"/)?.[1];
+      return buttons.find((button) => button.dataset.page === page) || null;
+    },
+    insertBefore(button, reference) {
+      buttons.splice(buttons.indexOf(reference), 0, button);
+    },
+  };
+  const context = {
+    pages: {},
+    state: { page: "dashboard", session: { roles: ["super_admin"] } },
+    routeFromPath: () => "dashboard",
+    navigate: () => undefined,
+    renderPage: () => "",
+    geoOperationsPage: () => "",
+    renderShell: () => undefined,
+    ensureAdminPageData: () => Promise.resolve(),
+    history: { pushState() {} },
+    document: {
+      querySelector: (selector) => selector === ".nav" ? nav : null,
+      createElement: () => ({ dataset: {}, classList: { add() {} }, addEventListener() {} }),
+    },
+  };
+  vm.runInNewContext(script.slice(installStart, installEnd), context);
+  context.renderShell();
+
+  assert.deepEqual(buttons.map((button) => button.dataset.page), [
+    "dashboard", "geoOperations", "models", "settings",
+  ]);
+});
+
 test("admin GEO platform picker loads the catalog, submits selections, and preserves unknown labels", async () => {
   const runtimeStart = script.indexOf("function geoOperationsState");
   const runtimeEnd = script.indexOf("function geoQualityCounts", runtimeStart);

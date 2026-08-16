@@ -148,6 +148,7 @@
         position: sticky;
         top: 0;
         height: 100vh;
+        overflow-y: auto;
       }
       .brand {
         height: 48px;
@@ -13732,13 +13733,13 @@
           if (!Array.isArray(state.adminRoles) || !state.adminRoles.includes("super_admin")) return;
           const nav = document.querySelector(".nav");
           if (!nav || nav.querySelector('[data-page="geoOperations"]')) return;
-          const settingsButton = nav.querySelector('[data-page="settings"]');
+          const modelsButton = nav.querySelector('[data-page="models"]');
           const button = document.createElement("button");
           button.dataset.page = "geoOperations";
           button.innerHTML = "<span>GEO运营</span>";
           if (state.page === "geoOperations") button.classList.add("active");
           button.addEventListener("click", () => navigate("geoOperations"));
-          nav.insertBefore(button, settingsButton);
+          nav.insertBefore(button, modelsButton);
         };
       })();
       ADMIN_PAGE_LOADERS.geoOperations = loadGeoOperations;
