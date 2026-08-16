@@ -18217,11 +18217,13 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/admin/geo/generate") {
           const body = (await readJsonBody(request)) as Record<string, unknown>;
           const contentType = readString(body.contentType);
+          const questionIds = readStringArray(body.questionIds);
           if (!isGeoContentType(contentType)) {
             return writeJson(response, envelopedError(400, "geo_content_type_invalid", "Invalid GEO content type"));
           }
           const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoGenerationService.generateDraft({
-            questionId: readString(body.questionId),
+            questionId: questionIds[0] ?? readString(body.questionId),
+            questionIds,
             evidenceIds: readStringArray(body.evidenceIds),
             contentType,
             topic: readString(body.topic),

@@ -79,6 +79,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(replayedQuestionResponse.status, 201, JSON.stringify(replayedQuestion));
       assert.equal(replayedQuestion.data.id, question.data.id);
 
+      const relatedQuestionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-question-related-${randomUUID()}`, cookie },
+        body: JSON.stringify({ rawQuestion: "多个镜头怎样保持同一张脸？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["baidu"], priority: 85, productCapabilities: ["角色素材库"], notes: "" }),
+      });
+      const relatedQuestion = await relatedQuestionResponse.json();
+      assert.equal(relatedQuestionResponse.status, 201, JSON.stringify(relatedQuestion));
+
       const evidenceResponse = await fetch(`${server.origin}/api/admin/geo/evidence`, {
         method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-evidence-${randomUUID()}`, cookie },
         body: JSON.stringify({ type: "product_feature", name: "角色素材管理", factText: "灵曦AI支持按角色保存参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true }),
@@ -94,11 +101,13 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       const generatedResponse = await fetch(`${server.origin}/api/admin/geo/generate`, {
         method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-generate-${randomUUID()}`, cookie },
-        body: JSON.stringify({ questionId: question.data.id, evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "" }),
+        body: JSON.stringify({ questionIds: [question.data.id, relatedQuestion.data.id], evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "" }),
       });
       const generated = await generatedResponse.json();
       assert.equal(generatedResponse.status, 201, JSON.stringify(generated));
       assert.deepEqual(gatewayModels, ["configured-geo-model", "configured-geo-model"]);
+      const linkedQuestions = await db.query<{ question_id: string }>("SELECT question_id FROM geo_content_question_links WHERE content_version_id=$1 ORDER BY question_id", [generated.data.version.id]);
+      assert.deepEqual(linkedQuestions.rows.map((row) => row.question_id).sort(), [question.data.id, relatedQuestion.data.id].sort());
 
       const reviewResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/submit-review`, {
         method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-review-${randomUUID()}`, cookie },

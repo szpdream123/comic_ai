@@ -13547,8 +13547,11 @@
         if (!state.geoOperations) {
           state.geoOperations = {
             platforms: [], questions: [], evidence: [], content: [], details: {}, settings: null,
-            selectedQuestionId: "", selectedEvidenceIds: [], loadError: "",
+            selectedQuestionId: "", selectedQuestionIds: [], selectedEvidenceIds: [], loadError: "",
           };
+        }
+        if (!Array.isArray(state.geoOperations.selectedQuestionIds)) {
+          state.geoOperations.selectedQuestionIds = state.geoOperations.selectedQuestionId ? [state.geoOperations.selectedQuestionId] : [];
         }
         return state.geoOperations;
       }
@@ -13613,7 +13616,7 @@
       function geoOperationsPage() {
         const store = geoOperationsState();
         if (store.loadError) return `<section class="state-panel" data-state="error"><strong>GEO运营暂不可用</strong><span>${escapeHtml(store.loadError)}</span><button class="btn ghost" onclick="loadGeoOperations().then(renderShell)">重新加载</button></section>`;
-        const questionRows = store.questions.length ? store.questions.map((item) => `<tr><td><input type="radio" name="geoQuestion" ${store.selectedQuestionId === item.id ? "checked" : ""} onchange="geoSelectQuestion('${item.id}')" /></td><td><strong>${escapeHtml(item.rawQuestion)}</strong><div class="metric-note">${escapeHtml(item.topic)} · ${escapeHtml(item.intent)}</div>${geoPlatformTags(item.targetPlatforms, store.platforms)}</td><td>${item.priority}</td><td><span class="tag blue">${escapeHtml(item.coverageStatus)}</span></td></tr>`).join("") : `<tr><td colspan="4">暂无问题，请先新增目标问题。</td></tr>`;
+        const questionRows = store.questions.length ? store.questions.map((item) => `<tr><td><input type="checkbox" name="geoQuestion" value="${escapeAttribute(item.id)}" ${store.selectedQuestionIds.includes(item.id) ? "checked" : ""} onchange="geoToggleQuestion('${item.id}', this.checked)" /></td><td><strong>${escapeHtml(item.rawQuestion)}</strong><div class="metric-note">${escapeHtml(item.topic)} · ${escapeHtml(item.intent)}</div>${geoPlatformTags(item.targetPlatforms, store.platforms)}</td><td>${item.priority}</td><td><span class="tag blue">${escapeHtml(item.coverageStatus)}</span></td></tr>`).join("") : `<tr><td colspan="4">暂无问题，请先新增目标问题。</td></tr>`;
         const evidenceRows = store.evidence.length ? store.evidence.map((item) => `<tr><td><input type="checkbox" ${store.selectedEvidenceIds.includes(item.id) ? "checked" : ""} ${item.reviewStatus === "approved" && item.publicUseAllowed ? "" : "disabled"} onchange="geoToggleEvidence('${item.id}', this.checked)" /></td><td><strong>${escapeHtml(item.name)}</strong><div class="metric-note">${escapeHtml(item.factText)}</div></td><td><span class="tag ${item.reviewStatus === "approved" ? "blue" : "warn"}">${escapeHtml(item.reviewStatus)}</span></td><td>${item.publicUseAllowed ? "允许公开" : "仅内部"}</td></tr>`).join("") : `<tr><td colspan="4">暂无证据，请先录入并审核证据。</td></tr>`;
         const contentRows = store.content.length ? store.content.map((item) => {
           const quality = geoQualityCounts(item);
@@ -13639,7 +13642,7 @@
           <section class="grid geo-operation-entry-grid">
             <article class="card"><div class="toolbar"><h3>问题库</h3><span class="tag blue">${store.questions.length}</span></div><form onsubmit="geoCreateQuestion(event)" class="section-stack"><label class="field"><span>目标问题</span><input name="rawQuestion" required placeholder="例如：AI短剧怎样保持角色一致？" /></label><div class="form-grid"><label class="field"><span>主题</span><input name="topic" required /></label><label class="field"><span>意图</span><select name="intent"><option value="tutorial">教程</option><option value="comparison">对比</option><option value="decision">决策</option></select></label></div><label class="field"><span>优先级</span><input name="priority" type="number" min="0" max="100" value="80" /></label>${geoPlatformPicker(store.platforms)}<div class="form-error" role="alert"></div><button class="btn ghost" type="submit">新增问题</button></form></article>
             <article class="card"><div class="toolbar"><h3>证据库</h3><span class="tag blue">${store.evidence.length}</span></div><form onsubmit="geoCreateEvidence(event)" class="section-stack"><label class="field"><span>证据名称</span><input name="name" required /></label><label class="field"><span>可公开事实</span><textarea name="factText" required></textarea></label><label class="field"><span>来源网址</span><input name="sourceUrl" type="url" /></label><label class="checkbox-row"><input name="publicUseAllowed" type="checkbox" checked />允许公开引用并直接审核通过</label><button class="btn ghost" type="submit">新增证据</button></form></article>
-            <article class="card"><div class="toolbar"><h3>生成草稿</h3><span class="tag blue">自动质检</span></div><form onsubmit="geoGenerateDraft(event)" class="section-stack"><label class="field"><span>内容类型</span><select name="contentType"><option value="guide">指南</option><option value="answer">问答</option><option value="case">案例</option><option value="report">报告</option></select></label><label class="field"><span>英文slug</span><input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="character-consistency" /></label><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><p class="metric-note">需选择1个问题和至少1条已审核、允许公开的证据。</p><button class="btn primary" type="submit">生成草稿</button></form></article>
+            <article class="card"><div class="toolbar"><h3>生成草稿</h3><span class="tag blue">自动质检</span></div><form onsubmit="geoGenerateDraft(event)" class="section-stack"><label class="field"><span>内容类型</span><select name="contentType"><option value="guide">指南</option><option value="answer">问答</option><option value="case">案例</option><option value="report">报告</option></select></label><label class="field"><span>英文slug</span><input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="character-consistency" /></label><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><p class="metric-note">可选择多个相近问题聚合为一篇内容，并至少选择1条已审核、允许公开的证据。</p><button class="btn primary" type="submit">生成草稿</button></form></article>
           </section>
           <section class="card"><div class="toolbar"><h3>问题与证据选择</h3><span class="metric-note">所选资料将作为模型唯一事实来源</span></div><div class="grid" style="grid-template-columns:1fr 1fr"><div class="table-wrap"><table><thead><tr><th>选择</th><th>问题</th><th>优先级</th><th>覆盖</th></tr></thead><tbody>${questionRows}</tbody></table></div><div class="table-wrap"><table><thead><tr><th>选择</th><th>证据</th><th>审核</th><th>公开</th></tr></thead><tbody>${evidenceRows}</tbody></table></div></div></section>
           <section class="card"><div class="toolbar"><h3>内容中心</h3><span class="metric-note">阻断项必须清零，警告项可在人工确认后发布</span></div><div class="table-wrap"><table><thead><tr><th>内容</th><th>状态</th><th>自动质检</th><th>操作</th></tr></thead><tbody>${contentRows}</tbody></table></div></section>
@@ -13669,7 +13672,18 @@
         await runAdminMutation(form, error, () => api("/api/admin/geo/evidence", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-evidence-${Date.now()}` }, body: JSON.stringify({ type: "product_feature", name: data.get("name"), factText: data.get("factText"), sourceUrl: data.get("sourceUrl") || null, reviewStatus: approved ? "approved" : "pending", validUntil: null, publicUseAllowed: approved }) }), "证据已新增");
         form.reset(); await loadGeoOperations(); renderShell();
       }
-      function geoSelectQuestion(id) { geoOperationsState().selectedQuestionId = id; renderShell(); }
+      function geoSelectQuestion(id) {
+        const store = geoOperationsState();
+        store.selectedQuestionId = id;
+        store.selectedQuestionIds = id ? [id] : [];
+        renderShell();
+      }
+      function geoToggleQuestion(id, checked) {
+        const store = geoOperationsState();
+        store.selectedQuestionIds = checked ? [...new Set([...store.selectedQuestionIds, id])] : store.selectedQuestionIds.filter((item) => item !== id);
+        store.selectedQuestionId = store.selectedQuestionIds[0] || "";
+        renderShell();
+      }
       function geoToggleEvidence(id, checked) {
         const store = geoOperationsState();
         store.selectedEvidenceIds = checked ? [...new Set([...store.selectedEvidenceIds, id])] : store.selectedEvidenceIds.filter((item) => item !== id);
@@ -13678,11 +13692,12 @@
         event.preventDefault();
         const form = event.currentTarget;
         const store = geoOperationsState();
-        if (!store.selectedQuestionId || store.selectedEvidenceIds.length === 0) return showToast("请先选择问题和已审核证据");
-        const question = store.questions.find((item) => item.id === store.selectedQuestionId);
+        if (store.selectedQuestionIds.length === 0 || store.selectedEvidenceIds.length === 0) return showToast("请先选择问题和已审核证据");
+        const primaryQuestionId = store.selectedQuestionIds[0];
+        const question = store.questions.find((item) => item.id === primaryQuestionId);
         const data = new FormData(form);
         const error = form.querySelector(".form-error") || { textContent: "" };
-        await runAdminMutation(form, error, () => api("/api/admin/geo/generate", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-generate-${Date.now()}` }, body: JSON.stringify({ questionId: store.selectedQuestionId, evidenceIds: store.selectedEvidenceIds, contentType: data.get("contentType"), topic: question?.topic || "GEO内容", slug: data.get("slug"), modelCode: data.get("modelCode") }) }), "草稿已生成并完成自动质检");
+        await runAdminMutation(form, error, () => api("/api/admin/geo/generate", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-generate-${Date.now()}` }, body: JSON.stringify({ questionId: primaryQuestionId, questionIds: store.selectedQuestionIds, evidenceIds: store.selectedEvidenceIds, contentType: data.get("contentType"), topic: question?.topic || "GEO内容", slug: data.get("slug"), modelCode: data.get("modelCode") }) }), "草稿已生成并完成自动质检");
         await loadGeoOperations(); renderShell();
       }
       async function geoSubmitReview(contentId, lockVersion) {
@@ -13747,6 +13762,7 @@
       window.geoCreateQuestion = geoCreateQuestion;
       window.geoCreateEvidence = geoCreateEvidence;
       window.geoSelectQuestion = geoSelectQuestion;
+      window.geoToggleQuestion = geoToggleQuestion;
       window.geoToggleEvidence = geoToggleEvidence;
       window.geoGenerateDraft = geoGenerateDraft;
       window.geoSubmitReview = geoSubmitReview;

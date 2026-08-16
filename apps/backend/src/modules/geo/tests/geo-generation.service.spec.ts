@@ -25,8 +25,9 @@ describe("GEO generation workflow", () => {
       await seedAdmin(db);
       const contentService = createGeoContentService({ db, now: () => fixedNow });
       const question = await contentService.saveQuestion({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "", actorAdminAccountId });
+      const relatedQuestion = await contentService.saveQuestion({ rawQuestion: "多个镜头怎样保持同一张脸？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["baidu"], priority: 85, productCapabilities: ["角色素材库"], notes: "", actorAdminAccountId });
       const evidence = await contentService.saveEvidence({ type: "product_feature", name: "角色素材管理", factText: "灵曦AI支持按角色保存参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true, actorAdminAccountId });
-      if (!("data" in question.body) || !("data" in evidence.body)) throw new Error("fixtures failed");
+      if (!("data" in question.body) || !("data" in relatedQuestion.body) || !("data" in evidence.body)) throw new Error("fixtures failed");
 
       const calls: Array<Record<string, unknown>> = [];
       const gateway: GeoTextChatGatewayLike = {
@@ -40,10 +41,12 @@ describe("GEO generation workflow", () => {
         async completeJson() { throw new Error("unexpected fallback"); },
       };
       const service = createGeoGenerationService({ db, gateway, contentService, now: () => fixedNow });
-      const result = await service.generateDraft({ questionId: question.body.data.id, evidenceIds: [evidence.body.data.id], contentType: "guide", topic: "角色一致性", slug: "generated-character-consistency", modelCode: "writer-model", actorAdminAccountId });
+      const result = await service.generateDraft({ questionId: question.body.data.id, questionIds: [question.body.data.id, relatedQuestion.body.data.id], evidenceIds: [evidence.body.data.id], contentType: "guide", topic: "角色一致性", slug: "generated-character-consistency", modelCode: "writer-model", actorAdminAccountId });
       assert.equal(result.status, 201);
       assert.equal(calls.length, 2);
       assert.match(String(calls[0]?.prompt), /角色素材管理/);
+      assert.match(String(calls[0]?.prompt), /AI短剧怎样保持角色一致/);
+      assert.match(String(calls[0]?.prompt), /多个镜头怎样保持同一张脸/);
       assert.doesNotMatch(String(calls[0]?.prompt), /created_by_admin_id|attachment_json/);
       assert.equal(calls[0]?.requestKeyPrefix, "geo-writer");
       assert.equal(calls[1]?.requestKeyPrefix, "geo-reviewer");
@@ -51,6 +54,8 @@ describe("GEO generation workflow", () => {
       assert.equal(runs.rows[0]?.status, "succeeded");
       assert.deepEqual(runs.rows[0]?.provider_request_ids_json, ["provider-1", "provider-2"]);
       assert.ok(runs.rows[0]?.content_item_id);
+      const questionLinks = await db.query<{ question_id: string }>("SELECT question_id FROM geo_content_question_links ORDER BY question_id");
+      assert.deepEqual(questionLinks.rows.map((row) => row.question_id).sort(), [question.body.data.id, relatedQuestion.body.data.id].sort());
     } finally {
       await db.close();
     }

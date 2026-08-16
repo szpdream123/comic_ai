@@ -161,6 +161,71 @@ test("admin GEO entry cards expose a narrow-screen single-column layout", () => 
   assert.doesNotMatch(context.result, /class="grid" style="grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
 });
 
+test("admin GEO generation groups multiple selected questions into one draft", async () => {
+  const pageStart = script.indexOf("function geoOperationsPage");
+  const pageEnd = script.indexOf("async function geoCreateQuestion", pageStart);
+  const selectionStart = script.indexOf("function geoSelectQuestion");
+  const selectionEnd = script.indexOf("async function geoSubmitReview", selectionStart);
+  assert.notEqual(pageStart, -1, "GEO page renderer exists");
+  assert.notEqual(selectionStart, -1, "GEO question selection exists");
+
+  const store = {
+    loadError: "",
+    platforms: [],
+    questions: [
+      { id: "question-1", rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", priority: 90, coverageStatus: "uncovered", targetPlatforms: [] },
+      { id: "question-2", rawQuestion: "多个镜头怎样保持同一张脸？", topic: "角色一致性", intent: "tutorial", priority: 85, coverageStatus: "uncovered", targetPlatforms: [] },
+    ],
+    evidence: [],
+    content: [],
+    details: {},
+    settings: { defaultModelCode: "test-model" },
+    selectedQuestionIds: ["question-1"],
+    selectedEvidenceIds: ["evidence-1"],
+  };
+  const requests = [];
+  const result = {};
+  const context = {
+    result,
+    Date,
+    geoOperationsState: () => store,
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+    geoPlatformTags: () => "",
+    geoPlatformPicker: () => "",
+    geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+    renderShell: () => undefined,
+    showToast: (message) => { throw new Error(message); },
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: JSON.parse(options.body) });
+      return { data: {} };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    loadGeoOperations: async () => undefined,
+  };
+  vm.runInNewContext(`${script.slice(pageStart, pageEnd)}\n${script.slice(selectionStart, selectionEnd)}\nresult.render = geoOperationsPage; result.legacySelect = geoSelectQuestion; result.toggle = geoToggleQuestion; result.generate = geoGenerateDraft;`, context);
+
+  const rendered = result.render();
+  assert.match(rendered, /type="checkbox"[^>]*question-1[^>]*checked/);
+  assert.match(rendered, /type="checkbox"[^>]*question-2/);
+
+  result.toggle("question-2", true);
+  assert.deepEqual(Array.from(store.selectedQuestionIds), ["question-1", "question-2"]);
+
+  const form = { values: { contentType: "guide", slug: "ai-character-consistency", modelCode: "test-model" }, querySelector: () => ({ textContent: "" }) };
+  await result.generate({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests[0].path, "/api/admin/geo/generate");
+  assert.deepEqual(Array.from(requests[0].payload.questionIds), ["question-1", "question-2"]);
+  assert.equal(requests[0].payload.questionId, "question-1");
+
+  result.legacySelect("question-2");
+  assert.deepEqual(Array.from(store.selectedQuestionIds), ["question-2"]);
+});
+
 test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);

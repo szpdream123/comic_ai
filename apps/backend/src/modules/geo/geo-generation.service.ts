@@ -29,16 +29,20 @@ export function createGeoGenerationService(deps: {
   const heartbeatIntervalMs = deps.heartbeatIntervalMs ?? 60 * 1000;
 
   async function generateDraft(input: {
-    questionId: string; evidenceIds: string[]; contentType: GeoContentType; topic: string; slug: string;
+    questionId: string; questionIds?: string[]; evidenceIds: string[]; contentType: GeoContentType; topic: string; slug: string;
     modelCode: string; actorAdminAccountId: string;
   }): Promise<GeoServiceResult<{ runId: string; item: unknown; version: unknown }>> {
     const runId = randomUUID();
     const leaseToken = randomUUID();
+    const questionIds = [...new Set([input.questionId, ...(input.questionIds ?? [])].map((value) => value.trim()).filter(Boolean))];
     const questionResult = await deps.db.query<{ id: string; raw_question: string; topic: string; intent: string; target_platforms_json: string[]; product_capabilities_json: string[] }>(
-      `SELECT id,raw_question,topic,intent,target_platforms_json,product_capabilities_json FROM geo_questions WHERE id=$1`,
-      [input.questionId],
+      `SELECT id,raw_question,topic,intent,target_platforms_json,product_capabilities_json FROM geo_questions WHERE id=ANY($1::uuid[])`,
+      [questionIds],
     );
-    const question = questionResult.rows[0];
+    if (questionResult.rows.length !== questionIds.length) return failure("geo_question_not_found", "目标问题不存在。", 404);
+    const questionById = new Map(questionResult.rows.map((item) => [item.id, item]));
+    const questions = questionIds.map((id) => questionById.get(id)!);
+    const question = questions[0];
     if (!question) return failure("geo_question_not_found", "目标问题不存在。", 404);
     const evidenceIds = [...new Set(input.evidenceIds)];
     const evidenceResult = evidenceIds.length
@@ -66,6 +70,7 @@ export function createGeoGenerationService(deps: {
     const publicPacket = {
       brand: "灵曦AI",
       question: { id: question.id, question: question.raw_question, topic: question.topic, intent: question.intent, targetPlatforms: question.target_platforms_json, productCapabilities: question.product_capabilities_json },
+      questions: questions.map((item) => ({ id: item.id, question: item.raw_question, topic: item.topic, intent: item.intent, targetPlatforms: item.target_platforms_json, productCapabilities: item.product_capabilities_json })),
       evidence,
       contentType: input.contentType,
       topic: input.topic,
@@ -123,7 +128,7 @@ export function createGeoGenerationService(deps: {
       };
       const draft = await deps.contentService.createDraftFromDocument({
         contentType: input.contentType, topic: input.topic, slug: input.slug,
-        questionIds: [input.questionId], evidenceIds, document, generationRunId: runId,
+        questionIds, evidenceIds, document, generationRunId: runId,
         configRevisionId: revisionId, actorAdminAccountId: input.actorAdminAccountId, qualityReport,
         generationCompletion: { leaseToken, providerRequestIds, usage: { stages: usage } },
       });
