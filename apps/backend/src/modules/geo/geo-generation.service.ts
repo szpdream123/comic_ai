@@ -60,13 +60,20 @@ export function createGeoGenerationService(deps: {
     if (evidence.some((item) => item.reviewStatus !== "approved" || !item.publicUseAllowed || (item.validUntil && new Date(item.validUntil).getTime() < now().getTime()))) {
       return failure("geo_evidence_not_public", "生成资料只能使用已审核、允许公开且仍在有效期内的证据。", 400);
     }
+    const existingItem = await deps.db.query<{ id: string }>(
+      `SELECT id FROM geo_content_items WHERE content_type=$1 AND slug=$2 AND status<>'archived'`,
+      [input.contentType, input.slug],
+    );
+    const existingContentItemId = existingItem.rows[0]?.id;
     const [{ settings, revisionId }, existing] = await Promise.all([
       loadGeoRuntimeSettings(deps.db),
       deps.contentService.listPublished(),
     ]);
     const modelCode = input.modelCode.trim() || settings.defaultModelCode;
     if (!modelCode) return failure("geo_model_required", "请先选择GEO生成模型或配置默认模型。", 400);
-    const existingDocuments = "data" in existing.body ? existing.body.data.map((entry) => entry.version.document) : [];
+    const existingDocuments = "data" in existing.body
+      ? existing.body.data.filter((entry) => entry.item.id !== existingContentItemId).map((entry) => entry.version.document)
+      : [];
     const publicPacket = {
       brand: "灵曦AI",
       question: { id: question.id, question: question.raw_question, topic: question.topic, intent: question.intent, targetPlatforms: question.target_platforms_json, productCapabilities: question.product_capabilities_json },
@@ -127,6 +134,7 @@ export function createGeoGenerationService(deps: {
         checkedAt: now().toISOString(),
       };
       const draft = await deps.contentService.createDraftFromDocument({
+        contentItemId: existingContentItemId,
         contentType: input.contentType, topic: input.topic, slug: input.slug,
         questionIds, evidenceIds, document, generationRunId: runId,
         configRevisionId: revisionId, actorAdminAccountId: input.actorAdminAccountId, qualityReport,

@@ -226,6 +226,190 @@ test("admin GEO generation groups multiple selected questions into one draft", a
   assert.deepEqual(Array.from(store.selectedQuestionIds), ["question-2"]);
 });
 
+test("admin GEO draft editor creates a new structured version without discarding linked evidence", async () => {
+  const editorStart = script.indexOf("function geoDraftBlockEditor");
+  const editorEnd = script.indexOf("async function geoSubmitReview", editorStart);
+  assert.notEqual(editorStart, -1, "GEO draft editor exists");
+  assert.notEqual(editorEnd, -1, "GEO draft editor has a stable boundary");
+
+  const sourceDocument = {
+    title: "原标题",
+    summary: "原摘要",
+    directAnswer: "原直接答案",
+    blocks: [
+      { type: "paragraph", text: "原正文", evidenceIds: ["evidence-1"] },
+      { type: "image", src: "/proof.png", alt: "原图片说明", caption: "原图注", evidenceIds: ["evidence-1"] },
+    ],
+    faq: [{ question: "原问题", answer: "原答案" }],
+    socialDrafts: { zhihu: "保留知乎文案", xiaohongshu: "", bilibili: "", wechat: "" },
+    seo: { title: "原SEO标题", description: "原SEO描述" },
+  };
+  const values = {
+    title: "新标题",
+    summary: "新摘要",
+    directAnswer: "新直接答案",
+    block_0_text: "新正文",
+    block_1_src: "/proof-new.png",
+    block_1_alt: "新图片说明",
+    block_1_caption: "新图注",
+    faq_0_question: "新问题",
+    faq_0_answer: "新答案",
+    seoTitle: "新SEO标题",
+    seoDescription: "新SEO描述",
+  };
+  const context = {
+    result: {},
+    requests: [],
+    Date,
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+    },
+    api: async (path, options) => {
+      context.requests.push({ path, payload: JSON.parse(options.body) });
+      return { data: {} };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    closeDrawer: () => undefined,
+    loadGeoOperations: async () => undefined,
+    renderShell: () => undefined,
+  };
+  vm.runInNewContext(`${script.slice(editorStart, editorEnd)}\nresult.markup = geoDraftEditorMarkup; result.read = geoDraftDocumentFromForm; result.save = geoSaveDraftEdit;`, context);
+
+  const markup = context.result.markup({ id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide" }, { document: sourceDocument });
+  assert.match(markup, /编辑草稿/);
+  assert.match(markup, /name="title"/);
+  assert.match(markup, /正文区块 1/);
+  assert.match(markup, /FAQ 1/);
+
+  const edited = context.result.read({ values }, sourceDocument);
+  assert.equal(edited.title, "新标题");
+  assert.equal(edited.blocks[0].text, "新正文");
+  assert.deepEqual(Array.from(edited.blocks[0].evidenceIds), ["evidence-1"]);
+  assert.equal(edited.blocks[1].src, "/proof-new.png");
+  assert.deepEqual(Array.from(edited.blocks[1].evidenceIds), ["evidence-1"]);
+  assert.equal(edited.faq[0].question, "新问题");
+  assert.equal(edited.socialDrafts.zhihu, "保留知乎文案");
+  assert.equal(edited.seo.title, "新SEO标题");
+
+  const form = {
+    values: { ...values, topic: "角色一致性新主题" },
+    dataset: {},
+    querySelector: () => ({ textContent: "" }),
+  };
+  await context.result.save(
+    { preventDefault() {}, currentTarget: form },
+    { id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide", lockVersion: 7 },
+    { document: sourceDocument, questionIds: ["question-1"], evidenceIds: ["evidence-1"], configRevisionId: "geo-default-v1" },
+  );
+  assert.equal(context.requests[0].path, "/api/admin/geo/content");
+  assert.equal(context.requests[0].payload.contentItemId, "content-1");
+  assert.equal(context.requests[0].payload.expectedLockVersion, 7);
+  assert.deepEqual(Array.from(context.requests[0].payload.questionIds), ["question-1"]);
+  assert.deepEqual(Array.from(context.requests[0].payload.evidenceIds), ["evidence-1"]);
+  assert.equal(context.requests[0].payload.document.title, "新标题");
+});
+
+test("admin GEO content details expose actionable quality issues and version history", () => {
+  const detailsStart = script.indexOf("function geoContentDetailMarkup");
+  const detailsEnd = script.indexOf("function geoOperationsPage", detailsStart);
+  assert.notEqual(detailsStart, -1, "GEO content details exist");
+  assert.notEqual(detailsEnd, -1, "GEO content details have a stable boundary");
+
+  const context = {
+    result: {},
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+  };
+  vm.runInNewContext(`${script.slice(detailsStart, detailsEnd)}\nresult.markup = geoContentDetailMarkup;`, context);
+
+  const item = {
+    id: "content-1",
+    topic: "角色一致性",
+    slug: "ai-character-consistency",
+    contentType: "guide",
+    status: "published",
+    currentDraftVersionId: "version-3",
+    currentPublishedVersionId: "version-2",
+  };
+  const markup = context.result.markup(item, {
+    versions: [
+      {
+        id: "version-3",
+        versionNumber: 3,
+        title: "待修改版本",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        publishedAt: null,
+        qualityReport: {
+          blockers: [{ code: "invalid_evidence", message: "证据已失效。", path: "blocks.1" }],
+          warnings: [{ code: "seo_description_short", message: "SEO描述过短。", path: "seo.description" }],
+          checkedAt: "2026-08-16T10:01:00.000Z",
+        },
+      },
+      { id: "version-2", versionNumber: 2, title: "当前线上版本", createdAt: "2026-08-15T10:00:00.000Z", publishedAt: "2026-08-15T11:00:00.000Z", qualityReport: { blockers: [], warnings: [], checkedAt: "2026-08-15T10:01:00.000Z" } },
+      { id: "version-1", versionNumber: 1, title: "首发版本", createdAt: "2026-08-14T10:00:00.000Z", publishedAt: "2026-08-14T11:00:00.000Z", qualityReport: { blockers: [], warnings: [], checkedAt: "2026-08-14T10:01:00.000Z" } },
+    ],
+  });
+
+  assert.match(markup, /版本与质检/);
+  assert.match(markup, /证据已失效。/);
+  assert.match(markup, /blocks\.1/);
+  assert.match(markup, /SEO描述过短。/);
+  assert.match(markup, /当前草稿/);
+  assert.match(markup, /当前线上/);
+  assert.match(markup, /geoRollbackContent\('content-1', 'version-1'\)/);
+  assert.doesNotMatch(markup, /geoRollbackContent\('content-1', 'version-2'\)/);
+  assert.match(markup, /geoArchiveContent\('content-1'\)/);
+});
+
+test("admin GEO rollback and archive operations send guarded mutation payloads", async () => {
+  const detailsStart = script.indexOf("function geoContentDetailMarkup");
+  const detailsEnd = script.indexOf("function geoOperationsPage", detailsStart);
+  assert.notEqual(detailsStart, -1, "GEO content operations exist");
+
+  const prompts = ["回滚错误发布", "内容过期", "/guides/replacement-guide"];
+  const requests = [];
+  const toasts = [];
+  let failNext = false;
+  const context = {
+    result: {},
+    Date,
+    window: {
+      confirm: () => true,
+      prompt: () => prompts.shift(),
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: JSON.parse(options.body) });
+      if (failNext) throw Object.assign(new Error("替代地址无效"), { payload: { error: { message: "替代地址必须指向已发布内容" } } });
+      return { data: {} };
+    },
+    showToast: (message) => toasts.push(message),
+    closeDrawer: () => undefined,
+    loadGeoOperations: async () => undefined,
+    renderShell: () => undefined,
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+  };
+  vm.runInNewContext(`${script.slice(detailsStart, detailsEnd)}\nresult.rollback = geoRollbackContent; result.archive = geoArchiveContent;`, context);
+
+  await context.result.rollback("content-1", "version-1");
+  await context.result.archive("content-1");
+
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/admin/geo/content/content-1/rollback",
+    "/api/admin/geo/content/content-1/archive",
+  ]);
+  assert.deepEqual(requests[0].payload, { versionId: "version-1", reason: "回滚错误发布" });
+  assert.deepEqual(requests[1].payload, { reason: "内容过期", redirectPath: "/guides/replacement-guide" });
+
+  prompts.push("再次归档", "/guides/not-published");
+  failNext = true;
+  await context.result.archive("content-1");
+  assert.equal(toasts.at(-1), "替代地址必须指向已发布内容");
+});
+
 test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);

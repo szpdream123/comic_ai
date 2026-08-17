@@ -29,6 +29,7 @@ type GeoVersionRow = {
   id: string; content_item_id: string; version_number: number; title: string; summary: string;
   document_json: GeoDocument; quality_report_json: GeoQualityReport; config_revision_id: string;
   generation_run_id: string | null; created_at: Date | string; published_at: Date | string | null;
+  question_ids?: string[]; evidence_ids?: string[];
 };
 
 export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Date }) {
@@ -100,12 +101,19 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     const itemResult = await deps.db.query<GeoItemRow>(`SELECT * FROM geo_content_items WHERE id=$1`, [contentItemId]);
     const item = itemResult.rows[0];
     if (!item) return fail(404, "geo_content_not_found", "GEO内容不存在。");
-    const versions = await deps.db.query<GeoVersionRow>(`SELECT * FROM geo_content_versions WHERE content_item_id=$1 ORDER BY version_number DESC`, [contentItemId]);
+    const versions = await deps.db.query<GeoVersionRow>(
+      `SELECT version.*,
+         ARRAY(SELECT link.question_id::text FROM geo_content_question_links link WHERE link.content_version_id=version.id ORDER BY link.question_id) AS question_ids,
+         ARRAY(SELECT link.evidence_id::text FROM geo_content_evidence_links link WHERE link.content_version_id=version.id ORDER BY link.evidence_id) AS evidence_ids
+       FROM geo_content_versions version WHERE version.content_item_id=$1 ORDER BY version.version_number DESC`,
+      [contentItemId],
+    );
     return ok({ item: mapItem(item), versions: versions.rows.map(mapVersion) });
   }
 
   async function createDraftFromDocument(input: {
     contentItemId?: string; contentType: GeoContentType; topic: string; slug: string;
+    expectedLockVersion?: number;
     questionIds: string[]; evidenceIds: string[]; document: GeoDocument; generationRunId: string | null;
     configRevisionId: string; actorAdminAccountId: string; qualityReport?: GeoQualityReport;
     generationCompletion?: { leaseToken: string; providerRequestIds: string[]; usage: Record<string, unknown> };
@@ -113,15 +121,22 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) || !input.topic.trim()) {
       return fail(400, "geo_content_invalid", "主题和英文短链必须有效。");
     }
+    if (input.expectedLockVersion !== undefined && (!Number.isInteger(input.expectedLockVersion) || input.expectedLockVersion < 1)) {
+      return fail(400, "geo_content_lock_invalid", "内容版本号无效。");
+    }
     const questionIds = uniqueStrings(input.questionIds);
     const evidenceIds = uniqueStrings(input.evidenceIds);
-    const [questionRows, evidenceRows, existingRows] = await Promise.all([
-      questionIds.length ? deps.db.query<{ id: string }>(`SELECT id FROM geo_questions WHERE id=ANY($1::uuid[])`, [questionIds]) : Promise.resolve({ rows: [] }),
-      evidenceIds.length ? deps.db.query<GeoEvidenceRow>(`SELECT * FROM geo_evidence_items WHERE id=ANY($1::uuid[])`, [evidenceIds]) : Promise.resolve({ rows: [] }),
-      deps.db.query<{ document_json: GeoDocument }>(
-        `SELECT version.document_json FROM geo_content_items item JOIN geo_content_versions version ON version.id=item.current_published_version_id WHERE item.status<>'archived'`,
-      ),
-    ]);
+    const questionRows = questionIds.length
+      ? await deps.db.query<{ id: string }>(`SELECT id FROM geo_questions WHERE id=ANY($1::uuid[])`, [questionIds])
+      : { rows: [] };
+    const evidenceRows = evidenceIds.length
+      ? await deps.db.query<GeoEvidenceRow>(`SELECT * FROM geo_evidence_items WHERE id=ANY($1::uuid[])`, [evidenceIds])
+      : { rows: [] };
+    const existingRows = await deps.db.query<{ document_json: GeoDocument }>(
+      `SELECT version.document_json FROM geo_content_items item JOIN geo_content_versions version ON version.id=item.current_published_version_id
+       WHERE item.status<>'archived' AND ($1::uuid IS NULL OR item.id<>$1)`,
+      [input.contentItemId ?? null],
+    );
     if (questionRows.rows.length !== questionIds.length || evidenceRows.rows.length !== evidenceIds.length) {
       return fail(400, "geo_reference_invalid", "问题或证据不存在。");
     }
@@ -156,10 +171,14 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
            lock_version=geo_content_items.lock_version+1,updated_by_admin_id=EXCLUDED.updated_by_admin_id,updated_at=EXCLUDED.updated_at
            WHERE geo_content_items.status<>'archived'
          RETURNING *
+       ), existing_item AS MATERIALIZED (
+         SELECT item.id FROM geo_content_items item CROSS JOIN lease_guard
+          WHERE item.id=$1 AND NOT $20 AND ($24::integer IS NULL OR item.lock_version=$24)
+          FOR UPDATE OF item
        ), selected_item AS MATERIALIZED (
          SELECT id FROM upserted_item
          UNION ALL
-         SELECT item.id FROM geo_content_items item CROSS JOIN lease_guard WHERE item.id=$1 AND NOT $20
+         SELECT id FROM existing_item
        ), locked_item AS MATERIALIZED (
          SELECT selected.id, pg_advisory_xact_lock(hashtextextended(selected.id::text, 0)) FROM selected_item selected
        ), next_version AS (
@@ -196,12 +215,13 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
        )
        SELECT row_to_json(final_item.*) AS item,row_to_json(inserted_version.*) AS version
        FROM final_item CROSS JOIN inserted_version CROSS JOIN audited`,
-      [itemId, versionId, input.document.title.trim(), input.document.summary.trim(), JSON.stringify(input.document), JSON.stringify(input.document.faq), JSON.stringify(input.document.seo), JSON.stringify(input.document.socialDrafts), JSON.stringify(qualityReport), input.configRevisionId, input.generationRunId, input.actorAdminAccountId, now(), questionIds, evidenceIds, randomUUID(), input.generationCompletion?.leaseToken ?? null, JSON.stringify(input.generationCompletion?.providerRequestIds ?? []), JSON.stringify(input.generationCompletion?.usage ?? {}), !input.contentItemId, input.contentType, input.topic.trim(), input.slug],
+      [itemId, versionId, input.document.title.trim(), input.document.summary.trim(), JSON.stringify(input.document), JSON.stringify(input.document.faq), JSON.stringify(input.document.seo), JSON.stringify(input.document.socialDrafts), JSON.stringify(qualityReport), input.configRevisionId, input.generationRunId, input.actorAdminAccountId, now(), questionIds, evidenceIds, randomUUID(), input.generationCompletion?.leaseToken ?? null, JSON.stringify(input.generationCompletion?.providerRequestIds ?? []), JSON.stringify(input.generationCompletion?.usage ?? {}), !input.contentItemId, input.contentType, input.topic.trim(), input.slug, input.expectedLockVersion ?? null],
     );
     const row = result.rows[0];
     if (!row) {
       if (input.generationRunId) return fail(409, "geo_generation_lease_lost", "生成任务租约已失效，请重新生成。");
       if (!input.contentItemId) return fail(409, "geo_content_archived", "同短链内容已归档，请先恢复或更换短链。");
+      if (input.expectedLockVersion !== undefined) return fail(409, "geo_content_edit_conflict", "内容已被其他管理员更新，请刷新后重新编辑。");
       return fail(404, "geo_content_not_found", "GEO内容不存在或已归档。");
     }
     return created({ item: mapItem(row.item), version: mapVersion(row.version) });
@@ -259,7 +279,7 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
          SELECT * FROM geo_content_versions WHERE id=$2 AND content_item_id=$1 AND published_at IS NOT NULL
        ), updated AS (
          UPDATE geo_content_items SET status='published',current_published_version_id=$2,lock_version=lock_version+1,
-           updated_by_admin_id=$3,updated_at=$4 WHERE id=$1 AND EXISTS(SELECT 1 FROM target) RETURNING *
+           updated_by_admin_id=$3,updated_at=$4 WHERE id=$1 AND status<>'archived' AND EXISTS(SELECT 1 FROM target) RETURNING *
        ), audited AS (
          INSERT INTO geo_audit_events (id,actor_admin_account_id,event_type,target_type,target_id,reason,metadata_json,created_at)
          SELECT $5,$3,'rolled_back','geo_content_item',id,$6,jsonb_build_object('versionId',$2),$4 FROM updated RETURNING id
@@ -322,7 +342,15 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
       [typeByRoute[match[1]!], match[2]],
     );
     if (!result.rows[0]) return fail(404, "geo_content_not_found", "GEO公开内容不存在。");
-    return ok({ item: mapItem(result.rows[0].item), version: mapVersion(result.rows[0].version) });
+    const evidence = await deps.db.query<GeoEvidenceRow>(
+      `SELECT evidence.* FROM geo_content_evidence_links link
+       JOIN geo_evidence_items evidence ON evidence.id=link.evidence_id
+       WHERE link.content_version_id=$1 AND evidence.review_status='approved' AND evidence.public_use_allowed
+         AND (evidence.valid_until IS NULL OR evidence.valid_until>=$2)
+       ORDER BY evidence.id`,
+      [result.rows[0].version.id, now()],
+    );
+    return ok({ item: mapItem(result.rows[0].item), version: mapVersion(result.rows[0].version), evidence: evidence.rows.map(mapPublicEvidence) });
   }
 
   return { listQuestions, saveQuestion, listEvidence, saveEvidence, listContent, getContent, createDraftFromDocument, submitForReview, publish, rollback, archive, listPublished, findPublishedByPath };
@@ -334,11 +362,14 @@ function mapQuestion(row: GeoQuestionRow) {
 function mapEvidence(row: GeoEvidenceRow) {
   return { id: row.id, type: row.evidence_type, name: row.name, factText: row.fact_text, sourceUrl: row.source_url, collectedAt: iso(row.collected_at), modelName: row.model_name, modelVersion: row.model_version, reviewStatus: row.review_status, validUntil: isoOrNull(row.valid_until), publicUseAllowed: row.public_use_allowed, reviewedAt: isoOrNull(row.reviewed_at), createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
 }
+function mapPublicEvidence(row: GeoEvidenceRow) {
+  return { id: row.id, name: row.name, factText: row.fact_text, sourceUrl: row.source_url };
+}
 function mapItem(row: GeoItemRow) {
   return { id: row.id, contentType: row.content_type, topic: row.topic, slug: row.slug, status: row.status, currentDraftVersionId: row.current_draft_version_id, currentPublishedVersionId: row.current_published_version_id, redirectPath: row.redirect_path, lockVersion: row.lock_version, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) };
 }
 function mapVersion(row: GeoVersionRow) {
-  return { id: row.id, contentItemId: row.content_item_id, versionNumber: row.version_number, title: row.title, summary: row.summary, document: row.document_json, qualityReport: row.quality_report_json, configRevisionId: row.config_revision_id, generationRunId: row.generation_run_id, createdAt: iso(row.created_at), publishedAt: isoOrNull(row.published_at) };
+  return { id: row.id, contentItemId: row.content_item_id, versionNumber: row.version_number, title: row.title, summary: row.summary, document: row.document_json, qualityReport: row.quality_report_json, configRevisionId: row.config_revision_id, generationRunId: row.generation_run_id, questionIds: row.question_ids ?? [], evidenceIds: row.evidence_ids ?? [], createdAt: iso(row.created_at), publishedAt: isoOrNull(row.published_at) };
 }
 function toEvidenceSnapshot(row: GeoEvidenceRow): GeoEvidenceSnapshot {
   return { id: row.id, name: row.name, factText: row.fact_text, sourceUrl: row.source_url, reviewStatus: row.review_status, publicUseAllowed: row.public_use_allowed, validUntil: isoOrNull(row.valid_until) };

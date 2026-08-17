@@ -61,6 +61,41 @@ describe("GEO generation workflow", () => {
     }
   });
 
+  it("regenerates an existing slug without comparing the draft to its own published version", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedAdmin(db);
+      const contentService = createGeoContentService({ db, now: () => fixedNow });
+      const question = await contentService.saveQuestion({ rawQuestion: "怎样复用角色素材？", topic: "角色一致性", intent: "tutorial", targetPlatforms: [], priority: 80, productCapabilities: [], notes: "", actorAdminAccountId });
+      if (!("data" in question.body)) throw new Error("fixture failed");
+      const neutralDocument: GeoDocument = {
+        ...generatedDocument,
+        blocks: [{ type: "paragraph", text: "先固定角色资料，再逐个检查分镜中的角色描述。", evidenceIds: [] }],
+      };
+      const original = await contentService.createDraftFromDocument({ contentType: "guide", topic: "角色一致性", slug: "regenerated-character-consistency", questionIds: [question.body.data.id], evidenceIds: [], document: neutralDocument, generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId });
+      if (!("data" in original.body)) throw new Error("original draft failed");
+      assert.equal((await contentService.submitForReview({ contentItemId: original.body.data.item.id, expectedLockVersion: original.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+      assert.equal((await contentService.publish({ contentItemId: original.body.data.item.id, actorAdminAccountId, reason: "发布原稿" })).status, 200);
+      let calls = 0;
+      const gateway: GeoTextChatGatewayLike = {
+        async completeJsonWithUsage() {
+          calls += 1;
+          return { content: JSON.stringify(calls === 1 ? neutralDocument : { issues: [] }), usage: null, providerRequestId: `provider-regenerate-${calls}` };
+        },
+        async completeJson() { throw new Error("unexpected fallback"); },
+      };
+      const service = createGeoGenerationService({ db, gateway, contentService, now: () => fixedNow });
+      const regenerated = await service.generateDraft({ questionId: question.body.data.id, evidenceIds: [], contentType: "guide", topic: "角色一致性", slug: "regenerated-character-consistency", modelCode: "writer-model", actorAdminAccountId });
+      assert.equal(regenerated.status, 201);
+      if (!("data" in regenerated.body)) throw new Error("regeneration failed");
+      assert.equal(regenerated.body.data.item.id, original.body.data.item.id);
+      assert.equal(regenerated.body.data.version.versionNumber, 2);
+      assert.equal(regenerated.body.data.version.qualityReport.blockers.some((issue) => issue.code === "high_similarity"), false);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("records invalid model output without creating a content version", async () => {
     const db = await createMigratedTestDb();
     try {

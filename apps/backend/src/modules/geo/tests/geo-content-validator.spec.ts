@@ -112,11 +112,12 @@ describe("GEO controlled content", () => {
       contentType: "guide",
       document: {
         ...validDocument,
-        blocks: [{ type: "paragraph", text: "<script>alert(1)</script>", evidenceIds: [] }],
+        blocks: [{ type: "paragraph", text: "<script>alert(1)</script>", evidenceIds: ["e-1"] }],
       },
       publishedAt: "2026-08-13T00:00:00.000Z",
       updatedAt: "2026-08-13T00:00:00.000Z",
       authorName: "灵曦AI团队",
+      evidence: [{ id: "e-1", name: "公开产品页", factText: "灵曦AI支持复用角色参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets" }],
       related: [],
     });
 
@@ -124,5 +125,9 @@ describe("GEO controlled content", () => {
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.match(html, /"@type":"FAQPage"/);
     assert.match(html, /灵曦AI/);
+    assert.match(html, /作者：灵曦AI团队/);
+    assert.match(html, /证据来源/);
+    assert.match(html, /href="https:\/\/www\.lingxiyunai\.com\/assets"/);
+    assert.match(html, /href="#geo-evidence-1"/);
   });
 });

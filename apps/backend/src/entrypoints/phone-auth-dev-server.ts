@@ -15726,6 +15726,7 @@ async function serveGeoPublic(
   pathname: string,
   response: ServerResponse,
   db: Awaited<ReturnType<typeof createDevDb>>,
+  runtimeEnv: NodeJS.ProcessEnv,
 ) {
   const match = pathname.match(/^\/(guides|cases|reports|answers)(?:\/([a-z0-9]+(?:-[a-z0-9]+)*))?\/?$/);
   if (!match) return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
@@ -15734,7 +15735,7 @@ async function serveGeoPublic(
   const slug = match[2];
   const service = createGeoContentService({ db });
   const template = await readFile(join(webRoot, "geo-public.html"), "utf8");
-  const origin = serverOriginFromRequest(request);
+  const origin = publicSiteOrigin(request, runtimeEnv);
   let html: string;
 
   if (slug) {
@@ -15777,6 +15778,7 @@ async function serveGeoPublic(
       publishedAt: result.body.data.version.publishedAt ?? result.body.data.item.updatedAt,
       updatedAt: result.body.data.item.updatedAt,
       authorName: versionSettings.publicAuthorName,
+      evidence: result.body.data.evidence,
       related,
     });
   } else {
@@ -15822,8 +15824,9 @@ async function serveDynamicSitemap(
   request: Parameters<typeof createServer>[0],
   response: ServerResponse,
   db: Awaited<ReturnType<typeof createDevDb>>,
+  runtimeEnv: NodeJS.ProcessEnv,
 ) {
-  const origin = serverOriginFromRequest(request);
+  const origin = publicSiteOrigin(request, runtimeEnv);
   let dynamicEntries: Array<{ href: string; lastmod: string | null }> = [];
   try {
     const result = await createGeoContentService({ db }).listPublished();
@@ -15866,7 +15869,7 @@ async function serveStatic(
   }
 
   if (pathname === "/robots.txt") {
-    const origin = serverOriginFromRequest(request);
+    const origin = publicSiteOrigin(request, runtimeEnv);
     response.statusCode = 200;
     response.setHeader("content-type", "text/plain; charset=utf-8");
     response.setHeader("cache-control", "public, max-age=0, must-revalidate");
@@ -15883,7 +15886,7 @@ async function serveStatic(
   }
 
   if (pathname === "/sitemap.xml") {
-    const origin = serverOriginFromRequest(request);
+    const origin = publicSiteOrigin(request, runtimeEnv);
     response.statusCode = 200;
     response.setHeader("content-type", "application/xml; charset=utf-8");
     response.setHeader("cache-control", "no-store");
@@ -15919,7 +15922,7 @@ async function serveStatic(
   if (filePath === join(webRoot, "app.html")) {
     const seoRoute = publicSeoRouteFromPath(pathname);
     const appShell = seoRoute
-      ? renderPublicSeoAppShell(file.toString("utf8"), seoRoute, serverOriginFromRequest(request))
+      ? renderPublicSeoAppShell(file.toString("utf8"), seoRoute, publicSiteOrigin(request, runtimeEnv))
       : renderPrivateAppShell(file.toString("utf8"));
     file = Buffer.from(
       renderProductionWebAppShell(
@@ -16359,6 +16362,10 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
     ? rawHost.replace(/:443$/i, "")
     : rawHost.replace(/:80$/i, "");
   return `${protocol}://${host}`;
+}
+
+function publicSiteOrigin(request: Parameters<typeof createServer>[0], env: NodeJS.ProcessEnv) {
+  return env.NODE_ENV === "production" ? productionHttpsOrigin(env) : serverOriginFromRequest(request);
 }
 
 function redirectInsecureProductionRequest(
@@ -18082,8 +18089,8 @@ export function createPhoneAuthDevServer(
 
         if (request.method === "GET" && (isGeoPublicPath(pathname) || pathname === "/sitemap.xml")) {
           const publicDb = await getDb();
-          if (pathname === "/sitemap.xml") return await serveDynamicSitemap(request, response, publicDb);
-          return await serveGeoPublic(request, pathname, response, publicDb);
+          if (pathname === "/sitemap.xml") return await serveDynamicSitemap(request, response, publicDb, runtimeEnv);
+          return await serveGeoPublic(request, pathname, response, publicDb, runtimeEnv);
         }
 
         if (request.method === "GET" && !pathname.startsWith("/api/")) {
@@ -18198,6 +18205,7 @@ export function createPhoneAuthDevServer(
           }
           const result = await executeIdempotentGeoMutation(db, { adminAccountId: actorAdminAccountId, idempotencyKey: geoIdempotencyKey!, request: { pathname, body }, execute: () => geoContentService.createDraftFromDocument({
             contentItemId: readString(body.contentItemId) || undefined,
+            expectedLockVersion: body.expectedLockVersion == null ? undefined : Number(body.expectedLockVersion),
             contentType,
             topic: readString(body.topic),
             slug: readString(body.slug),

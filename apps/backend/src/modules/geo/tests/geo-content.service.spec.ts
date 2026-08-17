@@ -70,6 +70,11 @@ describe("GEO content workflow", () => {
       });
       assert.equal(draft.status, 201);
       if (!("data" in draft.body)) throw new Error("draft not created");
+      const editableDetail = await service.getContent(draft.body.data.item.id);
+      assert.equal(editableDetail.status, 200);
+      if (!("data" in editableDetail.body)) throw new Error("editable detail missing");
+      assert.deepEqual(editableDetail.body.data.versions[0]?.questionIds, [question.body.data.id]);
+      assert.deepEqual(editableDetail.body.data.versions[0]?.evidenceIds, [evidence.body.data.id]);
       assert.equal((await service.publish({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "直接发布" })).status, 409);
 
       const review = await service.submitForReview({
@@ -93,13 +98,10 @@ describe("GEO content workflow", () => {
         questionIds: [question.body.data.id],
         evidenceIds: [evidence.body.data.id],
         document: {
-          title: "短剧分镜怎样安排信息密度",
-          summary: "通过目标拆分、镜头排序、对白精简和转场检查，控制每个画面承担的信息数量。",
-          directAnswer: "先确定单个镜头只传递一个核心信息，再按因果关系排列画面并删除重复对白。",
-          blocks: [{ type: "steps", items: [{ title: "拆分目标", body: "为每个画面写下一句主要任务。" }, { title: "检查转场", body: "确认相邻画面之间存在清楚的动作或情绪连接。" }], evidenceIds: [] }],
-          faq: [{ question: "一个镜头适合表达多少信息？", answer: "优先保留一个核心动作或情绪，其余内容交给前后镜头。" }],
-          socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
-          seo: { title: "短剧分镜信息密度安排方法 | 灵曦AI", description: "介绍目标拆分、画面排序、对白精简与转场检查的分镜方法。" },
+          ...supportedDocument,
+          title: "AI短剧怎样保持角色一致性：分镜复用方法",
+          summary: "通过固定角色资料、复用参考素材和逐镜检查，降低连续镜头中的角色漂移。",
+          seo: { ...supportedDocument.seo, title: "AI短剧角色一致性与分镜复用方法 | 灵曦AI" },
         },
         generationRunId: null,
         configRevisionId: "geo-default-v1",
@@ -117,12 +119,107 @@ describe("GEO content workflow", () => {
       assert.equal((await service.rollback({ contentItemId: draft.body.data.item.id, versionId: draft.body.data.version.id, actorAdminAccountId, reason: "回滚验证" })).status, 200);
       assert.equal((await service.findPublishedByPath("/guides/ai-short-drama-character-consistency")).body.data.version.versionNumber, 1);
       assert.equal((await service.archive({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "归档验证" })).status, 200);
+      assert.equal((await service.rollback({ contentItemId: draft.body.data.item.id, versionId: draft.body.data.version.id, actorAdminAccountId, reason: "归档后回滚" })).status, 409);
 
       const audit = await db.query<{ count: string }>("SELECT count(*)::text AS count FROM geo_audit_events WHERE target_id = $1", [draft.body.data.item.id]);
       assert.ok(Number(audit.rows[0]?.count ?? 0) >= 5);
     } finally {
       await db.close();
     }
+  });
+
+  it("does not fan out draft preflight checks across multiple database connections", async () => {
+    const questionId = "30000000-0000-4000-8000-000000000031";
+    const evidenceId = "30000000-0000-4000-8000-000000000032";
+    const itemId = "30000000-0000-4000-8000-000000000033";
+    const versionId = "30000000-0000-4000-8000-000000000034";
+    const supportedDocument: GeoDocument = {
+      ...document,
+      blocks: [{ type: "paragraph", text: "灵曦AI支持按角色保存参考素材。", evidenceIds: [evidenceId] }],
+    };
+    let activeQueries = 0;
+    let peakActiveQueries = 0;
+    const trackedDb = {
+      async query<T>(sql: string) {
+        activeQueries += 1;
+        peakActiveQueries = Math.max(peakActiveQueries, activeQueries);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        try {
+          if (sql.includes("FROM geo_questions")) return { rows: [{ id: questionId }] as T[] };
+          if (sql.includes("SELECT * FROM geo_evidence_items")) return { rows: [{
+            id: evidenceId,
+            evidence_type: "product_feature",
+            name: "角色素材管理",
+            fact_text: "灵曦AI支持按角色保存参考素材。",
+            source_url: "https://www.lingxiyunai.com/assets",
+            collected_at: fixedNow,
+            model_name: null,
+            model_version: null,
+            review_status: "approved",
+            valid_until: null,
+            public_use_allowed: true,
+            reviewed_by_admin_id: actorAdminAccountId,
+            reviewed_at: fixedNow,
+            created_by_admin_id: actorAdminAccountId,
+            created_at: fixedNow,
+            updated_at: fixedNow,
+          }] as T[] };
+          if (sql.includes("JOIN geo_content_versions version")) return { rows: [] as T[] };
+          return { rows: [{
+            item: {
+              id: itemId,
+              content_type: "guide",
+              topic: "角色一致性",
+              slug: "bounded-draft-preflight",
+              status: "draft",
+              current_draft_version_id: versionId,
+              current_published_version_id: null,
+              redirect_path: null,
+              lock_version: 2,
+              created_by_admin_id: actorAdminAccountId,
+              updated_by_admin_id: actorAdminAccountId,
+              created_at: fixedNow,
+              updated_at: fixedNow,
+            },
+            version: {
+              id: versionId,
+              content_item_id: itemId,
+              version_number: 1,
+              title: supportedDocument.title,
+              summary: supportedDocument.summary,
+              document_json: supportedDocument,
+              faq_json: supportedDocument.faq,
+              seo_json: supportedDocument.seo,
+              social_drafts_json: supportedDocument.socialDrafts,
+              quality_report_json: { blockers: [], warnings: [], checkedAt: fixedNow.toISOString() },
+              config_revision_id: "geo-default-v1",
+              generation_run_id: null,
+              created_by_admin_id: actorAdminAccountId,
+              created_at: fixedNow,
+              published_at: null,
+            },
+          }] as T[] };
+        } finally {
+          activeQueries -= 1;
+        }
+      },
+    };
+    const service = createGeoContentService({ db: trackedDb, now: () => fixedNow });
+
+    const result = await service.createDraftFromDocument({
+      contentType: "guide",
+      topic: "角色一致性",
+      slug: "bounded-draft-preflight",
+      questionIds: [questionId],
+      evidenceIds: [evidenceId],
+      document: supportedDocument,
+      generationRunId: null,
+      configRevisionId: "geo-default-v1",
+      actorAdminAccountId,
+    });
+
+    assert.equal(result.status, 201);
+    assert.equal(peakActiveQueries, 1);
   });
 
   it("does not allow a blocked draft into review", async () => {
@@ -173,6 +270,30 @@ describe("GEO content workflow", () => {
     }
   });
 
+  it("rejects a stale admin edit instead of replacing the current draft pointer", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(
+        `INSERT INTO admin_accounts (id, login_name, password_hash, display_name, status)
+         VALUES ($1, 'geo_edit_conflict_admin', 'plain:test-password', 'GEO Admin', 'active')`,
+        [actorAdminAccountId],
+      );
+      const service = createGeoContentService({ db, now: () => fixedNow });
+      const first = await service.createDraftFromDocument({ contentType: "guide", topic: "编辑冲突", slug: "edit-conflict", questionIds: [], evidenceIds: [], document, generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId });
+      if (!("data" in first.body)) throw new Error("first draft failed");
+      const baseInput = { contentItemId: first.body.data.item.id, expectedLockVersion: first.body.data.item.lockVersion, contentType: "guide" as const, topic: "编辑冲突", slug: "edit-conflict", questionIds: [], evidenceIds: [], generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId };
+      const saved = await service.createDraftFromDocument({ ...baseInput, document: { ...document, title: "编辑后的版本" } });
+      assert.equal(saved.status, 201);
+      const stale = await service.createDraftFromDocument({ ...baseInput, document: { ...document, title: "过期编辑" } });
+      assert.equal(stale.status, 409);
+      if ("error" in stale.body) assert.equal(stale.body.error.code, "geo_content_edit_conflict");
+      const versions = await db.query<{ title: string }>("SELECT title FROM geo_content_versions WHERE content_item_id=$1 ORDER BY version_number", [first.body.data.item.id]);
+      assert.deepEqual(versions.rows.map((row) => row.title), [document.title, "编辑后的版本"]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("validates and commits an archive redirect atomically", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -206,7 +327,10 @@ describe("GEO content workflow", () => {
       const service = createGeoContentService({ db: trackedDb, now: () => fixedNow });
       const result = await service.archive({ contentItemId: "30000000-0000-4000-8000-000000000011", actorAdminAccountId, reason: "迁移地址", redirectPath: "/guides/archive-target" });
       assert.equal(result.status, 200);
-      assert.equal(archiveSql.length, 1);
+      assert.equal((await service.rollback({ contentItemId: "30000000-0000-4000-8000-000000000011", versionId: "30000000-0000-4000-8000-000000000021", actorAdminAccountId, reason: "不应恢复归档" })).status, 409);
+      const archived = await db.query<{ status: string; redirect_path: string | null }>("SELECT status,redirect_path FROM geo_content_items WHERE id='30000000-0000-4000-8000-000000000011'");
+      assert.deepEqual(archived.rows[0], { status: "archived", redirect_path: "/guides/archive-target" });
+      assert.equal(archiveSql.length, 2);
       assert.match(archiveSql[0]!, /FOR (?:NO KEY UPDATE|UPDATE|SHARE)/i);
       assert.match(archiveSql[0]!, /UPDATE geo_content_items/i);
     } finally {

@@ -1465,14 +1465,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
       [actorAdminAccountId],
     );
     const service = createGeoContentService({ db, now: () => new Date("2026-08-13T10:00:00.000Z") });
+    const evidence = await service.saveEvidence({ type: "product_feature", name: "角色素材公开说明", factText: "公开产品页说明角色素材可以复用。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true, actorAdminAccountId });
+    if (!("data" in evidence.body)) throw new Error("fixture evidence failed");
     const draft = await service.createDraftFromDocument({
       contentType: "guide", topic: "角色一致性", slug: "ai-short-drama-character-consistency",
-      questionIds: [], evidenceIds: [], generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      questionIds: [], evidenceIds: [evidence.body.data.id], generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
       document: {
         title: "AI短剧如何保持角色一致性",
         summary: "从角色资料、参考素材和分镜约束三个环节减少不同镜头中的角色漂移。",
         directAnswer: "先固定角色资料，再让每个分镜引用同一组已确认素材。",
-        blocks: [{ type: "paragraph", text: "先建立可复用的角色参考素材，再进入分镜制作。", evidenceIds: [] }],
+        blocks: [{ type: "paragraph", text: "先建立可复用的角色参考素材，再进入分镜制作。", evidenceIds: [evidence.body.data.id] }],
         faq: [{ question: "什么时候更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
         socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
         seo: { title: "AI短剧角色一致性方法 | 灵曦AI", description: "介绍AI短剧角色资料、参考素材和分镜约束的实用方法。" },
@@ -1504,6 +1506,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.equal(response.status, 200);
         assert.match(html, /<h1>AI短剧如何保持角色一致性<\/h1>/);
         assert.match(html, /application\/ld\+json/);
+        assert.match(html, /证据来源/);
+        assert.match(html, /href="https:\/\/www\.lingxiyunai\.com\/assets"/);
         assert.match(html, /<link rel="canonical" href="https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency"/);
         assert.doesNotMatch(html, /src="\/app\.js/);
         assert.doesNotMatch(html, /public-seo-session-pending/);
@@ -2631,6 +2635,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
         apiResponse.headers.get("location"),
         "https://www.lingxiyunai.com/api/auth/password/login",
       );
+
+      const poisonedHeaders = {
+        host: "attacker.example:443",
+        "x-forwarded-host": "attacker.example:443",
+        "x-forwarded-proto": "https",
+      };
+      const robotsResponse = await fetch(`${server.origin}/robots.txt`, { headers: poisonedHeaders });
+      const robots = await robotsResponse.text();
+      assert.match(robots, /Sitemap: https:\/\/www\.lingxiyunai\.com\/sitemap\.xml/);
+      assert.doesNotMatch(robots, /attacker\.example/);
+      const sitemapResponse = await fetch(`${server.origin}/sitemap.xml`, { headers: poisonedHeaders });
+      const sitemap = await sitemapResponse.text();
+      assert.match(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/script<\/loc>/);
+      assert.doesNotMatch(sitemap, /attacker\.example/);
     } finally {
       await server.close();
     }
