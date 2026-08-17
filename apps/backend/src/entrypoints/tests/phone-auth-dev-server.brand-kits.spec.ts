@@ -133,7 +133,10 @@ it("exposes Loomic brand kit CRUD to a shared main account and protects project 
     const detail = await api(server.origin, `/api/creator/brand-kits/${kitId}`, memberCookie);
     assert.equal(detail.status, 200);
     assert.equal(detail.body.data.brandKit.assets.length, 2);
-    assert.match(String(detail.body.data.brandKit.assets.find((asset: { asset_type: string }) => asset.asset_type === "logo")?.file_url), /^https:\/\/brand\.test\//);
+    assert.equal(
+      detail.body.data.brandKit.assets.find((asset: { asset_type: string }) => asset.asset_type === "logo")?.file_url,
+      `/api/storage/objects/${logoObjectId}/content?proxy=1`,
+    );
     const foreignDetail = await api(server.origin, `/api/creator/brand-kits/${kitId}`, otherCookie);
     assert.equal(foreignDetail.status, 404);
 

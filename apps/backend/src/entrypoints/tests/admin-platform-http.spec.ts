@@ -7,6 +7,135 @@ import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
 describe("admin management platform HTTP routes", { concurrency: false }, () => {
+  it("restricts GEO operations to super admins and publishes an evidence-bound draft", async () => {
+    const db = await createMigratedTestDb();
+    const gatewayModels: string[] = [];
+    const gateway = {
+      async completeJsonWithUsage(input: { prompt?: string; model?: string }) {
+        gatewayModels.push(String(input.model || ""));
+        if (String(input.prompt).includes("独立内容审查员")) {
+          return { content: JSON.stringify({ issues: [] }), usage: { total_tokens: 10 }, providerRequestId: "geo-review-request" };
+        }
+        const evidenceId = String(input.prompt).match(/"evidence":\[\{"id":"([^"]+)"/)?.[1] ?? "";
+        return {
+          content: JSON.stringify({
+            title: "AI短剧角色一致性指南",
+            summary: "从角色资料、参考素材和分镜引用三个环节建立可复核的一致性流程。",
+            directAnswer: "先确认角色资料，再让每个分镜复用同一份已审核参考素材。",
+            blocks: [{ type: "paragraph", text: "灵曦AI支持按角色保存参考素材。", evidenceIds: [evidenceId] }],
+            faq: [{ question: "何时更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
+            socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+            seo: { title: "AI短剧角色一致性指南 | 灵曦AI", description: "介绍角色资料、参考素材和分镜引用的可复核操作流程。" },
+          }),
+          usage: { total_tokens: 20 },
+          providerRequestId: "geo-writer-request",
+        };
+      },
+      async completeJson() { throw new Error("unexpected fallback"); },
+    };
+    const { server, cookie } = await createLoggedInAdminServer(db, { serverOptions: { textChatGateway: gateway } });
+    try {
+      const anonymous = await fetch(`${server.origin}/api/admin/geo/questions`);
+      assert.equal(anonymous.status, 401);
+      const anonymousPlatforms = await fetch(`${server.origin}/api/admin/geo/platforms`);
+      assert.equal(anonymousPlatforms.status, 401);
+
+      const opsDb = await createMigratedTestDb();
+      const { server: opsServer, cookie: opsCookie } = await createLoggedInAdminServer(opsDb, { role: "ops_admin" });
+      try {
+        const forbidden = await fetch(`${opsServer.origin}/api/admin/geo/questions`, { headers: { cookie: opsCookie } });
+        assert.equal(forbidden.status, 403);
+        const forbiddenPlatforms = await fetch(`${opsServer.origin}/api/admin/geo/platforms`, { headers: { cookie: opsCookie } });
+        assert.equal(forbiddenPlatforms.status, 403);
+      } finally {
+        await opsServer.close();
+        await opsDb.close();
+      }
+
+      const platformsResponse = await fetch(`${server.origin}/api/admin/geo/platforms`, { headers: { cookie } });
+      const platforms = await platformsResponse.json();
+      assert.equal(platformsResponse.status, 200, JSON.stringify(platforms));
+      assert.deepEqual(platforms.data.map((item: { id: string }) => item.id), [
+        "deepseek", "doubao", "baidu", "yuanbao", "kimi", "tongyi",
+        "zhipu", "xinghuo", "quark", "metaso", "nami",
+      ]);
+      assert.equal(platforms.data.find((item: { id: string }) => item.id === "baidu")?.label, "百度文心助手");
+
+      const questionBody = JSON.stringify({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "" });
+      const missingIdempotency = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", cookie }, body: questionBody,
+      });
+      assert.equal(missingIdempotency.status, 400);
+      const questionIdempotencyKey = `geo-question-${randomUUID()}`;
+      const questionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": questionIdempotencyKey, cookie }, body: questionBody,
+      });
+      const question = await questionResponse.json();
+      assert.equal(questionResponse.status, 201, JSON.stringify(question));
+      const replayedQuestionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": questionIdempotencyKey, cookie }, body: questionBody,
+      });
+      const replayedQuestion = await replayedQuestionResponse.json();
+      assert.equal(replayedQuestionResponse.status, 201, JSON.stringify(replayedQuestion));
+      assert.equal(replayedQuestion.data.id, question.data.id);
+
+      const relatedQuestionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-question-related-${randomUUID()}`, cookie },
+        body: JSON.stringify({ rawQuestion: "多个镜头怎样保持同一张脸？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["baidu"], priority: 85, productCapabilities: ["角色素材库"], notes: "" }),
+      });
+      const relatedQuestion = await relatedQuestionResponse.json();
+      assert.equal(relatedQuestionResponse.status, 201, JSON.stringify(relatedQuestion));
+
+      const evidenceResponse = await fetch(`${server.origin}/api/admin/geo/evidence`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-evidence-${randomUUID()}`, cookie },
+        body: JSON.stringify({ type: "product_feature", name: "角色素材管理", factText: "灵曦AI支持按角色保存参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true }),
+      });
+      const evidence = await evidenceResponse.json();
+      assert.equal(evidenceResponse.status, 201, JSON.stringify(evidence));
+
+      const configuredSettingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, {
+        method: "PATCH", headers: { "content-type": "application/json", "idempotency-key": `geo-settings-valid-${randomUUID()}`, cookie },
+        body: JSON.stringify({ value: { defaultModelCode: "configured-geo-model", brandName: "灵曦AI", brandFacts: ["只使用审核证据"], brandTone: "专业、克制、清晰，不夸大效果", forbiddenPhrases: ["灵曦剧场"], defaultWordRange: { min: 1200, max: 2600 }, similarityThreshold: 0.82, publicAuthorName: "灵曦AI内容团队" }, reason: "HTTP配置验证" }),
+      });
+      assert.equal(configuredSettingsResponse.status, 200, await configuredSettingsResponse.text());
+
+      const generatedResponse = await fetch(`${server.origin}/api/admin/geo/generate`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-generate-${randomUUID()}`, cookie },
+        body: JSON.stringify({ questionIds: [question.data.id, relatedQuestion.data.id], evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "" }),
+      });
+      const generated = await generatedResponse.json();
+      assert.equal(generatedResponse.status, 201, JSON.stringify(generated));
+      assert.deepEqual(gatewayModels, ["configured-geo-model", "configured-geo-model"]);
+      const linkedQuestions = await db.query<{ question_id: string }>("SELECT question_id FROM geo_content_question_links WHERE content_version_id=$1 ORDER BY question_id", [generated.data.version.id]);
+      assert.deepEqual(linkedQuestions.rows.map((row) => row.question_id).sort(), [question.data.id, relatedQuestion.data.id].sort());
+
+      const reviewResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/submit-review`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-review-${randomUUID()}`, cookie },
+        body: JSON.stringify({ expectedLockVersion: generated.data.item.lockVersion }),
+      });
+      assert.equal(reviewResponse.status, 200, await reviewResponse.text());
+      const publishResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/publish`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-publish-${randomUUID()}`, cookie }, body: JSON.stringify({ reason: "HTTP流程验证" }),
+      });
+      assert.equal(publishResponse.status, 200, await publishResponse.text());
+
+      const settingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, { headers: { cookie } });
+      const settings = await settingsResponse.json();
+      assert.equal(settingsResponse.status, 200, JSON.stringify(settings));
+      assert.equal(settings.data.brandName, "灵曦AI");
+      assert.equal(settings.data.publicAuthorName, "灵曦AI内容团队");
+      assert.notEqual(settings.data.configRevisionId, "geo-default-v1");
+      const rejectedBrand = await fetch(`${server.origin}/api/admin/geo/settings`, {
+        method: "PATCH", headers: { "content-type": "application/json", "idempotency-key": `geo-settings-${randomUUID()}`, cookie },
+        body: JSON.stringify({ value: { brandName: "灵曦剧场" }, reason: "错误品牌验证" }),
+      });
+      assert.equal(rejectedBrand.status, 400);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("serves the standalone admin shell without using the creator app shell", async () => {
     const server = createPhoneAuthDevServer();
 

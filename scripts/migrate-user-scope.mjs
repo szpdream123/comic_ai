@@ -104,11 +104,14 @@ const migrations = [
   ["20260902-merge-san-bao-gpt-image2-variants.sql", "packages/db/migrations/20260902-merge-san-bao-gpt-image2-variants.sql"],
   ["20260903-add-globalaiopc-model-center-and-soundclone.sql", "packages/db/migrations/20260903-add-globalaiopc-model-center-and-soundclone.sql"],
   ["20260904-create-provider-material-assets.sql", "packages/db/migrations/20260904-create-provider-material-assets.sql"],
+  ["20260905-create-geo-operations.sql", "packages/db/migrations/20260905-create-geo-operations.sql"],
   ["20260905-home-recommendations.sql", "packages/db/migrations/20260905-home-recommendations.sql"],
+  ["20260906-add-geo-generation-leases.sql", "packages/db/migrations/20260906-add-geo-generation-leases.sql"],
   ["20260906-home-background-video.sql", "packages/db/migrations/20260906-home-background-video.sql"],
   ["20260907-free-generation-workspaces.sql", "packages/db/migrations/20260907-free-generation-workspaces.sql"],
   ["20260908-hide-soundclone-provider-parameters.sql", "packages/db/migrations/20260908-hide-soundclone-provider-parameters.sql"],
   ["20260909-backfill-project-cover-storage-objects.sql", "packages/db/migrations/20260909-backfill-project-cover-storage-objects.sql"],
+  ["20260910-allow-bound-team-asset-proxy-urls.sql", "packages/db/migrations/20260910-allow-bound-team-asset-proxy-urls.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -124,10 +127,13 @@ const runtimeSafeMigrationNames = new Set([
   "20260826-converge-provider-protocol-constraint.sql",
   "20260804-z-redact-sms-send-record-secrets.sql",
   "20260831-canvas-agent-outbox-wakeup.sql",
+  "20260905-create-geo-operations.sql",
   "20260905-home-recommendations.sql",
+  "20260906-add-geo-generation-leases.sql",
   "20260906-home-background-video.sql",
   "20260907-free-generation-workspaces.sql",
   "20260908-hide-soundclone-provider-parameters.sql",
+  "20260910-allow-bound-team-asset-proxy-urls.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

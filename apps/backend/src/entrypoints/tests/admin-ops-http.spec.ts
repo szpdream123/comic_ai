@@ -27,6 +27,7 @@ function createPhoneAuthDevServer(
     ...(options ?? {}),
     env: {
       NODE_ENV: "test",
+      PAYMENT_PROVIDER_MODE: "local",
       PAYMENT_MERCHANT_ID: "comic-ai-test-merchant",
       ...(options?.env ?? {}),
     },

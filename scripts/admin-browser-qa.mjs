@@ -50,6 +50,13 @@ try {
   await screenshot(desktop, join(artifactDir, "00-login-desktop.png"));
   await loginIfNeeded(desktop);
   await waitForCondition(desktop, "Boolean(document.querySelector('.admin-shell'))", 15_000);
+  const sidebarOverflowY = await evaluate(
+    desktop,
+    "getComputedStyle(document.querySelector('.sidebar')).overflowY",
+  );
+  if (sidebarOverflowY !== "auto") {
+    throw new Error(`admin_sidebar_not_scrollable:${sidebarOverflowY}`);
+  }
 
   const desktopPages = [
     ["dashboard", "01-dashboard-desktop.png", "button[data-page='dashboard']"],

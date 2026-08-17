@@ -33,6 +33,7 @@ import {
   runWithDatabaseContext,
 } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
+import { createGeoContentService } from "../../modules/geo/geo-content.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 const directUploadPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -598,7 +599,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(state.rows[0]?.provider_status, "failed");
       assert.equal(state.rows[0]?.provider_failure_code, "san_bao_invalid_response");
       assert.equal(state.rows[0]?.snapshot_status, "failed");
-      assert.equal(state.rows[0]?.reservation_status, "released");
+      assert.equal(state.rows[0]?.reservation_status, "manual_review_required");
     } finally {
       await server.close();
     }
@@ -858,7 +859,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         { headers: { cookie } },
       );
       const readOnlyEnvelope = await readOnlyResponse.json();
-      const unchangedSnapshot = await db.query<{ status: string; progress_stage: string }>(
+      const repairedSnapshot = await db.query<{ status: string; progress_stage: string }>(
         "SELECT status, progress_stage FROM ai_generation_task_snapshots WHERE task_id = $1",
         [taskId],
       );
@@ -866,7 +867,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(readOnlyResponse.status, 200);
       assert.equal(readOnlyEnvelope.data.items[0].status, "completed");
       assert.equal(readOnlyEnvelope.data.items[0].failure, null);
-      assert.deepEqual(unchangedSnapshot.rows, [{ status: "queued", progress_stage: "queued" }]);
+      assert.deepEqual(repairedSnapshot.rows, [{ status: "succeeded", progress_stage: "completed" }]);
 
       await db.query(
         `
@@ -886,6 +887,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
                   "lastFailureCode": "provider_output_upload_failed"
                 }
               }'::jsonb,
+              completed_at = NULL,
               failed_at = NULL,
               updated_at = '2026-07-14T08:00:19.000Z'
           WHERE task_id = $1
@@ -1593,6 +1595,85 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("serves GEO public SSR pages and dynamic sitemap entries without creator shell state", async () => {
+    const db = await createMigratedTestDb();
+    const actorAdminAccountId = "32000000-0000-4000-8000-000000000001";
+    await db.query(
+      `INSERT INTO admin_accounts (id,login_name,password_hash,display_name,status)
+       VALUES ($1,'geo_public_admin','plain:test-password','GEO Public Admin','active')`,
+      [actorAdminAccountId],
+    );
+    const service = createGeoContentService({ db, now: () => new Date("2026-08-13T10:00:00.000Z") });
+    const evidence = await service.saveEvidence({ type: "product_feature", name: "角色素材公开说明", factText: "公开产品页说明角色素材可以复用。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true, actorAdminAccountId });
+    if (!("data" in evidence.body)) throw new Error("fixture evidence failed");
+    const draft = await service.createDraftFromDocument({
+      contentType: "guide", topic: "角色一致性", slug: "ai-short-drama-character-consistency",
+      questionIds: [], evidenceIds: [evidence.body.data.id], generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      document: {
+        title: "AI短剧如何保持角色一致性",
+        summary: "从角色资料、参考素材和分镜约束三个环节减少不同镜头中的角色漂移。",
+        directAnswer: "先固定角色资料，再让每个分镜引用同一组已确认素材。",
+        blocks: [{ type: "paragraph", text: "先建立可复用的角色参考素材，再进入分镜制作。", evidenceIds: [evidence.body.data.id] }],
+        faq: [{ question: "什么时候更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
+        socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+        seo: { title: "AI短剧角色一致性方法 | 灵曦AI", description: "介绍AI短剧角色资料、参考素材和分镜约束的实用方法。" },
+      },
+    });
+    assert.equal(draft.status, 201);
+    if (!("data" in draft.body)) throw new Error("fixture draft failed");
+    assert.equal((await service.submitForReview({ contentItemId: draft.body.data.item.id, expectedLockVersion: draft.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+    assert.equal((await service.publish({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "公开页验证" })).status, 200);
+    const draftOnly = await service.createDraftFromDocument({
+      contentType: "answer", topic: "未发布", slug: "draft-only-answer", questionIds: [], evidenceIds: [],
+      generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      document: {
+        title: "未发布问答", summary: "这是一条仅用于验证站点地图不会暴露草稿的内容。", directAnswer: "尚未发布。",
+        blocks: [{ type: "paragraph", text: "草稿内容。", evidenceIds: [] }], faq: [],
+        socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+        seo: { title: "未发布问答 | 灵曦AI", description: "未发布内容不会进入公开站点地图。" },
+      },
+    });
+    const server = createPhoneAuthDevServer({ db });
+    const proxyHeaders = { connection: "close", "x-forwarded-host": "www.lingxiyunai.com:443", "x-forwarded-proto": "https" };
+    try {
+      await server.listen(0);
+      for (const cookie of [undefined, "auth_session=existing-session"]) {
+        const response = await fetch(`${server.origin}/guides/ai-short-drama-character-consistency`, {
+          headers: cookie ? { ...proxyHeaders, cookie } : proxyHeaders,
+        });
+        const html = await response.text();
+        assert.equal(response.status, 200);
+        assert.match(html, /<h1>AI短剧如何保持角色一致性<\/h1>/);
+        assert.match(html, /application\/ld\+json/);
+        assert.match(html, /证据来源/);
+        assert.match(html, /href="https:\/\/www\.lingxiyunai\.com\/assets"/);
+        assert.match(html, /<link rel="canonical" href="https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency"/);
+        assert.doesNotMatch(html, /src="\/app\.js/);
+        assert.doesNotMatch(html, /public-seo-session-pending/);
+      }
+      const listing = await fetch(`${server.origin}/guides`, { headers: proxyHeaders });
+      assert.equal(listing.status, 200);
+      assert.match(await listing.text(), /AI短剧如何保持角色一致性/);
+      const sitemap = await fetch(`${server.origin}/sitemap.xml`, { headers: proxyHeaders });
+      const sitemapXml = await sitemap.text();
+      assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency<\/loc>/);
+      assert.match(sitemapXml, /<lastmod>2026-08-13T10:00:00\.000Z<\/lastmod>/);
+      assert.doesNotMatch(sitemapXml, /draft-only-answer/);
+      if (!("data" in draftOnly.body)) throw new Error("draft-only fixture failed");
+      assert.equal((await service.submitForReview({ contentItemId: draftOnly.body.data.item.id, expectedLockVersion: draftOnly.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+      assert.equal((await service.publish({ contentItemId: draftOnly.body.data.item.id, actorAdminAccountId, reason: "重定向归档验证" })).status, 200);
+      assert.equal((await service.archive({ contentItemId: draftOnly.body.data.item.id, actorAdminAccountId, reason: "配置替代内容", redirectPath: "/guides/ai-short-drama-character-consistency" })).status, 200);
+      const moved = await fetch(`${server.origin}/answers/draft-only-answer`, { headers: proxyHeaders, redirect: "manual" });
+      assert.equal(moved.status, 301);
+      assert.equal(moved.headers.get("location"), "/guides/ai-short-drama-character-consistency");
+      assert.equal((await service.archive({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "无替代内容归档" })).status, 200);
+      const gone = await fetch(`${server.origin}/guides/ai-short-drama-character-consistency`, { headers: proxyHeaders, redirect: "manual" });
+      assert.equal(gone.status, 410);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns 404 for unknown app paths while preserving supported deep links", async () => {
     const server = createPhoneAuthDevServer({ db: {} as Awaited<ReturnType<typeof createDevDb>> });
 
@@ -1828,9 +1909,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       serverSource.indexOf("async function listEpisodeAssetTypesFromDb"),
       serverSource.indexOf("async function listEpisodeStoryboardsFromDb"),
     );
+    const getAssetsRouteMarker = serverSource.indexOf('pathname.endsWith("/assets")');
     const listEpisodeAssetsRouteBlock = serverSource.slice(
-      serverSource.indexOf('request.method === "GET" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
-      serverSource.indexOf('request.method === "POST" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
+      serverSource.lastIndexOf("if (", getAssetsRouteMarker),
+      serverSource.indexOf('request.method === "POST"', getAssetsRouteMarker),
     );
 
     assert.match(listEpisodeAssetsBlock, /await getEpisodeReadContext\(db,/);
@@ -2036,7 +2118,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
   it("rejects disabled users while preserving the account state", async () => {
     const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
+    const server = createPhoneAuthDevServer({
+      db,
+      env: { AUTH_SESSION_REDIS_CACHE_ENABLED: "false" },
+    });
 
     try {
       await server.listen(0);
@@ -2075,7 +2160,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const cookie = await login(server.origin, "13800138991");
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138991"));
       const projectId = randomUUID();
-      const scriptId = randomUUID();
       await db.query(
         `
           INSERT INTO projects (
@@ -2092,41 +2176,21 @@ describe("phone auth dev server", { concurrency: false }, () => {
     [projectId,
       userId],
       );
-      await db.query(
-        `
-          INSERT INTO scripts (
-        id,
-        project_id,
-        status,
-        input_text,
-        created_by_user_id
-      )
-          VALUES ($1, $2, 'draft', 'legacy script', $3)
-        `,
-    [scriptId,
-      projectId,
-      userId],
-      );
-
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
         headers: { cookie },
       });
       const stateBody = await stateResponse.json();
-      const persisted = await db.query<{ owner_user_id: string; script_project_id: string }>(
+      const persisted = await db.query<{ owner_user_id: string }>(
         `
-          SELECT
-            project.owner_user_id,
-            script.project_id AS script_project_id
-          FROM projects project
-          JOIN scripts script ON script.project_id = project.id
-          WHERE project.id = $1
+          SELECT owner_user_id
+          FROM projects
+          WHERE id = $1
         `,
         [projectId],
       );
 
       assert.equal(stateResponse.status, 200, JSON.stringify(stateBody));
       assert.equal(persisted.rows[0]?.owner_user_id, userId);
-      assert.equal(persisted.rows[0]?.script_project_id, projectId);
     } finally {
       await server.close();
     }
@@ -2693,6 +2757,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
         apiResponse.headers.get("location"),
         "https://www.lingxiyunai.com/api/auth/password/login",
       );
+
+      const poisonedHeaders = {
+        host: "attacker.example:443",
+        "x-forwarded-host": "attacker.example:443",
+        "x-forwarded-proto": "https",
+      };
+      const robotsResponse = await fetch(`${server.origin}/robots.txt`, { headers: poisonedHeaders });
+      const robots = await robotsResponse.text();
+      assert.match(robots, /Sitemap: https:\/\/www\.lingxiyunai\.com\/sitemap\.xml/);
+      assert.doesNotMatch(robots, /attacker\.example/);
+      const sitemapResponse = await fetch(`${server.origin}/sitemap.xml`, { headers: poisonedHeaders });
+      const sitemap = await sitemapResponse.text();
+      assert.match(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/script<\/loc>/);
+      assert.doesNotMatch(sitemap, /attacker\.example/);
     } finally {
       await server.close();
     }
@@ -15930,6 +16008,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         updated_by_name: string;
         is_admin_created: boolean;
         created_user_id: string;
+        storage_object_id: string;
         tags_json: string[] | string;
       }>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id]);
       const renameResponse = await fetch(`${server.origin}/api/creator/team-assets/${body.asset?.id}`, {
@@ -15951,9 +16030,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         asset_name: string;
         asset_prompt: string | null;
         asset_url: string;
+        storage_object_id: string;
         resource_size: number | string;
         tags_json: string[] | string;
-      }>("SELECT asset_name, asset_prompt, asset_url, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
+      }>("SELECT asset_name, asset_prompt, asset_url, storage_object_id, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
       const afterEdits = await db.query<{
         upload_sessions: number;
         upload_records: number;
@@ -15997,7 +16077,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(stored.rows[0]?.asset_prompt, "红色披风的青年英雄");
       assert.equal(stored.rows[0]?.asset_category, "character");
       assert.deepEqual(stored.rows[0]?.tags_json, []);
-      assert.match(stored.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(
+        stored.rows[0]?.asset_url,
+        `/api/storage/objects/${stored.rows[0]?.storage_object_id}/content?proxy=1`,
+      );
       assert.equal(stored.rows[0]?.resource_type, "image");
       assert.equal(Number(stored.rows[0]?.resource_size), 4);
       assert.equal(stored.rows[0]?.created_by_name.length > 0, true);
@@ -16018,7 +16101,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       ]);
       assert.equal(edited.rows[0]?.asset_name, "编辑后的团队主角");
       assert.equal(edited.rows[0]?.asset_prompt, "编辑后的团队角色描述");
-      assert.match(edited.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(
+        edited.rows[0]?.asset_url,
+        `/api/storage/objects/${edited.rows[0]?.storage_object_id}/content?proxy=1`,
+      );
       assert.equal(Number(edited.rows[0]?.resource_size), 5);
       assert.deepEqual(edited.rows[0]?.tags_json, ["主角", "红披风"]);
     } finally {

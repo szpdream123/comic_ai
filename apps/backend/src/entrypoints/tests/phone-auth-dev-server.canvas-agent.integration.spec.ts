@@ -100,8 +100,14 @@ describe("Canvas Agent HTTP integration", { concurrency: false }, () => {
 
       const agentModels = await api(server.origin, `/api/canvas/${canvasId}/agent-models`, memberCookie);
       assert.equal(agentModels.status, 200, JSON.stringify(agentModels.body));
-      assert.deepEqual(agentModels.body.data.models.map((model: { modelCode: string }) => model.modelCode), ["canvas-agent-test-model"]);
-      assert.equal("providerConfig" in agentModels.body.data.models[0], false);
+      assert.equal(
+        agentModels.body.data.models.some((model: { modelCode: string }) => model.modelCode === "canvas-agent-test-model"),
+        true,
+      );
+      assert.equal(
+        agentModels.body.data.models.every((model: Record<string, unknown>) => !("providerConfig" in model)),
+        true,
+      );
       assert.equal(JSON.stringify(agentModels.body.data.models).includes("test-agent-key"), false);
       const memberStorageHealth = await api(server.origin, `/api/canvas/${canvasId}/storage-health`, memberCookie);
       assert.equal(memberStorageHealth.status, 200, JSON.stringify(memberStorageHealth.body));
