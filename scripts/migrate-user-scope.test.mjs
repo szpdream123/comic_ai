@@ -76,6 +76,82 @@ describe("user-centric migration runner", { concurrency: false }, () => {
     }
   });
 
+  it("applies the GEO schema through the runtime-safe startup path", async () => {
+    const connectionString = process.env.DATABASE_URL?.trim();
+    assert.ok(connectionString, "DATABASE_URL is required");
+    const schema = `test_${randomUUID().replaceAll("-", "_")}`;
+    const client = new pg.Client({ connectionString });
+
+    await client.connect();
+    try {
+      await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(
+        "SELECT set_config('search_path', format('%I, pg_catalog', $1::text), false)",
+        [schema],
+      );
+      const baselineSql = await readFile(
+        new URL("../packages/db/baseline/user-centric-schema.sql", import.meta.url),
+        "utf8",
+      );
+      await client.query(baselineSql);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS app_schema_migrations (
+          migration_name text PRIMARY KEY,
+          checksum text NOT NULL,
+          applied_at timestamptz NOT NULL DEFAULT now()
+        );
+        TRUNCATE app_schema_migrations;
+        INSERT INTO app_schema_migrations (migration_name, checksum) VALUES
+          ('user-centric-schema.sql', 'baseline-test'),
+          ('model-reference-seed.sql', 'seed-test');
+        DROP TABLE IF EXISTS
+          geo_audit_events,
+          geo_content_evidence_links,
+          geo_content_question_links,
+          geo_content_versions,
+          geo_generation_runs,
+          geo_content_items,
+          geo_evidence_items,
+          geo_questions
+        CASCADE;
+      `);
+      const isolatedUrl = new URL(connectionString);
+      isolatedUrl.searchParams.set("options", `-c search_path=${schema}`);
+      for (const migrationName of [
+        "20260905-create-geo-operations.sql",
+        "20260906-add-geo-generation-leases.sql",
+      ]) {
+        const result = spawnSync(
+          process.execPath,
+          ["scripts/migrate-user-scope.mjs", "--apply", "--runtime-safe", "--only", migrationName],
+          {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            env: { ...process.env, DATABASE_URL: isolatedUrl.toString() },
+          },
+        );
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        assert.doesNotMatch(result.stdout, new RegExp(`runtime defer ${migrationName.replaceAll(".", "\\.")}`));
+      }
+      const tables = await client.query(
+        `SELECT count(*)::int AS count FROM information_schema.tables
+         WHERE table_schema=$1 AND table_name IN ('geo_questions','geo_evidence_items','geo_content_items','geo_content_versions','geo_generation_runs','geo_audit_events')`,
+        [schema],
+      );
+      const leaseColumns = await client.query(
+        `SELECT count(*)::int AS count FROM information_schema.columns
+         WHERE table_schema=$1 AND table_name='geo_generation_runs'
+           AND column_name IN ('heartbeat_at','lease_expires_at','lease_token')`,
+        [schema],
+      );
+      assert.equal(tables.rows[0]?.count, 6);
+      assert.equal(leaseColumns.rows[0]?.count, 3);
+    } finally {
+      await client.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await client.end();
+    }
+  });
+
   it("rolls back the migration ledger and baseline during an empty-schema dry run", { concurrency: false }, async () => {
     const connectionString = process.env.DATABASE_URL?.trim();
     assert.ok(connectionString, "DATABASE_URL is required");

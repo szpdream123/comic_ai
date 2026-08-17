@@ -45,6 +45,37 @@ describe("GEO operations schema", () => {
     assert.doesNotMatch(migration.sql, /\b(team_id|project_id|subaccount_id|legacy_owner)\b/i);
   });
 
+  it("enforces GEO content topic and redirect constraints in the complete schema", async () => {
+    const db = await createMigratedTestDb();
+    const actorAdminAccountId = "33000000-0000-4000-8000-000000000001";
+    try {
+      await db.query(
+        `INSERT INTO admin_accounts (id,login_name,password_hash,display_name,status)
+         VALUES ($1,'geo_schema_admin','plain:test-password','GEO Schema Admin','active')`,
+        [actorAdminAccountId],
+      );
+      await assert.rejects(
+        db.query(
+          `INSERT INTO geo_content_items (id,content_type,topic,slug,status,created_by_admin_id,updated_by_admin_id)
+           VALUES ('33000000-0000-4000-8000-000000000002','guide','   ','blank-topic','draft',$1,$1)`,
+          [actorAdminAccountId],
+        ),
+        (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "23514"),
+      );
+      await db.query(
+        `INSERT INTO geo_content_items (id,content_type,topic,slug,status,created_by_admin_id,updated_by_admin_id)
+         VALUES ('33000000-0000-4000-8000-000000000003','guide','有效主题','valid-topic','draft',$1,$1)`,
+        [actorAdminAccountId],
+      );
+      await assert.rejects(
+        db.query("UPDATE geo_content_items SET redirect_path='https://attacker.example/redirect' WHERE id='33000000-0000-4000-8000-000000000003'"),
+        (error: unknown) => Boolean(error && typeof error === "object" && "code" in error && error.code === "23514"),
+      );
+    } finally {
+      await db.close();
+    }
+  });
+
   it("applies the complete schema and exposes every GEO table", async () => {
     const db = await createMigratedTestDb();
     try {

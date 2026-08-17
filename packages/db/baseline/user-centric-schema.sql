@@ -395,7 +395,9 @@ CREATE TABLE IF NOT EXISTS "geo_content_items" (
   CHECK (content_type = ANY (ARRAY['guide'::text, 'case'::text, 'report'::text, 'answer'::text])),
   CHECK (status = ANY (ARRAY['draft'::text, 'in_review'::text, 'published'::text, 'archived'::text])),
   CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'::text),
-  CHECK (lock_version > 0)
+  CHECK (lock_version > 0),
+  CHECK (btrim(topic) <> ''::text),
+  CHECK (redirect_path IS NULL OR redirect_path ~ '^/(guides|cases|reports|answers)/[a-z0-9]+(?:-[a-z0-9]+)*$'::text)
 );
 
 CREATE TABLE IF NOT EXISTS "geo_generation_runs" (
