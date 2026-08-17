@@ -31976,7 +31976,10 @@ describe("production workbench project tab", () => {
     assert.match(html, /5秒/);
     assert.equal((html.match(/已选 2 条分镜/g) ?? []).length, 1);
     assert.doesNotMatch(html, /生成 2 条视频/);
-    assert.match(html, />生成<\/button>/);
+    assert.match(
+      html,
+      /class="episode-batch-submit"[^>]*>生成 1100 积分<\/button>/,
+    );
     assert.match(html, /白野/);
     assert.match(html, /残破街区/);
     assert.match(html, /旧式通讯器/);
@@ -32440,7 +32443,10 @@ describe("production workbench project tab", () => {
         },
       });
       assert.equal(workbench.ui.episodeBatchModal?.totalCredits, 2000);
-      assert.match(renderProductionWorkbench(workbench), />生成<\/button>/);
+      assert.match(
+        renderProductionWorkbench(workbench),
+        /class="episode-batch-submit"[^>]*>生成 2000 积分<\/button>/,
+      );
       const submitPromise = handleWorkbenchActionForTest(workbench, {
         dataset: { action: "submit-episode-batch-modal" },
       });
@@ -32519,7 +32525,7 @@ describe("production workbench project tab", () => {
       assert.equal(workbench.ui.episodeBatchModal?.isSubmitting, false);
       assert.match(
         renderProductionWorkbench(workbench),
-        /class="episode-batch-submit"[^>]*aria-busy="false"[^>]*>生成<\/button>/,
+        /class="episode-batch-submit"[^>]*aria-busy="false"[^>]*>生成 1100 积分<\/button>/,
       );
     } finally {
       globalThis.document = previousDocument;
