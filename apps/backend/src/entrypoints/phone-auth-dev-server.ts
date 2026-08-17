@@ -32029,7 +32029,8 @@ export function createPhoneAuthDevServer(
             signedUrlExpiresInSeconds,
             now,
           });
-          if (!uploaded.publicUrl?.startsWith("https://")) {
+          const assetUrl = uploaded.sourceUrl;
+          if (!assetUrl.startsWith("/api/storage/objects/")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const metadata = source.metadata_json && typeof source.metadata_json === "object"
@@ -32048,7 +32049,7 @@ export function createPhoneAuthDevServer(
             assetName,
             readString(metadata.description) || null,
             category,
-            uploaded.publicUrl,
+            assetUrl,
             sourceBytes.byteLength,
             now,
             operatorName,
@@ -32124,8 +32125,8 @@ export function createPhoneAuthDevServer(
             signedUrlExpiresInSeconds,
             now,
           });
-          const assetUrl = uploaded.publicUrl;
-          if (!assetUrl.startsWith("https://")) {
+          const assetUrl = uploaded.sourceUrl;
+          if (!assetUrl.startsWith("/api/storage/objects/")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const createdUserId = actor.teamMember?.id ?? actor.userId;
@@ -32228,8 +32229,8 @@ export function createPhoneAuthDevServer(
             signedUrlExpiresInSeconds,
             now,
           });
-          const assetUrl = uploaded.publicUrl;
-          if (!assetUrl.startsWith("https://")) {
+          const assetUrl = uploaded.sourceUrl;
+          if (!assetUrl.startsWith("/api/storage/objects/")) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const updated = await queryOne<Record<string, unknown>>(db, `

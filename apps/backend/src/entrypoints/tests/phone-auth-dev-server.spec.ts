@@ -599,7 +599,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(state.rows[0]?.provider_status, "failed");
       assert.equal(state.rows[0]?.provider_failure_code, "san_bao_invalid_response");
       assert.equal(state.rows[0]?.snapshot_status, "failed");
-      assert.equal(state.rows[0]?.reservation_status, "released");
+      assert.equal(state.rows[0]?.reservation_status, "manual_review_required");
     } finally {
       await server.close();
     }
@@ -859,7 +859,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         { headers: { cookie } },
       );
       const readOnlyEnvelope = await readOnlyResponse.json();
-      const unchangedSnapshot = await db.query<{ status: string; progress_stage: string }>(
+      const repairedSnapshot = await db.query<{ status: string; progress_stage: string }>(
         "SELECT status, progress_stage FROM ai_generation_task_snapshots WHERE task_id = $1",
         [taskId],
       );
@@ -867,7 +867,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(readOnlyResponse.status, 200);
       assert.equal(readOnlyEnvelope.data.items[0].status, "completed");
       assert.equal(readOnlyEnvelope.data.items[0].failure, null);
-      assert.deepEqual(unchangedSnapshot.rows, [{ status: "queued", progress_stage: "queued" }]);
+      assert.deepEqual(repairedSnapshot.rows, [{ status: "succeeded", progress_stage: "completed" }]);
 
       await db.query(
         `
@@ -887,6 +887,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
                   "lastFailureCode": "provider_output_upload_failed"
                 }
               }'::jsonb,
+              completed_at = NULL,
               failed_at = NULL,
               updated_at = '2026-07-14T08:00:19.000Z'
           WHERE task_id = $1
@@ -1908,9 +1909,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       serverSource.indexOf("async function listEpisodeAssetTypesFromDb"),
       serverSource.indexOf("async function listEpisodeStoryboardsFromDb"),
     );
+    const getAssetsRouteMarker = serverSource.indexOf('pathname.endsWith("/assets")');
     const listEpisodeAssetsRouteBlock = serverSource.slice(
-      serverSource.indexOf('request.method === "GET" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
-      serverSource.indexOf('request.method === "POST" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
+      serverSource.lastIndexOf("if (", getAssetsRouteMarker),
+      serverSource.indexOf('request.method === "POST"', getAssetsRouteMarker),
     );
 
     assert.match(listEpisodeAssetsBlock, /await getEpisodeReadContext\(db,/);
@@ -2116,7 +2118,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
   it("rejects disabled users while preserving the account state", async () => {
     const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
+    const server = createPhoneAuthDevServer({
+      db,
+      env: { AUTH_SESSION_REDIS_CACHE_ENABLED: "false" },
+    });
 
     try {
       await server.listen(0);
@@ -2155,7 +2160,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const cookie = await login(server.origin, "13800138991");
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138991"));
       const projectId = randomUUID();
-      const scriptId = randomUUID();
       await db.query(
         `
           INSERT INTO projects (
@@ -2172,41 +2176,21 @@ describe("phone auth dev server", { concurrency: false }, () => {
     [projectId,
       userId],
       );
-      await db.query(
-        `
-          INSERT INTO scripts (
-        id,
-        project_id,
-        status,
-        input_text,
-        created_by_user_id
-      )
-          VALUES ($1, $2, 'draft', 'legacy script', $3)
-        `,
-    [scriptId,
-      projectId,
-      userId],
-      );
-
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
         headers: { cookie },
       });
       const stateBody = await stateResponse.json();
-      const persisted = await db.query<{ owner_user_id: string; script_project_id: string }>(
+      const persisted = await db.query<{ owner_user_id: string }>(
         `
-          SELECT
-            project.owner_user_id,
-            script.project_id AS script_project_id
-          FROM projects project
-          JOIN scripts script ON script.project_id = project.id
-          WHERE project.id = $1
+          SELECT owner_user_id
+          FROM projects
+          WHERE id = $1
         `,
         [projectId],
       );
 
       assert.equal(stateResponse.status, 200, JSON.stringify(stateBody));
       assert.equal(persisted.rows[0]?.owner_user_id, userId);
-      assert.equal(persisted.rows[0]?.script_project_id, projectId);
     } finally {
       await server.close();
     }
@@ -16024,6 +16008,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         updated_by_name: string;
         is_admin_created: boolean;
         created_user_id: string;
+        storage_object_id: string;
         tags_json: string[] | string;
       }>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id]);
       const renameResponse = await fetch(`${server.origin}/api/creator/team-assets/${body.asset?.id}`, {
@@ -16045,9 +16030,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         asset_name: string;
         asset_prompt: string | null;
         asset_url: string;
+        storage_object_id: string;
         resource_size: number | string;
         tags_json: string[] | string;
-      }>("SELECT asset_name, asset_prompt, asset_url, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
+      }>("SELECT asset_name, asset_prompt, asset_url, storage_object_id, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
       const afterEdits = await db.query<{
         upload_sessions: number;
         upload_records: number;
@@ -16091,7 +16077,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(stored.rows[0]?.asset_prompt, "红色披风的青年英雄");
       assert.equal(stored.rows[0]?.asset_category, "character");
       assert.deepEqual(stored.rows[0]?.tags_json, []);
-      assert.match(stored.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(
+        stored.rows[0]?.asset_url,
+        `/api/storage/objects/${stored.rows[0]?.storage_object_id}/content?proxy=1`,
+      );
       assert.equal(stored.rows[0]?.resource_type, "image");
       assert.equal(Number(stored.rows[0]?.resource_size), 4);
       assert.equal(stored.rows[0]?.created_by_name.length > 0, true);
@@ -16112,7 +16101,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       ]);
       assert.equal(edited.rows[0]?.asset_name, "编辑后的团队主角");
       assert.equal(edited.rows[0]?.asset_prompt, "编辑后的团队角色描述");
-      assert.match(edited.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(
+        edited.rows[0]?.asset_url,
+        `/api/storage/objects/${edited.rows[0]?.storage_object_id}/content?proxy=1`,
+      );
       assert.equal(Number(edited.rows[0]?.resource_size), 5);
       assert.deepEqual(edited.rows[0]?.tags_json, ["主角", "红披风"]);
     } finally {

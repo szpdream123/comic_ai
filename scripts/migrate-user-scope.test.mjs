@@ -226,7 +226,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         `SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'users'`,
         [schema],
       );
-      assert.equal(migrations.rows[0]?.count, 89);
+      assert.equal(migrations.rows[0]?.count, (await loadSqlMigrations()).length);
       await client.query(`DROP INDEX "${schema}".canvas_agent_conversations_shard_idx`);
       const missingRequiredRuntimeSchema = spawnSync(
         process.execPath,
@@ -443,12 +443,6 @@ describe("user-centric migration runner", { concurrency: false }, () => {
         retry_policy_json: { submitAttempts: 3, finalizeAttempts: 3 },
       });
 
-      const legacyWorkflowCleanupSql = await readFile(
-        new URL("../packages/db/migrations/20260728-z-remove-legacy-workflow-runtime.sql", import.meta.url),
-        "utf8",
-      );
-      await client.query(legacyWorkflowCleanupSql);
-
       await client.query(`
         UPDATE "${schema}"."app_schema_migrations"
         SET checksum = CASE migration_name
@@ -478,7 +472,7 @@ describe("user-centric migration runner", { concurrency: false }, () => {
           DROP CONSTRAINT ai_model_configs_provider_protocol_check,
           ADD CONSTRAINT ai_model_configs_provider_protocol_check CHECK (provider_protocol IS NOT NULL);
         DELETE FROM "${schema}"."app_schema_migrations"
-        WHERE migration_name = '20260826-converge-provider-protocol-constraint.sql'
+        WHERE migration_name = '20260903-add-globalaiopc-model-center-and-soundclone.sql'
       `);
       const compatibilityResult = spawnSync(
         process.execPath,

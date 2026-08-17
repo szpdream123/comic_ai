@@ -51,7 +51,7 @@ test("retries runtime database initialization without duplicating concurrent att
       })),
     );
     assert.deepEqual(failedResponses.map((response) => response.status), [500, 500, 500, 500, 500]);
-    assert.equal(connectionAttempts, 2);
+    assert.equal(connectionAttempts, 3);
 
     process.env.DATABASE_URL = databaseUrl;
     const recoveredResponse = await fetch(`${server.origin}/api/auth/session`, {

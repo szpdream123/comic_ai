@@ -111,6 +111,7 @@ const migrations = [
   ["20260907-free-generation-workspaces.sql", "packages/db/migrations/20260907-free-generation-workspaces.sql"],
   ["20260908-hide-soundclone-provider-parameters.sql", "packages/db/migrations/20260908-hide-soundclone-provider-parameters.sql"],
   ["20260909-backfill-project-cover-storage-objects.sql", "packages/db/migrations/20260909-backfill-project-cover-storage-objects.sql"],
+  ["20260910-allow-bound-team-asset-proxy-urls.sql", "packages/db/migrations/20260910-allow-bound-team-asset-proxy-urls.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -132,6 +133,7 @@ const runtimeSafeMigrationNames = new Set([
   "20260906-home-background-video.sql",
   "20260907-free-generation-workspaces.sql",
   "20260908-hide-soundclone-provider-parameters.sql",
+  "20260910-allow-bound-team-asset-proxy-urls.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

@@ -162,11 +162,11 @@ it("returns the authenticated user's personal media summary and page", async () 
     const audio = list.data.find((item: { id: string }) => item.id === audioStorageObjectId);
     assert.equal(image?.mediaKind, "image");
     assert.equal(image?.storageObjectId, storageObjectId);
-    assert.equal(image?.previewUrl, "/uploads/storage/creator-test/personal/example.png");
+    assert.equal(image?.previewUrl, `/api/storage/objects/${storageObjectId}/content?proxy=1`);
     assert.equal(audio?.mediaKind, "audio");
     assert.equal(audio?.storageObjectId, audioStorageObjectId);
     assert.equal(audio?.contentType, "audio/mpeg");
-    assert.equal(audio?.previewUrl, "/uploads/storage/creator-test/personal/voice.mp3");
+    assert.equal(audio?.previewUrl, `/api/storage/objects/${audioStorageObjectId}/content?proxy=1`);
     assert.equal(audioListResponse.status, 200);
     assert.equal(audioList.meta.total, 1);
     assert.equal(audioList.data.length, 1);
