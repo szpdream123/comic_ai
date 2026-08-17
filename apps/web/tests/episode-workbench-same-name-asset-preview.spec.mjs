@@ -2,6 +2,49 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
+import {
+  renderAssetConversationEntryForPolling,
+  renderEpisodeAssetCardForTest,
+  renderStoryboardGenerationEntryForPolling,
+} from "../src/features/production-workbench/episode-workbench-rebuilt.js";
+
+test("episode asset and generation cards use the storage content gateway when object IDs exist", () => {
+  const imageStorageObjectId = "11111111-2222-4333-8444-555555555555";
+  const videoStorageObjectId = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+  const rawImageUrl = "https://bucket.cos.ap-guangzhou.myqcloud.com/legacy/image.png";
+  const rawVideoUrl = "https://bucket.cos.ap-guangzhou.myqcloud.com/legacy/video.mp4";
+
+  const assetHtml = renderEpisodeAssetCardForTest({
+    id: "asset-1",
+    name: "角色",
+    storageObjectId: imageStorageObjectId,
+    previewUrl: rawImageUrl,
+  });
+  const imageHtml = renderAssetConversationEntryForPolling({
+    taskId: "task-1",
+    fixedImages: [{
+      label: "图片",
+      storageObjectId: imageStorageObjectId,
+      url: rawImageUrl,
+    }],
+  });
+  const videoHtml = renderStoryboardGenerationEntryForPolling(
+    { id: "storyboard-1" },
+    {
+      status: "succeeded",
+      result: {
+        storageObjectId: videoStorageObjectId,
+        videoUrl: rawVideoUrl,
+      },
+    },
+    "video",
+  );
+
+  assert.match(assetHtml, new RegExp(`/api/storage/objects/${imageStorageObjectId}/content\\?proxy=1`));
+  assert.match(imageHtml, new RegExp(`/api/storage/objects/${imageStorageObjectId}/content\\?proxy=1`));
+  assert.match(videoHtml, new RegExp(`/api/storage/objects/${videoStorageObjectId}/content\\?proxy=1`));
+  assert.doesNotMatch(`${assetHtml}${imageHtml}${videoHtml}`, /myqcloud\.com/);
+});
 
 test("episode workbench hydrates same-name project library previews into asset tabs", () => {
   const html = renderProjectDetail({

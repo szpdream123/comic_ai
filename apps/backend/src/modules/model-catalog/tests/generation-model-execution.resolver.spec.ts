@@ -201,6 +201,23 @@ describe("generation model execution resolver", () => {
     });
   });
 
+  it("keeps an authorized source video when the configured model schema omits the optional field", () => {
+    const sourceVideo = { storageObjectId: "storage-reference", url: "https://signed.example/reference.mp4" };
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "seedance-text-video",
+      modelConfig: videoModelConfig({
+        modelCode: "seedance-text-video",
+        parameterSchema: { durationSec: { type: "integer" } },
+      }),
+      dispatchPolicy: undefined,
+      parameters: { sourceVideo },
+      fallbackQueueName: "generation-submit-video",
+    });
+
+    assert.deepEqual(execution.parameters.sourceVideo, sourceVideo);
+  });
+
   it("maps first-last-frame generation to the provider first-last-frame task mode", () => {
     const execution = resolveGenerationModelExecution({
       kind: "video",

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
+import { isTransientDatabasePersistenceError } from "../../shared/db/dev-db.ts";
+import type { SqlDatabase } from "../../shared/db/sql.ts";
 import type {
   TextGatewayChatCompletionChunk,
   TextGatewayChatCompletionRequest,
@@ -133,6 +135,131 @@ describe("text model gateway service", () => {
           error.code === "model_not_configured",
       );
       assert.equal(adapter.calls.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("marks a transient gateway persistence reset without calling the provider", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([]);
+    let injectedReset = false;
+    const resettingDb: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (!injectedReset && /INSERT INTO provider_requests/i.test(sql)) {
+          injectedReset = true;
+          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+    const gateway = createGateway(resettingDb, adapter);
+
+    try {
+      await assert.rejects(
+        gateway.chat.completions.create(
+          {
+            model: "deepseek-chat",
+            messages: [{ role: "user", content: "Say hi" }],
+            stream: true,
+          },
+          requestContext("persistence-reset"),
+        ),
+        isTransientDatabasePersistenceError,
+      );
+      assert.equal(injectedReset, true);
+      assert.equal(adapter.calls.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("marks a successful provider terminal persistence reset after preserving streamed output", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([chunk("chatcmpl-terminal-reset", "Hello", null)]);
+    let injectedReset = false;
+    const resettingDb: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (
+          !injectedReset
+          && /UPDATE provider_requests/i.test(sql)
+          && params[1] === "succeeded"
+        ) {
+          injectedReset = true;
+          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+    const gateway = createGateway(resettingDb, adapter);
+
+    try {
+      const result = await gateway.chat.completions.create(
+        {
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: "Say hi" }],
+          stream: true,
+        },
+        requestContext("terminal-persistence-reset"),
+      );
+      const iterator = result.stream[Symbol.asyncIterator]();
+      const first = await iterator.next();
+
+      assert.equal(first.value?.choices?.[0]?.delta?.content, "Hello");
+      await assert.rejects(
+        iterator.next(),
+        (error) => isTransientDatabasePersistenceError(error)
+          && (error as { retrySafe?: boolean }).retrySafe === false,
+      );
+      const final = await result.completed;
+      assert.equal(final.status, "failed");
+      assert.equal(final.failureCode, "transient_database_persistence_error");
+      assert.equal(injectedReset, true);
+      assert.equal(adapter.calls.length, 1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("preserves the provider stream error when failure-state persistence resets", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new ThrowingTextAdapter();
+    let injectedReset = false;
+    const resettingDb: SqlDatabase = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (
+          !injectedReset
+          && /UPDATE provider_requests/i.test(sql)
+          && params[1] === "failed"
+        ) {
+          injectedReset = true;
+          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        }
+        return db.query<T>(sql, params);
+      },
+    };
+    const gateway = createGateway(resettingDb, adapter);
+
+    try {
+      const result = await gateway.chat.completions.create(
+        {
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: "Say hi" }],
+          stream: true,
+        },
+        requestContext("failure-persistence-reset"),
+      );
+
+      await assert.rejects(async () => {
+        for await (const _chunk of result.stream) {
+          // consume stream
+        }
+      }, /upstream exploded/);
+      const final = await result.completed;
+      assert.equal(final.status, "failed");
+      assert.equal(final.failureCode, "provider_stream_error");
+      assert.equal(injectedReset, true);
+      assert.equal(adapter.calls.length, 1);
     } finally {
       await db.close();
     }
@@ -296,7 +423,7 @@ describe("text model gateway service", () => {
 });
 
 function createGateway(
-  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+  db: SqlDatabase,
   adapter: FakeTextAdapter | ThrowingTextAdapter | AbortAwareTextAdapter,
 ) {
   return new TextModelGatewayService({

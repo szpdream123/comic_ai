@@ -5,8 +5,11 @@ import {
   textModelGatewayOperationNames,
 } from "../model-gateway/text-model-gateway.service.ts";
 import type { TextGatewayChatCompletionRequest } from "../model-gateway/openai-compatible-text.adapter.ts";
+import { isRetrySafeTransientDatabasePersistenceError } from "../shared/db/dev-db.ts";
 
 const LIVE_ECHO_CHUNK_SIZE = 32;
+const AI_STORYBOARD_SHOT_MAX_TOKENS = 32_768;
+const AI_STORYBOARD_SHOT_CONTINUATION_LIMIT = 3;
 
 type MarkdownTableKey = "scenes" | "characters" | "props" | "storyboards";
 
@@ -29,8 +32,13 @@ export type AiStoryboardPreviewStreamEvent =
   | { type: "complete"; preview: ReturnType<typeof normalizePreview> & { rawMarkdown?: AiStoryboardPreviewRawMarkdown } };
 
 type AssetPromptStage = "scene" | "character" | "prop" | "shot";
-type ExtractAssetPromptStage = Exclude<AssetPromptStage, "shot">;
-type AiStoryboardPromptStage = "script" | AssetPromptStage;
+export type AiStoryboardPromptStage = "script" | AssetPromptStage;
+
+const AI_STORYBOARD_PROMPT_STAGES: AiStoryboardPromptStage[] = ["script", "scene", "character", "prop", "shot"];
+
+export class AiStoryboardWorkflowIntentError extends Error {
+  readonly code = "workflow_intent_invalid";
+}
 
 export interface TextChatGatewayLike {
   completeJson(input: {
@@ -106,6 +114,62 @@ export interface AiStoryboardPreviewInput {
     shotPrompt?: string;
   };
   signal?: AbortSignal;
+}
+
+export async function resolveAiStoryboardWorkflowIntent(input: {
+  gateway: TextChatGatewayLike;
+  modelCode: string;
+  instruction: string;
+  projectId?: string | null;
+  createdByUserId?: string | null;
+  signal?: AbortSignal;
+}) {
+  const instruction = String(input.instruction ?? "").trim();
+  if (!instruction) {
+    throw new AiStoryboardWorkflowIntentError("workflow instruction is required");
+  }
+  const raw = await input.gateway.completeJson({
+    model: input.modelCode,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "你是漫剧生产工作流的意图路由器。只判断用户明确要求产出的内容，不执行创作。",
+          "可选阶段仅有 script、scene、character、prop、shot。选择满足指令所需的最少阶段，不要自动补齐前置或后续阶段。",
+          "script=小说转剧本；scene=场景描述或场景图片提示词；character=人物/角色描述或人物图片提示词；prop=道具描述或道具图片提示词；shot=剧本转分镜或分镜图片/视频提示词。",
+          "例如：人物提示词只返回 character；小说转剧本只返回 script；剧本转分镜只返回 shot；明确要求完整制作或全部流程才返回全部五项。",
+          "只返回严格 JSON：{\"stages\":[\"character\"]}。stages 必须非空、不得包含其他值。",
+        ].join("\n"),
+      },
+      { role: "user", content: instruction },
+    ],
+    projectId: input.projectId,
+    createdByUserId: input.createdByUserId,
+    responseFormat: "json_object",
+    payloadSummary: "home workflow intent resolution",
+    requestKeyPrefix: "home-workflow-intent",
+    signal: input.signal,
+  });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(raw ?? ""));
+  } catch {
+    throw new AiStoryboardWorkflowIntentError("workflow intent model returned invalid JSON");
+  }
+  const stages = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as { stages?: unknown }).stages
+    : null;
+  if (!Array.isArray(stages) || stages.length === 0) {
+    throw new AiStoryboardWorkflowIntentError("workflow intent model returned no stages");
+  }
+  const normalizedStages = [...new Set(stages.map((stage) => String(stage ?? "").trim()))];
+  if (normalizedStages.some((stage) => !AI_STORYBOARD_PROMPT_STAGES.includes(stage as AiStoryboardPromptStage))) {
+    throw new AiStoryboardWorkflowIntentError("workflow intent model returned unsupported stages");
+  }
+  return {
+    stages: AI_STORYBOARD_PROMPT_STAGES.filter((stage) => normalizedStages.includes(stage)),
+    skipScriptStage: !normalizedStages.includes("script"),
+  };
 }
 
 export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewayLike }) {
@@ -279,16 +343,20 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
     yield { type: "asset_start", stage, title };
     onModelStreamStart?.();
     let raw = "";
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    let requestPrompt = prompt;
+    let continuationCount = 0;
+    let databaseRetryCount = 0;
+    while (true) {
       try {
         for await (const delta of streamJsonText({
           gateway: deps.gateway,
           model: modelCode,
-          prompt,
+          prompt: requestPrompt,
           projectId: input.canvasProjectId ? null : input.projectId,
           canvasProjectId: input.canvasProjectId,
           createdByUserId: input.createdByUserId,
           responseFormat: "text",
+          maxTokens: stage === "shot" ? AI_STORYBOARD_SHOT_MAX_TOKENS : undefined,
           signal: input.signal,
         })) {
           raw += delta;
@@ -296,7 +364,20 @@ export function createAiStoryboardPreviewService(deps: { gateway: TextChatGatewa
         }
         break;
       } catch (error) {
-        if (raw || attempt > 0 || !isRetryableAssetStageError(error)) throw error;
+        if (!raw && databaseRetryCount === 0 && isRetrySafeTransientDatabasePersistenceError(error)) {
+          databaseRetryCount += 1;
+          continue;
+        }
+        if (
+          stage !== "shot" ||
+          !raw.trim() ||
+          !isAiStoryboardOutputTruncatedError(error) ||
+          continuationCount >= AI_STORYBOARD_SHOT_CONTINUATION_LIMIT
+        ) {
+          throw error;
+        }
+        continuationCount += 1;
+        requestPrompt = buildAiStoryboardShotContinuationPrompt(prompt, raw, continuationCount);
       }
     }
     yield { type: "asset_done", stage, title, text: raw };
@@ -358,12 +439,9 @@ function startCollectedAssetPromptStage(
   };
 }
 
-function isRetryableAssetStageError(error: unknown) {
-  return typeof error === "object" && error !== null && "retryable" in error && error.retryable === true;
-}
-
 export function createTextModelChatGateway(deps: {
   gateway: TextModelGatewayService;
+  disableThinking?: boolean;
 }) {
   async function createStream(input: {
     model: string;
@@ -386,6 +464,7 @@ export function createTextModelChatGateway(deps: {
       stream: true,
       temperature: 0.2,
       messages,
+      ...(deps.disableThinking ? { thinking: { type: "disabled" as const } } : {}),
       ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
       ...(input.responseFormat === "json_object" ? { response_format: { type: "json_object" as const } } : {}),
     };
@@ -439,8 +518,12 @@ export function createTextModelChatGateway(deps: {
 
     async *streamJson(input) {
       const streamResult = await createStream(input);
+      const finishReasons = new Set<string>();
       for await (const chunk of streamResult.stream) {
         for (const choice of chunk.choices ?? []) {
+          if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+            finishReasons.add(choice.finish_reason);
+          }
           const delta = choice.delta?.content;
           if (typeof delta === "string" && delta) {
             yield delta;
@@ -451,8 +534,34 @@ export function createTextModelChatGateway(deps: {
       if (completed.status === "failed") {
         throw new Error(completed.failureCode || "provider_stream_error");
       }
+      if (finishReasons.has("length")) {
+        throw Object.assign(new Error("provider_output_truncated"), {
+          code: "provider_output_truncated",
+        });
+      }
     },
   } satisfies TextChatGatewayLike;
+}
+
+function isAiStoryboardOutputTruncatedError(error: unknown) {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "provider_output_truncated",
+  );
+}
+
+function buildAiStoryboardShotContinuationPrompt(prompt: string, raw: string, continuationCount: number) {
+  return [
+    prompt,
+    "",
+    `【已输出分镜，第 ${continuationCount} 次续接】`,
+    raw,
+    "",
+    "【续接规则】",
+    "从上一段的断点继续输出。若最后一条分镜未完成，先补完该条剩余内容；否则从下一条分镜开始。",
+    "不要重复已经完成的分镜，不要重写表头、代码块标记或前言，保持与上一段完全相同的输出结构。",
+  ].join("\n");
 }
 
 async function* streamJsonText(input: {
@@ -564,12 +673,16 @@ function formatCanonicalAssetCatalogLine(label: string, records: Record<string, 
 
 function buildAssetStagePrompt(stage: AssetPromptStage, template: string, scriptText: string) {
   const rendered = renderPromptTemplate(template, scriptText).trim();
+  const outputOrder = stage === "shot"
+    ? ""
+    : "\n\n【输出顺序】\n从输出的第一个字符起，直接输出提取列表的表头或数据行；不要输出前言、推理、步骤标题（如“第一步”）、说明文字或 Markdown 分隔线。列表完成后，单独输出一行 [[DETAILS]]，再继续输出详细设定。";
   if (!rendered) {
-    return `【剧本】\n${scriptText}`;
+    return `【剧本】\n${scriptText}${outputOrder}`;
   }
-  return rendered.includes(scriptText)
+  const prompt = rendered.includes(scriptText)
     ? rendered
     : `${rendered}\n\n【剧本】\n${scriptText}`;
+  return `${prompt}${outputOrder}`;
 }
 
 function normalizePreview(scriptText: string, promptResult: Record<string, unknown>) {
@@ -1759,11 +1872,11 @@ function parseStandaloneAssetMarkdownTableRecords(raw: string, tableKey: string)
 
 function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record<string, unknown>[] {
   const config = tableKey === "scenes"
-    ? { label: "场景名称", nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
+    ? { labels: ["场景名称"], nameKey: "sceneName", descriptionKey: "sceneDescription", promptKey: "sceneImagePrompt" }
     : tableKey === "characters"
-      ? { label: "角色名称", nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
+      ? { labels: ["角色名称"], nameKey: "characterName", descriptionKey: "characterDescription", promptKey: "characterImagePrompt" }
       : tableKey === "props"
-        ? { label: "道具名称", nameKey: "propName", descriptionKey: "propDescription", promptKey: "propImagePrompt" }
+        ? { labels: ["道具名称"], nameKey: "propName", descriptionKey: "propDescription", promptKey: "propImagePrompt" }
         : null;
   if (!config) {
     return [];
@@ -1786,7 +1899,7 @@ function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record
   };
   for (const rawLine of lines) {
     const normalizedLine = normalizeLabeledAssetMarkdownLine(rawLine);
-    const marker = matchLabeledAssetMarkdownHeading(normalizedLine, config.label);
+    const marker = matchLabeledAssetMarkdownHeading(normalizedLine, config.labels);
     if (marker) {
       flush();
       name = text(marker[1]).replace(/<br\s*\/?>(?:[\s\S]*)$/i, "").trim();
@@ -1805,9 +1918,12 @@ function parseLabeledAssetMarkdownRecords(raw: string, tableKey: string): Record
   return records;
 }
 
-function matchLabeledAssetMarkdownHeading(line: string, label: string) {
-  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return line.match(new RegExp(`^(?:${escapedLabel}\\s*[:：]|(?:【|\\[)\\s*${escapedLabel}\\s*(?:】|\\]))\\s*(.+)$`));
+function matchLabeledAssetMarkdownHeading(line: string, labels: string[]) {
+  const escapedLabels = labels
+    .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .sort((left, right) => right.length - left.length)
+    .join("|");
+  return line.match(new RegExp(`^(?:(?:${escapedLabels})\\s*[:：]|(?:【|\\[)\\s*(?:${escapedLabels})\\s*(?:】|\\]))\\s*(.+)$`));
 }
 
 function isLabeledProjectMarkdownHeading(line: string) {

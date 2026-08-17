@@ -91,7 +91,13 @@ const GLOBALAIOPC_MODEL_CENTER_SOUNDCLONE_RELATIVE_PATH = ["packages", "db", "mi
 const PROVIDER_MATERIAL_ASSETS_RELATIVE_PATH = ["packages", "db", "migrations", "20260904-create-provider-material-assets.sql"];
 const GEO_OPERATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260905-create-geo-operations.sql"];
 const GEO_GENERATION_LEASES_RELATIVE_PATH = ["packages", "db", "migrations", "20260906-add-geo-generation-leases.sql"];
+const HOME_RECOMMENDATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260905-home-recommendations.sql"];
+const HOME_BACKGROUND_VIDEO_RELATIVE_PATH = ["packages", "db", "migrations", "20260906-home-background-video.sql"];
+const FREE_GENERATION_WORKSPACES_RELATIVE_PATH = ["packages", "db", "migrations", "20260907-free-generation-workspaces.sql"];
+const HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH = ["packages", "db", "migrations", "20260908-hide-soundclone-provider-parameters.sql"];
+const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_RELATIVE_PATH = ["packages", "db", "migrations", "20260909-backfill-project-cover-storage-objects.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
+const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
 const TASK_CENTER_INCREMENTAL_INDEXES_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-task-center-incremental-indexes.sql"];
 const GENERATION_OUTBOX_FAIR_DISPATCH_RELATIVE_PATH = ["packages", "db", "migrations", "20260722-generation-outbox-fair-dispatch.sql"];
@@ -497,8 +503,28 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       sql: await readFile(join(rootDir, ...GEO_OPERATIONS_RELATIVE_PATH), "utf8"),
     },
     {
+      name: "20260905-home-recommendations.sql",
+      sql: await readFile(join(rootDir, ...HOME_RECOMMENDATIONS_RELATIVE_PATH), "utf8"),
+    },
+    {
       name: "20260906-add-geo-generation-leases.sql",
       sql: await readFile(join(rootDir, ...GEO_GENERATION_LEASES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260906-home-background-video.sql",
+      sql: await readFile(join(rootDir, ...HOME_BACKGROUND_VIDEO_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260907-free-generation-workspaces.sql",
+      sql: await readFile(join(rootDir, ...FREE_GENERATION_WORKSPACES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260908-hide-soundclone-provider-parameters.sql",
+      sql: await readFile(join(rootDir, ...HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME,
+      sql: await readFile(join(rootDir, ...PROJECT_COVER_STORAGE_OBJECT_BACKFILL_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName
@@ -541,6 +567,9 @@ async function executeMigration(db: SqlDatabase, migration: string, migrationNam
   if (migrationName === TASK_CENTER_PROVIDER_DIAGNOSTICS_MIGRATION_NAME) {
     await backfillTaskCenterProviderDiagnostics(db);
   }
+  if (migrationName === PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME) {
+    await backfillProjectCoverStorageObjects(db);
+  }
   if (concurrentIndexName) {
     await assertConcurrentIndexValid(db, concurrentIndexName);
   }
@@ -561,6 +590,50 @@ async function backfillTaskCenterProviderDiagnostics(db: SqlDatabase) {
       cursor = result.rows[0]?.next_id ?? null;
       if (processedCount === 0 || !cursor) break;
     }
+  }
+}
+
+async function backfillProjectCoverStorageObjects(db: SqlDatabase) {
+  const legacyCovers = await db.query<{ id: string; cover_image_url: string }>(`
+    SELECT id, cover_image_url
+    FROM projects
+    WHERE cover_storage_object_id IS NULL
+      AND cover_image_url IS NOT NULL
+  `);
+
+  for (const project of legacyCovers.rows) {
+    const parsed = parseLegacyCosObjectUrl(project.cover_image_url);
+    if (!parsed) continue;
+    await db.query(
+      `
+        UPDATE projects AS project
+        SET cover_storage_object_id = object.id
+        FROM storage_objects AS object
+        WHERE project.id = $1
+          AND project.cover_storage_object_id IS NULL
+          AND object.project_id = project.id
+          AND object.bucket = $2
+          AND object.object_key = $3
+          AND object.status = 'available'
+          AND object.deleted_at IS NULL
+      `,
+      [project.id, parsed.bucket, parsed.objectKey],
+    );
+  }
+}
+
+function parseLegacyCosObjectUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    const hostMatch = url.hostname.match(/^(.+)\.cos\.[^.]+\.myqcloud\.com$/i);
+    if (!hostMatch?.[1] || !url.pathname || url.pathname === "/") return null;
+    return {
+      bucket: hostMatch[1],
+      objectKey: decodeURIComponent(url.pathname.slice(1)),
+    };
+  } catch {
+    return null;
   }
 }
 

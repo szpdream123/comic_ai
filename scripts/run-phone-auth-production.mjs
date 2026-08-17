@@ -100,6 +100,7 @@ function runProductionFoundationSchema({ runtime, cwd, env, entrypoint }) {
       CREATOR_DEV_STACK_MANAGED: "false",
       CREATOR_DEV_SCHEMA_READY: "false",
     },
+    windowsHide: true,
     stdio: "inherit",
     timeout: productionFoundationSchemaTimeoutMs,
   });
@@ -204,6 +205,7 @@ function findNodeRuntime(minMajor) {
   const nodeLocator = process.platform === "win32" ? "where.exe" : "which";
   const whereNode = spawnSync(nodeLocator, ["node"], {
     encoding: "utf8",
+    windowsHide: true,
   });
 
   if (whereNode.status === 0) {
@@ -215,6 +217,7 @@ function findNodeRuntime(minMajor) {
   for (const candidate of candidates) {
     const version = spawnSync(candidate, ["--version"], {
       encoding: "utf8",
+      windowsHide: true,
     });
 
     if (version.status !== 0) {

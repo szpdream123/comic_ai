@@ -12,6 +12,7 @@ if (!pid) {
 
 const result = spawnSync("cmd.exe", ["/c", "taskkill", "/PID", String(pid), "/T", "/F"], {
   encoding: "utf8",
+  windowsHide: true,
 });
 
 rmSync(pidFile, { force: true });

@@ -850,7 +850,7 @@ function renderReferenceUploadCard(item) {
     <article class="reference-upload-card">
       <div class="reference-upload-thumb">
         ${item.kind === "image" && item.url ? `<img src="${escapeAttr(item.url)}" alt="${escapeAttr(item.name)}" />` : ""}
-        ${item.kind === "video" && item.url ? `<video src="${escapeAttr(item.url)}" muted playsinline></video>` : ""}
+        ${item.kind === "video" && item.url ? `<video src="${escapeAttr(item.url)}" muted playsinline preload="metadata"></video>` : ""}
       </div>
       <span class="reference-upload-badge">${escapeHtml(item.name)}</span>
     </article>
@@ -885,7 +885,7 @@ function renderMediaVisual(state, altText) {
     return "";
   }
   if (state.kind === "video") {
-    return `<video src="${escapeAttr(state.url)}" aria-label="${escapeAttr(altText)}" muted playsinline></video>`;
+    return `<video src="${escapeAttr(state.url)}" aria-label="${escapeAttr(altText)}" muted playsinline preload="metadata"></video>`;
   }
   return `<img src="${escapeAttr(state.url)}" alt="${escapeAttr(altText)}" />`;
 }

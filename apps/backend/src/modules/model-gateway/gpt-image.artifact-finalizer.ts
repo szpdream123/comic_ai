@@ -147,7 +147,7 @@ export async function persistGptImageArtifact(
 
     const urls = input.resolveUrls
       ? await input.resolveUrls(available)
-      : buildDefaultArtifactUrls(input.runtime, available);
+      : buildDefaultArtifactUrls(available);
     return {
       assetId: null,
       assetVersionId: null,
@@ -217,17 +217,8 @@ export function parseGptImageArtifactFromProviderResponse(
   };
 }
 
-function buildDefaultArtifactUrls(runtime: UploadSessionRuntime, object: StorageObjectRecord) {
-  const publicBaseUrl =
-    runtime.publicBaseUrl?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
-    "";
-  const platformUrl = publicBaseUrl
-    ? `${publicBaseUrl}/${object.objectKey}`
-    : object.bucket && runtime.region
-      ? `https://${object.bucket}.cos.${runtime.region}.myqcloud.com/${object.objectKey}`
-      : object.objectKey;
+function buildDefaultArtifactUrls(object: StorageObjectRecord) {
+  const platformUrl = `/api/storage/objects/${encodeURIComponent(object.id)}/content`;
   return {
     previewUrl: platformUrl,
     sourceUrl: platformUrl,

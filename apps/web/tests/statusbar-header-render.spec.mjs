@@ -40,6 +40,33 @@ function extractStatusbarButton(html, className) {
   return html.match(new RegExp(`<button[^>]*class="[^"]*${className}[^"]*"[^>]*>[\\s\\S]*?<\\/button>`))?.[0] ?? "";
 }
 
+test("home renders the configured background video as a looping muted layer", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      homeBackground: {
+        status: "active",
+        videoUrl: "https://example.com/home.mp4?x=1&y=2",
+      },
+    },
+  });
+  assert.match(html, /class="home-background-video"/);
+  assert.match(html, /<video autoplay muted loop playsinline preload="auto" data-home-background-video-url="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2"/);
+  assert.doesNotMatch(html, /poster=/);
+  assert.doesNotMatch(html, /<source src=/);
+});
+
+test("home omits an inactive background video", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: { activeNavTab: "home", homeBackground: { status: "inactive", videoUrl: "https://example.com/home.mp4" } },
+  });
+  assert.doesNotMatch(html, /class="home-background-video"/);
+});
+
 function extractStatusbarPopover(html, className) {
   return html.match(new RegExp(`<div[^>]*class="[^"]*${className}[^"]*"[^>]*>[\\s\\S]*?<\\/div>`))?.[0] ?? "";
 }
@@ -99,24 +126,161 @@ test("home statusbar wraps quick actions instead of forcing horizontal overlap o
 });
 
 test("home renders the AI creation hub without changing the workbench navigation", () => {
+  const projects = Array.from({ length: 10 }, (_, index) => ({
+    id: `project-${index + 1}`,
+    name: `项目 ${index + 1}`,
+    createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+  }));
   const html = renderProjectDetail({
     state: createBaseState(),
     session: { user: { phone: "+86 13800138000" } },
     ui: {
       activeNavTab: "home",
       membershipStatus: { status: "none" },
+      homeAgentAttachmentCount: 3,
+      homeAgentAttachments: [
+        { id: "attachment-image", name: "角色参考图.png", kind: "image", previewUrl: "blob:home-agent-image" },
+        { id: "attachment-video", name: "镜头参考.mp4", kind: "video", previewUrl: "blob:home-agent-video" },
+        { id: "attachment-file", name: "剧情设定.md", kind: "file", previewUrl: "" },
+      ],
+      homeAgentModelMenuOpen: true,
+      homeAgentModelTab: "image",
+      homeAgentSelectedModels: { image: "image-pro", video: "video-pro" },
+      episodeGenerationConfig: {
+        models: [
+          { mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro", providerGroup: "图片服务" },
+          { mediaType: "video", modelCode: "video-pro", modelLabel: "视频 Pro", providerGroup: "视频服务" },
+        ],
+      },
+      projectLibrary: projects,
+      projectLibraryPagination: { page: 1, pageSize: 18, total: 10, totalPages: 1 },
+      homeTvLoading: false,
+      homeTvCategory: "recommended",
+      homeTvCategories: [{
+        id: "category-recommended",
+        code: "recommended",
+        name: "推荐",
+        videos: [{
+          id: "video-neon",
+          title: "霓虹夜行",
+          subtitle: "都市幻想 · AI 短片",
+          coverUrl: "/assets/library/official/scenes/scene-3d-neon-street.png",
+          videoUrl: "",
+          durationLabel: "00:32",
+          coverAlt: "霓虹城市夜景作品封面",
+        }],
+      }],
     },
   });
   assert.match(html, /home-agent-composer/);
-  assert.match(html, /今天想创作什么/);
-  assert.match(html, /home-capability-grid/);
-  assert.match(html, /data-action="set-nav-tab" data-tab="tools"/);
+  assert.match(html, /class="home-agent-rich-editor"[^>]*data-home-agent-prompt[^>]*contenteditable="true"/);
+  assert.match(html, /说出你的创意，或者选一个 Skill 开始创作/);
+  assert.match(html, /data-action="submit-home-agent-prompt"/);
+  assert.match(html, /data-action="toggle-home-agent-mode-menu"/);
+  assert.match(html, />自动执行</);
+  assert.match(html, /data-home-agent-attachment-input/);
+  assert.match(html, /data-home-agent-attachment-list/);
+  assert.match(html, /home-agent-attachment image/);
+  assert.match(html, /tabindex="0" aria-label="图片附件 角色参考图\.png，悬停或聚焦预览"/);
+  assert.match(html, /角色参考图\.png/);
+  assert.match(html, /blob:home-agent-image/);
+  assert.match(html, /home-agent-attachment-hover-preview/);
+  assert.match(html, /home-agent-attachment video/);
+  assert.match(html, /data-home-agent-video-preview[^>]*muted loop playsinline/);
+  assert.match(html, /data-action="remove-home-agent-attachment"/);
+  assert.match(html, /data-action="remove-home-agent-model"/);
+  assert.match(html, /图片 Pro/);
+  assert.match(html, /视频 Pro/);
+  assert.doesNotMatch(html, /data-action="toggle-home-agent-model-menu"/);
+  assert.doesNotMatch(html, /data-action="set-home-agent-model-tab"/);
+  assert.doesNotMatch(html, /data-action="select-home-agent-model"/);
+  assert.doesNotMatch(html, /data-action="open-home-agent-skill-picker"/);
+  assert.doesNotMatch(html, /aria-label="进入画布选择创作节点"/);
+  assert.doesNotMatch(html, /home-agent-tip/);
+  assert.doesNotMatch(html, /home-capability-grid/);
   assert.match(html, /我的项目/);
+  assert.match(html, /10 个项目/);
+  assert.match(html, /项目 10/);
+  assert.match(html, /项目 3/);
+  assert.doesNotMatch(html, /项目 2/);
+  assert.doesNotMatch(html, /项目 1(?:<|\s)/);
   assert.match(html, /home-tv-grid/);
   assert.match(html, /灵曦 TV/);
   assert.match(html, /推荐/);
   assert.match(html, /scene-3d-neon-street\.png/);
   assert.doesNotMatch(html, /home-cinematic-sky/);
+
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /@media \(min-width: 861px\)\s*\{[\s\S]*?\.workbench-main\.home-mode \.hero-content\s*\{[\s\S]*?width:\s*calc\(100% - var\(--workbench-rail-width\) - 1\.5rem\)[\s\S]*?margin-left:\s*calc\(var\(--workbench-rail-width\) \+ 0\.75rem\)/);
+  assert.match(css, /\.home-agent-composer\s*\{[\s\S]*?width:\s*min\(1280px, 100%\)/);
+  assert.match(css, /\.home-agent-composer\s*\{[\s\S]*?min-height:\s*12\.5rem/);
+  assert.match(css, /\.home-agent-composer\s*\{[\s\S]*?border-radius:\s*30px/);
+  assert.match(css, /\.workbench-main\.home-mode \.home-background-video,[\s\S]*?position:\s*fixed;[\s\S]*?width:\s*100vw;[\s\S]*?height:\s*100dvh/);
+  assert.match(css, /@media \(min-width: 769px\)\s*\{[\s\S]*?\.workbench-main\.home-mode \.home-background-video,[\s\S]*?zoom:\s*calc\(1 \/ var\(--app-ui-scale, 1\)\)/);
+  assert.match(css, /\.home-agent-attachment-hover-preview\s*\{[\s\S]*?pointer-events:\s*none/);
+  assert.match(css, /\.home-agent-attachment\.image:hover \.home-agent-attachment-hover-preview,[\s\S]*?\.home-agent-attachment\.video:hover \.home-agent-attachment-hover-preview,[\s\S]*?visibility:\s*visible/);
+  assert.match(css, /\.home-agent-attachment-hover-preview\.video-preview > video\s*\{[\s\S]*?object-fit:\s*contain/);
+  assert.match(css, /\.home-agent-rich-editor\s*\{[\s\S]*?white-space:\s*pre-wrap/);
+  assert.match(css, /\.home-agent-model-menu\s*\{[\s\S]*?width:\s*min\(22rem, calc\(100vw - 3rem\)\)/);
+  assert.match(css, /@media \(max-width: 640px\)[\s\S]*?\.home-agent-attachment-hover-preview\s*\{[\s\S]*?left:\s*0[\s\S]*?transform:\s*translateY\(0\.3rem\)/);
+  assert.match(css, /\.home-capability-grid\s*\{[\s\S]*?width:\s*min\(1120px, 100%\)[\s\S]*?margin:\s*1\.75rem auto 0/);
+  assert.match(css, /\.home-capability-grid > button\s*\{[\s\S]*?min-height:\s*4\.35rem/);
+  assert.match(css, /\.home-project-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(8, minmax\(0, 1fr\)\)[\s\S]*?width:\s*100%[\s\S]*?margin-right:\s*auto/);
+  assert.match(css, /\.home-project-grid \.project-gallery-card\s*\{[\s\S]*?aspect-ratio:\s*16 \/ 10/);
+  assert.match(css, /\.home-tv\s*\{[\s\S]*?width:\s*100%[\s\S]*?max-width:\s*100%[\s\S]*?margin:\s*3\.2rem auto 0 0/);
+});
+
+test("home Skill entry reuses the existing generation Skill modal", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      homeAgentSkillPickerOpen: true,
+      homeAgentSkillSource: "official",
+      homeAgentSkillCategory: "image_style",
+      homeAgentOfficialSkills: [{
+        id: "film-look",
+        title: "电影感画面",
+        summary: "统一镜头语言",
+        category: "image_style",
+        official: true,
+      }],
+      homeAgentPrivateSkills: [],
+      homeAgentSkillPagination: { official: { total: 1, category: "all" }, private: {} },
+    },
+  });
+
+  assert.match(html, /class="canvas-text-skill-layer"/);
+  assert.match(html, />选择生成技能</);
+  assert.match(html, />生图风格</);
+  assert.match(html, /data-action="select-home-agent-skill"/);
+  assert.match(html, />引用到输入框</);
+  assert.doesNotMatch(html, /selection-picker-layer/);
+});
+
+test("project gallery shows a hover replacement action only for existing covers", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "library",
+      projectLibrary: [
+        { id: "covered-project", name: "已有封面", createdAt: "2026/08/13", coverImageUrl: "/uploads/covered.png" },
+        { id: "empty-project", name: "暂无封面", createdAt: "2026/08/13", coverImageUrl: "" },
+      ],
+      projectLibraryPagination: { page: 1, pageSize: 18, total: 2, totalPages: 1 },
+    },
+  });
+  const replacementActions = html.match(/class="project-cover-replace-button"/g) ?? [];
+  assert.equal(replacementActions.length, 1);
+  assert.match(html, /project-cover-replace-button[^>]*data-action="pick-project-cover"[^>]*data-project-id="covered-project"/);
+  assert.match(html, /aria-label="替换 已有封面 的项目封面"/);
+  assert.match(html, />替换封面<\/span>/);
 });
 
 test("global statusbar account card prefers nickname and shows experience membership expiry", () => {
@@ -583,7 +747,7 @@ test("credit ledger labels current and historical Canvas Agent charges in Chines
           availableDelta: -20,
           balanceAfter: 2016,
           sourceType: "canvas_agent_text_task",
-          reason: "画布协作Agent操作消耗",
+          reason: "会话消息积分消耗",
           metadata: { agentTaskId: "agent-task-1", billingEvent: "actual_usage" },
           createdAt: "2026-07-30T09:22:00.000Z",
         },
@@ -602,7 +766,7 @@ test("credit ledger labels current and historical Canvas Agent charges in Chines
     },
   });
 
-  assert.equal((html.match(/画布协作Agent操作消耗/g) ?? []).length, 2);
+  assert.equal((html.match(/会话消息积分消耗/g) ?? []).length, 2);
   assert.doesNotMatch(html, /Canvas Agent text round/);
 });
 
@@ -641,7 +805,7 @@ test("credit ledger labels prompt reverse charges by media type instead of Canva
 
   assert.match(html, /视频提示词反推消耗/);
   assert.match(html, /图片提示词反推消耗/);
-  assert.doesNotMatch(html, /画布协作Agent操作消耗/);
+  assert.doesNotMatch(html, /会话消息积分消耗/);
 });
 
 test("membership pricing overlay renders from every workbench module", () => {
@@ -1011,4 +1175,78 @@ test("credit ledger drawer uses a narrower desktop width", () => {
   const drawerRule = css.match(/\.credit-ledger-drawer\s*\{[\s\S]*?\n\}/)?.[0] ?? "";
   assert.match(drawerRule, /width:\s*min\(64rem,\s*calc\(100vw - 2\.4rem\)\)/);
   assert.doesNotMatch(drawerRule, /width:\s*min\(72rem/);
+});
+
+test("home tv uses a six-column responsive grid and scroll sentinel for incremental loading", () => {
+  const videos = Array.from({ length: 7 }, (_, index) => ({
+    id: `video-${index + 1}`,
+    title: `推荐视频 ${index + 1}`,
+    subtitle: "AI 短片",
+    coverUrl: `/cover-${index + 1}.png`,
+    videoUrl: "",
+    durationLabel: "00:30",
+    coverAlt: `推荐视频 ${index + 1}`,
+  }));
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      homeTvLoading: false,
+      homeTvCategory: "recommended",
+      homeTvCategories: [{ id: "category-1", code: "recommended", name: "推荐", videos }],
+    },
+  });
+  assert.match(html, /推荐视频 6/);
+  assert.doesNotMatch(html, /推荐视频 7/);
+  assert.match(html, /data-home-tv-load-more-sentinel/);
+  assert.match(html, /data-home-tv-total="7"/);
+  assert.doesNotMatch(html, /toggle-home-tv-expanded/);
+
+  const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
+  assert.match(css, /\.home-tv-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(6, minmax\(0, 1fr\)\)/);
+  assert.match(css, /@media \(max-width: 1480px\)[\s\S]*?repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(css, /@media \(max-width: 1100px\)[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/);
+});
+
+test("home TV video cards play only as hover previews", () => {
+  const html = renderProjectDetail({
+    state: createBaseState(),
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "home",
+      homeTvLoading: false,
+      homeTvCategory: "recommended",
+      homeTvCategories: [{
+        id: "category-1",
+        code: "recommended",
+        name: "推荐",
+        videos: [{
+          id: "video-preview",
+          title: "悬停播放视频",
+          subtitle: "AI 短片",
+          coverUrl: "/cover.png",
+          videoUrl: "https://example.com/preview.mp4",
+          durationLabel: "00:30",
+          coverAlt: "悬停播放视频封面",
+        }],
+      }],
+    },
+  });
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const videoCard = html.match(/<article class="home-tv-card has-video-preview">[\s\S]*?<\/article>/)?.[0] ?? "";
+  const css = readFileSync(
+    new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(videoCard, /data-home-tv-preview[^>]*muted loop playsinline preload="metadata"/);
+  assert.doesNotMatch(videoCard, /target="_blank"/);
+  assert.doesNotMatch(videoCard, /<video[^>]*controls/);
+  assert.match(source, /playHomeTvVideoPreview\(homeTvCard\)/);
+  assert.match(source, /stopHomeTvVideoPreview\(homeTvCard\)/);
+  assert.match(css, /\.home-tv-card\.has-video-preview:hover \.home-tv-preview-video\s*\{[\s\S]*?opacity:\s*1/);
 });

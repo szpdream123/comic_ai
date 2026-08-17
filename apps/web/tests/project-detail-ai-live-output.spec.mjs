@@ -51,7 +51,59 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
   });
 }
 
-test("loading AI storyboard preview keeps inferred tables while hiding the live output card and prompt panels", () => {
+function renderReadyPreview(options = {}) {
+  const hasStoryboards = options.hasStoryboards !== false;
+  const storyboardRows = hasStoryboards
+    ? [{ plot: "任小野走入城门", dialogue: "", imagePrompt: "城门静态画面", videoPrompt: "跟拍进入城门" }]
+    : [];
+  return renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      selectedProjectCardId: "project-1",
+      singleEpisodeAiPreview: {
+        status: "ready",
+        source: "single-episode-storyboard",
+        projectId: "project-1",
+        selectedStages: options.selectedStages ?? ["script", "scene", "character", "prop", "shot"],
+        regeneratingStage: options.regeneratingStage ?? "",
+        regenerationError: options.regenerationError ?? "",
+        completionMessage: options.completionMessage ?? "",
+        data: {
+          ...(options.omitCommitPayload ? {} : {
+            commitPayload: {
+              scriptText: "任小野走入城门。",
+              scenes: [{ sceneName: "城门" }],
+              characters: [{ characterName: "任小野" }],
+              props: [],
+              storyboards: storyboardRows,
+            },
+          }),
+          displayTables: {
+            script: { title: "剧本", rows: [{ scriptContent: "任小野走入城门。" }] },
+            scenes: { title: "场景", rows: [{ sceneName: "城门", sceneDescription: "雨后" }] },
+            characters: { title: "角色", rows: [{ characterName: "任小野", characterDescription: "少年" }] },
+            props: { title: "道具", rows: [] },
+            storyboards: { title: "分镜", rows: storyboardRows },
+          },
+        },
+      },
+    },
+  });
+}
+
+test("loading AI storyboard preview renders streamed stage output without duplicate inferred tables", () => {
   const cases = [
     {
       stage: "character",
@@ -82,27 +134,208 @@ test("loading AI storyboard preview keeps inferred tables while hiding the live 
   for (const item of cases) {
     const html = renderLoadingPreview(item.stage, item.responseText, item.options);
 
-    assert.match(html, /single-episode-ai-table-stack live/);
-    assert.doesNotMatch(html, /single-episode-ai-live-output/);
+    assert.match(html, new RegExp(`data-prompt-stage="${item.stage}-response"`));
+    assert.doesNotMatch(html, /single-episode-ai-table-stack live/);
     assert.doesNotMatch(html, /发送给 DeepSeek 的完整提示词/);
-    assert.doesNotMatch(html, /AI .*实时返回/);
-    assert.doesNotMatch(html, /data-prompt-stage=/);
     assert.match(html, item.marker);
   }
 });
 
-test("loading AI storyboard preview renders scene before character tables", () => {
+test("loading AI storyboard preview shows each streamed response body as it arrives", () => {
+  const rawMarker = "MODEL_PARTIAL_RESPONSE_NOW_VISIBLE";
+  const html = renderLoadingPreview("scene", `${rawMarker} 正在继续输出`);
+
+  assert.match(html, /data-prompt-stage="scene-response"/);
+  assert.match(html, new RegExp(rawMarker));
+  assert.match(html, /生成中/);
+});
+
+test("loading AI storyboard preview shows live parsing status and keeps create chapter frozen", () => {
+  const html = renderLoadingPreview("scene", "模型正在返回场景解析结果", {
+    scenes: [{ sceneName: "城门", sceneDescription: "雨后" }],
+  });
+
+  assert.match(html, /single-episode-ai-progress-state/);
+  assert.match(html, /模型正在解析文本，请稍候/);
+  assert.match(html, /场景提示词生成中/);
+  assert.match(html, /single-episode-ai-create[^>]*disabled[^>]*>解析中\.\.\.<\/button>/s);
+  assert.doesNotMatch(html, /data-action="commit-ai-storyboard-preview"/);
+});
+
+test("ready AI storyboard preview explicitly confirms completion before enabling create chapter", () => {
+  const html = renderReadyPreview();
+
+  assert.match(html, /single-episode-ai-completion-state success/);
+  assert.match(html, /解析完成，可以创建章节/);
+  assert.match(html, /data-action="commit-ai-storyboard-preview"/);
+  assert.doesNotMatch(html, /single-episode-ai-create[^>]*disabled/s);
+});
+
+test("ready AI storyboard preview keeps legacy table-only storyboard results committable", () => {
+  const html = renderReadyPreview({ omitCommitPayload: true });
+
+  assert.match(html, /解析完成，可以创建章节/);
+  assert.match(html, /data-action="commit-ai-storyboard-preview"/);
+  assert.doesNotMatch(html, /single-episode-ai-create[^>]*disabled/s);
+});
+
+test("ready AI storyboard preview keeps create chapter frozen when storyboard output is incomplete", () => {
+  const html = renderReadyPreview({ hasStoryboards: false, selectedStages: null });
+
+  assert.match(html, /解析结果不完整，请重新生成/);
+  assert.match(html, /single-episode-ai-create[^>]*disabled[^>]*>创建章节<\/button>/s);
+  assert.doesNotMatch(html, /data-action="commit-ai-storyboard-preview"/);
+});
+
+test("regenerating an AI storyboard stage freezes every generation action and shows progress", () => {
+  const html = renderReadyPreview({ regeneratingStage: "character" });
+  const regenerateButtons = html.match(/<button[\s\S]*?class="single-episode-ai-stage-regenerate"[\s\S]*?<\/button>/g) ?? [];
+
+  assert.match(html, /角色重新生成中，请稍候/);
+  assert.ok(regenerateButtons.length >= 4);
+  assert.ok(regenerateButtons.every((button) => /disabled/.test(button)));
+  assert.match(html, /single-episode-ai-create[^>]*disabled[^>]*>创建章节<\/button>/s);
+  assert.doesNotMatch(html, /data-action="commit-ai-storyboard-preview"/);
+});
+
+test("ready AI storyboard preview keeps regeneration failure visible inside the fullscreen result", () => {
+  const html = renderReadyPreview({ regenerationError: "模型连接暂时中断" });
+
+  assert.match(html, /single-episode-ai-completion-state error/);
+  assert.match(html, /重新生成失败：模型连接暂时中断/);
+});
+
+test("loading AI storyboard preview uses matching prompt detail columns before details arrive", () => {
+  for (const [stage, name] of [
+    ["scene", "城墙集市"],
+    ["character", "任小野"],
+    ["prop", "饭盒"],
+  ]) {
+    const html = renderLoadingPreview(stage, [
+      `| ${stage === "scene" ? "场景名称" : stage === "character" ? "角色名称" : "道具名称"} | 提示词详情 |`,
+      "| --- | --- |",
+      `| ${name} | 正在实时输出的提示词 |`,
+    ].join("\n"));
+
+    assert.match(html, /single-episode-ai-prompt-detail-table/);
+  }
+});
+
+test("loading AI storyboard preview replaces a staged list with the details", () => {
+  const html = renderLoadingPreview("scene", [
+    "## 第一步：场景提取清单",
+    "| 场景名称 | 氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "## 第二步：专业场景设定表",
+    "场景描述：这段详细原文不应显示在实时列表中。",
+  ].join("\n"));
+
+  assert.match(html, /场景提示词/);
+  assert.doesNotMatch(html, /城墙集市/);
+  assert.doesNotMatch(html, /第一步：场景提取清单/);
+  assert.match(html, /这段详细原文不应显示在实时列表中/);
+  assert.doesNotMatch(html, /第二步：专业场景设定表/);
+});
+
+test("loading AI storyboard preview hides the details marker and shows its content", () => {
+  const html = renderLoadingPreview("scene", [
+    "| 场景名称 | 氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "---",
+    "[[DETAILS]]",
+    "场景描述：这段详细原文不应显示在实时列表中。",
+  ].join("\n"));
+
+  assert.doesNotMatch(html, /城墙集市/);
+  assert.match(html, /这段详细原文不应显示在实时列表中/);
+  assert.doesNotMatch(html, /\[\[DETAILS\]\]/);
+  assert.doesNotMatch(html, /<pre>---<\/pre>/);
+});
+
+test("loading AI storyboard preview replaces the extracted list once prompt details arrive", () => {
+  const html = renderLoadingPreview("scene", [
+    "场景提取清单",
+    "| 场景名称 | 清单氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "[[DETAILS]]",
+    "【场景名称】城墙集市",
+    "图片提示词：城门阴影下的市集。",
+  ].join("\n"));
+
+  assert.match(html, /single-episode-ai-prompt-detail-table/);
+  assert.match(html, /提示词详情/);
+  assert.doesNotMatch(html, /场景提取清单/);
+  assert.doesNotMatch(html, /清单氛围/);
+});
+
+test("loading AI storyboard preview renders scene prompt details as name and prompt columns", () => {
+  const html = renderLoadingPreview("scene", [
+    "| 场景名称 | 氛围 |",
+    "| --- | --- |",
+    "| 城墙集市 | 温暖与不安 |",
+    "[[DETAILS]]",
+    "- **场景名称**：城墙集市",
+    "画面构图：城门阴影下的市集。",
+    "- **场景名称**：老旧木屋排巷",
+    "画面构图：狭窄巷道与木门。",
+  ].join("\n"));
+
+  assert.match(html, /single-episode-ai-prompt-detail-table/);
+  assert.match(html, /<th>场景名称<\/th>/);
+  assert.match(html, /<th>提示词详情<\/th>/);
+  assert.match(html, /<td>城墙集市<\/td>/);
+  assert.match(html, /<td>老旧木屋排巷<\/td>/);
+  assert.doesNotMatch(html, /\*\*场景名称\*\*/);
+});
+
+test("loading AI storyboard preview uses the required character and prop name labels", () => {
+  for (const [stage, label, headingLabel, firstName, secondName] of [
+    ["character", "角色名称", "角色名称", "任小野", "闵婶"],
+    ["prop", "道具名称", "道具名称", "饭盒", "旧木门"],
+  ]) {
+    const html = renderLoadingPreview(stage, [
+      "[[DETAILS]]",
+      `${headingLabel}：${firstName}`,
+      "图片提示词：细节一。",
+      `${headingLabel}：${secondName}`,
+      "图片提示词：细节二。",
+    ].join("\n"));
+
+    assert.match(html, /single-episode-ai-prompt-detail-table/);
+    assert.match(html, new RegExp(`<th>${label}<\\/th>`));
+    assert.match(html, /<th>提示词详情<\/th>/);
+    assert.match(html, new RegExp(`<td>${firstName}<\\/td>`));
+    assert.match(html, new RegExp(`<td>${secondName}<\\/td>`));
+  }
+});
+
+test("loading AI storyboard preview separates storyboard details using persisted shot markers", () => {
+  const html = renderLoadingPreview("shot", [
+    "【分镜1】任小野走进城门。",
+    "画面/动作：任小野停在城门阴影中。",
+    "【分镜2】闵婶接过饭盒。",
+    "画面/动作：闵婶伸手接过饭盒。",
+  ].join("\n"));
+
+  assert.match(html, /【分镜1】任小野走进城门。/);
+  assert.match(html, /【分镜2】闵婶接过饭盒。/);
+  assert.equal((html.match(/class="single-episode-ai-prompt-entry"/g) ?? []).length, 2);
+});
+
+test("loading AI storyboard preview keeps only streamed output while an asset stage is active", () => {
   const html = renderLoadingPreview("character", "{\"characters\":[{\"characterName\":\"任小野\"}]}", {
     characters: [{ characterName: "任小野", characterDescription: "黑色短衣" }],
     scenes: [{ sceneName: "闵婶家门口", sceneDescription: "傍晚微光" }],
     props: [{ propName: "饭盒", propDescription: "旧布包裹" }],
   });
 
-  assert.match(html, /single-episode-ai-table-stack live/);
-  assert.ok(
-    html.indexOf("single-episode-ai-table-card scenes") <
-      html.indexOf("single-episode-ai-table-card characters"),
-  );
+  assert.match(html, /data-prompt-stage="character-response"/);
+  assert.doesNotMatch(html, /single-episode-ai-table-stack live/);
+  assert.doesNotMatch(html, /single-episode-ai-table-card scenes/);
+  assert.doesNotMatch(html, /single-episode-ai-table-card characters/);
 });
 
 test("ready AI storyboard preview hides DeepSeek prompt and raw response sections while keeping final tables", () => {
@@ -175,7 +408,7 @@ test("ready AI storyboard preview hides DeepSeek prompt and raw response section
   );
 });
 
-test("AI storyboard preview hides all raw response blocks during streaming", () => {
+test("AI storyboard preview renders every streamed stage response", () => {
   const html = renderProjectDetail({
     state: {
       project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
@@ -227,11 +460,13 @@ test("AI storyboard preview hides all raw response blocks during streaming", () 
     },
   });
 
-  assert.doesNotMatch(html, /data-prompt-stage="scene-response"/);
-  assert.doesNotMatch(html, /data-prompt-stage="character-response"/);
-  assert.doesNotMatch(html, /data-prompt-stage="prop-response"/);
-  assert.doesNotMatch(html, /single-episode-ai-live-output/);
-  assert.doesNotMatch(html, /AI .*实时返回/);
+  assert.match(html, /data-prompt-stage="scene-response"/);
+  assert.match(html, /data-prompt-stage="character-response"/);
+  assert.match(html, /data-prompt-stage="prop-response"/);
+  assert.match(html, /城门口/);
+  assert.match(html, /任小野/);
+  assert.match(html, /饭盒/);
+  assert.doesNotMatch(html, /发送给.*提示词/);
 });
 
 test("ready AI storyboard preview no longer renders markdown raw response tables", () => {
@@ -397,7 +632,7 @@ test("project panel keeps busy status toast visible until generation finishes", 
   assert.match(css, /\.global-workbench-toast\.is-persistent\s*\{[^}]*animation:\s*none/s);
 });
 
-test("loading AI storyboard preview no longer renders duplicated live storyboard tables", () => {
+test("loading AI storyboard preview keeps streamed storyboard output without a duplicate result table", () => {
   const longVideoPrompt = [
     "BEGIN_LONG_VIDEO_PROMPT",
     "动态视频提示词".repeat(4200),
@@ -422,8 +657,9 @@ test("loading AI storyboard preview no longer renders duplicated live storyboard
 
   assert.doesNotMatch(html, /single-episode-ai-live-output/);
   assert.doesNotMatch(html, /AI 分镜 实时返回/);
-  assert.match(html, /single-episode-ai-table-stack live/);
-  assert.equal((html.match(/single-episode-ai-table-card storyboards/g) ?? []).length, 1);
+  assert.match(html, /data-prompt-stage="shot-response"/);
+  assert.doesNotMatch(html, /single-episode-ai-table-stack live/);
+  assert.equal((html.match(/single-episode-ai-table-card storyboards/g) ?? []).length, 0);
 });
 
 test("ready AI storyboard preview shows full script text even without a final state package", () => {

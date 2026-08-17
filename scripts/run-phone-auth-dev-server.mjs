@@ -47,6 +47,7 @@ if (generationQueueRequired && process.env.CREATOR_DEV_STACK_MANAGED !== "true")
   console.error("[phone-auth] Use npm run dev:http-only when you intentionally want HTTP-only mode.");
   const stackResult = spawnSync(runtime, [stackEntrypoint], {
     env: process.env,
+    windowsHide: true,
     stdio: "inherit",
   });
   process.exit(stackResult.status ?? 1);
@@ -160,6 +161,7 @@ function findNodeRuntime(minMajor) {
   const nodeLocator = process.platform === "win32" ? "where.exe" : "which";
   const whereNode = spawnSync(nodeLocator, ["node"], {
     encoding: "utf8",
+    windowsHide: true,
   });
 
   if (whereNode.status === 0) {
@@ -171,6 +173,7 @@ function findNodeRuntime(minMajor) {
   for (const candidate of candidates) {
     const version = spawnSync(candidate, ["--version"], {
       encoding: "utf8",
+      windowsHide: true,
     });
 
     if (version.status !== 0) {
@@ -198,6 +201,7 @@ function findNodeRuntime(minMajor) {
 function resolveTsxRuntimeArgs(runtime) {
   const version = spawnSync(runtime, ["--version"], {
     encoding: "utf8",
+    windowsHide: true,
   });
 
   if (version.status !== 0) {

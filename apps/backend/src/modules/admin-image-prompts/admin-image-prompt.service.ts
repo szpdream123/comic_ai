@@ -320,22 +320,7 @@ function style(name: string, legacyIdentifier: string, promptContent: string, _l
   };
 }
 function styleCoverDataUrl(name: string) {
-  const publicBaseUrl = (
-    process.env.STORAGE_PUBLIC_BASE_URL?.trim()
-    || process.env.STORAGE_ENDPOINT?.trim()
-    || cosBucketBaseUrl(process.env)
-  )?.replace(/\/+$/g, "");
-  if (!publicBaseUrl) return null;
-  const rootPrefix = (process.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets")
-    .replace(/^\/+|\/+$/g, "");
-  return `${publicBaseUrl}/${rootPrefix}/promptCovers/officialStyles/${encodeURIComponent(name)}.webp`;
-}
-
-function cosBucketBaseUrl(env: NodeJS.ProcessEnv) {
-  if ((env.STORAGE_ADAPTER_MODE ?? "").trim() !== "cos") return null;
-  const bucket = env.STORAGE_BUCKET?.trim();
-  const region = env.STORAGE_REGION?.trim();
-  return bucket && region ? `https://${bucket}.cos.${region}.myqcloud.com` : null;
+  return `/api/public/style-covers/${encodeURIComponent(name)}`;
 }
 
 const defaultImagePromptStyles = [

@@ -1,4 +1,9 @@
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import {
+  isTransientDatabaseConnectionError,
+  isTransientDatabasePersistenceError,
+  markTransientDatabasePersistenceError,
+} from "../shared/db/dev-db.ts";
 import type {
   OpenAICompatibleTextAdapter,
   TextGatewayChatCompletionChunk,
@@ -119,7 +124,7 @@ export class TextModelGatewayService {
           request.model,
           this.config.env,
         );
-    const prepared = await createOrReuseProviderRequest(this.config.db, {
+    const prepared = await persistTextGatewayState(() => createOrReuseProviderRequest(this.config.db, {
       projectId: context.projectId ?? null,
       canvasProjectId: context.canvasProjectId ?? null,
       workflowId: context.workflowId ?? null,
@@ -146,29 +151,29 @@ export class TextModelGatewayService {
       credentialVersionRef: model.credentialVersionRef ?? null,
       userId: context.createdByUserId!,
       now: now(),
-    });
+    }));
 
     if (prepared.request.externalSubmissionStartedAt) {
       throw new TextModelGatewayError("provider_request_already_started");
     }
 
-    const started = await markExternalSubmissionStarted(this.config.db, {
+    const started = await persistTextGatewayState(() => markExternalSubmissionStarted(this.config.db, {
       providerRequestId: prepared.request.id,
       externalRequestId: null,
       now: now(),
-    });
+    }));
     const upstreamRequest = prepareProviderChatCompletionRequest(
       request,
       model.providerModel,
       model.providerProtocol,
     );
     const auditRequest = redactTextGatewayVideoUrls(upstreamRequest);
-    await recordProviderRequestRedactedBody(this.config.db, {
+    await persistTextGatewayState(() => recordProviderRequestRedactedBody(this.config.db, {
       providerRequestId: started.id,
       request: auditRequest,
       now: now(),
-    });
-    await createUserModelRequestLog(this.config.db, {
+    }));
+    await persistTextGatewayState(() => createUserModelRequestLog(this.config.db, {
       providerRequestId: started.id,
       projectId: context.projectId ?? null,
       canvasProjectId: context.canvasProjectId ?? null,
@@ -189,7 +194,7 @@ export class TextModelGatewayService {
       requestBody: auditRequest,
       requestText: extractRequestText(upstreamRequest.messages),
       now: now(),
-    });
+    }));
     const abortController = new AbortController();
     let aborted = false;
     const abortFromContext = () => {
@@ -231,21 +236,21 @@ export class TextModelGatewayService {
         ...(modelError?.toRedactedProviderRecord() ?? {}),
       };
       if (status === "canceled") {
-        await markProviderRequestCanceled(this.config.db, {
+        await persistTextGatewayFailureState(() => markProviderRequestCanceled(this.config.db, {
           providerRequestId: started.id,
           failureCode,
           redactedResponse,
           now: now(),
-        });
+        }));
       } else {
-        await markProviderRequestFailed(this.config.db, {
+        await persistTextGatewayFailureState(() => markProviderRequestFailed(this.config.db, {
           providerRequestId: started.id,
           failureCode,
           redactedResponse,
           now: now(),
-        });
+        }));
       }
-      await completeUserModelRequestLog(this.config.db, {
+      await persistTextGatewayFailureState(() => completeUserModelRequestLog(this.config.db, {
         providerRequestId: started.id,
         status,
         responseText: null,
@@ -253,7 +258,7 @@ export class TextModelGatewayService {
         finishReasons: [],
         failureCode,
         now: now(),
-      });
+      }));
       context.signal?.removeEventListener("abort", abortFromContext);
       throw modelError ?? error;
     }
@@ -315,13 +320,13 @@ export class TextModelGatewayService {
       };
       const finishFailureCode = failureCodeFromFinishReasons(input.tracker.finishReasons);
       if (finishFailureCode) {
-        await markProviderRequestFailed(this.config.db, {
+        await persistTextGatewayFailureState(() => markProviderRequestFailed(this.config.db, {
           providerRequestId: input.providerRequestId,
           failureCode: finishFailureCode,
           redactedResponse,
           now: input.now(),
-        });
-        await completeUserModelRequestLog(this.config.db, {
+        }));
+        await persistTextGatewayFailureState(() => completeUserModelRequestLog(this.config.db, {
           providerRequestId: input.providerRequestId,
           status: "failed",
           responseText: input.tracker.responseText,
@@ -329,7 +334,7 @@ export class TextModelGatewayService {
           finishReasons: input.tracker.finishReasons,
           failureCode: finishFailureCode,
           now: input.now(),
-        });
+        }));
         input.resolveCompleted({
           status: "failed",
           failureCode: finishFailureCode,
@@ -344,22 +349,31 @@ export class TextModelGatewayService {
         usageSource,
       };
 
-      await markProviderRequestSucceeded(this.config.db, {
+      await persistTextGatewayState(() => markProviderRequestSucceeded(this.config.db, {
         providerRequestId: input.providerRequestId,
         externalRequestId: input.tracker.externalRequestId,
         redactedResponse,
         now: input.now(),
-      });
-      await completeUserModelRequestLog(this.config.db, {
+      }), { retrySafe: false });
+      await persistTextGatewayState(() => completeUserModelRequestLog(this.config.db, {
         providerRequestId: input.providerRequestId,
         status: "succeeded",
         responseText: input.tracker.responseText,
         responseUsage: usage,
         finishReasons: input.tracker.finishReasons,
         now: input.now(),
-      });
+      }), { retrySafe: false });
       input.resolveCompleted(final);
     } catch (error) {
+      if (isTransientDatabasePersistenceError(error)) {
+        input.resolveCompleted({
+          status: "failed",
+          failureCode: error.code,
+          usage: input.tracker.usage,
+          usageSource: input.tracker.usage ? "provider" : "provider_missing",
+        });
+        throw error;
+      }
       const status = input.isAborted() ? "canceled" : "failed";
       const failureCode = input.isAborted()
         ? "client_aborted_stream"
@@ -383,21 +397,21 @@ export class TextModelGatewayService {
       };
 
       if (status === "canceled") {
-        await markProviderRequestCanceled(this.config.db, {
+        await persistTextGatewayFailureState(() => markProviderRequestCanceled(this.config.db, {
           providerRequestId: input.providerRequestId,
           failureCode,
           redactedResponse,
           now: input.now(),
-        });
+        }));
       } else {
-        await markProviderRequestFailed(this.config.db, {
+        await persistTextGatewayFailureState(() => markProviderRequestFailed(this.config.db, {
           providerRequestId: input.providerRequestId,
           failureCode,
           redactedResponse,
           now: input.now(),
-        });
+        }));
       }
-      await completeUserModelRequestLog(this.config.db, {
+      await persistTextGatewayFailureState(() => completeUserModelRequestLog(this.config.db, {
         providerRequestId: input.providerRequestId,
         status,
         responseText: input.tracker.responseText,
@@ -405,7 +419,7 @@ export class TextModelGatewayService {
         finishReasons: input.tracker.finishReasons,
         failureCode,
         now: input.now(),
-      });
+      }));
 
       input.resolveCompleted({
         status,
@@ -415,6 +429,28 @@ export class TextModelGatewayService {
       });
       throw modelError ?? error;
     }
+  }
+}
+
+async function persistTextGatewayState<T>(
+  operation: () => Promise<T>,
+  options?: { retrySafe?: boolean },
+) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (isTransientDatabaseConnectionError(error)) {
+      throw markTransientDatabasePersistenceError(error, options);
+    }
+    throw error;
+  }
+}
+
+async function persistTextGatewayFailureState(operation: () => Promise<unknown>) {
+  try {
+    await operation();
+  } catch (error) {
+    console.error("[text-model-gateway] failed to persist provider failure state", error);
   }
 }
 

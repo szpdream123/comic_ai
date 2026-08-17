@@ -325,7 +325,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!object || object.status !== "available") {
         throw new Error("storage_upload_not_ready");
       }
-      const urls = await buildSignedObjectUrls(deps.db, {
+      await buildSignedObjectUrls(deps.db, {
         sessionToken: user.sessionToken,
         storageObjectId: object.id,
         adapter: runtime.adapter,
@@ -335,7 +335,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       return {
         id: object.id,
         objectKey: object.objectKey,
-        sourceUrl: urls.sourceUrl,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(object.id)}/content?proxy=1`,
       };
     }
 
@@ -344,7 +344,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       if (!object || object.status !== "available") {
         throw new Error("storage_upload_not_ready");
       }
-      const urls = await buildSignedObjectUrls(deps.db, {
+      await buildSignedObjectUrls(deps.db, {
         sessionToken: user.sessionToken,
         storageObjectId: object.id,
         adapter: runtime.adapter,
@@ -354,7 +354,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
       return {
         id: object.id,
         objectKey: object.objectKey,
-        sourceUrl: urls.sourceUrl,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(object.id)}/content?proxy=1`,
       };
     }
 
@@ -2328,9 +2328,6 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         return { status: 400, body: { error: "ai_storyboard_commit_payload_required" } };
       }
       const storyboards = Array.isArray(payload.storyboards) ? payload.storyboards : [];
-      if (!storyboards.length) {
-        return { status: 400, body: { error: "ai_storyboard_storyboards_required" } };
-      }
       const title = input.body.episodeTitle?.trim() || "AI 分镜章节";
       const actor = await resolveUserActorContext(deps.db, {
         sessionToken: input.user.sessionToken,
@@ -6722,11 +6719,7 @@ function buildDirectStoragePublicUrl(storageObjectKey: string | null) {
   if (/^(?:https?:)?\/\//i.test(normalizedKey) || normalizedKey.startsWith("data:")) {
     return normalizedKey;
   }
-  const publicBaseUrl =
-    process.env.STORAGE_PUBLIC_BASE_URL?.trim().replace(/\/+$/g, "") ||
-    process.env.STORAGE_ENDPOINT?.trim().replace(/\/+$/g, "") ||
-    "";
-  return publicBaseUrl ? `${publicBaseUrl}/${normalizedKey.replace(/^\/+/g, "")}` : null;
+  return null;
 }
 
 function parseMetadataJson(value: Record<string, unknown> | string | null | undefined) {
@@ -6758,34 +6751,16 @@ async function resolveStorageBackedPreviewUrl(
     signedUrlExpiresInSeconds: number;
   },
 ) {
-  const explicitPreviewUrl = getAssetPreviewUrl(input.storageObjectKey, input.metadata);
-  if (explicitPreviewUrl) {
-    return explicitPreviewUrl;
+  if (input.storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(input.storageObjectId)}/content?proxy=1`;
   }
+  const explicitPreviewUrl = getAssetPreviewUrl(input.storageObjectKey, input.metadata);
+  if (explicitPreviewUrl) return explicitPreviewUrl;
   if (
-    !input.storageObjectId &&
     typeof input.metadata?.generationTaskId === "string" &&
     input.metadata.generationTaskId.trim()
   ) {
     return null;
-  }
-  const directStorageUrl = buildDirectStoragePublicUrl(input.storageObjectKey);
-  if (directStorageUrl) {
-    return directStorageUrl;
-  }
-  if (input.storageObjectId) {
-    try {
-      const urls = await buildSignedObjectUrls(db, {
-        sessionToken: input.sessionToken,
-        storageObjectId: input.storageObjectId,
-        adapter: input.runtime.adapter,
-        now: input.now,
-        expiresInSeconds: input.signedUrlExpiresInSeconds,
-      });
-      return urls.previewUrl;
-    } catch {
-      return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
-    }
   }
   return getAssetPreviewUrl(input.storageObjectKey, input.metadata);
 }
@@ -6800,24 +6775,13 @@ async function hydrateProjectCoverUrl(
     signedUrlExpiresInSeconds: number;
   },
 ) {
-  if (!input.project?.coverStorageObjectId || input.project.coverImageUrl) {
+  if (!input.project?.coverStorageObjectId) {
     return input.project;
   }
-  try {
-    const urls = await buildSignedObjectUrls(db, {
-      sessionToken: input.sessionToken,
-      storageObjectId: input.project.coverStorageObjectId,
-      adapter: input.runtime.adapter,
-      now: input.now,
-      expiresInSeconds: input.signedUrlExpiresInSeconds,
-    });
-    return {
-      ...input.project,
-      coverImageUrl: urls.previewUrl,
-    };
-  } catch {
-    return input.project;
-  }
+  return {
+    ...input.project,
+    coverImageUrl: `/api/storage/objects/${encodeURIComponent(input.project.coverStorageObjectId)}/content?proxy=1`,
+  };
 }
 
 async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string | null; coverImageUrl?: string | null }>(
@@ -6833,21 +6797,10 @@ async function hydrateScriptCoverUrl<T extends { coverStorageObjectId?: string |
   if (!input.script?.coverStorageObjectId) {
     return input.script;
   }
-  try {
-    const urls = await buildSignedObjectUrls(db, {
-      sessionToken: input.sessionToken,
-      storageObjectId: input.script.coverStorageObjectId,
-      adapter: input.runtime.adapter,
-      now: input.now,
-      expiresInSeconds: input.signedUrlExpiresInSeconds,
-    });
-    return {
-      ...input.script,
-      coverImageUrl: urls.previewUrl,
-    };
-  } catch {
-    return input.script;
-  }
+  return {
+    ...input.script,
+    coverImageUrl: `/api/storage/objects/${encodeURIComponent(input.script.coverStorageObjectId)}/content?proxy=1`,
+  };
 }
 
 async function listScriptsForProjectDetail(
@@ -7040,10 +6993,10 @@ async function buildSignedExportRecord(
     });
     return {
       ...input.record,
-      signedUrl: urls.downloadUrl,
-      sourceUrl: urls.sourceUrl,
-      downloadUrl: urls.downloadUrl,
-      expiresAt: urls.expiresAt,
+      signedUrl: `/api/storage/objects/${encodeURIComponent(input.record.storageObjectId)}/content`,
+      sourceUrl: `/api/storage/objects/${encodeURIComponent(input.record.storageObjectId)}/content`,
+      downloadUrl: `/api/storage/objects/${encodeURIComponent(input.record.storageObjectId)}/content`,
+      expiresAt: null,
     };
   } catch {
     return input.record;

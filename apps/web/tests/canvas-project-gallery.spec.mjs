@@ -2,9 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  normalizeCanvasLibraryAsset,
   renderCanvasProjectGallery,
   renderCanvasSurfaceForHost,
 } from "../src/features/production-workbench/project-detail.js";
+
+test("canvas library media uses the authorized storage gateway when an object ID is available", () => {
+  const storageObjectId = "11111111-2222-4333-8444-555555555555";
+  const asset = normalizeCanvasLibraryAsset({
+    id: "asset-1",
+    storageObjectId,
+    previewUrl: "https://bucket.cos.ap-guangzhou.myqcloud.com/legacy/asset.png",
+  });
+
+  assert.equal(asset?.url, `/api/storage/objects/${storageObjectId}/content?proxy=1`);
+  assert.equal(asset?.previewUrl, `/api/storage/objects/${storageObjectId}/content?proxy=1`);
+});
 
 test("canvas project gallery paginates cards with the shared gallery footer", () => {
   const html = renderCanvasProjectGallery({

@@ -57,6 +57,7 @@ export class AdminBackedTextModelResolver implements TextModelResolver {
       version: 1,
       modelConfigId: model.id,
       modelCode: model.modelCode,
+      displayName: model.displayName,
       providerName: model.providerName,
       providerModel: model.providerModel,
       providerProtocol: model.providerProtocol,

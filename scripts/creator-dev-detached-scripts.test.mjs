@@ -40,4 +40,28 @@ describe("creator dev detached scripts", () => {
     assert.match(source, /await client\.query\("SELECT 1"\)/);
     assert.match(source, /await redis\.ping\(\)/);
   });
+
+  it("hides Windows command windows for startup, status, and stop subprocesses", () => {
+    for (const relativePath of [
+      "runtime-schema-migrations.mjs",
+      "run-creator-dev-stack.mjs",
+      "run-phone-auth-dev-server.mjs",
+      "run-phone-auth-http-only.mjs",
+      "run-phone-auth-production.mjs",
+      "start-dev-detached.mjs",
+      "start-http-only-detached.mjs",
+      "status-http-only-detached.mjs",
+      "stop-dev-detached.mjs",
+      "stop-http-only-detached.mjs",
+    ]) {
+      const source = readFileSync(join(process.cwd(), "scripts", relativePath), "utf8");
+      const childProcessCalls = source.match(/\bspawnSync\(/g) ?? [];
+      const hiddenWindows = source.match(/windowsHide:\s*true/g) ?? [];
+
+      assert.ok(
+        hiddenWindows.length >= childProcessCalls.length,
+        `${relativePath} must hide every synchronous startup subprocess on Windows`,
+      );
+    }
+  });
 });

@@ -1,7 +1,7 @@
 {
   "name": "@comic-ai/director-desk",
   "version": "0.1.0",
-  "description": "灵曦剧场内嵌的 3D 分镜导演台，用于场景摆位、动作调度和机位预演。",
+  "description": "灵曦AI内嵌的 3D 分镜导演台，用于场景摆位、动作调度和机位预演。",
   "license": "MIT",
   "engines": {
     "node": ">=20"

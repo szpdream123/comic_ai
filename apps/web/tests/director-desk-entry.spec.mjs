@@ -182,7 +182,7 @@ test("director route keeps the workbench shell and renders a direct module mount
   assert.doesNotMatch(html, /<iframe/i);
 });
 
-test("director desk ships only as the Lingxi Theater integrated module", () => {
+test("director desk ships only as the Lingxi AI integrated module", () => {
   const appSource = readFileSync("apps/web/src/features/director-desk/src/App.tsx", "utf8");
   const viteSource = readFileSync("apps/web/src/features/director-desk/vite.config.ts", "utf8");
   const workbenchSource = readFileSync("apps/web/src/features/production-workbench/index.js", "utf8");

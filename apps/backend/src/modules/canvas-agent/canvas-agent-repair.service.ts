@@ -197,7 +197,7 @@ export class CanvasAgentRepairService {
         JOIN canvas_agent_steps step ON step.id = agent.current_step_id
         JOIN tasks generation ON generation.id = step.generation_task_id
         WHERE agent.status = 'waiting_external'
-          AND step.status = 'waiting_external'
+          AND step.status IN ('waiting_external','succeeded','failed','canceled','result_unknown','manual_review_required')
           AND generation.status IN ('succeeded','failed','canceled','result_unknown','manual_review_required')
         ORDER BY agent.updated_at ASC, agent.id ASC
         LIMIT $1

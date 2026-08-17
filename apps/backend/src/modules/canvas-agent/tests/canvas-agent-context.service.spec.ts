@@ -110,3 +110,49 @@ test("Canvas Agent context compacts long conversations without loading 1000 mess
   assert.equal(storedSummary?.messageCount, 112);
   assert.equal(Array.isArray(storedSummary?.items) ? storedSummary.items.length : 0, 80);
 });
+
+test("media-generation-only context does not load Canvas knowledge or prompt preferences", async () => {
+  let canvasLoads = 0;
+  let memoryLoads = 0;
+  let preferenceLoads = 0;
+  const queries: string[] = [];
+  const db = {
+    async query<T>(sql: string) {
+      queries.push(sql);
+      if (sql.includes("SELECT summary_json FROM canvas_agent_conversations")) {
+        return { rows: [{ summary_json: { secretCanvasSummary: true } }] as T[] };
+      }
+      if (sql.includes("SELECT id FROM canvas_agent_conversations")) {
+        return { rows: [{ id: "conversation-1" }] as T[] };
+      }
+      if (sql.includes("FROM canvas_agent_messages")) {
+        return { rows: [{ role: "user", content_json: { text: "生成一张图" }, sequence: 1 }] as T[] };
+      }
+      if (sql.includes("FROM canvas_agent_file_grants")) return { rows: [] as T[] };
+      return { rows: [] as T[] };
+    },
+  };
+  const service = new CanvasAgentContextService({
+    db: db as never,
+    loadCanvasContext: async () => {
+      canvasLoads += 1;
+      return { secretCanvasDocument: true };
+    },
+    knowledge: { listMemories: async () => { memoryLoads += 1; return []; } },
+    promptPreferences: { list: async () => { preferenceLoads += 1; return []; } },
+  });
+
+  const context = await service.build({
+    canvasId: "canvas-1",
+    conversationId: "conversation-1",
+    actor: { ownerUserId: "user-1", capabilities: new Set() },
+    taskId: "task-1",
+    capabilityProfile: "media_generation_only",
+  });
+
+  assert.equal(canvasLoads, 0);
+  assert.equal(memoryLoads, 0);
+  assert.equal(preferenceLoads, 0);
+  assert.deepEqual(Object.keys(context).sort(), ["fileGrants", "messages"]);
+  assert.ok(queries.some((sql) => sql.includes("budget_json->>'capabilityProfile'")));
+});

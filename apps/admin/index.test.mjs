@@ -471,6 +471,8 @@ test("admin shell wires final design actions to real admin APIs", () => {
     "/api/admin/dashboard/model-health",
     "/api/admin/dashboard/recent-events",
     "/api/admin/video-batch/resolve",
+    "/api/admin/video-batch/cookie",
+    "/api/admin/video-batch/media",
     "/api/admin/models",
     "/api/admin/users",
     "/api/admin/settings",
@@ -801,6 +803,23 @@ test("admin shell exposes announcements as a standalone lightweight module", () 
   assert.doesNotMatch(script, /body:\s*String\(form\.get\("body"\) \|\| ""\)\.trim\(\)/);
 });
 
+test("admin shell exposes homepage recommendation category and video management", () => {
+  assert.match(html, /pages\.homeRecommendations = "首页推荐"/);
+  assert.match(html, /\/admin\/home-recommendations/);
+  assert.match(html, />新增分类</);
+  assert.match(html, />新增视频</);
+  assert.match(html, /\/api\/admin\/home-recommendations\/categories/);
+  assert.match(html, /\/api\/admin\/home-recommendations\/videos/);
+  assert.match(html, />首页背景视频</);
+  assert.match(html, /\/api\/admin\/home-recommendations\/background/);
+  assert.match(html, /\/api\/admin\/home-recommendations\/background\/upload/);
+  assert.match(html, /\/api\/admin\/home-recommendations\/videos\/upload/);
+  assert.match(html, /uploadHomeRecommendationVideo/);
+  assert.match(html, /accept="video\/\*"/);
+  assert.match(html, /name="videoUrl"/);
+  assert.doesNotMatch(html, /name="posterUrl"/);
+});
+
 test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
   for (const contract of [
     "function resolveAdminApiUrl",
@@ -856,6 +875,36 @@ test("admin video models expose the four backend management categories", () => {
   assert.match(script, /name="videoCategory"/);
   assert.match(script, /applyVideoCategoryToModelEditor/);
   assert.match(script, /uiConfig\.videoCategory/);
+});
+
+test("admin model configuration separates audio models from text and image models", () => {
+  assert.match(script, /key: "audio", title: "音频模型"/);
+  assert.match(script, /tabKey === "audio"/);
+  assert.match(script, /mediaType === "text" \|\| mediaType === "multimodal"/);
+  assert.match(script, /mediaType \|\| ""\)\.trim\(\) === "audio"\) return "音频模型"/);
+
+  const start = script.indexOf("const modelMediaTabs");
+  const end = script.indexOf("function updateModelMediaTab", start);
+  const context = {
+    state: {},
+    sortedModelRows: () => [
+      { id: "image", mediaType: "image" },
+      { id: "video", mediaType: "video" },
+      { id: "soundclone", mediaType: "audio" },
+      { id: "text", mediaType: "text" },
+    ],
+    modelMatchesApiKeyFilter: () => true,
+    result: null,
+  };
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = {
+      audio: modelsByMediaTab("audio").map((model) => model.id),
+      text: modelsByMediaTab("text").map((model) => model.id),
+    };
+  `, context);
+
+  assert.deepEqual([...context.result.audio], ["soundclone"]);
+  assert.deepEqual([...context.result.text], ["text"]);
 });
 
 test("model editor lets admins choose a secret reference for providerConfig apiKeyEnv", () => {
@@ -1326,6 +1375,41 @@ test("saving an unchanged model kind preserves existing task and supported modes
   assert.deepEqual(result.preserved.supportedModes, ["single-image", "multi-image"]);
   assert.deepEqual(result.switched.taskModes, ["image.generate"]);
   assert.deepEqual(result.switched.supportedModes, ["text_to_image"]);
+});
+
+test("admin model editor exposes and persists audio model kinds", () => {
+  assert.match(script, /value: "globalaiopc_sound_clone", label: "GlobalAiOpc 音频适配器", mediaTypes: \["audio"\]/);
+  assert.match(script, /value: "audio\.text_to_speech", mediaType: "audio"/);
+  assert.match(script, /value: "audio\.music_generation", mediaType: "audio"/);
+
+  const inferStart = script.indexOf("function inferModelKind");
+  const inferEnd = script.indexOf("function modelKindOptionsMarkup", inferStart);
+  assert.notEqual(inferStart, -1, "model kind inference helper exists");
+  const context = { result: null };
+  vm.runInNewContext(`${script.slice(inferStart, inferEnd)}
+    result = inferModelKind({ mediaType: "audio", taskModes: ["audio.text_to_speech"] });
+  `, context);
+  assert.equal(context.result, "audio.text_to_speech");
+
+  const transportStart = script.indexOf("function modelKindTransportFields");
+  const transportEnd = script.indexOf("function modelTransportChanged", transportStart);
+  const transportContext = {
+    inferModelKind: () => "audio.text_to_speech",
+    resolveVideoTaskModes: (kind) => kind.taskModes,
+    videoSupportedModesByTaskModes: () => ["video-only"],
+    result: null,
+  };
+  vm.runInNewContext(`${script.slice(transportStart, transportEnd)}
+    result = modelKindTransportFields(null, {
+      value: "audio.text_to_speech",
+      mediaType: "audio",
+      taskModes: ["audio.text_to_speech"],
+    });
+  `, transportContext);
+  assert.deepEqual(JSON.parse(JSON.stringify(transportContext.result)), {
+    taskModes: ["audio.text_to_speech"],
+    supportedModes: ["text_to_speech"],
+  });
 });
 
 test("admin image models can configure provider-backed resolution values", () => {

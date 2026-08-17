@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>灵曦AI - 工作流模式原型</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../../apps/web/src/features/production-workbench/production-workbench.css" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d10;
+      --surface: #10161b;
+      --surface-2: #151c22;
+      --surface-3: #1b242b;
+      --line: #26323a;
+      --line-bright: #3a4b55;
+      --text: #eef4f5;
+      --muted: #8d9ca4;
+      --faint: #5f6d74;
+      --cyan: #41d7d0;
+      --cyan-soft: #153a3a;
+      --coral: #ff7b62;
+      --amber: #f0b85a;
+      --green: #79d19a;
+      --blue: #67aef7;
+      --danger: #ff716f;
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --header-h: 58px;
+      --font: "Noto Sans SC", sans-serif;
+      --mono: "IBM Plex Mono", monospace;
+    }
+
+    * { box-sizing: border-box; letter-spacing: 0; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); }
+    body { overflow: hidden; }
+    button, input, select, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px;
+    }
+    svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .app-shell { height: 100dvh; display: grid; grid-template-rows: var(--header-h) minmax(0, 1fr); }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) auto minmax(280px, 1fr);
+      align-items: center;
+      gap: 18px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(9, 13, 16, .98);
+      z-index: 20;
+    }
+    .brand, .top-actions, .project-title, .status-cluster, .mode-switch, .icon-button, .button, .stage-strip, .panel-title, .asset-toolbar, .asset-meta, .shot-meta, .shot-assets, .control-tabs, .composer-actions, .production-switch { display: flex; align-items: center; }
+    .brand { gap: 10px; min-width: 0; }
+    .brand-mark {
+      display: grid; place-items: center; width: 31px; height: 31px;
+      border: 1px solid #54e9e0; border-radius: 7px; color: #071012; background: var(--cyan);
+      font-weight: 800; box-shadow: 0 0 24px rgba(65, 215, 208, .16);
+    }
+    .project-title { gap: 8px; min-width: 0; }
+    .project-title strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+    .project-title span, .save-status { color: var(--muted); font-size: 12px; }
+    .mode-switch {
+      justify-self: center; background: #0d1216; border: 1px solid var(--line); border-radius: 6px; padding: 3px;
+    }
+    .mode-switch button {
+      min-width: 88px; height: 32px; padding: 0 13px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer;
+    }
+    .mode-switch button.active { background: #1c292e; color: var(--text); box-shadow: inset 0 0 0 1px rgba(65, 215, 208, .32); }
+    .mode-switch button.active::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 7px; border-radius: 50%; background: var(--cyan); vertical-align: 2px; }
+    .top-actions { justify-self: end; gap: 8px; }
+    .quick-generate { position: relative; }
+    .quick-generate-trigger svg { width: 14px; height: 14px; }
+    .quick-generate-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 40;
+      display: grid;
+      width: 176px;
+      padding: 5px;
+      border: 1px solid var(--line-bright);
+      border-radius: 6px;
+      background: #11181d;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .36);
+    }
+    .quick-generate-menu[hidden] { display: none; }
+    .quick-generate-menu button {
+      min-height: 34px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .quick-generate-menu button:hover,
+    .quick-generate-menu button:focus-visible { background: #1b272d; color: var(--text); }
+    .credit { font-family: var(--mono); font-size: 12px; color: var(--amber); padding-right: 6px; }
+    .icon-button, .button {
+      justify-content: center; gap: 7px; height: 34px; border: 1px solid var(--line-bright); background: #11181d; border-radius: 5px; cursor: pointer;
+    }
+    .icon-button { width: 34px; padding: 0; }
+    .button { padding: 0 12px; font-size: 12px; font-weight: 600; }
+    .button:hover, .icon-button:hover { border-color: #53707a; background: #172127; }
+    .button.primary { background: var(--cyan); color: #071012; border-color: var(--cyan); }
+    .button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+    .button.danger { color: #ff9c99; }
+
+    .workspace { min-height: 0; display: grid; grid-template-rows: 48px minmax(0, 1fr); }
+    .stagebar {
+      display: grid; grid-template-columns: minmax(240px, 1fr) auto minmax(240px, 1fr); align-items: center; padding: 0 16px;
+      border-bottom: 1px solid var(--line); background: #0c1115;
+    }
+    .stage-strip { grid-column: 2; gap: 0; }
+    .stage-item { position: relative; display: flex; align-items: center; gap: 8px; min-width: 124px; color: var(--muted); font-size: 12px; }
+    .stage-item:not(:last-child)::after { content: ""; height: 1px; flex: 1; min-width: 28px; background: var(--line-bright); margin: 0 12px; }
+    .stage-dot { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--line-bright); border-radius: 50%; font-family: var(--mono); font-size: 10px; }
+    .stage-item.done { color: #b8cbc9; }
+    .stage-item.done .stage-dot { color: #06100f; background: var(--green); border-color: var(--green); }
+    .stage-item.active { color: var(--text); }
+    .stage-item.active .stage-dot { color: #071012; background: var(--cyan); border-color: var(--cyan); box-shadow: 0 0 18px rgba(65, 215, 208, .28); }
+    .stage-actions { justify-self: end; color: var(--muted); font-size: 12px; }
+    .production-switch { justify-self: start; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: #0a0f12; }
+    .production-switch button { height: 29px; padding: 0 13px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+    .production-switch button.active { color: var(--text); background: var(--surface-3); box-shadow: inset 0 -2px var(--cyan); }
+    .task-center-link { justify-self: end; }
+
+    .production-grid { min-height: 0; display: grid; grid-template-columns: 250px minmax(620px, 1fr) 310px; }
+    .script-panel, .generation-panel { min-height: 0; background: var(--surface); }
+    .script-panel { border-right: 1px solid var(--line); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+    .generation-panel { border-left: 1px solid var(--line); overflow-y: auto; }
+    .center-stage { min-width: 0; min-height: 0; background: #0b1013; overflow: hidden; }
+    .panel-header { padding: 14px 14px 11px; border-bottom: 1px solid var(--line); }
+    .panel-title { justify-content: space-between; gap: 12px; }
+    .panel-title h2, .panel-title h3 { margin: 0; font-size: 13px; }
+    .eyebrow { display: block; margin-bottom: 4px; color: var(--faint); font: 500 10px var(--mono); text-transform: uppercase; }
+    .tiny-count { color: var(--muted); font: 11px var(--mono); }
+
+    .source-card { margin: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #12191e; }
+    .source-card strong { display: block; font-size: 12px; margin-bottom: 5px; }
+    .source-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+    .source-file { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #c2d0d4; font-size: 11px; }
+    .source-file svg { width: 14px; height: 14px; color: var(--cyan); }
+
+    .chapter-list { padding: 0 8px 10px; overflow-y: auto; }
+    .chapter-list > small { display: block; padding: 4px 6px 8px; color: var(--faint); font: 10px var(--mono); }
+    .chapter-item { width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 8px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
+    .chapter-item:hover { background: #141c21; }
+    .chapter-item.active { color: var(--text); background: #162125; border-color: #284147; }
+    .chapter-no { font: 10px var(--mono); color: var(--faint); padding-top: 2px; }
+    .chapter-item.active .chapter-no { color: var(--cyan); }
+    .chapter-copy strong, .chapter-copy small { display: block; }
+    .chapter-copy strong { font-size: 12px; }
+    .chapter-copy small { margin-top: 4px; color: var(--faint); font-size: 10px; }
+    .chapter-state { width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: var(--green); }
+    .script-foot { padding: 10px 12px; border-top: 1px solid var(--line); }
+    .script-foot .button { width: 100%; }
+
+    .production-view { height: 100%; min-height: 0; }
+    .production-view[hidden] { display: none !important; }
+    .assets-section, .storyboard-section { min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #0d1317; }
+    .assets-head, .storyboard-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #0e1418; }
+    .asset-toolbar { gap: 6px; }
+    .filter-group { display: flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 5px; }
+    .filter-group button { height: 27px; padding: 0 10px; border: 0; border-radius: 3px; color: var(--muted); background: transparent; font-size: 11px; cursor: pointer; }
+    .filter-group button.active { color: var(--text); background: var(--surface-3); }
+    .asset-workspace { min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+    .asset-browser { min-height: 0; border-right: 1px solid var(--line); overflow-y: auto; padding: 8px; }
+    .asset-scroller { display: grid; grid-template-columns: 1fr; gap: 6px; }
+    .editor-pane { min-width: 0; min-height: 0; overflow-y: auto; padding: 16px; }
+    .editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    .editor-heading h2 { margin: 0; font-size: 16px; }
+    .editor-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+    .editor-status { padding: 4px 7px; border: 1px solid #315a50; border-radius: 4px; color: var(--green); font: 9px var(--mono); }
+    .asset-editor-grid { display: grid; grid-template-columns: minmax(180px, .42fr) minmax(280px, 1fr); gap: 14px; }
+    .asset-editor-preview { aspect-ratio: 3 / 4; max-height: 380px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-3); }
+    .asset-editor-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .field-stack { display: grid; gap: 11px; align-content: start; }
+    .field-stack label { display: grid; gap: 6px; color: #acbbc0; font-size: 10px; font-weight: 600; }
+    .editable-input, .editable-area { width: 100%; border: 1px solid var(--line-bright); border-radius: 5px; background: #0d1317; color: var(--text); }
+    .editable-input { height: 38px; padding: 0 10px; }
+    .editable-area { min-height: 98px; padding: 9px 10px; resize: vertical; line-height: 1.65; }
+    .editable-input:focus, .editable-area:focus { border-color: var(--cyan); }
+    .field-hint { color: var(--faint); font-size: 9px; font-weight: 400; }
+
+    .storyboard-title { display: flex; align-items: baseline; gap: 10px; }
+    .storyboard-title h2 { margin: 0; font-size: 13px; }
+    .storyboard-title span { color: var(--muted); font-size: 11px; }
+    .storyboard-workspace { min-height: 0; display: grid; grid-template-columns: 330px minmax(0, 1fr); }
+    .shot-list { min-height: 0; overflow-y: auto; padding: 8px; border-right: 1px solid var(--line); }
+    .shot-index { align-self: stretch; display: flex; flex-direction: column; justify-content: space-between; padding: 3px 0; color: var(--faint); font: 10px var(--mono); }
+    .shot-index strong { color: var(--text); font-size: 18px; font-weight: 500; }
+    .shot-thumb { position: relative; height: 58px; border-radius: 4px; overflow: hidden; background: #1b242a; }
+    .shot-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .shot-thumb span { position: absolute; right: 4px; bottom: 4px; padding: 2px 4px; border-radius: 3px; background: rgba(4, 8, 10, .82); font: 9px var(--mono); }
+    .shot-assets { gap: 4px; flex-wrap: wrap; margin-top: 7px; }
+    .mention { color: #a7d8d5; background: #183033; border: 1px solid #2b4f52; border-radius: 3px; padding: 2px 5px; font-size: 9px; }
+    .shot-editor { min-height: 0; overflow-y: auto; padding: 16px; }
+    .shot-editor-header { display: grid; grid-template-columns: 142px minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
+    .shot-editor-header .shot-thumb { height: 92px; }
+    .shot-editor-meta h2 { margin: 0 0 7px; font-size: 15px; }
+    .shot-editor-meta p { margin: 0 0 9px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .shot-editor-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+    .shot-editor-fields label { display: grid; gap: 6px; color: #acbbc0; font-size: 10px; font-weight: 600; }
+    .shot-editor-fields label.wide { grid-column: 1 / -1; }
+
+    .generation-panel .panel-header { position: sticky; top: 0; background: var(--surface); z-index: 2; }
+    .selection-context { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .selection-context strong { display: block; font-size: 13px; }
+    .selection-context p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .control-tabs { gap: 2px; margin: 12px 14px 0; padding: 3px; border: 1px solid var(--line); border-radius: 5px; }
+    .control-tabs button { flex: 1; height: 30px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; }
+    .control-tabs button.active { color: var(--text); background: var(--surface-3); }
+    .control-group { padding: 13px 14px; border-bottom: 1px solid var(--line); }
+    .control-group > label, .control-label { display: block; margin-bottom: 7px; color: #aebbc0; font-size: 10px; font-weight: 600; }
+    .select, .text-area { width: 100%; border: 1px solid var(--line-bright); border-radius: 5px; background: #0e1418; color: var(--text); }
+    .select { height: 36px; padding: 0 9px; font-size: 11px; }
+    .text-area { min-height: 96px; padding: 9px; resize: vertical; font-size: 11px; line-height: 1.6; }
+    .reference-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .reference-tile { position: relative; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-3); }
+    .reference-tile img { width: 100%; height: 100%; object-fit: cover; }
+    .reference-tile span { position: absolute; inset: auto 3px 3px; padding: 2px 3px; background: rgba(5,9,11,.82); font-size: 8px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .reference-groups { display: grid; gap: 11px; }
+    .reference-group { display: grid; gap: 6px; }
+    .reference-group[hidden] { display: none; }
+    .reference-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .reference-group-head strong { font-size: 10px; }
+    .reference-group-head small { color: var(--faint); font-size: 8px; }
+    .upload-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .upload-tile { position: relative; display: grid; place-items: center; min-height: 70px; overflow: hidden; border: 1px dashed var(--line-bright); border-radius: 4px; background: #0d1317; color: var(--muted); cursor: pointer; }
+    .upload-tile:hover { color: var(--cyan); border-color: var(--cyan); }
+    .upload-tile svg { width: 17px; height: 17px; }
+    .upload-tile span { margin-top: 4px; font-size: 8px; }
+    .upload-tile img, .upload-tile video { width: 100%; height: 70px; object-fit: cover; display: block; }
+    .upload-tile.has-file { border-style: solid; color: var(--text); }
+    .remove-upload { position: absolute; top: 4px; right: 4px; z-index: 2; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid #59666c; border-radius: 50%; background: rgba(5, 9, 11, .88); color: var(--text); cursor: pointer; }
+    .file-preview { width: 100%; min-width: 0; padding: 8px; text-align: center; }
+    .file-preview strong, .file-preview small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-preview strong { font-size: 9px; }
+    .file-preview small { margin-top: 3px; color: var(--faint); font-size: 8px; }
+    .parameter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .parameter-grid label { color: var(--muted); font-size: 9px; }
+    .parameter-grid .select { margin-top: 5px; }
+    .toggle-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 11px; color: var(--muted); font-size: 10px; }
+    .switch { position: relative; width: 34px; height: 18px; border: 0; border-radius: 9px; background: #2c3940; cursor: pointer; }
+    .switch::after { content: ""; position: absolute; width: 14px; height: 14px; left: 2px; top: 2px; border-radius: 50%; background: #87949a; transition: transform .18s ease, background .18s ease; }
+    .switch.on { background: #216866; }
+    .switch.on::after { transform: translateX(16px); background: var(--cyan); }
+    .cost-box { padding: 12px 14px; }
+    .cost-row { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 10px; }
+    .cost-row strong { color: var(--amber); font: 500 12px var(--mono); }
+    .generate-button { width: 100%; height: 40px; margin-top: 10px; border: 1px solid var(--cyan); border-radius: 5px; background: var(--cyan); color: #061110; font-weight: 700; cursor: pointer; }
+    .generate-button:disabled { cursor: not-allowed; opacity: .55; }
+    .generate-note { margin: 8px 0 0; color: var(--faint); font-size: 9px; line-height: 1.5; text-align: center; }
+
+    .toast { position: fixed; right: 18px; bottom: 18px; z-index: 50; max-width: 360px; padding: 10px 12px; border: 1px solid #3b6668; border-radius: 5px; background: #132426; color: #d9eeee; font-size: 11px; opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .deerflow-mark { position: fixed; right: 10px; bottom: 7px; z-index: 80; color: #708087; font: 8px var(--mono); text-decoration: none; opacity: .55; }
+    .deerflow-mark:hover { color: var(--cyan); opacity: 1; }
+
+    @media (max-width: 1180px) {
+      .production-grid { grid-template-columns: 210px minmax(540px, 1fr) 282px; }
+      .asset-workspace { grid-template-columns: 238px minmax(0, 1fr); }
+      .storyboard-workspace { grid-template-columns: 290px minmax(0, 1fr); }
+      .mode-switch button { min-width: 76px; }
+    }
+    @media (max-width: 1023px) {
+      body { overflow: auto; }
+      .app-shell { height: auto; min-height: 100dvh; grid-template-rows: auto auto; }
+      .topbar { position: sticky; top: 0; grid-template-columns: 1fr auto; height: auto; min-height: var(--header-h); }
+      .mode-switch { grid-column: 1 / -1; grid-row: 2; margin: 0 auto 8px; }
+      .top-actions .button span, .save-status, .credit { display: none; }
+      .workspace { grid-template-rows: auto auto auto; }
+      .stagebar { grid-template-columns: 1fr; min-height: 48px; overflow-x: auto; }
+      .stage-strip { grid-column: 1; justify-self: start; padding: 8px 0; }
+      .task-center-link { display: none; }
+      .production-switch { display: flex; margin-top: 8px; }
+      .production-grid { grid-template-columns: 1fr; }
+      .script-panel, .generation-panel { border: 0; border-bottom: 1px solid var(--line); }
+      .script-panel { grid-template-rows: auto auto auto auto; }
+      .chapter-list { display: grid; grid-auto-flow: column; grid-auto-columns: 210px; overflow-x: auto; padding: 0 10px 10px; }
+      .chapter-list > small { display: none; }
+      .script-foot { display: none; }
+      .center-stage { min-height: 680px; }
+      .asset-workspace, .storyboard-workspace { grid-template-columns: 1fr; }
+      .asset-browser, .shot-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 280px; }
+      .asset-scroller { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .generation-panel { max-height: none; }
+    }
+    @media (max-width: 767px) {
+      .topbar { padding: 8px 10px; gap: 8px; }
+      .project-title span { display: none; }
+      .top-actions { gap: 4px; }
+      .top-actions .button { width: 34px; padding: 0; }
+      .mode-switch { width: 100%; }
+      .mode-switch button { flex: 1; min-width: 0; padding: 0 6px; }
+      .stage-item { min-width: 106px; }
+      .stage-item:not(:last-child)::after { min-width: 16px; margin: 0 7px; }
+      .assets-head, .storyboard-head { align-items: flex-start; flex-direction: column; }
+      .asset-toolbar { width: 100%; overflow-x: auto; }
+      .asset-scroller { grid-template-columns: 1fr; }
+      .asset-editor-grid, .shot-editor-header, .shot-editor-fields { grid-template-columns: 1fr; }
+      .asset-editor-preview { max-height: 320px; }
+      .shot-editor-fields label.wide { grid-column: auto; }
+      .panel-header { padding-inline: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+
+    /* Iteration 3: one continuous workflow page, using the project's generation-panel grammar. */
+    .production-switch { display: none; }
+    .stagebar { grid-template-columns: 1fr auto 1fr; }
+    .production-grid { grid-template-columns: minmax(0, 1fr); }
+    .script-panel { display: none; }
+    .center-stage { overflow-y: auto; background: #0b1013; }
+    .flow-context { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: #10171b; }
+    .flow-context-mark { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #35545a; border-radius: 5px; color: var(--cyan); font: 500 11px var(--mono); }
+    .flow-context strong { display: block; font-size: 12px; }
+    .flow-context p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+    .flow-context span:last-child { color: var(--faint); font: 10px var(--mono); }
+    .production-view, .production-view[hidden] { display: grid !important; height: auto; min-height: 0; }
+    .assets-section { border-bottom: 1px solid var(--line-bright); }
+    .asset-workspace, .storyboard-workspace { display: block; }
+    .asset-browser, .shot-list { max-height: none; overflow: visible; border: 0; padding: 12px; }
+    .asset-scroller { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .editor-pane, .shot-editor { display: none; }
+    .storyboard-workspace { padding: 0; }
+    .shot-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .shot-inline-primary { grid-column: 2 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .generation-panel { display: none; }
+    .generation-panel .panel-header { position: sticky; top: 0; }
+    .project-component-badge { display: inline-flex; align-items: center; gap: 5px; color: var(--green); font: 9px var(--mono); }
+    .project-component-badge::before { content: "✓"; }
+    .control-tabs button { font-weight: 600; }
+    .control-tabs button::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; opacity: .55; }
+    .control-tabs button.active::before { color: var(--cyan); opacity: 1; }
+
+    @media (max-width: 1180px) {
+      .production-grid { grid-template-columns: minmax(0, 1fr) 310px; }
+      .asset-scroller { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .shot-list { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 1023px) {
+      .production-grid { grid-template-columns: 1fr; }
+      .flow-context { grid-template-columns: auto 1fr; }
+      .flow-context span:last-child { display: none; }
+    }
+    @media (max-width: 767px) {
+      .flow-context { padding: 10px 12px; }
+      .asset-scroller, .shot-list { padding: 8px; }
+      .asset-scroller { grid-template-columns: 1fr; }
+      .shot-inline-primary { grid-template-columns: 1fr; }
+    }
+
+    /* Iteration 6: layout only; the right workbench uses the project's episode-replica component styles. */
+    .workflow-composed-layout { grid-template-columns: minmax(0, 1fr); }
+    .workflow-composed-layout.workbench-open { grid-template-columns: minmax(0, 1fr) 430px; }
+    .center-stage { overflow-y: auto; }
+    .workflow-all-assets { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+    .generation-panel {
+      position: relative;
+      display: none;
+      min-width: 0;
+      overflow: hidden;
+      border-left: 1px solid var(--line);
+    }
+    .workflow-composed-layout.workbench-open .generation-panel { display: block; }
+    .workbench-close {
+      position: absolute;
+      top: 13px;
+      right: 12px;
+      z-index: 12;
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 1px solid var(--line-bright);
+      border-radius: 5px;
+      background: #11181d;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .workbench-close:hover { color: var(--text); background: #1a242a; }
+    .workbench-close svg { width: 16px; height: 16px; }
+    .generation-panel .episode-replica-stage-head { padding-right: 54px; }
+    .generation-panel > .episode-replica-center { width: 100%; height: 100%; }
+    .generation-panel .episode-replica-stage-head { min-height: 58px; }
+    .generation-panel .episode-replica-stage-body { min-height: 0; }
+    .generation-panel .episode-replica-prompt { min-height: 310px; }
+    .generation-panel [data-reference-kind][hidden],
+    .generation-panel [data-media][hidden] { display: none !important; }
+    .workflow-composed-layout .episode-replica-storyboard-grid {
+      min-height: 0;
+      padding-top: 0;
+    }
+    .workflow-composed-layout .episode-replica-shot-card {
+      height: 13.2rem;
+      min-height: 13.2rem;
+      max-height: 13.2rem;
+      overflow: hidden;
+    }
+    .workflow-composed-layout .episode-replica-shot-card-body {
+      grid-template-columns: minmax(6.2rem, .48fr) minmax(20rem, 1.65fr) minmax(7.4rem, .58fr);
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    .workflow-composed-layout .episode-replica-shot-card-column {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .workflow-composed-layout .episode-replica-shot-card .preview,
+    .workflow-composed-layout .episode-replica-shot-card .asset-preview {
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    .workflow-composed-layout .episode-replica-shot-preview-art img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      object-fit: cover;
+    }
+
+    @media (max-width: 1180px) {
+      .workflow-composed-layout.workbench-open { grid-template-columns: minmax(0, 1fr) 380px; }
+      .workflow-all-assets { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+      .shot-list { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+      .app-shell { height: auto; min-height: 100dvh; }
+      .workspace { min-height: calc(100dvh - var(--header-h)); }
+      .workflow-composed-layout,
+      .workflow-composed-layout.workbench-open { grid-template-columns: 1fr; }
+      .center-stage { overflow: visible; }
+      .generation-panel { min-height: 650px; border-top: 1px solid var(--line-bright); border-left: 0; }
+      .workflow-composed-layout .episode-replica-shot-card {
+        height: auto;
+        min-height: 0;
+        max-height: none;
+      }
+      .workflow-composed-layout .episode-replica-shot-card-body {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      .workflow-composed-layout .episode-replica-shot-card .preview,
+      .workflow-composed-layout .episode-replica-shot-card .asset-preview {
+        height: 10rem;
+      }
+    }
+    @media (max-width: 767px) {
+      .generation-panel { min-height: 590px; }
+      .topbar { grid-template-columns: minmax(0, 1fr) auto; }
+      .mode-switch { grid-row: 2; grid-column: 1 / -1; margin-bottom: 6px; }
+      .app-shell { --header-h: 104px; }
+      .quick-generate-trigger span { display: none; }
+      .quick-generate-trigger { width: 34px; padding: 0; }
+    }
+  </style>
+</head>
+<body class="workbench-body" data-workbench-theme="midnight">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">灵</span>
+        <div class="project-title">
+          <strong>雾港来信</strong><span>/ 第 01 集</span><span class="save-status">已自动保存</span>
+        </div>
+      </div>
+
+      <nav class="mode-switch" aria-label="创作模式">
+        <button type="button" data-mode="agent">Agent</button>
+        <button type="button" class="active" data-mode="workflow">工作流</button>
+        <button type="button" data-mode="free">自由生成</button>
+      </nav>
+
+      <div class="top-actions">
+        <span class="credit">预计 386 积分</span>
+        <div class="quick-generate">
+          <button class="button quick-generate-trigger" type="button" aria-haspopup="menu" aria-expanded="false" title="选择一键生成范围">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4zM18 14l.8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8z"/></svg><span>一键生成</span>
+          </button>
+          <div class="quick-generate-menu" role="menu" hidden>
+            <button type="button" role="menuitem" data-quick-generate="all">生成全部资产与分镜</button>
+            <button type="button" role="menuitem" data-quick-generate="assets">仅生成缺失资产</button>
+            <button type="button" role="menuitem" data-quick-generate="storyboards">仅生成缺失分镜</button>
+          </div>
+        </div>
+        <button class="button" type="button" data-action="open-canvas" title="进入画布">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="m8.2 7.2 7.4-.1M7.3 8.2l3.4 7.5m5.7-6.5-3 6.6"/></svg><span>进入画布</span>
+        </button>
+        <button class="icon-button" type="button" data-action="close" title="关闭工作流" aria-label="关闭工作流">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="stagebar" aria-label="工作流阶段">
+        <span></span>
+        <div class="stage-strip">
+          <div class="stage-item done"><span class="stage-dot">✓</span><span>剧本</span></div>
+          <div class="stage-item active"><span class="stage-dot">02</span><span>资产</span></div>
+          <div class="stage-item"><span class="stage-dot">03</span><span>分镜</span></div>
+          <div class="stage-item"><span class="stage-dot">04</span><span>生成</span></div>
+        </div>
+        <span></span>
+      </section>
+
+      <section class="production-grid workflow-composed-layout">
+        <aside class="script-panel" aria-label="剧本与章节">
+          <header class="panel-header">
+            <span class="eyebrow">Script source</span>
+            <div class="panel-title"><h2>剧本与章节</h2><span class="tiny-count">6 章</span></div>
+          </header>
+          <section class="source-card">
+            <strong>正式剧本已确认</strong>
+            <p>由小说原文生成，当前版本已用于拆解角色、场景、道具与分镜。</p>
+            <div class="source-file">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h5"/></svg>
+              <span>雾港来信_第1集.docx</span>
+            </div>
+          </section>
+          <nav class="chapter-list" aria-label="章节列表">
+            <small>CHAPTERS</small>
+            <button class="chapter-item active" type="button"><span class="chapter-no">01</span><span class="chapter-copy"><strong>码头的陌生来信</strong><small>2,816 字 · 12 镜</small></span><i class="chapter-state"></i></button>
+            <button class="chapter-item" type="button"><span class="chapter-no">02</span><span class="chapter-copy"><strong>旧钟楼的灯</strong><small>2,404 字 · 10 镜</small></span><i class="chapter-state"></i></button>
+            <button class="chapter-item" type="button"><span class="chapter-no">03</span><span class="chapter-copy"><strong>消失的守夜人</strong><small>2,930 字 · 13 镜</small></span><i class="chapter-state"></i></button>
+            <button class="chapter-item" type="button"><span class="chapter-no">04</span><span class="chapter-copy"><strong>潮声之下</strong><small>3,102 字 · 待解析</small></span><i class="chapter-state" style="background:var(--amber)"></i></button>
+            <button class="chapter-item" type="button"><span class="chapter-no">05</span><span class="chapter-copy"><strong>无名航线</strong><small>2,744 字 · 待解析</small></span><i class="chapter-state" style="background:var(--faint)"></i></button>
+          </nav>
+          <footer class="script-foot"><button class="button" type="button" data-action="parse">重新解析本章</button></footer>
+        </aside>
+
+        <section class="center-stage">
+          <header class="flow-context">
+            <span class="flow-context-mark">EP01</span>
+            <div><strong>码头的陌生来信</strong><p>剧本已确认 · 2,816 字 · 6 项资产 · 12 个分镜</p></div>
+            <span>ASSETS ↓ STORYBOARDS</span>
+          </header>
+          <section class="assets-section production-view" data-view-panel="assets" aria-label="资产制作">
+            <header class="assets-head">
+              <div class="panel-title"><div><span class="eyebrow">Asset production</span><h2>资产制作</h2></div><span class="tiny-count" id="asset-count">6 项 · 1 项生成中</span></div>
+              <div class="asset-toolbar">
+                <div class="filter-group" role="tablist" aria-label="资产类型">
+                  <button type="button" class="active" data-asset-filter="all">全部</button>
+                  <button type="button" data-asset-filter="character">角色</button>
+                  <button type="button" data-asset-filter="scene">场景</button>
+                  <button type="button" data-asset-filter="prop">道具</button>
+                </div>
+              </div>
+            </header>
+            <div class="asset-workspace">
+              <aside class="asset-browser">
+                <div class="episode-replica-asset-grid workflow-all-assets" id="asset-scroller">
+                  <article class="episode-replica-asset-card active" data-asset-card-id="asset-lin-che" data-asset-kind="character" data-name="林澈" data-prompt="27岁东方男性记者，短黑发，深色防水风衣，旧皮质相机包，雨夜冷青轮廓光，角色设定图，正面全身。" data-image="../../apps/web/assets/library/official/characters/2d-city-rider.png"><div class="episode-replica-asset-card-head"><div class="episode-replica-asset-title-row"><button class="pick" type="button" aria-label="选择素材"></button><label class="episode-replica-asset-select"><input class="episode-replica-asset-name-input name" type="text" value="林澈" maxlength="20" aria-label="素材标题" /></label></div><div class="episode-replica-asset-actions-row"><button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button">引入到对话框</button><span class="episode-replica-asset-hover-tools"><button type="button">+</button><button type="button">×</button></span></div></div><span class="label">角色固定</span><span class="label">角色描述</span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/characters/2d-city-rider.png" alt="角色林澈" /></span></span><label class="episode-replica-asset-desc-wrap"><textarea class="episode-replica-asset-desc-input" maxlength="2500" placeholder="可以编辑，点击框外后自动保存">27岁东方男性记者，短黑发，深色防水风衣，旧皮质相机包，雨夜冷青轮廓光，角色设定图，正面全身。</textarea></label><span class="count">48 / 2500</span></article>
+                  <article class="episode-replica-asset-card" data-asset-card-id="asset-shen-wu" data-asset-kind="character" data-name="沈雾" data-prompt="29岁东方女性海事研究员，银灰短发，浅灰机能外套，克制冷静，角色设定图，正面全身，干净背景。" data-image="../../apps/web/assets/library/official/characters/2d-city-girl.png"><div class="episode-replica-asset-card-head"><div class="episode-replica-asset-title-row"><button class="pick" type="button" aria-label="选择素材"></button><label class="episode-replica-asset-select"><input class="episode-replica-asset-name-input name" type="text" value="沈雾" maxlength="20" aria-label="素材标题" /></label></div><div class="episode-replica-asset-actions-row"><button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button">引入到对话框</button><span class="episode-replica-asset-hover-tools"><button type="button">+</button><button type="button">×</button></span></div></div><span class="label">角色固定</span><span class="label">角色描述</span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/characters/2d-city-girl.png" alt="角色沈雾" /></span></span><label class="episode-replica-asset-desc-wrap"><textarea class="episode-replica-asset-desc-input" maxlength="2500" placeholder="可以编辑，点击框外后自动保存">29岁东方女性海事研究员，银灰短发，浅灰机能外套，克制冷静，角色设定图，正面全身，干净背景。</textarea></label><span class="count">46 / 2500</span></article>
+                  <article class="episode-replica-asset-card" data-asset-card-id="asset-fog-port" data-asset-kind="scene" data-name="雾港码头" data-prompt="雨夜海港码头，老旧仓库群，冷青色港灯穿透浓雾，潮湿地面倒影，远处起重机剪影，悬疑电影氛围。" data-image="../../apps/web/assets/library/official/scenes/scene-3d-neon-street.png"><div class="episode-replica-asset-card-head"><div class="episode-replica-asset-title-row"><button class="pick" type="button" aria-label="选择素材"></button><label class="episode-replica-asset-select"><input class="episode-replica-asset-name-input name" type="text" value="雾港码头" maxlength="20" aria-label="素材标题" /></label></div><div class="episode-replica-asset-actions-row"><button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button">引入到对话框</button><span class="episode-replica-asset-hover-tools"><button type="button">+</button><button type="button">×</button></span></div></div><span class="label">场景固定</span><span class="label">场景描述</span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-3d-neon-street.png" alt="雾港码头场景" /></span></span><label class="episode-replica-asset-desc-wrap"><textarea class="episode-replica-asset-desc-input" maxlength="2500" placeholder="可以编辑，点击框外后自动保存">雨夜海港码头，老旧仓库群，冷青色港灯穿透浓雾，潮湿地面倒影，远处起重机剪影，悬疑电影氛围。</textarea></label><span class="count">45 / 2500</span></article>
+                  <article class="episode-replica-asset-card" data-asset-card-id="asset-clock-tower" data-asset-kind="scene" data-name="旧钟楼" data-prompt="废弃海港钟楼内部，狭窄木楼梯，巨大氧化铜钟，积尘值守室，窗外浓雾，微弱暖灯与冷月光交错。" data-image="../../apps/web/assets/library/official/scenes/scene-ancient-study.png"><div class="episode-replica-asset-card-head"><div class="episode-replica-asset-title-row"><button class="pick" type="button" aria-label="选择素材"></button><label class="episode-replica-asset-select"><input class="episode-replica-asset-name-input name" type="text" value="旧钟楼" maxlength="20" aria-label="素材标题" /></label></div><div class="episode-replica-asset-actions-row"><button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button">引入到对话框</button><span class="episode-replica-asset-hover-tools"><button type="button">+</button><button type="button">×</button></span></div></div><span class="label">场景固定</span><span class="label">场景描述</span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-ancient-study.png" alt="旧钟楼场景" /></span></span><label class="episode-replica-asset-desc-wrap"><textarea class="episode-replica-asset-desc-input" maxlength="2500" placeholder="可以编辑，点击框外后自动保存">废弃海港钟楼内部，狭窄木楼梯，巨大氧化铜钟，积尘值守室，窗外浓雾，微弱暖灯与冷月光交错。</textarea></label><span class="count">44 / 2500</span></article>
+                  <article class="episode-replica-asset-card" data-asset-card-id="asset-blue-letter" data-asset-kind="prop" data-name="蓝蜡封信" data-prompt="受潮旧信封特写，粗糙米色纸张，深蓝蜡封印，断帆纹章，水渍与盐晶，悬疑道具设定图。" data-image="../../apps/web/assets/library/official/scenes/scene-2d-store.png"><div class="episode-replica-asset-card-head"><div class="episode-replica-asset-title-row"><button class="pick" type="button" aria-label="选择素材"></button><label class="episode-replica-asset-select"><input class="episode-replica-asset-name-input name" type="text" value="蓝蜡封信" maxlength="20" aria-label="素材标题" /></label></div><div class="episode-replica-asset-actions-row"><button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button">引入到对话框</button><span class="episode-replica-asset-hover-tools"><button type="button">+</button><button type="button">×</button></span></div></div><span class="label">道具固定</span><span class="label">道具描述</span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-2d-store.png" alt="蓝蜡封信道具" /></span></span><label class="episode-replica-asset-desc-wrap"><textarea class="episode-replica-asset-desc-input" maxlength="2500" placeholder="可以编辑，点击框外后自动保存">受潮旧信封特写，粗糙米色纸张，深蓝蜡封印，断帆纹章，水渍与盐晶，悬疑道具设定图。</textarea></label><span class="count">40 / 2500</span></article>
+                  <article class="episode-replica-asset-card" data-asset-card-id="asset-brass-key" data-asset-kind="prop" data-name="黄铜钥匙" data-prompt="旧黄铜钥匙单体设定图，铜绿和盐渍，粗糙锻造纹理，钥匙柄刻有编号17，深色中性背景。" data-image="../../apps/web/assets/library/official/scenes/scene-3d-alchemy.png"><div class="episode-replica-asset-card-head"><div class="episode-replica-asset-title-row"><button class="pick" type="button" aria-label="选择素材"></button><label class="episode-replica-asset-select"><input class="episode-replica-asset-name-input name" type="text" value="黄铜钥匙" maxlength="20" aria-label="素材标题" /></label></div><div class="episode-replica-asset-actions-row"><button class="episode-replica-shot-dialog-import episode-replica-asset-dialog-import" type="button">引入到对话框</button><span class="episode-replica-asset-hover-tools"><button type="button">+</button><button type="button">×</button></span></div></div><span class="label">道具固定</span><span class="label">道具描述</span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-3d-alchemy.png" alt="黄铜钥匙道具" /></span></span><label class="episode-replica-asset-desc-wrap"><textarea class="episode-replica-asset-desc-input" maxlength="2500" placeholder="可以编辑，点击框外后自动保存">旧黄铜钥匙单体设定图，铜绿和盐渍，粗糙锻造纹理，钥匙柄刻有编号17，深色中性背景。</textarea></label><span class="count">42 / 2500</span></article>
+                  <button class="episode-replica-asset-empty" type="button" data-action="add-asset"><span class="episode-replica-asset-empty-icon" aria-hidden="true">+</span><span>新增素材</span></button>
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          <section class="storyboard-section production-view" data-view-panel="storyboards" aria-label="分镜制作">
+            <header class="storyboard-head">
+              <div class="storyboard-title"><h2>分镜制作</h2><span>第 01 章 · 12 镜 · 预计 01:24</span></div>
+              <div class="asset-toolbar"><button class="button" type="button" data-action="generate-storyboards">批量生成缺失分镜图</button></div>
+            </header>
+            <div class="storyboard-workspace">
+              <div class="episode-replica-storyboard-grid" id="shot-list">
+                <article class="episode-replica-shot-shell active" data-shot="01" data-image="../../apps/web/assets/library/official/scenes/scene-3d-neon-street.png"><div class="episode-replica-shot-card active" data-storyboard-id="shot-01"><button class="pick" type="button" aria-label="选择分镜"></button><span class="episode-replica-shot-card-head"><strong class="title">分镜 1: 雨夜码头</strong><button class="episode-replica-shot-dialog-import" type="button">引入到对话框</button><span class="episode-replica-shot-status-badge">视频生成中</span></span><span class="episode-replica-shot-card-body operation-board-mode"><span class="episode-replica-shot-card-column preview-column"><span class="episode-replica-shot-preview-head"><span class="preview-title">定稿视频</span></span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-3d-neon-street.png" alt="第01镜" /></span></span></span><span class="episode-replica-shot-card-column copy"><label class="episode-replica-shot-desc-wrap"><textarea class="episode-replica-shot-desc-input" data-storyboard-id="shot-01">镜头从湿润地面的灯光倒影缓慢抬升，林澈拆开蓝蜡封信，远处汽笛响起，浓雾横穿画面。</textarea></label><span class="count">47 / 3000</span></span><span class="episode-replica-shot-card-column assets"><span class="meta">角色 / 场景 / 道具</span><span class="asset-preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/characters/2d-city-rider.png" alt="林澈" /><img src="../../apps/web/assets/library/official/scenes/scene-2d-store.png" alt="蓝蜡封信" /></span></span></span></span></div><div class="episode-replica-shot-hover-tools"><button class="episode-replica-shot-add" type="button">+</button><button class="episode-replica-shot-delete" type="button">×</button></div></article>
+                <article class="episode-replica-shot-shell" data-shot="02" data-image="../../apps/web/assets/library/official/scenes/scene-ancient-study.png"><div class="episode-replica-shot-card" data-storyboard-id="shot-02"><button class="pick" type="button" aria-label="选择分镜"></button><span class="episode-replica-shot-card-head"><strong class="title">分镜 2: 盐渍地图</strong><button class="episode-replica-shot-dialog-import" type="button">引入到对话框</button><span class="episode-replica-shot-status-badge">待生成</span></span><span class="episode-replica-shot-card-body operation-board-mode"><span class="episode-replica-shot-card-column preview-column"><span class="episode-replica-shot-preview-head"><span class="preview-title">定稿视频</span></span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-ancient-study.png" alt="第02镜" /></span></span></span><span class="episode-replica-shot-card-column copy"><label class="episode-replica-shot-desc-wrap"><textarea class="episode-replica-shot-desc-input" data-storyboard-id="shot-02">俯拍信纸，手电光沿盐渍地图移动，画面缓慢推近旧钟楼标记，纸角被海风吹动。</textarea></label><span class="count">38 / 3000</span></span><span class="episode-replica-shot-card-column assets"><span class="meta">角色 / 场景 / 道具</span><span class="asset-preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-ancient-study.png" alt="旧钟楼" /></span></span></span></span></div><div class="episode-replica-shot-hover-tools"><button class="episode-replica-shot-add" type="button">+</button><button class="episode-replica-shot-delete" type="button">×</button></div></article>
+                <article class="episode-replica-shot-shell" data-shot="03" data-image="../../apps/web/assets/library/official/scenes/scene-3d-cloud-office.png"><div class="episode-replica-shot-card" data-storyboard-id="shot-03"><button class="pick" type="button" aria-label="选择分镜"></button><span class="episode-replica-shot-card-head"><strong class="title">分镜 3: 档案室对峙</strong><button class="episode-replica-shot-dialog-import" type="button">引入到对话框</button><span class="episode-replica-shot-status-badge">分镜图生成中</span></span><span class="episode-replica-shot-card-body operation-board-mode"><span class="episode-replica-shot-card-column preview-column"><span class="episode-replica-shot-preview-head"><span class="preview-title">定稿视频</span></span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-3d-cloud-office.png" alt="第03镜" /></span></span></span><span class="episode-replica-shot-card-column copy"><label class="episode-replica-shot-desc-wrap"><textarea class="episode-replica-shot-desc-input" data-storyboard-id="shot-03">镜头沿档案架横移，沈雾从阴影中进入画面，林澈迅速回头，两人在冷光下对峙。</textarea></label><span class="count">37 / 3000</span></span><span class="episode-replica-shot-card-column assets"><span class="meta">角色 / 场景 / 道具</span><span class="asset-preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/characters/2d-city-girl.png" alt="沈雾" /></span></span></span></span></div><div class="episode-replica-shot-hover-tools"><button class="episode-replica-shot-add" type="button">+</button><button class="episode-replica-shot-delete" type="button">×</button></div></article>
+                <article class="episode-replica-shot-shell" data-shot="04" data-image="../../apps/web/assets/library/official/scenes/scene-3d-cave.png"><div class="episode-replica-shot-card" data-storyboard-id="shot-04"><button class="pick" type="button" aria-label="选择分镜"></button><span class="episode-replica-shot-card-head"><strong class="title">分镜 4: 钟楼铁门</strong><button class="episode-replica-shot-dialog-import" type="button">引入到对话框</button><span class="episode-replica-shot-status-badge">需重试</span></span><span class="episode-replica-shot-card-body operation-board-mode"><span class="episode-replica-shot-card-column preview-column"><span class="episode-replica-shot-preview-head"><span class="preview-title">定稿视频</span></span><span class="preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-3d-cave.png" alt="第04镜" /></span></span></span><span class="episode-replica-shot-card-column copy"><label class="episode-replica-shot-desc-wrap"><textarea class="episode-replica-shot-desc-input" data-storyboard-id="shot-04">低机位跟随两人走向铁门，黄铜钥匙插入锁孔并转动，镜头停顿，楼上传来脚步与木板吱响。</textarea></label><span class="count">43 / 3000</span></span><span class="episode-replica-shot-card-column assets"><span class="meta">角色 / 场景 / 道具</span><span class="asset-preview"><span class="episode-replica-shot-preview-art"><img src="../../apps/web/assets/library/official/scenes/scene-3d-alchemy.png" alt="黄铜钥匙" /></span></span></span></span></div><div class="episode-replica-shot-hover-tools"><button class="episode-replica-shot-add" type="button">+</button><button class="episode-replica-shot-delete" type="button">×</button></div></article>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside class="generation-panel" aria-label="项目现有生成工作台挂载区域">
+          <button class="workbench-close" type="button" aria-label="关闭生成工作台" title="关闭生成工作台"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+          <section class="episode-replica-center image-mode asset-scope has-generated-stage">
+            <div class="episode-replica-stage-head">
+              <div class="episode-replica-stage-tabs">
+                <button class="episode-replica-stage-tab active" type="button" data-media="image">做图片</button>
+                <button class="episode-replica-stage-tab active" type="button" data-media="video" hidden>做视频</button>
+              </div>
+              <p class="episode-replica-stage-title" id="workbench-title">角色林澈</p>
+            </div>
+            <div class="episode-replica-stage-body">
+              <div class="episode-replica-generated-stage visible asset-scope">
+                <div class="episode-replica-asset-conversation-list">
+                  <section class="episode-replica-asset-conversation-entry">
+                    <div class="episode-replica-message-thread">
+                      <div class="episode-replica-message-row user"><article class="episode-replica-user-message generation-record"><span class="episode-replica-message-badge">用户</span><div class="episode-replica-user-message-copy" id="result-meta">图片生成 · 即梦 4.5 · 已完成</div></article></div>
+                    </div>
+                    <div class="episode-replica-fixed-results">
+                      <article class="episode-replica-fixed-image-card" id="image-result-card"><span class="episode-replica-fixed-image-badge">图片</span><button class="episode-replica-fixed-image-preview" type="button" aria-label="放大查看生成图片"><img id="result-image" src="../../apps/web/assets/library/official/characters/2d-city-rider.png" alt="当前生成图片" /></button></article>
+                      <article class="episode-replica-fixed-video-card" id="video-result-card" hidden><span class="episode-replica-fixed-image-badge">视频</span><video controls muted preload="none" poster="../../apps/web/assets/library/official/scenes/scene-3d-neon-street.png"></video></article>
+                      <div class="episode-replica-fixed-actions"><button type="button">重新编辑</button><button type="button">下载</button><button type="button">删除</button></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+            <section class="episode-replica-prompt image-mode asset-scope" aria-label="项目现有 Prompt Dock">
+              <div class="episode-replica-textarea has-inline-attachments">
+                <div class="episode-replica-ref-strip inline-upload-tray" id="reference-dock">
+                  <label class="episode-replica-upload-card combined uploadable" data-reference-kind="image"><span>+</span><strong>图片</strong><input type="file" accept="image/*" multiple hidden data-upload-kind="image" /></label>
+                  <label class="episode-replica-upload-card combined uploadable" data-reference-kind="video" hidden><span>+</span><strong>视频</strong><input type="file" accept="video/*" hidden data-upload-kind="video" /></label>
+                  <label class="episode-replica-upload-card combined uploadable" data-reference-kind="audio" hidden><span>+</span><strong>音频</strong><input type="file" accept="audio/*" hidden data-upload-kind="audio" /></label>
+                </div>
+                <div class="episode-prompt-editor-host" data-prompt-editor><textarea id="prompt-editor" placeholder="请输入您的生图要求，输入 @ 引用素材"></textarea></div>
+                <em data-prompt-character-count>0 / 5000</em>
+              </div>
+              <div class="episode-replica-prompt-footer">
+                <div class="episode-replica-prompt-selects"><button class="episode-replica-control" id="model-select" type="button">即梦 4.5 · 3 积分</button><button class="episode-replica-control" id="generation-mode" type="button">新增图片</button><button class="episode-replica-control" type="button">动画</button></div>
+                <button class="episode-replica-generate generate-button" type="button" data-action="generate-selected"><span class="episode-replica-generate-label">生成</span></button>
+              </div>
+              <p class="episode-replica-validation"></p>
+            </section>
+          </section>
+        </aside>
+
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" role="status" aria-live="polite"></div>
+  <a class="deerflow-mark" href="https://deerflow.tech" target="_blank" rel="noreferrer">Created By Deerflow</a>
+
+  <script>
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+    const toast = $(".toast");
+    let toastTimer;
+    let saveTimer;
+    let activeContext = "asset";
+
+    let activeAssetCard = $(".episode-replica-asset-card");
+    let activeShotRow = $(".episode-replica-shot-shell");
+
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
+    }
+
+    function markSaving() {
+      const localStatus = $(".editor-status");
+      const globalStatus = $(".save-status");
+      if (localStatus) localStatus.textContent = "保存中…";
+      globalStatus.textContent = "保存中…";
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        if (localStatus) localStatus.textContent = "已保存";
+        globalStatus.textContent = "已自动保存";
+      }, 420);
+    }
+
+    function setConsole() {
+      const isImage = activeContext === "asset";
+      const mediaMode = isImage ? "image" : "video";
+      const workbench = $(".episode-replica-center");
+      const promptDock = $(".episode-replica-prompt");
+      $('[data-media="image"]').hidden = !isImage;
+      $('[data-media="video"]').hidden = isImage;
+      $$('[data-media]').forEach((button) => button.classList.toggle("active", button.dataset.media === mediaMode));
+      workbench.classList.toggle("image-mode", isImage);
+      workbench.classList.toggle("video-mode", !isImage);
+      workbench.classList.toggle("asset-scope", isImage);
+      workbench.classList.toggle("storyboard-scope", !isImage);
+      promptDock.classList.toggle("image-mode", isImage);
+      promptDock.classList.toggle("video-mode", !isImage);
+      promptDock.classList.toggle("asset-scope", isImage);
+      promptDock.classList.toggle("storyboard-scope", !isImage);
+      $("#generation-mode").textContent = isImage ? "新增图片" : "参考生视频";
+      $("#model-select").textContent = isImage ? "即梦 4.5 · 3 积分" : "Vidu Q3-Pro · 68 积分";
+      $('[data-reference-kind="image"]').hidden = false;
+      $('[data-reference-kind="video"]').hidden = isImage;
+      $('[data-reference-kind="audio"]').hidden = isImage;
+      $("#image-result-card").hidden = !isImage;
+      $("#video-result-card").hidden = isImage;
+
+      if (isImage) {
+        $("#workbench-title").textContent = `${resolveAssetType(activeAssetCard.dataset.assetKind)}${activeAssetCard.dataset.name}`;
+        $("#prompt-editor").value = activeAssetCard.dataset.prompt;
+        $("#result-meta").textContent = "图片生成 · 即梦 4.5 · 已完成";
+        $("#result-image").src = activeAssetCard.dataset.image;
+        $(".episode-replica-generate-label").textContent = "生成";
+      } else {
+        const shotNo = activeShotRow.dataset.shot;
+        $("#workbench-title").textContent = `分镜：第 ${shotNo} 镜`;
+        $("#prompt-editor").value = $(".episode-replica-shot-desc-input", activeShotRow).value;
+        $("#result-meta").textContent = "视频生成 · Vidu Q3-Pro · 生成中";
+        $("#video-result-card video").poster = activeShotRow.dataset.image;
+        $(".episode-replica-generate-label").textContent = "生成";
+      }
+      $('[data-prompt-character-count]').textContent = `${[...$("#prompt-editor").value].length} / 5000`;
+    }
+
+    function resolveAssetType(type) {
+      return ({ character: "角色", scene: "场景", prop: "道具" })[type] || "资产";
+    }
+
+    function openWorkbench() {
+      $(".workflow-composed-layout").classList.add("workbench-open");
+      $(".generation-panel").setAttribute("aria-hidden", "false");
+    }
+
+    function closeWorkbench() {
+      $(".workflow-composed-layout").classList.remove("workbench-open");
+      $(".generation-panel").setAttribute("aria-hidden", "true");
+      $$(".episode-replica-asset-card, .episode-replica-shot-shell, .episode-replica-shot-card").forEach((item) => item.classList.remove("active"));
+    }
+
+    function selectAsset(card) {
+      activeAssetCard = card;
+      $$(".episode-replica-asset-card").forEach((item) => item.classList.toggle("active", item === card));
+      $$(".episode-replica-shot-shell").forEach((item) => {
+        item.classList.remove("active");
+        $(".episode-replica-shot-card", item).classList.remove("active");
+      });
+      activeContext = "asset";
+      setConsole();
+      openWorkbench();
+    }
+
+    function selectShot(row) {
+      activeShotRow = row;
+      $$(".episode-replica-shot-shell").forEach((item) => {
+        const active = item === row;
+        item.classList.toggle("active", active);
+        $(".episode-replica-shot-card", item).classList.toggle("active", active);
+      });
+      $$(".episode-replica-asset-card").forEach((item) => item.classList.remove("active"));
+      activeContext = "storyboard";
+      setConsole();
+      openWorkbench();
+    }
+
+    $$(".mode-switch button").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.mode !== "workflow") {
+          showToast(`${button.textContent.trim()} 模式将在正式版本中切换对应创作界面；当前原型聚焦工作流页面。`);
+          return;
+        }
+        $$(".mode-switch button").forEach((item) => item.classList.toggle("active", item === button));
+      });
+    });
+
+    $$('[data-asset-filter]').forEach((button) => {
+      button.addEventListener("click", () => {
+        const filter = button.dataset.assetFilter;
+        $$('[data-asset-filter]').forEach((item) => item.classList.toggle("active", item === button));
+        $$(".episode-replica-asset-card").forEach((card) => {
+          card.hidden = !["all", card.dataset.assetKind].includes(filter);
+        });
+        const visible = $$(".episode-replica-asset-card").filter((card) => !card.hidden).length;
+        $("#asset-count").textContent = `${visible} 项 · 1 项生成中`;
+      });
+    });
+
+    $$(".episode-replica-asset-card").forEach((card) => card.addEventListener("click", () => selectAsset(card)));
+    $$(".episode-replica-asset-name-input, .episode-replica-asset-desc-input").forEach((input) => {
+      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("focus", () => selectAsset(input.closest(".episode-replica-asset-card")));
+      input.addEventListener("input", () => {
+        const card = input.closest(".episode-replica-asset-card");
+        if (input.classList.contains("episode-replica-asset-name-input")) {
+          card.dataset.name = input.value;
+          if (card === activeAssetCard) $("#workbench-title").textContent = `${resolveAssetType(card.dataset.assetKind)}${input.value}`;
+        } else {
+          card.dataset.prompt = input.value;
+          $(".count", card).textContent = `${[...input.value].length} / 2500`;
+          if (card === activeAssetCard) {
+            $("#prompt-editor").value = input.value;
+            $('[data-prompt-character-count]').textContent = `${[...input.value].length} / 5000`;
+          }
+        }
+        markSaving();
+      });
+    });
+    $$(".episode-replica-shot-shell").forEach((row) => {
+      row.addEventListener("click", () => selectShot(row));
+      row.addEventListener("keydown", (event) => {
+        if (["Enter", " "].includes(event.key) && !event.target.matches("input, textarea, select, button")) {
+          event.preventDefault();
+          selectShot(row);
+        }
+      });
+    });
+
+    $$(".episode-replica-shot-desc-input").forEach((textarea) => {
+      textarea.addEventListener("click", (event) => event.stopPropagation());
+      textarea.addEventListener("focus", () => selectShot(textarea.closest(".episode-replica-shot-shell")));
+      textarea.addEventListener("input", () => {
+        const row = textarea.closest(".episode-replica-shot-shell");
+        $(".count", row).textContent = `${[...textarea.value].length} / 3000`;
+        if (row === activeShotRow) {
+          $("#prompt-editor").value = textarea.value;
+          $('[data-prompt-character-count]').textContent = `${[...textarea.value].length} / 5000`;
+        }
+        markSaving();
+      });
+    });
+
+    $("#prompt-editor")?.addEventListener("input", () => {
+      const value = $("#prompt-editor").value;
+      $('[data-prompt-character-count]').textContent = `${[...value].length} / 5000`;
+      if (activeContext === "storyboard") {
+        const textarea = $(".episode-replica-shot-desc-input", activeShotRow);
+        textarea.value = value;
+        $(".count", activeShotRow).textContent = `${[...value].length} / 3000`;
+      } else {
+        activeAssetCard.dataset.prompt = value;
+        const promptField = $(".episode-replica-asset-desc-input", activeAssetCard);
+        if (promptField && promptField !== document.activeElement) promptField.value = value;
+        $(".count", activeAssetCard).textContent = `${[...value].length} / 2500`;
+      }
+      markSaving();
+    });
+
+    $$('[data-media]').forEach((button) => button.addEventListener("click", () => {
+      showToast(activeContext === "asset" ? "资产使用项目图片生成栏。" : "分镜使用项目视频生成栏。");
+    }));
+
+    $(".workbench-close")?.addEventListener("click", closeWorkbench);
+
+    const quickGenerateTrigger = $(".quick-generate-trigger");
+    const quickGenerateMenu = $(".quick-generate-menu");
+    function closeQuickGenerateMenu() {
+      quickGenerateMenu.hidden = true;
+      quickGenerateTrigger.setAttribute("aria-expanded", "false");
+    }
+    quickGenerateTrigger?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const willOpen = quickGenerateMenu.hidden;
+      quickGenerateMenu.hidden = !willOpen;
+      quickGenerateTrigger.setAttribute("aria-expanded", String(willOpen));
+    });
+    $$('[data-quick-generate]').forEach((button) => button.addEventListener("click", () => {
+      const label = ({ all: "全部资产与分镜", assets: "缺失资产", storyboards: "缺失分镜" })[button.dataset.quickGenerate];
+      closeQuickGenerateMenu();
+      showToast(`已提交${label}的一键生成任务。`);
+    }));
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".quick-generate")) closeQuickGenerateMenu();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeQuickGenerateMenu();
+        if ($(".workflow-composed-layout").classList.contains("workbench-open")) closeWorkbench();
+      }
+    });
+
+    $$('[data-upload-kind]').forEach((input) => {
+      input.addEventListener("change", () => {
+        const kind = input.dataset.uploadKind;
+        const list = $("#reference-dock");
+        const files = [...input.files];
+        const current = $$(".upload-preview", list);
+        const limit = kind === "image" ? 10 : 1;
+        if (kind !== "image") current.forEach((preview) => preview.querySelector(".remove-upload").click());
+        const available = limit - $$(".upload-preview", list).length;
+        files.slice(0, available).forEach((file) => {
+          const url = URL.createObjectURL(file);
+          const preview = document.createElement("div");
+          preview.className = "episode-replica-ref-card attachment upload-preview";
+          if (kind === "image") {
+            const media = document.createElement("img");
+            media.src = url;
+            media.alt = file.name;
+            preview.append(media);
+          } else if (kind === "video") {
+            const media = document.createElement("video");
+            media.src = url;
+            media.muted = true;
+            preview.append(media);
+          } else {
+            const copy = document.createElement("span");
+            copy.className = "file-preview";
+            const name = document.createElement("strong");
+            const type = document.createElement("small");
+            name.textContent = file.name;
+            type.textContent = file.type || "音频文件";
+            copy.append(name, type);
+            preview.append(copy);
+          }
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "remove-upload";
+          remove.setAttribute("aria-label", `移除${file.name}`);
+          remove.textContent = "×";
+          remove.addEventListener("click", () => {
+            URL.revokeObjectURL(url);
+            preview.remove();
+          });
+          preview.append(remove);
+          list.append(preview);
+        });
+        if (files.length > available) showToast(`${kind === "image" ? "参考图片" : "参考素材"}最多添加 ${limit} 个。`);
+        else if (files.length) showToast(`已添加${kind === "image" ? "参考图片" : kind === "video" ? "参考视频" : "参考音频"}。`);
+        input.value = "";
+      });
+    });
+
+    $(".switch")?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      button.classList.toggle("on");
+      button.setAttribute("aria-pressed", String(button.classList.contains("on")));
+    });
+
+    $("[data-action='generate-selected']")?.addEventListener("click", () => {
+      showToast("已提交，可到任务中心查看进度。");
+    });
+
+    $$('[data-action]').forEach((button) => {
+      if (button.dataset.action === "generate-selected") return;
+      button.addEventListener("click", () => {
+        const messages = {
+          "open-canvas": "正式版本将在当前项目画布中打开同一批资产与分镜节点。",
+          close: "原型未关闭页面；正式版本会保存当前编辑内容。",
+          parse: "重新解析前将展示资产和分镜差异，不会删除已有媒体版本。",
+          "generate-assets": "将只提交缺失或失败的资产，并先展示积分预估。",
+          "generate-storyboards": "将批量提交缺失分镜图，已完成镜头不会重复生成。",
+          "edit-shots": "分镜动态提示词可直接编辑。",
+          "task-center": "正式版本将打开全局任务中心，并默认筛选当前项目。",
+          "add-asset": "正式版本将创建真实画布资产节点，不在工作流中保存副本。"
+        };
+        showToast(messages[button.dataset.action] || "该操作将在正式版本中接入现有业务能力。");
+      });
+    });
+
+    closeWorkbench();
+  </script>
+</body>
+</html>
+

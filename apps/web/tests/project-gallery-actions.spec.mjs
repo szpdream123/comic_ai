@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  deriveInitialNavTabForTest,
   handleWorkbenchActionForTest,
+  homeAgentPromptTextForSubmissionForTest,
   initProductionWorkbench,
   refreshProductionWorkbenchForTest,
   restoreWorkbenchRouteFromLocationForTest,
   syncCanvasProjectsFromApiForTest,
+  syncCanvasRouteStateForTest,
+  syncHomeProjectLibraryFromApiForTest,
+  syncHomeRecommendationsFromApiForTest,
   syncWorkbenchHashRouteForTest,
+  syncWorkbenchRouteStateForTest,
 } from "../src/features/production-workbench/index.js";
 
 function createProjectLibrary(count) {
@@ -188,6 +195,47 @@ test("project delete closes immediately after api success without waiting for li
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(assetLibraryCalls, 0);
+});
+
+test("project delete refreshes recent home projects to fill the removed card", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.homeRecentProjects = createProjectLibrary(8);
+  workbench.ui.homeProjectTotal = 9;
+  workbench.ui.projectLibraryPagination = { page: 1, pageSize: 18, total: 24, totalPages: 2 };
+  workbench.api.deleteProject = async () => ({ deleted: true, projectId: "project-1" });
+  workbench.api.getProjects = async ({ pageSize }) => {
+    if (pageSize === 8) {
+      return {
+        projects: createProjectLibrary(8).map((project, index) => ({
+          ...project,
+          id: `project-${index + 2}`,
+          name: `项目 ${index + 2}`,
+        })),
+        pagination: { page: 1, pageSize: 8, total: 8, totalPages: 1 },
+      };
+    }
+    return {
+      projects: createProjectLibrary(18).map((project, index) => ({
+        ...project,
+        id: `project-${index + 2}`,
+      })),
+      pagination: { page: 1, pageSize: 18, total: 23, totalPages: 2 },
+    };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-project-card", projectId: "project-1" },
+  });
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-project-card" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    workbench.ui.homeRecentProjects.map((project) => project.id),
+    ["project-2", "project-3", "project-4", "project-5", "project-6", "project-7", "project-8", "project-9"],
+  );
+  assert.equal(workbench.ui.homeProjectTotal, 8);
 });
 
 test("project delete failure restores an interactive modal without removing the card", async () => {
@@ -384,6 +432,108 @@ test("opening a project panel does not show a success toast", async () => {
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast success/);
   assert.doesNotMatch(workbench.root.innerHTML, /修改项目制作状态/);
   assert.doesNotMatch(workbench.root.innerHTML, /data-action="toggle-project-interior-status-menu"/);
+});
+
+test("opening a home project workflow renders its project assets and episode storyboards", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const calls = [];
+  globalThis.window = { location: { hash: "#/home" } };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.selectedProjectCardId = null;
+  workbench.ui.projectLibrary = [
+    { id: "project-1", name: "带数据项目", status: "进行中", createdAt: "2026/06/03" },
+  ];
+  workbench.api.selectProject = async ({ projectId }) => ({
+    project: { id: projectId, name: "带数据项目", phase: "shot_generation", aspectRatio: "9:16" },
+    episodes: [],
+    assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+    shots: [],
+  });
+  workbench.api.getAssetLibrary = async (projectId) => {
+    calls.push(["assets", projectId]);
+    return {
+      assets: [{
+        id: "asset-character-1",
+        assetType: "character_sheet",
+        label: "项目角色资产-小岚",
+        previewUrl: "http://127.0.0.1:4310/uploads/project-character.png",
+      }],
+    };
+  };
+  workbench.api.getProjectEpisodes = async (projectId) => {
+    calls.push(["episodes", projectId]);
+    return { episodes: [{ id: "episode-1", title: "第一集", sequence: 1, storyboardCount: 1 }] };
+  };
+  workbench.api.getEpisodeWorkbench = async (episodeId) => {
+    calls.push(["workbench", episodeId]);
+    return {
+      data: {
+        episode: { id: episodeId, projectId: "project-1", title: "第一集" },
+        project: { projectId: "project-1", name: "带数据项目" },
+        assetsByType: { character: [], scene: [], prop: [] },
+      },
+    };
+  };
+  workbench.api.listEpisodeAssets = async (episodeId) => {
+    calls.push(["episode-assets", episodeId]);
+    return {
+      items: [{
+        assetId: "episode-asset-1",
+        assetType: "role",
+        name: "小岚",
+        description: "项目角色资产-小岚",
+      }],
+    };
+  };
+  workbench.api.listStoryboards = async (episodeId) => {
+    calls.push(["storyboards", episodeId]);
+    return {
+      items: [{
+        id: "storyboard-1",
+        episodeId,
+        indexNo: 1,
+        title: "分镜 1",
+        sceneAnalysis: "项目分镜-小岚推开门",
+        videoPrompt: "项目分镜-小岚推开门",
+      }],
+      page: 1,
+      pageSize: 10,
+      total: 1,
+      totalPages: 1,
+      hasNext: false,
+    };
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-project-detail", projectId: "project-1" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.activeNavTab, "project");
+  assert.equal(workbench.ui.projectPanelMode, "episode-workbench");
+  assert.equal(workbench.ui.homeWorkflowOrigin, true);
+  assert.equal(workbench.ui.episodeWorkbenchLayout, "workflow");
+  assert.equal(workbench.ui.selectedEpisodeId, "episode-1");
+  assert.equal(workbench.ui.museScopeMode, "storyboard");
+  assert.equal(workbench.ui.episodeMediaMode, "video");
+  assert.equal(workbench.ui.selectedStoryboardId, "storyboard-1");
+  assert.equal(workbench.ui.workflowGenerationWorkbenchOpen, true);
+  assert.deepEqual(calls.slice(0, 2), [
+    ["assets", "project-1"],
+    ["episodes", "project-1"],
+  ]);
+  assert.deepEqual(calls.slice(2).sort((left, right) => left[0].localeCompare(right[0])), [
+    ["storyboards", "episode-1"],
+    ["workbench", "episode-1"],
+  ]);
+  assert.match(workbench.root.innerHTML, /项目角色资产-小岚/);
+  assert.match(workbench.root.innerHTML, /项目分镜-小岚推开门/);
+  assert.doesNotMatch(workbench.root.innerHTML, /当前剧集还没有分镜/);
 });
 
 test("project detail hash keeps the panel on overview", () => {
@@ -594,6 +744,816 @@ test("project gallery refresh does not block on non-gallery startup requests", a
     calls.filter((call) => !["session", "projects", "project-styles", "packages"].includes(call)),
     [],
   );
+});
+
+test("home recent projects refresh is isolated from the project gallery state", async () => {
+  const workbench = createWorkbench();
+  const projectLibrary = workbench.ui.projectLibrary;
+  workbench.ui.projectLibraryPagination = { page: 2, pageSize: 18, total: 24, totalPages: 2 };
+  workbench.ui.projectLibraryPage = 2;
+  workbench.ui.projectSearchQuery = "保留搜索";
+  workbench.ui.selectedProjectCardId = "project-20";
+  workbench.ui.homeRecentProjects = [];
+  workbench.ui.homeProjectTotal = 0;
+  workbench.ui.homeProjectsLoading = false;
+  workbench.api.getProjects = async (input) => {
+    assert.deepEqual(input, { page: 1, pageSize: 8, keyword: "" });
+    return {
+      projects: createProjectLibrary(8).map((project, index) => ({
+        ...project,
+        id: `recent-${index + 1}`,
+      })),
+      pagination: { page: 1, pageSize: 8, total: 37, totalPages: 5 },
+    };
+  };
+
+  const refreshing = syncHomeProjectLibraryFromApiForTest(workbench);
+  assert.equal(workbench.ui.homeProjectsLoading, true);
+  assert.equal(await refreshing, true);
+
+  assert.equal(workbench.ui.homeProjectsLoading, false);
+  assert.equal(workbench.ui.homeRecentProjects.length, 8);
+  assert.equal(workbench.ui.homeProjectTotal, 37);
+  assert.equal(workbench.ui.projectLibrary, projectLibrary);
+  assert.deepEqual(workbench.ui.projectLibraryPagination, { page: 2, pageSize: 18, total: 24, totalPages: 2 });
+  assert.equal(workbench.ui.projectLibraryPage, 2);
+  assert.equal(workbench.ui.projectSearchQuery, "保留搜索");
+  assert.equal(workbench.ui.selectedProjectCardId, "project-20");
+});
+
+test("stale home recent projects response cannot replace the latest response", async () => {
+  const workbench = createWorkbench();
+  const olderRequest = createDeferred();
+  const newerRequest = createDeferred();
+  let requestCount = 0;
+  workbench.ui.homeRecentProjects = [];
+  workbench.ui.homeProjectTotal = 0;
+  workbench.ui.homeProjectsLoading = false;
+  workbench.api.getProjects = (input) => {
+    assert.deepEqual(input, { page: 1, pageSize: 8, keyword: "" });
+    requestCount += 1;
+    return requestCount === 1 ? olderRequest.promise : newerRequest.promise;
+  };
+
+  const olderRefresh = syncHomeProjectLibraryFromApiForTest(workbench);
+  const newerRefresh = syncHomeProjectLibraryFromApiForTest(workbench);
+  newerRequest.resolve({
+    projects: [{ id: "newest-project", name: "最新项目", createdAt: "2026-08-12T12:00:00.000Z" }],
+    pagination: { page: 1, pageSize: 8, total: 1, totalPages: 1 },
+  });
+  assert.equal(await newerRefresh, true);
+  olderRequest.resolve({
+    projects: [{ id: "stale-project", name: "旧项目", createdAt: "2026-08-11T12:00:00.000Z" }],
+    pagination: { page: 1, pageSize: 8, total: 99, totalPages: 13 },
+  });
+  assert.equal(await olderRefresh, false);
+
+  assert.deepEqual(workbench.ui.homeRecentProjects.map((project) => project.id), ["newest-project"]);
+  assert.equal(workbench.ui.homeProjectTotal, 1);
+  assert.equal(workbench.ui.homeProjectsLoading, false);
+});
+
+test("home recommendations still load when the recent projects request fails", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.localStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeTvLoading = true;
+  workbench.ui.homeTvCategory = "recommended";
+  workbench.ui.homeTvCategories = [];
+  workbench.api.getProjects = async () => {
+    throw new Error("database_temporarily_unavailable");
+  };
+  workbench.api.getHomeRecommendations = async () => ({
+    background: { videoUrl: "https://cdn.example.com/home.mp4", status: "active" },
+    categories: [{ id: "category-1", code: "recommended", name: "推荐", videos: [] }],
+  });
+
+  try {
+    await refreshProductionWorkbenchForTest(workbench);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+
+  assert.equal(workbench.ui.homeTvLoading, false);
+  assert.equal(workbench.ui.homeBackground.videoUrl, "https://cdn.example.com/home.mp4");
+  assert.deepEqual(workbench.ui.homeTvCategories.map((category) => category.code), ["recommended"]);
+});
+
+test("home recommendations render without waiting for recent projects", async () => {
+  const workbench = createWorkbench();
+  const projectsRequest = createDeferred();
+  const recommendationsRequest = createDeferred();
+  const originalWindow = globalThis.window;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.localStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeTvLoading = true;
+  workbench.ui.homeTvCategory = "recommended";
+  workbench.ui.homeTvCategories = [];
+  workbench.api.getProjects = () => projectsRequest.promise;
+  workbench.api.getHomeRecommendations = () => recommendationsRequest.promise;
+
+  try {
+    const refreshing = refreshProductionWorkbenchForTest(workbench);
+    recommendationsRequest.resolve({
+      background: { videoUrl: "https://cdn.example.com/immediate.mp4", status: "active" },
+      categories: [{
+        id: "category-1",
+        code: "recommended",
+        name: "推荐",
+        videos: [{ id: "video-1", title: "推荐视频", coverUrl: "https://cdn.example.com/cover.jpg" }],
+      }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.doesNotMatch(workbench.root.innerHTML, /正在加载推荐视频/);
+    assert.match(workbench.root.innerHTML, /https:\/\/cdn\.example\.com\/immediate\.mp4/);
+    assert.match(workbench.root.innerHTML, /https:\/\/cdn\.example\.com\/cover\.jpg/);
+
+    projectsRequest.resolve({ projects: [], pagination: { total: 0 } });
+    await refreshing;
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+});
+
+test("opening home requests recommendations and ignores an older response", async () => {
+  const workbench = createWorkbench();
+  const olderRequest = createDeferred();
+  const newerRequest = createDeferred();
+  let requestCount = 0;
+  workbench.ui.homeTvLoading = true;
+  workbench.ui.homeTvCategory = "recommended";
+  workbench.ui.homeTvCategories = [];
+  workbench.ui.homeBackground = { videoUrl: "", status: "inactive" };
+  workbench.api.getProjects = async () => ({ projects: [], pagination: { total: 0 } });
+  workbench.api.getHomeRecommendations = () => {
+    requestCount += 1;
+    return requestCount === 1 ? olderRequest.promise : newerRequest.promise;
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-nav-tab", tab: "home" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(requestCount, 1);
+
+  const newerRefresh = syncHomeRecommendationsFromApiForTest(workbench);
+  newerRequest.resolve({
+    background: { videoUrl: "https://cdn.example.com/new.mp4", status: "active" },
+    categories: [{ id: "new", code: "recommended", name: "推荐", videos: [] }],
+  });
+  assert.equal(await newerRefresh, true);
+  olderRequest.resolve({
+    background: { videoUrl: "https://cdn.example.com/old.mp4", status: "active" },
+    categories: [{ id: "old", code: "old", name: "旧内容", videos: [] }],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(workbench.ui.homeTvLoading, false);
+  assert.equal(workbench.ui.homeBackground.videoUrl, "https://cdn.example.com/new.mp4");
+  assert.deepEqual(workbench.ui.homeTvCategories.map((category) => category.id), ["new"]);
+});
+
+test("home Agent attachment remove action deletes the matching inline file", async () => {
+  const workbench = createWorkbench();
+  workbench.homeAgentFiles = [{ name: "one.png" }, { name: "two.mp4" }];
+  workbench.ui.homeAgentAttachments = [
+    { id: "attachment-one", name: "one.png", kind: "image" },
+    { id: "attachment-two", name: "two.mp4", kind: "video" },
+  ];
+  workbench.ui.homeAgentAttachmentCount = 2;
+  workbench.ui.homeAgentComposerSegments = [
+    { type: "text", text: "开头\n" },
+    { type: "attachment", attachmentId: "attachment-one" },
+    { type: "text", text: "中间" },
+    { type: "attachment", attachmentId: "attachment-two" },
+  ];
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "remove-home-agent-attachment", attachmentId: "attachment-one" },
+  });
+
+  assert.deepEqual(workbench.ui.homeAgentAttachments.map((attachment) => attachment.id), ["attachment-two"]);
+  assert.deepEqual(workbench.homeAgentFiles.map((file) => file.name), ["two.mp4"]);
+  assert.equal(workbench.ui.homeAgentAttachmentCount, 1);
+  assert.deepEqual(workbench.ui.homeAgentComposerSegments, [
+    { type: "text", text: "开头\n" },
+    { type: "text", text: "中间" },
+    { type: "attachment", attachmentId: "attachment-two" },
+  ]);
+});
+
+test("home Agent submission text preserves inline attachment and model positions", () => {
+  const workbench = createWorkbench();
+  workbench.ui.homeAgentAttachments = [
+    { id: "attachment-image", name: "角色图.png", kind: "image" },
+    { id: "attachment-video", name: "镜头.mp4", kind: "video" },
+  ];
+  workbench.ui.episodeGenerationConfig = {
+    models: [
+      { mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro" },
+      { mediaType: "image", modelCode: "image-other", modelLabel: "其他图片模型" },
+      { media_type: "i2v", model_code: "video-pro", model_label: "视频 Pro" },
+    ],
+  };
+  workbench.ui.homeAgentSelectedModels = { image: "image-pro", video: "video-pro" };
+  workbench.ui.homeAgentComposerSegments = [
+    { type: "text", text: "先参考" },
+    { type: "attachment", attachmentId: "attachment-image" },
+    { type: "text", text: "\n生成角色，再使用" },
+    { type: "model", mediaType: "image" },
+    { type: "text", text: "制作，并结合" },
+    { type: "attachment", attachmentId: "attachment-video" },
+    { type: "text", text: "分析镜头，再用" },
+    { type: "model", mediaType: "video" },
+    { type: "text", text: "生成。" },
+  ];
+
+  assert.equal(
+    homeAgentPromptTextForSubmissionForTest(workbench),
+    "先参考【附件：角色图.png】\n生成角色，再使用【图片模型：图片 Pro】制作，并结合【附件：镜头.mp4】分析镜头，再用【视频模型：视频 Pro】生成。",
+  );
+});
+
+test("home Agent Skill picker inserts a selected Skill inline without leaving the homepage", async () => {
+  const workbench = createWorkbench();
+  const calls = [];
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeAgentComposerSegments = [{ type: "text", text: "请按" }];
+  workbench.homeAgentComposerCaret = { offset: 2 };
+  workbench.api.getPromptSkills = async (input) => {
+    calls.push(input);
+    return {
+      items: input.source === "official"
+        ? [{ id: "official-style", title: "电影感画面", summary: "统一镜头语言", category: "image_style" }]
+        : [{ id: "private-shot", title: "我的分镜模板", summary: "镜头拆解", category: "storyboard" }],
+    };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "open-home-agent-skill-picker" },
+  });
+
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.homeAgentSkillPickerOpen, true);
+  assert.deepEqual(calls, [
+    { source: "official", category: "all", page: 1, pageSize: 100 },
+    { source: "private", category: "all", page: 1, pageSize: 100 },
+  ]);
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "select-home-agent-skill", skillId: "official-style", skillCategory: "image_style" },
+  });
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-home-agent-skill" },
+  });
+
+  assert.equal(workbench.ui.homeAgentSkillPickerOpen, false);
+  assert.deepEqual(workbench.ui.homeAgentComposerSegments, [
+    { type: "text", text: "请按" },
+    { type: "skill", skillId: "official-style" },
+  ]);
+  assert.equal(homeAgentPromptTextForSubmissionForTest(workbench), "请按【Skill：电影感画面】");
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "remove-home-agent-skill", skillId: "official-style" },
+  });
+  assert.deepEqual(workbench.ui.homeAgentComposerSegments, [{ type: "text", text: "请按" }]);
+});
+
+test("home Agent video model tab refreshes the video generation config", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.episodeGenerationConfig = {
+    models: [{ mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro" }],
+    defaultImageModelCode: "image-pro",
+  };
+  workbench.ui.homeAgentModelTab = "image";
+  workbench.api.listGlobalGenerationConfig = async (input) => {
+    assert.deepEqual(input, { fresh: true, mediaType: "video" });
+    return {
+      models: [{ media_type: "i2v", modelCode: "video-pro", modelLabel: "视频 Pro" }],
+      defaultVideoModelCode: "video-pro",
+    };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-home-agent-model-tab", modelKind: "video" },
+  });
+
+  assert.equal(workbench.ui.homeAgentModelTab, "video");
+  assert.deepEqual(
+    workbench.ui.episodeGenerationConfig.models.map((model) => model.modelCode),
+    ["image-pro", "video-pro"],
+  );
+});
+
+test("home Agent video model can be inserted inline and removed independently", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.episodeGenerationConfig = {
+    models: [{ mediaType: "video", modelCode: "video-pro", modelLabel: "视频 Pro" }],
+  };
+  workbench.ui.homeAgentComposerSegments = [
+    { type: "text", text: "前文后文" },
+  ];
+  workbench.ui.homeAgentSelectedModels = { image: "", video: "" };
+  workbench.homeAgentComposerCaret = { offset: 2 };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "select-home-agent-model", modelKind: "video", modelCode: "video-pro" },
+  });
+
+  assert.deepEqual(workbench.ui.homeAgentComposerSegments, [
+    { type: "text", text: "前文" },
+    { type: "model", mediaType: "video" },
+    { type: "text", text: "后文" },
+  ]);
+  assert.equal(workbench.ui.homeAgentSelectedModels.video, "video-pro");
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "remove-home-agent-model", modelKind: "video" },
+  });
+
+  assert.deepEqual(workbench.ui.homeAgentComposerSegments, [
+    { type: "text", text: "前文" },
+    { type: "text", text: "后文" },
+  ]);
+  assert.equal(workbench.ui.homeAgentSelectedModels.video, "");
+});
+
+test("home workflow submission uploads a script and opens the shared episode workflow", async () => {
+  const workbench = createWorkbench();
+  const calls = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { hash: "#home" } };
+  workbench.ui.homeCreationMode = "workflow";
+  workbench.ui.homeWorkflowScriptFile = { name: "第一集.txt", type: "text/plain" };
+  workbench.ui.homeWorkflowScriptFileName = "第一集.txt";
+  workbench.ui.membershipStatus = { status: "active" };
+  workbench.ui.projectStyles = [{ code: "animation" }];
+  workbench.ui.isCreateModalOpen = false;
+  workbench.api.uploadFile = async (file, options) => {
+    calls.push(["uploadFile", file, options]);
+    return {
+      upload: {
+        uploadSessionId: "script-upload-1",
+        storageObjectId: "storage-script-1",
+        mimeType: "text/plain",
+      },
+    };
+  };
+  workbench.api.createProject = async (input) => {
+    calls.push(["createProject", input]);
+    return { project: { id: "workflow-project" } };
+  };
+  workbench.api.getProjectDetail = async (projectId) => {
+    calls.push(["getProjectDetail", projectId]);
+    return {
+      project: { id: projectId, name: "第一集" },
+      script: { id: "script-1", inputText: "第一集\n任小野走进雨夜车站。" },
+      episodes: [{ id: "episode-1", title: "第一集", sequence: 1 }],
+      assetsByType: { character: [], scene: [], prop: [] },
+      shots: [],
+    };
+  };
+  workbench.api.createAiStoryboardPreview = async (...args) => {
+    calls.push(["createAiStoryboardPreview", ...args]);
+    return {};
+  };
+  workbench.api.createCanvasProject = async () => {
+    throw new Error("workflow_must_not_create_canvas");
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-home-agent-prompt" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.deepEqual(calls.map(([name]) => name), ["uploadFile", "createProject", "getProjectDetail", "createAiStoryboardPreview"]);
+  assert.equal(calls[0][2].category, "script-documents");
+  assert.equal(calls[1][1].scriptInput, "");
+  assert.equal(calls[1][1].scriptUploadSessionId, "script-upload-1");
+  assert.equal(calls[1][1].name, "第一集");
+  assert.equal(calls[3][1], "workflow-project");
+  assert.deepEqual(calls[3][2], {
+    scriptText: "第一集\n任小野走进雨夜车站。",
+    skipScriptStage: true,
+    useDefaultWorkflowStages: true,
+    packages: null,
+  });
+  assert.equal(Object.hasOwn(calls[3][2], "instruction"), false);
+  assert.equal(Object.hasOwn(calls[3][2], "resolveInstructionIntent"), false);
+  assert.equal(workbench.ui.isCreateModalOpen, false);
+  assert.equal(workbench.ui.episodeWorkbenchLayout, "workflow");
+  assert.equal(workbench.ui.workflowGenerationWorkbenchOpen, false);
+  assert.equal(workbench.ui.projectPanelMode, "episode-workbench");
+  assert.equal(workbench.ui.selectedProjectCardId, "workflow-project");
+  assert.equal(workbench.ui.selectedEpisodeId, "episode-1");
+  assert.equal(workbench.ui.museScopeMode, "assets");
+});
+
+test("home workflow refuses to start without an uploaded script", async () => {
+  const workbench = createWorkbench();
+  let createCalls = 0;
+  workbench.ui.homeCreationMode = "workflow";
+  workbench.api.createProject = async () => {
+    createCalls += 1;
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "submit-home-agent-prompt" },
+  });
+
+  assert.equal(createCalls, 0);
+  assert.equal(workbench.ui.toast, "请先上传 DOCX 或 TXT 剧本文档。");
+});
+
+test("clicking the free generation tab immediately opens the conversation page", async () => {
+  const workbench = createWorkbench();
+  const pushedRoutes = [];
+  let createCalls = 0;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { pathname: "/app.html", search: "", hash: "#home" },
+    history: {
+      pushState(_state, _title, route) { pushedRoutes.push(route); },
+      replaceState() {},
+    },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.api.createCanvasProject = async () => {
+    createCalls += 1;
+    return { project: { id: "unexpected" } };
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-home-creation-mode", creationMode: "free" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(createCalls, 0);
+  assert.equal(workbench.ui.activeNavTab, "free-generation");
+  assert.equal(workbench.ui.canvasAgentOnly, true);
+  assert.equal(workbench.ui.canvasAgentCapabilityProfile, "media_generation_only");
+  assert.equal(workbench.ui.canvasSessionUiStateReady, true);
+  assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-project-main");
+  assert.deepEqual(pushedRoutes, ["#free-generation"]);
+  assert.match(workbench.root.innerHTML, /home-free-generation-dialog/);
+  assert.match(workbench.root.innerHTML, /data-new-canvas-mount/);
+  assert.match(workbench.root.innerHTML, /workbench-rail persistent/);
+  assert.match(workbench.root.innerHTML, /global-statusbar/);
+  assert.match(workbench.root.innerHTML, /new-canvas-workbench-host/);
+});
+
+test("anonymous users are prompted to log in before opening free generation", async () => {
+  const workbench = createWorkbench();
+  const loginReasons = [];
+  workbench.session = { authenticated: false, user: { id: "", phone: "" } };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.onRequireLogin = async (reason) => {
+    loginReasons.push(reason);
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "set-home-creation-mode", creationMode: "free" },
+  });
+
+  assert.deepEqual(loginReasons, ["free-generation"]);
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.homeCreationMode, "agent");
+  assert.notEqual(workbench.ui.canvasAgentOnly, true);
+});
+
+test("home free generation opens the standalone media conversation route", async () => {
+  const workbench = createWorkbench();
+  const pushedRoutes = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { pathname: "/app.html", search: "", hash: "#home" },
+    history: {
+      pushState(_state, _title, route) { pushedRoutes.push(route); },
+      replaceState() {},
+    },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "free";
+  workbench.ui.homeAgentComposerSegments = [{ type: "text", text: "生成雨夜车站的电影感画面" }];
+  workbench.ui.homeAgentMode = "c";
+  workbench.ui.homeAgentSelectedModels = { image: "image-pro", video: "" };
+  workbench.ui.membershipStatus = { status: "active" };
+  workbench.ui.episodeGenerationConfig = {
+    models: [{ mediaType: "image", modelCode: "image-pro", modelLabel: "图片 Pro" }],
+  };
+  workbench.api.createCanvasProject = async () => ({ project: { id: "free-session", title: "自由生成" } });
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-home-agent-prompt" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.activeNavTab, "free-generation");
+  assert.equal(workbench.ui.canvasProjectView, "detail");
+  assert.equal(workbench.ui.canvasAgentOnly, true);
+  assert.equal(workbench.ui.canvasAgentCapabilityProfile, "media_generation_only");
+  assert.equal(workbench.pendingHomeAgentPrompt.capabilityProfile, "media_generation_only");
+  assert.deepEqual(workbench.pendingHomeAgentPrompt.preferredModels, { image: "image-pro" });
+  assert.deepEqual(pushedRoutes, ["#free-generation"]);
+  assert.match(workbench.root.innerHTML, /home-free-generation-dialog/);
+  assert.match(workbench.root.innerHTML, /data-new-canvas-mount/);
+  assert.match(workbench.root.innerHTML, /workbench-rail persistent/);
+  assert.match(workbench.root.innerHTML, /global-statusbar/);
+});
+
+test("home Agent creation uses the Canvas default model when none was selected", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { pathname: "/app.html", search: "", hash: "#home" },
+    history: { pushState() {}, replaceState() {} },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeCreationMode = "agent";
+  workbench.ui.homeAgentComposerSegments = [{ type: "text", text: "帮我生成一张大树图片" }];
+  workbench.ui.membershipStatus = { status: "active" };
+  workbench.api.createCanvasProject = async () => ({ project: { id: "agent-default-model" } });
+  workbench.api.listGlobalGenerationConfig = async () => ({
+    models: [{ mediaType: "image", modelCode: "image-enabled", modelLabel: "图片模型" }],
+    defaultImageModelCode: "image-enabled",
+  });
+  workbench.api.getCanvasSettings = async () => ({
+    settings: { defaultModels: { image: "image-enabled" } },
+  });
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-home-agent-prompt" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.deepEqual(workbench.pendingHomeAgentPrompt.preferredModels, { image: "image-enabled" });
+});
+
+test("free generation route is independent from Canvas routing", () => {
+  const workbench = createWorkbench();
+  const location = {
+    pathname: "/app.html",
+    search: "",
+    hash: "#free-generation",
+  };
+
+  assert.equal(deriveInitialNavTabForTest("free-generation", workbench.session), "free-generation");
+  syncWorkbenchRouteStateForTest(workbench, "free-generation");
+  syncCanvasRouteStateForTest(workbench, "free-generation", location);
+
+  assert.equal(workbench.ui.activeNavTab, "free-generation");
+  assert.equal(workbench.ui.selectedCanvasProjectId, undefined);
+  assert.equal(workbench.ui.canvasAgentOnly, true);
+  assert.equal(workbench.ui.canvasAgentCapabilityProfile, "media_generation_only");
+  assert.equal(workbench.ui.canvasSessionUiStateReady, true);
+});
+
+test("re-entering free generation does not change the active Canvas selection", async () => {
+  const workbench = createWorkbench();
+  const pushedRoutes = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { pathname: "/app.html", search: "", hash: "#free-generation" },
+    history: {
+      pushState(_state, _title, route) { pushedRoutes.push(route); },
+      replaceState() {},
+    },
+  };
+  workbench.ui.selectedCanvasProjectId = "canvas-project-main";
+  workbench.ui.canvasAgent = { conversationId: "conversation-1", messages: [{ id: "message-1" }] };
+  workbench.ui.canvasSessionUiState = {
+    canvasAgent: { conversationId: "conversation-1", panelOpen: true },
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-home-creation-mode", creationMode: "free" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.selectedCanvasProjectId, "canvas-project-main");
+  assert.equal(workbench.ui.canvasAgent.conversationId, "conversation-1");
+  assert.equal(workbench.ui.canvasSessionUiState.canvasAgent.conversationId, "conversation-1");
+  assert.deepEqual(pushedRoutes, ["#free-generation"]);
+});
+
+test("free generation refresh restores the configured background video", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#free-generation", pathname: "/app.html", search: "" },
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.localStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = {
+    getItem() { return null; },
+    setItem() {},
+    removeItem() {},
+  };
+  workbench.ui.activeNavTab = "free-generation";
+  workbench.ui.canvasProjectView = "detail";
+  workbench.ui.canvasAgentOnly = true;
+  workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
+  workbench.ui.homeBackground = { videoUrl: "", status: "inactive" };
+  workbench.api.getHomeRecommendations = async () => ({
+    background: { videoUrl: "https://cdn.example.com/free-generation.mp4", status: "active" },
+    categories: [],
+  });
+
+  try {
+    await refreshProductionWorkbenchForTest(workbench);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+
+  assert.equal(workbench.ui.homeBackground.videoUrl, "https://cdn.example.com/free-generation.mp4");
+  assert.match(workbench.root.innerHTML, /free-generation\.mp4/);
+});
+
+test("free generation refresh rerenders the home shell when the background video becomes available", () => {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/index.js", import.meta.url),
+    "utf8",
+  );
+  const refreshSource = source.match(/async function refresh\(workbench\) \{[\s\S]*?function syncWorkbenchHashRoute/ )?.[0] ?? "";
+
+  assert.match(refreshSource, /const previousHomeBackground = workbench\.ui\.homeBackground/);
+  assert.match(refreshSource, /const homeBackgroundChanged =/);
+  assert.match(refreshSource, /if \(homeBackgroundChanged\) \{\s*render\(workbench\);\s*return;/);
+});
+
+test("leaving free generation clears its standalone Agent mode", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { hash: "#free-generation", pathname: "/app.html" } };
+  workbench.ui.activeNavTab = "free-generation";
+  workbench.ui.canvasAgentOnly = true;
+  workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "project" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.activeNavTab, "project");
+  assert.equal(workbench.ui.canvasAgentOnly, false);
+  assert.equal(workbench.ui.canvasAgentCapabilityProfile, "");
+});
+
+test("returning from free generation to workflow reloads the home project list", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { hash: "#free-generation", pathname: "/app.html" } };
+  workbench.ui.activeNavTab = "free-generation";
+  workbench.ui.homeRecentProjects = [];
+  workbench.ui.homeProjectTotal = 0;
+  workbench.api.getProjects = async () => ({
+    projects: [{ id: "project-returned", name: "已创建项目", status: "草稿", createdAt: "2026/08/14" }],
+    pagination: { page: 1, pageSize: 8, total: 1, totalPages: 1 },
+  });
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-home-creation-mode", creationMode: "workflow" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.homeProjectsLoading, false);
+  assert.equal(workbench.ui.homeProjectTotal, 1);
+  assert.equal(workbench.ui.homeRecentProjects[0]?.id, "project-returned");
+});
+
+test("returning from a project workflow reloads the latest home projects", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const projectRequests = [];
+  globalThis.window = { location: { hash: "#project" } };
+  workbench.ui.activeNavTab = "project";
+  workbench.ui.projectPanelMode = "episode-workbench";
+  workbench.ui.homeRecentProjects = [{ id: "stale-project", name: "旧项目" }];
+  workbench.ui.homeProjectTotal = 1;
+  workbench.api.getProjects = async (input) => {
+    projectRequests.push(input);
+    return {
+      projects: [{ id: "new-project", name: "刚创建的项目", status: "草稿", createdAt: "2026-08-15T12:00:00.000Z" }],
+      pagination: { page: 1, pageSize: 8, total: 2, totalPages: 1 },
+    };
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "back-to-home-from-workflow" },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(workbench.ui.homeProjectsLoading, false);
+  assert.deepEqual(projectRequests, [{ page: 1, pageSize: 8, keyword: "" }]);
+  assert.equal(workbench.ui.homeProjectTotal, 2);
+  assert.equal(workbench.ui.homeRecentProjects[0]?.id, "new-project");
 });
 
 test("navigation tabs render before lazy surface requests finish", async () => {

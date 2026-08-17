@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -12,6 +13,7 @@ import { promisify } from "node:util";
 import { brotliCompress as brotliCompressCallback, constants as zlibConstants, gzip as gzipCallback } from "node:zlib";
 import mammoth from "mammoth";
 import sharp from "sharp";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { transform as transformStaticAsset } from "esbuild";
 
 import { maskCnPhone, shanghaiDayWindow, shanghaiMonthWindow } from "../modules/identity/phone-auth.utils.ts";
@@ -34,6 +36,7 @@ import {
   ensureDefaultStoryboardPromptData,
 } from "../modules/admin-storyboard-prompts/admin-storyboard-prompt.service.ts";
 import { createAnnouncementService } from "../modules/announcements/announcement.service.ts";
+import { createHomeRecommendationService } from "../modules/home-recommendations/home-recommendation.service.ts";
 import { createAdminCharacterPromptService, ensureDefaultCharacterPromptTemplates } from "../modules/admin-character-prompts/admin-character-prompt.service.ts";
 import { createAdminImagePromptService } from "../modules/admin-image-prompts/admin-image-prompt.service.ts";
 import { createAdminShotPromptService, ensureDefaultShotPromptTemplates } from "../modules/admin-shot-prompts/admin-shot-prompt.service.ts";
@@ -49,8 +52,10 @@ import {
   setUserPromptDefault,
 } from "../modules/prompt-marketplace/prompt-skill-default.service.ts";
 import {
+  AiStoryboardWorkflowIntentError,
   createAiStoryboardPreviewService,
   createTextModelChatGateway,
+  resolveAiStoryboardWorkflowIntent,
   type TextChatGatewayLike,
 } from "../modules/ai-storyboard/ai-storyboard-preview.service.ts";
 import { createAiScriptAnalysisService } from "../modules/ai-storyboard/ai-script-analysis.service.ts";
@@ -305,7 +310,12 @@ import {
   type CanvasActorScope,
 } from "../modules/identity/canvas-actor-scope.service.ts";
 import { queryOne, type SqlDatabase } from "../modules/shared/db/sql.ts";
-import { createDevDb, runWithDatabaseContext } from "../modules/shared/db/dev-db.ts";
+import {
+  createDevDb,
+  isTransientDatabaseConnectionError,
+  isTransientDatabasePersistenceError,
+  runWithDatabaseContext,
+} from "../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../modules/shared/db/test-db.ts";
 import { beginOrReplayCommand, IdempotencyConflictError, IdempotencyProcessingError, type IdempotencyRecord } from "../modules/shared/idempotency/idempotency.service.ts";
 import { SqlIdempotencyRecordStore } from "../modules/shared/idempotency/persistent-idempotency.store.ts";
@@ -679,7 +689,7 @@ const publicSeoRoutes = new Map<string, PublicSeoRoute>(
     page.path,
     {
       ...page,
-      title: `${page.title} | 灵曦剧场`,
+      title: `${page.title} | 灵曦AI`,
       heading: page.title,
     },
   ]),
@@ -925,6 +935,268 @@ function redirect(response: ServerResponse, location: string) {
   response.statusCode = 302;
   response.setHeader("location", location);
   response.end();
+}
+
+export function homeRecommendationMediaGatewayPayload(data: Record<string, unknown>) {
+  const background = data.background && typeof data.background === "object"
+    ? data.background as Record<string, unknown>
+    : null;
+  const backgroundCacheVersion = String(background?.updatedAt ?? "").trim();
+  const categories = Array.isArray(data.categories) ? data.categories : [];
+  return {
+    ...data,
+    background: background
+      ? {
+          ...background,
+          videoUrl: String(background.videoUrl ?? "").trim()
+            ? `/api/home-recommendations/background/media?v=${encodeURIComponent(backgroundCacheVersion)}`
+            : "",
+        }
+      : background,
+    categories: categories.map((category) => {
+      const record = category && typeof category === "object" ? category as Record<string, unknown> : category;
+      if (!record || !Array.isArray(record.videos)) return record;
+      return {
+        ...record,
+        videos: record.videos.map((video) => {
+          const media = video && typeof video === "object" ? video as Record<string, unknown> : video;
+          const id = String(media?.id ?? "").trim();
+          if (!media || !id || !String(media.videoUrl ?? "").trim()) return media;
+          return {
+            ...media,
+            videoUrl: `/api/home-recommendations/videos/${encodeURIComponent(id)}/media`,
+          };
+        }),
+      };
+    }),
+  };
+}
+
+export function cosObjectKeyFromPublicUrl(input: {
+  sourceUrl: string;
+  bucket: string;
+  region: string;
+}) {
+  try {
+    const url = new URL(input.sourceUrl);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== `${input.bucket}.cos.${input.region}.myqcloud.com`.toLowerCase()) {
+      return null;
+    }
+    const objectKey = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+    return objectKey || null;
+  } catch {
+    return null;
+  }
+}
+
+function isHomeRecommendationObjectKey(input: {
+  objectKey: string;
+  officialAssetRootPrefix: string;
+}) {
+  const rootPrefix = input.officialAssetRootPrefix.replace(/^\/+|\/+$/g, "");
+  if (!rootPrefix || input.objectKey.includes("\\") || input.objectKey.split("/").some((part) => !part || part === "." || part === "..")) {
+    return false;
+  }
+  return [
+    `${rootPrefix}/homeBackgroundVideos/`,
+    `${rootPrefix}/homeRecommendationVideos/`,
+  ].some((prefix) => input.objectKey.startsWith(prefix));
+}
+
+type HomeMediaRateLimitGrant =
+  | { granted: true; release: () => void }
+  | { granted: false; retryAfterSeconds: number };
+
+function createHomeMediaRateLimiter(env: NodeJS.ProcessEnv) {
+  const perMinute = positiveIntegerEnvValue(env.HOME_MEDIA_SIGNING_PER_IP_PER_MINUTE, 30, 1_000);
+  const perHour = positiveIntegerEnvValue(env.HOME_MEDIA_SIGNING_PER_IP_PER_HOUR, 600, 10_000);
+  const concurrent = positiveIntegerEnvValue(env.HOME_MEDIA_SIGNING_CONCURRENT_PER_IP, 4, 100);
+  const entries = new Map<string, {
+    minuteStartedAt: number;
+    minuteCount: number;
+    hourStartedAt: number;
+    hourCount: number;
+    inFlight: number;
+    lastSeenAt: number;
+  }>();
+
+  return {
+    acquire(ipAddress: string, now = Date.now()): HomeMediaRateLimitGrant {
+      if (entries.size > 10_000) {
+        for (const [key, entry] of entries) {
+          if (now - entry.lastSeenAt > 60 * 60 * 1000 && entry.inFlight === 0) entries.delete(key);
+        }
+      }
+      const entry = entries.get(ipAddress) ?? {
+        minuteStartedAt: now,
+        minuteCount: 0,
+        hourStartedAt: now,
+        hourCount: 0,
+        inFlight: 0,
+        lastSeenAt: now,
+      };
+      if (now - entry.minuteStartedAt >= 60 * 1000) {
+        entry.minuteStartedAt = now;
+        entry.minuteCount = 0;
+      }
+      if (now - entry.hourStartedAt >= 60 * 60 * 1000) {
+        entry.hourStartedAt = now;
+        entry.hourCount = 0;
+      }
+      entry.lastSeenAt = now;
+      entries.set(ipAddress, entry);
+      if (entry.inFlight >= concurrent) {
+        return { granted: false, retryAfterSeconds: 1 };
+      }
+      if (entry.minuteCount >= perMinute) {
+        return { granted: false, retryAfterSeconds: Math.max(1, Math.ceil((entry.minuteStartedAt + 60 * 1000 - now) / 1000)) };
+      }
+      if (entry.hourCount >= perHour) {
+        return { granted: false, retryAfterSeconds: Math.max(1, Math.ceil((entry.hourStartedAt + 60 * 60 * 1000 - now) / 1000)) };
+      }
+      entry.minuteCount += 1;
+      entry.hourCount += 1;
+      entry.inFlight += 1;
+      return {
+        granted: true,
+        release: () => {
+          entry.inFlight = Math.max(0, entry.inFlight - 1);
+          entry.lastSeenAt = Date.now();
+        },
+      };
+    },
+  };
+}
+
+function positiveIntegerEnvValue(value: unknown, fallback: number, maximum: number) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0
+    ? Math.min(parsed, maximum)
+    : fallback;
+}
+
+class StorageMediaLimitError extends Error {
+  constructor(
+    readonly code: "rate_limited" | "queue_full",
+    readonly retryAfterSeconds: number,
+  ) {
+    super(`storage_media_${code}`);
+  }
+}
+
+function createKeyedConcurrencyGate(maxConcurrent: number, maxQueueSize: number) {
+  const entries = new Map<string, { active: number; waiting: Array<() => void>; lastSeenAt: number }>();
+
+  return {
+    async acquire(key: string) {
+      const now = Date.now();
+      if (entries.size > 10_000) {
+        for (const [entryKey, entry] of entries) {
+          if (entry.active === 0 && entry.waiting.length === 0 && now - entry.lastSeenAt > 60 * 60 * 1000) {
+            entries.delete(entryKey);
+          }
+        }
+      }
+      const entry = entries.get(key) ?? { active: 0, waiting: [], lastSeenAt: now };
+      entries.set(key, entry);
+      const release = () => {
+        const next = entry.waiting.shift();
+        entry.lastSeenAt = Date.now();
+        if (next) {
+          next();
+          return;
+        }
+        entry.active = Math.max(0, entry.active - 1);
+      };
+      if (entry.active < maxConcurrent) {
+        entry.active += 1;
+        return release;
+      }
+      if (entry.waiting.length >= maxQueueSize) {
+        throw new StorageMediaLimitError("queue_full", 1);
+      }
+      await new Promise<void>((resolve) => entry.waiting.push(resolve));
+      return release;
+    },
+  };
+}
+
+function createStorageMediaLimiter(env: NodeJS.ProcessEnv) {
+  const config = {
+    image: {
+      userConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_IMAGE_CONCURRENT_PER_USER, 12, 100),
+      ipConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_IMAGE_CONCURRENT_PER_IP, 20, 200),
+      queueSize: positiveIntegerEnvValue(env.STORAGE_MEDIA_IMAGE_QUEUE_SIZE, 80, 500),
+    },
+    video: {
+      userConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_VIDEO_CONCURRENT_PER_USER, 4, 50),
+      ipConcurrent: positiveIntegerEnvValue(env.STORAGE_MEDIA_VIDEO_CONCURRENT_PER_IP, 6, 100),
+      queueSize: positiveIntegerEnvValue(env.STORAGE_MEDIA_VIDEO_QUEUE_SIZE, 24, 200),
+    },
+    userPerMinute: positiveIntegerEnvValue(env.STORAGE_MEDIA_REQUESTS_PER_USER_PER_MINUTE, 120, 10_000),
+    ipPerMinute: positiveIntegerEnvValue(env.STORAGE_MEDIA_REQUESTS_PER_IP_PER_MINUTE, 180, 10_000),
+  };
+  const userGates = {
+    image: createKeyedConcurrencyGate(config.image.userConcurrent, config.image.queueSize),
+    video: createKeyedConcurrencyGate(config.video.userConcurrent, config.video.queueSize),
+  };
+  const ipGates = {
+    image: createKeyedConcurrencyGate(config.image.ipConcurrent, config.image.queueSize),
+    video: createKeyedConcurrencyGate(config.video.ipConcurrent, config.video.queueSize),
+  };
+  const rateEntries = new Map<string, { startedAt: number; count: number; lastSeenAt: number }>();
+
+  const consumeRate = (key: string, limit: number, now: number) => {
+    const entry = rateEntries.get(key) ?? { startedAt: now, count: 0, lastSeenAt: now };
+    if (now - entry.startedAt >= 60_000) {
+      entry.startedAt = now;
+      entry.count = 0;
+    }
+    entry.lastSeenAt = now;
+    rateEntries.set(key, entry);
+    if (entry.count >= limit) {
+      return Math.max(1, Math.ceil((entry.startedAt + 60_000 - now) / 1000));
+    }
+    entry.count += 1;
+    return 0;
+  };
+
+  return {
+    async acquire(input: { kind: "image" | "video"; userId: string; ipAddress: string }) {
+      const now = Date.now();
+      const userRetryAfter = consumeRate(`user:${input.userId}`, config.userPerMinute, now);
+      const ipRetryAfter = consumeRate(`ip:${input.ipAddress}`, config.ipPerMinute, now);
+      if (userRetryAfter || ipRetryAfter) {
+        throw new StorageMediaLimitError("rate_limited", Math.max(userRetryAfter, ipRetryAfter));
+      }
+      const releaseUser = await userGates[input.kind].acquire(input.userId);
+      try {
+        const releaseIp = await ipGates[input.kind].acquire(input.ipAddress);
+        return () => {
+          releaseIp();
+          releaseUser();
+        };
+      } catch (error) {
+        releaseUser();
+        throw error;
+      }
+    },
+  };
+}
+
+function homeMediaRequestIpAddress(
+  request: {
+    headers: Record<string, string | string[] | undefined>;
+    socket?: { remoteAddress?: string };
+  },
+  trustProxy: boolean,
+) {
+  if (trustProxy) return requestIpAddress(request) ?? "unknown";
+  return request.socket?.remoteAddress ?? "unknown";
 }
 
 function requestIpAddress(request: {
@@ -1292,6 +1564,7 @@ const adminRouteRoles = {
   membershipPlanManage: ["super_admin", "finance_admin"],
   announcementManage: ["super_admin", "ops_admin"],
   geoManage: ["super_admin"],
+  homeRecommendationManage: ["super_admin", "ops_admin"],
 } as const;
 
 function isGeoContentType(value: string): value is GeoContentType {
@@ -1536,6 +1809,12 @@ function canvasAgentActorFromCanvasScope(scope: CanvasActorScope): CanvasAgentAc
 function normalizeCanvasAgentMode(value: unknown): CanvasAgentMode {
   const mode = String(value ?? "b").trim().toLowerCase();
   return mode === "c" || mode === "plan" || mode === "expert" ? mode : "b";
+}
+
+function normalizeCanvasAgentCapabilityProfile(value: unknown): "canvas" | "media_generation_only" | null {
+  const profile = String(value ?? "canvas").trim().toLowerCase();
+  if (profile === "canvas" || profile === "media_generation_only") return profile;
+  return null;
 }
 
 function normalizeCanvasAgentMessage(value: unknown, fallback: unknown): Record<string, unknown> {
@@ -1892,6 +2171,7 @@ interface CanvasProjectRow {
   deleted_at?: Date | string | null;
   server_revision?: number;
   latest_document_id?: string | null;
+  is_free_generation_workspace?: boolean;
 }
 
 function formatCanvasProjectDate(now = new Date()): string {
@@ -1972,6 +2252,7 @@ async function listCanvasProjects(
         deleted_at
       FROM creator_canvas_projects
       WHERE ${input.teamMemberId ? "TRUE" : "created_by_user_id = $1"}
+        AND COALESCE(is_free_generation_workspace, false) = false
         ${ownerScopeSql}
         ${input.includeDeleted && !input.teamMemberId ? "" : "AND deleted_at IS NULL"}
         ${teamMemberVisibilitySql}
@@ -1980,6 +2261,39 @@ async function listCanvasProjects(
     params,
   );
   return result.rows.map(canvasProjectFromRow);
+}
+
+async function ensureFreeGenerationWorkspace(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  userId: string,
+  now: Date,
+): Promise<{ id: string; serverRevision: number }> {
+  const existing = await queryOne<{ id: string; server_revision: number | string }>(db, `
+    SELECT id, server_revision
+    FROM creator_canvas_projects
+    WHERE created_by_user_id=$1
+      AND is_free_generation_workspace=true
+      AND deleted_at IS NULL
+    LIMIT 1
+  `, [userId]);
+  if (existing) return { id: existing.id, serverRevision: Number(existing.server_revision ?? 1) || 1 };
+  const created = await queryOne<{ id: string; server_revision: number | string }>(db, `
+    INSERT INTO creator_canvas_projects (
+      id,title,status,is_free_generation_workspace,created_by_user_id,updated_by_user_id,created_at,updated_at
+    ) VALUES ($1,'自由生成','draft',true,$2,$2,$3,$3)
+    ON CONFLICT (created_by_user_id) WHERE is_free_generation_workspace=true AND deleted_at IS NULL
+    DO UPDATE SET updated_at=EXCLUDED.updated_at
+    RETURNING id,server_revision
+  `, [randomUUID(), userId, now]);
+  return { id: created!.id, serverRevision: Number(created!.server_revision ?? 1) || 1 };
+}
+
+function freeGenerationAgentActor(userId: string): CanvasAgentActor {
+  return {
+    ownerUserId: userId,
+    actorTeamMemberId: null,
+    capabilities: new Set([capabilities.canvasView, capabilities.canvasEdit, capabilities.canvasRun, capabilities.canvasManage]),
+  };
 }
 
 async function createCanvasProjectRecord(
@@ -2728,6 +3042,64 @@ async function readUploadedStorageObjectBytes(
   }
 }
 
+async function streamStorageObjectContent(input: {
+  response: ServerResponse;
+  signedUrl: string;
+  requestOrigin: string;
+  range: string | null;
+  contentType: string;
+  download: boolean;
+  fetchImpl: typeof fetch;
+}) {
+  let upstream: Response;
+  try {
+    upstream = await input.fetchImpl(
+      new URL(input.signedUrl, input.requestOrigin),
+      input.range ? { headers: { range: input.range } } : undefined,
+    );
+  } catch {
+    return false;
+  }
+  if (!upstream.ok || !upstream.body) {
+    await upstream.body?.cancel().catch(() => undefined);
+    return false;
+  }
+  input.response.statusCode = upstream.status;
+  input.response.setHeader("content-type", input.contentType);
+  input.response.setHeader("content-disposition", input.download ? "attachment" : "inline");
+  input.response.setHeader("cache-control", "private, max-age=3600");
+  input.response.setHeader("x-content-type-options", "nosniff");
+  for (const header of ["accept-ranges", "content-length", "content-range"] as const) {
+    const value = upstream.headers.get(header);
+    if (value) input.response.setHeader(header, value);
+  }
+  await new Promise<void>((resolve) => {
+    const body = Readable.fromWeb(upstream.body as never);
+    let completed = false;
+    const complete = () => {
+      if (completed) return;
+      completed = true;
+      input.response.off("finish", complete);
+      input.response.off("close", close);
+      body.off("error", fail);
+      resolve();
+    };
+    const close = () => {
+      body.destroy();
+      complete();
+    };
+    const fail = () => {
+      input.response.destroy();
+      complete();
+    };
+    input.response.once("finish", complete);
+    input.response.once("close", close);
+    body.once("error", fail);
+    body.pipe(input.response);
+  });
+  return true;
+}
+
 async function extractTextFromScriptDocumentBytes(bytes: Buffer, extension: string) {
   if (extension === ".txt") {
     return bytes.toString("utf8");
@@ -2760,6 +3132,47 @@ function hashJson(value: unknown) {
   return createHash("sha256")
     .update(JSON.stringify(canonicalizeJson(value)))
     .digest("hex");
+}
+
+async function beginAiStoryboardPreviewCommand(
+  db: SqlDatabase,
+  input: {
+    userId: string;
+    teamMemberId: string | null;
+    projectId: string;
+    idempotencyKey: string;
+    request: Record<string, unknown>;
+  },
+) {
+  const store = new SqlIdempotencyRecordStore(db);
+  const started = await beginOrReplayCommand(store, {
+    scopeKey: `user:${input.userId}`,
+    userId: input.userId,
+    operationName: operationNames.scriptParse,
+    idempotencyKey: `storyboard-preview:${input.teamMemberId ?? "owner"}:${input.idempotencyKey}`,
+    requestHash: hashJson({
+      projectId: input.projectId,
+      teamMemberId: input.teamMemberId,
+      body: input.request,
+    }),
+  });
+  if (started.kind !== "created") {
+    throw new IdempotencyProcessingError(started.record);
+  }
+  return { store, record: started.record };
+}
+
+async function finishAiStoryboardPreviewCommand(
+  command: { store: SqlIdempotencyRecordStore; record: IdempotencyRecord } | null,
+  status: "succeeded" | "failed_terminal" | "expired",
+) {
+  if (!command) return;
+  command.record = await command.store.update({
+    ...command.record,
+    status,
+    ...(status === "expired" ? { expiresAt: new Date(0) } : {}),
+    updatedAt: new Date(),
+  });
 }
 
 async function executeIdempotentToolPresetCommand(
@@ -2982,7 +3395,11 @@ export async function resolveGenerationStorageObjectReferences(
         ? signedUrl
         : await visit(item),
     ] as const));
-    return Object.fromEntries(entries);
+    const resolved = Object.fromEntries(entries);
+    if (signedUrl && !Object.keys(resolved).some((key) => generationMediaUrlKeys.has(key))) {
+      resolved.url = signedUrl;
+    }
+    return resolved;
   };
   return visit(value);
 }
@@ -3431,6 +3848,24 @@ function adminManagedUploadConfig(pathname: string, env: NodeJS.ProcessEnv) {
       sourceAction: "admin_settings_asset_upload",
     };
   }
+  if (pathname === "/api/admin/home-recommendations/background/upload") {
+    return {
+      kind: "home_background_video" as const,
+      rootPrefix,
+      subfolder: "homeBackgroundVideos",
+      policyPurpose: "home-background-video",
+      sourceAction: "admin_home_background_video_upload",
+    };
+  }
+  if (pathname === "/api/admin/home-recommendations/videos/upload") {
+    return {
+      kind: "home_recommendation_video" as const,
+      rootPrefix,
+      subfolder: "homeRecommendationVideos",
+      policyPurpose: "home-recommendation-video",
+      sourceAction: "admin_home_recommendation_video_upload",
+    };
+  }
   return null;
 }
 
@@ -3456,6 +3891,7 @@ async function uploadTrackedCloudObject(
     objectKey: string;
     bytes: Uint8Array;
     contentType: string;
+    cacheControl?: string | null;
     fileName: string;
     projectId?: string | null;
     canvasProjectId?: string | null;
@@ -3526,17 +3962,10 @@ async function uploadTrackedCloudObject(
       objectKey: input.objectKey,
       body: input.bytes,
       contentType: input.contentType,
+      cacheControl: input.cacheControl ?? null,
       contentLength: input.bytes.byteLength,
     });
-    const publicUrl = buildStorageObjectPublicUrl(input.runtime, {
-      bucket: input.runtime.bucket,
-      objectKey: input.objectKey,
-    });
-    const sourceUrl = publicUrl || (await input.runtime.adapter.createSignedReadUrl({
-      bucket: input.runtime.bucket,
-      objectKey: input.objectKey,
-      expiresAt: new Date(input.now.getTime() + input.signedUrlExpiresInSeconds * 1000),
-    })).url;
+    const sourceUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
     await db.query(
       `
         UPDATE storage_objects
@@ -3551,7 +3980,7 @@ async function uploadTrackedCloudObject(
         SET public_url = $2, status = 'uploaded', error_message = NULL, completed_at = $3
         WHERE id = $1
       `,
-      [uploadRecord.id, sourceUrl, input.now],
+      [uploadRecord.id, null, input.now],
     );
     return {
       storageObjectId,
@@ -3559,7 +3988,7 @@ async function uploadTrackedCloudObject(
       bucket: input.runtime.bucket,
       provider: input.runtime.provider,
       sourceUrl,
-      publicUrl,
+      publicUrl: null,
       eTag: putResult?.eTag ?? null,
       versionId: putResult?.versionId ?? null,
     };
@@ -3688,7 +4117,10 @@ async function readTeamAssetArtifactBytes(
 
 function teamAssetRow(row: Record<string, unknown>) {
   const storedAssetStatus = readString(row.asset_status);
-  const assetUrl = readString(row.asset_url);
+  const storageObjectId = readString(row.storage_object_id) || null;
+  const assetUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+    : readString(row.asset_url);
   const generationTaskId = readString(row.generation_task_id) || readString(row.provider_request_id) || null;
   const providerStatus = readString(row.generation_task_status) || readString(row.provider_request_status);
   const assetStatus = storedAssetStatus === "generating" && ["failed", "canceled", "manual_review_required", "result_unknown"].includes(providerStatus)
@@ -3732,7 +4164,7 @@ function teamAssetRow(row: Record<string, unknown>) {
     sourceUrl: assetUrl,
     resourceType: readString(row.resource_type),
     resourceSize: Number(row.resource_size ?? 0),
-    storageObjectId: readString(row.storage_object_id) || null,
+    storageObjectId,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdByName: readString(row.created_by_name),
@@ -4075,7 +4507,8 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
   }
-  const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+  const sourceId = uuidFromIdempotencyKey(`${input.idempotencyKey}:team-member:${input.teamMemberId}`);
+  const legacySourceId = uuidFromIdempotencyKey(input.idempotencyKey);
   const modelCode = String(input.modelConfig?.modelCode ?? "text.script").trim() || "text.script";
   const modelLabel = String(input.modelConfig?.displayName ?? "剧本模型").trim() || "剧本模型";
   const metadata = {
@@ -4121,9 +4554,9 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
          AND team_member_id = $2
          AND entry_type = 'transfer_out'
          AND source_type = 'team_member_generation_task'
-         AND source_id = $3
+          AND source_id = ANY($3::uuid[])
        LIMIT 1`,
-      [member.user_id, input.teamMemberId, sourceId],
+      [member.user_id, input.teamMemberId, [sourceId, legacySourceId]],
     );
     if (existingCharge && (
       Number(existingCharge.amount) !== amount
@@ -4179,6 +4612,7 @@ async function reserveAndConsumeSimpleTeamMemberCredits(
 
     await db.query("COMMIT");
     return {
+      replayed: Boolean(existingCharge),
       reservation: {
         id: sourceId,
         userId: member.user_id,
@@ -4244,12 +4678,24 @@ async function reserveConsumeAndGrantUserScriptAnalysisCredits(
       "SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE",
       [walletUserIds],
     );
+    const sourceType = input.sourceType ?? "user_script_analysis";
+    const sourceId = uuidFromIdempotencyKey(input.idempotencyKey);
+    const existingReservation = await queryOne<{ id: string }>(
+      db,
+      `SELECT id
+       FROM credit_reservations
+       WHERE user_id = $1
+         AND source_type = $2
+         AND source_id = $3
+       LIMIT 1`,
+      [input.userId, sourceType, sourceId],
+    );
     const reservation = await reserveCreditsInTransaction(db, {
       userId: input.userId,
       projectId: input.projectId ?? null,
       amount: Math.round(input.amount),
-      sourceType: input.sourceType ?? "user_script_analysis",
-      sourceId: uuidFromIdempotencyKey(input.idempotencyKey),
+      sourceType,
+      sourceId,
       reason: input.reason ?? "小说转剧本分析",
       metadata: input.metadata,
       createdByUserId: input.userId,
@@ -4270,7 +4716,7 @@ async function reserveConsumeAndGrantUserScriptAnalysisCredits(
       now: input.now,
     });
     await db.query("COMMIT");
-    return reservation;
+    return { ...reservation, replayed: Boolean(existingReservation) };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -4300,17 +4746,25 @@ async function grantPromptSkillAuthorCredits(
     .filter((grant): grant is NonNullable<typeof grant> => Boolean(
       grant && grant.amount > 0 && grant.userId !== input.payerUserId,
     ));
-  for (const grant of grants) {
-    await grantCredits(db, {
-      userId: grant.userId,
-      amount: grant.amount,
-      sourceType: "prompt_skill_usage_earning",
-      sourceId: grant.sourceId,
-      reason: "私人提示词技能使用分成",
-      metadata: grant.metadata,
-      createdByUserId: input.payerUserId,
-      now: input.now,
-    });
+  if (!grants.length) return;
+  await db.query("BEGIN");
+  try {
+    for (const grant of grants.sort((left, right) => left.userId.localeCompare(right.userId))) {
+      await grantCreditsInTransaction(db, {
+        userId: grant.userId,
+        amount: grant.amount,
+        sourceType: "prompt_skill_usage_earning",
+        sourceId: grant.sourceId,
+        reason: "私人提示词技能使用分成",
+        metadata: grant.metadata,
+        createdByUserId: input.payerUserId,
+        now: input.now,
+      });
+    }
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
   }
 }
 
@@ -4327,6 +4781,97 @@ async function releaseSimpleTeamMemberCredits(
 ) {
   const result = await refundTeamMemberGenerationCreditsIdempotently(db, input);
   return result.refunded;
+}
+
+async function releaseAiStoryboardPreviewCredits(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    amount: number;
+    sourceId: string;
+    metadata: Record<string, unknown>;
+    now: Date;
+  },
+) {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return false;
+  }
+  await grantCredits(db, {
+    userId: input.userId,
+    amount: Math.round(input.amount),
+    sourceType: "ai_storyboard_preview_refund",
+    sourceId: aiStoryboardPreviewRefundSourceId(input.sourceId),
+    reason: "剧本预览失败返还积分",
+    metadata: {
+      ...input.metadata,
+      billingEvent: "released",
+      outcome: "released",
+    },
+    createdByUserId: input.userId,
+    now: input.now,
+  });
+  return true;
+}
+
+function aiStoryboardPreviewRefundSourceId(idempotencyKey: string, teamMemberId?: string | null) {
+  return uuidFromIdempotencyKey(teamMemberId
+    ? `${idempotencyKey}:ai-storyboard-preview:refund:${teamMemberId}`
+    : `${idempotencyKey}:ai-storyboard-preview:refund`);
+}
+
+async function hasAiStoryboardPreviewRefund(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: {
+    userId: string;
+    teamMemberId: string | null;
+    idempotencyKey: string;
+  },
+) {
+  const sourceType = input.teamMemberId
+    ? "team_member_generation_refund"
+    : "ai_storyboard_preview_refund";
+  const sourceIds = input.teamMemberId
+    ? [
+        aiStoryboardPreviewRefundSourceId(input.idempotencyKey, input.teamMemberId),
+        aiStoryboardPreviewRefundSourceId(input.idempotencyKey),
+      ]
+    : [aiStoryboardPreviewRefundSourceId(input.idempotencyKey)];
+  const existing = await queryOne<{ id: string }>(
+    db,
+    `SELECT id
+     FROM credit_ledger_entries
+     WHERE user_id = $1
+       AND team_member_id IS NOT DISTINCT FROM $2::uuid
+       AND entry_type = 'grant'
+       AND source_type = $3
+       AND source_id = ANY($4::uuid[])
+     LIMIT 1`,
+    [input.userId, input.teamMemberId, sourceType, sourceIds],
+  );
+  return Boolean(existing);
+}
+
+async function retryAiStoryboardPreviewRefund<T>(operation: () => Promise<T>) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await runWithDatabaseContext(operation);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3 || !isTransientDatabaseConnectionError(error)) {
+        throw error;
+      }
+      await delay(attempt * 100);
+    }
+  }
+  throw lastError;
+}
+
+function aiStoryboardPreviewErrorDisplayMessage(error: unknown) {
+  if (isTransientDatabasePersistenceError(error)) {
+    return "服务连接暂时中断，请稍后重试。";
+  }
+  return translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。");
 }
 
 async function hasActiveGenerationMembership(
@@ -4347,6 +4892,26 @@ async function hasActiveGenerationMembership(
     [input.userId, input.now],
   );
   return Boolean(activeMembership);
+}
+
+async function assertActiveGenerationMembership(
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  input: { userId: string; now: Date },
+) {
+  if (await hasActiveGenerationMembership(db, input)) return;
+  const existingMembership = await queryOne<{ id: string }>(
+    db,
+    `SELECT id
+     FROM user_memberships
+     WHERE user_id = $1
+       AND membership_tier IN ('experience', 'professional')
+     LIMIT 1`,
+    [input.userId],
+  );
+  if (existingMembership) {
+    throw new MembershipCreditGateError("membership_expired", "您的会员已过期，请前往续充。", 403);
+  }
+  throw new MembershipCreditGateError("membership_required", "请充值会员。", 403);
 }
 
 async function resolveActiveMembershipTier(
@@ -4405,6 +4970,15 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
       : readEnumValues(modelConfig.parameterSchema.resolution);
   const supportedRatios = schemaRatios.length ? schemaRatios : defaultRatios;
   const supportedDurations = readEnumValues(modelConfig.parameterSchema.durationSec);
+  const parameterSchema = Object.fromEntries(Object.entries(modelConfig.parameterSchema).filter(([, parameter]) => (
+    parameter &&
+    typeof parameter === "object" &&
+    !Array.isArray(parameter) &&
+    (parameter as Record<string, unknown>).visible !== false
+  )));
+  const defaultParams = Object.fromEntries(Object.entries(modelConfig.defaultParams).filter(([key]) =>
+    Object.prototype.hasOwnProperty.call(parameterSchema, key),
+  ));
   return {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
@@ -4414,14 +4988,13 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     modelKindLabel: readString(modelConfig.uiConfig.modelKindLabel),
     videoCategory,
     videoCategoryLabel: readString(modelConfig.uiConfig.videoCategoryLabel) || videoCategoryLabel(videoCategory),
-    providerGroup: readString(modelConfig.uiConfig.group) || modelConfig.providerName,
     pipeline: readString(modelConfig.uiConfig.pipeline) || modelConfig.mediaType,
     supportedModes: supportedModes.length ? supportedModes : modelConfig.taskModes,
     supportedRatios: supportedRatios.length ? supportedRatios : ["16:9", "9:16"],
     supportedQuality: schemaQuality.length ? schemaQuality : ["1080p"],
     supportedDurations,
-    parameterSchema: modelConfig.parameterSchema,
-    defaultParams: modelConfig.defaultParams,
+    parameterSchema,
+    defaultParams,
     pricing: modelConfig.pricing,
     baseCredits: modelConfig.pricing.baseCredits,
     billingMode: modelConfig.pricing.billingMode,
@@ -4471,17 +5044,8 @@ async function buildBatchImageModelOptions(db: Parameters<typeof listActiveAiMod
   const models = activeImageModels
     .filter(modelConfigSupportsBatchImage)
     .map(modelConfigToBatchImageModelOption);
-  const fallbackModels = [
-    {
-      modelId: "nano_banana_2",
-      modelName: "nano banana 2",
-      ratios: ["16:9", "9:16", "1:1"],
-      qualities: ["2K"],
-    },
-  ];
-  const resolvedModels = models.length ? models : fallbackModels;
   return {
-    models: resolvedModels,
+    models,
   };
 }
 
@@ -4515,40 +5079,8 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
   const audioModels = activeAudioModels.filter((modelConfig) =>
     modelConfigSupportsGenerationExecution("audio", modelConfig),
   ).map(modelConfigToGenerationConfigModel);
-  const imageModels = executableImageModels.length
-    ? executableImageModels.map(modelConfigToGenerationConfigModel)
-    : !requestedMediaType || requestedMediaType === "image"
-      ? [
-        {
-          modelCode: "nano_banana_2",
-          modelLabel: "nano banana 2",
-          providerGroup: "Nano banana",
-          pipeline: "G",
-          supportedModes: ["text_to_image", "multi_reference", "image_to_image"],
-          supportedRatios: ["16:9", "9:16", "1:1"],
-          supportedQuality: ["2K"],
-          displayBaseCost: 90,
-          disabled: false,
-        },
-      ]
-      : [];
-  const videoModels = executableVideoModels.length
-    ? executableVideoModels.map(modelConfigToGenerationConfigModel)
-    : !requestedMediaType || requestedMediaType === "video"
-      ? [
-        {
-          modelCode: "video_mock_1",
-          modelLabel: "Video Mock",
-          providerGroup: "Mock",
-          pipeline: "mock",
-          supportedModes: ["video"],
-          supportedRatios: ["16:9", "9:16"],
-          supportedQuality: ["720p"],
-          displayBaseCost: Number(runtimeEnv.EPISODE_VIDEO_GENERATION_COST ?? 120),
-          disabled: false,
-        },
-      ]
-      : [];
+  const imageModels = executableImageModels.map(modelConfigToGenerationConfigModel);
+  const videoModels = executableVideoModels.map(modelConfigToGenerationConfigModel);
   const defaultVideoModel =
     videoModels.find((model) => model.videoCategory === "reference") ??
     videoModels[0] ??
@@ -4563,8 +5095,8 @@ async function buildGenerationConfigModelCatalog(db: Parameters<typeof listActiv
     ],
     presets: [],
     uploadLimits: episodeUploadLimits,
-    defaultImageModelCode: imageModels[0]?.modelCode ?? "nano_banana_2",
-    defaultVideoModelCode: defaultVideoModel?.modelCode ?? "video_mock_1",
+    defaultImageModelCode: imageModels[0]?.modelCode ?? null,
+    defaultVideoModelCode: defaultVideoModel?.modelCode ?? null,
     defaultAudioModelCode: audioModels[0]?.modelCode ?? null,
   };
 }
@@ -5795,27 +6327,45 @@ async function mapGenerationTaskResponse(
   const mockImageUrl = kind === "image" ? pickMockEpisodeImageUrl(row.task_id) : null;
   const storyboardVideoUrl = kind === "video" ? mockEpisodeStoryboardVideoUrl : null;
 
-  const snapshotResult = snapshotResultAsset
+  const rawSnapshotResult = snapshotResultAsset
     ? generationResultFromSnapshotAsset(snapshotResultAsset, kind, generatedAudioItems)
     : null;
   const metadataSourceUrl = readGenerationPublicAssetUrl(metadata.sourceUrl);
   const metadataPreviewUrl = readGenerationPublicAssetUrl(metadata.previewUrl);
   const metadataDownloadUrl = readGenerationPublicAssetUrl(metadata.downloadUrl);
-  const storageSourceUrl = readGenerationPublicAssetUrl(urls?.sourceUrl, urls?.downloadUrl, urls?.previewUrl);
-  const storagePreviewUrl = readGenerationPublicAssetUrl(urls?.previewUrl, urls?.sourceUrl, urls?.downloadUrl);
-  const storageDownloadUrl = readGenerationPublicAssetUrl(urls?.downloadUrl, urls?.sourceUrl, urls?.previewUrl);
+  const storageContentUrl = row.storage_object_id
+    ? `/api/storage/objects/${encodeURIComponent(row.storage_object_id)}/content`
+    : "";
+  const storageSourceUrl = storageContentUrl || readGenerationPublicAssetUrl(urls?.sourceUrl, urls?.downloadUrl, urls?.previewUrl);
+  const storagePreviewUrl = storageContentUrl
+    ? `${storageContentUrl}?proxy=1`
+    : readGenerationPublicAssetUrl(urls?.previewUrl, urls?.sourceUrl, urls?.downloadUrl);
+  const storageDownloadUrl = storageContentUrl || readGenerationPublicAssetUrl(urls?.downloadUrl, urls?.sourceUrl, urls?.previewUrl);
   const resultSourceUrl =
     kind === "image"
-      ? metadataSourceUrl || storageSourceUrl || mockImageUrl
+      ? storageSourceUrl || metadataSourceUrl || mockImageUrl
       : storageSourceUrl || metadataSourceUrl || storyboardVideoUrl;
   const resultPreviewUrl =
     kind === "image"
-      ? metadataPreviewUrl || storagePreviewUrl || resultSourceUrl || mockImageUrl
+      ? storagePreviewUrl || metadataPreviewUrl || resultSourceUrl || mockImageUrl
       : storagePreviewUrl || metadataPreviewUrl || resultSourceUrl;
   const resultDownloadUrl =
     kind === "image"
-      ? metadataDownloadUrl || storageDownloadUrl || resultSourceUrl || mockImageUrl
+      ? storageDownloadUrl || metadataDownloadUrl || resultSourceUrl || mockImageUrl
       : storageDownloadUrl || metadataDownloadUrl || resultSourceUrl;
+  const snapshotResult = rawSnapshotResult && urls && rawSnapshotResult.storageObjectId === row.storage_object_id
+    ? {
+        ...rawSnapshotResult,
+        imageUrl: kind === "image" ? resultSourceUrl : rawSnapshotResult.imageUrl,
+        videoUrl: kind === "video" ? resultSourceUrl : rawSnapshotResult.videoUrl,
+        audioUrl: kind === "audio" ? resultSourceUrl : rawSnapshotResult.audioUrl,
+        thumbnailUrl: kind === "image" ? resultPreviewUrl : rawSnapshotResult.thumbnailUrl,
+        coverImageUrl: kind === "image" ? resultPreviewUrl : rawSnapshotResult.coverImageUrl,
+        sourceUrl: resultSourceUrl,
+        downloadUrl: resultDownloadUrl,
+        expiresAt: urls.expiresAt,
+      }
+    : rawSnapshotResult;
 
   const result =
     snapshotResult ??
@@ -5970,6 +6520,7 @@ async function listTaskCenterTasks(
     progress_percent: number | string | null;
     project_id: string | null;
     project_name: string | null;
+    is_free_generation_workspace: boolean;
     episode_id: string | null;
     episode_title: string | null;
     target_type: string;
@@ -6012,6 +6563,7 @@ async function listTaskCenterTasks(
           END AS progress_percent,
           snapshot.project_id,
           project.name AS project_name,
+          COALESCE(canvas_project.is_free_generation_workspace, false) AS is_free_generation_workspace,
           snapshot.episode_id,
           episode.title AS episode_title,
           snapshot.target_type,
@@ -6068,6 +6620,7 @@ async function listTaskCenterTasks(
         JOIN tasks task ON task.id = snapshot.task_id
         LEFT JOIN projects project ON project.id = snapshot.project_id
         LEFT JOIN episodes episode ON episode.id = snapshot.episode_id
+        LEFT JOIN creator_canvas_projects canvas_project ON canvas_project.id = snapshot.canvas_project_id
         LEFT JOIN ai_model_configs model_config ON model_config.model_code = snapshot.model_code
         ${diagnosticsSchema.providerRequests ? `LEFT JOIN LATERAL (
           SELECT request.task_center_diagnostics_json
@@ -6135,6 +6688,7 @@ async function listTaskCenterTasks(
           END AS progress_percent,
           NULL::uuid AS project_id,
           NULL::text AS project_name,
+          false AS is_free_generation_workspace,
           NULL::uuid AS episode_id,
           NULL::text AS episode_title,
           'team_asset'::text AS target_type,
@@ -6326,7 +6880,7 @@ async function listTaskCenterTasks(
       projectName: row.project_name,
       episodeId: row.episode_id,
       episodeTitle: row.episode_title,
-      targetType: row.target_type,
+      targetType: row.is_free_generation_workspace ? "free_generation" : row.target_type,
       targetId: row.target_id,
       assetId: row.target_type === "asset" || row.target_type === "team_asset" ? row.target_id : null,
       model: modelDisplayName,
@@ -7861,6 +8415,8 @@ async function settleTimedOutEpisodeGenerationTask(
 ) {
   await db.query("BEGIN");
   try {
+    await db.query("SET LOCAL lock_timeout = '500ms'");
+    await db.query("SET LOCAL idle_in_transaction_session_timeout = '15s'");
     const row = await queryOne<{
       task_id: string;
       workflow_id: string;
@@ -7893,7 +8449,7 @@ async function settleTimedOutEpisodeGenerationTask(
         WHERE t.id = $1
           AND t.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
         LIMIT 1
-        FOR UPDATE OF t
+        FOR UPDATE OF t SKIP LOCKED
       `,
       [input.taskId],
     );
@@ -8231,6 +8787,7 @@ async function settleTimedOutEpisodeGenerationTask(
     return true;
   } catch (error) {
     await db.query("ROLLBACK").catch(() => undefined);
+    if ((error as { code?: unknown })?.code === "55P03") return false;
     throw error;
   }
 }
@@ -8617,9 +9174,9 @@ async function syncSeedanceVideoTaskOnRead(
         taskId: row.task_id,
         targetType: snapshot.targetType ?? "episode",
         targetId: snapshot.targetId ?? snapshot.episodeId ?? null,
-        previewUrl: urls.previewUrl,
-        sourceUrl: urls.sourceUrl,
-        downloadUrl: urls.downloadUrl,
+        previewUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content?proxy=1`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content`,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(availableStorageObject.id)}/content`,
         provider: isLingdongModelConfig(modelConfig) ? modelConfig!.providerName : "seedance",
         externalRequestId: row.external_request_id,
       },
@@ -9545,6 +10102,13 @@ async function createGenerationTask(
   const modelConfig = requestedModelCode
     ? await findActiveAiModelConfigByCode(db, requestedModelCode)
     : undefined;
+  const configuredModelSignedUrlExpiresInSeconds = Number(
+    input.env.MODEL_SIGNED_URL_EXPIRES_SECONDS,
+  );
+  const modelSignedUrlExpiresInSeconds = Number.isFinite(configuredModelSignedUrlExpiresInSeconds)
+    && configuredModelSignedUrlExpiresInSeconds > 0
+    ? Math.floor(configuredModelSignedUrlExpiresInSeconds)
+    : 6 * 60 * 60;
   const dispatchPolicy = requestedModelCode
     ? await findActiveAiModelDispatchPolicyByModelCode(db, requestedModelCode)
     : undefined;
@@ -9616,6 +10180,8 @@ async function createGenerationTask(
       assetVersionIds: referenceAssetVersionIds,
         modelConfig,
         runtime: input.runtime,
+        signedUrlExpiresInSeconds: modelSignedUrlExpiresInSeconds,
+        now: input.now,
       })
     : [];
   const resolveStorageObjectUrl = async (storageObjectId: string) => {
@@ -9634,7 +10200,7 @@ async function createGenerationTask(
           storageObjectId,
           adapter: input.runtime.adapter,
           now: input.now,
-          expiresInSeconds: input.signedUrlExpiresInSeconds,
+          expiresInSeconds: modelSignedUrlExpiresInSeconds,
         })).url;
       }
       return (await createSignedReadUrl(db, {
@@ -9642,7 +10208,7 @@ async function createGenerationTask(
         storageObjectId,
         adapter: input.runtime.adapter,
         now: input.now,
-        expiresInSeconds: input.signedUrlExpiresInSeconds,
+        expiresInSeconds: modelSignedUrlExpiresInSeconds,
       })).url;
     } catch (error) {
       if (error instanceof AuthorizationError) {
@@ -10860,9 +11426,9 @@ async function createGenerationTask(
           taskId: task.id,
           targetType: requestSnapshot.targetType,
           targetId: requestSnapshot.targetId,
-          previewUrl: urls.previewUrl,
-          sourceUrl: urls.sourceUrl,
-          downloadUrl: urls.downloadUrl,
+          previewUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content?proxy=1`,
+          sourceUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
+          downloadUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
         },
         sourceTaskId: task.id,
         sourceAttemptId: claim.attempt.id,
@@ -10914,10 +11480,10 @@ async function createGenerationTask(
         storageObjectKey: storageObject.object_key,
         mediaKind: input.kind,
         mimeType: config.contentType,
-        url: urls.previewUrl,
-        previewUrl: urls.previewUrl,
-        sourceUrl: urls.sourceUrl,
-        downloadUrl: urls.downloadUrl,
+        url: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content?proxy=1`,
+        previewUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content?proxy=1`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(storageObject.id)}/content`,
       },
     ],
     providerStatus: {
@@ -12004,6 +12570,8 @@ async function resolveGenerationReferenceImages(
     assetVersionIds: string[];
     modelConfig: AiModelConfigRecord | undefined;
     runtime: UploadSessionRuntime;
+    signedUrlExpiresInSeconds: number;
+    now: Date;
   },
 ) {
   if (!input.assetVersionIds.length) {
@@ -12071,7 +12639,7 @@ async function resolveGenerationReferenceImages(
     ),
   );
 
-  return input.assetVersionIds.flatMap((assetVersionId) => {
+  return (await Promise.all(input.assetVersionIds.map(async (assetVersionId) => {
     const row = rowsById.get(assetVersionId);
     if (!row) {
       throw new GenerationRequestValidationError(
@@ -12104,11 +12672,17 @@ async function resolveGenerationReferenceImages(
     const bucket = readString(row.storage_bucket) || input.runtime.bucket;
     return [{
       assetVersionId,
-      url: buildGenerationReferenceObjectUrl(input.runtime, bucket, objectKey),
+      url: await buildGenerationReferenceObjectUrl({
+        runtime: input.runtime,
+        bucket,
+        objectKey,
+        expiresInSeconds: input.signedUrlExpiresInSeconds,
+        now: input.now,
+      }),
       mimeType,
       name: readString(metadata.label) || `reference-${assetVersionId}.png`,
     }];
-  });
+  }))).flat();
 }
 
 function parseMetadataJson(value: Record<string, unknown> | string | null | undefined): Record<string, unknown> {
@@ -12122,19 +12696,20 @@ function parseMetadataJson(value: Record<string, unknown> | string | null | unde
   }
 }
 
-function buildGenerationReferenceObjectUrl(
-  runtime: UploadSessionRuntime,
-  bucket: string,
-  objectKey: string,
+async function buildGenerationReferenceObjectUrl(
+  input: {
+    runtime: UploadSessionRuntime;
+    bucket: string;
+    objectKey: string;
+    expiresInSeconds: number;
+    now: Date;
+  },
 ) {
-  const publicBaseUrl = runtime.publicBaseUrl?.trim().replace(/\/+$/g, "") || "";
-  if (publicBaseUrl) {
-    return `${publicBaseUrl}/${objectKey}`;
-  }
-  if (bucket && runtime.region) {
-    return `https://${bucket}.cos.${runtime.region}.myqcloud.com/${objectKey}`;
-  }
-  return objectKey;
+  return (await input.runtime.adapter.createSignedReadUrl({
+    bucket: input.bucket,
+    objectKey: input.objectKey,
+    expiresAt: new Date(input.now.getTime() + input.expiresInSeconds * 1000),
+  })).url;
 }
 
 async function resolveEpisodeAssetVersion(
@@ -14810,8 +15385,8 @@ async function createEpisodeOriginalVideoExport(
         status: "succeeded",
         mode: "storyboard_video_package",
         storageObjectId: archiveObject.id,
-        downloadUrl: urls.downloadUrl,
-        sourceUrl: urls.sourceUrl,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
         fileName: `${sanitizePortableFileName(`${context.project.name}-${context.episode.title}-MP4`, "episode-MP4")}.zip`,
         expiresAt: urls.expiresAt,
         createdAt: record.createdAt,
@@ -15029,8 +15604,8 @@ async function createEpisodeJianyingDraftExport(
         status: "succeeded",
         mode: "jianying_draft",
         storageObjectId: archiveObject.id,
-        downloadUrl: urls.downloadUrl,
-        sourceUrl: urls.sourceUrl,
+        downloadUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
+        sourceUrl: `/api/storage/objects/${encodeURIComponent(archiveObject.id)}/content`,
         fileName: `${packageResult.folderName}.zip`,
         expiresAt: urls.expiresAt,
         createdAt: record.createdAt,
@@ -16448,7 +17023,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     "@graph": [
       {
         "@type": "SoftwareApplication",
-        name: "灵曦剧场",
+        name: "灵曦AI",
         applicationCategory: "MultimediaApplication",
         operatingSystem: "Web",
         url: canonicalUrl,
@@ -16467,7 +17042,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
   const content = `
     <section class="public-seo-content" aria-labelledby="public-seo-heading">
       <nav class="public-seo-nav" aria-label="公开创作页面">
-        <a class="public-seo-brand" href="/">灵曦剧场</a>
+        <a class="public-seo-brand" href="/">灵曦AI</a>
         <div>${navigation}</div>
       </nav>
       <header class="public-seo-intro">
@@ -16514,7 +17089,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
         <div><h2>${escapeSeoHtml(route.ctaTitle)}</h2><p>${escapeSeoHtml(route.ctaBody)}</p></div>
         <button type="button" data-public-seo-login>登录并开始</button>
       </section>
-      <footer class="public-seo-footer"><span>灵曦剧场 · AI短剧与漫剧创作平台</span><a href="/">返回首页</a></footer>
+      <footer class="public-seo-footer"><span>灵曦AI · AI短剧与漫剧创作平台</span><a href="/">返回首页</a></footer>
     </section>`;
 
   return template
@@ -16534,7 +17109,7 @@ function renderPublicSeoAppShell(template: string, route: PublicSeoRoute, origin
     )
     .replace(
       "</head>",
-      `    <meta property="og:type" content="website" />\n    <meta property="og:site_name" content="灵曦剧场" />\n    <meta property="og:title" content="${escapeSeoHtml(route.title)}" />\n    <meta property="og:description" content="${escapeSeoHtml(route.description)}" />\n    <meta property="og:url" content="${escapeSeoHtml(canonicalUrl)}" />\n    <script type="application/ld+json">${structuredData}</script>\n  </head>`,
+      `    <meta property="og:type" content="website" />\n    <meta property="og:site_name" content="灵曦AI" />\n    <meta property="og:title" content="${escapeSeoHtml(route.title)}" />\n    <meta property="og:description" content="${escapeSeoHtml(route.description)}" />\n    <meta property="og:url" content="${escapeSeoHtml(canonicalUrl)}" />\n    <script type="application/ld+json">${structuredData}</script>\n  </head>`,
     )
     .replace("\n    <script type=\"module\"", `${content}\n\n    <script type=\"module\"`);
 }
@@ -16569,6 +17144,7 @@ function proxyRemoteMedia(
   response: ServerResponse,
   targetUrl: string,
   headers: Record<string, string> = {},
+  responseHeaders: Record<string, string> = {},
 ) {
   return new Promise<void>((resolvePromise) => {
     const upstream = httpsRequest(
@@ -16594,6 +17170,9 @@ function proxyRemoteMedia(
             response.setHeader(headerName, headerValue);
           }
         }
+        for (const [headerName, headerValue] of Object.entries(responseHeaders)) {
+          response.setHeader(headerName, headerValue);
+        }
         response.setHeader("access-control-allow-origin", "*");
         upstreamResponse.pipe(response);
         upstreamResponse.on("end", () => resolvePromise());
@@ -16615,6 +17194,62 @@ function proxyRemoteMedia(
       resolvePromise();
     });
     upstream.end();
+  });
+}
+
+function isSafeVideoBatchMediaUrl(targetUrl: string) {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "[::1]" || hostname === "0.0.0.0" || hostname === "::1") return false;
+    if (/^(127\.|10\.|192\.168\.)/u.test(hostname)) return false;
+    const private172 = hostname.match(/^172\.(\d{1,3})\./u);
+    if (private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function proxyMergedVideoMedia(
+  response: ServerResponse,
+  videoUrl: string,
+  audioUrl: string,
+  download: boolean,
+) {
+  return new Promise<void>((resolvePromise) => {
+    const child = spawn(ffmpegInstaller.path, [
+      "-hide_banner",
+      "-loglevel", "error",
+      "-i", videoUrl,
+      "-i", audioUrl,
+      "-map", "0:v:0",
+      "-map", "1:a:0?",
+      "-c", "copy",
+      "-movflags", "frag_keyframe+empty_moov",
+      "-f", "mp4",
+      "pipe:1",
+    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    response.statusCode = 200;
+    response.setHeader("content-type", "video/mp4");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("access-control-allow-origin", "*");
+    if (download) response.setHeader("content-disposition", "attachment; filename=video-hq.mp4");
+    child.stdout.pipe(response);
+    child.stderr.resume();
+    child.once("error", () => {
+      if (!response.headersSent) response.statusCode = 502;
+      response.end();
+      resolvePromise();
+    });
+    child.once("close", () => {
+      if (!response.writableEnded) response.end();
+      resolvePromise();
+    });
+    response.once("close", () => {
+      if (!response.writableEnded) child.kill();
+    });
   });
 }
 
@@ -17952,8 +18587,13 @@ export function createPhoneAuthDevServer(
   const signedUrlExpiresInSeconds = Number(
     runtimeEnv.STORAGE_SIGNED_URL_EXPIRES_SECONDS ??
     runtimeEnv.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
-    900,
+    3600,
   );
+  const homeMediaRateLimiter = createHomeMediaRateLimiter(runtimeEnv);
+  const storageMediaLimiter = createStorageMediaLimiter(runtimeEnv);
+  const officialAssetRootPrefix = runtimeEnv.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets";
+  const trustProxyForHomeMedia = String(runtimeEnv.HOME_MEDIA_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
+  const trustProxyForStorageMedia = String(runtimeEnv.STORAGE_MEDIA_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
   const storageAdapter = (() => {
     try {
       return createStorageAdapterFromEnv(runtimeEnv);
@@ -17972,10 +18612,7 @@ export function createPhoneAuthDevServer(
     provider: storageMode === "cos" ? "tencent_cos" : storageMode === "s3_compatible" ? "s3_compatible" : "creator-dev",
     bucket: storageBucket,
     region: storageRegion,
-    publicBaseUrl:
-      runtimeEnv.STORAGE_PUBLIC_BASE_URL?.trim() ||
-      runtimeEnv.STORAGE_ENDPOINT?.trim() ||
-      null,
+    publicBaseUrl: runtimeEnv.STORAGE_PUBLIC_BASE_URL?.trim() || null,
     adapter: storageAdapter,
     stsSecretId: runtimeEnv.STORAGE_COS_SECRET_ID?.trim() ?? null,
     stsSecretKey: runtimeEnv.STORAGE_COS_SECRET_KEY?.trim() ?? null,
@@ -17997,50 +18634,16 @@ export function createPhoneAuthDevServer(
     sessionToken: string,
     adminUserId: string,
   ): Promise<BrandKitDetailRecord> => {
-    const db = await getDb();
-    const sign = async (storageObjectId: string | null) => {
-      if (!storageObjectId) return null;
-      try {
-        const urls = await buildSignedObjectUrls(db, {
-          sessionToken,
-          storageObjectId,
-          adapter: storageRuntime.adapter,
-          now: new Date(),
-          expiresInSeconds: signedUrlExpiresInSeconds,
-          publicBaseUrl: storageRuntime.publicBaseUrl,
-          region: storageRuntime.region,
-        });
-        return urls.previewUrl;
-      } catch {
-        try {
-          const object = await findStorageObject(db, storageObjectId);
-          if (
-            !object ||
-            object.createdByUserId !== adminUserId ||
-            object.status !== "available" ||
-            object.deletedAt !== null
-          ) {
-            return null;
-          }
-          const expiresAt = new Date(Date.now() + signedUrlExpiresInSeconds * 1000);
-          const signed = await storageRuntime.adapter.createSignedReadUrl({
-            bucket: object.bucket,
-            objectKey: object.objectKey,
-            expiresAt,
-          });
-          return signed.url;
-        } catch {
-          return null;
-        }
-      }
-    };
+    const contentUrl = (storageObjectId: string | null) => storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+      : null;
     return {
       ...brandKit,
-      cover_url: await sign(brandKit.cover_storage_object_id),
-      assets: await Promise.all(brandKit.assets.map(async (asset) => ({
+      cover_url: contentUrl(brandKit.cover_storage_object_id),
+      assets: brandKit.assets.map((asset) => ({
         ...asset,
-        file_url: await sign(asset.storage_object_id),
-      }))),
+        file_url: contentUrl(asset.storage_object_id),
+      })),
     };
   };
   const httpServer = createServer((request, response) => {
@@ -18114,16 +18717,18 @@ export function createPhoneAuthDevServer(
             resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
             env: runtimeEnv,
           }),
+          disableThinking: true,
         });
-      const aiScriptAnalysisTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
+        const aiScriptAnalysisTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
         gateway: new TextModelGatewayService({
           db,
           adapter: new OpenAICompatibleTextAdapter(),
           modelflareAdapter: new ModelflareResponsesAdapter(),
           resolver: new AdminBackedTextModelResolver(db),
-          env: runtimeEnv,
-        }),
-      });
+            env: runtimeEnv,
+          }),
+          disableThinking: true,
+        });
       const canvasTextChatGateway = options.textChatGateway ?? createTextModelChatGateway({
         gateway: new TextModelGatewayService({
           db,
@@ -18357,6 +18962,119 @@ export function createPhoneAuthDevServer(
         const announcements = createAnnouncementService({ db });
         const result = await announcements.listActiveAnnouncements({ now: new Date() });
         return writeJson(response, enveloped(200, result.data));
+      }
+
+      const styleCoverMatch = pathname.match(/^\/api\/public\/style-covers\/([^/]+)$/);
+      if (request.method === "GET" && styleCoverMatch) {
+        const rateLimit = homeMediaRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForHomeMedia),
+        );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "official_asset_rate_limited", "Too many official asset signing requests"));
+        }
+        try {
+          let styleName = "";
+          try {
+            styleName = decodeURIComponent(styleCoverMatch[1] ?? "");
+          } catch {
+            return writeJson(response, envelopedError(400, "official_asset_invalid", "Official asset is invalid"));
+          }
+          if (!styleName || /[\\/\0]/.test(styleName)) {
+            return writeJson(response, envelopedError(404, "official_asset_not_found", "Official asset was not found"));
+          }
+          const location = (await storageRuntime.adapter.createSignedReadUrl({
+            bucket: storageBucket,
+            objectKey: `${officialAssetRootPrefix.replace(/^\/+|\/+$/g, "")}/promptCovers/officialStyles/${styleName}.webp`,
+            expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+          })).url;
+          response.statusCode = 307;
+          response.setHeader("location", location);
+          response.setHeader("cache-control", "no-store");
+          response.setHeader("referrer-policy", "no-referrer");
+          response.end();
+          return;
+        } finally {
+          rateLimit.release();
+        }
+      }
+
+      if (request.method === "GET" && pathname === "/api/home-recommendations") {
+        const recommendations = createHomeRecommendationService({ db });
+        return writeJson(
+          response,
+          enveloped(
+            200,
+            homeRecommendationMediaGatewayPayload((await recommendations.listPublicRecommendations()).data),
+          ),
+        );
+      }
+
+      const homeRecommendationVideoMediaMatch = pathname.match(/^\/api\/home-recommendations\/videos\/([^/]+)\/media$/);
+      if (
+        request.method === "GET" &&
+        (pathname === "/api/home-recommendations/background/media" || homeRecommendationVideoMediaMatch)
+      ) {
+        const rateLimit = homeMediaRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForHomeMedia),
+        );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "home_recommendation_media_rate_limited", "Too many home media signing requests"));
+        }
+        try {
+        const recommendations = createHomeRecommendationService({ db });
+        const publicRecommendations = (await recommendations.listPublicRecommendations()).data;
+        let videoId = "";
+        if (homeRecommendationVideoMediaMatch) {
+          try {
+            videoId = decodeURIComponent(homeRecommendationVideoMediaMatch[1] ?? "");
+          } catch {
+            return writeJson(response, envelopedError(400, "home_recommendation_media_invalid", "Home recommendation media is invalid"));
+          }
+        }
+        const sourceUrl = pathname === "/api/home-recommendations/background/media"
+          ? String(publicRecommendations.background?.videoUrl ?? "").trim()
+          : publicRecommendations.categories
+            .flatMap((category) => category.videos)
+            .find((video) => video.id === videoId)
+            ?.videoUrl ?? "";
+        if (!sourceUrl) {
+          return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
+        }
+
+        const objectKey = storageMode === "cos"
+          ? cosObjectKeyFromPublicUrl({ sourceUrl, bucket: storageBucket, region: storageRegion })
+          : null;
+        if (!objectKey || !isHomeRecommendationObjectKey({ objectKey, officialAssetRootPrefix })) {
+          return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
+        }
+        const location = (await storageRuntime.adapter.createSignedReadUrl({
+          bucket: storageBucket,
+          objectKey,
+          expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+        })).url;
+        let upstream: Response;
+        try {
+          upstream = await (options.fetchImpl ?? fetch)(location);
+        } catch {
+          return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
+        }
+        if (!upstream.ok || !upstream.body) {
+          await upstream.body?.cancel().catch(() => undefined);
+          return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
+        }
+        response.statusCode = 200;
+        response.setHeader("content-type", upstream.headers.get("content-type") ?? "video/mp4");
+        response.setHeader("cache-control", "public, max-age=31536000, immutable");
+        response.setHeader("referrer-policy", "no-referrer");
+        const contentLength = upstream.headers.get("content-length");
+        if (contentLength) response.setHeader("content-length", contentLength);
+        Readable.fromWeb(upstream.body as never).pipe(response);
+        return;
+        } finally {
+          rateLimit.release();
+        }
       }
 
       const generationWebhookMatch = pathname.match(/^\/api\/provider-webhooks\/generation\/([^/]+)$/);
@@ -18596,8 +19314,73 @@ export function createPhoneAuthDevServer(
         if (!urls.length) {
           return writeJson(response, envelopedError(400, "video_batch_links_required", "请粘贴至少一条受支持的视频链接。"));
         }
-        const tasks = await resolveVideoBatchLinks({ links: urls.join("\n") });
+        const videoBatchCookie = await createAdminSystemSettingsService({ db }).getVideoBatchCookie();
+        const tasks = await resolveVideoBatchLinks({ links: urls.join("\n"), cookie: videoBatchCookie.data.cookie });
         return writeJson(response, enveloped(200, { tasks }));
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/video-batch/cookie") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, {
+          status: 200,
+          body: await createAdminSystemSettingsService({ db }).getVideoBatchCookie(),
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/video-batch/media") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const targetUrl = new URL(request.url ?? pathname, "http://localhost").searchParams.get("url") ?? "";
+        const audioUrl = new URL(request.url ?? pathname, "http://localhost").searchParams.get("audio") ?? "";
+        if (!isSafeVideoBatchMediaUrl(targetUrl)) {
+          return writeJson(response, envelopedError(400, "video_batch_media_url_invalid", "播放地址无效或不受支持。"));
+        }
+        const isDownload = new URL(request.url ?? pathname, "http://localhost").searchParams.get("download") === "1";
+        if (audioUrl) {
+          if (!isSafeVideoBatchMediaUrl(audioUrl)) {
+            return writeJson(response, envelopedError(400, "video_batch_audio_url_invalid", "音频地址无效或不受支持。"));
+          }
+          await proxyMergedVideoMedia(response, targetUrl, audioUrl, isDownload);
+          return;
+        }
+        await proxyRemoteMedia(
+          response,
+          targetUrl,
+          {
+            ...(typeof request.headers.range === "string" ? { Range: request.headers.range } : {}),
+            "User-Agent": String(request.headers["user-agent"] ?? "Mozilla/5.0"),
+            Referer: "https://www.douyin.com/",
+          },
+          isDownload ? { "content-disposition": "attachment; filename=video.mp4" } : {},
+        );
+        return;
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/video-batch/cookie") {
+        const idempotencyKey = requiredIdempotencyKeyFromRequest(request);
+        if (!idempotencyKey) return writeIdempotencyKeyRequired(response);
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = (await readJsonBody(request)) as { cookie?: unknown; reason?: unknown };
+        return writeJson(response, await createAdminSystemSettingsService({ db }).updateVideoBatchCookie({
+          cookie: String(body.cookie ?? ""),
+          reason: String(body.reason ?? "更新视频解析服务端 Cookie"),
+          actorAdminAccountId: adminRoute.session.admin_account_id,
+          now: new Date(),
+        }));
       }
 
       if (request.method === "GET" && pathname === "/api/admin/dashboard/overview") {
@@ -20521,6 +21304,79 @@ export function createPhoneAuthDevServer(
         }));
       }
 
+      if (request.method === "GET" && pathname === "/api/admin/home-recommendations") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredRoles: [...adminRouteRoles.homeRecommendationManage],
+        });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const recommendations = createHomeRecommendationService({ db });
+        return writeJson(response, { status: 200, body: await recommendations.listAdminRecommendations() });
+      }
+
+      if (request.method === "PATCH" && pathname === "/api/admin/home-recommendations/background") {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveBackground({
+          videoUrl: body.videoUrl, posterUrl: body.posterUrl, status: body.status,
+          actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+
+      const adminHomeCategoryMatch = pathname.match(/^\/api\/admin\/home-recommendations\/categories\/([^/]+)$/);
+      if (request.method === "POST" && pathname === "/api/admin/home-recommendations/categories") {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveCategory({
+          code: body.code, name: body.name, status: body.status, sortOrder: body.sortOrder,
+          actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "PATCH" && adminHomeCategoryMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveCategory({
+          id: decodeURIComponent(adminHomeCategoryMatch[1]), code: body.code, name: body.name, status: body.status, sortOrder: body.sortOrder,
+          actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "DELETE" && adminHomeCategoryMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, await createHomeRecommendationService({ db }).deleteCategory({ id: decodeURIComponent(adminHomeCategoryMatch[1]) }));
+      }
+
+      const adminHomeVideoMatch = pathname.match(/^\/api\/admin\/home-recommendations\/videos\/([^/]+)$/);
+      if (request.method === "POST" && pathname === "/api/admin/home-recommendations/videos") {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveVideo({
+          categoryId: body.categoryId, title: body.title, subtitle: body.subtitle, coverUrl: body.coverUrl,
+          videoUrl: body.videoUrl, durationLabel: body.durationLabel, coverAlt: body.coverAlt,
+          status: body.status, sortOrder: body.sortOrder, actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "PATCH" && adminHomeVideoMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        const body = objectBody(await readJsonBody(request));
+        return writeJson(response, await createHomeRecommendationService({ db }).saveVideo({
+          id: decodeURIComponent(adminHomeVideoMatch[1]), categoryId: body.categoryId, title: body.title, subtitle: body.subtitle,
+          coverUrl: body.coverUrl, videoUrl: body.videoUrl, durationLabel: body.durationLabel, coverAlt: body.coverAlt,
+          status: body.status, sortOrder: body.sortOrder, actorAdminAccountId: adminRoute.session.admin_account_id, now: new Date(),
+        }));
+      }
+      if (request.method === "DELETE" && adminHomeVideoMatch) {
+        const adminRoute = await requireAdminRouteSession({ db, cookieHeader: request.headers.cookie, requiredRoles: [...adminRouteRoles.homeRecommendationManage] });
+        if (!adminRoute.ok) return writeJson(response, adminRoute.response);
+        return writeJson(response, await createHomeRecommendationService({ db }).deleteVideo({ id: decodeURIComponent(adminHomeVideoMatch[1]) }));
+      }
+
       if (request.method === "GET" && pathname === "/api/admin/membership/plans") {
         const adminRoute = await requireAdminRouteSession({
           db,
@@ -21063,6 +21919,8 @@ export function createPhoneAuthDevServer(
           cookieHeader: request.headers.cookie,
           ...(adminUploadConfig.kind === "prompt_cover"
             ? { requiredRoles: [...adminRouteRoles.storyboardPromptWrite] }
+            : adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video"
+              ? { requiredRoles: [...adminRouteRoles.homeRecommendationManage] }
             : { requiredPermissions: ["settings.write" as const] }),
         });
         if (!adminRoute.ok) {
@@ -21110,10 +21968,12 @@ export function createPhoneAuthDevServer(
             ),
           );
         }
-        if (uploadPolicy.kind !== "image") {
+        const isVideoUpload = adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video";
+        const isBackgroundVideoUpload = adminUploadConfig.kind === "home_background_video";
+        if (uploadPolicy.kind !== (isVideoUpload ? "video" : "image")) {
           return writeJson(
             response,
-            envelopedError(400, "admin_asset_upload_image_required", "Admin asset uploads only support images"),
+            envelopedError(400, isVideoUpload ? (isBackgroundVideoUpload ? "home_background_video_required" : "home_recommendation_video_required") : "admin_asset_upload_image_required", isVideoUpload ? "请选择视频文件" : "Admin asset uploads only support images"),
           );
         }
         if (typeof storageRuntime.adapter.putObject !== "function") {
@@ -21123,19 +21983,21 @@ export function createPhoneAuthDevServer(
           );
         }
 
-        let normalizedImage: Awaited<ReturnType<typeof normalizeAdminManagedImageUpload>>;
-        try {
-          normalizedImage = await normalizeAdminManagedImageUpload({ bytes, fileName });
-        } catch {
-          return writeJson(
-            response,
-            envelopedError(400, "admin_asset_upload_image_invalid", "Admin asset upload image is invalid"),
-          );
+        let managedFile = { bytes, contentType, fileName };
+        if (!isVideoUpload) {
+          try {
+            managedFile = await normalizeAdminManagedImageUpload({ bytes, fileName });
+          } catch {
+            return writeJson(
+              response,
+              envelopedError(400, "admin_asset_upload_image_invalid", "Admin asset upload image is invalid"),
+            );
+          }
         }
 
         const now = new Date();
         const objectKey = buildManagedUploadObjectKey({
-          fileName: normalizedImage.fileName,
+          fileName: managedFile.fileName,
           rootPrefix: adminUploadConfig.rootPrefix,
           subfolder: adminUploadConfig.subfolder,
           now,
@@ -21144,9 +22006,10 @@ export function createPhoneAuthDevServer(
         const uploaded = await uploadTrackedCloudObject(db, {
           runtime: storageRuntime,
           objectKey,
-          bytes: normalizedImage.bytes,
-          contentType: normalizedImage.contentType,
-          fileName: normalizedImage.fileName,
+          bytes: managedFile.bytes,
+          contentType: managedFile.contentType,
+          cacheControl: isBackgroundVideoUpload ? "public, max-age=31536000, immutable" : null,
+          fileName: managedFile.fileName,
           actorUserId: null,
           actorDisplayName: adminRoute.session.display_name,
           pageKey: "admin",
@@ -21170,8 +22033,8 @@ export function createPhoneAuthDevServer(
               storageObjectKey: objectKey,
               previewUrl: uploaded.sourceUrl,
               sourceUrl: uploaded.sourceUrl,
-              mimeType: normalizedImage.contentType,
-              byteSize: normalizedImage.bytes.byteLength,
+              mimeType: managedFile.contentType,
+              byteSize: managedFile.bytes.byteLength,
               originalFileName: fileName,
               eTag: uploaded.eTag,
               versionId: uploaded.versionId,
@@ -22209,42 +23072,39 @@ export function createPhoneAuthDevServer(
           )?.total_count ?? 0,
         );
 
+        const data = rows.rows.map((row) => {
+          const contentUrl = `/api/storage/objects/${encodeURIComponent(row.id)}/content`;
+          const previewUrl = row.status === "available" ? `${contentUrl}?proxy=1` : null;
+          return {
+            id: row.id,
+            bucket: row.bucket,
+            objectKey: row.object_key,
+            contentType: row.content_type,
+            mediaKind: row.content_type.startsWith("video/") ? "video" : "image",
+            sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+            provider: row.provider,
+            status: row.status,
+            previewUrl,
+            sourceUrl: row.status === "available" ? contentUrl : null,
+            downloadUrl: row.status === "available" ? `${contentUrl}?download=1` : null,
+            projectId: row.project_id,
+            projectName: row.project_name,
+            pageKey: row.page_key,
+            pageUrl: row.page_url,
+            sourceAction: row.source_action,
+            fileName: row.file_name,
+            actorDisplayName: row.actor_display_name,
+            actorPhoneE164: row.actor_phone_e164,
+            uploadStatus: row.upload_status,
+            createdAt: row.created_at.toISOString(),
+            uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
+            uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
+          };
+        });
         return writeJson(response, {
           status: 200,
           body: {
-            data: rows.rows.map((row) => {
-              const previewUrl =
-                row.public_url ||
-                buildStorageObjectPublicUrl(storageRuntime, {
-                  bucket: row.bucket,
-                  objectKey: row.object_key,
-                });
-              return {
-                id: row.id,
-                bucket: row.bucket,
-                objectKey: row.object_key,
-                contentType: row.content_type,
-                mediaKind: row.content_type.startsWith("video/") ? "video" : "image",
-                sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
-                provider: row.provider,
-                status: row.status,
-                previewUrl,
-                sourceUrl: previewUrl,
-                downloadUrl: previewUrl,
-                projectId: row.project_id,
-                projectName: row.project_name,
-                pageKey: row.page_key,
-                pageUrl: row.page_url,
-                sourceAction: row.source_action,
-                fileName: row.file_name,
-                actorDisplayName: row.actor_display_name,
-                actorPhoneE164: row.actor_phone_e164,
-                uploadStatus: row.upload_status,
-                createdAt: row.created_at.toISOString(),
-                uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
-                uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
-              };
-            }),
+            data,
             meta: {
               page,
               pageSize,
@@ -22489,44 +23349,41 @@ export function createPhoneAuthDevServer(
           )?.total_count ?? 0,
         );
 
+        const data = await Promise.all(rows.rows.map(async (row) => {
+          const contentUrl = `/api/storage/objects/${encodeURIComponent(row.id)}/content`;
+          const previewUrl = `${contentUrl}?proxy=1`;
+          return {
+            id: row.id,
+            storageObjectId: row.id,
+            bucket: row.bucket,
+            objectKey: row.object_key,
+            contentType: row.content_type,
+            mediaKind: row.content_type.startsWith("video/")
+              ? "video"
+              : row.content_type.startsWith("audio/") ? "audio" : "image",
+            sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+            provider: row.provider,
+            status: row.status,
+            previewUrl,
+            sourceUrl: contentUrl,
+            downloadUrl: `${contentUrl}?download=1`,
+            projectId: row.project_id,
+            projectName: row.project_name,
+            pageKey: row.page_key,
+            pageUrl: row.page_url,
+            sourceAction: row.source_action,
+            fileName: row.file_name,
+            actorDisplayName: row.actor_display_name,
+            uploadStatus: row.upload_status,
+            createdAt: row.created_at.toISOString(),
+            uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
+            uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
+          };
+        }));
         return writeJson(response, {
           status: 200,
           body: {
-            data: rows.rows.map((row) => {
-              const previewUrl =
-                row.public_url ||
-                buildStorageObjectPublicUrl(storageRuntime, {
-                  bucket: row.bucket,
-                  objectKey: row.object_key,
-                });
-              return {
-                id: row.id,
-                storageObjectId: row.id,
-                bucket: row.bucket,
-                objectKey: row.object_key,
-                contentType: row.content_type,
-                mediaKind: row.content_type.startsWith("video/")
-                  ? "video"
-                  : row.content_type.startsWith("audio/") ? "audio" : "image",
-                sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
-                provider: row.provider,
-                status: row.status,
-                previewUrl,
-                sourceUrl: previewUrl,
-                downloadUrl: previewUrl,
-                projectId: row.project_id,
-                projectName: row.project_name,
-                pageKey: row.page_key,
-                pageUrl: row.page_url,
-                sourceAction: row.source_action,
-                fileName: row.file_name,
-                actorDisplayName: row.actor_display_name,
-                uploadStatus: row.upload_status,
-                createdAt: row.created_at.toISOString(),
-                uploadCreatedAt: row.upload_created_at?.toISOString() ?? null,
-                uploadCompletedAt: row.upload_completed_at?.toISOString() ?? null,
-              };
-            }),
+            data,
             meta: {
               page,
               pageSize,
@@ -23897,6 +24754,7 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             projectId?: string | null;
+            canvasProjectId?: string | null;
             purpose: string;
             fileName: string;
             contentType: string;
@@ -23943,11 +24801,14 @@ export function createPhoneAuthDevServer(
               );
             }
           }
+          const freeGenerationWorkspace = body.purpose === "free-generation-attachments"
+            ? await ensureFreeGenerationWorkspace(db, authenticated.user.id, new Date())
+            : null;
           const prepared = await createUploadSession(db, {
             actor,
             sessionToken: authenticated.sessionToken,
             projectId: body.projectId?.trim() || null,
-            canvasProjectId: body.canvasProjectId?.trim() || null,
+            canvasProjectId: (freeGenerationWorkspace?.id ?? body.canvasProjectId?.trim()) || null,
             purpose: body.purpose,
             fileName: body.fileName,
             contentType: body.contentType,
@@ -24011,31 +24872,48 @@ export function createPhoneAuthDevServer(
               adapter: storageRuntime.adapter,
               now: new Date(),
               expiresInSeconds: signedUrlExpiresInSeconds,
+              responseContentDisposition: object.contentType.startsWith("video/") ? "inline" : undefined,
             });
             if (object.status !== "available") {
               return writeJson(response, envelopedError(409, "storage_object_not_ready", "Storage object is not ready"));
             }
-            if (
-              url.searchParams.get("download") === "1"
-              || (url.searchParams.get("proxy") === "1" && object.contentType.startsWith("image/"))
-            ) {
-              const bytes = await readUploadedStorageObjectBytes(db, {
-                sessionToken: authenticated.sessionToken,
-                storageObjectId: object.id,
-                bucket: object.bucket,
-                objectKey: object.objectKey,
-                runtime: storageRuntime,
-                signedUrlExpiresInSeconds,
-                now: new Date(),
-                fetchImpl: options.fetchImpl ?? fetch,
-              });
-              response.statusCode = 200;
-              response.setHeader("content-type", object.contentType);
-              response.setHeader("content-length", String(bytes.byteLength));
-              response.setHeader("cache-control", "private, max-age=300");
-              response.setHeader("x-content-type-options", "nosniff");
-              response.end(bytes);
-              return;
+            const proxyRequested = url.searchParams.get("proxy") === "1";
+            const downloadRequested = url.searchParams.get("download") === "1";
+            const image = object.contentType.startsWith("image/");
+            const video = object.contentType.startsWith("video/");
+            if (downloadRequested || (proxyRequested && (image || video))) {
+              let release: (() => void) | null = null;
+              try {
+                release = await storageMediaLimiter.acquire({
+                  kind: image ? "image" : "video",
+                  userId: authenticated.user.id,
+                  ipAddress: homeMediaRequestIpAddress(request, trustProxyForStorageMedia),
+                });
+                const streamed = await streamStorageObjectContent({
+                  response,
+                  signedUrl: signed.url,
+                  requestOrigin: serverOriginFromRequest(request),
+                  range: typeof request.headers.range === "string" ? request.headers.range : null,
+                  contentType: object.contentType,
+                  download: downloadRequested,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                });
+                if (!streamed) {
+                  return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+                }
+                return;
+              } catch (error) {
+                if (error instanceof StorageMediaLimitError) {
+                  response.setHeader("retry-after", String(error.retryAfterSeconds));
+                  return writeJson(
+                    response,
+                    envelopedError(429, `storage_media_${error.code}`, "Storage media request is temporarily queued"),
+                  );
+                }
+                throw error;
+              } finally {
+                release?.();
+              }
             }
             response.statusCode = 307;
             response.setHeader("location", signed.url);
@@ -24357,10 +25235,6 @@ export function createPhoneAuthDevServer(
             runtime: storageRuntime,
             signedUrlExpiresInSeconds,
           });
-          const publicUrl = buildStorageObjectPublicUrl(storageRuntime, {
-            bucket: completed.storageObject.bucket,
-            objectKey: completed.storageObject.objectKey,
-          });
           const uploadRecord = await completeProjectUploadRecord(db, {
             uploadSessionId,
             storageObjectId: completed.storageObject.id,
@@ -24369,7 +25243,7 @@ export function createPhoneAuthDevServer(
             provider: completed.storageObject.provider,
             contentType: completed.storageObject.contentType,
             sizeBytes: completed.storageObject.sizeBytes ?? null,
-            publicUrl,
+            publicUrl: null,
             status: "uploaded",
             errorMessage: null,
             now: new Date(),
@@ -24378,6 +25252,12 @@ export function createPhoneAuthDevServer(
             status: 200,
             body: {
               ...completed,
+              urls: {
+                previewUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`,
+                sourceUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?proxy=1`,
+                downloadUrl: `/api/storage/objects/${encodeURIComponent(completed.storageObject.id)}/content?download=1`,
+                expiresAt: null,
+              },
               uploadRecord,
             },
           });
@@ -24426,6 +25306,7 @@ export function createPhoneAuthDevServer(
         pathname.startsWith("/api/projects/") ||
         pathname.startsWith("/api/episodes/") ||
         pathname.startsWith("/api/canvas/") ||
+        pathname.startsWith("/api/free-generation/") ||
         pathname === "/api/director-desks" ||
         pathname.startsWith("/api/director-desks/") ||
         pathname === "/api/creator/canvases" ||
@@ -24952,6 +25833,174 @@ export function createPhoneAuthDevServer(
           }
         }
 
+        const freeGenerationConversationMatch = pathname.match(/^\/api\/free-generation\/conversations$/);
+        const freeGenerationMessageMatch = pathname.match(/^\/api\/free-generation\/conversations\/([^/]+)\/messages$/);
+        const freeGenerationFileGrantMatch = pathname.match(/^\/api\/free-generation\/conversations\/([^/]+)\/file-grants(?:\/([^/]+))?$/);
+        const freeGenerationEventsMatch = pathname.match(/^\/api\/free-generation\/agent-tasks\/([^/]+)\/events$/);
+        const freeGenerationControlMatch = pathname.match(/^\/api\/free-generation\/agent-tasks\/([^/]+)\/(pause|resume|stop|replan|interject|approve|skip)$/);
+        if (pathname.startsWith("/api/free-generation/")) {
+          if (authenticated.user.teamMember) {
+            return writeJson(response, envelopedError(403, "free_generation_owner_required", "free generation is only available to the account owner"));
+          }
+          const now = new Date();
+          const workspace = await ensureFreeGenerationWorkspace(db, authenticated.user.id, now);
+          const canvasProjectId = workspace.id;
+          const agentActor = freeGenerationAgentActor(authenticated.user.id);
+          if (request.method === "GET" && pathname === "/api/free-generation/agent-models") {
+            return writeJson(response, enveloped(200, { models: await listAvailableCanvasAgentModels(db) }));
+          }
+          if (freeGenerationConversationMatch) {
+            const body = request.method === "GET" ? {} : (await readJsonBody(request)) as Record<string, unknown>;
+            if (request.method === "GET") {
+              return writeJson(response, enveloped(200, { conversations: await listCanvasAgentConversations(db, {
+                canvasId: canvasProjectId, actor: agentActor, limit: Number(url.searchParams.get("limit") ?? 50),
+              }) }));
+            }
+            if (request.method === "POST") {
+              const conversation = await createCanvasAgentConversation(db, {
+                canvasId: canvasProjectId, actor: agentActor,
+                title: typeof body.title === "string" ? body.title : "自由生成", now,
+              });
+              return writeJson(response, enveloped(201, { conversation }));
+            }
+            if (request.method === "PATCH") {
+              return writeJson(response, enveloped(200, { conversation: await updateCanvasAgentConversation(db, {
+                canvasId: canvasProjectId, conversationId: String(body.conversationId ?? ""), actor: agentActor,
+                title: typeof body.title === "string" ? body.title : undefined,
+                status: body.status === "archived" ? "archived" : body.status === "active" ? "active" : undefined,
+                pinned: typeof body.pinned === "boolean" ? body.pinned : undefined, now,
+              }) }));
+            }
+            if (request.method === "DELETE") {
+              return writeJson(response, enveloped(200, { conversation: await deleteCanvasAgentConversation(db, {
+                canvasId: canvasProjectId, conversationId: String(url.searchParams.get("conversationId") ?? body.conversationId ?? ""), actor: agentActor, now,
+              }) }));
+            }
+            return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+          }
+          if (freeGenerationMessageMatch) {
+            const conversationId = decodeURIComponent(freeGenerationMessageMatch[1] ?? "");
+            if (request.method === "GET") {
+              try {
+                return writeJson(response, enveloped(200, { messages: await listCanvasAgentMessages(db, {
+                  canvasId: canvasProjectId, conversationId, actor: agentActor, limit: Number(url.searchParams.get("limit") ?? 200),
+                }) }));
+              } catch (error) {
+                if (error instanceof Error && error.message === "canvas_agent_conversation_not_found") {
+                  return writeJson(response, envelopedError(404, error.message, "Free generation conversation not found"));
+                }
+                throw error;
+              }
+            }
+            if (request.method !== "POST") return writeJson(response, envelopedError(405, "method_not_allowed", "method not allowed"));
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            const runtimeConfiguration = await loadCanvasAgentRuntimeConfiguration(db);
+            const modelCode = selectCanvasAgentModelCode(runtimeConfiguration, "c", body.modelCode ?? body.model);
+            if (!modelCode) return writeJson(response, envelopedError(400, "agent_model_required", "modelCode is required"));
+            const model = await new AdminBackedTextModelResolver(db).resolve(modelCode);
+            const userMessage = await enrichCanvasAgentMessageAttachments(db, {
+              canvasId: canvasProjectId, conversationId, actor: agentActor,
+              message: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+              sessionToken: authenticated.sessionToken, runtime: storageRuntime, signedUrlExpiresInSeconds, now,
+            });
+            const task = await createCanvasAgentTask(db, {
+              canvasId: canvasProjectId, conversationId, actor: agentActor, mode: "c", modelCode: model.id,
+              modelConfigSnapshot: model.snapshot,
+              budget: { ...readJsonRecord(body.budget), capabilityProfile: "media_generation_only" },
+              baseRevision: workspace.serverRevision, userMessage, now,
+            });
+            return writeJson(response, enveloped(202, { task }));
+          }
+          if (freeGenerationFileGrantMatch) {
+            const route = {
+              canvasId: canvasProjectId,
+              conversationId: decodeURIComponent(freeGenerationFileGrantMatch[1] ?? ""),
+              grantId: freeGenerationFileGrantMatch[2] ? decodeURIComponent(freeGenerationFileGrantMatch[2]) : null,
+            };
+            const service = createCanvasAgentFileGrantHttpService(db);
+            try {
+              const result = await service.handle({
+                method: request.method ?? "GET", route, actor: agentActor,
+                body: request.method === "POST" ? (await readJsonBody(request)) as Record<string, unknown> : undefined,
+                includeInactive: url.searchParams.get("includeInactive") === "true", now,
+              });
+              return writeJson(response, enveloped(result.status, result.data));
+            } catch (error) {
+              const code = error instanceof Error ? error.message : "free_generation_file_grant_error";
+              const status = code === "method_not_allowed" ? 405 : code.includes("not_found") ? 404 : 400;
+              return writeJson(response, envelopedError(status, code, code));
+            }
+          }
+          const resolveTask = async (taskId: string) => {
+            const task = await findCanvasAgentTaskForActor(db, { taskId, canvasId: canvasProjectId, actor: agentActor });
+            if (!task) throw new CanvasAuthorizationError("canvas_not_found");
+            return task;
+          };
+          if (request.method === "GET" && freeGenerationEventsMatch) {
+            const taskId = decodeURIComponent(freeGenerationEventsMatch[1] ?? "");
+            await resolveTask(taskId);
+            const headerCursor = Array.isArray(request.headers["last-event-id"]) ? request.headers["last-event-id"]?.[0] : request.headers["last-event-id"];
+            const after = Number(headerCursor ?? url.searchParams.get("after") ?? 0);
+            const limit = Number(url.searchParams.get("limit") ?? 200);
+            const afterSequence = Number.isFinite(after) ? Math.max(0, Math.trunc(after)) : 0;
+            const events = await listCanvasAgentEvents(db, { taskId, afterSequence, limit: Number.isFinite(limit) ? limit : 200 });
+            const wantsStream = request.headers.accept?.includes("text/event-stream") || url.searchParams.get("live") === "1";
+            if (!wantsStream) return writeJson(response, enveloped(200, { events }));
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/event-stream; charset=utf-8");
+            response.setHeader("cache-control", "no-cache, no-transform");
+            response.setHeader("connection", "keep-alive");
+            response.setHeader("x-accel-buffering", "no");
+            response.flushHeaders?.();
+            response.write("retry: 1000\n\n");
+            let cursor = afterSequence;
+            for (const event of events) { response.write(formatCanvasAgentSseChunk(event)); cursor = Math.max(cursor, event.sequence); }
+            let closed = false;
+            const markClosed = () => { closed = true; };
+            request.on("aborted", markClosed); response.on("close", markClosed);
+            const stopHeartbeat = startSseHeartbeat(response, 10_000);
+            try {
+              const expiresAt = Date.now() + 25_000;
+              while (!closed && !response.writableEnded && Date.now() < expiresAt) {
+                await delay(500);
+                if (closed || response.writableEnded) break;
+                await resolveTask(taskId);
+                const nextEvents = await listCanvasAgentEvents(db, { taskId, afterSequence: cursor, limit: Number.isFinite(limit) ? limit : 200 });
+                for (const event of nextEvents) { response.write(formatCanvasAgentSseChunk(event)); cursor = Math.max(cursor, event.sequence); }
+                if (nextEvents.some((event) => isTerminalCanvasAgentEvent(event.eventType))) break;
+              }
+            } finally {
+              stopHeartbeat(); request.off("aborted", markClosed); response.off("close", markClosed);
+            }
+            response.end(); return;
+          }
+          if (request.method === "POST" && freeGenerationControlMatch) {
+            const taskId = decodeURIComponent(freeGenerationControlMatch[1] ?? "");
+            const action = freeGenerationControlMatch[2] ?? "";
+            const task = await resolveTask(taskId);
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            let result;
+            if (action === "pause") result = await pauseCanvasAgentTask(db, { taskId, now });
+            else if (action === "resume") result = await resumeCanvasAgentTask(db, { taskId, now });
+            else if (action === "stop") result = await stopCanvasAgentTask(db, { taskId, now });
+            else if (action === "replan") result = await replanCanvasAgentTask(db, { taskId, reason: typeof body.reason === "string" ? body.reason : undefined, now });
+            else if (action === "skip") result = await skipCanvasAgentStep(db, { taskId, stepId: typeof body.stepId === "string" ? body.stepId : null, actor: agentActor, reason: typeof body.reason === "string" ? body.reason : null, now });
+            else if (action === "interject") {
+              const content = await enrichCanvasAgentMessageAttachments(db, {
+                canvasId: canvasProjectId, conversationId: task.conversationId, actor: agentActor,
+                message: normalizeCanvasAgentMessage(body.message ?? body.content, body.text),
+                sessionToken: authenticated.sessionToken, runtime: storageRuntime, signedUrlExpiresInSeconds, now,
+              });
+              result = await interjectCanvasAgentTask(db, { taskId, conversationId: task.conversationId, actor: agentActor, content, now });
+            } else result = await decideCanvasAgentApproval(db, {
+              taskId, approvalId: String(body.approvalId ?? ""), actor: agentActor,
+              decision: body.decision === "rejected" ? "rejected" : "approved", reason: typeof body.reason === "string" ? body.reason : null, now,
+            });
+            return writeJson(response, enveloped(200, { result }));
+          }
+          return writeJson(response, envelopedError(404, "free_generation_route_not_found", "free generation route not found"));
+        }
+
         const canvasAgentConversationMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/conversations$/);
         const canvasAgentModelsMatch = pathname.match(/^\/api\/canvas\/([^/]+)\/agent-models$/);
         if (request.method === "GET" && canvasAgentModelsMatch) {
@@ -25133,6 +26182,14 @@ export function createPhoneAuthDevServer(
             return writeJson(response, envelopedError(404, "canvas_project_not_found", "canvas project not found"));
           }
           const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const capabilityProfile = normalizeCanvasAgentCapabilityProfile(body.capabilityProfile);
+          if (!capabilityProfile) {
+            return writeJson(response, envelopedError(
+              400,
+              "canvas_agent_capability_profile_invalid",
+              "capabilityProfile must be canvas or media_generation_only",
+            ));
+          }
           const mode = normalizeCanvasAgentMode(body.mode);
           const runtimeConfiguration = await loadCanvasAgentRuntimeConfiguration(db);
           const modelCode = selectCanvasAgentModelCode(
@@ -25161,7 +26218,7 @@ export function createPhoneAuthDevServer(
             mode,
             modelCode: model.id,
             modelConfigSnapshot: model.snapshot,
-            budget: readJsonRecord(body.budget),
+            budget: { ...readJsonRecord(body.budget), capabilityProfile },
             baseRevision: canvas.serverRevision,
             userMessage,
             now: new Date(),
@@ -25568,16 +26625,14 @@ export function createPhoneAuthDevServer(
             limit: Number(url.searchParams.get("limit") ?? 50),
             cursor,
           });
-          const hydratedHistory = await hydrateCanvasGenerationHistoryArtifactUrls(history, (storageObjectId) =>
-            buildSignedObjectUrls(db, {
-              actorScope: canvasScope,
-              storageObjectId,
-              adapter: storageRuntime.adapter,
-              now: new Date(),
-              expiresInSeconds: signedUrlExpiresInSeconds,
-              publicBaseUrl: storageRuntime.publicBaseUrl,
-              region: storageRuntime.region,
-            }));
+          const hydratedHistory = await hydrateCanvasGenerationHistoryArtifactUrls(history, async (storageObjectId) => {
+            const contentUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`;
+            return {
+              previewUrl: `${contentUrl}?proxy=1`,
+              sourceUrl: contentUrl,
+              downloadUrl: `${contentUrl}?download=1`,
+            };
+          });
           return writeJson(response, enveloped(200, {
             ...hydratedHistory,
             nextCursor: hydratedHistory.nextCursor ? encodeCanvasGenerationHistoryCursor(hydratedHistory.nextCursor) : null,
@@ -29626,6 +30681,7 @@ export function createPhoneAuthDevServer(
             actor = await resolveActorContext(db, {
               sessionToken: authenticated.sessionToken,
               projectId,
+              capability: capabilities.generationStart,
               now: new Date(),
             });
           } catch (error) {
@@ -29642,10 +30698,24 @@ export function createPhoneAuthDevServer(
             });
             billingProjectId = null;
           }
+          if (await hasAiStoryboardPreviewRefund(db, {
+            userId: authenticated.user.id,
+            teamMemberId: actor.teamMember?.id ?? null,
+            idempotencyKey,
+          })) {
+            return writeJson(response, envelopedError(
+              409,
+              "ai_storyboard_preview_already_refunded",
+              "该请求已失败并返还积分，请重新发起。",
+            ));
+          }
+          await assertActiveGenerationMembership(db, { userId: authenticated.user.id, now: new Date() });
           const body = (await readJsonBody(request)) as {
             scriptText?: string | null;
             skillId?: string | null;
             modelCode?: string | null;
+            instruction?: string | null;
+            resolveInstructionIntent?: boolean | null;
             skipScriptStage?: boolean | null;
             useDefaultWorkflowStages?: boolean | null;
             stages?: Array<"script" | "scene" | "character" | "prop" | "shot"> | null;
@@ -29660,7 +30730,65 @@ export function createPhoneAuthDevServer(
               emotionPackageId?: string | null;
             } | null;
           };
+          let storyboardCommand: Awaited<ReturnType<typeof beginAiStoryboardPreviewCommand>> | null = null;
+          const beginStoryboardCommand = async () => {
+            storyboardCommand ??= await beginAiStoryboardPreviewCommand(db, {
+              userId: authenticated.user.id,
+              teamMemberId: actor.teamMember?.id ?? null,
+              projectId,
+              idempotencyKey,
+              request: body,
+            });
+          };
           const scriptText = String(body.scriptText ?? "").trim();
+          const resolveInstructionIntent = body.resolveInstructionIntent === true;
+          const instruction = String(body.instruction ?? "").trim();
+          const bodyModelCode = String(body.modelCode ?? "").trim();
+          const requestedModelCode = bodyModelCode || (body.skipScriptStage === true ? "deepseek-noval" : "deepseek-script");
+          const scriptModelConfig = bodyModelCode
+            ? await findActiveAiModelConfigByCode(db, requestedModelCode)
+            : await findActiveScriptGenerationModelConfig(db, requestedModelCode);
+          if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
+            throw new TextModelGatewayError("model_not_configured");
+          }
+          const resolvedModelCode = scriptModelConfig.modelCode;
+          let resolvedIntent: Awaited<ReturnType<typeof resolveAiStoryboardWorkflowIntent>> | null = null;
+          if (resolveInstructionIntent) {
+            if (!instruction) {
+              return writeJson(response, envelopedError(400, "workflow_instruction_required", "workflow instruction is required"));
+            }
+            try {
+              await beginStoryboardCommand();
+              resolvedIntent = await resolveAiStoryboardWorkflowIntent({
+                gateway: aiStoryboardTextChatGateway,
+                modelCode: resolvedModelCode,
+                instruction,
+                projectId,
+                createdByUserId: authenticated.user.id,
+              });
+            } catch (error) {
+              if (error instanceof IdempotencyConflictError || error instanceof IdempotencyProcessingError) {
+                return writeJson(response, envelopedError(409, error.code, "该请求已在处理中或已处理，请勿重复提交。"));
+              }
+              await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
+              if (error instanceof AiStoryboardWorkflowIntentError) {
+                return writeJson(response, envelopedError(422, error.code, "模型未能识别需要生成的内容，请把要求说得更具体。"));
+              }
+              throw error;
+            }
+            body.stages = resolvedIntent.stages;
+            body.skipScriptStage = resolvedIntent.skipScriptStage;
+            const selectedCategories = new Set(resolvedIntent.stages.map((stage) => ({
+              script: "script",
+              scene: "scene_extract",
+              character: "character_extract",
+              prop: "prop_extract",
+              shot: "shot",
+            } as const)[stage]));
+            body.skills = Object.fromEntries(Object.entries(body.skills ?? {}).filter(([category]) => selectedCategories.has(
+              category as "script" | "scene_extract" | "character_extract" | "prop_extract" | "shot",
+            )));
+          }
           const skipScriptStage = body.skipScriptStage === true;
           const useDefaultWorkflowStages = skipScriptStage && body.useDefaultWorkflowStages === true;
           const workflowStages = ["script", "scene", "character", "prop", "shot"] as const;
@@ -29771,18 +30899,9 @@ export function createPhoneAuthDevServer(
           if (usesLegacyPackages && (!genrePackage || !emotionPackage)) {
             return writeJson(response, envelopedError(404, "storyboard_prompt_package_not_found", "selected prompt package not found"));
           }
-          const bodyModelCode = String(body.modelCode ?? "").trim();
-          const requestedModelCode = bodyModelCode || (skipScriptStage ? "deepseek-noval" : "deepseek-script");
-          const scriptModelConfig = bodyModelCode
-            ? await findActiveAiModelConfigByCode(db, requestedModelCode)
-            : await findActiveScriptGenerationModelConfig(db, requestedModelCode);
-          if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
-            throw new TextModelGatewayError("model_not_configured");
-          }
-          const resolvedModelCode = scriptModelConfig.modelCode;
           const modelRunCount = usesLegacyPackages || useDefaultWorkflowStages
             ? (requestedStages.length || (skipScriptStage ? 4 : 5))
-            : workflowSkills.length;
+            : workflowSkills.length + (resolvedIntent ? 1 : 0);
           const modelCreditCost = generationCostFromModelConfig(0, scriptModelConfig) * modelRunCount;
           const skillCreditCost = workflowSkills.reduce(
             (sum, item) => sum + Math.max(0, Math.round(Number(item.priceCredits) || 0)),
@@ -29825,8 +30944,9 @@ export function createPhoneAuthDevServer(
                 },
               }));
           try {
-            if (actor.teamMember) {
-              await reserveAndConsumeSimpleTeamMemberCredits(db, {
+            await beginStoryboardCommand();
+            const billingClaim = actor.teamMember
+              ? await reserveAndConsumeSimpleTeamMemberCredits(db, {
                 projectId: billingProjectId,
                 teamMemberId: actor.teamMember.id,
                 idempotencyKey,
@@ -29842,9 +30962,8 @@ export function createPhoneAuthDevServer(
                 billingMetadata,
                 skillAuthorGrants,
                 now: new Date(),
-              });
-            } else {
-              await reserveAndConsumeAiStoryboardPreviewCredits(db, {
+              })
+              : await reserveAndConsumeAiStoryboardPreviewCredits(db, {
                 projectId: billingProjectId,
                 createdByUserId: authenticated.user.id,
                 idempotencyKey,
@@ -29856,11 +30975,24 @@ export function createPhoneAuthDevServer(
                 skillAuthorGrants,
                 now: new Date(),
               });
+            if (billingClaim?.replayed) {
+              return writeJson(response, envelopedError(
+                409,
+                "idempotency_processing",
+                "该请求已在处理中或已处理，请勿重复提交。",
+              ));
             }
           } catch (error) {
-            if (error instanceof IdempotencyConflictError) {
+            if (error instanceof IdempotencyConflictError || error instanceof IdempotencyProcessingError) {
               return writeJson(response, envelopedError(409, error.code, "幂等键已用于其他小说转剧本请求。"));
             }
+            if (error instanceof InsufficientCreditsError) {
+              await finishAiStoryboardPreviewCommand(storyboardCommand, "expired").catch(() => undefined);
+              return writeJson(response, actor.teamMember
+                ? envelopedError(402, "insufficient_credits", "积分不足，请联系管理员分配积分。")
+                : envelopedError(402, "insufficient_credits", "积分不足，请前往充值积分。"));
+            }
+            await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
             throw error;
           }
 
@@ -29911,13 +31043,18 @@ export function createPhoneAuthDevServer(
             response.setHeader("x-accel-buffering", "no");
             response.flushHeaders?.();
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
-            const abortController = createRequestAbortController(request, response);
+              const abortController = createRequestAbortController(request, response);
+            let commandSucceeded = false;
             try {
               let generationCompleted = false;
+              let completePayload: Record<string, unknown> | null = null;
               const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
                 userId: authenticated.user.id,
                 teamMemberId: actor.teamMember?.id ?? null,
               });
+              if (resolvedIntent) {
+                writeSseData(response, { type: "intent_resolved", ...resolvedIntent });
+              }
               for await (const event of previewService.generatePreviewStream({
                 ...previewInput,
                 signal: abortController.signal,
@@ -29927,7 +31064,7 @@ export function createPhoneAuthDevServer(
                 }
                 if (event.type === "complete") {
                   generationCompleted = true;
-                  writeSseData(response, {
+                  completePayload = {
                     type: "complete",
                     ...event.preview,
                     creditBalance: creditBalance.creditBalance,
@@ -29937,12 +31074,13 @@ export function createPhoneAuthDevServer(
                     modelRunCount,
                     skillCreditCost,
                     selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
+                    ...(resolvedIntent ? { resolvedIntent } : {}),
                     selectedPackages: genrePackage && emotionPackage ? {
                       genre: { id: genrePackage.id, name: genrePackage.name },
                       emotion: { id: emotionPackage.id, name: emotionPackage.name },
                       taboo: tabooPackages.map((item) => ({ id: item.id, name: item.name })),
                     } : null,
-                  });
+                  };
                 } else {
                   writeSseData(response, event);
                 }
@@ -29956,6 +31094,9 @@ export function createPhoneAuthDevServer(
                   skillAuthorGrants,
                   now: new Date(),
                 });
+                await finishAiStoryboardPreviewCommand(storyboardCommand, "succeeded");
+                commandSucceeded = true;
+                writeSseData(response, completePayload!);
               }
               stopHeartbeat();
               abortController.cleanup();
@@ -29966,22 +31107,41 @@ export function createPhoneAuthDevServer(
               stopHeartbeat();
               abortController.cleanup();
               if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
-                if (actor.teamMember) {
-                  await releaseSimpleTeamMemberCredits(db, {
-                    teamMemberId: actor.teamMember.id,
-                    amount: creditCost,
-                    sourceId: idempotencyKey,
-                    reason: "剧本预览失败返还积分",
-                    metadata: {
-                      taskType: "ai_storyboard_preview",
-                      promptPreview: scriptText.slice(0, 200),
-                    },
-                    now: new Date(),
-                  });
+                const failureMessage = aiStoryboardPreviewErrorDisplayMessage(error);
+                if (!commandSucceeded) {
+                  await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
+                  try {
+                    await retryAiStoryboardPreviewRefund(async () => {
+                    if (actor.teamMember) {
+                      await releaseSimpleTeamMemberCredits(db, {
+                        teamMemberId: actor.teamMember.id,
+                        amount: creditCost,
+                        sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey, actor.teamMember.id),
+                        reason: "剧本预览失败返还积分",
+                        metadata: {
+                          taskType: "ai_storyboard_preview",
+                          promptPreview: scriptText.slice(0, 200),
+                        },
+                        now: new Date(),
+                      });
+                    } else {
+                      await releaseAiStoryboardPreviewCredits(db, {
+                        userId: authenticated.user.id,
+                        amount: creditCost,
+                        sourceId: idempotencyKey,
+                        metadata: billingMetadata,
+                        now: new Date(),
+                      });
+                    }
+                    });
+                  } catch (refundError) {
+                    // The generation error must still reach the already-open event stream.
+                    console.error("[ai-storyboard-preview] credit refund failed after retries", refundError);
+                  }
                 }
                 writeSseData(response, {
                   type: "error",
-                  error: translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。"),
+                  error: failureMessage,
                 });
                 response.end();
               }
@@ -29989,6 +31149,7 @@ export function createPhoneAuthDevServer(
             return;
           }
 
+          let nonStreamCommandSucceeded = false;
           try {
             const preview = await previewService.generatePreview(previewInput);
             await grantPromptSkillAuthorCredits(db, {
@@ -30000,6 +31161,8 @@ export function createPhoneAuthDevServer(
               userId: authenticated.user.id,
               teamMemberId: actor.teamMember?.id ?? null,
             });
+            await finishAiStoryboardPreviewCommand(storyboardCommand, "succeeded");
+            nonStreamCommandSucceeded = true;
             return writeJson(response, enveloped(200, {
               ...preview,
               creditBalance: creditBalance.creditBalance,
@@ -30009,6 +31172,7 @@ export function createPhoneAuthDevServer(
               modelRunCount,
               skillCreditCost,
               selectedSkills: workflowSkills.map((item) => ({ id: item.id, category: item.category, title: item.title })),
+              ...(resolvedIntent ? { resolvedIntent } : {}),
               selectedPackages: genrePackage && emotionPackage ? {
                 genre: { id: genrePackage.id, name: genrePackage.name },
                 emotion: { id: emotionPackage.id, name: emotionPackage.name },
@@ -30016,18 +31180,41 @@ export function createPhoneAuthDevServer(
               } : null,
             }));
           } catch (error) {
-            if (actor.teamMember) {
-              await releaseSimpleTeamMemberCredits(db, {
-                teamMemberId: actor.teamMember.id,
-                amount: generationCostFromModelConfig(0, scriptModelConfig),
-                sourceId: idempotencyKey,
-                reason: "剧本预览失败返还积分",
-                metadata: {
-                  taskType: "ai_storyboard_preview",
-                  promptPreview: scriptText.slice(0, 200),
-                },
-                now: new Date(),
+            if (nonStreamCommandSucceeded) throw error;
+            await finishAiStoryboardPreviewCommand(storyboardCommand, "failed_terminal").catch(() => undefined);
+            try {
+              await retryAiStoryboardPreviewRefund(async () => {
+                if (actor.teamMember) {
+                  await releaseSimpleTeamMemberCredits(db, {
+                    teamMemberId: actor.teamMember.id,
+                    amount: creditCost,
+                    sourceId: aiStoryboardPreviewRefundSourceId(idempotencyKey, actor.teamMember.id),
+                    reason: "剧本预览失败返还积分",
+                    metadata: {
+                      taskType: "ai_storyboard_preview",
+                      promptPreview: scriptText.slice(0, 200),
+                    },
+                    now: new Date(),
+                  });
+                } else {
+                  await releaseAiStoryboardPreviewCredits(db, {
+                    userId: authenticated.user.id,
+                    amount: creditCost,
+                    sourceId: idempotencyKey,
+                    metadata: billingMetadata,
+                    now: new Date(),
+                  });
+                }
               });
+            } catch (refundError) {
+              console.error("[ai-storyboard-preview] credit refund failed after retries", refundError);
+            }
+            if (isTransientDatabasePersistenceError(error)) {
+              return writeJson(response, envelopedError(
+                503,
+                "ai_storyboard_preview_service_interrupted",
+                aiStoryboardPreviewErrorDisplayMessage(error),
+              ));
             }
             throw error;
           }

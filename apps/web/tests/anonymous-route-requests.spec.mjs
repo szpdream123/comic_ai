@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { initProductionWorkbench } from "../src/features/production-workbench/index.js";
 
 const ANONYMOUS_ROUTES = ["home", "tools", "project", "script", "team", "director"];
 
-test("anonymous main routes do not request page data", async () => {
+test("anonymous main routes only request public home recommendations", async () => {
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
   const previousLocalStorage = globalThis.localStorage;
@@ -55,7 +56,11 @@ test("anonymous main routes do not request page data", async () => {
         onLogout() {},
       });
 
-      assert.deepEqual(calls, [], `${route} should not request page data`);
+      assert.deepEqual(
+        calls,
+        route === "home" ? ["getHomeRecommendations"] : [],
+        `${route} requested unexpected page data`,
+      );
       if (route === "director") {
         assert.match(root.innerHTML, /data-director-desk-mount/);
       }
@@ -66,6 +71,11 @@ test("anonymous main routes do not request page data", async () => {
     restoreGlobal("localStorage", previousLocalStorage);
     restoreGlobal("sessionStorage", previousSessionStorage);
   }
+});
+
+test("anonymous API policy permits home recommendations", () => {
+  const appSource = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(appSource, /ANONYMOUS_READ_API_METHODS[\s\S]*?"getHomeRecommendations"/);
 });
 
 function createMemoryStorage() {

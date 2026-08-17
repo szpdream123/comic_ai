@@ -285,6 +285,33 @@ describe("production workbench task center", () => {
     assert.match(html, /generated\/task-image-1\.png/);
   });
 
+  it("renders completed free-generation videos as session videos", () => {
+    const html = renderProjectDetail({
+      state: {},
+      session: { user: { phone: "13800138000" } },
+      ui: {
+        activeNavTab: "home",
+        taskCenterOpen: true,
+        taskCenterTasksById: {
+          "task-free-video": {
+            taskId: "task-free-video",
+            targetType: "free_generation",
+            kind: "video",
+            status: "completed",
+            submittedAt: "2026-08-14T06:18:00.000Z",
+            result: { videoUrl: "/generated/free-session-video.mp4" },
+          },
+        },
+        taskCenterTaskOrder: ["task-free-video"],
+        taskCenterSelectedTaskId: "task-free-video",
+        taskCenterMeta: { page: 1, pageSize: 20, total: 1, totalPages: 1 },
+      },
+    });
+
+    assert.match(html, /会话生成视频/);
+    assert.match(html, /<video src="\/generated\/free-session-video\.mp4" controls preload="metadata"><\/video>/);
+  });
+
   it("does not show a stale task detail outside the current filter result", () => {
     const html = renderProjectDetail({
       state: {},

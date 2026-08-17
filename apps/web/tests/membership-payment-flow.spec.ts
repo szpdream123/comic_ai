@@ -2035,8 +2035,8 @@ test("opening pricing loads the backend managed paid membership agreement", asyn
         data: {
           rechargeTerms: {
             document: {
-              title: "灵曦剧场付费会员服务协议",
-              contentHtml: "<h1>灵曦剧场付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
+              title: "灵曦AI付费会员服务协议",
+              contentHtml: "<h1>灵曦AI付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
               versionLabel: "2026-07-03",
             },
           },
@@ -2058,7 +2058,7 @@ test("opening pricing loads the backend managed paid membership agreement", asyn
     "getMembershipStatus",
     "getPublicLegalDocuments",
   ].sort());
-  assert.equal(workbench.ui.paidMembershipAgreement?.title, "灵曦剧场付费会员服务协议");
+  assert.equal(workbench.ui.paidMembershipAgreement?.title, "灵曦AI付费会员服务协议");
   assert.match(workbench.ui.paidMembershipAgreement?.contentHtml ?? "", /后台配置的会员权益条款/);
 });
 
@@ -2069,8 +2069,8 @@ test("clicking the paid membership agreement opens a configured in-page reader m
     pendingMembershipPaymentProvider: "wechat_pay",
     membershipPaymentAgreementAccepted: true,
     paidMembershipAgreement: {
-      title: "灵曦剧场付费会员服务协议",
-      contentHtml: "<h1>灵曦剧场付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
+      title: "灵曦AI付费会员服务协议",
+      contentHtml: "<h1>灵曦AI付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
       versionLabel: "2026-07-03",
     },
     membershipPaymentQrCreatedAt: new Date().toISOString(),
@@ -2105,7 +2105,7 @@ test("clicking the paid membership agreement opens a configured in-page reader m
 
   assert.equal(workbench.ui.paidMembershipAgreementModalOpen, true);
   assert.match(workbench.root.innerHTML, /data-modal="membership-payment-agreement"/);
-  assert.match(workbench.root.innerHTML, /灵曦剧场付费会员服务协议/);
+  assert.match(workbench.root.innerHTML, /灵曦AI付费会员服务协议/);
   assert.match(workbench.root.innerHTML, /后台配置的会员权益条款/);
 });
 
@@ -2151,8 +2151,8 @@ test("membership agreement reader rerenders preserve the agreement content scrol
     membershipPaymentAgreementAccepted: true,
     paidMembershipAgreementModalOpen: true,
     paidMembershipAgreement: {
-      title: "灵曦剧场付费会员服务协议",
-      contentHtml: "<h1>灵曦剧场付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
+      title: "灵曦AI付费会员服务协议",
+      contentHtml: "<h1>灵曦AI付费会员服务协议</h1><p>后台配置的会员权益条款。</p>",
     },
     membershipPaymentQrCreatedAt: new Date().toISOString(),
     membershipPaymentQrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),

@@ -14,6 +14,7 @@ process.env.PHONE_AUTH_HTTP_ONLY = "true";
 
 const result = spawnSync(runtime, [launcherPath], {
   env: process.env,
+  windowsHide: true,
   stdio: "inherit",
 });
 
@@ -28,6 +29,7 @@ function findNodeRuntime(minMajor) {
   const nodeLocator = process.platform === "win32" ? "where.exe" : "which";
   const whereNode = spawnSync(nodeLocator, ["node"], {
     encoding: "utf8",
+    windowsHide: true,
   });
 
   if (whereNode.status === 0) {
@@ -39,6 +41,7 @@ function findNodeRuntime(minMajor) {
   for (const candidate of candidates) {
     const version = spawnSync(candidate, ["--version"], {
       encoding: "utf8",
+      windowsHide: true,
     });
 
     if (version.status !== 0) {

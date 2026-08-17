@@ -248,9 +248,9 @@ const CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY = "comic-ai:canvas-pending-c
 const CANVAS_PENDING_CREATE_IDEMPOTENCY_MAX_AGE_MS = 5 * 60_000;
 const CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 const CREDIT_SESSION_REFRESH_INTERVAL_MS = 5 * 60_000;
-const SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT = 16000;
 const SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS = 220;
 const SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS = 450;
+const SINGLE_EPISODE_AI_STREAM_PAINT_CHUNK_COUNT = 4;
 const SINGLE_EPISODE_AI_SCROLL_STICKY_THRESHOLD_PX = 72;
 const WORKBENCH_TOAST_DISMISS_MS = 3000;
 const EPISODE_ASSET_DESCRIPTION_LIMIT = 2500;
@@ -296,7 +296,7 @@ const PUBLIC_PATH_TOKENS = new Map([
 const PUBLIC_NAV_SEO = Object.fromEntries(
   ["home", "tools", "script", "project", "library", "team"].map((id) => {
     const page = PUBLIC_SEO_PAGE_BY_ID.get(id);
-    return [id, page ? { ...page, title: `${page.title} | 灵曦剧场` } : null];
+    return [id, page ? { ...page, title: `${page.title} | 灵曦AI` } : null];
   }),
 );
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
@@ -2219,6 +2219,8 @@ function resolveStoryboardCombinedPreviewUrl(storyboard) {
 const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
 const ANNOUNCEMENT_SEEN_STORAGE_PREFIX = "comic-ai:announcements:lastSeen";
 const WORKBENCH_THEME_STORAGE_KEY = "comic-ai:production-workbench-theme";
+const HOME_BACKGROUND_VIDEO_CACHE_NAME = "comic-ai:home-background-video:v1";
+const HOME_BACKGROUND_MEDIA_SOURCE_MIME_TYPE = 'video/mp4; codecs="hvc1.1.6.L150.B0,mp4a.40.2"';
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
 const WORKBENCH_THEME_IDS = new Set(WORKBENCH_THEME_OPTIONS.map((theme) => theme.id));
 const HOME_EFFECT_THEME_OPTIONS = {
@@ -2290,6 +2292,446 @@ const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WID
 const EPISODE_QUICK_ASSET_TOGGLE_VIEWPORT_MARGIN = 8;
 const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
 
+function revokeHomeAgentAttachmentPreviews(workbench, attachments = workbench?.ui?.homeAgentAttachments) {
+  for (const attachment of attachments ?? []) {
+    const previewUrl = String(attachment?.previewUrl ?? "");
+    if (previewUrl && typeof globalThis.URL?.revokeObjectURL === "function") {
+      globalThis.URL.revokeObjectURL(previewUrl);
+    }
+  }
+}
+
+function clearHomeAgentAttachments(workbench) {
+  revokeHomeAgentAttachmentPreviews(workbench);
+  workbench.homeAgentFiles = [];
+  workbench.ui.homeAgentAttachments = [];
+  workbench.ui.homeAgentAttachmentCount = 0;
+  workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+    .filter((segment) => segment?.type !== "attachment");
+}
+
+function setHomeWorkflowScriptFile(workbench, file) {
+  const extension = String(file?.name ?? "").trim().toLowerCase().match(/(\.[^.\\/]+)$/)?.[1] ?? "";
+  if (![".docx", ".txt"].includes(extension)) {
+    workbench.ui.homeWorkflowScriptFile = null;
+    workbench.ui.homeWorkflowScriptFileName = "";
+    workbench.ui.toast = "仅支持上传 DOCX 或 TXT 剧本文档。";
+    return false;
+  }
+  workbench.ui.homeWorkflowScriptFile = file;
+  workbench.ui.homeWorkflowScriptFileName = String(file.name ?? "");
+  workbench.ui.toast = "";
+  return true;
+}
+
+function clearHomeWorkflowScriptFile(workbench) {
+  workbench.ui.homeWorkflowScriptFile = null;
+  workbench.ui.homeWorkflowScriptFileName = "";
+}
+
+function playHomeAgentVideoPreview(container) {
+  const video = container?.querySelector?.("[data-home-agent-video-preview]");
+  if (!video) return;
+  video.muted = true;
+  try {
+    video.currentTime = 0;
+  } catch {
+    // Some browsers reject seeking before video metadata is available.
+  }
+  const playback = video.play?.();
+  playback?.catch?.(() => undefined);
+}
+
+function stopHomeAgentVideoPreview(container) {
+  const video = container?.querySelector?.("[data-home-agent-video-preview]");
+  if (!video) return;
+  video.pause?.();
+  try {
+    video.currentTime = 0;
+  } catch {
+    // Some browsers reject seeking before video metadata is available.
+  }
+}
+
+function hideCanvasAgentMessageAttachmentPreview() {
+  const preview = document.querySelector(".canvas-agent-message-preview-popover");
+  if (!preview) return;
+  preview.querySelector("video")?.pause?.();
+  preview.remove();
+}
+
+function showCanvasAgentMessageAttachmentPreview(attachment) {
+  const previewUrl = String(attachment?.dataset?.previewUrl ?? "").trim();
+  const kind = String(attachment?.dataset?.previewKind ?? "").trim();
+  if (!previewUrl || !["image", "video"].includes(kind)) return;
+  hideCanvasAgentMessageAttachmentPreview();
+  const preview = document.createElement("div");
+  preview.className = "canvas-agent-message-preview-popover";
+  const media = document.createElement(kind === "video" ? "video" : "img");
+  media.src = previewUrl;
+  if (kind === "video") {
+    media.muted = true;
+    media.loop = true;
+    media.playsInline = true;
+    media.preload = "metadata";
+  } else {
+    media.alt = "";
+  }
+  preview.append(media);
+  document.body.append(preview);
+  const anchor = attachment.getBoundingClientRect();
+  const bounds = preview.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchor.left + anchor.width / 2 - bounds.width / 2, window.innerWidth - bounds.width - 8));
+  const top = anchor.top - bounds.height - 10 >= 8
+    ? anchor.top - bounds.height - 10
+    : Math.min(window.innerHeight - bounds.height - 8, anchor.bottom + 10);
+  preview.style.left = `${left}px`;
+  preview.style.top = `${Math.max(8, top)}px`;
+  if (kind === "video") media.play?.().catch?.(() => undefined);
+}
+
+function playHomeTvVideoPreview(card) {
+  const video = card?.querySelector?.("[data-home-tv-preview]");
+  if (!video) return;
+  video.muted = true;
+  try {
+    video.currentTime = 0;
+  } catch {
+    // The preview may not be seekable before metadata is ready.
+  }
+  video.play?.().catch?.(() => undefined);
+}
+
+function stopHomeTvVideoPreview(card) {
+  const video = card?.querySelector?.("[data-home-tv-preview]");
+  if (!video) return;
+  video.pause?.();
+  try {
+    video.currentTime = 0;
+  } catch {
+    // The preview may not be seekable before metadata is ready.
+  }
+}
+
+function removeHomeAgentAttachmentById(workbench, attachmentId) {
+  const attachments = Array.from(workbench.ui.homeAgentAttachments ?? []);
+  const attachmentIndex = attachments.findIndex((attachment) => attachment.id === attachmentId);
+  if (attachmentIndex < 0) return false;
+  revokeHomeAgentAttachmentPreviews(workbench, [attachments[attachmentIndex]]);
+  attachments.splice(attachmentIndex, 1);
+  workbench.homeAgentFiles = Array.from(workbench.homeAgentFiles ?? []).filter((_, index) => index !== attachmentIndex);
+  workbench.ui.homeAgentAttachments = attachments;
+  workbench.ui.homeAgentAttachmentCount = workbench.homeAgentFiles.length;
+  workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+    .filter((segment) => segment?.type !== "attachment" || segment.attachmentId !== attachmentId);
+  render(workbench);
+  return true;
+}
+
+function appendHomeAgentTextSegment(segments, text) {
+  const normalizedText = String(text ?? "").replaceAll("\u200b", "");
+  if (!normalizedText) return;
+  const last = segments.at(-1);
+  if (last?.type === "text") last.text += normalizedText;
+  else segments.push({ type: "text", text: normalizedText });
+}
+
+function readHomeAgentComposerSegments(editor) {
+  const segments = [];
+  const visit = (node) => {
+    if (node?.nodeType === 3) {
+      appendHomeAgentTextSegment(segments, node.nodeValue);
+      return;
+    }
+    if (node?.nodeType !== 1) return;
+    const inlineKind = String(node.dataset?.homeAgentInlineKind ?? "");
+    if (inlineKind === "attachment") {
+      segments.push({ type: "attachment", attachmentId: String(node.dataset.homeAgentAttachmentId ?? "") });
+      return;
+    }
+    if (inlineKind === "model") {
+      segments.push({ type: "model", mediaType: String(node.dataset.homeAgentModelKind ?? "") });
+      return;
+    }
+    if (inlineKind === "skill") {
+      segments.push({ type: "skill", skillId: String(node.dataset.homeAgentSkillId ?? "") });
+      return;
+    }
+    if (node.tagName === "BR") {
+      appendHomeAgentTextSegment(segments, "\n");
+      return;
+    }
+    const isBlock = ["DIV", "P"].includes(node.tagName) && node !== editor;
+    if (isBlock && segments.length) appendHomeAgentTextSegment(segments, "\n");
+    for (const child of node.childNodes ?? []) visit(child);
+  };
+  for (const child of editor?.childNodes ?? []) visit(child);
+  return segments;
+}
+
+function homeAgentPromptTextFromSegments(segments) {
+  return segments
+    .filter((segment) => segment?.type === "text")
+    .map((segment) => String(segment.text ?? ""))
+    .join("");
+}
+
+function homeAgentPromptRemainingLength(editor) {
+  return Math.max(0, 8000 - homeAgentPromptTextFromSegments(readHomeAgentComposerSegments(editor)).length);
+}
+
+function normalizeHomeAgentModelMediaType(value) {
+  const normalized = String(value ?? "").trim().toLowerCase().replaceAll("-", "_");
+  if (normalized.includes("video") || ["i2v", "t2v", "lip_sync"].includes(normalized)) return "video";
+  if (normalized.includes("image") || ["i2i", "t2i", "multi_reference"].includes(normalized)) return "image";
+  return normalized;
+}
+
+function homeAgentPromptTextForSubmission(workbench) {
+  const attachments = new Map(
+    (workbench.ui.homeAgentAttachments ?? []).map((attachment) => [attachment.id, attachment]),
+  );
+  const models = Array.isArray(workbench.ui.episodeGenerationConfig?.models)
+    ? workbench.ui.episodeGenerationConfig.models
+    : [];
+  const skills = [
+    ...normalizeCanvasTextSkills(workbench.ui.homeAgentOfficialSkills, "official"),
+    ...normalizeCanvasTextSkills(workbench.ui.homeAgentPrivateSkills, "private"),
+  ];
+  return (workbench.ui.homeAgentComposerSegments ?? [])
+    .map((segment) => {
+      if (segment?.type === "text") return String(segment.text ?? "");
+      if (segment?.type === "attachment") {
+        const attachment = attachments.get(segment.attachmentId);
+        return attachment ? `【附件：${String(attachment.name ?? "未命名附件")}】` : "";
+      }
+      if (segment?.type === "model") {
+        const mediaType = String(segment.mediaType ?? "");
+        const selectedModelCode = String(workbench.ui.homeAgentSelectedModels?.[mediaType] ?? "").trim();
+        const model = models.find((candidate) => {
+          const candidateMediaType = normalizeHomeAgentModelMediaType(
+            candidate?.mediaType ?? candidate?.media_type ?? candidate?.mediaKind,
+          );
+          const candidateModelCode = String(
+            candidate?.modelCode ?? candidate?.model_code ?? candidate?.id ?? "",
+          ).trim();
+          return candidateMediaType === mediaType && candidateModelCode === selectedModelCode;
+        });
+        const modelLabel = String(model?.modelLabel ?? model?.model_label ?? model?.displayName ?? "").trim();
+        return modelLabel ? `【${mediaType === "video" ? "视频" : "图片"}模型：${modelLabel}】` : "";
+      }
+      if (segment?.type === "skill") {
+        const skill = skills.find((candidate) => candidate.id === String(segment.skillId ?? ""));
+        return skill ? `【Skill：${skill.title}】` : "";
+      }
+      return "";
+    })
+    .join("");
+}
+
+function syncHomeAgentComposerFromDom(workbench, editor) {
+  const segments = readHomeAgentComposerSegments(editor);
+  const attachmentIds = new Set(
+    segments.filter((segment) => segment.type === "attachment").map((segment) => segment.attachmentId),
+  );
+  const currentAttachments = Array.from(workbench.ui.homeAgentAttachments ?? []);
+  const currentFiles = Array.from(workbench.homeAgentFiles ?? []);
+  const attachmentRecords = new Map(
+    currentAttachments.map((attachment, index) => [attachment.id, { attachment, file: currentFiles[index] }]),
+  );
+  const nextAttachments = [];
+  const nextFiles = [];
+  const appliedAttachmentIds = new Set();
+  for (const segment of segments) {
+    if (segment.type !== "attachment" || appliedAttachmentIds.has(segment.attachmentId)) continue;
+    const record = attachmentRecords.get(segment.attachmentId);
+    if (!record) continue;
+    appliedAttachmentIds.add(segment.attachmentId);
+    nextAttachments.push(record.attachment);
+    nextFiles.push(record.file);
+  }
+  for (const attachment of currentAttachments) {
+    if (!attachmentIds.has(attachment.id)) revokeHomeAgentAttachmentPreviews(workbench, [attachment]);
+  }
+  const modelKinds = new Set(
+    segments.filter((segment) => segment.type === "model").map((segment) => segment.mediaType),
+  );
+  workbench.homeAgentFiles = nextFiles;
+  workbench.ui.homeAgentAttachments = nextAttachments;
+  workbench.ui.homeAgentAttachmentCount = nextFiles.length;
+  workbench.ui.homeAgentSelectedModels = Object.fromEntries(
+    ["image", "video"].map((kind) => [
+      kind,
+      modelKinds.has(kind) ? String(workbench.ui.homeAgentSelectedModels?.[kind] ?? "") : "",
+    ]),
+  );
+  workbench.ui.homeAgentComposerSegments = segments;
+  workbench.ui.homeAgentPromptDraft = homeAgentPromptTextFromSegments(segments);
+  rememberHomeAgentComposerCaret(workbench, editor);
+  return segments;
+}
+
+function homeAgentComposerCaretBookmark(editor) {
+  const selection = editor?.ownerDocument?.defaultView?.getSelection?.() ?? globalThis.getSelection?.();
+  if (!selection?.rangeCount || !selection.isCollapsed || !editor?.contains?.(selection.anchorNode)) return null;
+  const range = selection.getRangeAt(0);
+  const prefixRange = range.cloneRange();
+  prefixRange.selectNodeContents(editor);
+  prefixRange.setEnd(range.startContainer, range.startOffset);
+  const holder = editor.ownerDocument.createElement("div");
+  holder.append(prefixRange.cloneContents());
+  const prefixSegments = readHomeAgentComposerSegments(holder);
+  return {
+    offset: prefixSegments.reduce(
+      (total, segment) => total + (segment.type === "text" ? String(segment.text ?? "").length : 1),
+      0,
+    ),
+  };
+}
+
+function rememberHomeAgentComposerCaret(workbench, editor = workbench.root?.querySelector?.("[data-home-agent-prompt]")) {
+  if (!editor) return null;
+  syncHomeAgentComposerStateWithoutCaret(workbench, editor);
+  const bookmark = homeAgentComposerCaretBookmark(editor);
+  if (bookmark) workbench.homeAgentComposerCaret = bookmark;
+  return bookmark;
+}
+
+function syncHomeAgentComposerStateWithoutCaret(workbench, editor) {
+  const segments = readHomeAgentComposerSegments(editor);
+  workbench.ui.homeAgentComposerSegments = segments;
+  workbench.ui.homeAgentPromptDraft = homeAgentPromptTextFromSegments(segments);
+  return segments;
+}
+
+function insertHomeAgentComposerSegment(workbench, segment) {
+  const segments = Array.from(workbench.ui.homeAgentComposerSegments ?? []);
+  const totalLength = segments.reduce(
+    (total, item) => total + (item?.type === "text" ? String(item.text ?? "").length : 1),
+    0,
+  );
+  const savedOffset = Number(workbench.homeAgentComposerCaret?.offset);
+  const offset = Math.min(totalLength, Math.max(0, Number.isFinite(savedOffset) ? savedOffset : totalLength));
+  let cursor = 0;
+  let inserted = false;
+  for (let index = 0; index < segments.length; index += 1) {
+    const current = segments[index];
+    if (current?.type === "text") {
+      const text = String(current.text ?? "");
+      if (offset <= cursor + text.length) {
+        const textOffset = offset - cursor;
+        const replacement = [];
+        if (textOffset > 0) replacement.push({ type: "text", text: text.slice(0, textOffset) });
+        replacement.push(segment);
+        if (textOffset < text.length) replacement.push({ type: "text", text: text.slice(textOffset) });
+        segments.splice(index, 1, ...replacement);
+        inserted = true;
+        break;
+      }
+      cursor += text.length;
+      continue;
+    }
+    if (offset <= cursor) {
+      segments.splice(index, 0, segment);
+      inserted = true;
+      break;
+    }
+    cursor += 1;
+  }
+  if (!inserted) segments.push(segment);
+  workbench.ui.homeAgentComposerSegments = segments;
+  workbench.homeAgentComposerCaret = { offset: offset + 1 };
+}
+
+function restoreHomeAgentComposerCaret(workbench) {
+  queueMicrotask(() => {
+    const editor = workbench.root?.querySelector?.("[data-home-agent-prompt]");
+    const bookmark = workbench.homeAgentComposerCaret;
+    if (!editor || !bookmark || !editor.ownerDocument?.createRange) return;
+    const targetOffset = Math.max(0, Number(bookmark.offset) || 0);
+    const range = editor.ownerDocument.createRange();
+    let cursor = 0;
+    let placed = false;
+    const visit = (node) => {
+      if (placed) return;
+      if (node.nodeType === 3) {
+        const length = String(node.nodeValue ?? "").replaceAll("\u200b", "").length;
+        if (targetOffset <= cursor + length) {
+          range.setStart(node, Math.min(String(node.nodeValue ?? "").length, targetOffset - cursor));
+          placed = true;
+          return;
+        }
+        cursor += length;
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.dataset?.homeAgentInlineKind) {
+        if (targetOffset <= cursor) {
+          range.setStartBefore(node);
+          placed = true;
+        } else {
+          cursor += 1;
+          if (targetOffset === cursor) {
+            range.setStartAfter(node);
+            placed = true;
+          }
+        }
+        return;
+      }
+      if (node.tagName === "BR") {
+        if (targetOffset <= cursor) {
+          range.setStartBefore(node);
+          placed = true;
+        } else {
+          cursor += 1;
+          if (targetOffset === cursor) {
+            range.setStartAfter(node);
+            placed = true;
+          }
+        }
+        return;
+      }
+      for (const child of node.childNodes ?? []) visit(child);
+    };
+    for (const child of editor.childNodes ?? []) visit(child);
+    if (!placed) range.selectNodeContents(editor);
+    range.collapse(true);
+    const selection = editor.ownerDocument.defaultView?.getSelection?.();
+    selection?.removeAllRanges?.();
+    selection?.addRange?.(range);
+    editor.focus?.();
+  });
+}
+
+function removeAdjacentHomeAgentInlineNode(workbench, editor, key) {
+  const selection = editor?.ownerDocument?.defaultView?.getSelection?.() ?? globalThis.getSelection?.();
+  if (!selection?.rangeCount || !selection.isCollapsed || !editor.contains?.(selection.anchorNode)) return false;
+  const range = selection.getRangeAt(0);
+  let adjacent = null;
+  if (range.startContainer === editor) {
+    adjacent = editor.childNodes?.[range.startOffset + (key === "Backspace" ? -1 : 0)] ?? null;
+  } else if (range.startContainer?.nodeType === 3) {
+    const text = String(range.startContainer.nodeValue ?? "");
+    const visibleText = text.replaceAll("\u200b", "");
+    if (key === "Backspace" && (range.startOffset === 0 || !visibleText)) adjacent = range.startContainer.previousSibling;
+    if (key === "Delete" && (range.startOffset === text.length || !visibleText)) adjacent = range.startContainer.nextSibling;
+  }
+  if (adjacent?.nodeType === 3 && !String(adjacent.nodeValue ?? "").replaceAll("\u200b", "")) {
+    adjacent = key === "Backspace" ? adjacent.previousSibling : adjacent.nextSibling;
+  }
+  if (adjacent?.nodeType !== 1 || !adjacent.dataset?.homeAgentInlineKind) return false;
+  const nextOffset = Array.from(editor.childNodes ?? []).indexOf(adjacent);
+  adjacent.remove();
+  syncHomeAgentComposerFromDom(workbench, editor);
+  const caret = editor.ownerDocument.createRange();
+  caret.setStart(editor, Math.max(0, Math.min(nextOffset, editor.childNodes.length)));
+  caret.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(caret);
+  rememberHomeAgentComposerCaret(workbench, editor);
+  return true;
+}
+
 function openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget) {
   const imageUrl = String(imagePreviewTarget?.dataset?.imagePreviewUrl ?? "").trim();
   if (!imagePreviewTarget || !imageUrl) {
@@ -2350,6 +2792,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     librarySearchTimer: null,
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
+    homeProjectRequestId: 0,
     projectLibraryRequestId: 0,
     scriptLibraryRequestId: 0,
     toastDismissTimers: new Map(),
@@ -2386,6 +2829,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     homeLiquidEtherToken: null,
     homeLightfall: null,
     homeLightfallToken: null,
+    homeAgentFiles: [],
+    homeAgentAttachmentSequence: 0,
     state: null,
     ui: {
       busy: false,
@@ -2404,10 +2849,41 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       createProjectType: "animation",
       createProjectNotice: "",
       projectStyles: [],
+      homeCreationMode: "agent",
+      homeWorkflowScriptFile: null,
+      homeWorkflowScriptFileName: "",
+      homeAgentPromptDraft: "",
+      homeAgentMode: "c",
+      homeAgentModeMenuOpen: false,
+      homeAgentModelMenuOpen: false,
+      homeAgentModelTab: "image",
+      homeAgentSelectedModels: { image: "", video: "" },
+      homeAgentSkillPickerOpen: false,
+      homeAgentSkillSource: "official",
+      homeAgentSkillCategory: "",
+      homeAgentSkillDraftId: "",
+      homeAgentSkillLoading: false,
+      homeAgentOfficialSkills: [],
+      homeAgentPrivateSkills: [],
+      homeAgentSkillPagination: { official: {}, private: {} },
+      homeAgentAttachmentCount: 0,
+      homeAgentAttachments: [],
+      homeAgentComposerSegments: [],
+      homeTvCategory: "recommended",
+      homeTvVisibleCounts: {},
+      homeTvCategories: [],
+      homeBackground: { videoUrl: "", posterUrl: "", status: "inactive" },
+      homeTvLoading: true,
       episodeGenerationStyleCode: "",
       episodeGenerationStyleProjectId: null,
       batchImageStyles: [],
       isProjectStyleMenuOpen: false,
+      homeRecentProjects: [],
+      homeProjectTotal: 0,
+      homeProjectsLoading: hasActiveSessionUser(session),
+      homeProjectWorkflowProjectId: null,
+      homeProjectWorkflowLoading: false,
+      homeProjectWorkflowNotice: "",
       projectLibrary: [],
       projectLibraryPagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
       scriptLibraryRecords: [],
@@ -2442,6 +2918,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       episodeWorkbenchConversationScrollMode: null,
       episodeWorkbenchCenterWidthRatio: EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH,
       episodeWorkbenchCenterWidthPx: null,
+      episodeWorkbenchLayout: "standard",
+      homeWorkflowOrigin: false,
+      workflowGenerationWorkbenchOpen: false,
       episodeVoiceModal: null,
       episodeVoiceTeamAssets: [],
       episodeVoiceTeamLoading: false,
@@ -2923,6 +3402,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   installEpisodeWorkbenchTestHooks(workbench);
   root.addEventListener("pointerdown", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (eventTarget?.closest?.('[data-action="pick-home-agent-attachments"], [data-action="toggle-home-agent-model-menu"]')) {
+      rememberHomeAgentComposerCaret(workbench);
+    }
     const watermarkMask = eventTarget?.closest?.("[data-toolbox-watermark-mask]")
       ?? resolveToolboxVideoWatermarkMaskTarget(eventTarget, event);
     if (watermarkMask && startToolboxWatermarkRemovalMaskPaint(workbench, event, watermarkMask)) {
@@ -2948,6 +3430,38 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     updateCanvasRightPanGesture(workbench, event);
     updateEpisodeWorkbenchResizeHover(workbench, event);
     updateHomeHeroPointerAura(workbench, event);
+  });
+  root.addEventListener("pointerover", (event) => {
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
+    if (messageAttachment && !messageAttachment.contains?.(event.relatedTarget)) showCanvasAgentMessageAttachmentPreview(messageAttachment);
+    const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
+    if (videoAttachment && !videoAttachment.contains?.(event.relatedTarget)) playHomeAgentVideoPreview(videoAttachment);
+    const homeTvCard = eventTarget?.closest?.(".home-tv-card.has-video-preview");
+    if (homeTvCard && !homeTvCard.contains?.(event.relatedTarget)) playHomeTvVideoPreview(homeTvCard);
+  });
+  root.addEventListener("pointerout", (event) => {
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
+    if (messageAttachment && !messageAttachment.contains?.(event.relatedTarget)) hideCanvasAgentMessageAttachmentPreview();
+    const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
+    if (videoAttachment && !videoAttachment.contains?.(event.relatedTarget)) stopHomeAgentVideoPreview(videoAttachment);
+    const homeTvCard = eventTarget?.closest?.(".home-tv-card.has-video-preview");
+    if (homeTvCard && !homeTvCard.contains?.(event.relatedTarget)) stopHomeTvVideoPreview(homeTvCard);
+  });
+  root.addEventListener("focusin", (event) => {
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
+    if (messageAttachment) showCanvasAgentMessageAttachmentPreview(messageAttachment);
+    const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
+    if (videoAttachment && !eventTarget?.closest?.(".home-agent-attachment-remove")) playHomeAgentVideoPreview(videoAttachment);
+  });
+  root.addEventListener("focusout", (event) => {
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
+    if (messageAttachment) hideCanvasAgentMessageAttachmentPreview();
+    const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
+    if (videoAttachment) stopHomeAgentVideoPreview(videoAttachment);
   });
   root.addEventListener("pointerup", (event) => {
     finishToolboxWatermarkRemovalMaskPaintAndSync(workbench, event);
@@ -2993,6 +3507,19 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     // Preserve the current scroll position when selecting asset cards with the mouse.
     event.preventDefault();
   });
+  root.addEventListener("click", (event) => {
+    const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const commitTarget = eventTarget?.closest?.('[data-action="commit-ai-storyboard-preview"]');
+    if (!commitTarget || workbench.ui.singleEpisodeAiPreview?.status !== "ready") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void handleAction(workbench, commitTarget).catch((error) => {
+      workbench.ui.toast = `操作失败：${friendlyError(error)}`;
+      render(workbench);
+    });
+  }, { capture: true });
   root.addEventListener("click", (event) => {
     if (event.__newCanvasHandled === true) return;
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
@@ -3180,7 +3707,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
         workbench.ui.isFirstFrameMenuOpen ||
         workbench.ui.referenceAssetPickerKind ||
         workbench.ui.assetGeneratorOpenMenu ||
-        workbench.ui.themeMenuOpen
+        workbench.ui.themeMenuOpen ||
+        workbench.ui.homeAgentModeMenuOpen ||
+        workbench.ui.homeAgentModelMenuOpen
       ) {
         const closesOnlyThemeMenu = Boolean(
           workbench.ui.themeMenuOpen &&
@@ -3230,6 +3759,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
         workbench.ui.singleEpisodeScriptImportMenu = "";
         workbench.ui.assetGeneratorOpenMenu = "";
         workbench.ui.themeMenuOpen = false;
+        workbench.ui.homeAgentModeMenuOpen = false;
+        workbench.ui.homeAgentModelMenuOpen = false;
         if (shouldCloseEpisodePromptMenusLocally) {
           renderEpisodeWorkbenchPromptDockOnly(workbench);
         } else if (closesOnlyThemeMenu) {
@@ -3335,6 +3866,17 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dblclick", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const assetNameInput = eventTarget?.closest?.(".episode-replica-asset-name-input[readonly]");
+    if (assetNameInput) {
+      event.preventDefault();
+      assetNameInput.dataset.originalValue = assetNameInput.value;
+      assetNameInput.dataset.assetNameEditing = "true";
+      assetNameInput.removeAttribute("readonly");
+      assetNameInput.setAttribute("aria-readonly", "false");
+      assetNameInput.focus();
+      assetNameInput.select();
+      return;
+    }
     const imagePreviewTarget = eventTarget?.closest?.('[data-image-preview-url]');
     if (openStoryboardImagePreviewFromTarget(workbench, imagePreviewTarget)) {
       event.preventDefault();
@@ -3362,6 +3904,31 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("keydown", (event) => {
     const searchTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (
+      searchTarget?.matches?.("[data-home-agent-prompt]")
+      && ["Backspace", "Delete"].includes(event.key)
+      && !event.isComposing
+      && removeAdjacentHomeAgentInlineNode(workbench, searchTarget, event.key)
+    ) {
+      event.preventDefault();
+      return;
+    }
+    if (
+      searchTarget?.matches?.("[data-home-agent-prompt]")
+      && event.key === "Enter"
+      && (event.ctrlKey || event.metaKey)
+      && !event.isComposing
+    ) {
+      event.preventDefault();
+      globalThis.document?.execCommand?.("insertLineBreak", false);
+      syncHomeAgentComposerFromDom(workbench, searchTarget);
+      return;
+    }
+    if (searchTarget?.matches?.("[data-home-agent-prompt]") && event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      void handleAction(workbench, { dataset: { action: "submit-home-agent-prompt" } });
+      return;
+    }
     if (workbench.ui.assetInspector?.viewerOnly === true && event.key === "Tab") {
       event.preventDefault();
       workbench.root?.querySelector?.(".asset-image-lightbox-close")?.focus?.();
@@ -3394,6 +3961,21 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
         event.preventDefault();
         workbench.ui.canvasAssetTagEditorKey = "";
         render(workbench);
+      }
+      return;
+    }
+    if (
+      searchTarget?.matches?.(".episode-replica-asset-name-input") &&
+      !searchTarget.hasAttribute?.("readonly")
+    ) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        searchTarget.blur?.();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        searchTarget.value = searchTarget.dataset.originalValue ?? searchTarget.value;
+        searchTarget.dataset.assetNameEditing = "false";
+        searchTarget.blur?.();
       }
       return;
     }
@@ -3450,6 +4032,43 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
           ));
         previewTarget?.focus?.();
       });
+      return;
+    }
+    if (workbench.ui.homeProjectWorkflowProjectId) {
+      event.preventDefault();
+      workbench.ui.homeProjectWorkflowProjectId = null;
+      workbench.ui.homeProjectWorkflowLoading = false;
+      workbench.ui.homeProjectWorkflowNotice = "";
+      workbench.ui.selectedProjectCardId = null;
+      workbench.ui.selectedEpisodeId = null;
+      workbench.ui.episodeWorkbenchLayout = "standard";
+      workbench.ui.homeWorkflowOrigin = false;
+      workbench.ui.workflowGenerationWorkbenchOpen = false;
+      render(workbench);
+      return;
+    }
+    if (
+      workbench.ui.episodeWorkbenchLayout === "workflow" &&
+      workbench.ui.workflowGenerationWorkbenchOpen === true
+    ) {
+      event.preventDefault();
+      workbench.ui.homeProjectWorkflowProjectId = null;
+      workbench.ui.homeProjectWorkflowLoading = false;
+      workbench.ui.homeProjectWorkflowNotice = "";
+      workbench.ui.selectedProjectCardId = null;
+      workbench.ui.selectedEpisodeId = null;
+      workbench.ui.activeNavTab = "home";
+      workbench.ui.projectPanelMode = "library";
+      workbench.ui.episodeWorkbenchLayout = "standard";
+      workbench.ui.homeWorkflowOrigin = false;
+      workbench.ui.workflowGenerationWorkbenchOpen = false;
+      workbench.ui.openGenerationSelectMenu = null;
+      workbench.ui.isVideoModelMenuOpen = false;
+      workbench.ui.musePromptMenu = null;
+      if (globalThis.window?.location) {
+        globalThis.window.location.hash = "home";
+      }
+      render(workbench);
       return;
     }
     if (
@@ -3585,6 +4204,43 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("change", async (event) => {
     const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+
+    if (target?.matches?.("[data-home-workflow-script-input]")) {
+      const [file] = Array.from(target.files ?? []);
+      target.value = "";
+      if (file) setHomeWorkflowScriptFile(workbench, file);
+      render(workbench);
+      return;
+    }
+
+    if (target?.matches?.("[data-home-agent-attachment-input]")) {
+      const availableSlots = Math.max(0, 8 - Number(workbench.ui.homeAgentAttachmentCount ?? 0));
+      const nextFiles = Array.from(target.files ?? []).slice(0, availableSlots);
+      const nextAttachments = nextFiles.map((file) => {
+        workbench.homeAgentAttachmentSequence += 1;
+        const type = String(file?.type ?? "").toLowerCase();
+        const kind = type.startsWith("image/") ? "image" : type.startsWith("video/") ? "video" : "file";
+        return {
+          id: `home-agent-attachment-${workbench.homeAgentAttachmentSequence}`,
+          name: String(file?.name ?? "未命名附件"),
+          kind,
+          size: Number(file?.size ?? 0),
+          previewUrl: ["image", "video"].includes(kind) && typeof globalThis.URL?.createObjectURL === "function"
+            ? globalThis.URL.createObjectURL(file)
+            : "",
+        };
+      });
+      workbench.homeAgentFiles = [...(workbench.homeAgentFiles ?? []), ...nextFiles];
+      workbench.ui.homeAgentAttachments = [...(workbench.ui.homeAgentAttachments ?? []), ...nextAttachments];
+      for (const attachment of nextAttachments) {
+        insertHomeAgentComposerSegment(workbench, { type: "attachment", attachmentId: attachment.id });
+      }
+      workbench.ui.homeAgentAttachmentCount = workbench.homeAgentFiles.length;
+      target.value = "";
+      render(workbench);
+      restoreHomeAgentComposerCaret(workbench);
+      return;
+    }
 
     if (target?.matches?.("#toolbox-prompt-reverse-file")) {
       const [file] = [...(target.files ?? [])];
@@ -4027,7 +4683,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dragover", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="home-workflow-script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
     if (!zone) {
       return;
     }
@@ -4040,7 +4696,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("dragleave", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="home-workflow-script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
     if (!zone) {
       return;
     }
@@ -4053,7 +4709,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("drop", async (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
-    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
+    const zone = eventTarget?.closest?.('[data-dropzone="asset-import"], [data-dropzone="storyboard-image"], [data-dropzone="generation-frame"], [data-dropzone="generation-image"], [data-dropzone="generation-media"], [data-dropzone="script-upload"], [data-dropzone="home-workflow-script-upload"], [data-dropzone="toolbox-prompt-reverse"], [data-dropzone="toolbox-video-depth"], [data-dropzone="toolbox-video-to-director"]');
     if (!zone) {
       return;
     }
@@ -4114,6 +4770,12 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       );
       return;
     }
+    if (zone.dataset.dropzone === "home-workflow-script-upload") {
+      const [file] = files;
+      if (file) setHomeWorkflowScriptFile(workbench, file);
+      render(workbench);
+      return;
+    }
     if (zone.dataset.dropzone === "script-upload") {
       const [file] = files;
       if (!file) {
@@ -4145,6 +4807,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("paste", (event) => {
     const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (target?.matches?.("[data-home-agent-prompt]")) {
+      const text = event.clipboardData?.getData?.("text/plain");
+      if (typeof text !== "string") return;
+      event.preventDefault();
+      globalThis.document?.execCommand?.("insertText", false, text);
+      syncHomeAgentComposerFromDom(workbench, target);
+      return;
+    }
     if (!target?.matches?.("[data-canvas-text-input][contenteditable='true']")) {
       return;
     }
@@ -4207,6 +4877,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   root.addEventListener("input", async (event) => {
     const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+
+    if (target?.matches?.("[data-home-agent-prompt]")) {
+      syncHomeAgentComposerFromDom(workbench, target);
+      return;
+    }
 
     if (target?.matches?.("[data-prompt-plaza-search-input]")) {
       if (!workbench.promptPlazaSearchComposing) {
@@ -4782,6 +5457,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
 
   });
 
+  root.addEventListener("beforeinput", (event) => {
+    const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (!target?.matches?.("[data-home-agent-prompt]") || !String(event.inputType ?? "").startsWith("insert")) return;
+    if (homeAgentPromptRemainingLength(target) > 0) return;
+    const selection = target.ownerDocument?.defaultView?.getSelection?.();
+    if (!selection || selection.isCollapsed) event.preventDefault();
+  });
+
   root.addEventListener("mousedown", (event) => {
     const target = resolveEventElement(event.composedPath?.()[0] ?? event.target);
     if (!target?.closest?.(".episode-replica-prompt")) {
@@ -4904,9 +5587,23 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       return;
     }
     if (target?.matches?.(".episode-replica-asset-name-input")) {
+      const originalValue = target.dataset.originalValue ?? target.value;
+      const wasEditing = target.dataset.assetNameEditing === "true";
+      target.setAttribute("readonly", "");
+      target.setAttribute("aria-readonly", "true");
+      delete target.dataset.originalValue;
+      delete target.dataset.assetNameEditing;
+      if (!wasEditing) {
+        return;
+      }
+      const name = String(target.value ?? "").trim();
+      if (!name || name === String(originalValue ?? "").trim()) {
+        target.value = originalValue;
+        return;
+      }
       const assetId = target.dataset.assetId ?? "";
       const assetKind = target.dataset.assetKind ?? "character";
-      await saveEpisodeAssetName(workbench, assetKind, assetId, target.value);
+      await saveEpisodeAssetName(workbench, assetKind, assetId, name);
       return;
     }
     if (
@@ -5078,17 +5775,52 @@ async function refresh(workbench) {
   }
 
   const visibleTab = workbench.ui.activeNavTab;
+  const isHomeSurface = visibleTab === "home";
+  const isFreeGenerationSurface = visibleTab === "free-generation";
   const isProjectLibrary = visibleTab === "project" && workbench.ui.projectPanelMode === "library";
   const isProjectDetail =
     visibleTab === "project" && workbench.ui.projectPanelMode !== "library";
   const isTeamSurface = visibleTab === "team";
-  const isToolsSurface = isCanvasNavTab(visibleTab);
+  const isToolsSurface = isCanvasNavTab(visibleTab) || visibleTab === "free-generation";
   const isScriptSurface = visibleTab === "script";
   const isAssetLibrarySurface = visibleTab === "library";
   const isEpisodeWorkbenchSurface =
     visibleTab === "project" && workbench.ui.projectPanelMode === "episode-workbench";
 
-  if (!isAnonymousSession && isProjectLibrary) {
+  if (isHomeSurface || isFreeGenerationSurface) {
+    const loadHomeSurfaceData = async (task) => {
+      const previousHomeBackground = workbench.ui.homeBackground;
+      try {
+        return await task();
+      } finally {
+        if (["home", "free-generation"].includes(workbench.ui.activeNavTab)) {
+          const currentHomeBackground = workbench.ui.homeBackground;
+          const homeBackgroundChanged =
+            String(previousHomeBackground?.status ?? "") !== String(currentHomeBackground?.status ?? "") ||
+            String(previousHomeBackground?.videoUrl ?? "") !== String(currentHomeBackground?.videoUrl ?? "");
+          if (homeBackgroundChanged) {
+            render(workbench);
+            return;
+          }
+          if (workbench.ui.activeNavTab === "free-generation" && updateMountedNewCanvasSurface(workbench, { surfaceOnly: true })) {
+            return;
+          }
+          render(workbench);
+        }
+      }
+    };
+    const results = await Promise.allSettled([
+      isAnonymousSession || isFreeGenerationSurface
+        ? Promise.resolve(false)
+        : loadHomeSurfaceData(() => syncHomeProjectLibraryFromApi(workbench)),
+      loadHomeSurfaceData(() => syncHomeRecommendationsFromApi(workbench)),
+    ]);
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.warn(`[workbench] ${index === 0 ? "home project library" : "home recommendations"} failed`, result.reason);
+      }
+    });
+  } else if (!isAnonymousSession && isProjectLibrary) {
     await syncProjectLibraryFromApi(workbench, { includeAssets: false });
   } else if (!isAnonymousSession && isProjectDetail) {
     const routeProjectId =
@@ -6993,6 +7725,44 @@ function canvasTextSkillCacheKey(source, category, page) {
   return [source === "private" ? "private" : "official", String(category || "all"), Math.max(1, Number(page) || 1)].join(":");
 }
 
+async function syncHomeAgentSkillPage(workbench, options = {}) {
+  const source = workbench.ui.homeAgentSkillSource === "private" ? "private" : "official";
+  const previous = workbench.ui.homeAgentSkillPagination?.[source] ?? {};
+  const category = String(options.category ?? previous.category ?? "all").trim() || "all";
+  const page = Math.max(1, Number(options.page ?? previous.page) || 1);
+  const request = { source, category, page, pageSize: 100 };
+  if (typeof workbench.api?.getPromptSkills !== "function") {
+    if (source === "private") workbench.ui.homeAgentPrivateSkills = [];
+    else workbench.ui.homeAgentOfficialSkills = [];
+    workbench.ui.homeAgentSkillPagination = {
+      ...(workbench.ui.homeAgentSkillPagination ?? {}),
+      [source]: normalizeCanvasTextSkillPagination({}, request),
+    };
+    return;
+  }
+  const requestToken = (workbench.homeAgentSkillRequestToken ?? 0) + 1;
+  workbench.homeAgentSkillRequestToken = requestToken;
+  workbench.ui.homeAgentSkillLoading = true;
+  try {
+    const payload = await workbench.api.getPromptSkills(request);
+    if (workbench.homeAgentSkillRequestToken !== requestToken) return;
+    const skills = normalizeCanvasTextSkills(payload?.items, source);
+    if (source === "private") workbench.ui.homeAgentPrivateSkills = skills;
+    else workbench.ui.homeAgentOfficialSkills = skills;
+    workbench.ui.homeAgentSkillPagination = {
+      ...(workbench.ui.homeAgentSkillPagination ?? {}),
+      [source]: normalizeCanvasTextSkillPagination(payload, request),
+    };
+  } catch (error) {
+    if (workbench.homeAgentSkillRequestToken !== requestToken) return;
+    workbench.ui.toast = `Skill 加载失败：${friendlyError(error)}`;
+  } finally {
+    if (workbench.homeAgentSkillRequestToken === requestToken) {
+      workbench.ui.homeAgentSkillLoading = false;
+    }
+  }
+}
+
 async function syncCanvasTextSkills(workbench, options = {}) {
   const source = options.source === "private" ? "private" : "official";
   const previous = canvasTextSkillPaginationFor(workbench.ui, source);
@@ -8040,6 +8810,153 @@ function resolveHomeEffectThemeOptions(workbench) {
   return HOME_EFFECT_THEME_OPTIONS[themeId] ?? HOME_EFFECT_THEME_OPTIONS.starlit;
 }
 
+function preserveHomeBackgroundVideo(currentMain, nextMain) {
+  const currentHero = currentMain?.querySelector?.(".home-hero");
+  const nextHero = nextMain?.querySelector?.(".home-hero");
+  const currentLayer = currentHero?.querySelector?.(".home-background-video");
+  const nextLayer = nextHero?.querySelector?.(".home-background-video");
+  const currentSource = currentLayer?.querySelector?.("video")?.dataset?.homeBackgroundVideoUrl ?? "";
+  const nextSource = nextLayer?.querySelector?.("video")?.dataset?.homeBackgroundVideoUrl ?? "";
+  if (!currentLayer || !nextLayer || !currentSource || currentSource !== nextSource) {
+    return null;
+  }
+  const currentOverlay = currentHero?.querySelector?.(".home-background-video-overlay") ?? null;
+  const nextOverlay = nextHero?.querySelector?.(".home-background-video-overlay") ?? null;
+  currentLayer.remove();
+  currentOverlay?.remove?.();
+  nextLayer.remove();
+  nextOverlay?.remove?.();
+  return { layer: currentLayer, overlay: currentOverlay };
+}
+
+function clearHomeBackgroundVideoObjectUrl(workbench) {
+  workbench.homeBackgroundVideoCacheToken = Symbol("home-background-video-disposed");
+  const objectUrl = String(workbench.homeBackgroundVideoObjectUrl ?? "");
+  if (objectUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+    globalThis.URL.revokeObjectURL(objectUrl);
+  }
+  workbench.homeBackgroundVideoObjectUrl = "";
+  workbench.homeBackgroundVideoSourceUrl = "";
+}
+
+async function readCachedHomeBackgroundVideo(sourceUrl) {
+  if (!globalThis.caches?.open || typeof globalThis.fetch !== "function") {
+    throw new Error("浏览器不支持背景视频本地缓存");
+  }
+  const cache = await globalThis.caches.open(HOME_BACKGROUND_VIDEO_CACHE_NAME);
+  let response = await cache.match(sourceUrl);
+  if (!response) {
+    response = await globalThis.fetch(sourceUrl, { mode: "cors", credentials: "omit" });
+    if (!response.ok || response.type === "opaque") {
+      throw new Error("背景视频本地缓存下载失败");
+    }
+    await cache.put(sourceUrl, response.clone());
+  }
+  const requests = await cache.keys();
+  await Promise.all(requests
+    .filter((request) => request.url !== sourceUrl)
+    .map((request) => cache.delete(request)));
+  return response.blob();
+}
+
+function playHomeBackgroundVideo(video, shouldLoad = true) {
+  if (shouldLoad) video.load?.();
+  void video.play?.().catch(() => {
+    // Autoplay can be deferred by the browser until the page becomes visible.
+  });
+}
+
+function playHomeBackgroundVideoFromBlob(workbench, video, blob) {
+  const objectUrl = globalThis.URL?.createObjectURL?.(blob);
+  if (!objectUrl) throw new Error("浏览器无法创建本地背景视频");
+  workbench.homeBackgroundVideoObjectUrl = objectUrl;
+  video.src = objectUrl;
+  video.dataset.homeBackgroundVideoCacheState = "ready";
+  playHomeBackgroundVideo(video);
+}
+
+function playHomeBackgroundVideoFromMediaSource(workbench, video, blob, token) {
+  const MediaSourceCtor = globalThis.MediaSource;
+  if (
+    typeof MediaSourceCtor !== "function" ||
+    !MediaSourceCtor.isTypeSupported?.(HOME_BACKGROUND_MEDIA_SOURCE_MIME_TYPE) ||
+    typeof globalThis.URL?.createObjectURL !== "function"
+  ) {
+    return false;
+  }
+
+  const mediaSource = new MediaSourceCtor();
+  const objectUrl = globalThis.URL.createObjectURL(mediaSource);
+  const fallBackToBlob = () => {
+    if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+    globalThis.URL?.revokeObjectURL?.(objectUrl);
+    playHomeBackgroundVideoFromBlob(workbench, video, blob);
+  };
+  mediaSource.addEventListener("sourceopen", async () => {
+    if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) {
+      globalThis.URL?.revokeObjectURL?.(objectUrl);
+      return;
+    }
+    try {
+      const sourceBuffer = mediaSource.addSourceBuffer(HOME_BACKGROUND_MEDIA_SOURCE_MIME_TYPE);
+      const buffer = await blob.arrayBuffer();
+      if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) {
+        globalThis.URL?.revokeObjectURL?.(objectUrl);
+        return;
+      }
+      sourceBuffer.addEventListener("updateend", () => {
+        if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+        if (mediaSource.readyState === "open") mediaSource.endOfStream();
+        video.dataset.homeBackgroundVideoCacheState = "ready";
+        playHomeBackgroundVideo(video, false);
+      }, { once: true });
+      sourceBuffer.appendBuffer(buffer);
+    } catch {
+      fallBackToBlob();
+    }
+  }, { once: true });
+  workbench.homeBackgroundVideoObjectUrl = objectUrl;
+  video.src = objectUrl;
+  video.dataset.homeBackgroundVideoCacheState = "buffering";
+  video.load?.();
+  return true;
+}
+
+function syncHomeBackgroundVideoLocalCache(workbench) {
+  const video = workbench?.root?.querySelector?.(".home-background-video video");
+  const sourceUrl = String(video?.dataset?.homeBackgroundVideoUrl ?? "").trim();
+  if (!video || !sourceUrl) {
+    clearHomeBackgroundVideoObjectUrl(workbench);
+    return;
+  }
+  if (
+    workbench.homeBackgroundVideoSourceUrl === sourceUrl &&
+    (video.dataset.homeBackgroundVideoCacheState === "loading" || video.dataset.homeBackgroundVideoCacheState === "ready")
+  ) {
+    return;
+  }
+
+  clearHomeBackgroundVideoObjectUrl(workbench);
+  const token = Symbol("home-background-video-cache");
+  workbench.homeBackgroundVideoCacheToken = token;
+  workbench.homeBackgroundVideoSourceUrl = sourceUrl;
+  video.dataset.homeBackgroundVideoCacheState = "loading";
+
+  void readCachedHomeBackgroundVideo(sourceUrl)
+    .then((blob) => {
+      if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+      if (!playHomeBackgroundVideoFromMediaSource(workbench, video, blob, token)) {
+        playHomeBackgroundVideoFromBlob(workbench, video, blob);
+      }
+    })
+    .catch(() => {
+      if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+      video.src = sourceUrl;
+      video.dataset.homeBackgroundVideoCacheState = "fallback";
+      playHomeBackgroundVideo(video);
+    });
+}
+
 function replaceNavigationSurface(workbench, nextMarkup) {
   const documentRef = globalThis.document;
   const root = workbench?.root;
@@ -8092,6 +9009,7 @@ function replaceNavigationSurface(workbench, nextMarkup) {
   if (!currentStatusbar || !nextStatusbar) {
     currentMain.replaceWith(nextMain);
   } else {
+    const retainedHomeBackground = preserveHomeBackgroundVideo(currentMain, nextMain);
     currentMain.className = nextMain.className;
     let retainedStatusbar = currentStatusbar;
     if (currentStatusbar.innerHTML === nextStatusbar.innerHTML) {
@@ -8110,6 +9028,10 @@ function replaceNavigationSurface(workbench, nextMarkup) {
         currentMain.append(element);
       }
     });
+    if (retainedHomeBackground) {
+      const nextHero = currentMain.querySelector(".home-hero");
+      nextHero?.prepend?.(retainedHomeBackground.layer, ...(retainedHomeBackground.overlay ? [retainedHomeBackground.overlay] : []));
+    }
   }
   Array.from(root.children).forEach((element) => {
     if (element !== currentShell) {
@@ -8186,8 +9108,8 @@ function renderAfterCanvasLoad(workbench, options = {}) {
 }
 
 function shouldMountNewCanvas(workbench) {
-  return isCanvasNavTab(workbench?.ui?.activeNavTab)
-    && workbench.ui.canvasProjectView === "detail";
+  return workbench?.ui?.activeNavTab === "free-generation"
+    || (isCanvasNavTab(workbench?.ui?.activeNavTab) && workbench.ui.canvasProjectView === "detail");
 }
 
 function disposeNewCanvasMount(workbench) {
@@ -8489,6 +9411,8 @@ async function syncNewCanvasMount(workbench) {
     const instance = await mountNewCanvas(host, {
       workbench,
       canvasProjectId: workbench.ui.selectedCanvasProjectId,
+      agentOnly: workbench.ui.canvasAgentOnly === true,
+      capabilityProfile: workbench.ui.canvasAgentCapabilityProfile || undefined,
       onDirectorDeskNotify({ message, tone }) {
         showWorkbenchToast(workbench, message, { tone });
         render(workbench);
@@ -8573,6 +9497,21 @@ async function syncNewCanvasMount(workbench) {
     workbench.newCanvasInstance = instance;
     host.dataset.canvasProjectId = String(workbench.ui.selectedCanvasProjectId ?? "");
     updateMountedNewCanvasSurface(workbench, { surfaceOnly: true });
+    if (workbench.pendingHomeAgentPrompt) {
+      const pendingPrompt = workbench.pendingHomeAgentPrompt;
+      workbench.pendingHomeAgentPrompt = null;
+      try {
+        await instance.submitAgentPrompt?.(pendingPrompt);
+        clearHomeAgentAttachments(workbench);
+        workbench.ui.homeAgentPromptDraft = "";
+        workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+          .filter((segment) => segment?.type === "model");
+        workbench.ui.toast = "指令已交给画布 Agent。";
+      } catch (error) {
+        workbench.ui.toast = `Agent 启动失败：${friendlyError(error)}`;
+      }
+      renderWorkbenchChrome(workbench);
+    }
     return instance;
   } catch (error) {
     if (workbench.newCanvasMountToken === token) {
@@ -8622,6 +9561,59 @@ function updateNewCanvasSurfaceForHostAction(workbench) {
   return updateMountedNewCanvasSurface(workbench, options);
 }
 
+function renderHomeCreationModeSurface(workbench) {
+  const root = workbench?.root;
+  const documentRef = globalThis.document;
+  const currentModeSurface = root?.querySelector?.(".home-creation-mode-surface");
+  if (!documentRef?.createElement || !currentModeSurface) {
+    render(workbench);
+    return false;
+  }
+
+  const preservedNewCanvasMount = prepareNewCanvasMountForRender(workbench, shouldMountNewCanvas(workbench));
+  const activeStoryboards = getActiveStoryboards(workbench);
+  const selectedStoryboard = getSelectedStoryboard(activeStoryboards, workbench.ui.selectedStoryboardId);
+  syncActiveCanvasDocument(workbench);
+  const nextMarkup = renderProjectDetail({
+    state: workbench.state,
+    session: workbench.session,
+    api: workbench.api,
+    ui: {
+      ...workbench.ui,
+      storyboards: activeStoryboards,
+      selectedStoryboard,
+      canvasHostMount: shouldMountNewCanvas(workbench),
+    },
+  });
+  const modeSurfaceOpen = '<section class="home-creation-mode-surface">';
+  const modeSurfaceClose = "\n        </section>\n      </div>\n    </section>";
+  const modeSurfaceStart = nextMarkup.indexOf(modeSurfaceOpen);
+  const modeSurfaceEnd = nextMarkup.lastIndexOf(modeSurfaceClose);
+  if (modeSurfaceStart < 0 || modeSurfaceEnd < modeSurfaceStart) {
+    render(workbench);
+    return false;
+  }
+  const template = documentRef.createElement("template");
+  template.innerHTML = nextMarkup.slice(modeSurfaceStart, modeSurfaceEnd + "\n        </section>".length);
+  const nextModeSurface = template.content.querySelector(".home-creation-mode-surface");
+  if (!nextModeSurface) {
+    render(workbench);
+    return false;
+  }
+
+  const currentHero = root.querySelector(".home-hero");
+  const nextHeroClassName = nextMarkup.match(/<section class="([^"]*\bhome-hero\b[^"]*)"/i)?.[1];
+  if (currentHero && nextHeroClassName) currentHero.className = nextHeroClassName;
+  currentModeSurface.replaceWith(nextModeSurface);
+  const restoredNewCanvasMount = restoreNewCanvasMountAfterRender(workbench, preservedNewCanvasMount);
+  if (shouldMountNewCanvas(workbench) && !restoredNewCanvasMount) {
+    void syncNewCanvasMount(workbench);
+  }
+  syncCanvasLiveSubscription(workbench);
+  persistWorkbenchState(workbench);
+  return true;
+}
+
 export function reconcileFirstLoginGuideTargets(workbench) {
   if (workbench.ui?.firstLoginGuide?.step !== "tip") return false;
   const targetElements = workbench.root?.querySelectorAll?.("[data-first-login-target]") ?? [];
@@ -8642,6 +9634,8 @@ export function reconcileFirstLoginGuideTargets(workbench) {
 
 function render(workbench, options = {}) {
   if (updateNewCanvasSurfaceForHostAction(workbench)) return;
+  workbench.disposeHomeTvIncrementalLoading?.();
+  workbench.disposeHomeTvIncrementalLoading = null;
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
   const isDirectorDeskSurface = workbench.ui?.activeNavTab === "director";
   const preservedNewCanvasMount = prepareNewCanvasMountForRender(workbench, shouldMountNewCanvas(workbench));
@@ -8722,6 +9716,7 @@ function render(workbench, options = {}) {
   const restoredNewCanvasMount = restoreNewCanvasMountAfterRender(workbench, preservedNewCanvasMount);
   syncHomeLiquidEther(workbench);
   syncHomeLightfall(workbench);
+  syncHomeBackgroundVideoLocalCache(workbench);
   scheduleProjectGalleryMeasurement(workbench);
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, singleEpisodeAiScrollState);
   if (shouldMountNewCanvas(workbench) && !restoredNewCanvasMount) {
@@ -8731,6 +9726,7 @@ function render(workbench, options = {}) {
     void syncCanvasPromptEditor(workbench);
   }
   syncCanvasAssetIncrementalLoading(workbench);
+  syncHomeTvIncrementalLoading(workbench);
   syncCanvasLiveSubscription(workbench);
   resumeCanvasGenerationPollingIfNeeded(workbench);
   resumeEpisodeStoryboardGenerationPollingIfNeeded(workbench);
@@ -8758,6 +9754,25 @@ function syncCanvasAssetIncrementalLoading(workbench) {
   }, { root: scrollRoot, rootMargin: "300px" });
   observer.observe(sentinel);
   workbench.disposeCanvasAssetIncrementalLoading = () => observer.disconnect();
+}
+
+function syncHomeTvIncrementalLoading(workbench) {
+  const sentinel = workbench.root?.querySelector?.("[data-home-tv-load-more-sentinel]");
+  const total = Number(sentinel?.dataset?.homeTvTotal ?? 0);
+  const category = String(sentinel?.dataset?.homeTvCategory ?? "");
+  if (!sentinel || !category || !Number.isFinite(total) || total <= 0 || typeof globalThis.IntersectionObserver !== "function") return;
+  const observer = new globalThis.IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) return;
+    observer.disconnect();
+    workbench.disposeHomeTvIncrementalLoading = null;
+    const counts = workbench.ui.homeTvVisibleCounts ?? {};
+    const current = Math.max(6, Number(counts[category] ?? 6) || 6);
+    if (current >= total) return;
+    workbench.ui.homeTvVisibleCounts = { ...counts, [category]: Math.min(total, current + 6) };
+    render(workbench);
+  }, { root: null, rootMargin: "320px 0px" });
+  observer.observe(sentinel);
+  workbench.disposeHomeTvIncrementalLoading = () => observer.disconnect();
 }
 
 let directorDeskModulePromise = null;
@@ -9037,7 +10052,10 @@ function enqueueWorkbenchToast(workbench, value) {
   removePersistentWorkbenchToast(workbench);
   if (shouldMountNewCanvas(workbench)) {
     for (const queuedToast of [...(workbench.ui.toastQueue ?? [])]) {
-      if (queuedToast?.id) removeWorkbenchToastById(workbench, queuedToast.id);
+      if (queuedToast?.id) {
+        removeWorkbenchToastById(workbench, queuedToast.id);
+        removeWorkbenchToastDom(workbench, queuedToast.id);
+      }
     }
     workbench.root?.querySelector?.("#app-status")?.remove?.();
   }
@@ -9123,7 +10141,11 @@ function removeLatestWorkbenchToastByMessage(workbench, message) {
 }
 
 function removeWorkbenchToastDom(workbench, toastId) {
-  const roots = [workbench.newCanvasMount?.shadowRoot, workbench.root].filter(Boolean);
+  const roots = [
+    workbench.newCanvasMount?.shadowRoot,
+    workbench.newCanvasPendingHost?.shadowRoot,
+    workbench.root,
+  ].filter(Boolean);
   for (const root of [...new Set(roots)]) {
     const stack = root?.querySelector?.("#app-status");
     const toast = stack?.querySelector?.(`[data-toast-id="${toastId}"]`);
@@ -9274,6 +10296,14 @@ function captureSingleEpisodeAiPreviewScrollState(root) {
     liveOutput: captureSingleEpisodeAiScrollTargetState(
       root.querySelector(".manual-script-analysis-output pre, .single-episode-ai-live-output pre"),
     ),
+    promptBodies: root.querySelectorAll
+      ? Array.from(root.querySelectorAll(
+        ".single-episode-ai-sent-prompt[data-prompt-stage] .single-episode-ai-sent-prompt-body",
+      )).map((item) => ({
+        stage: String(item.closest("[data-prompt-stage]")?.dataset?.promptStage ?? ""),
+        ...captureSingleEpisodeAiScrollTargetState(item),
+      }))
+      : [],
     promptOpenState,
   };
 }
@@ -9310,6 +10340,20 @@ function restoreSingleEpisodeAiPreviewScrollState(root, scrollState) {
     root.querySelector(".manual-script-analysis-output pre, .single-episode-ai-live-output pre"),
     scrollState.liveOutput,
   );
+  if (Array.isArray(scrollState.promptBodies) && root.querySelectorAll) {
+    const promptBodies = Array.from(root.querySelectorAll(
+      ".single-episode-ai-sent-prompt[data-prompt-stage] .single-episode-ai-sent-prompt-body",
+    ));
+    for (const state of scrollState.promptBodies) {
+      if (!state?.stage) {
+        continue;
+      }
+      const body = promptBodies.find((item) => String(
+        item.closest("[data-prompt-stage]")?.dataset?.promptStage ?? "",
+      ) === state.stage);
+      restoreSingleEpisodeAiScrollTargetState(body, state);
+    }
+  }
   if (!Array.isArray(scrollState.promptOpenState) || !root.querySelectorAll) {
     return;
   }
@@ -9782,30 +10826,45 @@ function renderSingleEpisodeAiPreviewIncremental(workbench) {
   keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, scrollState);
 }
 
-function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, previousScrollState = null) {
+function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, scrollState = null) {
   if (workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
     return;
   }
-  if (previousScrollState) {
-    return;
-  }
-  const previewSurface = workbench.root.querySelector?.(
-    "[data-single-episode-ai-preview-surface]",
-  );
-  if (previewSurface) {
-    previewSurface.scrollTop = previewSurface.scrollHeight;
-  }
-  const scriptOutput = workbench.root.querySelector?.(".single-episode-ai-script-text div");
-  if (scriptOutput) {
-    scriptOutput.scrollTop = scriptOutput.scrollHeight;
-  }
-  const liveOutput = workbench.root.querySelector?.(
-    ".manual-script-analysis-output pre, .single-episode-ai-live-output pre",
-  );
-  if (!liveOutput) {
-    return;
-  }
-  liveOutput.scrollTop = liveOutput.scrollHeight;
+  const activeStage = String(workbench.ui.singleEpisodeAiPreview.activeStage ?? "");
+  const activePromptStage = activeStage ? `${activeStage}-response` : "";
+  const scrollToLatest = () => {
+    const previewSurface = workbench.root.querySelector?.(
+      "[data-single-episode-ai-preview-surface]",
+    );
+    if (previewSurface && (
+      activePromptStage || scrollState?.previewSurface?.stickToBottom !== false
+    )) {
+      previewSurface.scrollTop = previewSurface.scrollHeight;
+    }
+    const scriptOutput = workbench.root.querySelector?.(".single-episode-ai-script-text div");
+    if (scriptOutput && scrollState?.scriptOutput?.stickToBottom !== false) {
+      scriptOutput.scrollTop = scriptOutput.scrollHeight;
+    }
+    const liveOutput = workbench.root.querySelector?.(
+      ".manual-script-analysis-output pre, .single-episode-ai-live-output pre",
+    );
+    if (liveOutput && scrollState?.liveOutput?.stickToBottom !== false) {
+      liveOutput.scrollTop = liveOutput.scrollHeight;
+    }
+    if (activePromptStage) {
+      const escapedPromptStage = globalThis.CSS?.escape
+        ? globalThis.CSS.escape(activePromptStage)
+        : activePromptStage.replace(/[\\"]/g, "\\\\$&");
+      const activePromptBody = workbench.root.querySelector?.(
+        `.single-episode-ai-sent-prompt[data-prompt-stage="${escapedPromptStage}"] .single-episode-ai-sent-prompt-body`,
+      );
+      if (activePromptBody) {
+        activePromptBody.scrollTop = activePromptBody.scrollHeight;
+      }
+    }
+  };
+  scrollToLatest();
+  globalThis.requestAnimationFrame?.(scrollToLatest);
 }
 
 function restoreLibraryScrollState(root, libraryScrollState) {
@@ -10148,7 +11207,11 @@ function renderEpisodeStoryboardCardOnly(workbench, storyboardId) {
 
 function renderEpisodeStoryboardPanelOnly(workbench) {
   const panel = workbench?.root?.querySelector?.(".episode-replica-left");
-  if (!panel || workbench.ui.projectPanelMode !== "episode-workbench") {
+  if (
+    !panel ||
+    workbench.ui.projectPanelMode !== "episode-workbench" ||
+    workbench.ui.episodeWorkbenchLayout === "workflow"
+  ) {
     return false;
   }
   syncStoryboardPaginationForSelection(workbench);
@@ -11229,7 +12292,11 @@ function isPromptMentionGeneratedMediaItem(item) {
 
 function renderEpisodeWorkbenchSelectionOnly(workbench, options = {}) {
   const root = workbench?.root;
-  if (!root?.querySelector || workbench.ui.projectPanelMode !== "episode-workbench") {
+  if (
+    !root?.querySelector ||
+    workbench.ui.projectPanelMode !== "episode-workbench" ||
+    workbench.ui.episodeWorkbenchLayout === "workflow"
+  ) {
     return false;
   }
   const stageBody = root.querySelector(".episode-replica-stage-body");
@@ -11577,6 +12644,37 @@ function resolveEpisodeWorkbenchAssetLibraryFromState(workbench) {
     scene: filterTemporaryEpisodeUploadAssets(importedAssets.scene ?? []),
     prop: filterTemporaryEpisodeUploadAssets(importedAssets.prop ?? []),
   };
+}
+
+function resolveWorkflowAssetGenerationProgress(workbench) {
+  const importedAssets = resolveEpisodeWorkbenchAssetLibraryFromState(workbench);
+  const projectAssets =
+    workbench.ui.projectLibraryAssetsByType ??
+    workbench.ui.projectDetail?.assetsByType ??
+    workbench.state?.projectDetail?.assetsByType ??
+    {};
+  const assets = ["character", "scene", "prop"].flatMap((kind) => {
+    const imported = importedAssets[kind] ?? [];
+    return imported.length ? imported : (projectAssets[kind] ?? []);
+  });
+  const completed = assets.filter((asset) => {
+    const status = resolveWorkflowStatus(
+      asset?.generationStatus ??
+        asset?.generationResult?.status ??
+        asset?.generationResult?.workflowStatus ??
+        asset?.latestVersion?.metadata?.generationStatus,
+    );
+    return ["completed", "ready"].includes(status) || Boolean(resolveEpisodeAssetPreviewUrl(asset));
+  }).length;
+  return {
+    total: assets.length,
+    completed,
+  };
+}
+
+function resolveWorkflowDefaultGenerationScopeMode(workbench) {
+  const progress = resolveWorkflowAssetGenerationProgress(workbench);
+  return progress.total > 0 && progress.completed === progress.total ? "storyboard" : "assets";
 }
 
 function mergeGenerationState(currentState, nextState, options = {}) {
@@ -18065,6 +19163,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     workbench.ui.activeNavTab = normalizedTab;
+    if (workbench.ui.activeNavTab !== "free-generation") {
+      workbench.ui.canvasAgentOnly = false;
+      workbench.ui.canvasAgentCapabilityProfile = "";
+    }
     workbench.ui.projectPanelMode =
       workbench.ui.activeNavTab === "project" ? "library" : workbench.ui.projectPanelMode;
     if (workbench.ui.activeNavTab === "team") {
@@ -18114,6 +19216,26 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
     }
     render(workbench, navigationRenderOptions);
+    if (workbench.ui.activeNavTab === "home") {
+      runLazyWorkbenchTask(workbench, "home project library", async () => {
+        try {
+          await syncHomeProjectLibraryFromApi(workbench);
+        } finally {
+          if (workbench.ui.activeNavTab === "home") {
+            render(workbench, navigationRenderOptions);
+          }
+        }
+      });
+      runLazyWorkbenchTask(workbench, "home recommendations", async () => {
+        try {
+          await syncHomeRecommendationsFromApi(workbench);
+        } finally {
+          if (workbench.ui.activeNavTab === "home") {
+            render(workbench, navigationRenderOptions);
+          }
+        }
+      });
+    }
     if (routeUpdatedWithPushState || currentHash === nextHash) {
       scheduleLazySurfaceLoad(workbench, navigationRenderOptions);
     }
@@ -18261,6 +19383,420 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return project;
     }, {
       successToast: "已创建画布。",
+    });
+    return;
+  }
+
+  if (action === "pick-home-agent-attachments") {
+    rememberHomeAgentComposerCaret(workbench);
+    workbench.root?.querySelector?.("[data-home-agent-attachment-input]")?.click?.();
+    return;
+  }
+
+  if (action === "pick-home-workflow-script") {
+    workbench.root?.querySelector?.("[data-home-workflow-script-input]")?.click?.();
+    return;
+  }
+
+  if (action === "clear-home-workflow-script") {
+    clearHomeWorkflowScriptFile(workbench);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-home-creation-mode") {
+    const mode = String(target.dataset.creationMode ?? "");
+    if (["agent", "workflow", "free"].includes(mode)) {
+      if (mode === "free" && !hasActiveSessionUser(workbench.session)) {
+        await requireWorkbenchLogin(workbench, "free-generation");
+        return;
+      }
+      workbench.ui.homeCreationMode = mode;
+      workbench.ui.homeAgentModeMenuOpen = false;
+      workbench.ui.homeAgentModelMenuOpen = false;
+      workbench.ui.homeAgentSkillPickerOpen = false;
+      if (mode === "free") {
+        prepareFreeGenerationSurface(workbench);
+        if (typeof window !== "undefined") {
+          if (window.history?.pushState) window.history.pushState(null, "", freeGenerationRoute());
+          else window.location.hash = "free-generation";
+        }
+        render(workbench);
+        return;
+      }
+      const returningFromFreeGeneration = workbench.ui.activeNavTab === "free-generation";
+      if (returningFromFreeGeneration) {
+        workbench.ui.activeNavTab = "home";
+        workbench.ui.canvasAgentOnly = false;
+        workbench.ui.canvasAgentCapabilityProfile = "";
+        if (typeof window !== "undefined") {
+          if (window.history?.pushState) window.history.pushState(null, "", "#home");
+          else window.location.hash = "home";
+        }
+      }
+      if (returningFromFreeGeneration) {
+        workbench.ui.homeProjectsLoading = true;
+        runLazyWorkbenchTask(workbench, "home project library", async () => {
+          try {
+            await syncHomeProjectLibraryFromApi(workbench);
+          } finally {
+            if (workbench.ui.activeNavTab === "home") {
+              renderHomeCreationModeSurface(workbench);
+            }
+          }
+        });
+      }
+    }
+    renderHomeCreationModeSurface(workbench);
+    return;
+  }
+
+  if (action === "remove-home-agent-attachment") {
+    const attachmentId = String(target.dataset.attachmentId ?? "");
+    removeHomeAgentAttachmentById(workbench, attachmentId);
+    return;
+  }
+
+  if (action === "toggle-home-agent-mode-menu") {
+    workbench.ui.homeAgentModeMenuOpen = workbench.ui.homeAgentModeMenuOpen !== true;
+    workbench.ui.homeAgentModelMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-home-agent-mode") {
+    const mode = String(target.dataset.agentMode ?? "");
+    if (["b", "c", "plan", "expert"].includes(mode)) {
+      workbench.ui.homeAgentMode = mode;
+    }
+    workbench.ui.homeAgentModeMenuOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "toggle-home-agent-model-menu") {
+    rememberHomeAgentComposerCaret(workbench);
+    const shouldOpen = workbench.ui.homeAgentModelMenuOpen !== true;
+    workbench.ui.homeAgentModelMenuOpen = shouldOpen;
+    workbench.ui.homeAgentModeMenuOpen = false;
+    if (shouldOpen) {
+      try {
+        await ensureCanvasGenerationConfig(workbench, { force: true });
+      } catch (error) {
+        workbench.ui.toast = `模型列表加载失败：${friendlyError(error)}`;
+      }
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-home-agent-model-tab") {
+    const mediaType = String(target.dataset.modelKind ?? "");
+    if (["image", "video"].includes(mediaType)) {
+      workbench.ui.homeAgentModelTab = mediaType;
+      try {
+        await refreshActiveGenerationConfigForMedia(workbench, mediaType);
+      } catch (error) {
+        workbench.ui.toast = `${mediaType === "video" ? "视频" : "图片"}模型加载失败：${friendlyError(error)}`;
+      }
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-home-agent-model") {
+    const mediaType = String(target.dataset.modelKind ?? "");
+    const modelCode = String(target.dataset.modelCode ?? "").trim();
+    const configuredModels = Array.isArray(workbench.ui.episodeGenerationConfig?.models)
+      ? workbench.ui.episodeGenerationConfig.models
+      : [];
+    const modelAvailable = configuredModels.some((model) => {
+      const configuredMediaType = normalizeHomeAgentModelMediaType(
+        model?.mediaType ?? model?.media_type ?? model?.mediaKind,
+      );
+      const configuredModelCode = String(model?.modelCode ?? model?.model_code ?? model?.id ?? "").trim();
+      return model?.enabled !== false && configuredMediaType === mediaType && configuredModelCode === modelCode;
+    });
+    if (["image", "video"].includes(mediaType) && modelCode && modelAvailable) {
+      workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+        .filter((segment) => segment?.type !== "model" || segment.mediaType !== mediaType);
+      workbench.ui.homeAgentSelectedModels = {
+        ...(workbench.ui.homeAgentSelectedModels ?? {}),
+        [mediaType]: modelCode,
+      };
+      insertHomeAgentComposerSegment(workbench, { type: "model", mediaType });
+      workbench.ui.homeAgentModelMenuOpen = false;
+    }
+    render(workbench);
+    restoreHomeAgentComposerCaret(workbench);
+    return;
+  }
+
+  if (action === "remove-home-agent-model") {
+    const mediaType = String(target.dataset.modelKind ?? "");
+    if (["image", "video"].includes(mediaType)) {
+      workbench.ui.homeAgentSelectedModels = {
+        ...(workbench.ui.homeAgentSelectedModels ?? {}),
+        [mediaType]: "",
+      };
+      workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+        .filter((segment) => segment?.type !== "model" || segment.mediaType !== mediaType);
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "open-home-agent-skill-picker") {
+    rememberHomeAgentComposerCaret(workbench);
+    workbench.ui.homeAgentSkillPickerOpen = true;
+    workbench.ui.homeAgentSkillDraftId = "";
+    workbench.ui.homeAgentModeMenuOpen = false;
+    workbench.ui.homeAgentModelMenuOpen = false;
+    workbench.ui.homeAgentSkillLoading = true;
+    render(workbench);
+    try {
+      const fetchSkills = async (source) => {
+        if (typeof workbench.api?.getPromptSkills !== "function") return [];
+        const payload = await workbench.api.getPromptSkills({ source, category: "all", page: 1, pageSize: 100 });
+        return {
+          skills: normalizeCanvasTextSkills(payload?.items, source),
+          pagination: normalizeCanvasTextSkillPagination(payload, {
+            source,
+            category: "all",
+            page: 1,
+            pageSize: 100,
+          }),
+        };
+      };
+      const [official, privateSkills] = await Promise.all([fetchSkills("official"), fetchSkills("private")]);
+      workbench.ui.homeAgentOfficialSkills = official.skills;
+      workbench.ui.homeAgentPrivateSkills = privateSkills.skills;
+      workbench.ui.homeAgentSkillPagination = {
+        official: official.pagination,
+        private: privateSkills.pagination,
+      };
+    } catch (error) {
+      workbench.ui.toast = `Skill 加载失败：${friendlyError(error)}`;
+    } finally {
+      workbench.ui.homeAgentSkillLoading = false;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "close-home-agent-skill-picker") {
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftId = "";
+    render(workbench);
+    restoreHomeAgentComposerCaret(workbench);
+    return;
+  }
+
+  if (action === "set-home-agent-skill-source") {
+    const source = target.dataset.skillSource === "private" ? "private" : "official";
+    workbench.ui.homeAgentSkillSource = source;
+    workbench.ui.homeAgentSkillCategory = "";
+    workbench.ui.homeAgentSkillDraftId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-home-agent-skill-category") {
+    const category = String(target.dataset.skillCategory ?? "");
+    if (!category) return;
+    workbench.ui.homeAgentSkillCategory = category;
+    workbench.ui.homeAgentSkillDraftId = "";
+    render(workbench);
+    await syncHomeAgentSkillPage(workbench, { category, page: 1 });
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-home-agent-skill-page") {
+    const page = Math.max(1, Number(target.dataset.skillPage) || 1);
+    workbench.ui.homeAgentSkillDraftId = "";
+    render(workbench);
+    await syncHomeAgentSkillPage(workbench, { page });
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-home-agent-skill") {
+    workbench.ui.homeAgentSkillDraftId = String(target.dataset.skillId ?? "");
+    render(workbench);
+    return;
+  }
+
+  if (action === "clear-home-agent-skill-draft") {
+    workbench.ui.homeAgentSkillDraftId = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "confirm-home-agent-skill") {
+    const skillId = String(workbench.ui.homeAgentSkillDraftId ?? "");
+    const available = [
+      ...normalizeCanvasTextSkills(workbench.ui.homeAgentOfficialSkills, "official"),
+      ...normalizeCanvasTextSkills(workbench.ui.homeAgentPrivateSkills, "private"),
+    ].some((skill) => skill.id === skillId);
+    if (skillId && available) {
+      insertHomeAgentComposerSegment(workbench, { type: "skill", skillId });
+    }
+    workbench.ui.homeAgentSkillPickerOpen = false;
+    workbench.ui.homeAgentSkillDraftId = "";
+    render(workbench);
+    restoreHomeAgentComposerCaret(workbench);
+    return;
+  }
+
+  if (action === "remove-home-agent-skill") {
+    const skillId = String(target.dataset.skillId ?? "");
+    workbench.ui.homeAgentComposerSegments = (workbench.ui.homeAgentComposerSegments ?? [])
+      .filter((segment) => segment?.type !== "skill" || segment.skillId !== skillId);
+    render(workbench);
+    return;
+  }
+
+  if (action === "set-home-tv-category") {
+    const category = String(target.dataset.homeTvCategory ?? "");
+    if ((workbench.ui.homeTvCategories ?? []).some((item) => item.code === category)) {
+      workbench.ui.homeTvCategory = category;
+      workbench.ui.homeTvVisibleCounts = { ...(workbench.ui.homeTvVisibleCounts ?? {}), [category]: 6 };
+    }
+    render(workbench);
+    return;
+  }
+
+  if (action === "submit-home-agent-prompt") {
+    rememberHomeAgentComposerCaret(workbench);
+    const creationMode = ["agent", "workflow", "free"].includes(workbench.ui.homeCreationMode)
+      ? workbench.ui.homeCreationMode
+      : "agent";
+    const workflowScriptFile = creationMode === "workflow" ? workbench.ui.homeWorkflowScriptFile : null;
+    if (creationMode === "workflow" && !workflowScriptFile) {
+      workbench.ui.toast = "请先上传 DOCX 或 TXT 剧本文档。";
+      render(workbench);
+      workbench.root?.querySelector?.("[data-action=\"pick-home-workflow-script\"]")?.focus?.();
+      return;
+    }
+    const text = homeAgentPromptTextForSubmission(workbench).trim();
+    if (creationMode !== "workflow" && !text) {
+      workbench.ui.toast = "请先输入创作指令。";
+      render(workbench);
+      workbench.root?.querySelector?.("[data-home-agent-prompt]")?.focus?.();
+      return;
+    }
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户仅可查看管理员授权的项目、剧本和画布。";
+      render(workbench);
+      return;
+    }
+    if (!hasActiveSessionUser(workbench.session)) {
+      await requireWorkbenchLogin(workbench, "submit-home-agent-prompt");
+      return;
+    }
+    if (!isActiveMembershipStatus(workbench.ui.membershipStatus)) {
+      workbench.ui.pricingModalTab = "membership";
+      workbench.ui.isLibraryPricingModalOpen = true;
+      workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
+      render(workbench);
+      return;
+    }
+    if (creationMode === "workflow") {
+      let shouldStartAiWorkflow = false;
+      await runAction(workbench, "正在解析剧本并创建工作流...", async () => {
+        const scriptFile = workflowScriptFile;
+        const scriptUpload = await uploadLocalFile(workbench, scriptFile, "script-documents", {
+          projectId: null,
+          uploadLimits: SCRIPT_DOCUMENT_UPLOAD_LIMITS,
+        });
+        const projectName = (stripScriptDocumentExtension(scriptFile.name) || "工作流项目").slice(0, 60);
+        const created = await workbench.api.createProject(buildProjectCreateRequest({
+          name: projectName,
+          aspectRatio: "9:16",
+          projectType: resolveDefaultProjectStyleCode(workbench),
+          scriptInput: "",
+          scriptUploadSessionId: scriptUpload.uploadSessionId ?? null,
+          scriptStorageObjectId: scriptUpload.storageObjectId ?? null,
+          scriptFileName: scriptFile.name,
+          scriptContentType: scriptUpload.mimeType ?? scriptFile.type ?? null,
+        }));
+        const createdProject = created?.project ?? created?.body?.project ?? null;
+        const projectId = String(createdProject?.id ?? createdProject?.projectId ?? "").trim();
+        if (!projectId) {
+          throw new Error("project_create_result_missing");
+        }
+        workbench.ui.selectedProjectCardId = projectId;
+        applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, projectId));
+        const createdState = created?.state ?? created?.body?.state ?? {};
+        const sourceScript = String(
+          createdState?.script?.inputText ??
+          workbench.state?.script?.inputText,
+        ).trim();
+        if (!sourceScript) throw new Error("script_text_required");
+        await Promise.all([
+          syncEpisodePromptSkills(workbench),
+          loadGlobalGenerationConfig(workbench, { fresh: true, mediaType: "text" }),
+        ]);
+        workbench.ui.singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
+        workbench.ui.singleEpisodeName = buildSingleEpisodeTitle(sourceScript, getDetailEpisodes(workbench.state));
+        workbench.ui.singleEpisodeScript = sourceScript;
+        workbench.ui.singleEpisodeNotice = "";
+        workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
+        workbench.ui.homeWorkflowInstruction = sourceScript;
+        workbench.ui.episodeWorkbenchLayout = "workflow";
+        workbench.ui.homeWorkflowOrigin = true;
+        workbench.ui.workflowGenerationWorkbenchOpen = false;
+        shouldStartAiWorkflow = true;
+      }, { successToast: null });
+      if (shouldStartAiWorkflow) {
+        await handleAction(workbench, { dataset: { action: "confirm-single-episode", workflowOrigin: "home" } });
+      }
+      return;
+    }
+    await runAction(workbench, creationMode === "free" ? "正在打开自由生成..." : "正在创建 Agent 画布...", async () => {
+      const project = creationMode === "free" ? null : await createCanvasProject(workbench);
+      if (creationMode === "free") prepareFreeGenerationSurface(workbench);
+      if (project) touchRecentCanvasProject(workbench.ui, project.id);
+      workbench.ui.activeNavTab = creationMode === "free" ? "free-generation" : "tools";
+      workbench.ui.canvasProjectView = "detail";
+      workbench.ui.selectedCanvasNodeId = null;
+      workbench.ui.canvasEditorOpen = false;
+      workbench.ui.canvasAddMenuOpen = false;
+      workbench.ui.canvasContextMenu = null;
+      workbench.ui.canvasProjectMenuId = null;
+      workbench.ui.canvasAgentOnly = creationMode === "free";
+      workbench.ui.canvasAgentCapabilityProfile = creationMode === "free" ? "media_generation_only" : "";
+      workbench.ui.homeAgentModeMenuOpen = false;
+      workbench.ui.homeAgentModelMenuOpen = false;
+      if (typeof window !== "undefined") {
+        if (creationMode !== "free") syncCanvasProjectIdInLocation(project?.id);
+        if (window.history?.pushState) {
+          window.history.pushState(null, "", creationMode === "free"
+            ? freeGenerationRoute()
+            : `#${canvasDetailRouteToken(workbench)}`);
+        } else {
+          window.location.hash = creationMode === "free" ? "free-generation" : canvasDetailRouteToken(workbench);
+        }
+      }
+      await Promise.all([
+        ensureCanvasGenerationConfig(workbench),
+        loadCanvasSettingsRecord(workbench),
+        loadAppliedCanvasToolbar(workbench),
+      ]);
+      const preferredModels = resolveHomeAgentPreferredModels(workbench);
+      workbench.pendingHomeAgentPrompt = {
+        text,
+        mode: ["b", "c", "plan", "expert"].includes(workbench.ui.homeAgentMode)
+          ? workbench.ui.homeAgentMode
+          : "c",
+        files: Array.from(workbench.homeAgentFiles ?? []),
+        ...(Object.keys(preferredModels).length ? { preferredModels } : {}),
+        ...(creationMode === "free" ? { capabilityProfile: "media_generation_only" } : {}),
+      };
+      return project;
+    }, {
+      successToast: creationMode === "free" ? "已打开自由生成。" : "画布已创建，正在启动 Agent。",
     });
     return;
   }
@@ -18569,6 +20105,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "select-storyboard") {
     stopLipSyncAudioPreview(workbench);
     workbench.videoGenerationSelectionVersion = Number(workbench.videoGenerationSelectionVersion ?? 0) + 1;
+    const isWorkflowLayout = workbench.ui.episodeWorkbenchLayout === "workflow";
+    if (isWorkflowLayout) {
+      workbench.ui.museScopeMode = "storyboard";
+      workbench.ui.episodeMediaMode = "video";
+      workbench.ui.workflowGenerationWorkbenchOpen = true;
+    }
     workbench.ui.selectedStoryboardId = target.dataset.storyboardId ?? null;
     syncStoryboardPaginationForSelection(workbench);
     workbench.ui.isStoryboardDescriptionModalOpen = false;
@@ -18580,7 +20122,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     });
     clearStoryboardPromptForSelection(workbench, workbench.ui.selectedStoryboardId);
     requestEpisodeWorkbenchConversationScroll(workbench);
-    if (!renderEpisodeWorkbenchSelectionOnly(workbench)) {
+    if (isWorkflowLayout || !renderEpisodeWorkbenchSelectionOnly(workbench)) {
       render(workbench);
     }
     return;
@@ -18597,11 +20139,39 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     workbench.ui.selectedEpisodeCardId = assetId;
     workbench.ui.selectedEpisodeAssetId = assetId;
+    if (workbench.ui.episodeWorkbenchLayout === "workflow") {
+      workbench.ui.museScopeMode = "assets";
+      workbench.ui.episodeMediaMode = "image";
+      workbench.ui.workflowGenerationWorkbenchOpen = true;
+    }
     clearAssetPromptDraftForCurrentSelection(workbench);
     await loadSelectedAssetConversationHistory(workbench, { assetId, mediaKind: "image" });
     syncPromptFromCurrentScope(workbench);
     requestEpisodeWorkbenchConversationScroll(workbench);
     renderPreservingEpisodeAssetScroll(workbench);
+    return;
+  }
+
+  if (action === "close-workflow-generation-workbench") {
+    if (workbench.ui.episodeWorkbenchLayout === "workflow") {
+      workbench.ui.homeProjectWorkflowProjectId = null;
+      workbench.ui.homeProjectWorkflowLoading = false;
+      workbench.ui.homeProjectWorkflowNotice = "";
+      workbench.ui.selectedProjectCardId = null;
+      workbench.ui.selectedEpisodeId = null;
+      workbench.ui.activeNavTab = "home";
+      workbench.ui.projectPanelMode = "library";
+      workbench.ui.episodeWorkbenchLayout = "standard";
+      workbench.ui.homeWorkflowOrigin = false;
+      workbench.ui.workflowGenerationWorkbenchOpen = false;
+      workbench.ui.openGenerationSelectMenu = null;
+      workbench.ui.isVideoModelMenuOpen = false;
+      workbench.ui.musePromptMenu = null;
+      if (globalThis.window?.location) {
+        globalThis.window.location.hash = "home";
+      }
+      render(workbench);
+    }
     return;
   }
 
@@ -20078,7 +21648,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     if (shouldClosePromptMenus) {
       renderEpisodeWorkbenchPromptDockOnly(workbench);
     }
-    const storyboardScope = (workbench.ui.museScopeMode ?? "storyboard") === "storyboard";
+    const storyboardScope = target.dataset.batchScope
+      ? target.dataset.batchScope === "storyboard"
+      : (workbench.ui.museScopeMode ?? "storyboard") === "storyboard";
     const storyboardBoardMode = storyboardScope && workbench.ui.museBoardMode === "storyboard";
     const mode = storyboardScope ? "video" : "image";
     let items = [];
@@ -20962,6 +22534,39 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-project-detail") {
     const projectId = target.dataset.projectId ?? null;
+    if (workbench.ui.activeNavTab === "home" && projectId) {
+      workbench.ui.selectedProjectCardId = projectId;
+      workbench.ui.selectedEpisodeId = null;
+      workbench.ui.homeProjectWorkflowProjectId = projectId;
+      workbench.ui.homeProjectWorkflowLoading = true;
+      workbench.ui.homeProjectWorkflowNotice = "";
+      workbench.ui.homeWorkflowOrigin = true;
+      workbench.ui.workflowGenerationWorkbenchOpen = false;
+      render(workbench);
+      try {
+        await Promise.all([
+          ensureProjectOverviewLoaded(workbench, projectId),
+          ensureProjectAssetsLoaded(workbench, projectId),
+          ensureProjectEpisodesLoaded(workbench, projectId),
+        ]);
+        const nextStoryboards = syncStoryboards(
+          workbench.ui.storyboards,
+          createStoryboardList(workbench.state),
+        );
+        workbench.ui.storyboards = nextStoryboards;
+        workbench.ui.episodeStoryboardMap = syncEpisodeStoryboardMap(
+          workbench.ui.episodeStoryboardMap,
+          nextStoryboards,
+          getDetailEpisodes(workbench.state),
+        );
+        syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
+      } catch (error) {
+        workbench.ui.homeProjectWorkflowNotice = `加载项目失败：${friendlyError(error)}`;
+      }
+      workbench.ui.homeProjectWorkflowLoading = false;
+      render(workbench);
+      return;
+    }
     const selectedProjectCard = findProjectLibraryCard(workbench, projectId);
     syncActiveProjectFromLibraryCard(workbench, selectedProjectCard);
     workbench.ui.selectedProjectCardId = projectId;
@@ -21004,16 +22609,84 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "close-home-project-workflow") {
+    workbench.ui.homeProjectWorkflowProjectId = null;
+    workbench.ui.homeProjectWorkflowLoading = false;
+    workbench.ui.homeProjectWorkflowNotice = "";
+    workbench.ui.selectedProjectCardId = null;
+    workbench.ui.selectedEpisodeId = null;
+    workbench.ui.episodeWorkbenchLayout = "standard";
+    workbench.ui.homeWorkflowOrigin = false;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-home-project-workflow-episode") {
+    const episodeId = String(target.dataset.episodeId ?? "").trim();
+    if (!episodeId) {
+      return;
+    }
+    workbench.ui.homeProjectWorkflowProjectId = null;
+    workbench.ui.homeProjectWorkflowLoading = false;
+    workbench.ui.homeProjectWorkflowNotice = "";
+    workbench.ui.episodeWorkbenchLayout = "workflow";
+    workbench.ui.homeWorkflowOrigin = true;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
+    await enterEpisodeWorkbench(workbench, episodeId, {
+      preserveRoute: true,
+      scopeMode: resolveWorkflowDefaultGenerationScopeMode(workbench),
+    });
+    return;
+  }
+
   if (action === "open-episode-workbench") {
     const episodeId = target.dataset.episodeId ?? "episode-primary";
+    workbench.ui.episodeWorkbenchLayout = "standard";
+    workbench.ui.homeWorkflowOrigin = false;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
     await enterEpisodeWorkbench(workbench, episodeId, {
       toast: "",
     });
     return;
   }
 
+  if (action === "back-to-home-from-workflow") {
+    stopLipSyncAudioPreview(workbench);
+    workbench.ui.homeProjectWorkflowProjectId = null;
+    workbench.ui.homeProjectWorkflowLoading = false;
+    workbench.ui.homeProjectWorkflowNotice = "";
+    workbench.ui.selectedProjectCardId = null;
+    workbench.ui.selectedEpisodeId = null;
+    workbench.ui.activeNavTab = "home";
+    workbench.ui.projectPanelMode = "library";
+    workbench.ui.episodeWorkbenchLayout = "standard";
+    workbench.ui.homeWorkflowOrigin = false;
+    workbench.ui.workflowGenerationWorkbenchOpen = false;
+    workbench.ui.openGenerationSelectMenu = null;
+    workbench.ui.isVideoModelMenuOpen = false;
+    workbench.ui.musePromptMenu = null;
+    workbench.ui.toast = "";
+    workbench.ui.homeProjectsLoading = true;
+    if (globalThis.window?.location) {
+      globalThis.window.location.hash = "home";
+    }
+    render(workbench);
+    runLazyWorkbenchTask(workbench, "home project library", async () => {
+      try {
+        await syncHomeProjectLibraryFromApi(workbench);
+      } finally {
+        if (workbench.ui.activeNavTab === "home") {
+          render(workbench);
+        }
+      }
+    });
+    return;
+  }
+
   if (action === "back-to-episode-hub") {
     stopLipSyncAudioPreview(workbench);
+    workbench.ui.homeWorkflowOrigin = false;
     workbench.ui.selectedEpisodeId = null;
     workbench.ui.projectPanelMode = "detail";
     workbench.ui.projectInteriorSection = "episodes";
@@ -21739,6 +23412,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const isManualScriptAnalysis =
       workbench.ui.isScriptModalOpen &&
       workbench.ui.scriptModalMode === "manual";
+    const isHomeWorkflowAnalysis = target.dataset.workflowOrigin === "home";
     const manualInputValue = isManualScriptAnalysis
       ? String(workbench.root?.querySelector?.("#manual-script-input")?.value ?? workbench.ui.scriptManualDraft ?? "")
       : "";
@@ -21779,7 +23453,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         };
     const hasRequiredProjectContext = isManualScriptAnalysis || Boolean(projectId);
     const hasLegacyPackages = Boolean(packages?.genrePackageId && packages?.emotionPackageId);
-    const hasRequiredConversionSkill = isManualScriptAnalysis ? Boolean(skillId) : hasEpisodeSkills || hasLegacyPackages;
+    const hasRequiredConversionSkill = isManualScriptAnalysis
+      ? Boolean(skillId)
+      : isHomeWorkflowAnalysis || hasEpisodeSkills || hasLegacyPackages;
     if (!hasRequiredProjectContext || !hasRequiredConversionSkill || (!singleEpisodeTextModelCode && (isManualScriptAnalysis || !hasLegacyPackages))) {
       if (isManualScriptAnalysis) {
         workbench.ui.uploadNotice = !skillId
@@ -21803,11 +23479,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       status: "loading",
       source: isManualScriptAnalysis
         ? "manual-script-analysis"
+        : isHomeWorkflowAnalysis
+          ? "home-workflow"
         : "single-episode-storyboard",
       sourceScript: nextScript,
       packages,
       skillId: skillId || null,
       skills: episodeSkills,
+      selectedStages: isHomeWorkflowAnalysis ? ["scene", "character", "prop", "shot"] : null,
       modelCode: singleEpisodeTextModelCode || (!isManualScriptAnalysis && !hasEpisodeSkills ? "deepseek-script" : ""),
       projectId,
       data: (() => {
@@ -21827,7 +23506,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       liveStoryboardStreamState: null,
       livePreviewTables: null,
       liveDisplayTables: null,
-      activeStage: episodeSkills.script
+      activeStage: isHomeWorkflowAnalysis
+        ? "scene"
+        : episodeSkills.script
         ? "script"
         : episodeSkills.scene_extract
           ? "scene"
@@ -21837,7 +23518,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
               ? "prop"
               : "shot",
     });
-    if (isManualScriptAnalysis) {
+    if (isManualScriptAnalysis || isHomeWorkflowAnalysis) {
       workbench.ui.singleEpisodeAiPreview = createLoadingPreviewState();
     } else {
       workbench.ui.singleEpisodeAiChecking = true;
@@ -21845,9 +23526,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "generation-started");
       showWorkbenchToast(workbench, "正在分析中，请稍候...", { tone: "success" });
     }
-    render(workbench);
+      render(workbench);
     const ensureStoryboardPreviewLoading = () => {
-      if (isManualScriptAnalysis || workbench.ui.singleEpisodeAiPreview?.status === "loading") {
+      if (
+        isManualScriptAnalysis
+        || workbench.ui.singleEpisodeAiPreview?.status === "loading"
+        || workbench.ui.singleEpisodeAiPreview?.streamStagesCompleted === true
+      ) {
         return;
       }
       workbench.ui.singleEpisodeAiChecking = false;
@@ -21858,10 +23543,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     try {
       cancelSingleEpisodeAiPreviewRequest(workbench);
       workbench.singleEpisodeAiPreviewPaintedStages = new Set();
+      workbench.singleEpisodeAiPreviewStreamDeltaCount = 0;
       abortController = new AbortController();
       workbench.singleEpisodeAiPreviewAbortController = abortController;
       const previewInput = {
         scriptText: nextScript,
+        ...(isHomeWorkflowAnalysis ? {
+          skipScriptStage: true,
+          useDefaultWorkflowStages: true,
+        } : {}),
         ...(isManualScriptAnalysis
           ? { skillId, modelCode: singleEpisodeTextModelCode }
           : hasEpisodeSkills
@@ -21894,9 +23584,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             if (completedPreview && typeof completedPreview === "object") {
               preview = completedPreview;
             }
+            const streamStagesCompleted = !isManualScriptAnalysis
+              && eventName === "asset_done"
+              && finalizeSingleEpisodeAiPreviewCompletedStages(workbench);
             const immediateStage = eventName === "script_delta"
               ? "script"
-              : eventName === "asset_done"
+              : eventName === "asset_delta"
                 ? String(event?.data?.stage ?? "")
                 : "";
             const shouldPaintImmediately = Boolean(
@@ -21905,8 +23598,24 @@ export async function handleProductionWorkbenchAction(workbench, target) {
             if (shouldPaintImmediately) {
               workbench.singleEpisodeAiPreviewPaintedStages.add(immediateStage);
             }
-            renderSingleEpisodeAiPreviewProgress(workbench, { immediate: shouldPaintImmediately });
-            if (shouldPaintImmediately) {
+            const isStreamDelta = eventName === "script_delta" || eventName === "asset_delta";
+            if (isStreamDelta) {
+              workbench.singleEpisodeAiPreviewStreamDeltaCount =
+                Number(workbench.singleEpisodeAiPreviewStreamDeltaCount ?? 0) + 1;
+            }
+            const shouldPaintStreamDelta = isStreamDelta && (
+              shouldPaintImmediately ||
+              workbench.singleEpisodeAiPreviewStreamDeltaCount % SINGLE_EPISODE_AI_STREAM_PAINT_CHUNK_COUNT === 0
+            );
+            const shouldFlushStage = eventName === "script_done" || eventName === "asset_done";
+            const shouldPaintNow = shouldPaintStreamDelta || shouldFlushStage;
+            if (streamStagesCompleted) {
+              clearSingleEpisodeAiPreviewRenderTimer(workbench);
+              render(workbench);
+            } else {
+              renderSingleEpisodeAiPreviewProgress(workbench, { immediate: shouldPaintNow });
+            }
+            if (shouldPaintNow) {
               await waitForSingleEpisodeAiPreviewPaint();
             }
           } catch (error) {
@@ -21953,6 +23662,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         sourceScript: workbench.ui.singleEpisodeAiPreview.sourceScript,
         packages: workbench.ui.singleEpisodeAiPreview.packages,
         skills: workbench.ui.singleEpisodeAiPreview.skills,
+        selectedStages: finalizedPreview?.resolvedIntent?.stages ?? workbench.ui.singleEpisodeAiPreview.selectedStages ?? null,
         modelCode: workbench.ui.singleEpisodeAiPreview.modelCode,
         projectId: workbench.ui.singleEpisodeAiPreview.projectId,
         data: finalizedPreview,
@@ -22009,6 +23719,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         null;
       workbench.ui.singleEpisodeAiPreview.livePreviewTables =
         workbench.ui.singleEpisodeAiPreview.liveDisplayTables;
+      if (isHomeWorkflowAnalysis) {
+        workbench.ui.projectPanelMode = "episode-workbench";
+        workbench.ui.selectedEpisodeId = String(
+          getDetailEpisodes(workbench.state)[0]?.id ?? workbench.ui.selectedEpisodeId ?? "",
+        );
+        workbench.ui.museScopeMode = "assets";
+      }
     } catch (error) {
       if (!isManualScriptAnalysis) {
         workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "generation-failed");
@@ -22046,6 +23763,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       }
       if (!isManualScriptAnalysis && workbench.ui.singleEpisodeAiPreview?.status !== "loading") {
         workbench.ui.singleEpisodeAiChecking = false;
+        if (workbench.ui.singleEpisodeAiPreview?.streamStagesCompleted === true) {
+          showWorkbenchToast(workbench, "生成内容已完成，结果已保留。", { tone: "success" });
+          render(workbench);
+          return;
+        }
         workbench.ui.singleEpisodeAiPreview = { status: "idle", data: null, error: "" };
         showWorkbenchToast(workbench, friendlyError(error), { tone: "error" });
         render(workbench);
@@ -27089,7 +28811,7 @@ function applyCanvasScriptWorkflowLiveEvent(workbench, scriptNodeId, event) {
     } else if (eventName === "asset_delta") {
       preview.stages[stage] = {
         ...current,
-        responseText: appendBoundedText(current.responseText, data.text, 250_000),
+        responseText: `${String(current.responseText ?? "")}${String(data.text ?? "")}`,
         status: "running",
       };
     } else if (eventName === "asset_done") {
@@ -28744,6 +30466,8 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   if (!projectId || typeof workbench.api?.getStandaloneCanvas !== "function") {
     return false;
   }
+  workbench.ui.canvasAgentOnly = false;
+  workbench.ui.canvasAgentCapabilityProfile = "";
   workbench.ui.canvasSessionUiStateReady = false;
   const canvasRequest = workbench.api.getStandaloneCanvas(projectId);
   const canLoadSession = typeof workbench.api?.getCanvasSession === "function";
@@ -28769,6 +30493,13 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
     workbench.ui.canvasSessionUiState = session?.uiState && typeof session.uiState === "object"
       ? session.uiState
       : {};
+    const mediaGenerationOnly = workbench.ui.canvasSessionUiState.canvasAgentCapabilityProfile === "media_generation_only";
+    workbench.ui.canvasAgentOnly = mediaGenerationOnly;
+    workbench.ui.canvasAgentCapabilityProfile = mediaGenerationOnly ? "media_generation_only" : "";
+  }
+  if (workbench.ui.activeNavTab === "free-generation") {
+    workbench.ui.canvasAgentOnly = true;
+    workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
   }
   workbench.ui.canvasSessionUiStateReady = true;
   workbench.ui.activeCanvasProjectId = projectId;
@@ -29538,6 +31269,21 @@ async function createCanvasProject(workbench) {
   }));
   persistWorkbenchState(workbench);
   return project;
+}
+
+function prepareFreeGenerationSurface(workbench) {
+  workbench.ui.activeNavTab = "free-generation";
+  workbench.ui.canvasProjectView = "detail";
+  workbench.ui.selectedCanvasNodeId = null;
+  workbench.ui.canvasEditorOpen = false;
+  workbench.ui.canvasAddMenuOpen = false;
+  workbench.ui.canvasContextMenu = null;
+  workbench.ui.canvasProjectMenuId = null;
+  workbench.ui.canvasAgentOnly = true;
+  workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
+  // Free generation has no Canvas session to load before rendering.
+  workbench.ui.canvasSessionUiStateReady = true;
+  return null;
 }
 
 function applyCanvasProjectPatch(workbench, patch = {}) {
@@ -32183,6 +33929,18 @@ export async function refreshProductionWorkbenchForTest(workbench) {
   return refresh(workbench);
 }
 
+export async function syncHomeProjectLibraryFromApiForTest(workbench) {
+  return syncHomeProjectLibraryFromApi(workbench);
+}
+
+export async function syncHomeRecommendationsFromApiForTest(workbench) {
+  return syncHomeRecommendationsFromApi(workbench);
+}
+
+export function homeAgentPromptTextForSubmissionForTest(workbench) {
+  return homeAgentPromptTextForSubmission(workbench);
+}
+
 export function installWorkbenchToastQueueForTest(workbench) {
   installWorkbenchToastQueue(workbench);
 }
@@ -32715,6 +34473,10 @@ function mergeSingleEpisodeAiRegeneratedStage({ currentPreview, finalizedStage, 
     activeStage: "complete",
     regeneratingStage: "",
     regenerationError: "",
+    completionMessage: Array.isArray(normalizedData.commitPayload?.storyboards)
+      && normalizedData.commitPayload.storyboards.length > 0
+      ? `${stageConfig.label}已重新生成，可以创建章节。`
+      : `${stageConfig.label}已重新生成，解析结果已更新。`,
   };
 }
 
@@ -32771,12 +34533,7 @@ async function createSingleEpisodeAndEnterWorkbench(workbench, title, options = 
       await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
     }
 
-    const createdEpisodeId =
-      created?.episode?.id ??
-      created?.episode?.episodeId ??
-      created?.body?.episode?.id ??
-      created?.body?.episode?.episodeId ??
-      null;
+    const createdEpisodeId = resolveCreatedEpisodeWorkbenchId(workbench, created?.episode ?? created?.body?.episode, title);
     resetSingleEpisodeModalState(workbench);
     workbench.ui.episodeCardMenuId = null;
     await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
@@ -32800,47 +34557,70 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     previewData?.commitPayload ?? null,
     createSingleEpisodeAiPreviewSnapshot({ previewState, previewData }),
   );
-  const projectId = workbench.ui.selectedProjectCardId ?? workbench.state?.project?.id ?? null;
+  const projectId = String(
+    previewState.projectId ??
+    resolveActiveProjectId(workbench) ??
+    "",
+  ).trim() || null;
+  const isHomeWorkflow = previewState.source === "home-workflow";
   if (!projectId) {
     workbench.ui.singleEpisodeNotice = "请先选择项目后再创建章节。";
+    showWorkbenchToast(workbench, workbench.ui.singleEpisodeNotice, { tone: "error" });
     render(workbench);
     return;
   }
-  if (!commitPayload || !Array.isArray(commitPayload.storyboards) || commitPayload.storyboards.length === 0) {
-    workbench.ui.singleEpisodeNotice = "AI 分镜结果缺少可创建的分镜，请重新生成。";
+  const hasWorkflowOutput = Boolean(
+    commitPayload && (
+      (Array.isArray(commitPayload.storyboards) && commitPayload.storyboards.length > 0) ||
+      (isHomeWorkflow && (
+        String(commitPayload.scriptText ?? "").trim() ||
+        [commitPayload.scenes, commitPayload.characters, commitPayload.props].some((items) => Array.isArray(items) && items.length > 0)
+      ))
+    ),
+  );
+  if (!hasWorkflowOutput) {
+    workbench.ui.singleEpisodeNotice = "AI 结果为空，请重新生成。";
+    showWorkbenchToast(workbench, workbench.ui.singleEpisodeNotice, { tone: "error" });
     render(workbench);
     return;
   }
   if (typeof workbench.api.commitAiStoryboardPreview !== "function") {
     workbench.ui.singleEpisodeNotice = "当前接口不支持创建 AI 章节，请刷新后重试。";
+    showWorkbenchToast(workbench, workbench.ui.singleEpisodeNotice, { tone: "error" });
     render(workbench);
     return;
   }
 
+  workbench.ui.selectedProjectCardId = projectId;
   workbench.ui.singleEpisodeAiPreview = {
     ...previewState,
     status: "submitting",
     error: "",
   };
+  const episodeTitle = workbench.ui.singleEpisodeName || buildSingleEpisodeTitle(
+    workbench.ui.singleEpisodeScript || commitPayload.scriptText || previewData?.scriptText || "",
+    getDetailEpisodes(workbench.state),
+  );
 
   await runAction(workbench, "正在创建章节...", async () => {
     const result = await workbench.api.commitAiStoryboardPreview(projectId, {
-      episodeTitle: workbench.ui.singleEpisodeName || buildSingleEpisodeTitle(
-        workbench.ui.singleEpisodeScript || commitPayload.scriptText || previewData?.scriptText || "",
-        getDetailEpisodes(workbench.state),
-      ),
+      episodeTitle,
       commitPayload,
     });
     const createdEpisode = result?.episode ?? result?.body?.episode ?? null;
-    const createdEpisodeId = createdEpisode?.id ?? createdEpisode?.episodeId ?? null;
+    appendCommittedEpisodeToProjectDetail(workbench, createdEpisode);
     if (workbench.ui.selectedProjectCardId) {
       try {
         await ensureProjectEpisodesLoaded(workbench, workbench.ui.selectedProjectCardId, { force: true });
       } catch (error) {
-        appendCommittedEpisodeToProjectDetail(workbench, createdEpisode);
         console.warn("[creator-app] project episodes refresh after AI storyboard commit failed", error);
       }
     }
+    const createdEpisodeId = resolveCreatedEpisodeWorkbenchId(
+      workbench,
+      createdEpisode,
+      episodeTitle,
+    );
     hydrateEpisodeWorkbenchFromAiStoryboardCommit(workbench, {
       result,
       commitPayload,
@@ -32856,7 +34636,9 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
     workbench.ui.episodeCardMenuId = null;
     await enterEpisodeWorkbench(workbench, createdEpisodeId ?? getDefaultEpisodeWorkbenchId(workbench), {
       toast: "已创建章节并进入分镜工作台。",
-      scopeMode: "storyboard",
+      scopeMode: isHomeWorkflow && (!Array.isArray(commitPayload.storyboards) || commitPayload.storyboards.length === 0)
+        ? "assets"
+        : "storyboard",
     });
     workbench.ui.firstLoginGuide = advanceFirstLoginGuide(workbench.ui.firstLoginGuide, "storyboard-committed");
   }, {
@@ -32869,6 +34651,20 @@ async function commitAiStoryboardPreviewAndEnterWorkbench(workbench) {
       };
     },
   });
+}
+
+function resolveCreatedEpisodeWorkbenchId(workbench, createdEpisode, fallbackTitle = "") {
+  const createdEpisodeId = String(
+    createdEpisode?.id ?? createdEpisode?.episodeId ?? "",
+  ).trim();
+  if (createdEpisodeId) {
+    return createdEpisodeId;
+  }
+  const normalizedTitle = String(fallbackTitle ?? "").trim();
+  const matchingEpisode = normalizedTitle
+    ? getDetailEpisodes(workbench.state).find((episode) => episode?.title === normalizedTitle)
+    : null;
+  return matchingEpisode?.id ?? getDefaultEpisodeWorkbenchId(workbench);
 }
 
 function appendCommittedEpisodeToProjectDetail(workbench, episode) {
@@ -33675,9 +35471,7 @@ function appendSingleEpisodeAiAssetStepText(workbench, data = {}) {
   const fullResponseText = `${String(existing?.fullResponseText ?? "")}${text}`;
   upsertSingleEpisodeAiAssetStep(workbench, data, {
     status: "loading",
-    responseText: stage === "shot"
-      ? fullResponseText
-      : appendBoundedText(existing?.responseText, text, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+    responseText: fullResponseText,
     fullResponseText,
   });
 }
@@ -33744,16 +35538,44 @@ function syncSingleEpisodeAiTableForStage(workbench, stage) {
   syncSingleEpisodeAiAssetTable(workbench, stage);
 }
 
-function appendBoundedText(current, next, maxChars) {
-  const combined = `${String(current ?? "")}${String(next ?? "")}`;
-  if (!maxChars || combined.length <= maxChars) {
-    return combined;
-  }
-  return combined.slice(-maxChars);
-}
-
 function resolveSingleEpisodeAiPreviewStreamEventName(event) {
   return String(event?.event ?? event?.data?.type ?? "").trim();
+}
+
+function finalizeSingleEpisodeAiPreviewCompletedStages(workbench) {
+  const preview = workbench?.ui?.singleEpisodeAiPreview;
+  if (!preview || preview.status !== "loading" || preview.streamStagesCompleted === true) {
+    return false;
+  }
+  const selectedStages = Array.isArray(preview.selectedStages) && preview.selectedStages.length > 0
+    ? preview.selectedStages.map((stage) => String(stage ?? "")).filter(Boolean)
+    : (preview.assetPromptSteps ?? []).map((step) => String(step?.stage ?? "")).filter(Boolean);
+  if (!selectedStages.length) {
+    return false;
+  }
+  const completed = selectedStages.every((stage) => {
+    if (stage === "script") {
+      return Boolean(String(preview.scriptText ?? preview.scriptRawText ?? "").trim());
+    }
+    return (preview.assetPromptSteps ?? []).some((step) => (
+      String(step?.stage ?? "") === stage && step?.status === "done"
+    ));
+  });
+  if (!completed) {
+    return false;
+  }
+  const finalizedPreview = finalizeSingleEpisodeAiPreviewData(null, preview);
+  workbench.ui.singleEpisodeAiPreview = {
+    ...preview,
+    status: "ready",
+    data: finalizedPreview,
+    error: "",
+    activeStage: "complete",
+    streamStagesCompleted: true,
+    livePreviewTables: preview.livePreviewTables ?? finalizedPreview.previewTables ?? finalizedPreview.displayTables ?? null,
+    liveDisplayTables: preview.liveDisplayTables ?? finalizedPreview.previewTables ?? finalizedPreview.displayTables ?? null,
+  };
+  return true;
 }
 
 function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) {
@@ -33761,6 +35583,12 @@ function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) 
   const data = event?.data ?? {};
   const isManualScriptAnalysis = options.isManualScriptAnalysis === true;
   if (!eventName || eventName === "ping") {
+    return null;
+  }
+  if (eventName === "intent_resolved") {
+    const stages = Array.isArray(data.stages) ? data.stages.map((stage) => String(stage ?? "")) : [];
+    workbench.ui.singleEpisodeAiPreview.selectedStages = stages;
+    workbench.ui.singleEpisodeAiPreview.activeStage = stages[0] ?? "intent";
     return null;
   }
   if (eventName === "script_prompt") {
@@ -33772,21 +35600,21 @@ function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) 
     return null;
   }
   if (eventName === "script_delta") {
-    workbench.ui.singleEpisodeAiPreview.scriptText = appendBoundedText(
-      workbench.ui.singleEpisodeAiPreview.scriptText,
-      data.text,
-      SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-    );
-    workbench.ui.singleEpisodeAiPreview.scriptRawText = appendBoundedText(
-      workbench.ui.singleEpisodeAiPreview.scriptRawText,
-      data.text,
-      SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-    );
+    workbench.ui.singleEpisodeAiPreview.scriptText = `${String(
+      workbench.ui.singleEpisodeAiPreview.scriptText ?? "",
+    )}${String(data.text ?? "")}`;
+    workbench.ui.singleEpisodeAiPreview.scriptRawText = `${String(
+      workbench.ui.singleEpisodeAiPreview.scriptRawText ?? "",
+    )}${String(data.text ?? "")}`;
     syncSingleEpisodeAiScriptTable(workbench);
     workbench.ui.singleEpisodeAiPreview.activeStage = "script";
     return null;
   }
   if (eventName === "script_done") {
+    if (Array.isArray(workbench.ui.singleEpisodeAiPreview.selectedStages)
+      && !workbench.ui.singleEpisodeAiPreview.selectedStages.includes("script")) {
+      return null;
+    }
     workbench.ui.singleEpisodeAiPreview.scriptText = String(
       data.text ?? workbench.ui.singleEpisodeAiPreview.scriptText ?? "",
     );
@@ -33810,33 +35638,44 @@ function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) 
     return null;
   }
   if (eventName === "prompt_delta") {
-    workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
-      workbench.ui.singleEpisodeAiPreview.promptText,
-      data.text,
-      SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-    );
+    workbench.ui.singleEpisodeAiPreview.promptText = `${String(
+      workbench.ui.singleEpisodeAiPreview.promptText ?? "",
+    )}${String(data.text ?? "")}`;
     workbench.ui.singleEpisodeAiPreview.activeStage = "prompt";
     return null;
   }
   if (eventName === "asset_prompt") {
+    const existingStep = (workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [])
+      .find((item) => item.stage === String(data.stage ?? ""));
+    if (existingStep?.status === "done") {
+      return null;
+    }
     upsertSingleEpisodeAiAssetStep(workbench, data, { promptText: String(data.text ?? "") });
     workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
     return null;
   }
   if (eventName === "asset_start") {
+    const existingStep = (workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [])
+      .find((item) => item.stage === String(data.stage ?? ""));
+    if (existingStep?.status === "done") {
+      return null;
+    }
     upsertSingleEpisodeAiAssetStep(workbench, data, { status: "loading" });
     workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
     return null;
   }
   if (eventName === "asset_delta") {
+    const existingStep = (workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [])
+      .find((item) => item.stage === String(data.stage ?? ""));
+    if (existingStep?.status === "done") {
+      return null;
+    }
     appendSingleEpisodeAiAssetStepText(workbench, data);
     const stage = String(data.stage ?? "");
     if (stage === "shot") {
-      workbench.ui.singleEpisodeAiPreview.promptText = appendBoundedText(
-        workbench.ui.singleEpisodeAiPreview.promptText,
-        data.text,
-        SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT,
-      );
+      workbench.ui.singleEpisodeAiPreview.promptText = `${String(
+        workbench.ui.singleEpisodeAiPreview.promptText ?? "",
+      )}${String(data.text ?? "")}`;
     }
     scheduleSingleEpisodeAiTableSync(workbench, stage);
     workbench.ui.singleEpisodeAiPreview.activeStage = data.stage ?? "asset";
@@ -33844,12 +35683,17 @@ function applySingleEpisodeAiPreviewStreamEvent(workbench, event, options = {}) 
   }
   if (eventName === "asset_done") {
     flushSingleEpisodeAiTableSync(workbench, data.stage);
-    const rawResponseText = String(data.text ?? "");
+    const existingStep = (workbench.ui.singleEpisodeAiPreview.assetPromptSteps ?? [])
+      .find((item) => item.stage === String(data.stage ?? ""));
+    const rawResponseText = String(data.text ?? "") || String(
+      existingStep?.fullResponseText ?? existingStep?.rawResponseText ?? existingStep?.responseText ?? "",
+    );
+    if (existingStep?.status === "done" && rawResponseText === String(existingStep.fullResponseText ?? "")) {
+      return null;
+    }
     upsertSingleEpisodeAiAssetStep(workbench, data, {
       status: "done",
-      responseText: String(data.stage ?? "") === "shot"
-        ? rawResponseText
-        : appendBoundedText("", rawResponseText, SINGLE_EPISODE_AI_LIVE_TEXT_LIMIT),
+      responseText: rawResponseText,
       fullResponseText: rawResponseText,
       rawResponseText,
     });
@@ -34846,6 +36690,12 @@ function parseSingleEpisodeAiStageRows(raw, tableKey) {
     if (Array.isArray(labeledAssetRows) && labeledAssetRows.length > 0) {
       return labeledAssetRows;
     }
+    if (tableKey === "characters") {
+      const plainCharacterRows = parseSingleEpisodeAiPlainCharacterRows(raw);
+      if (Array.isArray(plainCharacterRows) && plainCharacterRows.length > 0) {
+        return plainCharacterRows;
+      }
+    }
     if (tableKey === "storyboards") {
       const sectionTableRows = parseSingleEpisodeAiStoryboardSectionTableRows(raw);
       if (Array.isArray(sectionTableRows) && sectionTableRows.length > 0) {
@@ -34947,6 +36797,46 @@ function parseSingleEpisodeAiLabeledAssetRows(raw, tableKey) {
   }
   flush();
   return records.length ? records : null;
+}
+
+function parseSingleEpisodeAiPlainCharacterRows(raw) {
+  const markdownBody = extractSingleEpisodeAiMarkdownBody(raw);
+  if (!markdownBody) {
+    return null;
+  }
+  const records = markdownBody
+    .split(/\r?\n\s*\r?\n/)
+    .map((block) => String(block ?? "").trim())
+    .filter(Boolean)
+    .map((block) => {
+      const lines = block.split("\n");
+      const firstLine = normalizeSingleEpisodeAiLabeledAssetLine(lines[0]);
+      const marker = firstLine.match(/^(.{1,48}?)\s*[:：]\s*(.+)$/);
+      if (!marker || isSingleEpisodeAiCharacterFieldLabel(marker[1])) {
+        return null;
+      }
+      const characterName = String(marker[1] ?? "").trim();
+      const description = [String(marker[2] ?? "").trim(), ...lines.slice(1)]
+        .map(normalizeSingleEpisodeAiLabeledAssetLine)
+        .filter(Boolean)
+        .join("\n");
+      if (!characterName || !description) {
+        return null;
+      }
+      return normalizeSingleEpisodeAiTableRecord({
+        characterName,
+        characterDescription: description,
+        characterImagePrompt: description,
+      }, "characters");
+    })
+    .filter(Boolean);
+  return records.length ? records : null;
+}
+
+function isSingleEpisodeAiCharacterFieldLabel(value) {
+  return /^(?:角色|人物|名称|描述|提示词|外貌|年龄|性别|服装|性格|场景|道具|画面|镜头|对白|动作|时间|地点|环境|背景)$/.test(
+    String(value ?? "").replace(/\s+/g, ""),
+  );
 }
 
 function normalizeSingleEpisodeAiLabeledAssetLine(line) {
@@ -35823,6 +37713,10 @@ export function parseSingleEpisodeAiStoryboardMarkdownForTest(raw) {
   return parseSingleEpisodeAiStoryboardMarkdown(raw);
 }
 
+export function parseSingleEpisodeAiStageRowsForTest(raw, tableKey) {
+  return parseSingleEpisodeAiStageRows(raw, tableKey);
+}
+
 function compactSingleEpisodeAiMarkdownSection(lines) {
   return (Array.isArray(lines) ? lines : [])
     .map((line) => String(line ?? "").replace(/^\s*[-*•]\s*/, "").replace(/\*\*/g, "").trim())
@@ -36573,6 +38467,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
     workbench.ui.storyboardBoardModeComposerDrafts = {};
   }
   const requestedScopeMode = options.scopeMode ?? workbench.ui.museScopeMode ?? "storyboard";
+  const isWorkflowLayout = workbench.ui.episodeWorkbenchLayout === "workflow";
   let storyboards = getEpisodeStoryboards(workbench, resolvedEpisodeId);
   const shouldLoadRemoteEpisode =
     resolvedEpisodeId &&
@@ -36581,7 +38476,7 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
   const episodeContextPromise = shouldLoadRemoteEpisode
     ? workbench.api.getEpisodeWorkbench(resolvedEpisodeId)
     : null;
-  const episodeStoryboardsPromise = shouldLoadRemoteEpisode && requestedScopeMode === "storyboard"
+  const episodeStoryboardsPromise = shouldLoadRemoteEpisode && (requestedScopeMode === "storyboard" || isWorkflowLayout)
     ? loadEpisodeStoryboardsForWorkbench(workbench, resolvedEpisodeId)
     : null;
   workbench.ui.episodeWorkbenchError = "";
@@ -36651,11 +38546,12 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
 
   if (shouldLoadRemoteEpisode) {
     try {
-      const [context, primaryScopeData] = await Promise.all([
+      const [context, primaryScopeData, workflowStoryboards] = await Promise.all([
         episodeContextPromise,
         requestedScopeMode === "assets"
           ? ensureEpisodeWorkbenchAssetsHydrated(workbench)
           : episodeStoryboardsPromise,
+        isWorkflowLayout && requestedScopeMode === "assets" ? episodeStoryboardsPromise : null,
       ]);
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
         return;
@@ -36671,6 +38567,8 @@ async function enterEpisodeWorkbench(workbench, episodeId, options = {}) {
         workbench.ui.selectedProjectCardId;
       if (requestedScopeMode === "storyboard") {
         storyboards = primaryScopeData;
+      } else if (isWorkflowLayout && Array.isArray(workflowStoryboards)) {
+        storyboards = workflowStoryboards;
       }
     } catch (error) {
       if (workbench.ui.episodeWorkbenchEnterRequestId !== requestId || workbench.ui.selectedEpisodeId !== resolvedEpisodeId) {
@@ -37417,7 +39315,7 @@ async function ensureCanvasGenerationConfig(workbench, options = {}) {
 }
 
 function hasLoadedGenerationModelsForMedia(workbench, mediaType) {
-  const expectedMediaType = String(mediaType ?? "").trim().toLowerCase();
+  const expectedMediaType = normalizeHomeAgentModelMediaType(mediaType);
   const models = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
     ? workbench.ui.episodeGenerationConfig.models
     : [];
@@ -37425,25 +39323,29 @@ function hasLoadedGenerationModelsForMedia(workbench, mediaType) {
     return false;
   }
   return models.some((model) => {
-    const modelMediaType = String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "").trim().toLowerCase();
+    const modelMediaType = normalizeHomeAgentModelMediaType(
+      model?.mediaType ?? model?.media_type ?? model?.mediaKind,
+    );
     return modelMediaType === expectedMediaType;
   });
 }
 
 function filterGenerationConfigModelsByMediaType(config = {}, mediaType = "") {
-  const expectedMediaType = String(mediaType ?? "").trim().toLowerCase();
+  const expectedMediaType = normalizeHomeAgentModelMediaType(mediaType);
   if (!expectedMediaType || !Array.isArray(config?.models)) {
     return config;
   }
   const models = config.models.filter((model) => {
-    const modelMediaType = String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "").trim().toLowerCase();
+    const modelMediaType = normalizeHomeAgentModelMediaType(
+      model?.mediaType ?? model?.media_type ?? model?.mediaKind,
+    );
     return modelMediaType === expectedMediaType;
   });
   return { ...config, models };
 }
 
 function mergeGenerationConfigForMedia(current = {}, next = {}, mediaType = "") {
-  const expectedMediaType = String(mediaType ?? "").trim().toLowerCase();
+  const expectedMediaType = normalizeHomeAgentModelMediaType(mediaType);
   if (!expectedMediaType) {
     return next;
   }
@@ -37468,7 +39370,9 @@ function mergeGenerationConfigForMedia(current = {}, next = {}, mediaType = "") 
 }
 
 function generationConfigModelMediaType(model) {
-  return String(model?.mediaType ?? model?.media_type ?? model?.mediaKind ?? "").trim().toLowerCase();
+  return normalizeHomeAgentModelMediaType(
+    model?.mediaType ?? model?.media_type ?? model?.mediaKind,
+  );
 }
 
 async function restoreEpisodeGenerationTasksForWorkbench(workbench, episodeId) {
@@ -37487,7 +39391,7 @@ async function restorePendingAssetBatchGenerationTasksForWorkbench(workbench, ep
   });
   const batchResults = { ...(workbench.ui.episodeBatchResults ?? {}) };
   let restoredCount = 0;
-  for (const task of tasks) {
+  for (const task of [...tasks].reverse()) {
     const mediaKind = task?.kind === "video" || task?.result?.mediaKind === "video" ? "video" : "image";
     const status = resolveWorkflowStatus(task?.status ?? task?.workflowStatus);
     const targetType = String(task?.targetType ?? "").trim();
@@ -37530,13 +39434,21 @@ async function restorePendingAssetBatchGenerationTasksForWorkbench(workbench, ep
       fixedImages: existing?.fixedImages ?? [],
       status: "running",
     };
-    batchResults[assetId] = normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind);
+    const restoredResult = normalizeEpisodeTaskForLegacyResult(task, submission, mediaKind);
+    batchResults[assetId] = restoredResult;
+    appendAssetConversationHistoryEntry(workbench, restoredResult);
     restoredCount += 1;
   }
   if (!restoredCount) {
     return tasks;
   }
   workbench.ui.episodeBatchResults = batchResults;
+  const selectedAssetId = String(
+    workbench.ui.selectedEpisodeAssetId ?? workbench.ui.selectedEpisodeCardId ?? "",
+  ).trim();
+  if (selectedAssetId && batchResults[selectedAssetId]) {
+    syncSelectedAssetConversationResult(workbench, selectedAssetId, "image");
+  }
   workbench.ui.generationPollingActive = true;
   scheduleAssetBatchGenerationPolling(workbench, "image", { immediate: true });
   return tasks;
@@ -37636,6 +39548,32 @@ function resolveConfiguredImageModelCode(workbench, mode, fallback) {
   }
   const configuredModel = models.find((model) => modelSupportsGenerationMode(model, mode));
   return configuredModel?.modelCode ?? fallback;
+}
+
+function resolveHomeAgentPreferredModels(workbench) {
+  const configuredModels = Array.isArray(workbench.ui?.episodeGenerationConfig?.models)
+    ? workbench.ui.episodeGenerationConfig.models
+    : [];
+  const canvasDefaults = workbench.ui?.canvasSettingsRecord?.settings?.defaultModels ?? {};
+  const generationDefaults = workbench.ui?.episodeGenerationConfig ?? {};
+  return Object.fromEntries(
+    ["image", "video"].map((mediaType) => {
+      const selected = String(workbench.ui.homeAgentSelectedModels?.[mediaType] ?? "").trim();
+      const canvasDefault = String(canvasDefaults[mediaType] ?? "").trim();
+      const generationDefault = String(
+        mediaType === "image"
+          ? generationDefaults.defaultImageModelCode ?? ""
+          : generationDefaults.defaultVideoModelCode ?? "",
+      ).trim();
+      const firstAvailable = configuredModels.find((model) => (
+        model?.enabled !== false &&
+        normalizeHomeAgentModelMediaType(model?.mediaType ?? model?.media_type ?? model?.mediaKind) === mediaType &&
+        String(model?.modelCode ?? model?.model_code ?? model?.id ?? "").trim()
+      ));
+      const fallback = String(firstAvailable?.modelCode ?? firstAvailable?.model_code ?? firstAvailable?.id ?? "").trim();
+      return [mediaType, selected || canvasDefault || generationDefault || fallback];
+    }).filter(([, modelCode]) => modelCode),
+  );
 }
 
 function findConfiguredGenerationModel(workbench, modelCode) {
@@ -46466,6 +48404,7 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
     workbench.ui.selectedEpisodeAssetId ??
     workbench.ui.selectedEpisodeCardId ??
     null;
+  const conversationAssetId = resolveAssetConversationSourceId(workbench, assetId);
   const targetKey = resolveAssetConversationTargetKey(mediaKind);
   const historyKey = buildAssetConversationHistoryKey(assetId, mediaKind);
   const force = options.force === true;
@@ -46513,12 +48452,27 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       ...(workbench.ui.assetConversationHistoryPendingKeys ?? {}),
       [historyKey]: true,
     };
-    activeRequestPromise = historyLoader.call(
-      workbench.api,
-      workbench.ui.selectedEpisodeId,
-      assetId,
-      mediaKind,
-    );
+    activeRequestPromise = (async () => {
+      const compactResponse = await historyLoader.call(
+        workbench.api,
+        workbench.ui.selectedEpisodeId,
+        conversationAssetId,
+        mediaKind,
+      );
+      const compactEntries = Array.isArray(compactResponse?.entries) ? compactResponse.entries : [];
+      if (
+        compactEntries.length ||
+        options.fullHistory === true ||
+        typeof workbench.api?.getAssetConversationFullHistory !== "function"
+      ) {
+        return compactResponse;
+      }
+      return workbench.api.getAssetConversationFullHistory(
+        workbench.ui.selectedEpisodeId,
+        conversationAssetId,
+        mediaKind,
+      );
+    })();
     workbench.assetConversationHistoryRequestPromises = {
       ...(workbench.assetConversationHistoryRequestPromises ?? {}),
       [historyKey]: activeRequestPromise,
@@ -46565,6 +48519,19 @@ export async function loadSelectedAssetConversationHistory(workbench, options = 
       workbench.ui.assetConversationHistoryPendingKeys = nextPending;
     }
   }
+}
+
+function resolveAssetConversationSourceId(workbench, assetId) {
+  const normalizedAssetId = String(assetId ?? "").trim();
+  if (!normalizedAssetId) {
+    return normalizedAssetId;
+  }
+  const assets = ["character", "scene", "prop"].flatMap((kind) => workbench.ui.importedAssets?.[kind] ?? []);
+  const selectedAsset = assets.find((asset) => (
+    String(asset?.id ?? "").trim() === normalizedAssetId ||
+    String(asset?.assetId ?? "").trim() === normalizedAssetId
+  ));
+  return String(selectedAsset?.conversationAssetId ?? normalizedAssetId).trim() || normalizedAssetId;
 }
 
 function resolveAssetConversationActionResult(workbench, taskId, mediaKind = "image") {
@@ -51614,14 +53581,21 @@ function syncSelectedStoryboardId(workbench, storyboards) {
   if (!workbench.ui.selectedStoryboardId && storyboards.length > 0) {
     workbench.ui.selectedStoryboardId = storyboards[0].id;
     syncStoryboardPaginationForSelection(workbench);
-    return;
-  }
-
-  if (
+  } else if (
     workbench.ui.selectedStoryboardId &&
     !storyboards.some((storyboard) => storyboard.id === workbench.ui.selectedStoryboardId)
   ) {
     workbench.ui.selectedStoryboardId = storyboards[0]?.id ?? null;
+  }
+
+  if (workbench.ui.episodeWorkbenchLayout === "workflow" && workbench.ui.workflowGenerationWorkbenchOpen !== true) {
+    const scopeMode = resolveWorkflowDefaultGenerationScopeMode(workbench);
+    workbench.ui.museScopeMode = scopeMode;
+    workbench.ui.episodeMediaMode = scopeMode === "storyboard" ? "video" : "image";
+    if (scopeMode === "assets") {
+      syncSelectedEpisodeAssetForCurrentTab(workbench);
+    }
+    workbench.ui.workflowGenerationWorkbenchOpen = true;
   }
   syncStoryboardPaginationForSelection(workbench);
 }
@@ -51747,6 +53721,15 @@ function hydratePersistedWorkbenchState(workbench) {
 
 function syncWorkbenchRouteState(workbench, hash) {
   const token = String(hash || "").replace(/^#/, "");
+  if (token === "free-generation") {
+    workbench.ui.activeNavTab = "free-generation";
+    workbench.ui.projectPanelMode = "library";
+    workbench.ui.canvasProjectView = "detail";
+    workbench.ui.canvasAgentOnly = true;
+    workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
+    workbench.ui.canvasSessionUiStateReady = true;
+    return;
+  }
   if (parseEpisodeRouteToken(token)) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "episode-workbench";
@@ -51827,6 +53810,15 @@ function syncWorkbenchRouteState(workbench, hash) {
 
 function syncCanvasRouteState(workbench, hash, locationLike = globalThis.window?.location) {
   const token = String(hash || "").replace(/^#/, "");
+  if (token === "free-generation") {
+    workbench.ui.activeNavTab = "free-generation";
+    workbench.ui.projectPanelMode = "library";
+    workbench.ui.canvasProjectView = "detail";
+    workbench.ui.canvasAgentOnly = true;
+    workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
+    workbench.ui.canvasSessionUiStateReady = true;
+    return;
+  }
   if (!["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
     return;
   }
@@ -52146,6 +54138,10 @@ function syncSelectedEpisodeAssetForCurrentTab(workbench) {
   ) {
     return workbench.ui.selectedEpisodeCardId ?? workbench.ui.selectedEpisodeAssetId ?? null;
   }
+  const hadSelectedAsset = Boolean(
+    assetEntries.some((item) => item.id === workbench.ui.selectedEpisodeCardId) ||
+    assetEntries.some((item) => item.id === workbench.ui.selectedEpisodeAssetId),
+  );
   const selectedId =
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeCardId)?.id ??
     assetEntries.find((item) => item.id === workbench.ui.selectedEpisodeAssetId)?.id ??
@@ -52155,6 +54151,14 @@ function syncSelectedEpisodeAssetForCurrentTab(workbench) {
   workbench.ui.selectedEpisodeAssetId = selectedId;
   const validIds = new Set(assetEntries.map((item) => item.id));
   workbench.ui.selectedEpisodeAssetIds = (workbench.ui.selectedEpisodeAssetIds ?? []).filter((id) => validIds.has(id));
+  if (
+    selectedId &&
+    !hadSelectedAsset &&
+    workbench.ui.episodeWorkbenchLayout === "workflow" &&
+    workbench.ui.museScopeMode === "assets"
+  ) {
+    workbench.ui.workflowGenerationWorkbenchOpen = true;
+  }
   return selectedId;
 }
 
@@ -55676,6 +57680,9 @@ export function friendlyError(error) {
   }
   const message =
     error instanceof Error ? error.message : (typeof error?.message === "string" ? error.message : String(error));
+  if (/network error|networkerror|failed to fetch/i.test(message)) {
+    return "网络连接异常，生成服务未能建立连接，请重试。";
+  }
   if (
     errorCode === "unexpected_response" ||
     error instanceof SyntaxError ||
@@ -56018,6 +58025,10 @@ function canvasDetailRouteToken(workbench) {
   return "tools-canvas";
 }
 
+function freeGenerationRoute() {
+  return "#free-generation";
+}
+
 function readCanvasProjectIdFromLocation(locationLike = globalThis.window?.location) {
   const params = new URLSearchParams(String(locationLike?.search ?? ""));
   return String(params.get("canvasProjectId") ?? "").trim() || null;
@@ -56090,6 +58101,9 @@ function deriveInitialNavTab(hash, session = {}) {
   }
   if (token === "library") {
     return "library";
+  }
+  if (token === "free-generation") {
+    return "free-generation";
   }
   if (["tools", "tools-canvas", "new-canvas", "new-canvas-canvas"].includes(token)) {
     return "tools";
@@ -56833,6 +58847,7 @@ function mapEpisodeAssetContracts(assets = [], kind) {
     return {
       id: asset?.assetId ?? asset?.id ?? `asset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       assetId: asset?.assetId ?? asset?.id ?? null,
+      conversationAssetId: resolveEpisodeAssetConversationSourceId(asset),
       name: asset?.name ?? asset?.label ?? "未命名资产",
       preview: resolvedPreview,
       previewUrl: resolvedPreview,
@@ -56902,6 +58917,7 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
       ? "episode"
       : asset.latestVersion?.metadata?.source ?? localAsset?.source ?? "import";
     const localEpisodeDerivedAsset = localAssetIsEpisode || isEpisodeDerivedProjectAsset(asset, localAsset);
+    const conversationAssetId = resolveEpisodeAssetConversationSourceId(asset, localAsset);
     const { generationResult, generationStatus, generationTaskId } = localEpisodeDerivedAsset
       ? { generationResult: null, generationStatus: "", generationTaskId: "" }
       : resolveProjectAssetGenerationSnapshot(asset, localAsset);
@@ -56925,6 +58941,7 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
     return {
       id: asset.id,
       assetId: asset.assetId ?? asset.id ?? null,
+      conversationAssetId,
       name: asset.label ?? asset.assetKey ?? localAsset?.name ?? "未命名资产",
       preview,
       previewUrl: preview,
@@ -56958,6 +58975,22 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
         null,
     };
   });
+}
+
+function resolveEpisodeAssetConversationSourceId(asset, fallbackAsset = null) {
+  const candidates = [
+    asset?.conversationAssetId,
+    fallbackAsset?.conversationAssetId,
+    asset?.generationResult?.assetId,
+    asset?.generationResult?.targetId,
+    asset?.latestVersion?.metadata?.generationResult?.assetId,
+    asset?.latestVersion?.metadata?.generationResult?.targetId,
+    asset?.metadata?.generationResult?.assetId,
+    asset?.metadata?.generationResult?.targetId,
+  ];
+  return candidates
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) ?? null;
 }
 
 function filterTemporaryEpisodeUploadAssets(assets = []) {
@@ -57346,6 +59379,70 @@ async function syncProjectLibraryFromApi(workbench, options = {}) {
   return true;
 }
 
+async function syncHomeProjectLibraryFromApi(workbench) {
+  if (typeof workbench.api?.getProjects !== "function") {
+    workbench.ui.homeProjectsLoading = false;
+    return false;
+  }
+  const requestId = (workbench.homeProjectRequestId ?? 0) + 1;
+  workbench.homeProjectRequestId = requestId;
+  workbench.ui.homeProjectsLoading = true;
+  try {
+    const payload = await workbench.api.getProjects({
+      page: 1,
+      pageSize: 8,
+      keyword: "",
+    });
+    if (workbench.homeProjectRequestId !== requestId) {
+      return false;
+    }
+    const projects = Array.isArray(payload.projects)
+      ? payload.projects.map((project) => mapProjectRecordToCard(project))
+      : [];
+    const pagination = normalizeProjectLibraryPagination(payload.pagination, {
+      page: 1,
+      pageSize: 8,
+      total: projects.length,
+    });
+    workbench.ui.homeRecentProjects = projects;
+    workbench.ui.homeProjectTotal = pagination.total;
+    return true;
+  } finally {
+    if (workbench.homeProjectRequestId === requestId) {
+      workbench.ui.homeProjectsLoading = false;
+    }
+  }
+}
+
+async function syncHomeRecommendationsFromApi(workbench) {
+  if (typeof workbench.api?.getHomeRecommendations !== "function") {
+    workbench.ui.homeTvLoading = false;
+    return false;
+  }
+  const requestId = (workbench.homeRecommendationRequestId ?? 0) + 1;
+  workbench.homeRecommendationRequestId = requestId;
+  workbench.ui.homeTvLoading = true;
+  try {
+    const payload = await workbench.api.getHomeRecommendations();
+    if (workbench.homeRecommendationRequestId !== requestId) {
+      return false;
+    }
+    const categories = Array.isArray(payload?.categories) ? payload.categories : [];
+    workbench.ui.homeBackground = payload?.background && typeof payload.background === "object"
+      ? payload.background
+      : { videoUrl: "", posterUrl: "", status: "inactive" };
+    workbench.ui.homeTvCategories = categories;
+    if (!categories.some((item) => item.code === workbench.ui.homeTvCategory)) {
+      workbench.ui.homeTvCategory = categories[0]?.code ?? "";
+    }
+    return true;
+  } finally {
+    if (workbench.homeRecommendationRequestId === requestId) {
+      workbench.ui.homeTvLoading = false;
+    }
+  }
+}
+
 function normalizeProjectLibraryPagination(value, fallback = {}) {
   const pageSize = normalizeProjectLibraryPageSize(value?.pageSize ?? fallback.pageSize);
   const total = Math.max(0, Number(value?.total ?? fallback.total ?? 0));
@@ -57445,6 +59542,12 @@ async function deleteProjectIfPresent(workbench, projectId) {
 
 function applyDeletedProjectsToWorkbench(workbench, projectIds) {
   const deletedIds = new Set(projectIds.map((projectId) => String(projectId ?? "").trim()).filter(Boolean));
+  const homeProjects = Array.isArray(workbench.ui.homeRecentProjects) ? workbench.ui.homeRecentProjects : [];
+  const removedHomeProjects = homeProjects.filter((project) => deletedIds.has(String(project?.id ?? ""))).length;
+  workbench.ui.homeRecentProjects = homeProjects.filter((project) => !deletedIds.has(String(project?.id ?? "")));
+  if (removedHomeProjects > 0) {
+    workbench.ui.homeProjectTotal = Math.max(0, Number(workbench.ui.homeProjectTotal ?? homeProjects.length) - removedHomeProjects);
+  }
   removeDeletedProjectsFromLibrary(workbench, [...deletedIds]);
   workbench.ui.selectedProjectIds = (workbench.ui.selectedProjectIds ?? [])
     .filter((projectId) => !deletedIds.has(String(projectId ?? "")));
@@ -57459,17 +59562,25 @@ function refreshProjectLibraryAfterDelete(workbench) {
     return;
   }
   runLazyWorkbenchTask(workbench, "project library after delete", async () => {
-    const refreshed = await syncProjectLibraryFromApi(workbench, {
-      page: workbench.ui.projectLibraryPage,
-      includeAssets: false,
-    });
-    if (refreshed) {
+    const [libraryRefreshed, homeRefreshed] = await Promise.all([
+      syncProjectLibraryFromApi(workbench, {
+        page: workbench.ui.projectLibraryPage,
+        includeAssets: false,
+      }),
+      syncHomeProjectLibraryFromApi(workbench),
+    ]);
+    if (libraryRefreshed || homeRefreshed) {
       render(workbench);
     }
   });
 }
 
 async function syncCanvasProjectsFromApi(workbench) {
+  if (workbench.ui.activeNavTab === "free-generation") {
+    workbench.ui.canvasAgentOnly = true;
+    workbench.ui.canvasAgentCapabilityProfile = "media_generation_only";
+    return;
+  }
   if (typeof workbench.api?.getCanvasProjects !== "function") {
     syncActiveCanvasDocument(workbench);
     return;
@@ -58409,6 +60520,10 @@ async function deleteStoryboardVideo(workbench, storyboardId, videoId) {
 
 export function mapEpisodeAssetContractsForTest(assets = [], kind = "character") {
   return mapEpisodeAssetContracts(assets, kind);
+}
+
+export async function restorePendingAssetBatchGenerationTasksForTest(workbench, episodeId) {
+  return restorePendingAssetBatchGenerationTasksForWorkbench(workbench, episodeId);
 }
 
 export function clearTeamAssetSubmissionToastForTest(workbench) {

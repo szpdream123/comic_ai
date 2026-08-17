@@ -5,7 +5,7 @@ import { test } from "node:test";
 import * as productionWorkbench from "../src/features/production-workbench/index.js";
 import { renderEpisodeAssetCardForTest } from "../src/features/production-workbench/episode-workbench-rebuilt.js";
 
-test("episode asset title is rendered as an enabled text editor", () => {
+test("episode asset title enters editing only after a double click", () => {
   const html = renderEpisodeAssetCardForTest({
     id: "asset-1",
     name: "玄衣修士",
@@ -17,7 +17,9 @@ test("episode asset title is rendered as an enabled text editor", () => {
   assert.match(input, /data-asset-kind="character"/);
   assert.match(input, /value="玄衣修士"/);
   assert.match(input, /maxlength="20"/);
-  assert.doesNotMatch(input, /\b(?:disabled|readonly)\b/);
+  assert.match(input, /\breadonly\b/);
+  assert.match(input, /title="双击修改名称"/);
+  assert.match(html, /episode-replica-asset-name-edit-hint" data-tooltip="双击修改名称"/);
   assert.match(html, /class="episode-replica-asset-title-row"/);
   assert.match(html, /episode-replica-asset-title-row[\s\S]*episode-replica-asset-name-input/);
   const actionsRow = html.match(/<div class="episode-replica-asset-actions-row">(?<body>[\s\S]*?)<\/div>/)?.groups?.body ?? "";
@@ -118,7 +120,7 @@ test("episode asset title rejects an empty value without overwriting the asset",
   assert.equal(workbench.ui.toast, "资产名称不能为空。");
 });
 
-test("episode asset title saves when the editor loses focus", async () => {
+test("episode asset title saves only after double-click editing and a changed value loses focus", async () => {
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
   const previousLocalStorage = globalThis.localStorage;
@@ -184,12 +186,35 @@ test("episode asset title saves when the editor loses focus", async () => {
     workbench.api.updateEpisodeAsset = async (episodeId, targetAssetId, payload) => {
       calls.push({ episodeId, targetAssetId, payload });
     };
+    const attributes = new Set(["readonly"]);
     const target = Object.assign(new FakeElement(), {
       dataset: { assetId, assetKind: "character" },
-      value: "玄衣剑客",
+      value: "玄衣修士",
       matches(selector) { return selector === ".episode-replica-asset-name-input"; },
+      closest(selector) {
+        return selector === ".episode-replica-asset-name-input[readonly]" && attributes.has("readonly")
+          ? this
+          : null;
+      },
+      hasAttribute(name) { return attributes.has(name); },
+      setAttribute(name) { attributes.add(name); },
+      removeAttribute(name) { attributes.delete(name); },
+      focus() {},
+      select() {},
     });
 
+    for (const listener of listeners.get("focusout") ?? []) {
+      await listener({ target, relatedTarget: null, composedPath: () => [target] });
+    }
+
+    assert.deepEqual(calls, []);
+
+    for (const listener of listeners.get("dblclick") ?? []) {
+      listener({ target, preventDefault() {}, composedPath: () => [target] });
+    }
+    assert.equal(target.hasAttribute("readonly"), false);
+
+    target.value = "玄衣剑客";
     for (const listener of listeners.get("focusout") ?? []) {
       await listener({ target, relatedTarget: null, composedPath: () => [target] });
     }
@@ -208,13 +233,28 @@ test("episode asset title saves when the editor loses focus", async () => {
   }
 });
 
+test("episode asset title restores an empty double-click edit without saving", async () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/index.js", import.meta.url), "utf8");
+  const focusoutStart = source.indexOf('if (target?.matches?.(".episode-replica-asset-name-input"))');
+  const focusoutEnd = source.indexOf('if (\n      target?.matches?.("#video-prompt-input")', focusoutStart);
+  const focusoutSource = source.slice(focusoutStart, focusoutEnd);
+
+  assert.ok(focusoutStart >= 0 && focusoutEnd > focusoutStart);
+  assert.match(focusoutSource, /const wasEditing = target\.dataset\.assetNameEditing === "true"/);
+  assert.match(focusoutSource, /if \(!wasEditing\) \{\s*return;/);
+  assert.match(focusoutSource, /if \(!name \|\| name === String\(originalValue \?\? ""\)\.trim\(\)\) \{\s*target\.value = originalValue;\s*return;/);
+});
+
 test("episode asset title focus styles follow the active workbench theme", () => {
   const css = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
   const focusBlock = css.match(/\.episode-replica-asset-name-input:focus\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+  const tooltipBlock = css.match(/\.episode-replica-asset-name-edit-hint::after\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
 
   assert.match(focusBlock, /var\(--theme-control-active-border/);
   assert.match(focusBlock, /var\(--theme-control-active-background/);
   assert.match(focusBlock, /box-shadow:/);
+  assert.match(tooltipBlock, /content:\s*attr\(data-tooltip\)/);
+  assert.match(tooltipBlock, /pointer-events:\s*none/);
 });
 
 test("episode asset description editor supports 2500 characters and manual resizing", () => {

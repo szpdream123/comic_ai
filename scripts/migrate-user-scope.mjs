@@ -105,7 +105,12 @@ const migrations = [
   ["20260903-add-globalaiopc-model-center-and-soundclone.sql", "packages/db/migrations/20260903-add-globalaiopc-model-center-and-soundclone.sql"],
   ["20260904-create-provider-material-assets.sql", "packages/db/migrations/20260904-create-provider-material-assets.sql"],
   ["20260905-create-geo-operations.sql", "packages/db/migrations/20260905-create-geo-operations.sql"],
+  ["20260905-home-recommendations.sql", "packages/db/migrations/20260905-home-recommendations.sql"],
   ["20260906-add-geo-generation-leases.sql", "packages/db/migrations/20260906-add-geo-generation-leases.sql"],
+  ["20260906-home-background-video.sql", "packages/db/migrations/20260906-home-background-video.sql"],
+  ["20260907-free-generation-workspaces.sql", "packages/db/migrations/20260907-free-generation-workspaces.sql"],
+  ["20260908-hide-soundclone-provider-parameters.sql", "packages/db/migrations/20260908-hide-soundclone-provider-parameters.sql"],
+  ["20260909-backfill-project-cover-storage-objects.sql", "packages/db/migrations/20260909-backfill-project-cover-storage-objects.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -121,11 +126,16 @@ const runtimeSafeMigrationNames = new Set([
   "20260826-converge-provider-protocol-constraint.sql",
   "20260804-z-redact-sms-send-record-secrets.sql",
   "20260831-canvas-agent-outbox-wakeup.sql",
+  "20260905-home-recommendations.sql",
+  "20260906-home-background-video.sql",
+  "20260907-free-generation-workspaces.sql",
+  "20260908-hide-soundclone-provider-parameters.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",
 ]);
 const taskCenterProviderDiagnosticsMigrationName = "20260824-task-center-provider-diagnostics.sql";
+const projectCoverStorageObjectBackfillMigrationName = "20260909-backfill-project-cover-storage-objects.sql";
 const compatibleChecksumTransitions = new Map([
   ["20260720-add-aliyun-bailian-audio-model.sql", {
     recorded: [
@@ -154,8 +164,9 @@ const compatibleChecksumTransitions = new Map([
     recorded: [
       "c34889dfd4cae6f8cef5c179dfaddad87bb0384b9d8f5fe10a50054fb26d5a4c",
       "99a6a8111f77709b887d65cf71df83b9a0ad1c8f6bb7037319ae3b29ac3b433a",
+      "9b555fbef017f23accf2986a7ee1542be091f8b022560aba955828c95566542a",
     ],
-    current: "9b555fbef017f23accf2986a7ee1542be091f8b022560aba955828c95566542a",
+    current: "3c89983380e637330d4bb7883ce4b9ad077d3392c724fa5e39416da52b6800dc",
   }],
   ["20260725-create-canvas-agent-runtime.sql", {
     recorded: "e8bda0ec7ec8d507b7dc3156406787e346e07029330c2980e8a09cb048f93e4a",
@@ -176,7 +187,11 @@ const migrationLockRetryMs = 250;
 const mode = process.argv.includes("--dry-run") ? "dry-run" : process.argv.includes("--apply") ? "apply" : null;
 const registerExisting = process.argv.includes("--register-existing");
 const runtimeSafe = process.argv.includes("--runtime-safe");
-if (!mode) throw new Error("usage: migrate-user-scope.mjs --dry-run|--apply [--register-existing]");
+const onlyMigrationIndex = process.argv.indexOf("--only");
+const onlyMigrationName = onlyMigrationIndex >= 0 ? process.argv[onlyMigrationIndex + 1] : null;
+if (!mode || (onlyMigrationIndex >= 0 && !onlyMigrationName)) {
+  throw new Error("usage: migrate-user-scope.mjs --dry-run|--apply [--register-existing] [--only migration-name]");
+}
 
 const connectionString = process.env.DATABASE_URL?.trim();
 if (!connectionString) throw new Error("DATABASE_URL is required");
@@ -207,18 +222,24 @@ try {
   const target = await client.query("SELECT current_database() AS database_name, current_schema() AS schema_name");
   console.log(`target=${target.rows[0].database_name}/${target.rows[0].schema_name}`);
   const loaded = await loadMigrations();
+  const selected = onlyMigrationName
+    ? loaded.filter((migration) => migration.name === onlyMigrationName)
+    : loaded;
+  if (onlyMigrationName && selected.length !== 1) {
+    throw new Error(`unknown_migration:${onlyMigrationName}`);
+  }
 
   if (mode === "dry-run") {
     await client.query("BEGIN");
     transactionOpen = true;
     await client.query("SET LOCAL statement_timeout = '15min'");
-    await applyOrValidate(client, loaded, false, registerExisting);
+    await applyOrValidate(client, selected, false, registerExisting);
     await assertCleanSchema(client);
     await client.query("ROLLBACK");
     transactionOpen = false;
     console.log("dry-run rolled back");
   } else {
-    await applyOrValidate(client, loaded, true, registerExisting);
+    await applyOrValidate(client, selected, true, registerExisting);
     await client.query("DISCARD PLANS");
     await assertCleanSchema(client);
     console.log("migration complete");
@@ -390,6 +411,16 @@ async function applyOrValidate(db, loaded, apply, allowRegistration) {
 
     if (apply && migration.name === taskCenterProviderDiagnosticsMigrationName) {
       await applyTaskCenterProviderDiagnosticsMigration(db, migration);
+    } else if (apply && migration.name === projectCoverStorageObjectBackfillMigrationName) {
+      await applyProjectCoverStorageObjectBackfillMigration(db, migration);
+    } else if (!apply && migration.name === projectCoverStorageObjectBackfillMigrationName) {
+      await db.query(migration.sql);
+      const updated = await backfillProjectCoverStorageObjects(db);
+      await db.query(
+        "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
+        [migration.name, migration.checksum],
+      );
+      console.log(`dry-run ok ${migration.name} (project covers: ${updated})`);
     } else if (!apply && migration.name === taskCenterProviderDiagnosticsMigrationName) {
       await db.query(migration.sql);
       await backfillTaskCenterProviderDiagnostics(db);
@@ -517,6 +548,71 @@ async function applyTaskCenterProviderDiagnosticsMigration(db, migration) {
   console.log(
     `applied ${migration.name} (provider summaries: ${providerBackfilled}, snapshot summaries: ${snapshotBackfilled})`,
   );
+}
+
+async function applyProjectCoverStorageObjectBackfillMigration(db, migration) {
+  await db.query("BEGIN");
+  try {
+    await db.query("SET LOCAL statement_timeout = '15min'");
+    await db.query(migration.sql);
+    const updated = await backfillProjectCoverStorageObjects(db);
+    await db.query(
+      "INSERT INTO app_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
+      [migration.name, migration.checksum],
+    );
+    await db.query("COMMIT");
+    console.log(`applied ${migration.name} (project covers: ${updated})`);
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  }
+}
+
+async function backfillProjectCoverStorageObjects(db) {
+  const legacyCovers = await db.query(`
+    SELECT id, cover_image_url
+    FROM projects
+    WHERE cover_storage_object_id IS NULL
+      AND cover_image_url IS NOT NULL
+  `);
+  let updated = 0;
+  for (const project of legacyCovers.rows) {
+    const parsed = parseLegacyCosObjectUrl(project.cover_image_url);
+    if (!parsed) continue;
+    const result = await db.query(
+      `
+        UPDATE projects AS project
+        SET cover_storage_object_id = object.id
+        FROM storage_objects AS object
+        WHERE project.id = $1
+          AND project.cover_storage_object_id IS NULL
+          AND object.project_id = project.id
+          AND object.bucket = $2
+          AND object.object_key = $3
+          AND object.status = 'available'
+          AND object.deleted_at IS NULL
+        RETURNING project.id
+      `,
+      [project.id, parsed.bucket, parsed.objectKey],
+    );
+    updated += result.rows.length;
+  }
+  return updated;
+}
+
+function parseLegacyCosObjectUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    const hostMatch = url.hostname.match(/^(.+)\.cos\.[^.]+\.myqcloud\.com$/i);
+    if (!hostMatch?.[1] || !url.pathname || url.pathname === "/") return null;
+    return {
+      bucket: hostMatch[1],
+      objectKey: decodeURIComponent(url.pathname.slice(1)),
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function backfillTaskCenterProviderDiagnostics(db) {
@@ -721,6 +817,11 @@ async function assertCleanSchema(db) {
     )
     SELECT object_type, object_name
     FROM findings
+    WHERE (object_type, object_name) NOT IN (
+      ('column', 'creator_canvas_projects.is_free_generation_workspace'),
+      ('constraint', 'creator_canvas_projects_is_free_generation_workspace_not_null'),
+      ('index', 'creator_canvas_projects_free_generation_workspace_owner_idx')
+    )
     ORDER BY object_type, object_name
   `, [first, second]);
   if (result.rows.length > 0) throw new Error(`legacy_schema_objects_remain:${JSON.stringify(result.rows)}`);

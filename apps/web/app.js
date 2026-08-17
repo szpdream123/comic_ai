@@ -6,7 +6,7 @@ import {
 
 const root = document.querySelector("#creator-app");
 const productionWorkbenchPromise = root
-  ? import("./src/features/production-workbench/index.js?home-font=2&single-episode-limit=2&single-episode-help=1&prompt-cover-upload=1&storyboard-style-picker=1&asset-reference-mentions=1&storyboard-content-import=1&backend-style-reference=1&model-display-only=1&stable-generation-name=1&canvas-inline-prompt-editor=8&canvas-project-route=3&canvas-run-group-overlay=3&canvas-refresh-mount=4&v=20260810-1")
+  ? import("./src/features/production-workbench/index.js")
   : null;
 const homeUrl =
   window.location.protocol === "file:"
@@ -16,7 +16,7 @@ const LOCAL_STORAGE_PREFIXES = ["comic-ai-project-library", "comic-ai:production
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
 const CODE_REQUEST_COOLDOWN_SECONDS = 60;
 const GLOBAL_TOAST_DURATION_MS = 2000;
-const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace"]);
+const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace", "getHomeRecommendations"]);
 
 async function bootstrap() {
   const sessionPromise = creatorApi.getSession();
@@ -179,7 +179,7 @@ export function openLoginModal() {
   modal.className = "app-login-modal";
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
-  modal.setAttribute("aria-label", "登录灵曦剧场");
+  modal.setAttribute("aria-label", "登录灵曦AI");
   modal.innerHTML = renderLoginModalMarkup();
   document.body.appendChild(modal);
   modal.querySelectorAll("[data-login-modal-close]").forEach((button) => {

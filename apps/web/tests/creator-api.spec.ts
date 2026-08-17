@@ -149,22 +149,35 @@ test("parseScript sends an idempotency key", async () => {
 
 test("task-center list forwards incremental query parameters", async () => {
   const calls = [];
+  const timeoutDelays = [];
+  const previousSetTimeout = globalThis.setTimeout;
+  const previousClearTimeout = globalThis.clearTimeout;
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
     return { ok: true, text: async () => "{}" };
   };
+  globalThis.setTimeout = ((callback, delay, ...args) => {
+    timeoutDelays.push(delay);
+    return previousSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout;
 
-  const { creatorApi } = await import("../src/shared/creator-api.js");
-  await creatorApi.listTaskCenterTasks({
-    pageSize: 50,
-    updatedAfter: "2026-07-22T08:00:00.000Z",
-    cursor: "cursor/value",
-  });
+  try {
+    const { creatorApi } = await import("../src/shared/creator-api.js");
+    await creatorApi.listTaskCenterTasks({
+      pageSize: 50,
+      updatedAfter: "2026-07-22T08:00:00.000Z",
+      cursor: "cursor/value",
+    });
+  } finally {
+    globalThis.setTimeout = previousSetTimeout;
+    globalThis.clearTimeout = previousClearTimeout;
+  }
 
   assert.equal(
     calls[0].url,
     "/api/task-center/tasks?pageSize=50&updatedAfter=2026-07-22T08%3A00%3A00.000Z&cursor=cursor%2Fvalue",
   );
+  assert.deepEqual(timeoutDelays, [60_000]);
 });
 
 test("storyboard prompt packages request the compact creator payload", async () => {
@@ -280,6 +293,51 @@ test("getAnnouncements reads the public announcement route", async () => {
   assert.equal(calls[0].options.credentials, "include");
   assert.equal(payload.announcements[0]?.title, "平台公告");
   assert.equal(payload.version, "2026-07-17T05:56:48.039Z");
+});
+
+test("catalog reads reuse the TTL cache until a write invalidates it", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ configs: [], categories: [], requestId: "cache-test" }),
+    };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?catalog-cache=${Date.now()}`);
+  await creatorApi.getHomeRecommendations();
+  await creatorApi.getHomeRecommendations();
+  await creatorApi.listCanvasUserConfigs({ type: "character" });
+  await creatorApi.listCanvasUserConfigs({ type: "character" });
+  await creatorApi.createCanvasUserConfig({ type: "character", name: "角色配置" });
+  await creatorApi.listCanvasUserConfigs({ type: "character" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/home-recommendations",
+    "/api/canvas-library/configs?type=character",
+    "/api/canvas-library/configs",
+    "/api/canvas-library/configs?type=character",
+  ]);
+});
+
+test("prompt skill catalog uses a longer cache than a personal skill library", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ items: [] }) };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?prompt-skill-cache=${Date.now()}`);
+  await creatorApi.getPromptSkills({ source: "official", category: "script" });
+  await creatorApi.getPromptSkills({ source: "official", category: "script" });
+  await creatorApi.getPromptSkills({ source: "private", category: "script" });
+  await creatorApi.getPromptSkills({ source: "private", category: "script" });
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/creator/prompt-skills/catalog?category=script&page=1&pageSize=12",
+    "/api/creator/prompt-skills/library?category=script&page=1&pageSize=12",
+  ]);
 });
 
 test("prompt reverse allows image models enough time to complete", async () => {
@@ -2551,7 +2609,7 @@ test("jianying export waits for archive build without changing other export time
     globalThis.fetch = previousFetch;
   }
 
-  assert.deepEqual(scheduledDelays, [600_000, 10_000, 123_456]);
+  assert.deepEqual(scheduledDelays, [600_000, 60_000, 123_456]);
 });
 
 test("new envelope errors expose status code, error code, details, and request id", async () => {

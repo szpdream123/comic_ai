@@ -88,6 +88,7 @@ function runDevFoundationSchema({ runtime, cwd, env }) {
       CREATOR_DEV_STACK_MANAGED: "false",
       CREATOR_DEV_SCHEMA_READY: "false",
     },
+    windowsHide: true,
     stdio: "inherit",
     timeout: devFoundationSchemaTimeoutMs,
   });
@@ -167,7 +168,7 @@ function findNodeRuntime(minMajor) {
   addCandidate(process.execPath);
 
   const nodeLocator = process.platform === "win32" ? "where.exe" : "which";
-  const whereNode = spawnSync(nodeLocator, ["node"], { encoding: "utf8" });
+  const whereNode = spawnSync(nodeLocator, ["node"], { encoding: "utf8", windowsHide: true });
 
   if (whereNode.status === 0) {
     for (const line of whereNode.stdout.split(/\r?\n/)) {
@@ -176,7 +177,7 @@ function findNodeRuntime(minMajor) {
   }
 
   for (const candidate of candidates) {
-    const version = spawnSync(candidate, ["--version"], { encoding: "utf8" });
+    const version = spawnSync(candidate, ["--version"], { encoding: "utf8", windowsHide: true });
     if (version.status !== 0) continue;
     const match = version.stdout.trim().match(/^v(\d+)\./);
     if (match && Number(match[1]) >= minMajor) {
@@ -195,7 +196,7 @@ function findNodeRuntime(minMajor) {
 }
 
 function resolveTsxRuntimeArgs(runtimePath) {
-  const version = spawnSync(runtimePath, ["--version"], { encoding: "utf8" });
+  const version = spawnSync(runtimePath, ["--version"], { encoding: "utf8", windowsHide: true });
   if (version.status !== 0) return ["--loader", "tsx"];
   const match = version.stdout.trim().match(/^v(\d+)\.(\d+)\.(\d+)/);
   if (!match) return ["--loader", "tsx"];

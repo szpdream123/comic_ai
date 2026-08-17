@@ -6,6 +6,7 @@ import { grantCredits } from "../../credit-billing/credit-ledger.service.ts";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { CanvasAgentBillingService } from "../canvas-agent-billing.service.ts";
 import { CanvasAgentRepairService } from "../canvas-agent-repair.service.ts";
+import { createWorkflowWithTasks } from "../../workflow-task/workflow-task.service.ts";
 import {
   createCanvasAgentStep,
   createCanvasAgentTask,
@@ -121,7 +122,7 @@ test("owner round settles the reservation from actual token usage", async () => 
     `, [fixture.ownerUserId]);
     assert.deepEqual(settled, { consumed: 9, released: 1 });
     assert.equal(Number(user.rows[0]?.credit_balance_cached), 91);
-    assert.equal(ledger.rows[0]?.reason, "画布协作Agent操作消耗");
+    assert.equal(ledger.rows[0]?.reason, "会话消息积分消耗");
   } finally {
     await db.close();
   }
@@ -289,6 +290,59 @@ test("lease repair refunds a member debit before requeueing the model round", as
     await assertRoundRepaired(db, fixture.task.id, fixture.stepId);
     assert.equal(Number(member.rows[0]?.member_credits), 100);
     assert.equal(Number(refunds.rows[0]?.count), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("completed generation repair wakes an Agent whose step was already reconciled", async () => {
+  const db = await createMigratedTestDb();
+  try {
+    const fixture = await createRunningModelRound(db, null);
+    const generation = await createWorkflowWithTasks(db, {
+      userId: fixture.ownerUserId,
+      projectId: null,
+      canvasProjectId: fixture.canvasId,
+      workflowType: "canvas_agent_generation",
+      inputSnapshot: {},
+      tasks: [{
+        taskType: "episode_generate_video",
+        queueName: "generation-submit-video",
+        targetEntityType: "canvas_agent_conversation",
+        targetEntityId: fixture.task.id,
+        inputSnapshot: {},
+      }],
+    });
+    const generationTaskId = generation.tasks[0]!.id;
+    await db.query("UPDATE tasks SET status='succeeded' WHERE id=$1", [generationTaskId]);
+    await db.query(`
+      UPDATE canvas_agent_steps
+      SET kind='tool', status='succeeded', generation_task_id=$2, completed_at=$3, updated_at=$3
+      WHERE id=$1
+    `, [fixture.stepId, generationTaskId, repairedAt]);
+    await db.query(`
+      UPDATE canvas_agent_tasks
+      SET status='waiting_external', current_step_id=$2, lease_owner=NULL,
+          lease_expires_at=NULL, heartbeat_at=NULL, updated_at=$3
+      WHERE id=$1
+    `, [fixture.task.id, fixture.stepId, repairedAt]);
+
+    const result = await new CanvasAgentRepairService({ db, now: () => repairedAt }).resumeCompletedGenerations();
+
+    assert.deepEqual(result, { inspected: 1, resumed: 1 });
+    const state = await db.query<{ task_status: string; step_status: string; message_count: number | string }>(`
+      SELECT agent.status AS task_status, step.status AS step_status,
+             (SELECT count(*) FROM canvas_agent_messages message
+              WHERE message.task_id=agent.id AND message.role='tool') AS message_count
+      FROM canvas_agent_tasks agent
+      JOIN canvas_agent_steps step ON step.id=agent.current_step_id
+      WHERE agent.id=$1
+    `, [fixture.task.id]);
+    assert.deepEqual(state.rows[0], {
+      task_status: "queued",
+      step_status: "succeeded",
+      message_count: "1",
+    });
   } finally {
     await db.close();
   }

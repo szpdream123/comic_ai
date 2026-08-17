@@ -55,7 +55,7 @@ import { createCanvasPanoramaViewerController } from "./canvas-panorama-viewer.j
 
 const DEFAULT_STYLE_HREFS = [
   "/src/features/production-workbench/production-workbench.css",
-  "/src/features/new-canvas/new-canvas.css?v=20260810-1",
+  "/src/features/new-canvas/new-canvas.css?v=20260813-2",
 ];
 export const CANVAS_ASSET_DRAG_TYPE = "application/x-comic-ai-canvas-asset";
 export const CANVAS_STORYBOARD_CELL_DRAG_TYPE = "application/x-comic-ai-canvas-storyboard-cell";
@@ -139,6 +139,8 @@ function appendStyles(shadowRoot, styleHrefs) {
   criticalStyle.textContent = `
     :host { display: block; min-height: 100%; background: #08111b; }
     .new-canvas-root { visibility: hidden !important; }
+    :host(.is-agent-only),
+    :host(.is-agent-only) .new-canvas-root { visibility: visible !important; background: transparent !important; }
     [data-new-canvas-style-gate] { display: block; min-height: calc(100dvh - 6rem); background: #08111b; }
     [data-new-canvas-style-gate] > * { visibility: hidden; }
   `;
@@ -244,6 +246,8 @@ function createProductionCanvasAdapter(dependencies = {}) {
         // The host itself is rendered by the workbench. Its shadow surface must
         // always render the actual Canvas, never another host placeholder.
         canvasHostMount: false,
+        canvasAgentOnly: context.agentOnly === true,
+        canvasAgentCapabilityProfile: String(context.capabilityProfile ?? ""),
       });
       const workbench = sourceWorkbench
         ? {
@@ -265,7 +269,12 @@ function createProductionCanvasAdapter(dependencies = {}) {
       let disposed = false;
       let graph = null;
       let renderToken = 0;
-      const agentController = createCanvasAgentController({ surface, workbench, renderLayout: () => render() });
+      const agentController = createCanvasAgentController({
+        surface,
+        workbench,
+        renderLayout: () => render(),
+        capabilityProfile: context.capabilityProfile,
+      });
       const configLibraryController = createCanvasConfigLibraryController({ surface, workbench });
       const directorDeskOverlay = createDirectorDeskOverlay({ surface, workbench });
       const minimapController = createCanvasMinimapController({ surface, workbench });
@@ -274,6 +283,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
       let mediaToolsController = null;
       let panoramaDrag = null;
       let canvasAgentResize = null;
+      let mediaComposerResize = null;
       let storyboardCellPointer = null;
       let suppressStoryboardExtractClickUntil = 0;
       let canvasNodePointer = null;
@@ -292,7 +302,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         context.onCanvasBlankConnection?.(input, { workbench, surface });
       };
       const createMarkup = (renderUi = workbench.ui) => renderNewCanvasLayout(
-        renderer({
+        context.agentOnly === true ? "" : renderer({
           state: workbench.state,
           session: workbench.session,
           ui: renderUi,
@@ -301,6 +311,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
         renderUi,
         `${renderCanvasMediaToolsShell(renderUi)}${renderCanvasConfigLibraryShell(renderUi)}${renderCanvasCharacterLibraryShell(renderUi)}`,
         renderCanvasMinimap(renderUi),
+        { agentOnly: context.agentOnly === true },
       );
       const createNodeMarkup = (nodeId) => {
         const canvasDocument = workbench.ui?.canvasDocument;
@@ -331,6 +342,16 @@ function createProductionCanvasAdapter(dependencies = {}) {
         const token = ++renderToken;
         const agentTimelineScroll = agentController.captureTimelineScroll();
         const markup = createMarkup();
+        if (context.agentOnly === true) {
+          disposeCanvasGraph(graph);
+          graph = null;
+          workbench.canvasGraph = null;
+          surface.innerHTML = markup;
+          agentController.restoreTimelineScroll(agentTimelineScroll);
+          void agentController.syncPromptEditor();
+          context.onRender?.({ workbench, graph: null, surface });
+          return;
+        }
         const currentGraphMount = graph
           ? surface.querySelector?.("[data-canvas-x6-mount]")
           : null;
@@ -983,6 +1004,25 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.stopPropagation();
           return;
         }
+        const mediaComposerResizeHandle = event.target?.closest?.("[data-agent-media-composer-resize]");
+        if (mediaComposerResizeHandle && event.button === 0) {
+          const composer = mediaComposerResizeHandle.closest?.(".canvas-agent-media-composer");
+          const composerHeight = Number(workbench.ui.canvasAgent?.mediaComposerHeight);
+          mediaComposerResize = {
+            pointerId: event.pointerId,
+            startY: Number(event.clientY ?? 0),
+            startHeight: Number.isFinite(composerHeight)
+              ? composerHeight
+              : Math.round(composer?.getBoundingClientRect?.().height ?? 272),
+            handle: mediaComposerResizeHandle,
+            composer,
+          };
+          mediaComposerResizeHandle.setPointerCapture?.(event.pointerId);
+          composer?.classList?.add?.("is-resizing");
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         const interactionActionTarget = (event.composedPath?.() ?? [])
           .find((candidate) => candidate?.matches?.('[data-action="set-canvas-interaction-mode"]'));
         if (interactionActionTarget) {
@@ -1068,6 +1108,20 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.stopPropagation();
           return;
         }
+        if (mediaComposerResize?.pointerId === event.pointerId) {
+          const nextHeight = Math.min(
+            560,
+            Math.max(
+              176,
+              Math.round(mediaComposerResize.startHeight + mediaComposerResize.startY - Number(event.clientY ?? 0)),
+            ),
+          );
+          workbench.ui.canvasAgent.mediaComposerHeight = nextHeight;
+          mediaComposerResize.composer?.style?.setProperty?.("--canvas-agent-media-composer-height", `${nextHeight}px`);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (panoramaDrag?.pointerId === event.pointerId) {
           panoramaDrag.nextView = applyCanvasPanoramaDrag(panoramaDrag.view, {
             deltaX: event.clientX - panoramaDrag.startX,
@@ -1121,6 +1175,16 @@ function createProductionCanvasAdapter(dependencies = {}) {
           canvasAgentResize.handle?.releasePointerCapture?.(event.pointerId);
           canvasAgentResize = null;
           surface.querySelector?.(".new-canvas-layout")?.classList?.remove?.("is-agent-resizing");
+          persistCanvasAgentUiState(workbench.ui, workbench.ui.canvasAgent);
+          void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (mediaComposerResize?.pointerId === event.pointerId) {
+          mediaComposerResize.handle?.releasePointerCapture?.(event.pointerId);
+          mediaComposerResize.composer?.classList?.remove?.("is-resizing");
+          mediaComposerResize = null;
           persistCanvasAgentUiState(workbench.ui, workbench.ui.canvasAgent);
           void Promise.resolve(workbench.persistCanvasSession?.()).catch(() => undefined);
           event.preventDefault();
@@ -1220,7 +1284,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
       syncVisualViewport();
       mediaToolsController = createCanvasMediaToolsController({ surface, workbench, render });
       await render();
-      void agentController.resume();
+      const agentReady = agentController.resume();
       return {
         workbench,
         get graph() {
@@ -1238,6 +1302,16 @@ function createProductionCanvasAdapter(dependencies = {}) {
           if (next.controlsOnly === true) return renderControls();
           if (next.surfaceOnly === true) return render();
           return next.interactionOnly === true ? renderInteraction() : render();
+        },
+        async submitPrompt(input = {}) {
+          await agentController.stagePrompt(input);
+          await agentReady;
+          return agentController.submitPrompt(input, { staged: true });
+        },
+        async submitAgentPrompt(input = {}) {
+          await agentController.stagePrompt(input);
+          await agentReady;
+          return agentController.submitPrompt(input, { staged: true });
         },
         dispose() {
           disposed = true;
@@ -1636,6 +1710,12 @@ export async function mountNewCanvas(target, options = {}) {
       disposeStyles,
       async update(next = {}) {
         return adapterHandle?.update?.(next);
+      },
+      async submitPrompt(input = {}) {
+        return adapterHandle?.submitPrompt?.(input) ?? false;
+      },
+      async submitAgentPrompt(input = {}) {
+        return adapterHandle?.submitAgentPrompt?.(input) ?? false;
       },
       async unmount() {
         await unmountNewCanvas(host);
