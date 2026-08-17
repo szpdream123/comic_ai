@@ -51139,6 +51139,7 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.singleEpisodeAiPreview.data.commitPayload.characters[0].characterDescription, regeneratedCharacter.characterDescription);
     assert.equal(workbench.ui.singleEpisodeAiPreview.regeneratingStage, "");
     assert.equal(workbench.ui.toast.message, "角色已重新生成。");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.completionMessage, "角色已重新生成，解析结果已更新。");
   });
 
   it("keeps the single episode modal open when AI storyboard membership validation fails", async () => {

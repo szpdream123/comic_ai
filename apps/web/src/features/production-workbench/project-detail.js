@@ -4351,7 +4351,11 @@ export function renderSingleEpisodeAiPreview(ui) {
   const previewTitle = resolveSingleEpisodeAiPreviewTitle(preview);
   const previewAriaLabel = preview.source === "single-episode-script-storyboard" ? "AI 剧本分镜" : "AI 小说分镜";
   const guideTargetKey = resolveFirstLoginGuideTargetKey(ui.firstLoginGuide);
-  const canCreateEpisode = preview.source === "home-workflow" || !Array.isArray(preview.selectedStages) || preview.selectedStages.includes("shot");
+  const supportsEpisodeCreation = preview.source === "home-workflow"
+    || !Array.isArray(preview.selectedStages)
+    || preview.selectedStages.includes("shot");
+  const canCreateEpisode = supportsEpisodeCreation && hasSingleEpisodeAiCommitOutput(preview);
+  const isRegenerating = Boolean(preview.regeneratingStage);
   if (!preview || preview.status === "idle") {
     return "";
   }
@@ -4369,10 +4373,14 @@ export function renderSingleEpisodeAiPreview(ui) {
             <div class="single-episode-ai-top-status" aria-live="polite">
               <p>灵曦AI</p>
               <h3>${resolveSingleEpisodeAiLoadingTitle(preview.activeStage)}</h3>
+              <div class="single-episode-ai-progress-state" role="status">
+                <span class="single-episode-ai-progress-spinner" aria-hidden="true"></span>
+                <span>模型正在解析文本，请稍候</span>
+              </div>
             </div>
           ` : ""}
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" disabled>${preview.activeStage === "intent" ? "分析中" : canCreateEpisode ? "创建章节" : "生成中"}</button>
+            <button class="single-episode-ai-create is-waiting" type="button" disabled>解析中...</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
@@ -4446,12 +4454,22 @@ export function renderSingleEpisodeAiPreview(ui) {
     `;
   }
   const tables = resolveSingleEpisodeAiRenderTables(preview);
+  const completionState = resolveSingleEpisodeAiCompletionState(preview, {
+    supportsEpisodeCreation,
+    canCreateEpisode,
+  });
+  const canUsePrimaryAction = !isRegenerating && (canCreateEpisode || !supportsEpisodeCreation);
+  const primaryAction = canCreateEpisode
+    ? "commit-ai-storyboard-preview"
+    : !supportsEpisodeCreation
+      ? "close-ai-storyboard-preview"
+      : "";
   return `
       <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-label="${escapeAttr(`${previewAriaLabel}结果`)}">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create ${canCreateEpisode && guideTargetKey === "commit-storyboard-button" ? "first-login-guide-target" : ""}" type="button" data-action="${canCreateEpisode ? "commit-ai-storyboard-preview" : "close-ai-storyboard-preview"}"${canCreateEpisode ? ' data-first-login-target="commit-storyboard-button"' : ""}>${canCreateEpisode ? (preview.source === "home-workflow" ? "进入工作流" : "创建章节") : "完成"}</button>
+            <button class="single-episode-ai-create ${canUsePrimaryAction && canCreateEpisode && guideTargetKey === "commit-storyboard-button" ? "first-login-guide-target" : ""} ${isRegenerating ? "is-waiting" : canUsePrimaryAction ? "" : "is-blocked"}" type="button"${canUsePrimaryAction ? ` data-action="${primaryAction}"` : ""}${canUsePrimaryAction && canCreateEpisode ? ' data-first-login-target="commit-storyboard-button"' : ""}${canUsePrimaryAction ? "" : " disabled"}>${supportsEpisodeCreation ? (preview.source === "home-workflow" ? "进入工作流" : "创建章节") : "完成"}</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
@@ -4461,6 +4479,10 @@ export function renderSingleEpisodeAiPreview(ui) {
               <p>灵曦AI</p>
               <h3>${escapeHtml(previewTitle)}</h3>
             </div>
+          </div>
+          <div class="single-episode-ai-completion-state ${escapeAttr(completionState.tone)}" role="status" aria-live="polite">
+            <span class="single-episode-ai-completion-icon" aria-hidden="true">${completionState.tone === "success" ? "✓" : completionState.tone === "loading" ? '<i class="single-episode-ai-progress-spinner"></i>' : "!"}</span>
+            <strong>${escapeHtml(completionState.message)}</strong>
           </div>
           ${renderSingleEpisodeAiSentPrompts(preview, { mode: "ready" })}
           <div class="single-episode-ai-table-stack">
@@ -4476,6 +4498,64 @@ export function renderSingleEpisodeAiPreview(ui) {
         </div>
     </section>
   `;
+}
+
+function hasSingleEpisodeAiCommitOutput(preview) {
+  const previewData = preview?.data?.commitPayload
+    ? preview.data
+    : preview?.data?.data ?? preview?.data ?? {};
+  const commitPayload = previewData?.commitPayload;
+  const renderedTables = resolveSingleEpisodeAiRenderTables(preview);
+  const hasStoryboardRows = Array.isArray(renderedTables?.storyboards?.rows)
+    && renderedTables.storyboards.rows.length > 0;
+  if (preview?.source !== "home-workflow") {
+    return Boolean(
+      (Array.isArray(commitPayload?.storyboards) && commitPayload.storyboards.length > 0)
+      || hasStoryboardRows,
+    );
+  }
+  return Boolean(
+    (Array.isArray(commitPayload?.storyboards) && commitPayload.storyboards.length > 0)
+    || hasStoryboardRows
+    || String(commitPayload?.scriptText ?? previewData?.scriptText ?? "").trim()
+    || [commitPayload?.scenes, commitPayload?.characters, commitPayload?.props]
+      .some((items) => Array.isArray(items) && items.length > 0),
+  );
+}
+
+function resolveSingleEpisodeAiCompletionState(preview, options = {}) {
+  if (preview?.regeneratingStage) {
+    return {
+      tone: "loading",
+      message: `${resolveSingleEpisodeAiStageLabel(preview.regeneratingStage)}重新生成中，请稍候`,
+    };
+  }
+  if (preview?.regenerationError) {
+    return {
+      tone: "error",
+      message: `重新生成失败：${String(preview.regenerationError)}`,
+    };
+  }
+  if (options.supportsEpisodeCreation && !options.canCreateEpisode) {
+    return { tone: "warning", message: "解析结果不完整，请重新生成" };
+  }
+  if (String(preview?.completionMessage ?? "").trim()) {
+    return { tone: "success", message: String(preview.completionMessage).trim() };
+  }
+  return {
+    tone: "success",
+    message: options.supportsEpisodeCreation ? "解析完成，可以创建章节" : "解析完成，可以查看结果",
+  };
+}
+
+function resolveSingleEpisodeAiStageLabel(stage) {
+  return ({
+    script: "剧本",
+    scene: "场景",
+    character: "角色",
+    prop: "道具",
+    shot: "分镜",
+  })[String(stage ?? "")] ?? "内容";
 }
 
 function renderManualScriptAnalysisPreview(preview) {
