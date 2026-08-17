@@ -60,11 +60,12 @@ export function createGeoGenerationService(deps: {
     if (evidence.some((item) => item.reviewStatus !== "approved" || !item.publicUseAllowed || (item.validUntil && new Date(item.validUntil).getTime() < now().getTime()))) {
       return failure("geo_evidence_not_public", "生成资料只能使用已审核、允许公开且仍在有效期内的证据。", 400);
     }
-    const existingItem = await deps.db.query<{ id: string }>(
-      `SELECT id FROM geo_content_items WHERE content_type=$1 AND slug=$2 AND status<>'archived'`,
+    const existingItem = await deps.db.query<{ id: string; lock_version: number }>(
+      `SELECT id,lock_version FROM geo_content_items WHERE content_type=$1 AND slug=$2 AND status<>'archived'`,
       [input.contentType, input.slug],
     );
     const existingContentItemId = existingItem.rows[0]?.id;
+    const existingContentLockVersion = existingItem.rows[0]?.lock_version;
     const [{ settings, revisionId }, existing] = await Promise.all([
       loadGeoRuntimeSettings(deps.db),
       deps.contentService.listPublished(),
@@ -135,6 +136,7 @@ export function createGeoGenerationService(deps: {
       };
       const draft = await deps.contentService.createDraftFromDocument({
         contentItemId: existingContentItemId,
+        expectedLockVersion: existingContentLockVersion,
         contentType: input.contentType, topic: input.topic, slug: input.slug,
         questionIds, evidenceIds, document, generationRunId: runId,
         configRevisionId: revisionId, actorAdminAccountId: input.actorAdminAccountId, qualityReport,

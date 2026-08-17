@@ -96,6 +96,103 @@ describe("GEO generation workflow", () => {
     }
   });
 
+  it("rejects a generated draft when an administrator edits the item during generation", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedAdmin(db);
+      const contentService = createGeoContentService({ db, now: () => fixedNow });
+      const question = await contentService.saveQuestion({ rawQuestion: "怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: [], priority: 80, productCapabilities: [], notes: "", actorAdminAccountId });
+      if (!("data" in question.body)) throw new Error("question fixture failed");
+      const original = await contentService.createDraftFromDocument({ contentType: "guide", topic: "角色一致性", slug: "edited-during-generation", questionIds: [question.body.data.id], evidenceIds: [], document: generatedDocument, generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId });
+      if (!("data" in original.body)) throw new Error("content fixture failed");
+      const gated = createGatedGateway();
+      const service = createGeoGenerationService({ db, gateway: gated.gateway, contentService, now: () => fixedNow });
+
+      const pending = service.generateDraft({ questionId: question.body.data.id, evidenceIds: [], contentType: "guide", topic: "角色一致性", slug: "edited-during-generation", modelCode: "writer-model", actorAdminAccountId });
+      await waitForRunningRun(db);
+      const manual = await contentService.createDraftFromDocument({
+        contentItemId: original.body.data.item.id,
+        expectedLockVersion: original.body.data.item.lockVersion,
+        contentType: "guide",
+        topic: "人工更新主题",
+        slug: "edited-during-generation",
+        questionIds: [question.body.data.id],
+        evidenceIds: [],
+        document: { ...generatedDocument, title: "管理员人工更新版本" },
+        generationRunId: null,
+        configRevisionId: "geo-default-v1",
+        actorAdminAccountId,
+      });
+      if (!("data" in manual.body)) throw new Error("manual edit failed");
+      gated.releaseWriter();
+
+      const generated = await pending;
+      assert.equal(generated.status, 409);
+      assert.equal("error" in generated.body ? generated.body.error.code : null, "geo_content_edit_conflict");
+      const item = await db.query<{ current_draft_version_id: string }>("SELECT current_draft_version_id FROM geo_content_items WHERE id=$1", [original.body.data.item.id]);
+      assert.equal(item.rows[0]?.current_draft_version_id, manual.body.data.version.id);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("allows only one concurrent generation to create a new slug", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedAdmin(db);
+      const contentService = createGeoContentService({ db, now: () => fixedNow });
+      const question = await contentService.saveQuestion({ rawQuestion: "怎样创建角色资料？", topic: "角色资料", intent: "tutorial", targetPlatforms: [], priority: 80, productCapabilities: [], notes: "", actorAdminAccountId });
+      if (!("data" in question.body)) throw new Error("question fixture failed");
+      const first = createGatedGateway();
+      const second = createGatedGateway();
+      const firstService = createGeoGenerationService({ db, gateway: first.gateway, contentService, now: () => fixedNow });
+      const secondService = createGeoGenerationService({ db, gateway: second.gateway, contentService, now: () => fixedNow });
+
+      const firstPending = firstService.generateDraft({ questionId: question.body.data.id, evidenceIds: [], contentType: "guide", topic: "角色资料", slug: "concurrent-new-generation", modelCode: "writer-model", actorAdminAccountId });
+      const secondPending = secondService.generateDraft({ questionId: question.body.data.id, evidenceIds: [], contentType: "guide", topic: "角色资料", slug: "concurrent-new-generation", modelCode: "writer-model", actorAdminAccountId });
+      await waitForRunningRunCount(db, 2);
+      first.releaseWriter();
+      second.releaseWriter();
+
+      const results = await Promise.all([firstPending, secondPending]);
+      assert.deepEqual(results.map((result) => result.status).sort(), [201, 409]);
+      const conflict = results.find((result) => result.status === 409);
+      assert.equal(conflict && "error" in conflict.body ? conflict.body.error.code : null, "geo_content_generation_conflict");
+      const versions = await db.query<{ count: string }>("SELECT count(*)::text AS count FROM geo_content_versions version JOIN geo_content_items item ON item.id=version.content_item_id WHERE item.slug='concurrent-new-generation'");
+      assert.equal(versions.rows[0]?.count, "1");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("does not revive an item archived while generation is running", async () => {
+    const db = await createMigratedTestDb();
+    try {
+      await seedAdmin(db);
+      const contentService = createGeoContentService({ db, now: () => fixedNow });
+      const question = await contentService.saveQuestion({ rawQuestion: "怎样归档旧内容？", topic: "内容归档", intent: "tutorial", targetPlatforms: [], priority: 80, productCapabilities: [], notes: "", actorAdminAccountId });
+      if (!("data" in question.body)) throw new Error("question fixture failed");
+      const original = await contentService.createDraftFromDocument({ contentType: "guide", topic: "内容归档", slug: "archived-during-generation", questionIds: [question.body.data.id], evidenceIds: [], document: generatedDocument, generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId });
+      if (!("data" in original.body)) throw new Error("content fixture failed");
+      const gated = createGatedGateway();
+      const service = createGeoGenerationService({ db, gateway: gated.gateway, contentService, now: () => fixedNow });
+
+      const pending = service.generateDraft({ questionId: question.body.data.id, evidenceIds: [], contentType: "guide", topic: "内容归档", slug: "archived-during-generation", modelCode: "writer-model", actorAdminAccountId });
+      await waitForRunningRun(db);
+      assert.equal((await contentService.archive({ contentItemId: original.body.data.item.id, actorAdminAccountId, reason: "淘汰旧内容" })).status, 200);
+      gated.releaseWriter();
+
+      const generated = await pending;
+      assert.equal(generated.status, 409);
+      assert.equal("error" in generated.body ? generated.body.error.code : null, "geo_content_edit_conflict");
+      const item = await db.query<{ status: string; current_draft_version_id: string }>("SELECT status,current_draft_version_id FROM geo_content_items WHERE id=$1", [original.body.data.item.id]);
+      assert.equal(item.rows[0]?.status, "archived");
+      assert.equal(item.rows[0]?.current_draft_version_id, original.body.data.version.id);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("records invalid model output without creating a content version", async () => {
     const db = await createMigratedTestDb();
     try {
@@ -249,6 +346,34 @@ async function waitForRunningRun(db: Awaited<ReturnType<typeof createMigratedTes
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("generation run did not start");
+}
+
+async function waitForRunningRunCount(db: Awaited<ReturnType<typeof createMigratedTestDb>>, count: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await db.query<{ count: string }>("SELECT count(*)::text AS count FROM geo_generation_runs WHERE status='running'");
+    if (Number(result.rows[0]?.count) === count) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`expected ${count} running generation runs`);
+}
+
+function createGatedGateway() {
+  let releaseWriter!: () => void;
+  const writerGate = new Promise<void>((resolve) => { releaseWriter = resolve; });
+  let calls = 0;
+  const gateway: GeoTextChatGatewayLike = {
+    async completeJsonWithUsage() {
+      calls += 1;
+      if (calls === 1) await writerGate;
+      return {
+        content: JSON.stringify(calls === 1 ? generatedDocument : { issues: [] }),
+        usage: null,
+        providerRequestId: `provider-gated-${calls}`,
+      };
+    },
+    async completeJson() { throw new Error("unexpected fallback"); },
+  };
+  return { gateway, releaseWriter };
 }
 
 async function waitForLeaseExtension(db: Awaited<ReturnType<typeof createMigratedTestDb>>, initialExpiry: Date) {

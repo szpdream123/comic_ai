@@ -148,7 +148,9 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     if (input.contentItemId) {
       const itemResult = await deps.db.query<GeoItemRow>(`SELECT * FROM geo_content_items WHERE id=$1 AND status<>'archived'`, [input.contentItemId]);
       const selected = itemResult.rows[0];
-      if (!selected) return fail(404, "geo_content_not_found", "GEO内容不存在或已归档。");
+      if (!selected) return input.expectedLockVersion === undefined
+        ? fail(404, "geo_content_not_found", "GEO内容不存在或已归档。")
+        : fail(409, "geo_content_edit_conflict", "内容已被其他管理员更新，请刷新后重新生成。");
       if (selected.content_type !== input.contentType || selected.slug !== input.slug) {
         return fail(409, "geo_content_identity_conflict", "已有内容的类型和短链不可变更。");
       }
@@ -166,14 +168,12 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
        ), upserted_item AS (
          INSERT INTO geo_content_items (id,content_type,topic,slug,status,current_draft_version_id,lock_version,created_by_admin_id,updated_by_admin_id,created_at,updated_at)
          SELECT $1,$21,$22,$23,'draft',$2,2,$12,$12,$13,$13 FROM lease_guard WHERE $20
-         ON CONFLICT (content_type,slug) DO UPDATE SET topic=EXCLUDED.topic,current_draft_version_id=$2,
-           status=CASE WHEN geo_content_items.current_published_version_id IS NULL THEN 'draft' ELSE 'published' END,
-           lock_version=geo_content_items.lock_version+1,updated_by_admin_id=EXCLUDED.updated_by_admin_id,updated_at=EXCLUDED.updated_at
-           WHERE geo_content_items.status<>'archived'
-         RETURNING *
-       ), existing_item AS MATERIALIZED (
-         SELECT item.id FROM geo_content_items item CROSS JOIN lease_guard
-          WHERE item.id=$1 AND NOT $20 AND ($24::integer IS NULL OR item.lock_version=$24)
+          ON CONFLICT (content_type,slug) DO NOTHING
+          RETURNING *
+        ), existing_item AS MATERIALIZED (
+          SELECT item.id FROM geo_content_items item CROSS JOIN lease_guard
+           WHERE item.id=$1 AND NOT $20 AND item.status<>'archived'
+             AND ($24::integer IS NULL OR item.lock_version=$24)
           FOR UPDATE OF item
        ), selected_item AS MATERIALIZED (
          SELECT id FROM upserted_item
@@ -198,10 +198,11 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
          INSERT INTO geo_content_evidence_links (content_version_id,evidence_id)
          SELECT inserted_version.id,selected.evidence_id FROM inserted_version CROSS JOIN unnest($15::uuid[]) AS selected(evidence_id) RETURNING content_version_id
        ), updated_item AS (
-         UPDATE geo_content_items SET current_draft_version_id=$2,
-           status=CASE WHEN current_published_version_id IS NULL THEN 'draft' ELSE 'published' END,
-           lock_version=lock_version+1,updated_by_admin_id=$12,updated_at=$13
-          FROM inserted_version WHERE geo_content_items.id=inserted_version.content_item_id AND NOT $20 RETURNING geo_content_items.*
+          UPDATE geo_content_items SET current_draft_version_id=$2,
+            status=CASE WHEN current_published_version_id IS NULL THEN 'draft' ELSE 'published' END,
+            lock_version=lock_version+1,updated_by_admin_id=$12,updated_at=$13
+           FROM inserted_version WHERE geo_content_items.id=inserted_version.content_item_id
+             AND geo_content_items.status<>'archived' AND NOT $20 RETURNING geo_content_items.*
        ), final_item AS (
          SELECT * FROM upserted_item
          UNION ALL SELECT * FROM updated_item
@@ -219,9 +220,15 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
     );
     const row = result.rows[0];
     if (!row) {
-      if (input.generationRunId) return fail(409, "geo_generation_lease_lost", "生成任务租约已失效，请重新生成。");
-      if (!input.contentItemId) return fail(409, "geo_content_archived", "同短链内容已归档，请先恢复或更换短链。");
+      if (input.generationRunId && input.generationCompletion) {
+        const activeRun = await deps.db.query<{ id: string }>(
+          `SELECT id FROM geo_generation_runs WHERE id=$1 AND lease_token=$2 AND status='running' AND lease_expires_at>$3`,
+          [input.generationRunId, input.generationCompletion.leaseToken, now()],
+        );
+        if (!activeRun.rows[0]) return fail(409, "geo_generation_lease_lost", "生成任务租约已失效，请重新生成。");
+      }
       if (input.expectedLockVersion !== undefined) return fail(409, "geo_content_edit_conflict", "内容已被其他管理员更新，请刷新后重新编辑。");
+      if (!input.contentItemId) return fail(409, "geo_content_generation_conflict", "同短链内容已被其他任务生成，请刷新后重试。");
       return fail(404, "geo_content_not_found", "GEO内容不存在或已归档。");
     }
     return created({ item: mapItem(row.item), version: mapVersion(row.version) });
