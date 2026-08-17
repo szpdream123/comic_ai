@@ -158,6 +158,9 @@ test("admin GEO entry cards expose a narrow-screen single-column layout", () => 
 
   assert.match(context.result, /class="grid geo-operation-entry-grid"/);
   assert.match(context.result, /@media\(max-width:720px\)\{\.geo-operation-entry-grid\{grid-template-columns:1fr\}\}/);
+  assert.match(context.result, /class="grid geo-source-grid"/);
+  assert.match(context.result, /@media\(max-width:720px\)\{\.geo-source-grid\{grid-template-columns:1fr\}\}/);
+  assert.doesNotMatch(context.result, /class="grid geo-source-grid" style=/);
   assert.doesNotMatch(context.result, /class="grid" style="grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
 });
 
