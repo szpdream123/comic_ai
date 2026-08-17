@@ -72,6 +72,24 @@ describe("GEO controlled content", () => {
     });
     assert.ok(unsafe.blockers.some((item) => item.code === "unsafe_url"));
 
+    const credentialUrl = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "cta", title: "试用", body: "立即体验", href: "https://user:password123@example.com/start", label: "打开" }],
+      },
+      evidence: [evidence],
+    });
+    assert.ok(credentialUrl.blockers.some((item) => item.code === "unsafe_url"));
+
+    const sensitiveUrl = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "cta", title: "试用", body: "立即体验", href: "https://example.com/start?api_key=secret123456", label: "打开" }],
+      },
+      evidence: [evidence],
+    });
+    assert.ok(sensitiveUrl.blockers.some((item) => item.code === "sensitive_information"));
+
     const expired = validateGeoDraft({
       document: validDocument,
       evidence: [{ ...evidence, validUntil: "2025-01-01T00:00:00.000Z" }],

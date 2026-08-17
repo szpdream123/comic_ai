@@ -245,6 +245,52 @@ describe("GEO content workflow", () => {
     }
   });
 
+  it("does not publish a reviewed draft after its evidence expires", async () => {
+    const db = await createMigratedTestDb();
+    let currentNow = fixedNow;
+    try {
+      await db.query(
+        `INSERT INTO admin_accounts (id, login_name, password_hash, display_name, status)
+         VALUES ($1, 'geo_expired_evidence_admin', 'plain:test-password', 'GEO Admin', 'active')`,
+        [actorAdminAccountId],
+      );
+      const service = createGeoContentService({ db, now: () => currentNow });
+      const evidence = await service.saveEvidence({
+        type: "product_feature",
+        name: "限时有效证据",
+        factText: "灵曦AI支持按角色保存参考素材。",
+        sourceUrl: "https://www.lingxiyunai.com/assets",
+        reviewStatus: "approved",
+        validUntil: new Date(fixedNow.getTime() + 60_000),
+        publicUseAllowed: true,
+        actorAdminAccountId,
+      });
+      if (!("data" in evidence.body)) throw new Error("evidence fixture failed");
+      const draft = await service.createDraftFromDocument({
+        contentType: "guide",
+        topic: "证据有效期",
+        slug: "expired-evidence-before-publish",
+        questionIds: [],
+        evidenceIds: [evidence.body.data.id],
+        document: { ...document, blocks: [{ type: "paragraph", text: "灵曦AI支持按角色保存参考素材。", evidenceIds: [evidence.body.data.id] }] },
+        generationRunId: null,
+        configRevisionId: "geo-default-v1",
+        actorAdminAccountId,
+      });
+      if (!("data" in draft.body)) throw new Error("draft fixture failed");
+      assert.equal((await service.submitForReview({ contentItemId: draft.body.data.item.id, expectedLockVersion: draft.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+      currentNow = new Date(fixedNow.getTime() + 120_000);
+
+      const published = await service.publish({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "证据已过期" });
+      assert.equal(published.status, 409);
+      if ("error" in published.body) assert.equal(published.body.error.code, "geo_publish_conflict");
+      const item = await db.query<{ status: string; current_published_version_id: string | null }>("SELECT status,current_published_version_id FROM geo_content_items WHERE id=$1", [draft.body.data.item.id]);
+      assert.deepEqual(item.rows[0], { status: "in_review", current_published_version_id: null });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("serializes concurrent successor versions for the same content item", async () => {
     const db = await createMigratedTestDb();
     try {

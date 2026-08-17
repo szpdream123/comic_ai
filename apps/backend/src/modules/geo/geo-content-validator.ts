@@ -102,6 +102,7 @@ function collectDocumentText(document: GeoDocument) {
     document.seo.title,
     document.seo.description,
     ...document.blocks.map(blockText),
+    ...document.blocks.flatMap(blockUrls),
     ...document.faq.flatMap((item) => [item.question, item.answer]),
     ...Object.values(document.socialDrafts),
   ];
@@ -136,7 +137,9 @@ export function isSafeGeoUrl(value: string) {
   if (!/^https?:\/\//i.test(url)) return false;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
+    return (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && !parsed.username
+      && !parsed.password;
   } catch {
     return false;
   }

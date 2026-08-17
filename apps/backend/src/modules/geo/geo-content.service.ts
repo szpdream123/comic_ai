@@ -261,6 +261,13 @@ export function createGeoContentService(deps: { db: SqlDatabase; now?: () => Dat
          FROM geo_content_versions version
          WHERE item.id=$1 AND item.status='in_review' AND version.id=item.current_draft_version_id
            AND jsonb_array_length(COALESCE(version.quality_report_json->'blockers','[]'::jsonb))=0
+           AND NOT EXISTS (
+             SELECT 1 FROM geo_content_evidence_links link
+             JOIN geo_evidence_items evidence ON evidence.id=link.evidence_id
+             WHERE link.content_version_id=version.id
+               AND (evidence.review_status<>'approved' OR NOT evidence.public_use_allowed
+                 OR (evidence.valid_until IS NOT NULL AND evidence.valid_until<$3))
+           )
          RETURNING item.*
        ), published_version AS (
          UPDATE geo_content_versions version SET published_at=COALESCE(published_at,$3)
