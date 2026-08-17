@@ -112,6 +112,7 @@ const migrations = [
   ["20260908-hide-soundclone-provider-parameters.sql", "packages/db/migrations/20260908-hide-soundclone-provider-parameters.sql"],
   ["20260909-backfill-project-cover-storage-objects.sql", "packages/db/migrations/20260909-backfill-project-cover-storage-objects.sql"],
   ["20260910-allow-bound-team-asset-proxy-urls.sql", "packages/db/migrations/20260910-allow-bound-team-asset-proxy-urls.sql"],
+  ["20260911-repair-globalaiopc-model-center-video-classification.sql", "packages/db/migrations/20260911-repair-globalaiopc-model-center-video-classification.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -134,6 +135,7 @@ const runtimeSafeMigrationNames = new Set([
   "20260907-free-generation-workspaces.sql",
   "20260908-hide-soundclone-provider-parameters.sql",
   "20260910-allow-bound-team-asset-proxy-urls.sql",
+  "20260911-repair-globalaiopc-model-center-video-classification.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

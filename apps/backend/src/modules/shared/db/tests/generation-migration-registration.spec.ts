@@ -1113,4 +1113,263 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("repairs GlobalAiOpc Model Center videos overwritten as image models", async () => {
+    const migrationNames = (await loadSqlMigrations()).map((migration) => migration.name);
+    assert.ok(migrationNames.includes("20260911-repair-globalaiopc-model-center-video-classification.sql"));
+    assert.ok(
+      migrationNames.indexOf("20260911-repair-globalaiopc-model-center-video-classification.sql")
+        > migrationNames.indexOf("20260910-allow-bound-team-asset-proxy-urls.sql"),
+    );
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    assert.match(
+      productionMigrationScript,
+      /const migrations = \[[\s\S]*\["20260911-repair-globalaiopc-model-center-video-classification\.sql", "packages\/db\/migrations\/20260911-repair-globalaiopc-model-center-video-classification\.sql"\][\s\S]*const requiredBaselineMigrationNames/,
+    );
+    assert.match(
+      productionMigrationScript,
+      /const runtimeSafeMigrationNames = new Set\(\[[\s\S]*"20260911-repair-globalaiopc-model-center-video-classification\.sql"[\s\S]*\]\);\s*const runtimeRequiredPostconditionMigrationNames/,
+    );
+
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(`
+        UPDATE ai_model_configs
+        SET provider_protocol = 'global_ai_opc_image',
+            invocation_mode = 'sync',
+            media_type = 'image',
+            task_modes_json = '["image.edit","image.reference_generate","image.image_to_image"]'::jsonb,
+            capabilities_json = '{"prompt":true,"referenceImages":true}'::jsonb,
+            parameter_schema_json = parameter_schema_json || '{"adminOnly":{"type":"string","visible":false}}'::jsonb,
+            default_params_json = default_params_json || '{"durationSec":15,"adminOnly":"keep"}'::jsonb,
+            provider_config_json = '{"requestPath":"/v1/images/generations","requestFormat":"global_ai_opc_image","apiKeyEnv":"GLOBAL_AI_OPC_API_KEY"}'::jsonb,
+            pricing_json = '{"baseCredits":150,"unit":"image","administratorNote":"keep"}'::jsonb,
+            limits_json = '{"maxReferences":10}'::jsonb,
+            ui_config_json = '{"modelKind":"image.reference_image","modelKindLabel":"参考生图","pipeline":"image","toolboxTools":["prompt-reverse"]}'::jsonb
+        WHERE model_code IN ('seedance-2.5-c1', 'MiniMax-H3-c4');
+
+        UPDATE ai_model_dispatch_policies
+        SET submit_queue_name = 'generation-submit-image',
+            poll_queue_name = NULL,
+            finalize_queue_name = NULL,
+            job_id_template = 'generation:image:submit:{taskId}',
+            bullmq_job_options_json = '{"attempts":7}'::jsonb,
+            submit_concurrency_limit = 7,
+            provider_rpm_limit = 17,
+            provider_concurrent_limit = 3,
+            polling_interval_ms = 42000,
+            polling_concurrency_limit = 9,
+            polling_backoff_json = '{"strategy":"fixed","intervalMs":42000}'::jsonb,
+            retry_policy_json = '{"submitAttempts":7}'::jsonb,
+            circuit_breaker_json = '{"openAfterFailures":99}'::jsonb,
+            status = 'disabled'
+        WHERE model_config_id IN (
+          SELECT id
+          FROM ai_model_configs
+          WHERE model_code IN ('seedance-2.5-c1', 'MiniMax-H3-c4')
+        );
+      `);
+
+      await applySqlMigration(
+        db,
+        process.cwd(),
+        "20260911-repair-globalaiopc-model-center-video-classification.sql",
+      );
+
+      const models = await db.query<{
+        model_code: string;
+        provider_protocol: string;
+        invocation_mode: string;
+        media_type: string;
+        task_modes_json: string[];
+        capabilities_json: Record<string, unknown>;
+        parameter_schema_json: Record<string, unknown>;
+        default_params_json: Record<string, unknown>;
+        provider_config_json: Record<string, unknown>;
+        pricing_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        ui_config_json: Record<string, unknown>;
+        submit_queue_name: string;
+        poll_queue_name: string | null;
+        finalize_queue_name: string | null;
+        job_id_template: string;
+        bullmq_job_options_json: Record<string, unknown>;
+        submit_concurrency_limit: number;
+        provider_rpm_limit: number;
+        provider_concurrent_limit: number;
+        polling_interval_ms: number;
+        polling_concurrency_limit: number;
+        polling_backoff_json: Record<string, unknown>;
+        retry_policy_json: Record<string, unknown>;
+        circuit_breaker_json: Record<string, unknown>;
+        policy_status: string;
+      }>(`
+        SELECT model.model_code, model.provider_protocol, model.invocation_mode,
+               model.media_type, model.task_modes_json, model.capabilities_json,
+               model.parameter_schema_json, model.default_params_json,
+               model.provider_config_json, model.pricing_json, model.limits_json,
+               model.ui_config_json, policy.submit_queue_name, policy.poll_queue_name,
+               policy.finalize_queue_name, policy.job_id_template,
+               policy.bullmq_job_options_json, policy.submit_concurrency_limit,
+               policy.provider_rpm_limit, policy.provider_concurrent_limit,
+               policy.polling_interval_ms, policy.polling_concurrency_limit,
+               policy.polling_backoff_json, policy.retry_policy_json,
+               policy.circuit_breaker_json, policy.status AS policy_status
+        FROM ai_model_configs model
+        JOIN ai_model_dispatch_policies policy ON policy.model_config_id = model.id
+        WHERE model.model_code IN ('seedance-2.5-c1', 'MiniMax-H3-c4')
+        ORDER BY model.model_code
+      `);
+
+      assert.deepEqual(models.rows.map((model) => ({
+        modelCode: model.model_code,
+        providerProtocol: model.provider_protocol,
+        invocationMode: model.invocation_mode,
+        mediaType: model.media_type,
+        taskModes: model.task_modes_json,
+        capabilities: model.capabilities_json,
+        administratorParameter: model.parameter_schema_json.adminOnly,
+        administratorDefault: model.default_params_json.adminOnly,
+        durationSec: model.default_params_json.durationSec,
+        createTaskEndpoint: model.provider_config_json.createTaskEndpoint,
+        queryTaskEndpoint: model.provider_config_json.queryTaskEndpoint,
+        requestFormat: model.provider_config_json.requestFormat,
+        pricingUnit: model.pricing_json.unit,
+        administratorNote: model.pricing_json.administratorNote,
+        limits: model.limits_json,
+        modelKind: model.ui_config_json.modelKind,
+        pipeline: model.ui_config_json.pipeline,
+        toolboxTools: model.ui_config_json.toolboxTools,
+        submitQueueName: model.submit_queue_name,
+        pollQueueName: model.poll_queue_name,
+        finalizeQueueName: model.finalize_queue_name,
+        jobIdTemplate: model.job_id_template,
+        bullmqJobOptions: model.bullmq_job_options_json,
+        submitConcurrencyLimit: model.submit_concurrency_limit,
+        providerRpmLimit: model.provider_rpm_limit,
+        providerConcurrentLimit: model.provider_concurrent_limit,
+        pollingIntervalMs: model.polling_interval_ms,
+        pollingConcurrencyLimit: model.polling_concurrency_limit,
+        pollingBackoff: model.polling_backoff_json,
+        retryPolicy: model.retry_policy_json,
+        circuitBreaker: model.circuit_breaker_json,
+        policyStatus: model.policy_status,
+      })), [
+        {
+          modelCode: "MiniMax-H3-c4",
+          providerProtocol: "globalaiopc_video",
+          invocationMode: "async_polling",
+          mediaType: "video",
+          taskModes: [
+            "video.text_to_video",
+            "video.image_to_video",
+            "video.first_last_frame_to_video",
+            "video.reference_guided_video",
+          ],
+          capabilities: {
+            prompt: true,
+            asyncPolling: true,
+            referenceImages: true,
+            referenceVideo: true,
+            referenceAudio: true,
+            voice: false,
+          },
+          administratorParameter: { type: "string", visible: false },
+          administratorDefault: "keep",
+          durationSec: 15,
+          createTaskEndpoint: "/v2/model-center/tasks",
+          queryTaskEndpoint: "/v2/model-center/tasks/{taskId}",
+          requestFormat: "globalaiopc_model_center_video",
+          pricingUnit: "video",
+          administratorNote: "keep",
+          limits: {
+            maxReferences: 5,
+            maxReferenceAudios: 3,
+            minDurationSec: 5,
+            maxDurationSec: 15,
+            supportedRatios: ["16:9", "9:16"],
+            supportedResolutions: ["1440P"],
+          },
+          modelKind: "video.reference",
+          pipeline: "video",
+          toolboxTools: ["prompt-reverse"],
+          submitQueueName: "generation-submit-video",
+          pollQueueName: "generation-poll-video",
+          finalizeQueueName: "generation-finalize-artifact",
+          jobIdTemplate: "generation:video:{stage}:{taskId}",
+          bullmqJobOptions: { attempts: 7 },
+          submitConcurrencyLimit: 7,
+          providerRpmLimit: 17,
+          providerConcurrentLimit: 3,
+          pollingIntervalMs: 42000,
+          pollingConcurrencyLimit: 9,
+          pollingBackoff: { strategy: "fixed", intervalMs: 42000 },
+          retryPolicy: { submitAttempts: 7 },
+          circuitBreaker: { openAfterFailures: 99 },
+          policyStatus: "disabled",
+        },
+        {
+          modelCode: "seedance-2.5-c1",
+          providerProtocol: "globalaiopc_video",
+          invocationMode: "async_polling",
+          mediaType: "video",
+          taskModes: [
+            "video.text_to_video",
+            "video.image_to_video",
+            "video.first_last_frame_to_video",
+            "video.reference_guided_video",
+            "video.video_to_video",
+          ],
+          capabilities: {
+            prompt: true,
+            asyncPolling: true,
+            referenceImages: true,
+            referenceVideo: true,
+            referenceAudio: true,
+            voice: false,
+          },
+          administratorParameter: { type: "string", visible: false },
+          administratorDefault: "keep",
+          durationSec: 15,
+          createTaskEndpoint: "/v2/model-center/tasks",
+          queryTaskEndpoint: "/v2/model-center/tasks/{taskId}",
+          requestFormat: "globalaiopc_model_center_video",
+          pricingUnit: "video",
+          administratorNote: "keep",
+          limits: {
+            maxPromptLength: 5000,
+            maxReferences: 30,
+            maxReferenceVideos: 10,
+            maxReferenceAudios: 10,
+            minDurationSec: 4,
+            maxDurationSec: 30,
+            supportedRatios: ["9:16", "16:9", "1:1"],
+            supportedResolutions: ["720p", "480p"],
+          },
+          modelKind: "video.reference",
+          pipeline: "video",
+          toolboxTools: ["prompt-reverse"],
+          submitQueueName: "generation-submit-video",
+          pollQueueName: "generation-poll-video",
+          finalizeQueueName: "generation-finalize-artifact",
+          jobIdTemplate: "generation:video:{stage}:{taskId}",
+          bullmqJobOptions: { attempts: 7 },
+          submitConcurrencyLimit: 7,
+          providerRpmLimit: 17,
+          providerConcurrentLimit: 3,
+          pollingIntervalMs: 42000,
+          pollingConcurrencyLimit: 9,
+          pollingBackoff: { strategy: "fixed", intervalMs: 42000 },
+          retryPolicy: { submitAttempts: 7 },
+          circuitBreaker: { openAfterFailures: 99 },
+          policyStatus: "disabled",
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
 });

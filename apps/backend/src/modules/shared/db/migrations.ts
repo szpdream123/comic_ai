@@ -97,6 +97,7 @@ const FREE_GENERATION_WORKSPACES_RELATIVE_PATH = ["packages", "db", "migrations"
 const HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH = ["packages", "db", "migrations", "20260908-hide-soundclone-provider-parameters.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_RELATIVE_PATH = ["packages", "db", "migrations", "20260909-backfill-project-cover-storage-objects.sql"];
 const TEAM_ASSET_PROXY_URLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-allow-bound-team-asset-proxy-urls.sql"];
+const GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-repair-globalaiopc-model-center-video-classification.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -530,6 +531,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260910-allow-bound-team-asset-proxy-urls.sql",
       sql: await readFile(join(rootDir, ...TEAM_ASSET_PROXY_URLS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260911-repair-globalaiopc-model-center-video-classification.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName
