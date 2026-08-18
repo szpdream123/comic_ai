@@ -1,4 +1,5 @@
 import {
+  getCanvasProjectGallerySnapshot,
   getProjectGallerySnapshot,
   renderProjectDetail,
   renderStoryboardGeneratorTaskOverview,
@@ -259,7 +260,6 @@ const ASSET_LIBRARY_CACHE_TTL_MS = 30_000;
 const DIRECTOR_DESK_MODULE_URL = "/director-desk/director-desk.js";
 const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260810-2";
 const PERSONAL_MEDIA_LIBRARY_PAGE_SIZE = 12;
-const CANVAS_PROJECT_GALLERY_PAGE_SIZE = 18;
 const CANVAS_LIVE_RECONNECT_BASE_MS = 800;
 const CANVAS_LIVE_RECONNECT_MAX_MS = 8000;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
@@ -2329,6 +2329,12 @@ function setHomeWorkflowScriptFile(workbench, file) {
     workbench.ui.toast = "仅支持上传 DOCX 或 TXT 剧本文档。";
     return false;
   }
+  if (Number(file?.size ?? 0) > SCRIPT_DOCUMENT_UPLOAD_LIMITS.document.maxBytes) {
+    workbench.ui.homeWorkflowScriptFile = null;
+    workbench.ui.homeWorkflowScriptFileName = "";
+    workbench.ui.toast = "剧本文档不能超过 10 MB，请换用更小的文件。";
+    return false;
+  }
   workbench.ui.homeWorkflowScriptFile = file;
   workbench.ui.homeWorkflowScriptFileName = String(file.name ?? "");
   workbench.ui.toast = "";
@@ -3196,10 +3202,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       canvasDramaAssetEdits: {},
       canvasProjectStatusFilter: "active",
       canvasRecentProjectIds: [],
+      selectedCanvasProjectIds: [],
       renameCanvasProjectId: null,
       renameCanvasProjectName: "",
       renameCanvasProjectNotice: "",
       deleteCanvasProjectId: null,
+      deleteCanvasProjectMode: "single",
+      deleteCanvasProjectIds: [],
+      deleteCanvasProjectSubmitting: false,
       canvasDirectorCaptureDeleteTarget: null,
       isScriptModalOpen: false,
       scriptModalMode: "full",
@@ -8850,13 +8860,16 @@ function clearHomeBackgroundVideoObjectUrl(workbench) {
   workbench.homeBackgroundVideoSourceUrl = "";
 }
 
-async function readCachedHomeBackgroundVideo(sourceUrl) {
+async function readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss = true } = {}) {
   if (!globalThis.caches?.open || typeof globalThis.fetch !== "function") {
     throw new Error("浏览器不支持背景视频本地缓存");
   }
   const cache = await globalThis.caches.open(HOME_BACKGROUND_VIDEO_CACHE_NAME);
   let response = await cache.match(sourceUrl);
   if (!response) {
+    if (!fetchOnMiss) {
+      throw new Error("背景视频本地缓存未命中");
+    }
     response = await globalThis.fetch(sourceUrl, { mode: "cors", credentials: "omit" });
     if (!response.ok || response.type === "opaque") {
       throw new Error("背景视频本地缓存下载失败");
@@ -8942,7 +8955,10 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
   }
   if (
     workbench.homeBackgroundVideoSourceUrl === sourceUrl &&
-    (video.dataset.homeBackgroundVideoCacheState === "loading" || video.dataset.homeBackgroundVideoCacheState === "ready")
+    (video.dataset.homeBackgroundVideoCacheState === "loading" ||
+      video.dataset.homeBackgroundVideoCacheState === "streaming" ||
+      video.dataset.homeBackgroundVideoCacheState === "ready" ||
+      video.dataset.homeBackgroundVideoCacheState === "fallback")
   ) {
     return;
   }
@@ -8951,11 +8967,14 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
   const token = Symbol("home-background-video-cache");
   workbench.homeBackgroundVideoCacheToken = token;
   workbench.homeBackgroundVideoSourceUrl = sourceUrl;
-  video.dataset.homeBackgroundVideoCacheState = "loading";
+  video.src = sourceUrl;
+  video.dataset.homeBackgroundVideoCacheState = "streaming";
+  playHomeBackgroundVideo(video);
 
-  void readCachedHomeBackgroundVideo(sourceUrl)
+  void readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss: false })
     .then((blob) => {
       if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+      if (video.readyState > 0) return;
       if (!playHomeBackgroundVideoFromMediaSource(workbench, video, blob, token)) {
         playHomeBackgroundVideoFromBlob(workbench, video, blob);
       }
@@ -8965,7 +8984,22 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
       video.src = sourceUrl;
       video.dataset.homeBackgroundVideoCacheState = "fallback";
       playHomeBackgroundVideo(video);
+      warmHomeBackgroundVideoCacheAfterFirstFrame(workbench, video, sourceUrl, token);
     });
+}
+
+function warmHomeBackgroundVideoCacheAfterFirstFrame(workbench, video, sourceUrl, token) {
+  const warmCache = () => {
+    if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+    void readCachedHomeBackgroundVideo(sourceUrl).catch(() => {
+      // Cache warming is best effort; direct video playback remains the fallback.
+    });
+  };
+  if (video.readyState > 0) {
+    warmCache();
+    return;
+  }
+  video.addEventListener?.("loadeddata", warmCache, { once: true });
 }
 
 function replaceNavigationSurface(workbench, nextMarkup) {
@@ -14985,7 +15019,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     if (patchName === "toggle-snap") {
       updateCanvasViewportAndRender(workbench, {
-        snapEnabled: viewport.snapEnabled !== false ? false : true,
+        snapEnabled: viewport.snapEnabled === true ? false : true,
       });
       return;
     }
@@ -15017,7 +15051,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const canvasDocument = ensureWorkbenchCanvasDocument(workbench);
     const viewport = canvasDocument.viewport ?? {};
     updateCanvasViewportAndRender(workbench, {
-      snapEnabled: viewport.snapEnabled !== false ? false : true,
+      snapEnabled: viewport.snapEnabled === true ? false : true,
     });
     return;
   }
@@ -19825,6 +19859,79 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "toggle-canvas-project-selection") {
+    const projectId = String(target.dataset.canvasProjectId ?? "").trim();
+    if (!projectId) return;
+    const snapshot = getCanvasProjectGallerySnapshot(workbench.ui);
+    const pageIds = new Set(snapshot.visibleProjects.map((project) => String(project.id ?? "")).filter(Boolean));
+    if (!pageIds.has(projectId)) {
+      workbench.ui.selectedCanvasProjectIds = [];
+      render(workbench);
+      return;
+    }
+    const selected = new Set(
+      (Array.isArray(workbench.ui.selectedCanvasProjectIds) ? workbench.ui.selectedCanvasProjectIds : [])
+        .map((id) => String(id ?? "").trim())
+        .filter((id) => id && pageIds.has(id)),
+    );
+    if (selected.has(projectId)) selected.delete(projectId);
+    else selected.add(projectId);
+    workbench.ui.selectedCanvasProjectIds = [...selected];
+    workbench.ui.canvasProjectMenuId = null;
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-current-page-canvas-projects") {
+    workbench.ui.selectedCanvasProjectIds = getCanvasProjectGallerySnapshot(workbench.ui).visibleProjects
+      .map((project) => String(project.id ?? ""))
+      .filter(Boolean);
+    workbench.ui.canvasProjectMenuId = null;
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "clear-selected-canvas-projects") {
+    workbench.ui.selectedCanvasProjectIds = [];
+    workbench.ui.deleteCanvasProjectMode = "single";
+    workbench.ui.deleteCanvasProjectIds = [];
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
+  if (action === "delete-selected-canvas-projects") {
+    if (isTeamMemberSession(workbench.session)) {
+      workbench.ui.toast = "子账户无法删除画布。";
+      workbench.ui.canvasProjectMenuId = null;
+      render(workbench);
+      return;
+    }
+    const selected = new Set(
+      (Array.isArray(workbench.ui.selectedCanvasProjectIds) ? workbench.ui.selectedCanvasProjectIds : [])
+        .map((id) => String(id ?? "").trim())
+        .filter(Boolean),
+    );
+    const selectedOnPage = getCanvasProjectGallerySnapshot(workbench.ui).visibleProjects
+      .map((project) => String(project.id ?? "").trim())
+      .filter((id) => id && selected.has(id));
+    if (!selectedOnPage.length) {
+      workbench.ui.toast = "请先选择当前页画布。";
+      render(workbench);
+      return;
+    }
+    workbench.ui.deleteCanvasProjectMode = "bulk";
+    workbench.ui.deleteCanvasProjectIds = selectedOnPage;
+    workbench.ui.deleteCanvasProjectId = null;
+    workbench.ui.deleteCanvasProjectSubmitting = false;
+    workbench.ui.canvasProjectMenuId = null;
+    workbench.ui.toast = "";
+    render(workbench);
+    return;
+  }
+
   if (action === "rename-canvas-project") {
     const projectId = target.dataset.canvasProjectId ?? null;
     const currentProject = normalizeCanvasProjects(workbench.ui).find((project) => project.id === projectId);
@@ -19902,6 +20009,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     workbench.ui.deleteCanvasProjectId = target.dataset.canvasProjectId ?? null;
+    workbench.ui.deleteCanvasProjectMode = "single";
+    workbench.ui.deleteCanvasProjectIds = [];
+    workbench.ui.deleteCanvasProjectSubmitting = false;
     workbench.ui.canvasProjectMenuId = null;
     render(workbench);
     return;
@@ -19909,6 +20019,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-delete-canvas-project-modal") {
     workbench.ui.deleteCanvasProjectId = null;
+    workbench.ui.deleteCanvasProjectMode = "single";
+    workbench.ui.deleteCanvasProjectIds = [];
+    workbench.ui.deleteCanvasProjectSubmitting = false;
     render(workbench);
     return;
   }
@@ -19916,8 +20029,54 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "confirm-delete-canvas-project") {
     if (isTeamMemberSession(workbench.session)) {
       workbench.ui.deleteCanvasProjectId = null;
+      workbench.ui.deleteCanvasProjectMode = "single";
+      workbench.ui.deleteCanvasProjectIds = [];
+      workbench.ui.deleteCanvasProjectSubmitting = false;
       workbench.ui.toast = "子账户无法删除画布。";
       render(workbench);
+      return;
+    }
+    if (workbench.ui.deleteCanvasProjectMode === "bulk") {
+      const projectIds = Array.isArray(workbench.ui.deleteCanvasProjectIds) ? workbench.ui.deleteCanvasProjectIds : [];
+      const uniqueProjectIds = [...new Set(projectIds.map((id) => String(id ?? "").trim()).filter(Boolean))];
+      if (!uniqueProjectIds.length) {
+        workbench.ui.deleteCanvasProjectMode = "single";
+        workbench.ui.deleteCanvasProjectIds = [];
+        workbench.ui.deleteCanvasProjectSubmitting = false;
+        render(workbench);
+        return;
+      }
+      workbench.ui.deleteCanvasProjectSubmitting = true;
+      await runAction(workbench, "正在删除所选画布...", async () => {
+        const deletedProjectIds = [];
+        try {
+          for (const projectId of uniqueProjectIds) {
+            if (typeof workbench.api.deleteCanvasProject === "function") {
+              await workbench.api.deleteCanvasProject(projectId);
+            }
+            deleteCanvasProject(workbench, projectId);
+            deletedProjectIds.push(projectId);
+          }
+        } catch (error) {
+          const deletedIdSet = new Set(deletedProjectIds);
+          const remainingProjectIds = uniqueProjectIds.filter((projectId) => !deletedIdSet.has(projectId));
+          workbench.ui.deleteCanvasProjectIds = remainingProjectIds;
+          workbench.ui.selectedCanvasProjectIds = remainingProjectIds;
+          persistWorkbenchState(workbench);
+          throw error;
+        }
+        workbench.ui.selectedCanvasProjectIds = [];
+        workbench.ui.deleteCanvasProjectId = null;
+        workbench.ui.deleteCanvasProjectMode = "single";
+        workbench.ui.deleteCanvasProjectIds = [];
+        workbench.ui.deleteCanvasProjectSubmitting = false;
+        persistWorkbenchState(workbench);
+      }, {
+        successToast: `已删除 ${uniqueProjectIds.length} 个画布。`,
+        onError() {
+          workbench.ui.deleteCanvasProjectSubmitting = false;
+        },
+      });
       return;
     }
     const projectId = workbench.ui.deleteCanvasProjectId;
@@ -19926,15 +20085,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       return;
     }
+    workbench.ui.deleteCanvasProjectSubmitting = true;
     await runAction(workbench, "正在删除画布...", async () => {
       if (typeof workbench.api.deleteCanvasProject === "function") {
         await workbench.api.deleteCanvasProject(projectId);
       }
       deleteCanvasProject(workbench, projectId);
       workbench.ui.deleteCanvasProjectId = null;
+      workbench.ui.deleteCanvasProjectMode = "single";
+      workbench.ui.deleteCanvasProjectIds = [];
+      workbench.ui.deleteCanvasProjectSubmitting = false;
       persistWorkbenchState(workbench);
     }, {
       successToast: "已删除画布。",
+      onError() {
+        workbench.ui.deleteCanvasProjectSubmitting = false;
+      },
     });
     return;
   }
@@ -25458,10 +25624,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "change-canvas-project-page") {
-    const totalProjects = Array.isArray(workbench.ui.canvasProjects) ? workbench.ui.canvasProjects.length : 0;
-    const totalPages = Math.max(1, Math.ceil(totalProjects / CANVAS_PROJECT_GALLERY_PAGE_SIZE));
+    const totalPages = getCanvasProjectGallerySnapshot(workbench.ui).totalPages;
     const nextPage = Math.max(1, Number.parseInt(String(target.dataset.page ?? "1"), 10) || 1);
     workbench.ui.canvasProjectPage = Math.min(totalPages, nextPage);
+    workbench.ui.selectedCanvasProjectIds = [];
     workbench.ui.toast = "";
     render(workbench);
     return;
@@ -27264,6 +27430,7 @@ function handleNewCanvasHostInput(workbench, target) {
       ? target.value
       : "active";
     workbench.ui.canvasProjectPage = 1;
+    workbench.ui.selectedCanvasProjectIds = [];
     render(workbench);
     return true;
   }
@@ -27299,6 +27466,7 @@ function handleNewCanvasHostInput(workbench, target) {
   if (target?.matches?.("[data-canvas-project-search]")) {
     workbench.ui.canvasProjectSearchQuery = target.value ?? "";
     workbench.ui.canvasProjectPage = 1;
+    workbench.ui.selectedCanvasProjectIds = [];
     render(workbench);
     return true;
   }
@@ -31649,7 +31817,7 @@ function normalizeCanvasViewport(viewport = {}) {
     x: Number(viewport.x ?? 0),
     y: Number(viewport.y ?? 0),
     zoom: clampCanvasZoom(viewport.zoom ?? 1),
-    snapEnabled: viewport.snapEnabled ?? true,
+    snapEnabled: viewport.snapEnabled ?? false,
     interactionMode,
   };
 }
@@ -32332,10 +32500,10 @@ function resolveCanvasViewportPatch(viewport = {}, patchName = "") {
     return { zoom: Math.round((zoom - 0.1) * 100) / 100 };
   }
   if (patchName === "toggle-snap") {
-    return { snapEnabled: !(viewport.snapEnabled ?? true) };
+    return { snapEnabled: !(viewport.snapEnabled ?? false) };
   }
   if (patchName === "reset") {
-    return { x: 0, y: 0, zoom: 1, snapEnabled: true };
+    return { x: 0, y: 0, zoom: 1, snapEnabled: false };
   }
   return {};
 }
@@ -33961,6 +34129,14 @@ export async function syncHomeRecommendationsFromApiForTest(workbench) {
 
 export function homeAgentPromptTextForSubmissionForTest(workbench) {
   return homeAgentPromptTextForSubmission(workbench);
+}
+
+export function setHomeWorkflowScriptFileForTest(workbench, file) {
+  return setHomeWorkflowScriptFile(workbench, file);
+}
+
+export function setScriptUploadFileForTest(workbench, file) {
+  return setScriptUploadFile(workbench, file);
 }
 
 export function installWorkbenchToastQueueForTest(workbench) {
@@ -41587,6 +41763,12 @@ function setScriptUploadFile(workbench, file) {
     workbench.ui.scriptUploadFile = null;
     workbench.ui.scriptUploadFileName = "";
     workbench.ui.uploadNotice = "仅支持上传 docx 或 txt 剧本文档。";
+    return false;
+  }
+  if (Number(file?.size ?? 0) > SCRIPT_DOCUMENT_UPLOAD_LIMITS.document.maxBytes) {
+    workbench.ui.scriptUploadFile = null;
+    workbench.ui.scriptUploadFileName = "";
+    workbench.ui.uploadNotice = "剧本文档不能超过 10 MB，请换用更小的文件。";
     return false;
   }
   workbench.ui.scriptUploadFile = file;

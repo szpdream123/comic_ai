@@ -33922,13 +33922,13 @@ describe("production workbench project tab", () => {
       },
     });
 
-    assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, false);
+    assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, true);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "toggle-canvas-snap" },
     });
 
-    assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, true);
+    assert.equal(workbench.ui.canvasDocument.viewport.snapEnabled, false);
   });
 
   it("renders the canvas flow with pan and zoom viewport transforms", () => {

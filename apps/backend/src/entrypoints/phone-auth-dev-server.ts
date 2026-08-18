@@ -637,6 +637,16 @@ const scriptDocumentUploadLimits = {
     (extension) => ![".txt", ".docx"].includes(extension),
   ),
 };
+const canvasAnnotationUploadLimits = {
+  image: episodeUploadLimits.image,
+  vector: {
+    label: "矢量标注",
+    maxBytes: 5 * 1024 * 1024,
+    mimeTypes: ["application/json"],
+    extensions: [".json"],
+  },
+  blockedExtensions: episodeUploadLimits.blockedExtensions,
+};
 const brandFontUploadLimits = {
   font: {
     label: "品牌字体",
@@ -3881,6 +3891,7 @@ function getUploadExtension(fileName: unknown) {
 function resolveUploadLimitsForPurpose(purpose: unknown) {
   const normalizedPurpose = String(purpose ?? "").trim();
   if (normalizedPurpose === "script-documents") return scriptDocumentUploadLimits;
+  if (normalizedPurpose === "canvas-annotations") return canvasAnnotationUploadLimits;
   if (normalizedPurpose === "new-canvas/brand-font") return brandFontUploadLimits;
   return episodeUploadLimits;
 }
@@ -3888,7 +3899,7 @@ function resolveUploadLimitsForPurpose(purpose: unknown) {
 function getUploadLimitKind(
   contentType: unknown,
   fileName: unknown,
-  limits: typeof episodeUploadLimits | typeof scriptDocumentUploadLimits | typeof brandFontUploadLimits = episodeUploadLimits,
+  limits: typeof episodeUploadLimits | typeof scriptDocumentUploadLimits | typeof canvasAnnotationUploadLimits | typeof brandFontUploadLimits = episodeUploadLimits,
 ) {
   const normalizedContentType = String(contentType ?? "").split(";")[0]!.trim().toLowerCase();
   const extension = getUploadExtension(fileName);
@@ -3901,7 +3912,7 @@ function getUploadLimitKind(
       "mimeTypes" in rule &&
       (rule.mimeTypes.includes(normalizedContentType) || rule.extensions.includes(extension))
     ) {
-      return kind as "image" | "video" | "audio" | "document" | "font";
+      return kind as "image" | "video" | "audio" | "document" | "vector" | "font";
     }
   }
   return null;
@@ -19538,9 +19549,13 @@ export function createPhoneAuthDevServer(
           return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
         }
 
-        const objectKey = storageMode === "cos"
-          ? cosObjectKeyFromPublicUrl({ sourceUrl, bucket: storageBucket, region: storageRegion })
-          : null;
+        const storageObjectId = storageObjectIdFromContentUrl(sourceUrl);
+        const storageObject = isUuid(storageObjectId) ? await findStorageObject(db, storageObjectId) : null;
+        const objectKey = storageMode === "cos" && storageObject?.status === "available" && storageObject.bucket === storageBucket
+          ? storageObject.objectKey
+          : storageMode === "cos"
+            ? cosObjectKeyFromPublicUrl({ sourceUrl, bucket: storageBucket, region: storageRegion })
+            : null;
         if (!objectKey || !isHomeRecommendationObjectKey({ objectKey, officialAssetRootPrefix })) {
           return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
         }
@@ -34604,6 +34619,7 @@ export function createPhoneAuthDevServer(
         if (writeKnownError(response, error)) {
           return;
         }
+        console.error("[phone-auth] unhandled request error", error);
         response.statusCode = 500;
         response.setHeader("content-type", "application/json; charset=utf-8");
         response.end(

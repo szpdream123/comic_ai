@@ -320,7 +320,7 @@ export function enableCanvasGraphSnapline(X6, graph, viewport = {}) {
   if (!graph?.use || typeof X6?.Snapline !== "function") return false;
   if (graph.getPlugin?.("snapline")) return true;
   graph.use(new X6.Snapline({
-    enabled: viewport.snapEnabled !== false,
+    enabled: viewport.snapEnabled === true,
     sharp: true,
     tolerance: 8,
   }));
@@ -1336,6 +1336,7 @@ export function refreshCanvasWorkflowGraph(workbench) {
   applyCanvasGraphInteractionMode(graph, document.viewport);
   reconcileCanvasWorkflowGraph(graph, nextData);
   applyCanvasGraphInteractionMode(graph, document.viewport);
+  applyInitialViewport(graph, document.viewport);
   graph.__comicAiCanvasDocument = document;
   if (
     transientEditor?.canvasTransientEditor === true
@@ -1835,7 +1836,7 @@ function createGraph(X6, mount, workbench, size = {}) {
       },
     },
     snapline: {
-      enabled: viewport.snapEnabled !== false,
+      enabled: viewport.snapEnabled === true,
       sharp: true,
     },
     keyboard: { enabled: true, global: false },
@@ -2001,7 +2002,7 @@ function wireGraphSync(graph, workbench, mount) {
     });
   };
   bindCanvasEdgeDisconnectControl(graph, workbench, mount);
-  const snapEnabled = () => workbench?.ui?.canvasDocument?.viewport?.snapEnabled !== false;
+  const snapEnabled = () => workbench?.ui?.canvasDocument?.viewport?.snapEnabled === true;
   const suspendDragSnapline = () => {
     if (!snapEnabled() || dragSnaplineSuspended) return;
     graph.getPlugin?.("snapline")?.disable?.();
@@ -2053,6 +2054,7 @@ function wireGraphSync(graph, workbench, mount) {
       }
     }
     if (!event?.options?.ui && !event?.options?.selection) syncMovedNodeEditor(event);
+    if (!event?.options?.selection) positionCanvasNodeActionToolbar(graph, mount);
     if (event?.options?.selection) {
       selectionMovePending = true;
     }
@@ -2580,7 +2582,7 @@ function applyCanvasEdgeVisibility(edge, visible) {
 
 export function applyCanvasGraphViewportPreferences(graph, viewport = {}) {
   if (!graph) return false;
-  const snapEnabled = viewport.snapEnabled !== false;
+  const snapEnabled = viewport.snapEnabled === true;
   if (graph.__comicAiCanvasSnapEnabled === snapEnabled) return true;
   if (graph.options?.snapline) graph.options.snapline.enabled = snapEnabled;
   graph.setGridSize?.(snapEnabled ? CANVAS_GRID_SIZE : 1);

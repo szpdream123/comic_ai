@@ -1264,7 +1264,10 @@ export function renderProjectDetail(context = {}) {
       notice: ui.renameCanvasProjectNotice ?? "",
     })}
     ${renderCanvasProjectDeleteModal({
-      show: Boolean(ui.deleteCanvasProjectId),
+      show: Boolean(ui.deleteCanvasProjectId) || ui.deleteCanvasProjectMode === "bulk",
+      mode: ui.deleteCanvasProjectMode === "bulk" ? "bulk" : "single",
+      count: Array.isArray(ui.deleteCanvasProjectIds) ? ui.deleteCanvasProjectIds.length : 0,
+      submitting: ui.deleteCanvasProjectSubmitting === true,
       projectName:
         ui.canvasProjects?.find?.((project) => project.id === ui.deleteCanvasProjectId)?.title ?? "",
     })}
@@ -9465,7 +9468,7 @@ function renderToolsPanel(ui = {}, state = {}, session = null) {
   const zoomMenuOpen = ui.canvasZoomMenuOpen === true;
   const canvasEdgeStyle = ui.canvasEdgeStyle === "orthogonal" ? "orthogonal" : "curve";
   const canvasEdgesHidden = ui.canvasEdgesHidden === true;
-  const canvasSnapEnabled = viewport.snapEnabled !== false;
+  const canvasSnapEnabled = viewport.snapEnabled === true;
   const gridStyle = canvasGridStyle(viewport);
   const sidebarMode = ["assets", "history"].includes(ui.canvasSidebarMode)
     ? ui.canvasSidebarMode
@@ -9880,26 +9883,18 @@ export function renderCanvasSurfaceForHost(context = {}) {
 }
 
 export function renderCanvasProjectGallery(ui = {}) {
-  const allProjects = normalizeCanvasProjectCards(ui);
-  const statusFilter = ["active", "archived", "all"].includes(ui.canvasProjectStatusFilter)
-    ? ui.canvasProjectStatusFilter
-    : "active";
-  const statusProjects = statusFilter === "all"
-    ? allProjects
-    : allProjects.filter((project) => statusFilter === "archived"
-      ? normalizeCanvasProjectCardStatus(project.status) === "archived"
-      : normalizeCanvasProjectCardStatus(project.status) !== "archived");
-  const searchQuery = String(ui.canvasProjectSearchQuery ?? "").trim().toLocaleLowerCase();
-  const projects = searchQuery
-    ? statusProjects.filter((project) => `${project.title ?? ""} ${project.id ?? ""}`.toLocaleLowerCase().includes(searchQuery))
-    : statusProjects;
-  const pageSize = CANVAS_PROJECT_GALLERY_PAGE_SIZE;
-  const totalProjects = projects.length;
-  const totalPages = Math.max(1, Math.ceil(totalProjects / pageSize));
-  const currentPage = Math.min(Math.max(1, Number(ui.canvasProjectPage ?? 1) || 1), totalPages);
-  const visibleProjects = totalProjects <= pageSize
-    ? projects
-    : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const snapshot = getCanvasProjectGallerySnapshot(ui);
+  const {
+    allProjects,
+    statusFilter,
+    searchQuery,
+    totalProjects,
+    totalPages,
+    currentPage,
+    visibleProjects,
+  } = snapshot;
+  const selectedIds = normalizeSelectedProjectIds(ui.selectedCanvasProjectIds);
+  const selectedCount = visibleProjects.filter((project) => selectedIds.has(String(project.id ?? ""))).length;
   const isTeamMember = isTeamMemberSession(ui.session);
   const canCreateCanvasProject = !isTeamMember;
   return `
@@ -9923,6 +9918,17 @@ export function renderCanvasProjectGallery(ui = {}) {
           </label>
         </div>
       </header>
+      ${isTeamMember ? "" : `<div class="project-gallery-toolbar canvas-project-gallery-toolbar">
+        <div class="project-gallery-toolbar-summary">
+          <strong>本页已选 ${selectedCount}</strong>
+          <span>仅作用于当前页</span>
+        </div>
+        <div class="project-gallery-toolbar-actions">
+          <button class="gallery-toolbar-button" type="button" data-action="select-current-page-canvas-projects" ${visibleProjects.length ? "" : "disabled"}>全选本页</button>
+          <button class="gallery-toolbar-button" type="button" data-action="clear-selected-canvas-projects" ${selectedCount ? "" : "disabled"}>取消选择</button>
+          <button class="gallery-toolbar-button danger" type="button" data-action="delete-selected-canvas-projects" ${selectedCount ? "" : "disabled"}>删除所选</button>
+        </div>
+      </div>`}
       <div class="canvas-project-card-grid">
         ${visibleProjects.length
           ? visibleProjects.map((project) => renderCanvasProjectCard(
@@ -9930,6 +9936,7 @@ export function renderCanvasProjectGallery(ui = {}) {
             ui.canvasProjectMenuId === project.id,
             !isTeamMember,
             String(ui.canvasOpeningProjectId ?? "") === String(project.id ?? ""),
+            selectedIds.has(String(project.id ?? "")),
           )).join("")
           : searchQuery
             ? `<p class="canvas-project-empty">没有匹配“${escapeHtml(String(ui.canvasProjectSearchQuery ?? "").trim())}”的画布</p>`
@@ -9937,7 +9944,7 @@ export function renderCanvasProjectGallery(ui = {}) {
               ? renderTeamMemberAssignmentEmptyState("画布")
               : ""}
       </div>
-      ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, pageSize, "画布分页", "change-canvas-project-page") : ""}
+      ${totalProjects ? renderProjectGalleryPagination(totalProjects, currentPage, totalPages, CANVAS_PROJECT_GALLERY_PAGE_SIZE, "画布分页", "change-canvas-project-page") : ""}
       <div class="canvas-project-aurora" aria-hidden="true"></div>
       ${canCreateCanvasProject
         ? `<button class="canvas-create-project-button" type="button" data-action="create-canvas-project">
@@ -9947,6 +9954,30 @@ export function renderCanvasProjectGallery(ui = {}) {
         : ``}
     </section>
   `;
+}
+
+export function getCanvasProjectGallerySnapshot(ui = {}) {
+  const allProjects = normalizeCanvasProjectCards(ui);
+  const statusFilter = ["active", "archived", "all"].includes(ui.canvasProjectStatusFilter)
+    ? ui.canvasProjectStatusFilter
+    : "active";
+  const statusProjects = statusFilter === "all"
+    ? allProjects
+    : allProjects.filter((project) => statusFilter === "archived"
+      ? normalizeCanvasProjectCardStatus(project.status) === "archived"
+      : normalizeCanvasProjectCardStatus(project.status) !== "archived");
+  const searchQuery = String(ui.canvasProjectSearchQuery ?? "").trim().toLocaleLowerCase();
+  const projects = searchQuery
+    ? statusProjects.filter((project) => `${project.title ?? ""} ${project.id ?? ""}`.toLocaleLowerCase().includes(searchQuery))
+    : statusProjects;
+  const pageSize = CANVAS_PROJECT_GALLERY_PAGE_SIZE;
+  const totalProjects = projects.length;
+  const totalPages = Math.max(1, Math.ceil(totalProjects / pageSize));
+  const currentPage = Math.min(Math.max(1, Number(ui.canvasProjectPage ?? 1) || 1), totalPages);
+  const visibleProjects = totalProjects <= pageSize
+    ? projects
+    : projects.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  return { allProjects, statusFilter, searchQuery, projects, totalProjects, totalPages, currentPage, visibleProjects };
 }
 
 function isTeamMemberSession(session) {
@@ -10022,11 +10053,20 @@ function resolveRecentCanvasProjects(ui = {}) {
     .slice(0, 5);
 }
 
-function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = true, opening = false) {
+function renderCanvasProjectCard(project = {}, menuOpen = false, canDelete = true, opening = false, selected = false) {
   const openingAttrs = opening ? ' class="canvas-project-card-open is-opening" data-canvas-project-opening="true" disabled aria-busy="true"' : ' class="canvas-project-card-open"';
   const openingTitleAttrs = opening ? ' disabled aria-busy="true"' : "";
   return `
-    <article class="canvas-project-card">
+    <article class="canvas-project-card${selected ? " is-selected" : ""}">
+      ${canDelete ? `<button
+        class="project-gallery-select-toggle canvas-project-select-toggle"
+        type="button"
+        data-action="toggle-canvas-project-selection"
+        data-canvas-project-id="${escapeAttr(project.id ?? "")}"
+        aria-pressed="${selected ? "true" : "false"}"
+        aria-label="${selected ? "取消选择画布" : "选择画布"}"
+        title="${selected ? "取消选择" : "选择当前画布"}"
+      ><span aria-hidden="true"></span></button>` : ""}
       <button${openingAttrs} type="button" data-action="open-canvas-project" data-canvas-project-id="${escapeAttr(project.id ?? "")}" aria-label="打开${escapeAttr(project.title ?? "画布项目")}">
         <span class="canvas-project-cover" aria-hidden="true">
           <span class="canvas-project-play">${renderCanvasIcon("video")}</span>
@@ -12123,7 +12163,7 @@ function resolveActiveHomeBackgroundVideoUrl(ui = {}) {
 function renderHomeBackgroundVideo(ui = {}) {
   const homeBackgroundVideoUrl = resolveActiveHomeBackgroundVideoUrl(ui);
   return homeBackgroundVideoUrl
-    ? `<div class="home-background-video" aria-hidden="true"><video autoplay muted loop playsinline preload="auto" data-home-background-video-url="${escapeAttr(homeBackgroundVideoUrl)}"></video></div><div class="home-background-video-overlay" aria-hidden="true"></div>`
+    ? `<div class="home-background-video" aria-hidden="true"><video autoplay muted loop playsinline preload="auto" src="${escapeAttr(homeBackgroundVideoUrl)}" data-home-background-video-url="${escapeAttr(homeBackgroundVideoUrl)}"></video></div><div class="home-background-video-overlay" aria-hidden="true"></div>`
     : "";
 }
 
@@ -12940,25 +12980,29 @@ function renderCanvasProjectRenameModal({ show, value, notice }) {
   `;
 }
 
-function renderCanvasProjectDeleteModal({ show, projectName }) {
+function renderCanvasProjectDeleteModal({ show, projectName, mode = "single", count = 0, submitting = false }) {
   if (!show) {
     return "";
   }
+  const normalizedCount = Math.max(0, Number(count) || 0);
+  const message = mode === "bulk"
+    ? `所选内容将被删除，确定删除本页选中的 ${normalizedCount} 个画布吗？`
+    : `所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？`;
 
   return `
-    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="确认删除画布">
+    <section class="modal-backdrop delete-project-backdrop" role="dialog" aria-modal="true" aria-label="${submitting ? "正在删除" : "确认删除画布"}" aria-busy="${submitting ? "true" : "false"}">
       <div class="delete-project-modal canvas-project-delete-modal">
         <div class="delete-project-head">
           <div class="delete-project-icon">×</div>
           <div>
-            <h2>确认删除</h2>
-            <p>所选内容将被删除，确定删除${projectName ? `“${escapeHtml(projectName)}”` : ""}吗？</p>
+            <h2>${submitting ? "正在删除" : "确认删除"}</h2>
+            <p ${submitting ? 'role="status" aria-live="polite" aria-atomic="true"' : ""}>${submitting ? "正在删除画布及其关联内容，请稍候。" : message}</p>
           </div>
-          <button class="modal-close" type="button" data-action="close-delete-canvas-project-modal" aria-label="关闭">×</button>
+          <button class="modal-close" type="button" data-action="close-delete-canvas-project-modal" aria-label="关闭" ${submitting ? "disabled" : ""}>×</button>
         </div>
         <div class="delete-project-actions">
-          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-canvas-project-modal">取消</button>
-          <button class="delete-confirm-button" type="button" data-action="confirm-delete-canvas-project">确定</button>
+          <button class="secondary-action delete-cancel-button" type="button" data-action="close-delete-canvas-project-modal" ${submitting ? "disabled" : ""}>取消</button>
+          <button class="delete-confirm-button${submitting ? " is-loading" : ""}" type="button" data-action="confirm-delete-canvas-project" ${submitting ? "disabled" : ""}>${submitting ? '<span class="delete-project-spinner" aria-hidden="true"></span>删除中…' : "确定"}</button>
         </div>
       </div>
     </section>

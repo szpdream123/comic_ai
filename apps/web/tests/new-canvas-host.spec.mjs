@@ -257,6 +257,8 @@ test("Canvas host actions update the mounted surface without redrawing the workb
   assert.doesNotMatch(hostSource, /graph\?\.hideGrid\?\.\(\)/);
   assert.doesNotMatch(hostSource, /updateCanvasViewport\(canvasDocument, patch\)/);
   assert.match(hostSource, /const applySnapPreference = \(\) =>/);
+  assert.match(hostSource, /snapEnabled: canvasDocument\.viewport\?\.snapEnabled !== true/);
+  assert.match(hostSource, /const snapEnabled = workbench\.ui\.canvasDocument\?\.viewport\?\.snapEnabled === true/);
   assert.match(hostSource, /applyCanvasGraphViewportPreferences\(graph, nextDocument\.viewport\)/);
   assert.match(hostSource, /action === "toggle-canvas-snap"\) \{\s*event\.preventDefault\?\.\(\);\s*event\.stopPropagation\(\);[\s\S]*?renderInteraction\(\)/);
   assert.match(hostSource, /classList\?\.toggle\?\.\("active", snapEnabled\)/);

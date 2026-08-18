@@ -1346,10 +1346,7 @@ export const creatorApi = {
 
   getStandaloneCanvas(canvasProjectId) {
     const path = `/api/creator/canvases/${encodeURIComponent(canvasProjectId)}/document`;
-    return fetchJsonWithTtl(path, {
-      cacheKey: `GET ${path}`,
-      cacheTtlMs: 30000,
-    });
+    return fetchJson(path, { cache: "no-store" });
   },
 
   getCanvasDocument(canvasProjectId) {

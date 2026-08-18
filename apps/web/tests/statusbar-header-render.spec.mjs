@@ -53,7 +53,7 @@ test("home renders the configured background video as a looping muted layer", ()
     },
   });
   assert.match(html, /class="home-background-video"/);
-  assert.match(html, /<video autoplay muted loop playsinline preload="auto" data-home-background-video-url="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2"/);
+  assert.match(html, /<video autoplay muted loop playsinline preload="auto" src="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2" data-home-background-video-url="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2"/);
   assert.doesNotMatch(html, /poster=/);
   assert.doesNotMatch(html, /<source src=/);
 });

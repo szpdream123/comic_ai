@@ -34,6 +34,7 @@ import {
 } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createGeoContentService } from "../../modules/geo/geo-content.service.ts";
+import { createHomeRecommendationService } from "../../modules/home-recommendations/home-recommendation.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 const directUploadPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

@@ -10,6 +10,7 @@ import {
   renderCanvasMediaToolsShell,
   shouldDismissMediaDrawer,
 } from "../src/features/new-canvas/media-tools-drawer.js";
+import { validateUploadFile } from "../src/shared/creator-api.js";
 
 test("Canvas media tools render for selected image nodes", () => {
   const ui = {
@@ -22,6 +23,29 @@ test("Canvas media tools render for selected image nodes", () => {
   assert.match(shell, /Camera Studio/);
   assert.match(shell, /开始处理/);
   assert.match(shell, /data-media-drawer-grip/);
+});
+
+test("Canvas media tools show the selected storage image across every editor", () => {
+  const ui = {
+    selectedCanvasNodeId: "source-image",
+    canvasDocument: {
+      nodes: [{ id: "source-image", type: "source-image", data: { title: "待处理原图", storageObjectId: "storage-source" } }],
+    },
+    canvasMediaTools: { open: true, tool: "outpaint" },
+  };
+  const state = ensureCanvasMediaToolsState(ui);
+  for (const tool of ["outpaint", "remove_background", "free_view", "camera_studio", "slice", "composite", "batch_grid"]) {
+    state.tool = tool;
+    const shell = renderCanvasMediaToolsShell(ui);
+    assert.match(shell, /canvas-media-source-preview/);
+    assert.match(shell, /\/api\/storage\/objects\/storage-source\/content\?proxy=1/);
+    assert.match(shell, /待处理原图/);
+  }
+
+  state.tool = "crop";
+  assert.match(renderCanvasMediaToolsShell(ui), /canvas-media-crop-stage[^>]+storage-source/);
+  state.tool = "annotation";
+  assert.match(renderCanvasMediaToolsShell(ui), /canvas-media-annotation-stage[^>]+storage-source/);
 });
 
 test("Canvas mobile media drawer uses a bounded swipe threshold", () => {
@@ -99,6 +123,90 @@ test("Canvas crop number inputs update the preview selection immediately", () =>
   controller.dispose();
 });
 
+test("Canvas local crop waits for the new node to be persisted", async () => {
+  const previousDocument = globalThis.document;
+  const previousImage = globalThis.Image;
+  const calls = [];
+  globalThis.Image = class {
+    naturalWidth = 800;
+    naturalHeight = 600;
+    set src(value) {
+      this.currentSrc = value;
+      this.onload?.();
+    }
+  };
+  globalThis.document = {
+    createElement(tagName) {
+      assert.equal(tagName, "canvas");
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage() {} }),
+        toBlob: (callback) => callback(new Blob(["cropped"], { type: "image/png" })),
+      };
+    },
+  };
+  try {
+    const ui = {
+      selectedCanvasProjectId: "canvas-crop",
+      selectedCanvasNodeId: "source-image-node",
+      canvasDocument: {
+        version: 1,
+        nodes: [{
+          id: "source-image-node",
+          type: "source-image",
+          position: { x: 10, y: 20 },
+          size: { width: 300, height: 300 },
+          data: { url: "/api/storage/objects/source/content?proxy=1" },
+        }],
+        edges: [],
+      },
+      canvasMediaTools: { open: true, tool: "crop" },
+    };
+    const workbench = {
+      ui,
+      api: {
+        async uploadFile(_file, options) {
+          calls.push(["upload", options]);
+          return { upload: { storageObjectId: "crop-storage" } };
+        },
+      },
+      updateCanvasDocument(document, options) {
+        calls.push(["update", options]);
+        ui.canvasDocument = document;
+      },
+      async saveCanvasNow() {
+        calls.push(["save", ui.canvasDocument.nodes.at(-1)?.data?.storageObjectId]);
+      },
+      async refreshCanvasSurface() {
+        calls.push(["refresh"]);
+      },
+    };
+    const controller = createCanvasMediaToolsController({ surface: {}, workbench, render() {} });
+    const state = ensureCanvasMediaToolsState(ui);
+
+    await controller.handleAction({ dataset: { mediaAction: "submit" } });
+
+    assert.deepEqual(calls[0][1], {
+      category: "canvas-derivations",
+      projectId: null,
+      canvasProjectId: "canvas-crop",
+    });
+    assert.deepEqual(calls.slice(1), [
+      ["update", { scheduleSave: false }],
+      ["save", "crop-storage"],
+      ["refresh"],
+    ]);
+    assert.equal(ui.canvasDocument.nodes.at(-1).data.url, "/api/storage/objects/crop-storage/content?proxy=1");
+    assert.equal(state.status, "completed");
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousImage === undefined) delete globalThis.Image;
+    else globalThis.Image = previousImage;
+  }
+});
+
 test("Canvas media tools create a derivation, generation task, and task binding", async () => {
   const calls = [];
   const ui = {
@@ -134,8 +242,8 @@ test("Canvas media tools create a derivation, generation task, and task binding"
   let renders = 0;
   const controller = createCanvasMediaToolsController({ surface: {}, workbench, render: () => { renders += 1; } });
   const state = ensureCanvasMediaToolsState(ui);
-  state.tool = "crop";
-  state.instruction = "保留人物并裁切为近景";
+  state.tool = "outpaint";
+  state.instruction = "向外扩展画面";
   await controller.handleAction({ dataset: { mediaAction: "submit" } });
 
   assert.equal(calls[0][0], "start");
@@ -146,6 +254,114 @@ test("Canvas media tools create a derivation, generation task, and task binding"
   assert.deepEqual(calls[2], ["attach", "canvas-1", "derivation-1", "task-1"]);
   assert.equal(state.status, "running");
   assert.equal(renders >= 2, true);
+});
+
+test("Canvas outpaint exposes image models and submits the selected model", async () => {
+  let generationInput = null;
+  const ui = {
+    selectedCanvasProjectId: "canvas-1",
+    selectedCanvasNodeId: "image-node",
+    episodeGenerationConfig: {
+      defaultImageModelCode: "image-fast",
+      models: [
+        { modelCode: "image-fast", modelLabel: "快速图片模型", mediaType: "image" },
+        { modelCode: "image-quality", modelLabel: "高质量图片模型", mediaType: "image" },
+      ],
+    },
+    canvasDocument: {
+      nodes: [{ id: "image-node", type: "image", data: { storageObjectId: "storage-1", url: "/source.png" } }],
+    },
+    canvasMediaTools: { open: true, tool: "outpaint" },
+  };
+  const workbench = {
+    ui,
+    api: {
+      async startCanvasMediaDerivation() { return { derivation: { id: "derivation-outpaint" } }; },
+      async createImageGenerationTask(input) { generationInput = input; return { taskId: "task-outpaint" }; },
+      async attachCanvasMediaDerivationTask() {},
+    },
+  };
+  const controller = createCanvasMediaToolsController({ surface: {}, workbench, render() {} });
+  const state = ensureCanvasMediaToolsState(ui);
+
+  assert.match(renderCanvasMediaToolsShell(ui), /data-media-field="generationModelCode"/);
+  assert.match(renderCanvasMediaToolsShell(ui), /高质量图片模型/);
+  controller.handleInput({ dataset: { mediaField: "generationModelCode" }, type: "select-one", value: "image-quality" });
+  await controller.handleAction({ dataset: { mediaAction: "submit" } });
+
+  assert.equal(state.status, "running");
+  assert.equal(generationInput.model, "image-quality");
+  controller.dispose();
+});
+
+test("Canvas crop is processed locally and never calls model generation APIs", async () => {
+  const previousDocument = globalThis.document;
+  const previousImage = globalThis.Image;
+  const calls = [];
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext() {
+      return { drawImage(...args) { calls.push(["drawImage", ...args.slice(1)]); } };
+    },
+    toBlob(callback) {
+      calls.push(["toBlob", this.width, this.height]);
+      callback(new Blob(["crop"], { type: "image/png" }));
+    },
+  };
+  globalThis.document = { createElement() { return canvas; } };
+  globalThis.Image = class {
+    naturalWidth = 800;
+    naturalHeight = 600;
+    set src(value) {
+      this.source = value;
+      queueMicrotask(() => this.onload?.());
+    }
+  };
+  try {
+    const ui = {
+      selectedCanvasProjectId: "canvas-1",
+      selectedCanvasNodeId: "image-node",
+      canvasDocument: {
+        nodes: [{
+          id: "image-node",
+          type: "source-image",
+          position: { x: 40, y: 60 },
+          size: { width: 320, height: 180 },
+          data: { url: "/uploads/source.png", mediaKind: "image" },
+        }],
+        edges: [],
+      },
+      canvasMediaTools: { open: true, tool: "crop", cropX: 10, cropY: 20, cropWidth: 50, cropHeight: 40 },
+    };
+    const workbench = {
+      ui,
+      api: {
+        async uploadFile(file, options) {
+          calls.push(["upload", file, options]);
+          return { upload: { storageObjectId: "cropped-storage", previewUrl: "/uploads/cropped.png" } };
+        },
+        async startCanvasMediaDerivation() { throw new Error("model_api_must_not_be_called"); },
+        async createImageGenerationTask() { throw new Error("model_api_must_not_be_called"); },
+      },
+    };
+    const controller = createCanvasMediaToolsController({ surface: {}, workbench, render() {} });
+    const state = ensureCanvasMediaToolsState(ui);
+    await controller.handleAction({ dataset: { mediaAction: "submit" } });
+
+    assert.deepEqual(calls[0], ["drawImage", 80, 120, 400, 240, 0, 0, 400, 240]);
+    assert.deepEqual(calls[1], ["toBlob", 400, 240]);
+    assert.equal(calls[2][0], "upload");
+    assert.equal(state.status, "completed");
+    assert.equal(ui.canvasDocument.nodes.length, 2);
+    assert.equal(ui.canvasDocument.nodes.at(-1).data.storageObjectId, "cropped-storage");
+    controller.dispose();
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousImage === undefined) delete globalThis.Image;
+    else globalThis.Image = previousImage;
+  }
 });
 
 test("Canvas media tools include professional parameters in derivation snapshots", async () => {
@@ -199,20 +415,6 @@ test("Canvas media tools include professional parameters in derivation snapshots
         fillLight: true,
       },
       prompt: "front camera view, eye-level shot, medium-shot framing, 35mm cinematic lens, cinematic composition, coherent subject identity, high detail",
-    }],
-    ["slice", { sliceRows: 3, sliceColumns: 4, sliceGapPixels: 16 }, "slice", { rows: 3, columns: 4, gapPixels: 16 }],
-    ["composite", {
-      compositeBlendMode: "screen",
-      compositeOpacityPercent: 65,
-      compositeAlignment: "bottom_right",
-      compositeSecondaryArtifactId: "artifact-secondary",
-      compositeSecondarySource: { artifactId: "artifact-secondary", assetId: "asset-secondary", assetVersionId: "version-secondary", storageObjectId: null },
-    }, "composite", {
-      blendMode: "screen",
-      opacity: 0.65,
-      alignment: "bottom_right",
-      secondaryArtifactId: "artifact-secondary",
-      secondarySource: { artifactId: "artifact-secondary", assetId: "asset-secondary", assetVersionId: "version-secondary", storageObjectId: null },
     }],
   ];
 
@@ -348,38 +550,114 @@ test("Canvas media drawer ignores clicks inside its backdrop and skips redraws f
   assert.equal(renders, 0);
 });
 
-test("Canvas composite requires and persists a stable secondary artifact", async () => {
-  const snapshots = [];
+test("Canvas composite is processed locally and never calls model generation APIs", async () => {
+  const previousDocument = globalThis.document;
+  const previousImage = globalThis.Image;
+  const calls = [];
+  globalThis.Image = class {
+    naturalWidth = 320;
+    naturalHeight = 240;
+    set src(value) {
+      this.source = value;
+      queueMicrotask(() => this.onload?.());
+    }
+  };
+  globalThis.document = {
+    createElement() {
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          drawImage(...args) { calls.push(["drawImage", ...args.slice(1)]); },
+          save() {},
+          restore() {},
+        }),
+        toBlob(callback) { calls.push(["toBlob", this.width, this.height]); callback(new Blob(["composite"], { type: "image/png" })); },
+      };
+    },
+  };
   const ui = {
     selectedCanvasProjectId: "canvas-composite",
     selectedCanvasNodeId: "image-node",
-    creditBalance: 88,
-    canvasDocument: { nodes: [{ id: "image-node", type: "image", data: { storageObjectId: "source-storage" } }] },
+    canvasDocument: { nodes: [{ id: "image-node", type: "image", position: { x: 0, y: 0 }, data: { url: "/source.png" } }] },
     canvasAssets: [{ artifactId: "artifact-2", mediaKind: "image", title: "第二张", assetId: "asset-2", assetVersionId: "version-2", storageObjectId: "storage-2" }],
   };
   const workbench = {
     ui,
     api: {
-      async startCanvasMediaDerivation(_canvasId, input) { snapshots.push(input.requestSnapshot); return { derivation: { id: "derivation-2" } }; },
-      async createImageGenerationTask() { return { taskId: "task-2" }; },
-      async attachCanvasMediaDerivationTask() {},
+      async uploadFile() { calls.push(["upload"]); return { upload: { storageObjectId: "composite-storage" } }; },
+      async startCanvasMediaDerivation() { throw new Error("model_api_must_not_be_called"); },
+      async createImageGenerationTask() { throw new Error("model_api_must_not_be_called"); },
     },
   };
-  const controller = createCanvasMediaToolsController({ surface: {}, workbench, render() {} });
-  const state = ensureCanvasMediaToolsState(ui);
-  state.open = true;
-  state.tool = "composite";
-  controller.handleInput({ dataset: { mediaField: "compositeSecondaryArtifactId" }, type: "select-one", value: "artifact-2" });
-  await controller.handleAction({ dataset: { mediaAction: "submit" } });
+  try {
+    const controller = createCanvasMediaToolsController({ surface: {}, workbench, render() {} });
+    const state = ensureCanvasMediaToolsState(ui);
+    state.tool = "composite";
+    controller.handleInput({ dataset: { mediaField: "compositeSecondaryArtifactId" }, type: "select-one", value: "artifact-2" });
+    await controller.handleAction({ dataset: { mediaAction: "submit" } });
 
-  assert.equal(snapshots[0].composite.secondaryArtifactId, "artifact-2");
-  assert.deepEqual(snapshots[0].composite.secondarySource, {
-    artifactId: "artifact-2", assetId: "asset-2", assetVersionId: "version-2", storageObjectId: "storage-2",
-  });
-  const shell = renderCanvasMediaToolsShell(ui);
-  assert.match(shell, /第二张图片/);
-  assert.match(shell, /合成输入<\/dt><dd>2\/2/);
-  assert.match(shell, /积分余额<\/dt><dd>88/);
+    assert.equal(calls.at(-1)[0], "upload");
+    assert.equal(state.status, "completed");
+    assert.equal(ui.canvasDocument.nodes.length, 2);
+    assert.equal(ui.canvasDocument.nodes.at(-1).data.storageObjectId, "composite-storage");
+    controller.dispose();
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousImage === undefined) delete globalThis.Image;
+    else globalThis.Image = previousImage;
+  }
+});
+
+test("Canvas slice is processed locally and creates one node per tile", async () => {
+  const previousDocument = globalThis.document;
+  const previousImage = globalThis.Image;
+  const uploads = [];
+  globalThis.Image = class {
+    naturalWidth = 800;
+    naturalHeight = 600;
+    set src(value) { this.source = value; queueMicrotask(() => this.onload?.()); }
+  };
+  globalThis.document = {
+    createElement() {
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage() {} }),
+        toBlob(callback) { callback(new Blob(["slice"], { type: "image/png" })); },
+      };
+    },
+  };
+  try {
+    const ui = {
+      selectedCanvasProjectId: "canvas-slice",
+      selectedCanvasNodeId: "image-node",
+      canvasDocument: { nodes: [{ id: "image-node", type: "source-image", data: { url: "/source.png" } }], edges: [] },
+      canvasMediaTools: { tool: "slice", sliceRows: 2, sliceColumns: 2, sliceGapPixels: 8 },
+    };
+    const workbench = {
+      ui,
+      api: {
+        async uploadFile() { const id = `slice-${uploads.length + 1}`; uploads.push(id); return { upload: { storageObjectId: id } }; },
+        async startCanvasMediaDerivation() { throw new Error("model_api_must_not_be_called"); },
+        async createImageGenerationTask() { throw new Error("model_api_must_not_be_called"); },
+      },
+    };
+    const controller = createCanvasMediaToolsController({ surface: {}, workbench, render() {} });
+    const state = ensureCanvasMediaToolsState(ui);
+    await controller.handleAction({ dataset: { mediaAction: "submit" } });
+    assert.equal(state.status, "completed");
+    assert.equal(uploads.length, 4);
+    assert.equal(ui.canvasDocument.nodes.length, 5);
+    assert.equal(ui.canvasDocument.nodes.at(-1).data.source, "canvas_slice");
+    controller.dispose();
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousImage === undefined) delete globalThis.Image;
+    else globalThis.Image = previousImage;
+  }
 });
 
 test("Canvas vector annotation uploads structured strokes", async () => {
@@ -403,7 +681,11 @@ test("Canvas vector annotation uploads structured strokes", async () => {
   const workbench = {
     ui,
     api: {
-      async uploadFile(file) { uploadedPayload = JSON.parse(await file.text()); return { upload: { storageObjectId: "vector-storage" } }; },
+      async uploadFile(file, options) {
+        validateUploadFile(file, options.uploadLimits);
+        uploadedPayload = JSON.parse(await file.text());
+        return { upload: { storageObjectId: "vector-storage" } };
+      },
       async createCanvasAnnotationLayer(_canvasId, input) { layerInput = input; return { layer: { id: "vector-layer" } }; },
     },
   };
@@ -442,6 +724,7 @@ test("Canvas annotation uploads the raster and creates a recoverable layer", asy
     ui,
     api: {
       async uploadFile(file, options) {
+        validateUploadFile(file, options.uploadLimits);
         calls.push(["upload", file.type, options]);
         return { upload: { storageObjectId: "annotation-storage-1" } };
       },
@@ -463,7 +746,8 @@ test("Canvas annotation uploads the raster and creates a recoverable layer", asy
   await controller.handleAction({ dataset: { mediaAction: "submit" } });
 
   assert.deepEqual(calls[0].slice(0, 2), ["upload", "image/png"]);
-  assert.deepEqual(calls[0][2], { category: "canvas-annotations", projectId: null });
+  assert.equal(calls[0][2].category, "canvas-annotations");
+  assert.equal(calls[0][2].projectId, null);
   assert.deepEqual(calls[1], ["layer", "canvas-annotation", {
     nodeKey: "image-node",
     layerKind: "raster_annotation",
@@ -649,6 +933,51 @@ test("Canvas annotation supports erase, undo, and loading the persisted layer li
   assert.equal(operations.includes("destination-out"), true);
   await controller.handleAction({ dataset: { mediaAction: "annotation-undo" } });
   assert.equal(operations.includes("restore:snapshot-1"), true);
+});
+
+test("Canvas annotation loads a persisted raster layer and rerenders its state", async () => {
+  const operations = [];
+  const context = {
+    clearRect() {},
+    drawImage() { operations.push("draw-image"); },
+  };
+  const canvas = {
+    width: 640,
+    height: 360,
+    getContext: () => context,
+  };
+  const ui = {
+    selectedCanvasProjectId: "canvas-layers",
+    selectedCanvasNodeId: "image-node",
+    canvasDocument: { nodes: [{ id: "image-node", type: "image", data: { url: "https://cdn.test/source.png" } }] },
+  };
+  const workbench = { ui, api: {} };
+  const surface = { querySelector: () => canvas };
+  const previousImage = globalThis.Image;
+  globalThis.Image = class {
+    set src(value) {
+      this.url = value;
+      queueMicrotask(() => this.onload?.());
+    }
+  };
+  try {
+    const controller = createCanvasMediaToolsController({ surface, workbench, render() {} });
+    const state = ensureCanvasMediaToolsState(ui);
+    state.open = true;
+    state.tool = "annotation";
+    state.annotationLayers = [{ id: "layer-1", layerKind: "mask", previewUrl: "https://cdn.test/layer.png" }];
+
+    await controller.handleAction({ dataset: { mediaAction: "load-annotation-layer", layerId: "layer-1" } });
+
+    assert.deepEqual(operations, ["draw-image"]);
+    assert.equal(state.annotationLayerId, "layer-1");
+    assert.equal(state.error, "");
+    assert.match(renderCanvasMediaToolsShell(ui), /canvas-media-layer-preview/);
+    controller.dispose();
+  } finally {
+    if (previousImage === undefined) delete globalThis.Image;
+    else globalThis.Image = previousImage;
+  }
 });
 
 test("Canvas media tools expose persisted derivation and task recovery state", () => {
