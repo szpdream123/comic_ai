@@ -248,6 +248,11 @@ function clearReadRequestCaches() {
   clearReadJsonCache();
 }
 
+function invalidateSessionCache() {
+  clearFetchJsonCache("GET /api/auth/session");
+  invalidateReadJsonCacheKey("GET /api/auth/session");
+}
+
 function clearProjectSelectionReadCaches() {
   for (const key of fetchJsonCache.keys()) {
     if (isProjectSelectionReadCacheKey(key)) {
@@ -461,7 +466,7 @@ function postJson(url, body, options = {}) {
   }).then((result) => {
     if (cacheInvalidation === "project-selection") {
       clearProjectSelectionReadCaches();
-    } else {
+    } else if (cacheInvalidation !== "none") {
       clearReadRequestCaches();
     }
     return result;
@@ -718,21 +723,21 @@ let cosBrowserSdkPromise = null;
 export const defaultUploadLimits = {
   image: {
     label: "图片",
-    maxBytes: 20 * 1024 * 1024,
+    maxBytes: 30 * 1024 * 1024,
     maxReferencesPerTask: 30,
     mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
     extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
   },
   video: {
     label: "视频",
-    maxBytes: 500 * 1024 * 1024,
+    maxBytes: 50 * 1024 * 1024,
     recommendedMaxDurationSeconds: 15 * 60,
     mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
     extensions: [".mp4", ".webm", ".mov"],
   },
   audio: {
     label: "音频",
-    maxBytes: 100 * 1024 * 1024,
+    maxBytes: 15 * 1024 * 1024,
     mimeTypes: ["audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a"],
     extensions: [".mp3", ".wav", ".m4a"],
   },
@@ -883,8 +888,7 @@ function shouldUsePreparedUploadProxy(options = {}) {
   if (shouldUseSameOriginUploadProxy()) {
     return true;
   }
-  const purpose = String(options.purpose ?? options.category ?? "").trim().toLowerCase();
-  return purpose.startsWith("team-assets/");
+  return false;
 }
 
 function shouldUseSameOriginUploadProxy() {
@@ -899,6 +903,40 @@ function shouldUseSameOriginUploadProxy() {
     hostname === "localhost" ||
     hostname === "::1"
   );
+}
+
+function getTeamAssetUploadLimits(category) {
+  if (category === "voice") {
+    return {
+      ...defaultUploadLimits,
+      image: undefined,
+      video: undefined,
+      audio: {
+        ...defaultUploadLimits.audio,
+        mimeTypes: [
+          "application/octet-stream",
+          "audio/mpeg",
+          "audio/mp3",
+          "audio/wav",
+          "audio/x-wav",
+          "audio/mp4",
+          "audio/aac",
+          "audio/x-m4a",
+        ],
+        extensions: [".mp3", ".wav", ".m4a", ".aac"],
+      },
+    };
+  }
+  return {
+    ...defaultUploadLimits,
+    image: {
+      ...defaultUploadLimits.image,
+      mimeTypes: ["application/octet-stream", "image/png", "image/jpeg", "image/webp"],
+      extensions: [".png", ".jpg", ".jpeg", ".webp"],
+    },
+    video: undefined,
+    audio: undefined,
+  };
 }
 
 async function uploadPreparedFileWithCos(prepared, file, options = {}) {
@@ -1044,7 +1082,7 @@ export const creatorApi = {
     const result = await patchJson("/api/auth/profile", {
       displayName: String(input?.displayName ?? ""),
     });
-    clearFetchJsonCache("GET /api/auth/session");
+    invalidateSessionCache();
     return result;
   },
 
@@ -1057,7 +1095,7 @@ export const creatorApi = {
       },
       { action: "auth.password.change" },
     );
-    clearFetchJsonCache("GET /api/auth/session");
+    invalidateSessionCache();
     return result;
   },
 
@@ -1338,10 +1376,11 @@ export const creatorApi = {
   },
 
   getToolPreset(presetId) {
-    return fetchJson(
-      `/api/creator/tool-presets/${encodeURIComponent(presetId)}`,
-      { cache: "no-store" },
-    );
+    const path = `/api/creator/tool-presets/${encodeURIComponent(presetId)}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createToolPreset(input, options = {}) {
@@ -1373,17 +1412,19 @@ export const creatorApi = {
   },
 
   listToolPresetVersions(presetId) {
-    return fetchJson(
-      `/api/creator/tool-presets/${encodeURIComponent(presetId)}/versions`,
-      { cache: "no-store" },
-    );
+    const path = `/api/creator/tool-presets/${encodeURIComponent(presetId)}/versions`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 60000,
+    });
   },
 
   getToolPresetVersion(presetId, versionNumber) {
-    return fetchJson(
-      `/api/creator/tool-presets/${encodeURIComponent(presetId)}/versions/${encodeURIComponent(versionNumber)}`,
-      { cache: "no-store" },
-    );
+    const path = `/api/creator/tool-presets/${encodeURIComponent(presetId)}/versions/${encodeURIComponent(versionNumber)}`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 60000,
+    });
   },
 
   getCanvasHead(canvasProjectId) {
@@ -1674,11 +1715,17 @@ export const creatorApi = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scene }),
+    }).then((result) => {
+      clearReadRequestCaches();
+      return result;
     });
   },
 
   listDirectorDesks() {
-    return fetchJson("/api/director-desks", { cache: "no-store" });
+    return fetchJsonWithTtl("/api/director-desks", {
+      cacheKey: "GET /api/director-desks",
+      cacheTtlMs: 30000,
+    });
   },
 
   listCanvasAgentEvents(canvasProjectId, taskId, input = {}) {
@@ -1712,10 +1759,11 @@ export const creatorApi = {
   },
 
   listCanvasAgentModels(canvasProjectId) {
-    return fetchJson(
-      `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-models`,
-      { cache: "no-store" },
-    );
+    const path = `/api/canvas/${encodeURIComponent(canvasProjectId)}/agent-models`;
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 300000,
+    });
   },
 
   createCanvasAgentConversation(canvasProjectId, input = {}) {
@@ -1850,7 +1898,10 @@ export const creatorApi = {
   },
 
   listFreeGenerationModels() {
-    return fetchJson("/api/free-generation/agent-models", { cache: "no-store" });
+    return fetchJsonWithTtl("/api/free-generation/agent-models", {
+      cacheKey: "GET /api/free-generation/agent-models",
+      cacheTtlMs: 300000,
+    });
   },
 
   createFreeGenerationConversation(input = {}) {
@@ -2169,7 +2220,10 @@ export const creatorApi = {
 
   getBrandKit(kitId) {
     const path = `/api/creator/brand-kits/${encodeURIComponent(kitId)}`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   createBrandKit(input = {}) {
@@ -2211,22 +2265,31 @@ export const creatorApi = {
 
   getProjectBrandKit(projectId) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/brand-kit`;
-    return fetchJson(path, { dedupeKey: `GET ${path}` });
+    return fetchJsonWithTtl(path, {
+      cacheKey: `GET ${path}`,
+      cacheTtlMs: 30000,
+    });
   },
 
   updateProjectBrandKit(projectId, input = {}) {
     return patchJson(`/api/creator/projects/${encodeURIComponent(projectId)}/brand-kit`, input);
   },
 
-  uploadTeamAsset(file, input = {}) {
-    const formData = new FormData();
-    formData.set("file", file);
-    formData.set("category", input.category ?? "character");
-    formData.set("assetName", input.assetName ?? file?.name?.replace?.(/\.[^.]+$/, "") ?? "未命名资产");
-    if (input.assetPrompt) {
-      formData.set("assetPrompt", input.assetPrompt);
-    }
-    return postMultipart("/api/creator/team-assets/upload", formData);
+  async uploadTeamAsset(file, input = {}) {
+    const category = input.category ?? "character";
+    const uploaded = await this.uploadFile(file, {
+      purpose: `team-assets/${category}`,
+      uploadLimits: getTeamAssetUploadLimits(category),
+      onProgress: input.onProgress,
+      signal: input.signal,
+    });
+    return postJson("/api/creator/team-assets/upload", {
+      category,
+      assetName: input.assetName ?? file?.name?.replace?.(/\.[^.]+$/, "") ?? "未命名资产",
+      ...(input.assetPrompt ? { assetPrompt: input.assetPrompt } : {}),
+      uploadSessionId: uploaded.upload?.uploadSessionId,
+      storageObjectId: uploaded.upload?.storageObjectId,
+    });
   },
 
   updateTeamAsset(assetId, input = {}) {
@@ -2237,16 +2300,21 @@ export const creatorApi = {
     return postJson("/api/creator/team-assets/import-project-asset", input);
   },
 
-  replaceTeamAssetFile(assetId, file, input = {}) {
-    const formData = new FormData();
-    formData.set("file", file);
-    if (input.name) {
-      formData.set("assetName", input.name);
-    }
-    if (input.prompt !== undefined) {
-      formData.set("assetPrompt", input.prompt);
-    }
-    return postMultipart(`/api/creator/team-assets/${encodeURIComponent(assetId)}/upload`, formData);
+  async replaceTeamAssetFile(assetId, file, input = {}) {
+    const uploaded = await this.uploadFile(file, {
+      purpose: "team-assets/replace",
+      uploadLimits: file?.type?.toLowerCase?.().startsWith("audio/")
+        ? getTeamAssetUploadLimits("voice")
+        : getTeamAssetUploadLimits("character"),
+      onProgress: input.onProgress,
+      signal: input.signal,
+    });
+    return postJson(`/api/creator/team-assets/${encodeURIComponent(assetId)}/upload`, {
+      ...(input.name ? { assetName: input.name } : {}),
+      ...(input.prompt !== undefined ? { assetPrompt: input.prompt } : {}),
+      uploadSessionId: uploaded.upload?.uploadSessionId,
+      storageObjectId: uploaded.upload?.storageObjectId,
+    });
   },
 
   deleteTeamAsset(assetId) {
@@ -3098,7 +3166,9 @@ export const creatorApi = {
     if (!normalizedTaskIds.length) {
       return Promise.resolve({ items: [] });
     }
-    return postJson("/api/generation-tasks/batch", { taskIds: normalizedTaskIds });
+    return postJson("/api/generation-tasks/batch", { taskIds: normalizedTaskIds }, {
+      cacheInvalidation: "none",
+    });
   },
 
   listTaskCenterTasks(params = {}, options = {}) {

@@ -39,6 +39,7 @@ Copy `.env.example` to `.env` and change the values you need.
   - Uses Tencent Cloud COS with browser direct upload via STS plus backend-signed read URLs.
   - Requires `STORAGE_PROVIDER=cos`, `STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_COS_SECRET_ID`, and `STORAGE_COS_SECRET_KEY`.
   - Supports optional `STORAGE_COS_STS_DURATION_SECONDS` and `STORAGE_SIGNED_URL_EXPIRES_SECONDS`.
+  - `STORAGE_UPLOAD_PROXY_CONCURRENT_REQUESTS` limits the local or fallback proxy upload path; it defaults to 4.
   - Production should keep the bucket private and rely on backend short-lived signed URLs for preview, playback, and download.
 - `STORAGE_ADAPTER_MODE=s3_compatible`
   - Uses the same direct object adapter shape against an S3-compatible endpoint.

@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -23,6 +23,7 @@ import {
   type AdminPermission,
 } from "../modules/admin-auth/admin-auth.service.ts";
 import { createAdminHttpAuth } from "../modules/admin-auth/admin-http-auth.ts";
+import { routeMarketingHttpRequest } from "../modules/marketing/http/marketing-http.ts";
 import { createAdminDashboardService } from "../modules/admin-dashboard/admin-dashboard.service.ts";
 import { createAdminModelConfigService } from "../modules/admin-models/admin-model-config.service.ts";
 import type { CanvasAgentModelCompatibilityProbeResult } from "../modules/canvas-agent/canvas-agent-model-compatibility-probe.service.ts";
@@ -200,6 +201,7 @@ import {
   type CanvasGenerationDispatch,
   type CanvasGenerationBatchBilling,
 } from "../modules/project/canvas-generation-batch.service.ts";
+import { CANVAS_PRODUCT_LIMITS } from "../modules/project/canvas-product-limits.ts";
 import {
   exportCanvasGenerationHistoryJson,
   CanvasGenerationHistoryError,
@@ -414,7 +416,10 @@ import {
   finalizeTaskAttempt,
 } from "../modules/workflow-task/workflow-task.service.ts";
 import { createProviderAdapterFromModelConfig } from "../modules/model-gateway/provider-adapter.factory.ts";
-import { fetchProviderArtifactSafely } from "../modules/model-gateway/provider-artifact-url-safety.ts";
+import {
+  fetchProviderArtifactSafely,
+  isSafePublicHttpsUrlLiteral,
+} from "../modules/model-gateway/provider-artifact-url-safety.ts";
 import { resolveGenerationProviderFetch } from "../modules/model-gateway/generation-provider-fetch.ts";
 import {
   ImageGenerationTargetError,
@@ -566,21 +571,21 @@ const mockEpisodeImageUrls = [
 const episodeUploadLimits = {
   image: {
     label: "图片",
-    maxBytes: 20 * 1024 * 1024,
+    maxBytes: 30 * 1024 * 1024,
     maxReferencesPerTask: 30,
     mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
     extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
   },
   video: {
     label: "视频",
-    maxBytes: 500 * 1024 * 1024,
+    maxBytes: 50 * 1024 * 1024,
     recommendedMaxDurationSeconds: 3 * 60 * 60,
     mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
     extensions: [".mp4", ".webm", ".mov"],
   },
   audio: {
     label: "音频",
-    maxBytes: 100 * 1024 * 1024,
+    maxBytes: 15 * 1024 * 1024,
     mimeTypes: ["audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a"],
     extensions: [".mp3", ".wav", ".m4a"],
   },
@@ -602,10 +607,14 @@ const episodeUploadLimits = {
     ".zip",
   ],
 };
+const videoBatchMediaDownloadMaxBytes = episodeUploadLimits.video.maxBytes;
+const videoBatchMediaDownloadTimeoutMs = 30 * 60 * 1000;
+const providerArtifactUploadMaxBytes = episodeUploadLimits.video.maxBytes;
+const providerArtifactUploadTimeoutMs = 30 * 60 * 1000;
 const scriptDocumentUploadLimits = {
   document: {
     label: "剧本文档",
-    maxBytes: 30 * 1024 * 1024,
+    maxBytes: 10 * 1024 * 1024,
     mimeTypes: [
       "text/plain",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -816,14 +825,23 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 const maximumJsonBodyBytes = 6 * 1024 * 1024;
-const promptReverseMaximumImageBytes = 20 * 1024 * 1024;
+const promptReverseMaximumImageBytes = 30 * 1024 * 1024;
 const promptReverseMaximumBodyBytes = Math.ceil(promptReverseMaximumImageBytes * 4 / 3) + 128 * 1024;
 const promptReverseMaximumFrameSheetCount = 64;
 const promptReverseMinimumSegmentDurationMs = 1000;
 const promptReverseMaximumSegmentDurationMs = 300000;
 // Multipart parsing buffers the request before exposing File objects. Keep its total
 // body bounded while allowing the largest supported file plus MIME framing fields.
-const maximumMultipartBodyBytes = episodeUploadLimits.video.maxBytes + 1024 * 1024;
+const creatorUploadMultipartMaxBytes = episodeUploadLimits.video.maxBytes + 1024 * 1024;
+const teamAssetMultipartMaxBytes = episodeUploadLimits.audio.maxBytes + 1024 * 1024;
+const watermarkModelDefaultMaxBytes = 512 * 1024 * 1024;
+const watermarkModelDefaultTimeoutMs = 5 * 60 * 1000;
+const watermarkModelCacheDirectory = join(tmpdir(), "comic-ai-watermark-model-cache");
+const watermarkModelDownloads = new Map<string, {
+  controller: AbortController;
+  promise: Promise<{ filePath: string; sizeBytes: number }>;
+  subscribers: number;
+}>();
 
 async function readJsonBody(request: AsyncIterable<Buffer | string>): Promise<unknown> {
   const body = await readLimitedTextBody(request, maximumJsonBodyBytes);
@@ -865,32 +883,48 @@ function verifyGenerationWebhookSignature(rawBody: string, signature: string, se
 async function readMultipartFormData(
   request: Parameters<typeof createServer>[0],
   origin: string,
+  maximumBytes: number,
+  timeoutMs: number,
 ) {
   const declaredContentLength = Number(firstRequestHeader(request.headers["content-length"]));
-  if (Number.isFinite(declaredContentLength) && declaredContentLength > maximumMultipartBodyBytes) {
+  if (Number.isFinite(declaredContentLength) && declaredContentLength > maximumBytes) {
     throw new Error("request_body_too_large");
   }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const url = new URL(request.url ?? "/", origin);
-  const webRequest = new Request(url, {
-    method: request.method,
-    headers: request.headers as HeadersInit,
-    body: Readable.from(readLimitedMultipartBody(request)) as unknown as BodyInit,
-    duplex: "half",
-  });
-  return webRequest.formData();
+  try {
+    const webRequest = new Request(url, {
+      method: request.method,
+      headers: request.headers as HeadersInit,
+      body: Readable.from(readLimitedMultipartBody(request, maximumBytes)) as unknown as BodyInit,
+      duplex: "half",
+      signal: controller.signal,
+    });
+    return await webRequest.formData();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("request_body_timeout");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-async function* readLimitedMultipartBody(request: AsyncIterable<Buffer | string>) {
+async function* readLimitedMultipartBody(
+  request: AsyncIterable<Buffer | string>,
+  maximumBytes: number,
+) {
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.byteLength;
-    if (size > maximumMultipartBodyBytes) throw new Error("request_body_too_large");
+    if (size > maximumBytes) throw new Error("request_body_too_large");
     yield buffer;
   }
 }
 
 const defaultSessionCookieMaxAgeSeconds = 30 * 24 * 60 * 60;
+const wechatOAuthStateMaxAgeSeconds = 10 * 60;
 
 function sessionCookie(
   token: string,
@@ -908,15 +942,33 @@ function clearSessionCookie(secure = false): string {
   return `auth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
+function wechatOAuthStateCookie(state: string, secure = false): string {
+  return `wechat_oauth_state=${state}; Path=/api/auth/wechat; HttpOnly; SameSite=Lax; Max-Age=${wechatOAuthStateMaxAgeSeconds}${secure ? "; Secure" : ""}`;
+}
+
+function clearWechatOAuthStateCookie(secure = false): string {
+  return `wechat_oauth_state=; Path=/api/auth/wechat; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+}
+
 function redirectWithSessionCookie(
   response: ServerResponse,
   location: string,
   token: string,
   secure = false,
+  extraCookies: string[] = [],
 ) {
   response.statusCode = 302;
   response.setHeader("location", location);
-  response.setHeader("set-cookie", sessionCookie(token, defaultSessionCookieMaxAgeSeconds, secure));
+  response.setHeader("set-cookie", [
+    sessionCookie(token, defaultSessionCookieMaxAgeSeconds, secure),
+    ...extraCookies,
+  ]);
   response.end();
 }
 
@@ -953,7 +1005,7 @@ export function homeRecommendationMediaGatewayPayload(data: Record<string, unkno
           if (!media || !id || !String(media.videoUrl ?? "").trim()) return media;
           return {
             ...media,
-            videoUrl: `/api/home-recommendations/videos/${encodeURIComponent(id)}/media`,
+            videoUrl: `/api/home-recommendations/videos/${encodeURIComponent(id)}/media?v=${encodeURIComponent(String(media.updatedAt ?? "").trim())}`,
           };
         }),
       };
@@ -1066,6 +1118,22 @@ function positiveIntegerEnvValue(value: unknown, fallback: number, maximum: numb
   return Number.isInteger(parsed) && parsed > 0
     ? Math.min(parsed, maximum)
     : fallback;
+}
+
+function createRequestConcurrencyLimiter(maxConcurrent: number) {
+  let active = 0;
+  return {
+    acquire() {
+      if (active >= maxConcurrent) return null;
+      active += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        active = Math.max(0, active - 1);
+      };
+    },
+  };
 }
 
 class StorageMediaLimitError extends Error {
@@ -1562,6 +1630,12 @@ function writeKnownError(response: ServerResponse, error: unknown): boolean {
     return true;
   }
 
+  if (error instanceof Error && error.message === "request_body_timeout") {
+    response.setHeader("connection", "close");
+    writeJson(response, envelopedError(408, "request_body_timeout", "Request body timed out"));
+    return true;
+  }
+
   if (error instanceof SyntaxError) {
     writeJson(response, {
       status: 400,
@@ -1845,7 +1919,9 @@ async function enrichCanvasAgentMessageAttachments(
     const kind = contentType.startsWith("image/")
       ? "image"
       : contentType.startsWith("video/") ? "video" : "document";
-    const maxSizeBytes = kind === "video" ? 500 * 1024 * 1024 : 20 * 1024 * 1024;
+    const maxSizeBytes = kind === "video"
+      ? 50 * 1024 * 1024
+      : kind === "image" ? 30 * 1024 * 1024 : 10 * 1024 * 1024;
     if (Number(object.sizeBytes ?? 0) > maxSizeBytes) {
       throw new Error("canvas_agent_attachment_too_large");
     }
@@ -3020,59 +3096,175 @@ async function readUploadedStorageObjectBytes(
 async function streamStorageObjectContent(input: {
   response: ServerResponse;
   signedUrl: string;
-  requestOrigin: string;
+  relativeUrlOrigin: string;
   range: string | null;
   contentType: string;
   download: boolean;
   fetchImpl: typeof fetch;
+  cacheControl?: string;
+  timeoutMs?: number;
 }) {
-  let upstream: Response;
+  const controller = new AbortController();
+  const timeout = input.timeoutMs
+    ? setTimeout(() => controller.abort(), input.timeoutMs)
+    : null;
+  const abortUpstream = () => controller.abort();
+  input.response.once("close", abortUpstream);
+  let upstream: Response | null = null;
   try {
+    if (input.signedUrl.startsWith("//")) {
+      return false;
+    }
+    const upstreamUrl = new URL(input.signedUrl, input.relativeUrlOrigin);
+    if (upstreamUrl.protocol !== "http:" && upstreamUrl.protocol !== "https:") {
+      return false;
+    }
     upstream = await input.fetchImpl(
-      new URL(input.signedUrl, input.requestOrigin),
-      input.range ? { headers: { range: input.range } } : undefined,
+      upstreamUrl,
+      {
+        ...(input.range ? { headers: { range: input.range } } : {}),
+        redirect: "manual",
+        signal: controller.signal,
+      },
     );
+    if (upstream.status === 416) {
+      input.response.statusCode = 416;
+      input.response.setHeader("accept-ranges", upstream.headers.get("accept-ranges") ?? "bytes");
+      const contentRange = upstream.headers.get("content-range");
+      if (contentRange) input.response.setHeader("content-range", contentRange);
+      input.response.end();
+      return true;
+    }
+    if (!upstream.ok || !upstream.body) {
+      await upstream.body?.cancel().catch(() => undefined);
+      return false;
+    }
+    input.response.statusCode = upstream.status;
+    input.response.setHeader("content-type", input.contentType);
+    input.response.setHeader("content-disposition", input.download ? "attachment" : "inline");
+    input.response.setHeader("cache-control", input.cacheControl ?? "private, max-age=3600");
+    input.response.setHeader("x-content-type-options", "nosniff");
+    for (const header of ["accept-ranges", "content-length", "content-range"] as const) {
+      const value = upstream.headers.get(header);
+      if (value) input.response.setHeader(header, value);
+    }
+    await new Promise<void>((resolve) => {
+      const body = Readable.fromWeb(upstream!.body as never);
+      let completed = false;
+      const complete = () => {
+        if (completed) return;
+        completed = true;
+        input.response.off("finish", complete);
+        input.response.off("close", close);
+        body.off("error", fail);
+        resolve();
+      };
+      const close = () => {
+        body.destroy();
+        complete();
+      };
+      const fail = () => {
+        input.response.destroy();
+        complete();
+      };
+      input.response.once("finish", complete);
+      input.response.once("close", close);
+      body.once("error", fail);
+      body.pipe(input.response);
+    });
+    return true;
   } catch {
     return false;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    input.response.off("close", abortUpstream);
+    if (controller.signal.aborted) {
+      await upstream?.body?.cancel().catch(() => undefined);
+    }
   }
-  if (!upstream.ok || !upstream.body) {
-    await upstream.body?.cancel().catch(() => undefined);
+}
+
+async function streamLocalStorageObjectContent(input: {
+  response: ServerResponse;
+  bucket: string;
+  objectKey: string;
+  range: string | null;
+  contentType: string;
+  download: boolean;
+  cacheControl: string;
+  timeoutMs: number;
+}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  const abortStream = () => controller.abort();
+  input.response.once("close", abortStream);
+  try {
+    const filePath = resolveLocalStorageObjectPath(input.bucket, input.objectKey);
+    const fileStats = await stat(filePath);
+    let start: number | undefined;
+    let end: number | undefined;
+    if (input.range) {
+      const match = input.range.match(/^bytes=(\d*)-(\d*)$/);
+      if (!match || (!match[1] && !match[2]) || fileStats.size === 0) {
+        input.response.statusCode = 416;
+        input.response.setHeader("accept-ranges", "bytes");
+        input.response.setHeader("content-range", `bytes */${fileStats.size}`);
+        input.response.end();
+        return true;
+      }
+      if (!match[1]) {
+        const suffixLength = Number(match[2]);
+        if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+          input.response.statusCode = 416;
+          input.response.setHeader("accept-ranges", "bytes");
+          input.response.setHeader("content-range", `bytes */${fileStats.size}`);
+          input.response.end();
+          return true;
+        }
+        start = Math.max(0, fileStats.size - suffixLength);
+        end = fileStats.size - 1;
+      } else {
+        start = Number(match[1]);
+        end = match[2] ? Math.min(Number(match[2]), fileStats.size - 1) : fileStats.size - 1;
+        if (
+          !Number.isSafeInteger(start) ||
+          !Number.isSafeInteger(end) ||
+          start < 0 ||
+          start >= fileStats.size ||
+          end < start
+        ) {
+          input.response.statusCode = 416;
+          input.response.setHeader("accept-ranges", "bytes");
+          input.response.setHeader("content-range", `bytes */${fileStats.size}`);
+          input.response.end();
+          return true;
+        }
+      }
+    }
+    input.response.statusCode = start === undefined ? 200 : 206;
+    input.response.setHeader("content-type", input.contentType);
+    input.response.setHeader("content-disposition", input.download ? "attachment" : "inline");
+    input.response.setHeader("cache-control", input.cacheControl);
+    input.response.setHeader("x-content-type-options", "nosniff");
+    input.response.setHeader("accept-ranges", "bytes");
+    input.response.setHeader("content-length", String(
+      start === undefined ? fileStats.size : end! - start + 1,
+    ));
+    if (start !== undefined) {
+      input.response.setHeader("content-range", `bytes ${start}-${end}/${fileStats.size}`);
+    }
+    await pipeline(
+      createReadStream(filePath, start === undefined ? {} : { start, end }),
+      input.response,
+      { signal: controller.signal },
+    );
+    return true;
+  } catch {
     return false;
+  } finally {
+    clearTimeout(timeout);
+    input.response.off("close", abortStream);
   }
-  input.response.statusCode = upstream.status;
-  input.response.setHeader("content-type", input.contentType);
-  input.response.setHeader("content-disposition", input.download ? "attachment" : "inline");
-  input.response.setHeader("cache-control", "private, max-age=3600");
-  input.response.setHeader("x-content-type-options", "nosniff");
-  for (const header of ["accept-ranges", "content-length", "content-range"] as const) {
-    const value = upstream.headers.get(header);
-    if (value) input.response.setHeader(header, value);
-  }
-  await new Promise<void>((resolve) => {
-    const body = Readable.fromWeb(upstream.body as never);
-    let completed = false;
-    const complete = () => {
-      if (completed) return;
-      completed = true;
-      input.response.off("finish", complete);
-      input.response.off("close", close);
-      body.off("error", fail);
-      resolve();
-    };
-    const close = () => {
-      body.destroy();
-      complete();
-    };
-    const fail = () => {
-      input.response.destroy();
-      complete();
-    };
-    input.response.once("finish", complete);
-    input.response.once("close", close);
-    body.once("error", fail);
-    body.pipe(input.response);
-  });
-  return true;
 }
 
 async function extractTextFromScriptDocumentBytes(bytes: Buffer, extension: string) {
@@ -6078,17 +6270,7 @@ async function mapGenerationTaskResponse(
     readString(providerResponse.providerStatus) ||
     readString(row.provider_request_status) ||
     null;
-  let urls: Awaited<ReturnType<typeof signedUrlsForStorageObject>> | null = null;
-  if (row.storage_object_id) {
-    urls = await signedUrlsForStorageObject(db, {
-      sessionToken: input.sessionToken,
-      canvasScope: input.canvasScope,
-      storageObjectId: row.storage_object_id,
-      runtime: input.runtime,
-      signedUrlExpiresInSeconds: input.signedUrlExpiresInSeconds,
-      now: input.now,
-    });
-  }
+  const hasStorageObject = Boolean(row.storage_object_id);
   const lipSyncConfig =
     snapshot.parameters &&
     typeof snapshot.parameters === "object" &&
@@ -6137,11 +6319,11 @@ async function mapGenerationTaskResponse(
   const storageContentUrl = row.storage_object_id
     ? `/api/storage/objects/${encodeURIComponent(row.storage_object_id)}/content`
     : "";
-  const storageSourceUrl = storageContentUrl || readGenerationPublicAssetUrl(urls?.sourceUrl, urls?.downloadUrl, urls?.previewUrl);
+  const storageSourceUrl = storageContentUrl;
   const storagePreviewUrl = storageContentUrl
     ? `${storageContentUrl}?proxy=1`
-    : readGenerationPublicAssetUrl(urls?.previewUrl, urls?.sourceUrl, urls?.downloadUrl);
-  const storageDownloadUrl = storageContentUrl || readGenerationPublicAssetUrl(urls?.downloadUrl, urls?.sourceUrl, urls?.previewUrl);
+    : "";
+  const storageDownloadUrl = storageContentUrl;
   const resultSourceUrl =
     kind === "image"
       ? storageSourceUrl || metadataSourceUrl || mockImageUrl
@@ -6154,7 +6336,7 @@ async function mapGenerationTaskResponse(
     kind === "image"
       ? storageDownloadUrl || metadataDownloadUrl || resultSourceUrl || mockImageUrl
       : storageDownloadUrl || metadataDownloadUrl || resultSourceUrl;
-  const snapshotResult = rawSnapshotResult && urls && rawSnapshotResult.storageObjectId === row.storage_object_id
+  const snapshotResult = rawSnapshotResult && hasStorageObject && rawSnapshotResult.storageObjectId === row.storage_object_id
     ? {
         ...rawSnapshotResult,
         imageUrl: kind === "image" ? resultSourceUrl : rawSnapshotResult.imageUrl,
@@ -6164,13 +6346,13 @@ async function mapGenerationTaskResponse(
         coverImageUrl: kind === "image" ? resultPreviewUrl : rawSnapshotResult.coverImageUrl,
         sourceUrl: resultSourceUrl,
         downloadUrl: resultDownloadUrl,
-        expiresAt: urls.expiresAt,
+        expiresAt: null,
       }
     : rawSnapshotResult;
 
   const result =
     snapshotResult ??
-    (row.asset_version_id && urls
+    (row.asset_version_id && hasStorageObject
       ? {
           assetId: row.asset_id,
           assetVersionId: row.asset_version_id,
@@ -6188,7 +6370,7 @@ async function mapGenerationTaskResponse(
             (kind === "image" ? resultPreviewUrl : null),
           sourceUrl: resultSourceUrl,
           downloadUrl: resultDownloadUrl,
-          expiresAt: urls.expiresAt,
+          expiresAt: null,
           generatedAudioItems,
         }
       : null);
@@ -6298,20 +6480,13 @@ async function listTaskCenterTasks(
     cursor?: { updatedAt: string; taskId: string } | null;
   },
 ) {
-  await reconcileTerminalTaskCenterSnapshots(db, {
-    userId: input.userId,
-    now: new Date(),
-  });
-  await reconcileDefinitiveProviderSubmissionFailures(db, {
-    userId: input.userId,
-    now: new Date(),
-  });
   const diagnosticsSchema = await taskCenterDiagnosticsSchemaForDb(db);
   const offset = input.cursor ? 0 : Math.max(0, (input.page - 1) * input.pageSize);
   const normalizedStatus = readString(input.status) || null;
   const normalizedKind = readString(input.kind) || null;
   const normalizedSearch = readString(input.search) || null;
   const taskIds = input.taskIds?.length ? input.taskIds : null;
+  const includeTotal = !taskIds;
   const rows = await db.query<{
     task_id: string;
     task_type: string;
@@ -6427,6 +6602,9 @@ async function listTaskCenterTasks(
           SELECT request.task_center_diagnostics_json
           FROM provider_requests request
           WHERE request.task_id = snapshot.task_id
+            -- Completed tasks never expose provider diagnostics in this response.
+            -- Avoid probing provider history for the common completed-task path.
+            AND task.status <> 'succeeded'
             AND (
               request.attempt_id = snapshot.attempt_id
               OR (request.attempt_id IS NULL AND task.attempt_count = 1)
@@ -6599,7 +6777,7 @@ async function listTaskCenterTasks(
             OR (item.updated_at = $8::timestamptz AND item.task_id::text < $9::text)
           )
       )
-      SELECT filtered_items.*, COUNT(*) OVER() AS total_count
+      SELECT filtered_items.*, ${includeTotal ? "COUNT(*) OVER()" : "0::bigint"} AS total_count
       FROM filtered_items
       ORDER BY updated_at DESC, task_id DESC
       LIMIT $10 OFFSET $11
@@ -6703,10 +6881,12 @@ async function listTaskCenterTasks(
       updatedAt: new Date(row.updated_at).toISOString(),
     };
   });
-  const total = Number(rows.rows[0]?.total_count ?? 0);
-  const hasNext = input.cursor
-    ? input.pageSize < total
-    : input.page * input.pageSize < total;
+  const total = includeTotal ? Number(rows.rows[0]?.total_count ?? 0) : items.length;
+  const hasNext = taskIds
+    ? false
+    : input.cursor
+      ? input.pageSize < total
+      : input.page * input.pageSize < total;
   const lastRow = rows.rows.at(-1);
   const nextCursor = hasNext && lastRow
     ? encodeTaskCenterCursor({
@@ -6820,6 +7000,8 @@ async function reconcileTerminalTaskCenterSnapshots(
             END
           )
         )
+      ORDER BY task.updated_at, task.id
+      LIMIT 100
     `,
     [input.userId, input.now],
   );
@@ -6829,40 +7011,6 @@ async function reconcileTerminalTaskCenterSnapshots(
       now: input.now,
     });
   }
-  await db.query(
-    `
-      UPDATE ai_generation_task_snapshots snapshot
-      SET status = task.status,
-          progress_stage = CASE WHEN task.status = 'succeeded' THEN 'completed' ELSE task.status END,
-          progress_percent = CASE WHEN task.status IN ('succeeded', 'failed', 'canceled') THEN 100 ELSE snapshot.progress_percent END,
-          failure_json = CASE
-            WHEN task.status = 'succeeded' THEN NULL
-            ELSE COALESCE(
-              NULLIF(snapshot.failure_json, '{}'::jsonb),
-              jsonb_build_object(
-                'failureCode', COALESCE(task.failure_code, task.status),
-                'displayMessage', '生成任务已结束。'
-              )
-            )
-          END,
-          completed_at = CASE
-            WHEN task.status = 'succeeded' THEN COALESCE(snapshot.completed_at, task.updated_at)
-            ELSE snapshot.completed_at
-          END,
-          failed_at = CASE
-            WHEN task.status IN ('failed', 'canceled', 'result_unknown', 'manual_review_required')
-            THEN COALESCE(snapshot.failed_at, task.updated_at)
-            ELSE snapshot.failed_at
-          END,
-          updated_at = GREATEST(snapshot.updated_at, task.updated_at)
-      FROM tasks task
-      WHERE snapshot.task_id = task.id
-        AND snapshot.user_id = $1
-        AND snapshot.status IN ('queued', 'running', 'pending', 'submitted', 'external_submitted', 'accepted', 'provider_submitted', 'processing')
-        AND task.status IN ('succeeded', 'failed', 'canceled', 'result_unknown', 'manual_review_required')
-    `,
-    [input.userId],
-  );
 }
 
 async function readGenerationTaskResponseForSession(
@@ -6876,6 +7024,7 @@ async function readGenerationTaskResponseForSession(
     fetchImpl?: typeof fetch;
     signedUrlExpiresInSeconds: number;
     now: Date;
+    synchronizeReadMetadata?: boolean;
   },
 ) {
   const taskContext = await resolveTaskContext(db, {
@@ -6886,26 +7035,29 @@ async function readGenerationTaskResponseForSession(
   if (!taskContext) {
     return null;
   }
-  await settleTimedOutEpisodeGenerationTask(db, {
-    taskId: input.taskId,
-    now: input.now,
-  });
-  const generationQueueConfig = loadGenerationQueueConfig(input.runtimeEnv);
-  if (!generationQueueConfig.outboxDispatcherEnabled && !generationQueueConfig.workersEnabled) {
-    await syncSeedanceVideoTaskOnRead(db, {
+  const terminal = ["succeeded", "failed", "canceled", "result_unknown", "manual_review_required"].includes(taskContext.task.status);
+  if (!terminal) {
+    await settleTimedOutEpisodeGenerationTask(db, {
       taskId: input.taskId,
-      sessionToken: input.sessionToken,
-      runtime: input.runtime,
-      env: input.runtimeEnv,
-      fetchImpl: input.fetchImpl,
+      now: input.now,
+    });
+    const generationQueueConfig = loadGenerationQueueConfig(input.runtimeEnv);
+    if (!generationQueueConfig.outboxDispatcherEnabled && !generationQueueConfig.workersEnabled) {
+      await syncSeedanceVideoTaskOnRead(db, {
+        taskId: input.taskId,
+        sessionToken: input.sessionToken,
+        runtime: input.runtime,
+        env: input.runtimeEnv,
+        fetchImpl: input.fetchImpl,
+        now: input.now,
+      });
+    }
+    await enqueueVideoFinalizeIfProviderResultReady(db, {
+      taskId: input.taskId,
+      staleDispatchMs: generationQueueConfig.repair.staleDispatchMs,
       now: input.now,
     });
   }
-  await enqueueVideoFinalizeIfProviderResultReady(db, {
-    taskId: input.taskId,
-    staleDispatchMs: generationQueueConfig.repair.staleDispatchMs,
-    now: input.now,
-  });
   const task = await mapGenerationTaskResponse(db, {
     taskId: input.taskId,
     sessionToken: input.sessionToken,
@@ -6916,20 +7068,22 @@ async function readGenerationTaskResponseForSession(
   if (!task) {
     return null;
   }
-  await recordCanvasHistoryFromGenerationResponse(db, {
-    responseBody: task,
-    userId: input.userId,
-    now: input.now,
-  });
-  await syncProjectAssetGenerationTaskMetadata(db, {
-    task: task as Record<string, unknown>,
-    now: input.now,
-  });
-  await syncTeamAssetGenerationTaskMetadata(db, {
-    task: task as Record<string, unknown>,
-    adminUserId: taskContext.actor.userId,
-    now: input.now,
-  });
+  if (input.synchronizeReadMetadata !== false) {
+    await recordCanvasHistoryFromGenerationResponse(db, {
+      responseBody: task,
+      userId: input.userId,
+      now: input.now,
+    });
+    await syncProjectAssetGenerationTaskMetadata(db, {
+      task: task as Record<string, unknown>,
+      now: input.now,
+    });
+    await syncTeamAssetGenerationTaskMetadata(db, {
+      task: task as Record<string, unknown>,
+      adminUserId: taskContext.actor.userId,
+      now: input.now,
+    });
+  }
   return task;
 }
 
@@ -7959,17 +8113,29 @@ function parseContentLength(value: string | null) {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
 }
 
+function parseBoundedPositiveInteger(value: string | null, fallback: number, maximum: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.floor(parsed), 1), maximum);
+}
+
 function delay(ms: number) {
   return ms > 0 ? new Promise((resolvePromise) => setTimeout(resolvePromise, ms)) : Promise.resolve();
 }
 
-function createCountingUploadStream(body: ReadableStream<Uint8Array>) {
+function createCountingUploadStream(body: ReadableStream<Uint8Array>, maxBytes?: number) {
   let sizeBytes = 0;
   const counter = new Transform({
     transform(chunk, _encoding, callback) {
       sizeBytes += Buffer.isBuffer(chunk)
         ? chunk.byteLength
         : Buffer.byteLength(chunk);
+      if (maxBytes !== undefined && sizeBytes > maxBytes) {
+        callback(new Error("provider_artifact_upload_too_large"));
+        return;
+      }
       callback(null, chunk);
     },
   });
@@ -8004,7 +8170,15 @@ async function uploadProviderArtifactToStorage(
   let knownSizeBytes: number | null = null;
 
   for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
-    const artifactResponse = await fetchProviderArtifactSafely(input.artifactUrl, undefined, input.fetchImpl);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), providerArtifactUploadTimeoutMs);
+    let artifactResponse: Response | undefined;
+    try {
+      artifactResponse = await fetchProviderArtifactSafely(
+        input.artifactUrl,
+        { signal: controller.signal },
+        input.fetchImpl,
+      );
     if (!artifactResponse.ok || !artifactResponse.body) {
       await artifactResponse.body?.cancel().catch(() => undefined);
       throw Object.assign(new Error(`provider_artifact_download_${artifactResponse.status}`), {
@@ -8019,6 +8193,13 @@ async function uploadProviderArtifactToStorage(
     knownSizeBytes =
       parseContentLength(artifactResponse.headers.get("content-length")) ??
       knownSizeBytes;
+    if (knownSizeBytes !== null && knownSizeBytes > providerArtifactUploadMaxBytes) {
+      await artifactResponse.body.cancel().catch(() => undefined);
+      throw Object.assign(new Error("provider_artifact_upload_too_large"), {
+        failureCode: "provider_output_download_failed",
+        storageObjectId: storageObject?.id,
+      });
+    }
 
     if (!storageObject) {
       try {
@@ -8041,7 +8222,7 @@ async function uploadProviderArtifactToStorage(
       }
     }
 
-    const counted = createCountingUploadStream(artifactResponse.body);
+    const counted = createCountingUploadStream(artifactResponse.body, providerArtifactUploadMaxBytes);
     try {
       let uploadResult: { eTag?: string | null; versionId?: string | null } | undefined;
       if (
@@ -8079,6 +8260,9 @@ async function uploadProviderArtifactToStorage(
       await delay(retryDelayMs);
     } finally {
       await artifactResponse.body.cancel().catch(() => undefined);
+    }
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -8593,9 +8777,9 @@ async function settleTimedOutEpisodeGenerationTask(
   }
 }
 
-async function reconcileDefinitiveProviderSubmissionFailures(
+export async function repairDefinitiveProviderSubmissionFailures(
   db: Awaited<ReturnType<typeof createDevDb>>,
-  input: { userId: string; now: Date },
+  input: { userId?: string | null; now: Date; limit?: number },
 ) {
   const rows = await db.query<{
     task_id: string;
@@ -8639,8 +8823,8 @@ async function reconcileDefinitiveProviderSubmissionFailures(
       LEFT JOIN task_attempts current_attempt
         ON current_attempt.id = task.current_attempt_id
        AND current_attempt.status IN ('created', 'running', 'result_unknown')
-      WHERE workflow.created_by_user_id = $1
-        AND snapshot.user_id = $1
+      WHERE ($1::uuid IS NULL OR workflow.created_by_user_id = $1)
+        AND ($1::uuid IS NULL OR snapshot.user_id = $1)
         AND task.status IN ('queued', 'running', 'result_unknown')
         AND task.task_type IN ('episode_generate_image', 'episode_generate_video', 'episode_generate_audio')
         AND provider_request.status = 'result_unknown'
@@ -8656,11 +8840,13 @@ async function reconcileDefinitiveProviderSubmissionFailures(
           )
         )
       ORDER BY task.updated_at ASC
+      LIMIT $2
     `,
-    [input.userId],
+    [input.userId ?? null, input.limit ?? 100],
   );
+  let repaired = 0;
   for (const row of rows.rows) {
-    await settleTimedOutEpisodeGenerationTask(db, {
+    const settled = await settleTimedOutEpisodeGenerationTask(db, {
       taskId: row.task_id,
       now: input.now,
       failureCode: row.failure_code,
@@ -8668,7 +8854,9 @@ async function reconcileDefinitiveProviderSubmissionFailures(
       expectedAttemptId: row.current_attempt_id,
       expectedAttemptCount: Number(row.attempt_count),
     });
+    if (settled) repaired += 1;
   }
+  return { repaired };
 }
 
 export async function repairTimedOutEpisodeGenerationTasks(
@@ -16085,7 +16273,7 @@ async function serveStatic(
   }
 
   if (pathname.startsWith("/vendor/")) {
-    return await serveVendorFile(pathname, response);
+    return await serveVendorFile(request, pathname, response);
   }
 
   const normalizedPath = pathname === "/" ? "/app.html" : pathname;
@@ -16304,7 +16492,11 @@ async function serveAdminStatic(pathname: string, response: ServerResponse) {
   response.end(file);
 }
 
-async function serveVendorFile(pathname: string, response: ServerResponse) {
+async function serveVendorFile(
+  request: Parameters<typeof createServer>[0],
+  pathname: string,
+  response: ServerResponse,
+) {
   const normalizedPath = pathname.replace(/^\/vendor\/+/, "");
   const servesWebVendorFile = [
     "prompt-editor.js",
@@ -16332,37 +16524,168 @@ async function serveVendorFile(pathname: string, response: ServerResponse) {
   }
   const file = await readFile(filePath);
 
-  response.statusCode = 200;
   response.setHeader(
     "content-type",
     contentTypes[extname(filePath)] ?? "application/octet-stream",
   );
-  response.setHeader("cache-control", "no-store");
-  response.end(file);
-}
-
-async function serveWatermarkRemovalModel(response: ServerResponse, modelUrl: string) {
-  let upstream: Response;
-  try {
-    upstream = await fetch(modelUrl, { redirect: "follow" });
-  } catch {
-    response.statusCode = 502;
-    response.setHeader("content-type", "text/plain; charset=utf-8");
-    response.end("Watermark removal model is unavailable");
-    return;
-  }
-  if (!upstream.ok || !upstream.body) {
-    response.statusCode = 502;
-    response.setHeader("content-type", "text/plain; charset=utf-8");
-    response.end(`Watermark removal model download failed (${upstream.status})`);
+  const etag = staticAssetEtag(file);
+  response.setHeader("etag", etag);
+  response.setHeader("cache-control", "public, max-age=86400, must-revalidate");
+  if (requestMatchesEtag(request, etag)) {
+    response.statusCode = 304;
+    response.end();
     return;
   }
   response.statusCode = 200;
-  response.setHeader("content-type", "application/octet-stream");
-  response.setHeader("cache-control", "public, max-age=86400");
-  const contentLength = upstream.headers.get("content-length");
-  if (contentLength) response.setHeader("content-length", contentLength);
-  Readable.fromWeb(upstream.body as any).pipe(response);
+  response.end(file);
+}
+
+async function cacheWatermarkRemovalModel(input: {
+  modelUrl: string;
+  fetchImpl: typeof fetch;
+  signal: AbortSignal;
+  maxBytes: number;
+  timeoutMs: number;
+}) {
+  const cacheKey = createHash("sha256").update(input.modelUrl).digest("hex");
+  const filePath = join(watermarkModelCacheDirectory, `${cacheKey}.model`);
+  await mkdir(watermarkModelCacheDirectory, { recursive: true });
+  try {
+    const cached = await stat(filePath);
+    if (cached.isFile() && cached.size > 0 && cached.size <= input.maxBytes) {
+      return { filePath, sizeBytes: cached.size };
+    }
+    await unlink(filePath).catch(() => undefined);
+  } catch {
+    // Cache miss.
+  }
+
+  let download = watermarkModelDownloads.get(cacheKey);
+  if (!download) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+    const promise = (async () => {
+      const temporaryPath = `${filePath}.${randomUUID()}.part`;
+      let upstream: Response | null = null;
+      try {
+        upstream = await input.fetchImpl(input.modelUrl, {
+          redirect: "follow",
+          signal: controller.signal,
+        });
+        const contentLength = parseContentLength(upstream.headers.get("content-length"));
+        if (!upstream.ok || !upstream.body || (contentLength !== null && contentLength > input.maxBytes)) {
+          await upstream.body?.cancel().catch(() => undefined);
+          throw new Error("watermark_model_download_failed");
+        }
+        let downloadedBytes = 0;
+        const byteLimit = new Transform({
+          transform(chunk, _encoding, callback) {
+            downloadedBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
+            if (downloadedBytes > input.maxBytes) {
+              callback(new Error("watermark_model_too_large"));
+              return;
+            }
+            callback(null, chunk);
+          },
+        });
+        await pipeline(
+          Readable.fromWeb(upstream.body as never),
+          byteLimit,
+          createWriteStream(temporaryPath, { flags: "wx" }),
+        );
+        if (
+          downloadedBytes === 0 ||
+          (contentLength !== null && downloadedBytes !== contentLength)
+        ) {
+          throw new Error("watermark_model_download_incomplete");
+        }
+        await rename(temporaryPath, filePath);
+        return { filePath, sizeBytes: downloadedBytes };
+      } finally {
+        clearTimeout(timeout);
+        await upstream?.body?.cancel().catch(() => undefined);
+        await unlink(temporaryPath).catch(() => undefined);
+      }
+    })();
+    download = { controller, promise, subscribers: 0 };
+    watermarkModelDownloads.set(cacheKey, download);
+    void promise.finally(() => {
+      if (watermarkModelDownloads.get(cacheKey) === download) {
+        watermarkModelDownloads.delete(cacheKey);
+      }
+    }).catch(() => undefined);
+  }
+  download.subscribers += 1;
+  let rejectForAbort: (() => void) | null = null;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    if (input.signal.aborted) {
+      reject(input.signal.reason ?? new Error("watermark_model_download_aborted"));
+      return;
+    }
+    rejectForAbort = () => {
+      reject(input.signal.reason ?? new Error("watermark_model_download_aborted"));
+    };
+    input.signal.addEventListener("abort", rejectForAbort, { once: true });
+  });
+  try {
+    return await Promise.race([download.promise, abortPromise]);
+  } finally {
+    if (rejectForAbort) input.signal.removeEventListener("abort", rejectForAbort);
+    download.subscribers = Math.max(0, download.subscribers - 1);
+    if (download.subscribers === 0 && watermarkModelDownloads.get(cacheKey) === download) {
+      watermarkModelDownloads.delete(cacheKey);
+      download.controller.abort();
+    }
+  }
+}
+
+async function serveWatermarkRemovalModel(
+  request: IncomingMessage,
+  response: ServerResponse,
+  input: {
+    modelUrl: string;
+    fetchImpl: typeof fetch;
+    maxBytes: number;
+    timeoutMs: number;
+  },
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  const abortDownload = () => controller.abort();
+  response.once("close", abortDownload);
+  try {
+    const cached = await cacheWatermarkRemovalModel({
+      modelUrl: input.modelUrl,
+      fetchImpl: input.fetchImpl,
+      signal: controller.signal,
+      maxBytes: input.maxBytes,
+      timeoutMs: input.timeoutMs,
+    });
+    if (request.destroyed || response.destroyed) return;
+    const etag = staticAssetEtag(`${input.modelUrl}:${cached.sizeBytes}`);
+    response.setHeader("content-type", "application/octet-stream");
+    response.setHeader("cache-control", "public, max-age=86400, must-revalidate");
+    response.setHeader("content-length", String(cached.sizeBytes));
+    response.setHeader("etag", etag);
+    if (requestMatchesEtag(request, etag)) {
+      response.statusCode = 304;
+      response.end();
+      return;
+    }
+    response.statusCode = 200;
+    await pipeline(createReadStream(cached.filePath), response, { signal: controller.signal });
+  } catch (error) {
+    if (!response.headersSent && !response.destroyed) {
+      response.statusCode = 502;
+      response.setHeader("content-type", "text/plain; charset=utf-8");
+      response.end(controller.signal.aborted
+        ? "Watermark removal model download timed out"
+        : "Watermark removal model is unavailable");
+    }
+  } finally {
+    clearTimeout(timeout);
+    response.off("close", abortDownload);
+  }
 }
 
 async function appendEpisodeWorkbenchEvent(body: unknown, user: AuthenticatedUser) {
@@ -16393,15 +16716,21 @@ async function serveUploadedFile(
   pathname: string,
   response: ServerResponse,
 ) {
-  const relativePath = pathname.replace(/^\/uploads\/+/, "");
+  let relativePath: string;
+  try {
+    relativePath = decodeURIComponent(pathname.replace(/^\/uploads\/+/, ""));
+  } catch {
+    response.statusCode = 400;
+    response.end("Invalid upload path");
+    return;
+  }
   const absolutePath = resolve(uploadRoot, relativePath);
-  if (!absolutePath.startsWith(uploadRoot)) {
+  if (!absolutePath.startsWith(`${uploadRoot}${sep}`)) {
     response.statusCode = 403;
     response.end("Forbidden");
     return;
   }
 
-  const file = await readFile(absolutePath);
   const fileStats = await stat(absolutePath);
   const contentType =
     contentTypes[extname(absolutePath).toLowerCase()] ?? "application/octet-stream";
@@ -16416,30 +16745,29 @@ async function serveUploadedFile(
     const requestedEnd = match?.[2] ? Number(match[2]) : fileStats.size - 1;
     const end = Math.min(requestedEnd, fileStats.size - 1);
 
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end) {
+    if (!match || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= fileStats.size || start > end) {
       response.statusCode = 416;
       response.setHeader("content-range", `bytes */${fileStats.size}`);
       response.end();
       return;
     }
 
-    const chunk = file.subarray(start, end + 1);
     response.statusCode = 206;
     response.setHeader("content-range", `bytes ${start}-${end}/${fileStats.size}`);
-    response.setHeader("content-length", String(chunk.byteLength));
-    response.end(chunk);
+    response.setHeader("content-length", String(end - start + 1));
+    await pipeline(createReadStream(absolutePath, { start, end }), response);
     return;
   }
 
   response.statusCode = 200;
-  response.setHeader("content-length", String(file.byteLength));
-  response.end(file);
+  response.setHeader("content-length", String(fileStats.size));
+  await pipeline(createReadStream(absolutePath), response);
 }
 
 function resolveLocalStorageObjectPath(bucket: string, objectKey: string) {
   const absolutePath = resolve(uploadRoot, "storage", bucket, objectKey);
   const expectedRoot = resolve(uploadRoot, "storage");
-  if (!absolutePath.startsWith(expectedRoot)) {
+  if (!absolutePath.startsWith(`${expectedRoot}${sep}`)) {
     throw new Error("upload_path_outside_root");
   }
   return absolutePath;
@@ -16550,6 +16878,14 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
     ? rawHost.replace(/:443$/i, "")
     : rawHost.replace(/:80$/i, "");
   return `${protocol}://${host}`;
+}
+
+function storageProxyRelativeUrlOrigin(request: Parameters<typeof createServer>[0]) {
+  const port = request.socket.localPort;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error("storage_proxy_local_port_unavailable");
+  }
+  return `http://127.0.0.1:${port}`;
 }
 
 function redirectInsecureProductionRequest(
@@ -16806,21 +17142,6 @@ function proxyRemoteMedia(
   });
 }
 
-function isSafeVideoBatchMediaUrl(targetUrl: string) {
-  try {
-    const parsed = new URL(targetUrl);
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-    const hostname = parsed.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname === "[::1]" || hostname === "0.0.0.0" || hostname === "::1") return false;
-    if (/^(127\.|10\.|192\.168\.)/u.test(hostname)) return false;
-    const private172 = hostname.match(/^172\.(\d{1,3})\./u);
-    if (private172 && Number(private172[1]) >= 16 && Number(private172[1]) <= 31) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function proxyMergedVideoMedia(
   response: ServerResponse,
   videoUrl: string,
@@ -16860,6 +17181,105 @@ function proxyMergedVideoMedia(
       if (!response.writableEnded) child.kill();
     });
   });
+}
+
+async function proxyVerifiedVideoBatchMedia(
+  response: ServerResponse,
+  targetUrl: string,
+  headers: Record<string, string>,
+  responseHeaders: Record<string, string>,
+  fetchImpl?: typeof fetch,
+) {
+  let upstream: Response;
+  try {
+    upstream = await fetchProviderArtifactSafely(targetUrl, { headers }, fetchImpl);
+  } catch {
+    writeJson(response, envelopedError(502, "video_batch_media_unavailable", "远程媒体暂时不可用。"));
+    return;
+  }
+
+  response.statusCode = upstream.status;
+  for (const headerName of [
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+    "cache-control",
+    "etag",
+    "last-modified",
+  ]) {
+    const headerValue = upstream.headers.get(headerName);
+    if (headerValue) response.setHeader(headerName, headerValue);
+  }
+  for (const [headerName, headerValue] of Object.entries(responseHeaders)) {
+    response.setHeader(headerName, headerValue);
+  }
+  response.setHeader("access-control-allow-origin", "*");
+  if (!upstream.body) {
+    response.end();
+    return;
+  }
+  await pipeline(Readable.fromWeb(upstream.body as never), response).catch(() => undefined);
+}
+
+async function downloadVerifiedVideoBatchMedia(
+  targetUrl: string,
+  headers: Record<string, string>,
+  destinationPath: string,
+  fetchImpl?: typeof fetch,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), videoBatchMediaDownloadTimeoutMs);
+  try {
+    const upstream = await fetchProviderArtifactSafely(targetUrl, { headers, signal: controller.signal }, fetchImpl);
+    const contentLength = parseContentLength(upstream.headers.get("content-length"));
+    if (!upstream.ok || !upstream.body || (contentLength !== null && contentLength > videoBatchMediaDownloadMaxBytes)) {
+      await upstream.body?.cancel().catch(() => undefined);
+      throw new Error("video_batch_media_download_failed");
+    }
+    let downloadedBytes = 0;
+    const byteLimit = new Transform({
+      transform(chunk, _encoding, callback) {
+        downloadedBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
+        if (downloadedBytes > videoBatchMediaDownloadMaxBytes) {
+          callback(new Error("video_batch_media_download_too_large"));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(
+      Readable.fromWeb(upstream.body as never),
+      byteLimit,
+      createWriteStream(destinationPath, { flags: "wx" }),
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function proxyVerifiedMergedVideoBatchMedia(
+  response: ServerResponse,
+  videoUrl: string,
+  audioUrl: string,
+  download: boolean,
+  headers: Record<string, string>,
+  fetchImpl?: typeof fetch,
+) {
+  const tempDirectory = await mkdtemp(join(tmpdir(), "comic-ai-video-batch-"));
+  const videoPath = join(tempDirectory, "video-input");
+  const audioPath = join(tempDirectory, "audio-input");
+  try {
+    await downloadVerifiedVideoBatchMedia(videoUrl, headers, videoPath, fetchImpl);
+    await downloadVerifiedVideoBatchMedia(audioUrl, headers, audioPath, fetchImpl);
+    await proxyMergedVideoMedia(response, videoPath, audioPath, download);
+  } catch {
+    if (!response.headersSent) {
+      writeJson(response, envelopedError(502, "video_batch_media_unavailable", "远程媒体暂时不可用。"));
+    }
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 async function ensureDevUserAccess(
@@ -18182,6 +18602,18 @@ export function createPhoneAuthDevServer(
     string,
     { projectId: string | null; scriptId: string | null }
   >();
+  const creatorProjectListCache = new Map<string, {
+    expiresAt: number;
+    response: AuthHttpResponse<unknown>;
+  }>();
+  const clearCreatorProjectListCache = (ownerUserId: string) => {
+    const cacheKeyPrefix = `${ownerUserId}:`;
+    for (const cacheKey of creatorProjectListCache.keys()) {
+      if (cacheKey.startsWith(cacheKeyPrefix)) {
+        creatorProjectListCache.delete(cacheKey);
+      }
+    }
+  };
   const canvasLiveHub = createCanvasLiveCollaborationHub({
     revisionTransport: createCanvasLiveRevisionTransportFromEnv(runtimeEnv),
   });
@@ -18197,23 +18629,34 @@ export function createPhoneAuthDevServer(
     3600,
   );
   const homeMediaRateLimiter = createHomeMediaRateLimiter(runtimeEnv);
+  const watermarkModelRateLimiter = createHomeMediaRateLimiter({
+    HOME_MEDIA_SIGNING_PER_IP_PER_MINUTE: runtimeEnv.WATERMARK_MODEL_PER_IP_PER_MINUTE ?? "6",
+    HOME_MEDIA_SIGNING_PER_IP_PER_HOUR: runtimeEnv.WATERMARK_MODEL_PER_IP_PER_HOUR ?? "30",
+    HOME_MEDIA_SIGNING_CONCURRENT_PER_IP: runtimeEnv.WATERMARK_MODEL_CONCURRENT_PER_IP ?? "2",
+  });
+  const bufferedMultipartLimiter = createRequestConcurrencyLimiter(
+    positiveIntegerEnvValue(runtimeEnv.BUFFERED_MULTIPART_CONCURRENT_REQUESTS, 2, 10),
+  );
+  const uploadProxyLimiter = createRequestConcurrencyLimiter(
+    positiveIntegerEnvValue(runtimeEnv.STORAGE_UPLOAD_PROXY_CONCURRENT_REQUESTS, 4, 16),
+  );
+  const bufferedMultipartTimeoutMs = 30 * 60 * 1000;
+  const watermarkModelMaxBytes = positiveIntegerEnvValue(
+    runtimeEnv.WATERMARK_MODEL_MAX_BYTES,
+    watermarkModelDefaultMaxBytes,
+    2 * 1024 * 1024 * 1024,
+  );
+  const watermarkModelTimeoutMs = positiveIntegerEnvValue(
+    runtimeEnv.WATERMARK_MODEL_TIMEOUT_MS,
+    watermarkModelDefaultTimeoutMs,
+    30 * 60 * 1000,
+  );
   const storageMediaLimiter = createStorageMediaLimiter(runtimeEnv);
   const officialAssetRootPrefix = runtimeEnv.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX?.trim() || "officialAssets";
   const trustProxyForHomeMedia = String(runtimeEnv.HOME_MEDIA_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
+  const trustProxyForWatermarkModel = String(runtimeEnv.WATERMARK_MODEL_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
   const trustProxyForStorageMedia = String(runtimeEnv.STORAGE_MEDIA_TRUST_PROXY ?? "false").trim().toLowerCase() === "true";
-  const storageAdapter = (() => {
-    try {
-      return createStorageAdapterFromEnv(runtimeEnv);
-    } catch (error) {
-      console.warn(
-        `[storage] Falling back to dev adapter. ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return createStorageAdapterFromEnv({
-        ...runtimeEnv,
-        STORAGE_ADAPTER_MODE: "dev",
-      });
-    }
-  })();
+  const storageAdapter = options.storageRuntime?.adapter ?? createStorageAdapterFromEnv(runtimeEnv);
   const defaultStorageRuntime: UploadSessionRuntime = {
     mode: storageMode,
     provider: storageMode === "cos" ? "tencent_cos" : storageMode === "s3_compatible" ? "s3_compatible" : "creator-dev",
@@ -18297,11 +18740,38 @@ export function createPhoneAuthDevServer(
           return redirect(response, target.toString());
         }
 
+        if (request.method === "GET" && pathname.startsWith("/uploads/")) {
+          return await serveUploadedFile(request, pathname, response);
+        }
+
         if (request.method === "GET" && !pathname.startsWith("/api/")) {
           return await serveStatic(request, pathname, response, runtimeEnv);
         }
 
         const db = await getDb();
+        const marketingResponse = await routeMarketingHttpRequest({
+          request,
+          pathname,
+          search: url.search,
+          db,
+          env: runtimeEnv,
+          storageAdapter: storageRuntime.adapter,
+          requireSuperAdmin: async () => {
+            const adminRoute = await requireAdminRouteSession({
+              db,
+              cookieHeader: request.headers.cookie,
+              requiredRoles: ["super_admin"],
+            });
+            if (!adminRoute.ok) return adminRoute;
+            return {
+              ok: true as const,
+              adminAccountId: adminRoute.session.admin_account_id,
+            };
+          },
+        });
+        if (marketingResponse) {
+          return writeJson(response, marketingResponse);
+        }
         const creatorApplication = createCreatorApplication({
           db,
           creatorApps,
@@ -18339,12 +18809,8 @@ export function createPhoneAuthDevServer(
           env: runtimeEnv,
         }),
       });
-      if (pathname.startsWith("/uploads/")) {
-        return await serveUploadedFile(request, pathname, response);
-      }
-
       if (pathname.startsWith("/vendor/")) {
-        return await serveVendorFile(pathname, response);
+        return await serveVendorFile(request, pathname, response);
       }
 
       if (request.method === "GET" && pathname === "/api/toolbox/watermark-removal/model") {
@@ -18352,7 +18818,23 @@ export function createPhoneAuthDevServer(
           runtimeEnv.WATERMARK_REMOVAL_MODEL_URL ??
             "https://hf-mirror.com/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
         ).trim();
-        return await serveWatermarkRemovalModel(response, modelUrl);
+        const rateLimit = watermarkModelRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForWatermarkModel),
+        );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "watermark_model_rate_limited", "Too many model download requests"));
+        }
+        try {
+          return await serveWatermarkRemovalModel(request, response, {
+            modelUrl,
+            fetchImpl: options.fetchImpl ?? fetch,
+            maxBytes: watermarkModelMaxBytes,
+            timeoutMs: watermarkModelTimeoutMs,
+          });
+        } finally {
+          rateLimit.release();
+        }
       }
 
       const watermarkOcrModelMatch = pathname.match(/^\/api\/toolbox\/watermark-removal\/ocr\/(det|rec|dict)$/);
@@ -18367,10 +18849,23 @@ export function createPhoneAuthDevServer(
           : modelKind === "rec"
             ? "onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx"
             : "paddle/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile/ppocr_keys_v1.txt";
-        return await serveWatermarkRemovalModel(
-          response,
-          `${configuredBaseUrl}/${modelPath}`,
+        const rateLimit = watermarkModelRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForWatermarkModel),
         );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "watermark_model_rate_limited", "Too many model download requests"));
+        }
+        try {
+          return await serveWatermarkRemovalModel(request, response, {
+            modelUrl: `${configuredBaseUrl}/${modelPath}`,
+            fetchImpl: options.fetchImpl ?? fetch,
+            maxBytes: watermarkModelMaxBytes,
+            timeoutMs: watermarkModelTimeoutMs,
+          });
+        } finally {
+          rateLimit.release();
+        }
       }
 
       if (request.method === "GET" && pathname === "/api/community") {
@@ -18760,26 +19255,35 @@ export function createPhoneAuthDevServer(
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
         const targetUrl = new URL(request.url ?? pathname, "http://localhost").searchParams.get("url") ?? "";
         const audioUrl = new URL(request.url ?? pathname, "http://localhost").searchParams.get("audio") ?? "";
-        if (!isSafeVideoBatchMediaUrl(targetUrl)) {
+        if (!isSafePublicHttpsUrlLiteral(targetUrl)) {
           return writeJson(response, envelopedError(400, "video_batch_media_url_invalid", "播放地址无效或不受支持。"));
         }
         const isDownload = new URL(request.url ?? pathname, "http://localhost").searchParams.get("download") === "1";
+        const upstreamHeaders = {
+          ...(typeof request.headers.range === "string" ? { Range: request.headers.range } : {}),
+          "User-Agent": String(request.headers["user-agent"] ?? "Mozilla/5.0"),
+          Referer: "https://www.douyin.com/",
+        };
         if (audioUrl) {
-          if (!isSafeVideoBatchMediaUrl(audioUrl)) {
+          if (!isSafePublicHttpsUrlLiteral(audioUrl)) {
             return writeJson(response, envelopedError(400, "video_batch_audio_url_invalid", "音频地址无效或不受支持。"));
           }
-          await proxyMergedVideoMedia(response, targetUrl, audioUrl, isDownload);
+          await proxyVerifiedMergedVideoBatchMedia(
+            response,
+            targetUrl,
+            audioUrl,
+            isDownload,
+            upstreamHeaders,
+            options.fetchImpl,
+          );
           return;
         }
-        await proxyRemoteMedia(
+        await proxyVerifiedVideoBatchMedia(
           response,
           targetUrl,
-          {
-            ...(typeof request.headers.range === "string" ? { Range: request.headers.range } : {}),
-            "User-Agent": String(request.headers["user-agent"] ?? "Mozilla/5.0"),
-            Referer: "https://www.douyin.com/",
-          },
+          upstreamHeaders,
           isDownload ? { "content-disposition": "attachment; filename=video.mp4" } : {},
+          options.fetchImpl,
         );
         return;
       }
@@ -22373,8 +22877,8 @@ export function createPhoneAuthDevServer(
         const media = String(url.searchParams.get("media") ?? "all");
         const range = String(url.searchParams.get("range") ?? "all");
         const keyword = String(url.searchParams.get("keyword") ?? "").trim().toLowerCase();
-        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 10), 1), 100);
-        const page = Math.max(Number(url.searchParams.get("page") ?? 1), 1);
+        const pageSize = parseBoundedPositiveInteger(url.searchParams.get("pageSize"), 10, 100);
+        const page = parseBoundedPositiveInteger(url.searchParams.get("page"), 1, 10_000);
         const offset = (page - 1) * pageSize;
         const where: string[] = [
           "so.status IN ('available', 'pending_upload', 'failed', 'delete_failed')",
@@ -22650,8 +23154,8 @@ export function createPhoneAuthDevServer(
         const media = String(url.searchParams.get("media") ?? "all");
         const range = String(url.searchParams.get("range") ?? "all");
         const keyword = String(url.searchParams.get("keyword") ?? "").trim().toLowerCase();
-        const pageSize = Math.min(Math.max(Number(url.searchParams.get("pageSize") ?? 12), 1), 100);
-        const page = Math.max(Number(url.searchParams.get("page") ?? 1), 1);
+        const pageSize = parseBoundedPositiveInteger(url.searchParams.get("pageSize"), 12, 100);
+        const page = parseBoundedPositiveInteger(url.searchParams.get("page"), 1, 10_000);
         const offset = (page - 1) * pageSize;
         const where: string[] = [
           "so.status = 'available'",
@@ -22940,6 +23444,7 @@ export function createPhoneAuthDevServer(
             state,
             authorizeUrl: buildWeChatAuthorizeUrl(config, state),
           },
+          cookies: [wechatOAuthStateCookie(state, useSecureSessionCookies)],
         });
       }
 
@@ -22955,12 +23460,19 @@ export function createPhoneAuthDevServer(
         const code = url.searchParams.get("code")?.trim() ?? "";
         const state = url.searchParams.get("state")?.trim() ?? "";
         const stateRecord = wechatLoginStates.get(state);
+        const browserState = parseCookies(request.headers.cookie).wechat_oauth_state?.trim() ?? "";
         wechatLoginStates.delete(state);
 
-        if (!stateRecord || Date.now() - stateRecord.createdAt > 10 * 60 * 1000) {
+        if (
+          !stateRecord ||
+          Date.now() - stateRecord.createdAt > wechatOAuthStateMaxAgeSeconds * 1000 ||
+          !browserState ||
+          !timingSafeStringEqual(browserState, state)
+        ) {
           return writeJson(response, {
             status: 400,
             body: { error: "wechat_state_invalid" },
+            cookies: [clearWechatOAuthStateCookie(useSecureSessionCookies)],
           });
         }
 
@@ -22968,6 +23480,7 @@ export function createPhoneAuthDevServer(
           return writeJson(response, {
             status: 400,
             body: { error: "wechat_code_required" },
+            cookies: [clearWechatOAuthStateCookie(useSecureSessionCookies)],
           });
         }
 
@@ -23014,7 +23527,13 @@ export function createPhoneAuthDevServer(
           now,
         });
 
-        return redirectWithSessionCookie(response, "/app.html#project", session.token, useSecureSessionCookies);
+        return redirectWithSessionCookie(
+          response,
+          "/app.html#project",
+          session.token,
+          useSecureSessionCookies,
+          [clearWechatOAuthStateCookie(useSecureSessionCookies)],
+        );
       }
 
       if (request.method === "POST" && pathname === "/api/auth/code/verify") {
@@ -24140,6 +24659,29 @@ export function createPhoneAuthDevServer(
         }
       }
 
+      if (request.method === "POST" && pathname === "/api/storage/repair") {
+        const adminRoute = await requireAdminRouteSession({
+          db,
+          cookieHeader: request.headers.cookie,
+          requiredPermissions: ["ops.task.retry"],
+        });
+        if (!adminRoute.ok) {
+          return writeJson(response, adminRoute.response);
+        }
+        const repair = await runCreatorRepairMaintenance(db, {
+          runtime: storageRuntime,
+          now: new Date(),
+          limit: repairSchedulerOptions.limit,
+        });
+        return writeJson(response, {
+          status: 200,
+          body: {
+            ...repair.storage,
+            episodeGeneration: repair.episodeGeneration,
+          },
+        });
+      }
+
       if (pathname.startsWith("/api/storage/")) {
         const authenticated = await findAuthenticatedUser(
           db,
@@ -24201,6 +24743,7 @@ export function createPhoneAuthDevServer(
           const actor = await resolveActorContext(db, {
             sessionToken: authenticated.sessionToken,
             ...(body.projectId?.trim() ? { projectId: body.projectId.trim() } : {}),
+            ...(body.projectId?.trim() ? { capability: capabilities.projectEdit } : {}),
             now: new Date(),
           });
           if (isTeamAssetUploadPurpose(body.purpose)) {
@@ -24301,6 +24844,17 @@ export function createPhoneAuthDevServer(
             const image = object.contentType.startsWith("image/");
             const video = object.contentType.startsWith("video/");
             if (downloadRequested || (proxyRequested && (image || video))) {
+              const cacheableProxyRequest = proxyRequested && !downloadRequested && !request.headers.range;
+              if (cacheableProxyRequest) {
+                const etag = staticAssetEtag(`storage:${object.id}:${object.etag ?? ""}:${object.versionId ?? ""}`);
+                response.setHeader("etag", etag);
+                response.setHeader("cache-control", "private, max-age=3600");
+                if (requestMatchesEtag(request, etag)) {
+                  response.statusCode = 304;
+                  response.end();
+                  return;
+                }
+              }
               let release: (() => void) | null = null;
               try {
                 release = await storageMediaLimiter.acquire({
@@ -24308,15 +24862,27 @@ export function createPhoneAuthDevServer(
                   userId: authenticated.user.id,
                   ipAddress: homeMediaRequestIpAddress(request, trustProxyForStorageMedia),
                 });
-                const streamed = await streamStorageObjectContent({
-                  response,
-                  signedUrl: signed.url,
-                  requestOrigin: serverOriginFromRequest(request),
-                  range: typeof request.headers.range === "string" ? request.headers.range : null,
-                  contentType: object.contentType,
-                  download: downloadRequested,
-                  fetchImpl: options.fetchImpl ?? fetch,
-                });
+                const streamed = storageRuntime.mode === "dev"
+                  ? await streamLocalStorageObjectContent({
+                      response,
+                      bucket: object.bucket,
+                      objectKey: object.objectKey,
+                      range: typeof request.headers.range === "string" ? request.headers.range : null,
+                      contentType: object.contentType,
+                      download: downloadRequested,
+                      cacheControl: downloadRequested ? "private, no-store" : "private, max-age=3600",
+                      timeoutMs: providerArtifactUploadTimeoutMs,
+                    })
+                  : await streamStorageObjectContent({
+                      response,
+                      signedUrl: signed.url,
+                      relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                      range: typeof request.headers.range === "string" ? request.headers.range : null,
+                      contentType: object.contentType,
+                      download: downloadRequested,
+                      fetchImpl: options.fetchImpl ?? fetch,
+                      timeoutMs: providerArtifactUploadTimeoutMs,
+                    });
                 if (!streamed) {
                   return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
                 }
@@ -24428,22 +24994,62 @@ export function createPhoneAuthDevServer(
                 envelopedError(409, "upload_session_not_ready", "Upload session is not ready"),
               );
             }
-            const bytes = await readUploadedStorageObjectBytes(db, {
-              sessionToken: authenticated.sessionToken,
-              storageObjectId: uploaded.storageObject.id,
-              bucket: uploaded.storageObject.bucket,
-              objectKey: uploaded.storageObject.objectKey,
-              runtime: storageRuntime,
-              signedUrlExpiresInSeconds,
-              now,
-              fetchImpl: options.fetchImpl ?? fetch,
-            });
-            response.statusCode = 200;
-            response.setHeader("content-type", uploaded.storageObject.contentType || "application/octet-stream");
-            response.setHeader("content-length", String(bytes.byteLength));
-            response.setHeader("cache-control", "private, max-age=300");
-            response.setHeader("x-content-type-options", "nosniff");
-            response.end(bytes);
+            const range = typeof request.headers.range === "string" ? request.headers.range : null;
+            const mediaKind = uploaded.storageObject.contentType.startsWith("image/") ? "image" : "video";
+            let release: (() => void) | null = null;
+            let streamed = false;
+            try {
+              release = await storageMediaLimiter.acquire({
+                kind: mediaKind,
+                userId: authenticated.user.id,
+                ipAddress: homeMediaRequestIpAddress(request, trustProxyForStorageMedia),
+              });
+              streamed = storageRuntime.mode === "dev"
+                ? await streamLocalStorageObjectContent({
+                    response,
+                    bucket: uploaded.storageObject.bucket,
+                    objectKey: uploaded.storageObject.objectKey,
+                    range,
+                    contentType: uploaded.storageObject.contentType || "application/octet-stream",
+                    download: false,
+                    cacheControl: "private, max-age=300",
+                    timeoutMs: providerArtifactUploadTimeoutMs,
+                  })
+                : await (async () => {
+                    const urls = uploaded.urls ?? await buildSignedObjectUrls(db, {
+                      sessionToken: authenticated.sessionToken,
+                      storageObjectId: uploaded.storageObject.id,
+                      adapter: storageRuntime.adapter,
+                      now,
+                      expiresInSeconds: signedUrlExpiresInSeconds,
+                    });
+                    return streamStorageObjectContent({
+                      response,
+                      signedUrl: urls.sourceUrl ?? urls.downloadUrl ?? urls.previewUrl,
+                      relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                      range,
+                      contentType: uploaded.storageObject.contentType || "application/octet-stream",
+                      download: false,
+                      fetchImpl: options.fetchImpl ?? fetch,
+                      cacheControl: "private, max-age=300",
+                      timeoutMs: providerArtifactUploadTimeoutMs,
+                    });
+                  })();
+            } catch (error) {
+              if (error instanceof StorageMediaLimitError) {
+                response.setHeader("retry-after", String(error.retryAfterSeconds));
+                return writeJson(
+                  response,
+                  envelopedError(429, `storage_media_${error.code}`, "Storage media request is temporarily queued"),
+                );
+              }
+              throw error;
+            } finally {
+              release?.();
+            }
+            if (!streamed && !response.headersSent) {
+              return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+            }
             return;
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -24471,6 +25077,17 @@ export function createPhoneAuthDevServer(
           pathname.startsWith("/api/storage/upload-sessions/") &&
           pathname.endsWith("/blob")
         ) {
+          const releaseUploadProxy = uploadProxyLimiter.acquire();
+          if (!releaseUploadProxy) {
+            response.setHeader("retry-after", "1");
+            return writeJson(response, envelopedError(
+              429,
+              "storage_upload_proxy_busy",
+              "Upload proxy is temporarily busy. Please retry shortly.",
+            ));
+          }
+          response.once("finish", releaseUploadProxy);
+          response.once("close", releaseUploadProxy);
           const uploadSessionId = decodeURIComponent(pathname.split("/").at(-2) ?? "");
           const session = await findUploadSession(db, uploadSessionId);
           if (!session) {
@@ -24644,16 +25261,28 @@ export function createPhoneAuthDevServer(
             sessionToken: authenticated.sessionToken,
             now: new Date(),
           });
-          const completed = await completeUploadSession(db, {
-            actor,
-            sessionToken: authenticated.sessionToken,
-            uploadSessionId,
-            checksum: body.checksum ?? null,
-            eTag: body.eTag ?? null,
-            now: new Date(),
-            runtime: storageRuntime,
-            signedUrlExpiresInSeconds,
-          });
+          let completed;
+          try {
+            completed = await completeUploadSession(db, {
+              actor,
+              sessionToken: authenticated.sessionToken,
+              uploadSessionId,
+              checksum: body.checksum ?? null,
+              eTag: body.eTag ?? null,
+              now: new Date(),
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+            });
+          } catch (error) {
+            if (error instanceof Error && error.message === "storage_object_size_mismatch") {
+              return writeJson(response, envelopedError(
+                400,
+                "upload_size_mismatch",
+                "Uploaded file size does not match the prepared upload session",
+              ));
+            }
+            throw error;
+          }
           const uploadRecord = await completeProjectUploadRecord(db, {
             uploadSessionId,
             storageObjectId: completed.storageObject.id,
@@ -24705,20 +25334,6 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        if (request.method === "POST" && pathname === "/api/storage/repair") {
-          const repair = await runCreatorRepairMaintenance(db, {
-            runtime: storageRuntime,
-            now: new Date(),
-            limit: repairSchedulerOptions.limit,
-          });
-          return writeJson(response, {
-            status: 200,
-            body: {
-              ...repair.storage,
-              episodeGeneration: repair.episodeGeneration,
-            },
-          });
-        }
       }
 
       if (
@@ -25380,12 +25995,32 @@ export function createPhoneAuthDevServer(
             const stopHeartbeat = startSseHeartbeat(response, 10_000);
             try {
               const expiresAt = Date.now() + 25_000;
+              let pollDelayMs = 500;
+              let nextAuthorizationAt = Date.now() + 5_000;
               while (!closed && !response.writableEnded && Date.now() < expiresAt) {
-                await delay(500);
+                await delay(pollDelayMs);
                 if (closed || response.writableEnded) break;
-                await resolveTask(taskId);
+                if (Date.now() >= nextAuthorizationAt) {
+                  try {
+                    await resolveTask(taskId);
+                  } catch {
+                    response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
+                    break;
+                  }
+                  nextAuthorizationAt = Date.now() + 5_000;
+                }
                 const nextEvents = await listCanvasAgentEvents(db, { taskId, afterSequence: cursor, limit: Number.isFinite(limit) ? limit : 200 });
+                if (nextEvents.length && Date.now() < nextAuthorizationAt) {
+                  try {
+                    await resolveTask(taskId);
+                  } catch {
+                    response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
+                    break;
+                  }
+                  nextAuthorizationAt = Date.now() + 5_000;
+                }
                 for (const event of nextEvents) { response.write(formatCanvasAgentSseChunk(event)); cursor = Math.max(cursor, event.sequence); }
+                pollDelayMs = nextEvents.length ? 500 : Math.min(pollDelayMs * 2, 3_000);
                 if (nextEvents.some((event) => isTerminalCanvasAgentEvent(event.eventType))) break;
               }
             } finally {
@@ -25721,30 +26356,51 @@ export function createPhoneAuthDevServer(
               const stopHeartbeat = startSseHeartbeat(response, 10_000);
               const expiresAt = Date.now() + 25_000;
               try {
+                let pollDelayMs = 500;
+                let nextAuthorizationAt = Date.now() + 5_000;
                 while (!closed && !response.writableEnded && Date.now() < expiresAt) {
-                  await delay(500);
+                  await delay(pollDelayMs);
                   if (closed || response.writableEnded) break;
-                  try {
-                    await resolveCanvasAgentTaskActor(
-                      db,
-                      authenticated.sessionToken,
-                      canvasProjectId,
-                      taskId,
-                      "view",
-                    );
-                  } catch {
-                    response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
-                    break;
+                  if (Date.now() >= nextAuthorizationAt) {
+                    try {
+                      await resolveCanvasAgentTaskActor(
+                        db,
+                        authenticated.sessionToken,
+                        canvasProjectId,
+                        taskId,
+                        "view",
+                      );
+                      nextAuthorizationAt = Date.now() + 5_000;
+                    } catch {
+                      response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
+                      break;
+                    }
                   }
                   const nextEvents = await listCanvasAgentEvents(db, {
                     taskId,
                     afterSequence: cursor,
                     limit: Number.isFinite(limit) ? limit : 200,
                   });
+                  if (nextEvents.length && Date.now() < nextAuthorizationAt) {
+                    try {
+                      await resolveCanvasAgentTaskActor(
+                        db,
+                        authenticated.sessionToken,
+                        canvasProjectId,
+                        taskId,
+                        "view",
+                      );
+                    } catch {
+                      response.write("event: access.revoked\ndata: {\"error\":\"canvas_agent_access_revoked\"}\n\n");
+                      break;
+                    }
+                    nextAuthorizationAt = Date.now() + 5_000;
+                  }
                   for (const event of nextEvents) {
                     response.write(formatCanvasAgentSseChunk(event));
                     cursor = Math.max(cursor, event.sequence);
                   }
+                  pollDelayMs = nextEvents.length ? 500 : Math.min(pollDelayMs * 2, 3_000);
                   if (nextEvents.some((event) => isTerminalCanvasAgentEvent(event.eventType))) break;
                 }
               } finally {
@@ -25918,6 +26574,9 @@ export function createPhoneAuthDevServer(
             dependsOn?: string[];
             payload?: Record<string, unknown>;
           }> : [];
+          if (requestedNodes.length === 0 || requestedNodes.length > CANVAS_PRODUCT_LIMITS.generation.maximumBatchNodes) {
+            throw new CanvasGenerationBatchError("canvas_batch_node_count_invalid");
+          }
           const nodes = await resolveCanvasBatchPromptDependencies(db, canvasScope, requestedNodes);
           const mediaNodes = nodes.filter((node): node is typeof node & { mediaKind: "image" | "video" | "audio" } => node.mediaKind !== "text");
           const hasPromptSkills = mediaNodes.some((node) => Boolean(readCanvasGenerationSkillSelection(readJsonRecord(node.payload))));
@@ -28668,11 +29327,18 @@ export function createPhoneAuthDevServer(
                     fetchImpl: options.fetchImpl,
                     signedUrlExpiresInSeconds,
                     now,
+                    synchronizeReadMetadata: false,
                   });
                 } catch (error) {
                   console.error(`[generation-task-batch] task=${taskId} refresh failed`, error);
                 }
                 try {
+                  const authorized = await resolveTaskContext(db, {
+                    taskId,
+                    sessionToken: authenticated.sessionToken,
+                    now,
+                  });
+                  if (!authorized) return null;
                   return await mapGenerationTaskResponse(db, {
                     taskId,
                     sessionToken: authenticated.sessionToken,
@@ -28812,6 +29478,27 @@ export function createPhoneAuthDevServer(
           });
         }
         const teamCreatorApplication = creatorApplication;
+        if (
+          request.method === "POST" &&
+          String(request.headers["content-type"] ?? "").toLowerCase().includes("multipart/form-data") &&
+          (
+            pathname === "/api/creator/uploads" ||
+            pathname === "/api/creator/team-assets/upload" ||
+            /^\/api\/creator\/team-assets\/[^/]+\/upload$/.test(pathname)
+          )
+        ) {
+          const releaseBufferedMultipart = bufferedMultipartLimiter.acquire();
+          if (!releaseBufferedMultipart) {
+            response.setHeader("retry-after", "1");
+            return writeJson(response, envelopedError(
+              429,
+              "buffered_multipart_busy",
+              "Another large upload is still being processed. Please retry shortly.",
+            ));
+          }
+          response.once("finish", releaseBufferedMultipart);
+          response.once("close", releaseBufferedMultipart);
+        }
 
         if (request.method === "GET" && pathname === "/api/creator/team/overview") {
           return writeJson(
@@ -29154,19 +29841,42 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "GET" && pathname === "/api/creator/projects") {
-          return writeJson(
-            response,
-            await creatorApplication.listProjects({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              now: new Date(),
-              page: Number(url.searchParams.get("page") ?? 1),
-              pageSize: url.searchParams.get("pageSize"),
-              keyword: url.searchParams.get("keyword"),
-            }),
-          );
+          // Team-member visibility can change independently; keep its authorization check live.
+          const cacheKey = authenticated.user.teamMember?.id
+            ? null
+            : [
+                authenticated.user.id,
+                url.searchParams.get("page") ?? "1",
+                url.searchParams.get("pageSize") ?? "",
+                url.searchParams.get("keyword") ?? "",
+              ].join(":");
+          const cached = cacheKey ? creatorProjectListCache.get(cacheKey) : null;
+          if (cached && cached.expiresAt > Date.now()) {
+            return writeJson(response, cached.response);
+          }
+          if (cached && cacheKey) {
+            creatorProjectListCache.delete(cacheKey);
+          }
+          const projectListResponse = await creatorApplication.listProjects({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            now: new Date(),
+            page: Number(url.searchParams.get("page") ?? 1),
+            pageSize: url.searchParams.get("pageSize"),
+            keyword: url.searchParams.get("keyword"),
+          });
+          if (cacheKey && projectListResponse.status === 200) {
+            if (creatorProjectListCache.size >= 100) {
+              creatorProjectListCache.delete(creatorProjectListCache.keys().next().value!);
+            }
+            creatorProjectListCache.set(cacheKey, {
+              expiresAt: Date.now() + 20_000,
+              response: projectListResponse,
+            });
+          }
+          return writeJson(response, projectListResponse);
         }
 
         const projectBrandKitMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/brand-kit$/);
@@ -30664,18 +31374,19 @@ export function createPhoneAuthDevServer(
             resolution: body.resolution,
             projectType: String(body.projectType ?? "animation"),
           };
-          return writeJson(
-            response,
-            await creatorApplication.createProject({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              body: createProjectBody,
-              idempotencyKey,
-              now: new Date(),
-            }),
-          );
+          const projectResponse = await creatorApplication.createProject({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            body: createProjectBody,
+            idempotencyKey,
+            now: new Date(),
+          });
+          if (projectResponse.status < 400) {
+            clearCreatorProjectListCache(authenticated.user.id);
+          }
+          return writeJson(response, projectResponse);
         }
 
         if (request.method === "PATCH" && pathname === "/api/creator/project") {
@@ -30686,34 +31397,36 @@ export function createPhoneAuthDevServer(
             phase?: "script_input" | "asset_review" | "shot_generation" | "export" | null;
             coverImageUrl?: string | null;
           };
-          return writeJson(
-            response,
-            await creatorApplication.updateProject({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              body,
-              now: new Date(),
-            }),
-          );
+          const projectResponse = await creatorApplication.updateProject({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            body,
+            now: new Date(),
+          });
+          if (projectResponse.status < 400) {
+            clearCreatorProjectListCache(authenticated.user.id);
+          }
+          return writeJson(response, projectResponse);
         }
 
         if (request.method === "DELETE" && pathname === "/api/creator/project") {
           const body = (await readJsonBody(request)) as {
             projectId?: string | null;
           };
-          return writeJson(
-            response,
-            await creatorApplication.deleteProject({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              body,
-              now: new Date(),
-            }),
-          );
+          const projectResponse = await creatorApplication.deleteProject({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            body,
+            now: new Date(),
+          });
+          if (projectResponse.status < 400) {
+            clearCreatorProjectListCache(authenticated.user.id);
+          }
+          return writeJson(response, projectResponse);
         }
 
         if (request.method === "POST" && pathname === "/api/creator/project/cover") {
@@ -30723,17 +31436,18 @@ export function createPhoneAuthDevServer(
             uploadSessionId?: string | null;
             storageObjectId?: string | null;
           };
-          return writeJson(
-            response,
-            await creatorApplication.updateProject({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              body,
-              now: new Date(),
-            }),
-          );
+          const projectResponse = await creatorApplication.updateProject({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            body,
+            now: new Date(),
+          });
+          if (projectResponse.status < 400) {
+            clearCreatorProjectListCache(authenticated.user.id);
+          }
+          return writeJson(response, projectResponse);
         }
 
         if (request.method === "POST" && pathname === "/api/creator/parse") {
@@ -31406,7 +32120,85 @@ export function createPhoneAuthDevServer(
           }))) {
             return writeJson(response, envelopedError(403, "team_asset_library_entitlement_required", "Team asset library membership is required"));
           }
-          const formData = await readMultipartFormData(request, serverOriginFromRequest(request));
+          if (String(request.headers["content-type"] ?? "").toLowerCase().includes("application/json")) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            const category = parseTeamAssetCategory(body.category);
+            const assetName = readString(body.assetName);
+            const assetPrompt = readString(body.assetPrompt) || null;
+            const uploadSessionId = readString(body.uploadSessionId);
+            const storageObjectId = readString(body.storageObjectId);
+            if (!category || !assetName || !isUuid(uploadSessionId) || !isUuid(storageObjectId)) {
+              return writeJson(response, envelopedError(400, "invalid_team_asset_input", "Team asset category, name and completed upload are required"));
+            }
+            if (await hasTeamAssetNameConflict(db, {
+              adminUserId: actor.userId,
+              category,
+              name: assetName,
+            })) {
+              return writeJson(response, envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"));
+            }
+            const uploaded = await getUploadSessionStatus(db, {
+              actor,
+              sessionToken: authenticated.sessionToken,
+              uploadSessionId,
+              now,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+            });
+            const uploadPolicy = validateUploadPolicy({
+              fileName: uploaded.uploadSession.originalFileName,
+              contentType: uploaded.storageObject.contentType,
+              sizeBytes: uploaded.storageObject.sizeBytes,
+              purpose: uploaded.uploadSession.purpose,
+            });
+            if (
+              uploaded.storageObject.id !== storageObjectId ||
+              uploaded.uploadSession.status !== "uploaded" ||
+              uploaded.storageObject.status !== "available" ||
+              !isTeamAssetUploadPurpose(uploaded.uploadSession.purpose) ||
+              !uploadPolicy.ok ||
+              (category === "voice" ? uploadPolicy.kind !== "audio" : uploadPolicy.kind !== "image")
+            ) {
+              return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
+            }
+            const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
+            const assetId = randomUUID();
+            const inserted = await queryOne<Record<string, unknown>>(
+              db,
+              `
+                INSERT INTO team_assets (
+                  id, admin_user_id, asset_name, asset_prompt, asset_category,
+                  asset_status, asset_url, resource_type, resource_size,
+                  created_at, updated_at, created_by_name, updated_by_name,
+                  is_admin_created, created_user_id, storage_object_id
+                )
+                VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9, $10, $10, $11, $12, $13)
+                RETURNING *
+              `,
+              [
+                assetId,
+                actor.userId,
+                assetName,
+                assetPrompt,
+                category,
+                `/api/storage/objects/${encodeURIComponent(uploaded.storageObject.id)}/content?proxy=1`,
+                teamAssetResourceKind(uploaded.storageObject.contentType),
+                uploaded.storageObject.sizeBytes,
+                now,
+                operatorName,
+                !actor.teamMember,
+                actor.teamMember?.id ?? actor.userId,
+                uploaded.storageObject.id,
+              ],
+            );
+            return writeJson(response, { status: 200, body: { asset: teamAssetRow(inserted!) } });
+          }
+          const formData = await readMultipartFormData(
+            request,
+            serverOriginFromRequest(request),
+            teamAssetMultipartMaxBytes,
+            bufferedMultipartTimeoutMs,
+          );
           const category = parseTeamAssetCategory(formData.get("category"));
           const file = formData.get("file");
           const assetName = String(formData.get("assetName") ?? (file instanceof File ? file.name.replace(/\.[^.]+$/, "") : "")).trim();
@@ -31508,7 +32300,79 @@ export function createPhoneAuthDevServer(
           if (!existing) {
             return writeJson(response, { status: 404, body: { error: "team_asset_not_found" } });
           }
-          const formData = await readMultipartFormData(request, serverOriginFromRequest(request));
+          if (String(request.headers["content-type"] ?? "").toLowerCase().includes("application/json")) {
+            const body = (await readJsonBody(request)) as Record<string, unknown>;
+            const uploadSessionId = readString(body.uploadSessionId);
+            const storageObjectId = readString(body.storageObjectId);
+            const assetName = readString(body.assetName) || null;
+            const hasAssetPrompt = body.assetPrompt !== undefined;
+            const assetPrompt = hasAssetPrompt ? readString(body.assetPrompt) : null;
+            const category = parseTeamAssetCategory(existing.asset_category);
+            if (!category || !isUuid(uploadSessionId) || !isUuid(storageObjectId)) {
+              return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
+            }
+            if (assetName && await hasTeamAssetNameConflict(db, {
+              adminUserId: actor.userId,
+              category,
+              name: assetName,
+              excludeAssetId: assetId,
+            })) {
+              return writeJson(response, envelopedError(409, "ASSET_ALREADY_EXISTS", "Asset name already exists in this category"));
+            }
+            const uploaded = await getUploadSessionStatus(db, {
+              actor,
+              sessionToken: authenticated.sessionToken,
+              uploadSessionId,
+              now,
+              runtime: storageRuntime,
+              signedUrlExpiresInSeconds,
+            });
+            const uploadPolicy = validateUploadPolicy({
+              fileName: uploaded.uploadSession.originalFileName,
+              contentType: uploaded.storageObject.contentType,
+              sizeBytes: uploaded.storageObject.sizeBytes,
+              purpose: uploaded.uploadSession.purpose,
+            });
+            if (
+              uploaded.storageObject.id !== storageObjectId ||
+              uploaded.uploadSession.status !== "uploaded" ||
+              uploaded.storageObject.status !== "available" ||
+              !isTeamAssetUploadPurpose(uploaded.uploadSession.purpose) ||
+              !uploadPolicy.ok ||
+              (category === "voice" ? uploadPolicy.kind !== "audio" : uploadPolicy.kind !== "image")
+            ) {
+              return writeJson(response, envelopedError(400, "invalid_team_asset_file", "Invalid team asset file"));
+            }
+            const operatorName = actor.teamMember?.memberName ?? authenticated.user.displayName ?? authenticated.user.phone ?? actor.userId;
+            const updated = await queryOne<Record<string, unknown>>(db, `
+              UPDATE team_assets
+              SET asset_url = $3, resource_type = $4, resource_size = $5, storage_object_id = $11,
+                  asset_name = COALESCE($6, asset_name),
+                  asset_prompt = CASE WHEN $7::boolean THEN $8 ELSE asset_prompt END,
+                  asset_status = 'active', updated_at = $9, updated_by_name = $10
+              WHERE id = $1 AND admin_user_id = $2
+              RETURNING *
+            `, [
+              assetId,
+              actor.userId,
+              `/api/storage/objects/${encodeURIComponent(uploaded.storageObject.id)}/content?proxy=1`,
+              teamAssetResourceKind(uploaded.storageObject.contentType),
+              uploaded.storageObject.sizeBytes,
+              assetName,
+              hasAssetPrompt,
+              assetPrompt,
+              now,
+              operatorName,
+              uploaded.storageObject.id,
+            ]);
+            return writeJson(response, { status: 200, body: { asset: teamAssetRow(updated!) } });
+          }
+          const formData = await readMultipartFormData(
+            request,
+            serverOriginFromRequest(request),
+            teamAssetMultipartMaxBytes,
+            bufferedMultipartTimeoutMs,
+          );
           const file = formData.get("file");
           const assetName = String(formData.get("assetName") ?? "").trim() || null;
           const hasAssetPrompt = formData.has("assetPrompt");
@@ -31773,7 +32637,12 @@ export function createPhoneAuthDevServer(
         }
 
         if (request.method === "POST" && pathname === "/api/creator/uploads") {
-          const formData = await readMultipartFormData(request, serverOriginFromRequest(request));
+          const formData = await readMultipartFormData(
+            request,
+            serverOriginFromRequest(request),
+            creatorUploadMultipartMaxBytes,
+            bufferedMultipartTimeoutMs,
+          );
           const category = String(formData.get("category") ?? "misc");
           const projectId = String(formData.get("projectId") ?? "").trim() || null;
           const file = formData.get("file");
@@ -31889,18 +32758,19 @@ export function createPhoneAuthDevServer(
             role?: "producer" | "creator" | "viewer" | null;
             note?: string | null;
           };
-          return writeJson(
-            response,
-            await creatorApplication.createProjectMember({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              projectId,
-              body,
-              now: new Date(),
-            }),
-          );
+          const projectMemberResponse = await creatorApplication.createProjectMember({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            projectId,
+            body,
+            now: new Date(),
+          });
+          if (projectMemberResponse.status < 400) {
+            clearCreatorProjectListCache(authenticated.user.id);
+          }
+          return writeJson(response, projectMemberResponse);
         }
 
         const projectMemberMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/members\/([^/]+)$/);
@@ -31912,19 +32782,20 @@ export function createPhoneAuthDevServer(
             note?: string | null;
             status?: "active" | "disabled" | null;
           };
-          return writeJson(
-            response,
-            await creatorApplication.updateProjectMember({
-              user: {
-                id: authenticated.user.id,
-                sessionToken: authenticated.sessionToken,
-              },
-              projectId,
-              memberId,
-              body,
-              now: new Date(),
-            }),
-          );
+          const projectMemberResponse = await creatorApplication.updateProjectMember({
+            user: {
+              id: authenticated.user.id,
+              sessionToken: authenticated.sessionToken,
+            },
+            projectId,
+            memberId,
+            body,
+            now: new Date(),
+          });
+          if (projectMemberResponse.status < 400) {
+            clearCreatorProjectListCache(authenticated.user.id);
+          }
+          return writeJson(response, projectMemberResponse);
         }
 
         const projectTeamDashboardExportMatch = pathname.match(/^\/api\/creator\/projects\/([^/]+)\/team-dashboard\/export$/);

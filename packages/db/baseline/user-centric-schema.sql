@@ -3295,6 +3295,8 @@ CREATE INDEX IF NOT EXISTS project_upload_records_actor_created_idx ON project_u
 
 CREATE INDEX IF NOT EXISTS project_upload_records_project_created_idx ON project_upload_records USING btree (project_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS project_upload_records_storage_object_created_id_idx ON project_upload_records USING btree (storage_object_id, created_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS project_upload_records_status_idx ON project_upload_records USING btree (status, created_at DESC);
 
 CREATE UNIQUE INDEX IF NOT EXISTS project_upload_records_upload_session_unique_idx ON project_upload_records USING btree (upload_session_id) WHERE (upload_session_id IS NOT NULL);

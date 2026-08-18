@@ -53,28 +53,29 @@ const DEFAULT_MEDIA_COMPOSER_HEIGHT = 272;
 const MEDIA_COMPOSER_MIN_HEIGHT = 176;
 const MEDIA_COMPOSER_MAX_HEIGHT = 560;
 const PROMPT_EDITOR_MODULE_URL = "/vendor/prompt-editor.js?v=20260810-2";
+const AGENT_ATTACHMENT_UPLOAD_CONCURRENCY = 2;
 const AGENT_ATTACHMENT_UPLOAD_LIMITS = {
   image: {
     label: "图片",
-    maxBytes: 20 * 1024 * 1024,
+    maxBytes: 30 * 1024 * 1024,
     mimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
     extensions: [".jpg", ".jpeg", ".png", ".webp", ".avif"],
   },
   video: {
     label: "视频",
-    maxBytes: 500 * 1024 * 1024,
+    maxBytes: 50 * 1024 * 1024,
     mimeTypes: ["video/mp4", "video/webm", "video/quicktime"],
     extensions: [".mp4", ".webm", ".mov"],
   },
   audio: {
     label: "音频",
-    maxBytes: 100 * 1024 * 1024,
+    maxBytes: 15 * 1024 * 1024,
     mimeTypes: ["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"],
     extensions: [".mp3", ".m4a", ".ogg", ".wav", ".webm"],
   },
   document: {
     label: "文档",
-    maxBytes: 20 * 1024 * 1024,
+    maxBytes: 10 * 1024 * 1024,
     mimeTypes: [
       "text/plain",
       "text/markdown",
@@ -1346,7 +1347,6 @@ export function createCanvasAgentController({
     }
     try {
       await refreshConversationMessages(conversationId);
-      await loadFileGrants(conversationId);
       cacheConversation(conversationId);
       if (conversation?.taskId) {
         agent.taskId = String(conversation.taskId);
@@ -1461,7 +1461,10 @@ export function createCanvasAgentController({
     syncPanel();
     const uploaded = [];
     try {
-      for (const file of candidates.slice(0, remaining)) {
+      const selectedFiles = candidates.slice(0, remaining);
+      let nextIndex = 0;
+      let uploadFailure = null;
+      const uploadOne = async (file) => {
         const kind = resolveAgentAttachmentKind(file);
         if (!kind) throw new Error(`不支持的附件类型：${file.name || "文件"}`);
         const result = await workbench.api.uploadFile(file, {
@@ -1480,7 +1483,7 @@ export function createCanvasAgentController({
         });
         const fileGrantId = String(grant?.grant?.id ?? "").trim();
         if (!fileGrantId) throw new Error("canvas_agent_attachment_grant_missing");
-        uploaded.push({
+        return {
           id: storageObjectId,
           storageObjectId,
           fileGrantId,
@@ -1491,14 +1494,33 @@ export function createCanvasAgentController({
           previewUrl: kind === "image" || kind === "video"
             ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
             : "",
-        });
-      }
+        };
+      };
+      const worker = async () => {
+        while (!uploadFailure && nextIndex < selectedFiles.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          try {
+            uploaded[index] = await uploadOne(selectedFiles[index]);
+          } catch (error) {
+            uploadFailure ??= error;
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(AGENT_ATTACHMENT_UPLOAD_CONCURRENCY, selectedFiles.length) },
+          () => worker(),
+        ),
+      );
+      if (uploadFailure) throw uploadFailure;
       await loadFileGrants(conversationId);
     } finally {
-      if (uploaded.length) {
-        agent.promptAttachments = [...current, ...uploaded];
+      const completedUploads = uploaded.filter(Boolean);
+      if (completedUploads.length) {
+        agent.promptAttachments = [...current, ...completedUploads];
         if (!mediaOnly) {
-          agent.promptDraft = appendAgentPromptAttachmentTokens(agent.promptDraft, uploaded);
+          agent.promptDraft = appendAgentPromptAttachmentTokens(agent.promptDraft, completedUploads);
         }
       }
       agent.attachmentUploading = false;

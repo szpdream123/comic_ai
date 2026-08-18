@@ -109,6 +109,20 @@ const migrations = [
   ["20260907-free-generation-workspaces.sql", "packages/db/migrations/20260907-free-generation-workspaces.sql"],
   ["20260908-hide-soundclone-provider-parameters.sql", "packages/db/migrations/20260908-hide-soundclone-provider-parameters.sql"],
   ["20260909-backfill-project-cover-storage-objects.sql", "packages/db/migrations/20260909-backfill-project-cover-storage-objects.sql"],
+  ["20260910-create-marketing-module.sql", "packages/db/migrations/20260910-create-marketing-module.sql"],
+  ["20260911-project-upload-storage-object-index.sql", "packages/db/migrations/20260911-project-upload-storage-object-index.sql"],
+  ["20260912-create-marketing-brand-profiles.sql", "packages/db/migrations/20260912-create-marketing-brand-profiles.sql"],
+  ["20260913-marketing-executor-health.sql", "packages/db/migrations/20260913-marketing-executor-health.sql"],
+  ["20260914-marketing-executor-alerts.sql", "packages/db/migrations/20260914-marketing-executor-alerts.sql"],
+  ["20260915-marketing-research-request-log.sql", "packages/db/migrations/20260915-marketing-research-request-log.sql"],
+  ["20260916-marketing-agent-usage-records.sql", "packages/db/migrations/20260916-marketing-agent-usage-records.sql"],
+  ["20260917-marketing-text-agent-provider-audit.sql", "packages/db/migrations/20260917-marketing-text-agent-provider-audit.sql"],
+  ["20260918-marketing-component-admissions.sql", "packages/db/migrations/20260918-marketing-component-admissions.sql"],
+  ["20260919-marketing-generation-runs.sql", "packages/db/migrations/20260919-marketing-generation-runs.sql"],
+  ["20260920-marketing-execution-owner-bindings.sql", "packages/db/migrations/20260920-marketing-execution-owner-bindings.sql"],
+  ["20260921-marketing-generation-confirmations.sql", "packages/db/migrations/20260921-marketing-generation-confirmations.sql"],
+  ["20260922-marketing-generation-skills.sql", "packages/db/migrations/20260922-marketing-generation-skills.sql"],
+  ["20260923-marketing-skill-kinds.sql", "packages/db/migrations/20260923-marketing-skill-kinds.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -116,6 +130,7 @@ const nonTransactionalMigrationIndexes = new Map([
   ["20260731-failed-image-submission-active-repair-index.sql", "tasks_failed_image_submission_active_repair_idx"],
   ["20260731-failed-image-submission-snapshot-repair-index.sql", "generation_snapshots_failed_image_submission_repair_idx"],
   ["20260824-z-task-center-provider-diagnostics-index.sql", "provider_requests_task_center_diagnostics_idx"],
+  ["20260911-project-upload-storage-object-index.sql", "project_upload_records_storage_object_created_id_idx"],
 ]);
 const nonTransactionalMigrationNames = new Set(nonTransactionalMigrationIndexes.keys());
 const runtimeSafeMigrationNames = new Set([
@@ -128,6 +143,20 @@ const runtimeSafeMigrationNames = new Set([
   "20260906-home-background-video.sql",
   "20260907-free-generation-workspaces.sql",
   "20260908-hide-soundclone-provider-parameters.sql",
+  "20260910-create-marketing-module.sql",
+  "20260911-project-upload-storage-object-index.sql",
+  "20260912-create-marketing-brand-profiles.sql",
+  "20260913-marketing-executor-health.sql",
+  "20260914-marketing-executor-alerts.sql",
+  "20260915-marketing-research-request-log.sql",
+  "20260916-marketing-agent-usage-records.sql",
+  "20260917-marketing-text-agent-provider-audit.sql",
+  "20260918-marketing-component-admissions.sql",
+  "20260919-marketing-generation-runs.sql",
+  "20260920-marketing-execution-owner-bindings.sql",
+  "20260921-marketing-generation-confirmations.sql",
+  "20260922-marketing-generation-skills.sql",
+  "20260923-marketing-skill-kinds.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

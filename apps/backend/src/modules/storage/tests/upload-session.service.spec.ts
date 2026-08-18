@@ -184,6 +184,54 @@ describe("upload session service", () => {
     }
   });
 
+  it("rejects a completed upload when the stored object size differs from the session", async () => {
+    const db = await createMigratedTestDb();
+    const localObjectStore = new LocalObjectStoreStub();
+
+    try {
+      await seedUploadUsers(db);
+      const runtime = createRuntime(localObjectStore);
+      const actor = createActor("00000000-0000-4000-8000-000000000001");
+      const prepared = await createUploadSession(db, {
+        actor,
+        sessionToken: "owner-token",
+        projectId: "40000000-0000-4000-8000-000000000001",
+        purpose: "storyboard-images",
+        fileName: "shot-oversized.png",
+        contentType: "image/png",
+        sizeBytes: 1024,
+        checksum: null,
+        multipart: false,
+        idempotencyKey: "upload:storyboard-images:shot-oversized.png",
+        now: new Date("2026-05-27T02:12:00.000Z"),
+        runtime,
+      });
+      localObjectStore.put(prepared.objectKey, {
+        contentType: "image/png",
+        contentLength: 1025,
+      });
+
+      await assert.rejects(
+        completeUploadSession(db, {
+          actor,
+          sessionToken: "owner-token",
+          uploadSessionId: prepared.uploadSessionId,
+          now: new Date("2026-05-27T02:13:00.000Z"),
+          runtime,
+          signedUrlExpiresInSeconds: 900,
+        }),
+        /storage_object_size_mismatch/,
+      );
+
+      const storedObject = await findStorageObject(db, prepared.storageObjectId);
+      const storedSession = await findUploadSession(db, prepared.uploadSessionId);
+      assert.equal(storedObject?.status, "pending_upload");
+      assert.equal(storedSession?.status, "created");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("completes an upload owned by the current user", async () => {
     const db = await createMigratedTestDb();
     const localObjectStore = new LocalObjectStoreStub();

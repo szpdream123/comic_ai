@@ -40,6 +40,7 @@ export interface TextModelGatewayRequestContext {
   agentTaskId?: string | null;
   agentStepId?: string | null;
   createdByUserId?: string | null;
+  createdByAdminId?: string | null;
   requestKey: string;
   requestHash: string;
   payloadHash: string;
@@ -144,7 +145,8 @@ export class TextModelGatewayService {
       },
       providerConfigRevisionId: model.providerConfigRevisionId ?? null,
       credentialVersionRef: model.credentialVersionRef ?? null,
-      userId: context.createdByUserId!,
+      userId: context.createdByUserId ?? null,
+      createdByAdminId: context.createdByAdminId ?? null,
       now: now(),
     });
 
@@ -178,6 +180,7 @@ export class TextModelGatewayService {
       agentTaskId: context.agentTaskId ?? null,
       agentStepId: context.agentStepId ?? null,
       userId: context.createdByUserId ?? null,
+      adminAccountId: context.createdByAdminId ?? null,
       providerName: model.providerName,
       providerOperation: context.providerOperation,
       modelId: model.id,

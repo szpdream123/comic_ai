@@ -256,7 +256,17 @@ async function setSearchPathIfNeeded(client: PoolClient, schemaName?: string) {
   if (!schemaName) {
     return;
   }
-  await client.query(`SET search_path TO ${quoteIdentifier(schemaName)}`);
+  const extensionSchemas = await client.query<{ schema_name: string }>(
+    `SELECT namespace.nspname AS schema_name
+     FROM pg_extension AS extension
+     JOIN pg_namespace AS namespace ON namespace.oid = extension.extnamespace
+     WHERE extension.extname = 'pg_trgm'`,
+  );
+  const searchPath = [
+    schemaName,
+    ...extensionSchemas.rows.map((row) => row.schema_name).filter((name) => name !== schemaName),
+  ];
+  await client.query(`SET search_path TO ${searchPath.map(quoteIdentifier).join(", ")}`);
 }
 
 function transactionSqlCommand(sql: string) {

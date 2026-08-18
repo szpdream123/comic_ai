@@ -3329,6 +3329,7 @@ async function persistSeedanceVideoArtifact(
       storageObjectId: uploaded.storageObject.id,
       contentType: uploaded.contentType,
       sizeBytes: uploaded.sizeBytes,
+      checksum: uploaded.checksum,
       eTag: uploaded.uploadResult?.eTag ?? null,
       versionId: uploaded.uploadResult?.versionId ?? null,
       metadata: artifactMetadata,
@@ -3435,6 +3436,7 @@ async function uploadProviderArtifactToStorage(
   storageObject: StorageObjectRecord;
   contentType: string;
   sizeBytes: number | null;
+  checksum: string;
   uploadResult?: { eTag?: string | null; versionId?: string | null };
 }> {
   const { retryAttempts, retryDelayMs, downloadTimeoutMs, uploadTimeoutMs } = readGenerationArtifactUploadConfig(input.env);
@@ -3454,6 +3456,7 @@ async function uploadProviderArtifactToStorage(
         storageObject,
         contentType: reusable.contentType,
         sizeBytes: reusable.sizeBytes,
+        checksum: reusable.checksum,
       };
     }
   }
@@ -3466,6 +3469,7 @@ async function uploadProviderArtifactToStorage(
     let uploadStream: Transform | null = null;
     let sourceDownloadError: unknown = null;
     let countedSizeBytes = 0;
+    const checksum = createHash("sha256");
     try {
       response = await fetchProviderArtifactSafely(input.artifactUrl, {
         ...input.downloadInit,
@@ -3499,6 +3503,7 @@ async function uploadProviderArtifactToStorage(
       uploadStream = new Transform({
         transform(chunk: Buffer | Uint8Array | string, _encoding, callback) {
           countedSizeBytes += Buffer.byteLength(chunk);
+          checksum.update(chunk);
           callback(null, chunk);
         },
       });
@@ -3527,6 +3532,7 @@ async function uploadProviderArtifactToStorage(
         storageObject,
         contentType,
         sizeBytes: knownSizeBytes ?? countedSizeBytes,
+        checksum: checksum.digest("hex"),
         uploadResult,
       };
     } catch (error) {
@@ -3564,8 +3570,10 @@ async function findReusableSeedanceStorageObject(
 ) {
   if (typeof runtime.adapter.headObject !== "function") {
     const sizeBytes = Number(storageObject.sizeBytes ?? 0);
+    const checksum = storageObject.checksum ?? "";
     return storageObject.status === "available" && Number.isFinite(sizeBytes) && sizeBytes > 0
-      ? { contentType: storageObject.contentType, sizeBytes }
+      && /^[a-fA-F0-9]{64}$/.test(checksum)
+      ? { contentType: storageObject.contentType, sizeBytes, checksum }
       : null;
   }
   const remote = await runtime.adapter.headObject({
@@ -3574,10 +3582,11 @@ async function findReusableSeedanceStorageObject(
   });
   if (!remote.exists) return null;
   const sizeBytes = Number(remote.contentLength ?? storageObject.sizeBytes ?? 0);
-  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return null;
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || !/^[a-fA-F0-9]{64}$/.test(storageObject.checksum ?? "")) return null;
   return {
     contentType: readString(remote.contentType) ?? storageObject.contentType,
     sizeBytes,
+    checksum: storageObject.checksum!,
   };
 }
 

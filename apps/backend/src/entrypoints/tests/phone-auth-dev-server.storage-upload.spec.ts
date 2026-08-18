@@ -1033,7 +1033,7 @@ describe("phone auth dev server storage uploads", () => {
           purpose: "storyboard-video",
           fileName: "too-large.mp4",
           contentType: "video/mp4",
-          sizeBytes: 500 * 1024 * 1024 + 1,
+          sizeBytes: 50 * 1024 * 1024 + 1,
         }),
       });
       const oversizedVideo = await oversizedVideoResponse.json();
@@ -1094,7 +1094,7 @@ describe("phone auth dev server storage uploads", () => {
         {
           method: "PUT",
           headers: { "content-type": "image/png", cookie },
-          body: Buffer.alloc(20 * 1024 * 1024 + 1),
+          body: Buffer.alloc(30 * 1024 * 1024 + 1),
         },
       );
       const otherCookie = await login(server.origin, "13800138001");
@@ -1119,7 +1119,7 @@ describe("phone auth dev server storage uploads", () => {
       assert.equal(createProjectResponse.status, 200);
       assert.equal(oversizedVideoResponse.status, 413);
       assert.equal(oversizedVideo.errorCode, "upload_file_too_large");
-      assert.equal(oversizedVideo.details.maxBytes, 500 * 1024 * 1024);
+      assert.equal(oversizedVideo.details.maxBytes, 50 * 1024 * 1024);
       assert.equal(blockedExecutableResponse.status, 400);
       assert.equal(blockedExecutable.errorCode, "upload_type_not_allowed");
       assert.equal(mismatchedMimeResponse.status, 400);

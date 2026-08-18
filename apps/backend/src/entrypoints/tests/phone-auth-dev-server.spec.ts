@@ -129,7 +129,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
     assert.match(
       source,
-      /async function reconcileDefinitiveProviderSubmissionFailures[\s\S]*provider_request\.attempt_id = task\.current_attempt_id/,
+      /async function repairDefinitiveProviderSubmissionFailures[\s\S]*provider_request\.attempt_id = task\.current_attempt_id/,
+    );
+    assert.match(
+      source,
+      /async function mapGenerationTaskResponse[\s\S]*const hasStorageObject = Boolean\(row\.storage_object_id\);/,
+    );
+    assert.doesNotMatch(
+      source.match(/async function listTaskCenterTasks[\s\S]*?const diagnosticsSchema/)?.[0] ?? "",
+      /reconcile(?:TerminalTaskCenterSnapshots|DefinitiveProviderSubmissionFailures)/,
     );
     assert.match(
       source,
@@ -206,9 +214,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await server.listen(0);
       const payload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
       const backgroundMediaUrl = new URL(payload.data.background.videoUrl, server.origin);
+      const videoMediaUrl = new URL(payload.data.categories[0]?.videos[0]?.videoUrl ?? "", server.origin);
       assert.equal(backgroundMediaUrl.pathname, "/api/home-recommendations/background/media");
       assert.ok(backgroundMediaUrl.searchParams.get("v"));
-      assert.equal(payload.data.categories[0]?.videos[0]?.videoUrl, `/api/home-recommendations/videos/${videoId}/media`);
+      assert.equal(videoMediaUrl.pathname, `/api/home-recommendations/videos/${videoId}/media`);
+      assert.ok(videoMediaUrl.searchParams.get("v"));
 
       const response = await fetch(backgroundMediaUrl);
       assert.equal(response.status, 200);
@@ -227,8 +237,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
         "UPDATE home_background_settings SET video_url = $1, updated_at = updated_at + interval '1 second' WHERE id = 'homepage'",
         [`https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`],
       );
-      const updatedPayload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string } } };
+      await db.query(
+        "UPDATE home_recommendation_videos SET updated_at = updated_at + interval '1 second' WHERE id = $1",
+        [videoId],
+      );
+      const updatedPayload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
       assert.notEqual(updatedPayload.data.background.videoUrl, payload.data.background.videoUrl);
+      assert.notEqual(updatedPayload.data.categories[0]?.videos[0]?.videoUrl, payload.data.categories[0]?.videos[0]?.videoUrl);
       const blockedResponse = await fetch(`${server.origin}${updatedPayload.data.background.videoUrl}`, { redirect: "manual" });
       assert.equal(blockedResponse.status, 404);
       assert.equal(signedRequests.length, 2);
@@ -748,6 +763,38 @@ describe("phone auth dev server", { concurrency: false }, () => {
         `,
         [randomUUID(), olderTargetId, workflowId, olderTaskId, userId],
       );
+      const foreignUserId = randomUUID();
+      const foreignPhone = `139${String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0")}`;
+      const foreignWorkflowId = randomUUID();
+      const foreignTaskId = randomUUID();
+      const foreignTargetId = randomUUID();
+      await db.query(
+        "INSERT INTO users (id, phone_e164, password_hash, status) VALUES ($1, $2, $3, 'active')",
+        [foreignUserId, foreignPhone, await createUserPasswordHash(defaultPasswordFromPhone(foreignPhone))],
+      );
+      await db.query(
+        `INSERT INTO workflows (id, workflow_type, status, input_snapshot_json, created_by_user_id, created_at, updated_at)
+         VALUES ($1, 'image_generation', 'succeeded', '{}'::jsonb, $2, now(), now())`,
+        [foreignWorkflowId, foreignUserId],
+      );
+      await db.query(
+        `INSERT INTO tasks (
+           id, workflow_id, task_type, status, queue_name, input_snapshot_json,
+           target_entity_type, target_entity_id, created_at, updated_at
+         ) VALUES ($1, $2, 'image_generation', 'succeeded', 'generation', '{}'::jsonb, 'storyboard', $3, now(), now())`,
+        [foreignTaskId, foreignWorkflowId, foreignTargetId],
+      );
+      await db.query(
+        `INSERT INTO ai_generation_task_snapshots (
+           id, target_type, target_id, workflow_id, task_id, model_config_id, model_code, media_type,
+           task_mode, status, progress_stage, progress_percent, request_summary_json,
+           result_assets_json, submitted_at, completed_at, created_at, updated_at, user_id
+         ) VALUES ($1, 'storyboard', $2, $3, $4,
+           (SELECT id FROM ai_model_configs WHERE model_code = 'global-ai-opc-gpt-image-2'),
+           'global-ai-opc-gpt-image-2', 'image', 'generate', 'succeeded', 'completed', 100,
+           '{"prompt":"foreign task"}'::jsonb, '[]'::jsonb, now(), now(), now(), now(), $5)`,
+        [randomUUID(), foreignTargetId, foreignWorkflowId, foreignTaskId, foreignUserId],
+      );
       const response = await fetch(
         `${server.origin}/api/task-center/tasks?page=1&pageSize=20&status=poll&taskIds=${taskId}`,
         { headers: { cookie }, signal: AbortSignal.timeout(3000) },
@@ -759,7 +806,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
           "content-type": "application/json",
           cookie,
         },
-        body: JSON.stringify({ taskIds: [taskId, "invalid-task-id", taskId] }),
+        body: JSON.stringify({ taskIds: [taskId, foreignTaskId, "invalid-task-id", taskId] }),
       });
       const batchEnvelope = await batchResponse.json();
 
@@ -782,8 +829,14 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(envelope.data.pageSize, 20);
       assert.equal(envelope.data.total, 1);
       assert.equal(envelope.data.totalPages, 1);
+      assert.match(
+        taskCenterQuerySql ?? "",
+        /AND task\.status <> 'succeeded'/,
+        "completed task reads must not probe provider diagnostics",
+      );
       assert.equal(batchResponse.status, 200);
       assert.deepEqual(batchEnvelope.data.items.map((item: { taskId: string }) => item.taskId), [taskId]);
+      assert.equal(JSON.stringify(batchEnvelope.data).includes(foreignTaskId), false);
       assert.equal(JSON.stringify(batchEnvelope.data).includes("global-ai-opc-gpt-image-2"), false);
 
       const promptSearchResponse = await fetch(
@@ -1469,7 +1522,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await server.listen(0);
 
       const moduleResponse = await fetch(`${server.origin}/vendor/three.module.js`);
+      const moduleEtag = moduleResponse.headers.get("etag");
       const moduleText = await moduleResponse.text();
+      const revalidatedModuleResponse = await fetch(`${server.origin}/vendor/three.module.js`, {
+        headers: { "if-none-match": moduleEtag ?? "" },
+      });
       const coreResponse = await fetch(`${server.origin}/vendor/three.core.js`);
       const coreText = await coreResponse.text();
       const x6Response = await fetch(`${server.origin}/vendor/@antv/x6/dist/x6.min.js`);
@@ -1477,6 +1534,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(moduleResponse.status, 200);
       assert.match(moduleResponse.headers.get("content-type") ?? "", /text\/javascript/);
+      assert.equal(moduleResponse.headers.get("cache-control"), "public, max-age=86400, must-revalidate");
+      assert.ok(moduleEtag);
+      assert.equal(revalidatedModuleResponse.status, 304);
       assert.match(moduleText, /three\.core\.js/);
       assert.equal(coreResponse.status, 200);
       assert.match(coreResponse.headers.get("content-type") ?? "", /text\/javascript/);
@@ -3050,6 +3110,70 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(first.script.id, replay.script.id);
       assert.deepEqual(conflict, { error: "idempotency_conflict" });
       assert.equal(projects.projects.length, 1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("caches an owner project list briefly and clears it after a project update", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "project-list-cache-create",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Cached project name",
+          scriptInput: "Episode 1: Cache the project list.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const created = await createResponse.json();
+      const initialListResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const initialList = await initialListResponse.json();
+
+      await db.query(
+        "UPDATE projects SET name = $1 WHERE id = $2",
+        ["Changed outside the API", created.project.id],
+      );
+      const cachedListResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const cachedList = await cachedListResponse.json();
+      const updateResponse = await fetch(`${server.origin}/api/creator/project`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          cookie,
+        },
+        body: JSON.stringify({
+          projectId: created.project.id,
+          name: "Updated through the API",
+        }),
+      });
+      const refreshedListResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const refreshedList = await refreshedListResponse.json();
+
+      assert.equal(createResponse.status, 200);
+      assert.equal(initialListResponse.status, 200);
+      assert.equal(cachedListResponse.status, 200);
+      assert.equal(updateResponse.status, 200);
+      assert.equal(refreshedListResponse.status, 200);
+      assert.equal(initialList.projects[0].name, "Cached project name");
+      assert.equal(cachedList.projects[0].name, "Cached project name");
+      assert.equal(refreshedList.projects[0].name, "Updated through the API");
     } finally {
       await server.close();
     }
@@ -5329,8 +5453,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.equal(generationConfigEnvelope.data.defaultImageModelCode, "global-ai-opc-gpt-image-2");
         assert.equal(generationConfigEnvelope.data.defaultVideoModelCode, "doubao-seedance-2-0-260128");
         assert.equal(generationConfigEnvelope.data.creditBalance, 0);
-        assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 20 * 1024 * 1024);
-        assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 500 * 1024 * 1024);
+        assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxBytes, 30 * 1024 * 1024);
+        assert.equal(generationConfigEnvelope.data.uploadLimits.video.maxBytes, 50 * 1024 * 1024);
         assert.equal(generationConfigEnvelope.data.uploadLimits.image.maxReferencesPerTask, 30);
         assert.ok(generationConfigEnvelope.data.uploadLimits.blockedExtensions.includes(".exe"));
         assert.equal(createStoryboardResponse.status, 200);
@@ -13950,6 +14074,11 @@ describe("phone auth dev server", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      const forbiddenRepairResponse = await fetch(`${server.origin}/api/storage/repair`, {
+        method: "POST",
+        headers: { cookie },
+      });
+      assert.equal(forbiddenRepairResponse.status, 401);
       await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -14138,6 +14267,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const cookie = await login(server.origin, "13800138000");
+      const adminCookie = await loginOpsAdmin(server.origin, db);
       await seedGenerationAccessForPhone(db, "13800138000");
 
       const createResponse = await fetch(`${server.origin}/api/creator/project/create`, {
@@ -14241,7 +14371,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       try {
         const lockedRepairResponse = await fetch(`${server.origin}/api/storage/repair`, {
           method: "POST",
-          headers: { cookie },
+          headers: { cookie: adminCookie },
         });
         const lockedRepair = await lockedRepairResponse.json();
         const lockedTask = await db.query<{ status: string }>(
@@ -14259,7 +14389,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       const repairResponse = await fetch(`${server.origin}/api/storage/repair`, {
         method: "POST",
-        headers: { cookie },
+        headers: { cookie: adminCookie },
       });
       const repair = await repairResponse.json();
       const task = await db.query<{ status: string; failure_code: string | null }>(
@@ -16273,6 +16403,38 @@ async function loginAsAccount(origin: string, account: string, password: string)
   } finally {
     await fallbackDb?.close();
   }
+}
+
+async function loginOpsAdmin(
+  origin: string,
+  db: Awaited<ReturnType<typeof createMigratedTestDb>>,
+) {
+  const loginName = `ops_admin_${randomUUID().slice(0, 8)}`;
+  const password = `Ops-${randomUUID()}-Pwd`;
+  await db.query(
+    `
+      INSERT INTO admin_accounts (
+        id, login_name, password_hash, display_name, status, super_admin_slot
+      ) VALUES ($1, $2, 'plain:' || $3, 'Ops Admin', 'active', NULL)
+    `,
+    [randomUUID(), loginName, password],
+  );
+  await db.query(
+    `
+      INSERT INTO admin_account_roles (id, admin_account_id, role_code)
+      SELECT $1, id, 'ops_admin'
+      FROM admin_accounts
+      WHERE login_name = $2
+    `,
+    [randomUUID(), loginName],
+  );
+  const response = await fetch(`${origin}/api/admin/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ loginName, password }),
+  });
+  assert.equal(response.status, 200);
+  return response.headers.get("set-cookie") ?? "";
 }
 
 async function loginTeamMemberAccount(origin: string, account: string, password: string) {

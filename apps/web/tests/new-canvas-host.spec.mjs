@@ -1062,6 +1062,37 @@ test("applying a toolbar version persists its stable reference on the Canvas doc
   assert.deepEqual(workbench.ui.canvasConfigSnapshots.toolbar.manifest.toolIds, ["select", "connect"]);
 });
 
+test("Canvas config library ignores stale type-filter responses", async () => {
+  let resolveStyle;
+  const workbench = {
+    ui: {},
+    api: {
+      listCanvasUserConfigs({ type }) {
+        if (type === "style") {
+          return new Promise((resolve) => { resolveStyle = resolve; });
+        }
+        return Promise.resolve({ configs: [{ id: "skill-1", type: "skill", name: "分镜 Skill" }] });
+      },
+      listCanvasUserConfigVersions(configId) {
+        return Promise.resolve({ versions: [{ id: `${configId}-version-1`, version: 1 }] });
+      },
+    },
+  };
+  const controller = createCanvasConfigLibraryController({ surface: {}, workbench });
+
+  controller.handleInput({ dataset: { configField: "type" }, value: "style" });
+  controller.handleInput({ dataset: { configField: "type" }, value: "skill" });
+  await new Promise((resolve) => setImmediate(resolve));
+  resolveStyle({ configs: [{ id: "style-1", type: "style", name: "旧画风" }] });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(workbench.ui.canvasConfigLibrary.type, "skill");
+  assert.deepEqual(workbench.ui.canvasConfigLibrary.configs, [
+    { id: "skill-1", type: "skill", name: "分镜 Skill" },
+  ]);
+  assert.equal(workbench.ui.canvasConfigLibrary.selectedConfigId, "skill-1");
+});
+
 test("Canvas pane dismissal closes settings and transient node overlays", () => {
   const ui = {
     canvasConfigLibrary: { open: true },

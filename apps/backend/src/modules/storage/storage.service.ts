@@ -71,6 +71,15 @@ export interface StorageAdapter {
     checksum?: string | null;
     versionId?: string | null;
   }>;
+  copyObject?(input: {
+    sourceBucket: string;
+    sourceObjectKey: string;
+    destinationBucket: string;
+    destinationObjectKey: string;
+  }): Promise<{
+    eTag?: string | null;
+    versionId?: string | null;
+  }>;
   deleteObject?(input: {
     bucket: string;
     objectKey: string;

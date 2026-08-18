@@ -981,6 +981,55 @@ describe("team asset local uploads", () => {
     }
   });
 
+  it("limits a batch selection to ten team assets regardless of file type", async () => {
+    const { workbench, uploadCalls } = createWorkbench();
+    const files = Array.from({ length: 11 }, (_, index) => ({
+      name: `character-${index + 1}.png`,
+      type: "image/png",
+      size: 1024,
+      lastModified: index + 1,
+    }));
+
+    await handleTeamAssetLocalUploadFiles(workbench, "character", files);
+
+    assert.equal(uploadCalls.length, 0);
+    assert.equal(workbench.ui.assetImportDrafts.length, 10);
+    assert.equal(workbench.ui.assetImportSelection.length, 10);
+    assert.match(String(workbench.ui.toast), /已选择 10 个图片，1 个文件已跳过/);
+  });
+
+  it("releases team image object URL previews after closing the import dialog", async () => {
+    const globals = globalThis;
+    const originalUrl = globals.URL;
+    const revokedUrls = [];
+    globals.URL = {
+      createObjectURL(file) {
+        return `blob:team-preview-${file.name}`;
+      },
+      revokeObjectURL(url) {
+        revokedUrls.push(url);
+      },
+    };
+
+    try {
+      const { workbench } = createWorkbench();
+      await handleTeamAssetLocalUploadFiles(workbench, "character", [{
+        name: "hero.png",
+        type: "image/png",
+        size: 1024,
+        lastModified: 1,
+      }]);
+
+      assert.equal(workbench.ui.assetImportDrafts[0]?.preview, "blob:team-preview-hero.png");
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "close-asset-import-modal" },
+      });
+      assert.deepEqual(revokedUrls, ["blob:team-preview-hero.png"]);
+    } finally {
+      globals.URL = originalUrl;
+    }
+  });
+
   it("blocks duplicate team asset names within the same upload batch", async () => {
     const { workbench, uploadCalls } = createWorkbench({
       ui: {
@@ -1570,7 +1619,7 @@ describe("team asset local uploads", () => {
         {
           name: "too-large.png",
           type: "image/png",
-          size: 20 * 1024 * 1024 + 1,
+          size: 30 * 1024 * 1024 + 1,
           lastModified: 4,
         },
       ]);

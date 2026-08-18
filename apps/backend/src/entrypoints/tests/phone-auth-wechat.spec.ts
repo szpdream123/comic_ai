@@ -82,6 +82,29 @@ describe("phone auth WeChat login", () => {
     }
   });
 
+  it("rejects a valid state when it is not returned by the initiating browser", async () => {
+    const server = createPhoneAuthDevServer({
+      env: wechatEnv,
+      repairScheduler: { enabled: false },
+    });
+
+    try {
+      await server.listen(0);
+      const startResponse = await fetch(`${server.origin}/api/auth/wechat/start`);
+      const started = await startResponse.json();
+      const state = new URL(started.authorizeUrl).searchParams.get("state");
+      const callbackResponse = await fetch(
+        `${server.origin}/api/auth/wechat/callback?code=wx-code&state=${state}`,
+        { redirect: "manual" },
+      );
+
+      assert.equal(callbackResponse.status, 400);
+      assert.deepEqual(await callbackResponse.json(), { error: "wechat_state_invalid" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exchanges callback code, stores WeChat fields on users, and creates a session", async () => {
     const db = await createMigratedTestDb();
     const requestedUrls: string[] = [];
@@ -111,9 +134,10 @@ describe("phone auth WeChat login", () => {
       const startResponse = await fetch(`${server.origin}/api/auth/wechat/start`);
       const started = await startResponse.json();
       const state = new URL(started.authorizeUrl).searchParams.get("state");
+      const oauthStateCookie = startResponse.headers.get("set-cookie") ?? "";
       const callbackResponse = await fetch(
         `${server.origin}/api/auth/wechat/callback?code=wx-code&state=${state}`,
-        { redirect: "manual" },
+        { headers: { cookie: oauthStateCookie }, redirect: "manual" },
       );
       const cookie = callbackResponse.headers.get("set-cookie") ?? "";
       const users = await db.query<{

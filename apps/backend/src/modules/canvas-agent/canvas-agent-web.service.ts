@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import net from "node:net";
+import { Agent, buildConnector } from "undici";
 
 import type { CanvasAgentActor } from "./canvas-agent.types.ts";
 import { CanvasAgentExternalToolBoundary, CanvasAgentKnowledgeService } from "./canvas-agent-knowledge.service.ts";
@@ -149,15 +150,15 @@ export class CanvasAgentWebToolService {
   }
 
   private async fetchSearchProvider(request: { url: URL; init: RequestInit }, providerId: string) {
-    await assertPublicHostname(request.url.hostname, this.lookupImpl);
+    const resolvedAddress = await resolvePublicHostname(request.url.hostname, this.lookupImpl);
     await this.boundary.authorize({ kind: "web", targetId: providerId, domain: request.url.hostname });
     let response: Response;
     try {
-      response = await this.fetchImpl(request.url, {
+      response = await fetchResolvedPublicUrl(request.url, {
         ...request.init,
         redirect: "manual",
         signal: AbortSignal.timeout(10_000),
-      });
+      }, resolvedAddress, this.fetchImpl);
     } catch (error) {
       if (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name)) {
         throw new Error("canvas_agent_web_search_provider_timeout");
@@ -165,27 +166,35 @@ export class CanvasAgentWebToolService {
       throw new Error("canvas_agent_web_search_provider_unavailable");
     }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error("canvas_agent_web_search_provider_redirect_invalid");
     }
-    if (!response.ok) throw mapSearchProviderHttpError(response.status);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw mapSearchProviderHttpError(response.status);
+    }
     return response;
   }
 
   private async fetchAllowed(initialUrl: URL, providerId: string) {
     let current = initialUrl;
     for (let redirect = 0; redirect <= maxRedirects; redirect += 1) {
-      await assertPublicHostname(current.hostname, this.lookupImpl);
+      const resolvedAddress = await resolvePublicHostname(current.hostname, this.lookupImpl);
       await this.boundary.authorize({ kind: "web", targetId: providerId, domain: current.hostname });
-      const response = await this.fetchImpl(current, {
+      const response = await fetchResolvedPublicUrl(current, {
         redirect: "manual",
         signal: AbortSignal.timeout(10_000),
         headers: { accept: "text/html, text/plain, application/json;q=0.8" },
-      });
+      }, resolvedAddress, this.fetchImpl);
       if (![301, 302, 303, 307, 308].includes(response.status)) {
-        if (!response.ok) throw new Error(`canvas_agent_web_http_${response.status}`);
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new Error(`canvas_agent_web_http_${response.status}`);
+        }
         return response;
       }
       const location = response.headers.get("location");
+      await response.body?.cancel().catch(() => undefined);
       if (!location || redirect === maxRedirects) throw new Error("canvas_agent_web_redirect_invalid");
       current = new URL(location, current);
       normalizeWebUrl(current.toString());
@@ -336,18 +345,108 @@ function readString(value: unknown) {
 }
 
 export async function assertPublicHostname(hostname: string, lookupImpl: typeof lookup = lookup) {
+  await resolvePublicHostname(hostname, lookupImpl);
+}
+
+export type ResolvedPublicHostname = {
+  hostname: string;
+  address: string | null;
+};
+
+export type PinnedPublicDispatcherFactory = (input: { hostname: string; address: string }) => Agent;
+
+export async function resolvePublicHostname(hostname: string, lookupImpl: typeof lookup = lookup): Promise<ResolvedPublicHostname> {
   const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
   if (!normalized || normalized === "localhost" || normalized.endsWith(".local") || normalized.endsWith(".internal")) {
     throw new Error("canvas_agent_web_ssrf_blocked");
   }
   if (net.isIP(normalized)) {
     if (isPrivateIp(normalized)) throw new Error("canvas_agent_web_ssrf_blocked");
-    return;
+    return { hostname: normalized, address: null };
   }
   const addresses = await lookupImpl(normalized, { all: true, verbatim: true });
   if (!addresses.length || addresses.some((entry) => isPrivateIp(entry.address))) {
     throw new Error("canvas_agent_web_ssrf_blocked");
   }
+  return { hostname: normalized, address: addresses[0]?.address ?? null };
+}
+
+export async function fetchResolvedPublicUrl(
+  url: URL,
+  init: RequestInit,
+  resolved: ResolvedPublicHostname,
+  fetchImpl: typeof fetch = fetch,
+  dispatcherFactory: PinnedPublicDispatcherFactory = createPinnedPublicDispatcher,
+): Promise<Response> {
+  const hostname = url.hostname.trim().toLowerCase().replace(/\.$/, "");
+  if (hostname !== resolved.hostname) throw new Error("canvas_agent_web_ssrf_blocked");
+  if (!resolved.address) return fetchImpl(url, init);
+
+  const dispatcher = dispatcherFactory({ hostname: resolved.hostname, address: resolved.address });
+  try {
+    const response = await fetchImpl(url, { ...init, dispatcher } as RequestInit);
+    return responseWithDispatcherLifetime(response, dispatcher);
+  } catch (error) {
+    dispatcher.destroy(error instanceof Error ? error : undefined);
+    throw error;
+  }
+}
+
+function createPinnedPublicDispatcher(input: { hostname: string; address: string }) {
+  const defaultConnector = buildConnector({});
+  return new Agent({
+    connect(options, callback) {
+      defaultConnector({
+        ...options,
+        hostname: input.address,
+        host: input.address,
+        servername: options.servername ?? input.hostname,
+      }, callback);
+    },
+  });
+}
+
+function responseWithDispatcherLifetime(response: Response, dispatcher: Agent): Response {
+  if (!response.body) {
+    void dispatcher.close();
+    return response;
+  }
+  const reader = response.body.getReader();
+  let finished = false;
+  const finish = (error?: unknown) => {
+    if (finished) return;
+    finished = true;
+    if (error instanceof Error) dispatcher.destroy(error);
+    else void dispatcher.close();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          finish();
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        finish(error);
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        finish();
+      }
+    },
+  });
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 function isPrivateIp(value: string) {

@@ -313,6 +313,128 @@ describe("openai images provider adapter", () => {
     assert.deepEqual(result.redactedResponse?.outputTypes, ["b64_json"]);
   });
 
+  it("rejects reference image lists above the adapter hard limit before contacting the provider", async () => {
+    let providerRequests = 0;
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      fetchImpl: (async () => {
+        providerRequests += 1;
+        return new Response();
+      }) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-reference-limit",
+        providerName: "openai-images",
+        providerOperation: "episode.image.generate",
+        requestKey: "workflow-reference-limit:task-1",
+        payloadRef: "creator://payload-reference-limit",
+        payloadHash: "hash-reference-limit",
+        redactedPayload: {
+          prompt: "Use these references.",
+          referenceImages: Array.from({ length: 17 }, (_, index) => ({
+            b64Json: Buffer.from(`reference-${index}`).toString("base64"),
+          })),
+        },
+      }),
+      /image_provider_reference_limit_exceeded/,
+    );
+    assert.equal(providerRequests, 0);
+  });
+
+  it("rejects oversized reference image downloads before contacting the image provider", async () => {
+    let providerRequests = 0;
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      fetchImpl: (async () => {
+        providerRequests += 1;
+        return new Response();
+      }) as typeof fetch,
+      referenceFetchImpl: (async () => new Response(null, {
+        status: 200,
+        headers: { "content-length": String(20 * 1024 * 1024 + 1) },
+      })) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-oversized-reference",
+        providerName: "openai-images",
+        providerOperation: "episode.image.generate",
+        requestKey: "workflow-oversized-reference:task-1",
+        payloadRef: "creator://payload-oversized-reference",
+        payloadHash: "hash-oversized-reference",
+        redactedPayload: {
+          prompt: "Use this reference.",
+          referenceImages: [{ url: "https://cdn.example.test/reference.png" }],
+        },
+      }),
+      /image_provider_reference_too_large/,
+    );
+    assert.equal(providerRequests, 0);
+  });
+
+  it("rejects private reference image URLs before issuing a request", async () => {
+    let referenceFetchCalls = 0;
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      referenceFetchImpl: (async () => {
+        referenceFetchCalls += 1;
+        return new Response();
+      }) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-private-reference",
+        providerName: "openai-images",
+        providerOperation: "episode.image.generate",
+        requestKey: "workflow-private-reference:task-1",
+        payloadRef: "creator://payload-private-reference",
+        payloadHash: "hash-private-reference",
+        redactedPayload: {
+          prompt: "Use this reference.",
+          referenceImages: [{ url: "https://127.0.0.1/internal.png" }],
+        },
+      }),
+      /provider_artifact_url_invalid/,
+    );
+    assert.equal(referenceFetchCalls, 0);
+  });
+
+  it("validates reference image redirect destinations before following them", async () => {
+    const requestedUrls: string[] = [];
+    const adapter = new OpenAIImagesProviderAdapter({
+      apiKey: "openai-key",
+      referenceFetchImpl: (async (url, init) => {
+        requestedUrls.push(String(url));
+        assert.equal(init?.redirect, "manual");
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://127.0.0.1/internal.png" },
+        });
+      }) as typeof fetch,
+    });
+
+    await assert.rejects(
+      () => adapter.submit({
+        providerRequestId: "provider-request-reference-redirect",
+        providerName: "openai-images",
+        providerOperation: "episode.image.generate",
+        requestKey: "workflow-reference-redirect:task-1",
+        payloadRef: "creator://payload-reference-redirect",
+        payloadHash: "hash-reference-redirect",
+        redactedPayload: {
+          prompt: "Use this reference.",
+          referenceImages: [{ url: "https://cdn.example.test/reference.png" }],
+        },
+      }),
+      /provider_artifact_url_invalid/,
+    );
+    assert.deepEqual(requestedUrls, ["https://cdn.example.test/reference.png"]);
+  });
+
   it("normalizes legacy image parameters before submitting reference edits", async () => {
     let capturedBody: FormData | null = null;
 

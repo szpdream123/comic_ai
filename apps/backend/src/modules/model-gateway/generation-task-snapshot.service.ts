@@ -441,10 +441,10 @@ export async function markGenerationTaskSnapshotFailed(
           failed_at = $9,
           updated_at = $9
       WHERE task_id = $1
-        AND EXISTS (
+          AND EXISTS (
           SELECT 1 FROM tasks task
           WHERE task.id = $1
-            AND task.status = 'failed'
+            AND task.status IN ('queued', 'running', 'failed')
             AND (
               ($2::uuid IS NOT NULL AND task.current_attempt_id = $2::uuid)
               OR ($2::uuid IS NULL AND task.current_attempt_id IS NULL AND task.attempt_count = 0)

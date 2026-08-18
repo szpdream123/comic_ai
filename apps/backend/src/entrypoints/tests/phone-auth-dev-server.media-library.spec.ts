@@ -113,7 +113,7 @@ it("returns the authenticated user's personal media summary and page", async () 
     assert.equal(loginResponse.status, 200);
     const cookie = loginResponse.headers.get("set-cookie") ?? "";
 
-    const [summaryResponse, audioSummaryResponse, listResponse, audioListResponse] = await Promise.all([
+    const [summaryResponse, audioSummaryResponse, listResponse, audioListResponse, boundedPageResponse] = await Promise.all([
       fetch(`${server.origin}/api/creator/media-library/summary?media=all&range=all`, {
         headers: { cookie },
       }),
@@ -126,11 +126,15 @@ it("returns the authenticated user's personal media summary and page", async () 
       fetch(`${server.origin}/api/creator/media-library?media=audio&range=all&page=1&pageSize=12`, {
         headers: { cookie },
       }),
+      fetch(`${server.origin}/api/creator/media-library?media=all&range=all&page=Infinity&pageSize=Infinity`, {
+        headers: { cookie },
+      }),
     ]);
     const summary = await summaryResponse.json();
     const audioSummary = await audioSummaryResponse.json();
     const list = await listResponse.json();
     const audioList = await audioListResponse.json();
+    const boundedPage = await boundedPageResponse.json();
 
     assert.equal(summaryResponse.status, 200);
     assert.deepEqual(summary, {
@@ -153,6 +157,9 @@ it("returns the authenticated user's personal media summary and page", async () 
       audioBytes: 4096,
     });
     assert.equal(listResponse.status, 200);
+    assert.equal(boundedPageResponse.status, 200);
+    assert.equal(boundedPage.meta.page, 1);
+    assert.equal(boundedPage.meta.pageSize, 12);
     assert.equal(list.meta.total, 2);
     assert.equal(list.data.length, 2);
     assert.equal(list.data.some((item: { id: string }) => item.id === pendingAudioStorageObjectId), false);

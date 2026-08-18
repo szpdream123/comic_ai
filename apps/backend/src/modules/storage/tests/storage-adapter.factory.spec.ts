@@ -4,6 +4,13 @@ import { describe, it } from "node:test";
 import { createStorageAdapterFromEnv } from "../storage-adapter.factory.ts";
 
 describe("storage adapter factory", () => {
+  it("rejects an unknown storage mode instead of falling back to local storage", () => {
+    assert.throws(
+      () => createStorageAdapterFromEnv({ STORAGE_ADAPTER_MODE: "cos_typo" }),
+      /storage_adapter_mode_invalid/,
+    );
+  });
+
   it("builds a public-base-url adapter from env when configured", async () => {
     const adapter = createStorageAdapterFromEnv({
       STORAGE_ADAPTER_MODE: "public_base_url",

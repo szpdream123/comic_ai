@@ -14,7 +14,7 @@ const PROVIDER_SUBMISSION_RECOVERY_LEASE_MS = 10 * 60 * 1000;
 
 export interface ProviderRequestRecord {
   id: string;
-  userId: string;
+  userId: string | null;
   projectId: string | null;
   canvasProjectId?: string;
   workflowId: string | null;
@@ -35,12 +35,14 @@ export interface ProviderRequestRecord {
   redactedResponse: Record<string, unknown> | null;
   failureCode: string | null;
   createdByUserId: string | null;
+  createdByAdminId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface ProviderRequestInput {
-  userId: string;
+  userId?: string | null;
+  createdByAdminId?: string | null;
   projectId?: string | null;
   canvasProjectId?: string | null;
   workflowId?: string | null;
@@ -82,6 +84,7 @@ interface ProviderRequestRow {
   response_redacted_json: Record<string, unknown> | null;
   failure_code: string | null;
   created_by_user_id: string;
+  created_by_admin_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -122,12 +125,13 @@ export async function createOrReuseProviderRequest(
         credential_version_ref,
         status,
         created_by_user_id,
+        created_by_admin_id,
         created_at,
         updated_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14, $15::jsonb, $16, $17, 'created', $18, $19, $19
+        $10, $11, $12, $13, $14, $15::jsonb, $16, $17, 'created', $18, $19, $20, $20
       )
       ON CONFLICT (provider_name, provider_operation, request_key)
       DO NOTHING
@@ -151,7 +155,8 @@ export async function createOrReuseProviderRequest(
       JSON.stringify(input.redactedPayload),
       input.providerConfigRevisionId ?? null,
       input.credentialVersionRef ?? null,
-      input.userId,
+      input.userId ?? null,
+      input.createdByAdminId ?? null,
       input.now,
     ],
   );
@@ -1102,6 +1107,7 @@ function providerRequestFromRow(row: ProviderRequestRow): ProviderRequestRecord 
     redactedResponse: row.response_redacted_json,
     failureCode: row.failure_code,
     createdByUserId: row.created_by_user_id,
+    createdByAdminId: row.created_by_admin_id,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };

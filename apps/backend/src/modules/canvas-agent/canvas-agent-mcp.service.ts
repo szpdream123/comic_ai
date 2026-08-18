@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import type { CanvasAgentActor } from "./canvas-agent.types.ts";
 import { assertNoLocalPath } from "./canvas-agent-context.service.ts";
 import { CanvasAgentExternalToolBoundary } from "./canvas-agent-knowledge.service.ts";
-import { assertPublicHostname } from "./canvas-agent-web.service.ts";
+import { fetchResolvedPublicUrl, resolvePublicHostname } from "./canvas-agent-web.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
 
 const maxResponseBytes = 2 * 1024 * 1024;
@@ -41,7 +41,7 @@ export class CanvasAgentMcpToolService {
         AND deleted_at IS NULL LIMIT 1
     `, [input.conversationId, input.canvasId, input.actor.ownerUserId, input.actor.actorTeamMemberId ?? null]);
     if (!conversation.rows[0]) throw new Error("canvas_agent_conversation_not_found");
-    await assertPublicHostname(endpoint.hostname, this.lookupImpl);
+    const resolvedAddress = await resolvePublicHostname(endpoint.hostname, this.lookupImpl);
     const policy = await this.boundary.authorize({
       kind: "mcp",
       targetId: input.serverId,
@@ -53,14 +53,17 @@ export class CanvasAgentMcpToolService {
     }
     const args = input.arguments && typeof input.arguments === "object" ? input.arguments : {};
     assertNoLocalPath(args);
-    const response = await this.fetchImpl(endpoint, {
+    const response = await fetchResolvedPublicUrl(endpoint, {
       method: "POST",
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: randomUUID(), method: operation, params: args }),
-    });
-    if (!response.ok) throw new Error(`canvas_agent_mcp_http_${response.status}`);
+    }, resolvedAddress, this.fetchImpl);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`canvas_agent_mcp_http_${response.status}`);
+    }
     const bytes = await response.arrayBuffer();
     if (bytes.byteLength > maxResponseBytes) throw new Error("canvas_agent_mcp_response_too_large");
     let payload: unknown;

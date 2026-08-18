@@ -149,6 +149,47 @@ describe("S3 compatible storage adapter", () => {
     }
   });
 
+  it("copies an object to a distinct server-side delivery key", async () => {
+    let capturedCopySource = "";
+    let capturedPath = "";
+    const server = createServer((request, response) => {
+      capturedCopySource = request.headers["x-amz-copy-source"] ?? "";
+      capturedPath = request.url ?? "";
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/xml", "x-amz-version-id": "delivery-version" });
+        response.end("<CopyObjectResult><ETag>&quot;delivery-etag&quot;</ETag></CopyObjectResult>");
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.equal(typeof address, "object");
+
+    try {
+      const adapter = new S3CompatibleStorageAdapter({
+        endpoint: `http://127.0.0.1:${address!.port}`,
+        region: "ap-guangzhou",
+        accessKeyId: "test-access-key",
+        secretAccessKey: "test-secret-key",
+        forcePathStyle: true,
+      });
+
+      const result = await adapter.copyObject({
+        sourceBucket: "creator-test",
+        sourceObjectKey: "projects/source file.mp4",
+        destinationBucket: "creator-test",
+        destinationObjectKey: "marketing-delivery/job-1/asset-1-source-file.mp4",
+      });
+
+      assert.equal(capturedCopySource, "/creator-test/projects/source%20file.mp4");
+      assert.equal(new URL(capturedPath, "http://storage.test").pathname, "/creator-test/marketing-delivery/job-1/asset-1-source-file.mp4");
+      assert.deepEqual(result, { eTag: "delivery-etag", versionId: "delivery-version" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("aborts a timed-out known-length upload request", async () => {
     let requestSocket: import("node:net").Socket | null = null;
     let resolveConnectionClosed: (() => void) | null = null;

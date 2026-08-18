@@ -693,7 +693,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       const retriedPersistPayload = await retriedPersist.json();
       const retriedStoragePayload = await retriedStorage.json();
       const outbox = await db.query<{
-        payload_json: { taskId: string; finalizeMode: string; providerExecutor: string };
+        payload_json: { taskId: string; attemptId: string; finalizeMode: string; providerExecutor: string };
       }>(
         `
           SELECT payload_json
@@ -711,8 +711,9 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(retriedPersistPayload.task.id, persistTask.taskId);
       assert.equal(retriedStorage.status, 200);
       assert.equal(retriedStoragePayload.task.id, storageTask.taskId);
+      assert.ok(outbox.rows.every((row) => /^[0-9a-f-]{36}$/i.test(row.payload_json.attemptId)));
       assert.deepEqual(
-        outbox.rows.map((row) => row.payload_json),
+        outbox.rows.map(({ payload_json: { attemptId: _attemptId, ...payload } }) => payload),
         [
           {
             workflowId: uploadTask.workflowId,

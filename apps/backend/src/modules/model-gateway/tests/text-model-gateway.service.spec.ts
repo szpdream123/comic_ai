@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
@@ -289,6 +290,41 @@ describe("text model gateway service", () => {
 
       assert.equal(stored.rows[0]?.status, "canceled");
       assert.equal(stored.rows[0]?.failure_code, "client_aborted_stream");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("records an administrator-owned request without impersonating a user", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([
+      chunk("chatcmpl-admin", "{}", "stop"),
+      {
+        id: "chatcmpl-admin", object: "chat.completion.chunk", created: 1716026400, model: "deepseek-chat", choices: [],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+      } as TextGatewayChatCompletionChunk,
+    ]);
+    const adminId = randomUUID();
+    try {
+      await db.query(
+        "INSERT INTO admin_accounts (id, login_name, password_hash, display_name, status, super_admin_slot) VALUES ($1, $2, 'plain:password', 'Marketing Admin', 'active', 1)",
+        [adminId, `gateway_admin_${adminId.slice(0, 8)}`],
+      );
+      const result = await createGateway(db, adapter).chat.completions.create({
+        model: "deepseek-chat", messages: [{ role: "user", content: "Return JSON" }], stream: true,
+      }, { ...requestContext("admin"), createdByAdminId: adminId });
+      for await (const _chunk of result.stream) {
+        // consume stream
+      }
+      await result.completed;
+      const provider = await db.query<{ created_by_user_id: string | null; created_by_admin_id: string | null }>(
+        "SELECT created_by_user_id, created_by_admin_id FROM provider_requests WHERE id = $1", [result.providerRequestId],
+      );
+      const log = await db.query<{ user_id: string | null; admin_account_id: string | null }>(
+        "SELECT user_id, admin_account_id FROM user_model_request_logs WHERE provider_request_id = $1", [result.providerRequestId],
+      );
+      assert.deepEqual(provider.rows[0], { created_by_user_id: null, created_by_admin_id: adminId });
+      assert.deepEqual(log.rows[0], { user_id: null, admin_account_id: adminId });
     } finally {
       await db.close();
     }

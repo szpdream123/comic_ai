@@ -505,7 +505,7 @@ function renderVideoToDirectorModal(state) {
             </label>
             <label class="toolbox-director-dropzone" for="toolbox-video-director-file" data-dropzone="toolbox-video-to-director">
               <input id="toolbox-video-director-file" type="file" accept="video/mp4,video/webm,video/quicktime" hidden ${isBusy ? "disabled" : ""} />
-              ${hasFile ? `<video src="${escapeAttr(state.previewUrl)}" controls preload="metadata"></video><span>${escapeHtml(state.fileName)} · ${formatFileSize(state.fileSize)}</span>` : `<strong>添加参考视频</strong><span>MP4 / WebM / MOV，最大 500 MB</span>`}
+              ${hasFile ? `<video src="${escapeAttr(state.previewUrl)}" controls preload="metadata"></video><span>${escapeHtml(state.fileName)} · ${formatFileSize(state.fileSize)}</span>` : `<strong>添加参考视频</strong><span>MP4 / WebM / MOV，最大 50 MB</span>`}
             </label>
             ${hasFile && !isBusy ? `<button type="button" class="toolbox-director-clear" data-action="clear-toolbox-video-to-director-file">移除视频</button>` : ""}
             <div class="toolbox-director-stages" aria-label="解析流程">
@@ -600,7 +600,7 @@ function renderPromptReverseModal(state) {
               <label class="toolbox-reverse-dropzone ${isVideo && !pluginReady ? "is-disabled" : ""}" data-dropzone="toolbox-prompt-reverse" ${isVideo && !pluginReady ? "aria-disabled=\"true\"" : "for=\"toolbox-prompt-reverse-file\""}>
                 <span class="toolbox-reverse-upload-icon" aria-hidden="true">↑</span>
                 <strong>${isVideo ? pluginReady ? "添加参考视频" : "等待浏览器解析插件就绪" : "添加参考图"}</strong>
-                <span>${isVideo ? pluginReady ? "支持 MP4、WEBM、MOV，最大 500 MB" : "插件就绪后即可选择视频" : "支持 PNG、JPG、WEBP，最大 20 MB"}</span>
+                <span>${isVideo ? pluginReady ? "支持 MP4、WEBM、MOV，最大 50 MB" : "插件就绪后即可选择视频" : "支持 PNG、JPG、WEBP，最大 30 MB"}</span>
               </label>
             `}
             <input id="toolbox-prompt-reverse-file" class="toolbox-reverse-file-input" type="file" accept="${isVideo ? "video/mp4,video/webm,video/quicktime" : "image/png,image/jpeg,image/webp"}" ${isVideo && !pluginReady ? "disabled" : ""} />
@@ -702,10 +702,10 @@ function renderToolboxGuide(tool) {
         "设置清晰度、帧率和深度颜色，然后生成并下载结果。",
       ];
   const note = isPromptReverse
-    ? "图片最大 20 MB，视频最大 500 MB；图片反推和视频反推都会消耗积分。"
+    ? "图片最大 30 MB，视频最大 50 MB；图片反推和视频反推都会消耗积分。"
     : isWatermarkRemoval
-      ? "图片最大 20 MB，视频最大 120 MB 且建议不超过 15 秒；处理在当前浏览器本机完成。"
-      : "视频最大 500 MB；处理速度与电脑性能、视频时长、清晰度和帧率有关。";
+      ? "图片最大 30 MB，视频最大 50 MB 且建议不超过 15 秒；处理在当前浏览器本机完成。"
+      : "视频最大 50 MB；处理速度与电脑性能、视频时长、清晰度和帧率有关。";
   return `
     <div class="toolbox-guide-layer">
       <section class="toolbox-guide-panel" role="dialog" aria-modal="true" aria-labelledby="toolbox-guide-title-${tool}">
@@ -836,7 +836,7 @@ function renderVideoDepthModal(state) {
                   <h2 id="toolbox-video-depth-title">视频转深度</h2>
                   ${renderToolboxGuideTrigger("open-toolbox-video-depth-guide", "视频转深度", state.guideOpen)}
                 </div>
-                <p>处理速度与电脑环境关联、视频最大处理 500 MB</p>
+                <p>处理速度与电脑环境关联、视频最大处理 50 MB</p>
               </div>
             </div>
             <div class="toolbox-depth-header-plugin" data-plugin-status="${escapeAttr(pluginStatus)}">
@@ -989,7 +989,7 @@ function renderWatermarkRemovalModal(state) {
                 <label class="toolbox-watermark-dropzone ${pluginReady ? "" : "is-disabled"}" ${pluginReady ? "for=\"toolbox-watermark-file\"" : "aria-disabled=\"true\""}>
                   <span class="toolbox-reverse-upload-icon" aria-hidden="true">↑</span>
                   <strong>${pluginReady ? `添加需要处理的${mediaLabel}` : "等待本地插件就绪"}</strong>
-                  <span>${pluginReady ? isVideo ? "支持 MP4、WEBM、MOV，建议 15 秒以内" : "支持 PNG、JPG、WEBP，最大 20 MB" : `安装插件后即可选择${mediaLabel}`}</span>
+                  <span>${pluginReady ? isVideo ? "支持 MP4、WEBM、MOV，建议 15 秒以内，最大 50 MB" : "支持 PNG、JPG、WEBP，最大 30 MB" : `安装插件后即可选择${mediaLabel}`}</span>
                 </label>
               `}
             </div>

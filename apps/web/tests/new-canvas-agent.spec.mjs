@@ -210,7 +210,7 @@ test("Canvas Agent condenses active task events into one thinking indicator", ()
   });
 
   assert.match(html, /class="canvas-agent-thinking"/);
-  assert.match(html, /正在执行 canvas\.patch/);
+  assert.match(html, /正在执行 灵曦AI/);
   assert.doesNotMatch(html, /data-event-status="task\.created"|data-event-status="task\.started"|data-event-status="step\.running"/);
 });
 
@@ -443,7 +443,7 @@ test("Canvas Agent panel exposes conversation modes and a running stop action", 
   assert.match(html, /class="canvas-agent-send-button is-running"/);
   assert.match(html, /data-agent-action="send"[^>]+aria-label="停止 Agent 任务"/);
   assert.doesNotMatch(html, /class="canvas-agent-task-controls"|class="canvas-agent-interject"/);
-  assert.match(html, /<select[^>]+data-agent-field="modelCode"[^>]+disabled/);
+  assert.doesNotMatch(html, /<select[^>]+data-agent-field="modelCode"[^>]+disabled/);
   assert.match(html, /aria-label="文本模型"/);
   assert.match(html, /暂无可用文本模型/);
   assert.doesNotMatch(html, /<input[^>]+data-agent-field="modelCode"/);
@@ -959,7 +959,7 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   html = renderCanvasAgentPanel(workbench.ui);
   assert.match(html, /Audio Pro/);
   assert.doesNotMatch(html, /NARRATOR|打开音频参数面板|audio-settings-panel/);
-  assert.match(html, /<span>12<\/span>/);
+  assert.doesNotMatch(html, /<span>12<\/span>/);
   assert.doesNotMatch(html, /Disabled Video|Inactive Video|我的图片密钥|我的音频密钥/);
 
   assert.match(html, /当前 · Agent text/);
@@ -980,8 +980,15 @@ test("media-only Agent reuses enabled generation models, remarks, parameters, an
   assert.equal(sentInput.modelCode, "agent-text-fast");
   assert.equal(sentInput.message.preferredGenerationKind, "audio");
   assert.equal(sentInput.mode, "c");
-  assert.deepEqual(sentInput.message.preferredModels, { audio: "audio-pro" });
+  assert.deepEqual(sentInput.budget, { generationPermissionMode: "full_access" });
+  assert.deepEqual(sentInput.message.preferredModels, {
+    image: "image-pro",
+    video: "video-fast",
+    audio: "audio-pro",
+  });
   assert.deepEqual(sentInput.message.preferredGenerationParameters, {
+    image: {},
+    video: {},
     audio: { voice: "narrator", speed: 1 },
   });
   controller.dispose();
@@ -999,7 +1006,7 @@ test("media-only Agent ignores staged approval modes while regular Canvas Agent 
   });
   await mediaController.stagePrompt({ text: "生成图片", mode: "b" });
   assert.equal(mediaWorkbench.ui.canvasAgent.mode, "c");
-  assert.doesNotMatch(renderCanvasAgentPanel(mediaWorkbench.ui), /canvas-agent-mode-picker|审核批准/);
+  assert.doesNotMatch(renderCanvasAgentPanel(mediaWorkbench.ui), /data-agent-action="toggle-mode-menu"|data-agent-mode=/);
   mediaController.dispose();
 
   const canvasHtml = renderCanvasAgentPanel({ canvasAgent: {} });
@@ -1359,7 +1366,7 @@ test("Canvas Agent approval hides internal policy codes from the visible summary
   }];
   const html = renderCanvasAgentPanel({ canvasAgent: { events, status: "waiting_approval" } });
   assert.doesNotMatch(html, />b_mode_effect</);
-  assert.match(html, /该操作需要你的确认后才能继续。/);
+  assert.match(html, /该操作需积分扣费，请问是否继续？/);
 });
 
 test("Canvas Agent controller reuses creator-api aliases for conversation, messages, polling, and controls", async () => {
@@ -1881,7 +1888,7 @@ test("Canvas Agent restores message history and manages archived conversations",
   controller.handleInput({ dataset: { agentField: "conversationId" }, value: "conversation-2" });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(workbench.ui.canvasAgent.messages.map((message) => [message.role, message.text]), [
-    ["tool", "canvas.read 已执行"],
+    ["tool", "灵曦AI 已执行"],
   ]);
   await controller.handleAction({ dataset: { agentAction: "delete-conversation" } });
   assert.equal(workbench.ui.canvasAgent.conversationId, "conversation-1");
@@ -2044,7 +2051,8 @@ test("Canvas Agent renders safe clickable citations and structured tool activity
   assert.match(html, /data-event-kind="research"/);
   assert.match(html, /data-event-kind="mcp"/);
   assert.match(html, /联网研究/);
-  assert.match(html, /工具 web_search/);
+  assert.match(html, /灵曦AI 正在处理/);
+  assert.doesNotMatch(html, /web_search|mcp\.call/);
   assert.match(html, /决策 allow/);
   assert.doesNotMatch(html, /javascript:alert/);
 });
@@ -2080,7 +2088,7 @@ test("Canvas Agent renders generation media and adds the stable result to the ca
     api: {},
   };
   const initialHtml = renderCanvasAgentPanel(workbench.ui);
-  assert.match(initialHtml, /<img src="\/api\/storage\/preview-1"/);
+  assert.match(initialHtml, /<img src="\/api\/storage\/objects\/storage-1\/content\?proxy=1"/);
   assert.match(initialHtml, /data-agent-action="add-media-to-canvas"/);
 
   const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
@@ -2300,7 +2308,7 @@ test("Canvas Agent merges generation submission and completion into one media ca
     canvasAgent: { messages },
   });
   assert.equal((html.match(/class="canvas-agent-media"/g) ?? []).length, 1);
-  assert.match(html, /generation\.create 已执行/);
+  assert.match(html, /灵曦AI 已执行/);
   assert.match(html, /data-agent-action="locate-agent-canvas-node"/);
   assert.doesNotMatch(html, /data-agent-action="add-media-to-canvas"/);
 
@@ -3293,6 +3301,77 @@ test("Canvas Agent snapshots selected files before clearing the attachment input
   controller.dispose();
 });
 
+test("Canvas Agent uploads at most two attachments concurrently and preserves their order", async () => {
+  const selectedFiles = [
+    { name: "first.png", type: "image/png", size: 128 },
+    { name: "second.png", type: "image/png", size: 256 },
+    { name: "third.png", type: "image/png", size: 512 },
+  ];
+  const releases = new Map();
+  let activeUploads = 0;
+  let maxActiveUploads = 0;
+  let uploadStarts = 0;
+  let resolveFirstTwoStarted;
+  let resolveThirdStarted;
+  let resolveCompleted;
+  const firstTwoStarted = new Promise((resolve) => { resolveFirstTwoStarted = resolve; });
+  const thirdStarted = new Promise((resolve) => { resolveThirdStarted = resolve; });
+  const completed = new Promise((resolve) => { resolveCompleted = resolve; });
+  const workbench = {
+    ui: {
+      selectedCanvasProjectId: "canvas-attachment-concurrency",
+      canvasAgent: {
+        conversationId: "conversation-attachment-concurrency",
+        conversations: [{ id: "conversation-attachment-concurrency", title: "附件上传" }],
+      },
+    },
+    api: {
+      async uploadFile(file) {
+        activeUploads += 1;
+        maxActiveUploads = Math.max(maxActiveUploads, activeUploads);
+        uploadStarts += 1;
+        if (uploadStarts === 2) resolveFirstTwoStarted();
+        if (uploadStarts === 3) resolveThirdStarted();
+        await new Promise((resolve) => releases.set(file.name, resolve));
+        activeUploads -= 1;
+        return { upload: { storageObjectId: `storage-${file.name}` } };
+      },
+      async createCanvasAgentFileGrant(_canvasId, _conversationId, input) {
+        return { grant: { id: `grant-${input.storageObjectId}` } };
+      },
+      async listCanvasAgentFileGrants() {
+        resolveCompleted();
+        return { grants: [] };
+      },
+    },
+  };
+  const input = {
+    matches(selector) { return selector === "[data-agent-attachment-input]"; },
+    get files() { return selectedFiles; },
+    set value(_value) { selectedFiles.length = 0; },
+  };
+  const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
+
+  assert.equal(controller.handleInput(input), true);
+  await firstTwoStarted;
+  assert.equal(maxActiveUploads, 2);
+  assert.equal(uploadStarts, 2);
+
+  releases.get("first.png")?.();
+  releases.get("second.png")?.();
+  await thirdStarted;
+  releases.get("third.png")?.();
+  await completed;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(maxActiveUploads, 2);
+  assert.deepEqual(
+    workbench.ui.canvasAgent.promptAttachments.map((attachment) => attachment.name),
+    ["first.png", "second.png", "third.png"],
+  );
+  controller.dispose();
+});
+
 test("media-only Agent uploads references and submits with the selected generation model without a text model", async () => {
   let sentInput = null;
   const file = { name: "character.png", type: "image/png", size: 64 };
@@ -3408,6 +3487,7 @@ test("media-only Agent creates a new text-model task instead of interjecting whi
         modelCode: "text-model",
         mode: "c",
         capabilityProfile: "media_generation_only",
+        budget: { generationPermissionMode: "full_access" },
         message: {
           text: "基于参考图生成 5 秒视频",
           preferredModels: { video: "video-model" },

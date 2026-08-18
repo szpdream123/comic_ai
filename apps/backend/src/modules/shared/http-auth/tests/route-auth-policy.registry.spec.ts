@@ -244,7 +244,7 @@ describe("route auth policy registry", () => {
 
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 188);
+    assert.equal(signatures.length, 191);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");
@@ -303,7 +303,7 @@ describe("route auth policy registry", () => {
 
     assert.equal(wideCompositePredicates.length, 57);
     assert.deepEqual(apiRouteAuthInventoryCoverage, {
-      explicitMethodPath: { discovered: 188, uncovered: 0 },
+      explicitMethodPath: { discovered: 191, uncovered: 0 },
       regexDynamicMatchers: { discovered: 141, uncovered: 0 },
       wideCompositePredicates: { unresolved: 55 },
       conditionalQueryPolicies: { unresolved: 1 },
