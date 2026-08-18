@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { validateGeoDraft } from "../geo-content-validator.ts";
-import { renderGeoArticle } from "../geo-public-renderer.ts";
+import { renderGeoArticle, renderGeoListing } from "../geo-public-renderer.ts";
 import type { GeoDocument, GeoEvidenceSnapshot } from "../geo-types.ts";
 
 const evidence: GeoEvidenceSnapshot = {
@@ -122,6 +122,46 @@ describe("GEO controlled content", () => {
     assert.ok(report.blockers.some((item) => item.code === "high_similarity"));
   });
 
+  it("requires accessible public images and warns about externally hosted image evidence", () => {
+    const missingAlt = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "image", src: "/geo-assets/32000000-0000-4000-8000-000000000001", alt: "", caption: "角色设定示例", evidenceIds: [] }],
+      },
+      evidence: [evidence],
+    });
+    assert.ok(missingAlt.blockers.some((item) => item.code === "image_alt_missing"));
+
+    const privateImage = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "image", src: "/api/storage/objects/32000000-0000-4000-8000-000000000001/content?proxy=1", alt: "角色设定示例", caption: "角色设定示例", evidenceIds: [] }],
+      },
+      evidence: [evidence],
+    });
+    assert.ok(privateImage.blockers.some((item) => item.code === "private_image_url"));
+
+    const absolutePrivateImage = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "image", src: "https://www.lingxiyunai.com/api/storage/objects/32000000-0000-4000-8000-000000000001/content?proxy=1", alt: "角色设定示例", caption: "角色设定示例", evidenceIds: [] }],
+      },
+      evidence: [evidence],
+    });
+    assert.ok(absolutePrivateImage.blockers.some((item) => item.code === "private_image_url"));
+    assert.equal(absolutePrivateImage.warnings.some((item) => item.code === "external_image_url"), false);
+
+    const externalImage = validateGeoDraft({
+      document: {
+        ...validDocument,
+        blocks: [{ type: "image", src: "https://images.example.com/character.png", alt: "角色设定示例", caption: "", evidenceIds: [] }],
+      },
+      evidence: [evidence],
+    });
+    assert.ok(externalImage.warnings.some((item) => item.code === "external_image_url"));
+    assert.ok(externalImage.warnings.some((item) => item.code === "image_caption_missing"));
+  });
+
   it("escapes rendered values and emits FAQ JSON-LD from the same document", () => {
     const html = renderGeoArticle({
       template: "<!doctype html><html><head>{{GEO_HEAD}}</head><body>{{GEO_CONTENT}}</body></html>",
@@ -147,5 +187,47 @@ describe("GEO controlled content", () => {
     assert.match(html, /证据来源/);
     assert.match(html, /href="https:\/\/www\.lingxiyunai\.com\/assets"/);
     assert.match(html, /href="#geo-evidence-1"/);
+  });
+
+  it("renders image discovery metadata, stable heading anchors, breadcrumbs, and preview robots", () => {
+    const html = renderGeoArticle({
+      template: "<!doctype html><html><head>{{GEO_HEAD}}</head><body>{{GEO_CONTENT}}</body></html>",
+      canonicalUrl: "https://www.lingxiyunai.com/guides/character-consistency",
+      brandName: "灵曦AI",
+      contentType: "guide",
+      document: {
+        ...validDocument,
+        blocks: [
+          { type: "heading", level: 2, text: "人物一致性准备" },
+          { type: "image", src: "/geo-assets/32000000-0000-4000-8000-000000000001", alt: "人物角色设定表", caption: "人物角色设定表与参考图", evidenceIds: [] },
+        ],
+      },
+      publishedAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:00:00.000Z",
+      authorName: "灵曦AI团队",
+      evidence: [],
+      related: [],
+      robots: "noindex,nofollow",
+    });
+
+    assert.match(html, /<meta name="robots" content="noindex,nofollow"/);
+    assert.match(html, /<meta property="og:image" content="https:\/\/www\.lingxiyunai\.com\/geo-assets\/32000000-0000-4000-8000-000000000001"/);
+    assert.match(html, /"image":"https:\/\/www\.lingxiyunai\.com\/geo-assets\/32000000-0000-4000-8000-000000000001"/);
+    assert.match(html, /"@type":"BreadcrumbList"/);
+    assert.match(html, /<h2 id="geo-heading-1-人物一致性准备">人物一致性准备<\/h2>/);
+  });
+
+  it("marks empty GEO listings noindex while keeping populated listings indexable", () => {
+    const input = {
+      template: "<!doctype html><html><head>{{GEO_HEAD}}</head><body>{{GEO_CONTENT}}</body></html>",
+      canonicalUrl: "https://www.lingxiyunai.com/cases",
+      brandName: "灵曦AI" as const,
+      title: "AI短剧实践案例 | 灵曦AI",
+      description: "AI短剧实践案例。",
+    };
+    const empty = renderGeoListing({ ...input, items: [] });
+    const populated = renderGeoListing({ ...input, items: [{ href: "/cases/example", title: "示例", summary: "案例摘要" }] });
+    assert.match(empty, /<meta name="robots" content="noindex,follow"/);
+    assert.match(populated, /<meta name="robots" content="index,follow,max-image-preview:large"/);
   });
 });

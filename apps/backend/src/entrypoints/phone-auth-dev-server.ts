@@ -4051,6 +4051,15 @@ function adminManagedUploadConfig(pathname: string, env: NodeJS.ProcessEnv) {
       sourceAction: "admin_settings_asset_upload",
     };
   }
+  if (pathname === "/api/admin/geo/assets/uploads") {
+    return {
+      kind: "geo_content_image" as const,
+      rootPrefix,
+      subfolder: "geoContent",
+      policyPurpose: "official-assets",
+      sourceAction: "admin_geo_content_image_upload",
+    };
+  }
   if (pathname === "/api/admin/home-recommendations/background/upload") {
     return {
       kind: "home_background_video" as const,
@@ -16601,33 +16610,121 @@ async function serveDynamicSitemap(
   runtimeEnv: NodeJS.ProcessEnv,
 ) {
   const origin = publicSiteOrigin(request, runtimeEnv);
-  let dynamicEntries: Array<{ href: string; lastmod: string | null }> = [];
+  let dynamicEntries: Array<{ href: string; lastmod: string | null; contentType: GeoContentType }> = [];
   try {
     const result = await createGeoContentService({ db }).listPublished();
     if ("data" in result.body) {
       dynamicEntries = result.body.data.map((entry) => ({
         href: geoPublicHref(entry.item.contentType, entry.item.slug),
         lastmod: entry.version.publishedAt ?? entry.item.updatedAt,
+        contentType: entry.item.contentType,
       }));
     }
   } catch {
     dynamicEntries = [];
   }
   const staticEntries = Array.from(publicSeoRoutes.values()).map((route) => ({ href: route.path, lastmod: null }));
-  const geoRootEntries = Object.keys(geoPublicRouteTypes).map((route) => ({ href: `/${route}`, lastmod: null }));
+  const publishedTypes = new Set(dynamicEntries.map((entry) => entry.contentType));
+  const geoRootEntries = Object.entries(geoPublicRouteTypes)
+    .filter(([, contentType]) => publishedTypes.has(contentType))
+    .map(([route]) => ({ href: `/${route}`, lastmod: null }));
   const entries = [...staticEntries, ...geoRootEntries, ...dynamicEntries];
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries
     .map((entry) => `  <url><loc>${escapeSeoHtml(`${origin}${entry.href}`)}</loc>${entry.lastmod ? `<lastmod>${escapeSeoHtml(new Date(entry.lastmod).toISOString())}</lastmod>` : ""}</url>`)
     .join("\n")}\n</urlset>\n`;
-  response.statusCode = 200;
+  const file = Buffer.from(xml, "utf8");
+  const etag = staticAssetEtag(file);
+  response.setHeader("etag", etag);
   response.setHeader("content-type", "application/xml; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(xml);
+  response.setHeader("cache-control", "public, max-age=0, must-revalidate");
+  if (requestMatchesEtag(request, etag)) {
+    response.statusCode = 304;
+    response.end();
+    return;
+  }
+  response.statusCode = 200;
+  response.end(file);
+}
+
+async function serveGeoAsset(
+  request: Parameters<typeof createServer>[0],
+  response: ServerResponse,
+  db: Awaited<ReturnType<typeof createDevDb>>,
+  storageRuntime: UploadSessionRuntime,
+  storageObjectId: string,
+  officialAssetRootPrefix: string,
+  signedUrlExpiresInSeconds: number,
+  publicOrigin: string,
+) {
+  if (!isUuid(storageObjectId)) {
+    return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
+  }
+  const storageObject = await findStorageObject(db, storageObjectId);
+  const expectedPrefix = `${officialAssetRootPrefix.replace(/^\/+|\/+$/g, "")}/geoContent/`;
+  const tracked = storageObject ? await db.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM project_upload_records
+       WHERE storage_object_id=$1 AND source_action='admin_geo_content_image_upload' AND status='uploaded'
+     ) AS exists`,
+    [storageObjectId],
+  ) : null;
+  if (
+    storageObject?.status !== "available"
+    || storageObject.bucket !== storageRuntime.bucket
+    || !storageObject.contentType.toLowerCase().startsWith("image/")
+    || !storageObject.objectKey.startsWith(expectedPrefix)
+    || tracked?.rows[0]?.exists !== true
+  ) {
+    return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
+  }
+  const publicPath = `/geo-assets/${storageObjectId}`;
+  const published = await db.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM geo_content_items item
+       JOIN geo_content_versions version ON version.id=item.current_published_version_id
+       WHERE item.status='published' AND (
+         version.document_json->'blocks' @> $1::jsonb
+         OR version.document_json->'blocks' @> $2::jsonb
+       )
+     ) AS exists`,
+    [
+      JSON.stringify([{ type: "image", src: publicPath }]),
+      JSON.stringify([{ type: "image", src: `${publicOrigin.replace(/\/$/, "")}${publicPath}` }]),
+    ],
+  );
+  const isPublished = published.rows[0]?.exists === true;
+  if (!isPublished) {
+    const adminRoute = await requireAdminRouteSession({
+      db,
+      cookieHeader: request.headers.cookie,
+      requiredRoles: ["super_admin"],
+    });
+    if (!adminRoute.ok) {
+      return writeText(response, { status: 404, contentType: "text/plain; charset=utf-8", body: "Not Found" });
+    }
+  }
+  const signed = await storageRuntime.adapter.createSignedReadUrl({
+    bucket: storageObject.bucket,
+    objectKey: storageObject.objectKey,
+    expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+    responseContentDisposition: "inline",
+  });
+  response.statusCode = 307;
+  response.setHeader("location", signed.url);
+  const redirectMaxAge = Number.isFinite(signedUrlExpiresInSeconds)
+    ? Math.max(0, Math.min(300, Math.floor(signedUrlExpiresInSeconds) - 30))
+    : 0;
+  response.setHeader("cache-control", isPublished ? `public, max-age=${redirectMaxAge}, must-revalidate` : "private, no-store");
+  response.setHeader("referrer-policy", "no-referrer");
+  response.end();
 }
 
 function geoPublicHref(contentType: GeoContentType, slug: string) {
-  const routeByType: Record<GeoContentType, string> = { guide: "guides", case: "cases", report: "reports", answer: "answers" };
-  return `/${routeByType[contentType]}/${slug}`;
+  return `/${contentTypeRouteName(contentType)}/${slug}`;
+}
+
+function contentTypeRouteName(contentType: GeoContentType) {
+  return ({ guide: "guides", case: "cases", report: "reports", answer: "answers" } as const)[contentType];
 }
 
 async function serveStatic(
@@ -17280,6 +17377,8 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
 
 function publicSiteOrigin(request: Parameters<typeof createServer>[0], env: NodeJS.ProcessEnv) {
   return env.NODE_ENV === "production" ? productionHttpsOrigin(env) : serverOriginFromRequest(request);
+}
+
 function storageProxyRelativeUrlOrigin(request: Parameters<typeof createServer>[0]) {
   const port = request.socket.localPort;
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -19146,6 +19245,14 @@ export function createPhoneAuthDevServer(
           const publicDb = await getDb();
           if (pathname === "/sitemap.xml") return await serveDynamicSitemap(request, response, publicDb, runtimeEnv);
           return await serveGeoPublic(request, pathname, response, publicDb, runtimeEnv);
+        }
+
+        const geoAssetMatch = pathname.match(/^\/geo-assets\/([^/]+)$/);
+        if ((request.method === "GET" || request.method === "HEAD") && geoAssetMatch) {
+          const publicDb = await getDb();
+          return await serveGeoAsset(request, response, publicDb, storageRuntime, geoAssetMatch[1]!, officialAssetRootPrefix, signedUrlExpiresInSeconds, productionHttpsOrigin(runtimeEnv));
+        }
+
         if (request.method === "GET" && pathname.startsWith("/uploads/")) {
           return await serveUploadedFile(request, pathname, response);
         }
@@ -19215,7 +19322,7 @@ export function createPhoneAuthDevServer(
           env: runtimeEnv,
         }),
       });
-      if (pathname === "/api/admin/geo" || pathname.startsWith("/api/admin/geo/")) {
+      if ((pathname === "/api/admin/geo" || pathname.startsWith("/api/admin/geo/")) && pathname !== "/api/admin/geo/assets/uploads") {
         const adminRoute = await requireAdminRouteSession({
           db,
           cookieHeader: request.headers.cookie,
@@ -19224,6 +19331,42 @@ export function createPhoneAuthDevServer(
         if (!adminRoute.ok) return writeJson(response, adminRoute.response);
 
         const actorAdminAccountId = adminRoute.session.admin_account_id;
+        if (request.method === "POST" && pathname === "/api/admin/geo/preview") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const contentType = readString(body.contentType);
+          if (!isGeoContentType(contentType) || !isGeoDocumentInput(body.document)) {
+            return writeJson(response, envelopedError(400, "geo_preview_invalid", "Invalid GEO preview document"));
+          }
+          const evidenceIds = readStringArray(body.evidenceIds).filter(isUuid);
+          const evidenceResult = evidenceIds.length > 0 ? await db.query<{
+            id: string; name: string; fact_text: string; source_url: string | null;
+          }>(
+            `SELECT id,name,fact_text,source_url FROM geo_evidence_items
+             WHERE id=ANY($1::uuid[]) AND review_status='approved' AND public_use_allowed
+               AND (valid_until IS NULL OR valid_until>=NOW())
+             ORDER BY id`,
+            [evidenceIds],
+          ) : { rows: [] };
+          const template = await readFile(join(webRoot, "geo-public.html"), "utf8");
+          const runtimeSettings = await loadGeoRuntimeSettings(db);
+          const slug = readString(body.slug) || "draft-preview";
+          const routeName = contentTypeRouteName(contentType);
+          const now = new Date().toISOString();
+          const html = renderGeoArticle({
+            template,
+            canonicalUrl: `${publicSiteOrigin(request, runtimeEnv)}/${routeName}/${slug}`,
+            brandName: "灵曦AI",
+            contentType,
+            document: body.document,
+            publishedAt: now,
+            updatedAt: now,
+            authorName: runtimeSettings.settings.publicAuthorName,
+            evidence: evidenceResult.rows.map((item) => ({ id: item.id, name: item.name, factText: item.fact_text, sourceUrl: item.source_url })),
+            related: [],
+            robots: "noindex,nofollow",
+          });
+          return writeJson(response, { status: 200, body: { data: { html } } });
+        }
         const geoIdempotencyKey = request.method === "GET" ? null : requiredIdempotencyKeyFromRequest(request);
         if (request.method !== "GET" && !geoIdempotencyKey) return writeIdempotencyKeyRequired(response);
         const geoContentService = createGeoContentService({ db });
@@ -19566,20 +19709,35 @@ export function createPhoneAuthDevServer(
         })).url;
         let upstream: Response;
         try {
-          upstream = await (options.fetchImpl ?? fetch)(location);
+          const range = typeof request.headers.range === "string" ? request.headers.range : null;
+          upstream = await (options.fetchImpl ?? fetch)(
+            location,
+            range ? { headers: { range } } : undefined,
+          );
         } catch {
           return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
+        }
+        if (upstream.status === 416) {
+          response.statusCode = 416;
+          response.setHeader("accept-ranges", upstream.headers.get("accept-ranges") ?? "bytes");
+          const contentRange = upstream.headers.get("content-range");
+          if (contentRange) response.setHeader("content-range", contentRange);
+          await upstream.body?.cancel().catch(() => undefined);
+          response.end();
+          return;
         }
         if (!upstream.ok || !upstream.body) {
           await upstream.body?.cancel().catch(() => undefined);
           return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
         }
-        response.statusCode = 200;
-        response.setHeader("content-type", upstream.headers.get("content-type") ?? "video/mp4");
+        response.statusCode = upstream.status;
+        response.setHeader("content-type", upstream.headers.get("content-type") ?? storageObject?.contentType ?? "video/mp4");
         response.setHeader("cache-control", "public, max-age=31536000, immutable");
         response.setHeader("referrer-policy", "no-referrer");
-        const contentLength = upstream.headers.get("content-length");
-        if (contentLength) response.setHeader("content-length", contentLength);
+        for (const header of ["accept-ranges", "content-length", "content-range"] as const) {
+          const value = upstream.headers.get(header);
+          if (value) response.setHeader(header, value);
+        }
         Readable.fromWeb(upstream.body as never).pipe(response);
         return;
         } finally {
@@ -22489,6 +22647,7 @@ export function createPhoneAuthDevServer(
         }
         const isVideoUpload = adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video";
         const isBackgroundVideoUpload = adminUploadConfig.kind === "home_background_video";
+        const isGeoContentImageUpload = adminUploadConfig.kind === "geo_content_image";
         if (uploadPolicy.kind !== (isVideoUpload ? "video" : "image")) {
           return writeJson(
             response,
@@ -22527,7 +22686,7 @@ export function createPhoneAuthDevServer(
           objectKey,
           bytes: managedFile.bytes,
           contentType: managedFile.contentType,
-          cacheControl: isBackgroundVideoUpload ? "public, max-age=31536000, immutable" : null,
+          cacheControl: isBackgroundVideoUpload || isGeoContentImageUpload ? "public, max-age=31536000, immutable" : null,
           fileName: managedFile.fileName,
           actorUserId: null,
           actorDisplayName: adminRoute.session.display_name,
@@ -22550,8 +22709,8 @@ export function createPhoneAuthDevServer(
               bucket: storageRuntime.bucket,
               storageObjectId: uploaded.storageObjectId,
               storageObjectKey: objectKey,
-              previewUrl: uploaded.sourceUrl,
-              sourceUrl: uploaded.sourceUrl,
+              previewUrl: isGeoContentImageUpload ? `/geo-assets/${uploaded.storageObjectId}` : uploaded.sourceUrl,
+              sourceUrl: isGeoContentImageUpload ? `/geo-assets/${uploaded.storageObjectId}` : uploaded.sourceUrl,
               mimeType: managedFile.contentType,
               byteSize: managedFile.bytes.byteLength,
               originalFileName: fileName,
@@ -25279,6 +25438,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (pathname.startsWith("/api/storage/")) {
+        const storageObjectContentMatch = pathname.match(/^\/api\/storage\/objects\/([^/]+)\/content$/);
         const authenticated = await findAuthenticatedUser(
           db,
           request.headers.cookie,
@@ -25286,6 +25446,53 @@ export function createPhoneAuthDevServer(
           authSessionCache,
           { includeCredit: false },
         );
+        if (request.method === "GET" && storageObjectContentMatch) {
+          const adminRoute = await requireAdminRouteSession({
+            db,
+            cookieHeader: request.headers.cookie,
+            requiredRoles: [...adminRouteRoles.homeRecommendationManage],
+          });
+          if (adminRoute.ok) {
+            const storageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
+            const object = isUuid(storageObjectId) ? await findStorageObject(db, storageObjectId) : null;
+            if (
+              !object ||
+              object.status !== "available" ||
+              object.bucket !== storageBucket ||
+              !object.contentType.startsWith("video/") ||
+              !isHomeRecommendationObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix })
+            ) {
+              return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
+            }
+            const signed = await storageRuntime.adapter.createSignedReadUrl({
+              bucket: object.bucket,
+              objectKey: object.objectKey,
+              expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+              responseContentDisposition: "inline",
+            });
+            if (url.searchParams.get("proxy") === "1") {
+              const streamed = await streamStorageObjectContent({
+                response,
+                signedUrl: signed.url,
+                relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                range: typeof request.headers.range === "string" ? request.headers.range : null,
+                contentType: object.contentType,
+                download: false,
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+              if (!streamed) {
+                return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+              }
+              return;
+            }
+            response.statusCode = 307;
+            response.setHeader("location", signed.url);
+            response.setHeader("cache-control", "private, no-store");
+            response.setHeader("referrer-policy", "no-referrer");
+            response.end();
+            return;
+          }
+        }
         if (!authenticated) {
           return writeJson(response, {
             status: 401,
@@ -25413,7 +25620,6 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        const storageObjectContentMatch = pathname.match(/^\/api\/storage\/objects\/([^/]+)\/content$/);
         if (request.method === "GET" && storageObjectContentMatch) {
           const storageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
           if (!isUuid(storageObjectId)) {

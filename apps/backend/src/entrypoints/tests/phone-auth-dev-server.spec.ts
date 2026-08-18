@@ -1618,6 +1618,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(sitemapResponse.status, 200);
       assert.match(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/script<\/loc>/);
       assert.doesNotMatch(sitemap, /http:\/\/www\.lingxiyunai\.com:443/);
+      assert.doesNotMatch(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/(?:guides|cases|reports|answers)<\/loc>/);
+      assert.match(sitemapResponse.headers.get("cache-control") ?? "", /must-revalidate/);
+      const sitemapNotModified = await fetch(`${server.origin}/sitemap.xml`, {
+        headers: { ...proxyHeaders, "if-none-match": sitemapResponse.headers.get("etag") ?? "" },
+      });
+      assert.equal(sitemapNotModified.status, 304);
 
       const publicRoutes = [
         ["/", "AI视频生成工具，串联剧本、分镜、素材与成片 | 灵曦AI", "AI视频生成工具，串联剧本、分镜、素材与成片", "从一个剧本或故事想法开始"],
@@ -1714,9 +1720,16 @@ describe("phone auth dev server", { concurrency: false }, () => {
       }
       const listing = await fetch(`${server.origin}/guides`, { headers: proxyHeaders });
       assert.equal(listing.status, 200);
-      assert.match(await listing.text(), /AI短剧如何保持角色一致性/);
+      const listingHtml = await listing.text();
+      assert.match(listingHtml, /AI短剧如何保持角色一致性/);
+      assert.match(listingHtml, /<meta name="robots" content="index,follow,max-image-preview:large"/);
+      const emptyCases = await fetch(`${server.origin}/cases`, { headers: proxyHeaders });
+      assert.equal(emptyCases.status, 200);
+      assert.match(await emptyCases.text(), /<meta name="robots" content="noindex,follow"/);
       const sitemap = await fetch(`${server.origin}/sitemap.xml`, { headers: proxyHeaders });
       const sitemapXml = await sitemap.text();
+      assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides<\/loc>/);
+      assert.doesNotMatch(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/cases<\/loc>/);
       assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency<\/loc>/);
       assert.match(sitemapXml, /<lastmod>2026-08-13T10:00:00\.000Z<\/lastmod>/);
       assert.doesNotMatch(sitemapXml, /draft-only-answer/);

@@ -26,6 +26,7 @@ New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $excludedRootNames = @(
   ".agents",
   ".claude",
+  ".codex-home",
   ".codex-runtime",
   ".git",
   ".gstack",
@@ -37,6 +38,7 @@ $excludedRootNames = @(
   ".npm-cache",
   ".opencode",
   ".superpowers",
+  ".tmp",
   ".turbo",
   ".worktrees",
   "artifacts",
@@ -91,6 +93,10 @@ function Test-ExcludedDirectory {
   }
 
   if ($excludedRootNames -contains $segments[0]) {
+    return $true
+  }
+
+  if ($segments[0] -like ".tmp-*") {
     return $true
   }
 

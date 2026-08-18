@@ -551,6 +551,7 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20260911-repair-globalaiopc-model-center-video-classification.sql",
       sql: await readFile(join(rootDir, ...GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH), "utf8"),
     },
+    {
       name: "20260910-create-marketing-module.sql",
       sql: await readFile(join(rootDir, ...MARKETING_MODULE_RELATIVE_PATH), "utf8"),
     },
