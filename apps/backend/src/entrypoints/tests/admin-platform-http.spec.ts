@@ -109,6 +109,17 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       const linkedQuestions = await db.query<{ question_id: string }>("SELECT question_id FROM geo_content_question_links WHERE content_version_id=$1 ORDER BY question_id", [generated.data.version.id]);
       assert.deepEqual(linkedQuestions.rows.map((row) => row.question_id).sort(), [question.data.id, relatedQuestion.data.id].sort());
 
+      const previewResponse = await fetch(`${server.origin}/api/admin/geo/preview`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ contentType: "guide", slug: "http-character-consistency", document: generated.data.version.document, evidenceIds: [evidence.data.id] }),
+      });
+      const preview = await previewResponse.json();
+      assert.equal(previewResponse.status, 200, JSON.stringify(preview));
+      assert.match(preview.data.html, /<meta name="robots" content="noindex,nofollow"/);
+      assert.match(preview.data.html, /<h1>AI短剧角色一致性指南<\/h1>/);
+      assert.match(preview.data.html, /证据来源/);
+
       const reviewResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/submit-review`, {
         method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-review-${randomUUID()}`, cookie },
         body: JSON.stringify({ expectedLockVersion: generated.data.item.lockVersion }),
@@ -6558,6 +6569,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       serverOptions: {
         env: {
           STORAGE_OFFICIAL_ASSET_ROOT_PREFIX: "officialAssets",
+          STORAGE_SIGNED_URL_EXPIRES_SECONDS: "60",
         },
         storageRuntime: {
           mode: "cos",
@@ -6636,6 +6648,15 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
       );
       const settingsAssetPayload = await settingsAssetResponse.json();
+      const geoImageResponse = await fetch(
+        `${server.origin}/api/admin/geo/assets/uploads?fileName=character-proof.png`,
+        {
+          method: "POST",
+          headers: { "content-type": "image/png", cookie },
+          body: transparentPngBytes,
+        },
+      );
+      const geoImagePayload = await geoImageResponse.json();
       const invalidImageResponse = await fetch(
         `${server.origin}/api/admin/prompt-covers/uploads?fileName=broken.png`,
         {
@@ -6672,9 +6693,55 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.match(settingsAssetPayload.data.storageObjectKey, /^officialAssets\/settingsAssets\/\d{8}\/[0-9a-f-]+-support-qr\.jpg$/);
       assert.equal(settingsAssetPayload.data.mimeType, "image/jpeg");
       assert.equal((await sharp(uploadedObjects[2].body).metadata()).format, "jpeg");
+      assert.equal(geoImageResponse.status, 200, JSON.stringify(geoImagePayload));
+      assert.match(geoImagePayload.data.storageObjectKey, /^officialAssets\/geoContent\/\d{8}\/[0-9a-f-]+-character-proof\.png$/);
+      assert.equal(geoImagePayload.data.sourceUrl, `/geo-assets/${geoImagePayload.data.storageObjectId}`);
+      assert.equal(geoImagePayload.data.previewUrl, `/geo-assets/${geoImagePayload.data.storageObjectId}`);
+      assert.equal((await sharp(uploadedObjects[3].body).metadata()).format, "png");
+      const geoDraftImageAnonymousResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { redirect: "manual" });
+      assert.equal(geoDraftImageAnonymousResponse.status, 404);
+      const geoDraftImageAdminResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { headers: { cookie }, redirect: "manual" });
+      assert.equal(geoDraftImageAdminResponse.status, 307);
+      assert.equal(
+        geoDraftImageAdminResponse.headers.get("location"),
+        `https://signed.example.test/official-assets-bucket/${geoImagePayload.data.storageObjectKey}`,
+      );
+      assert.match(geoDraftImageAdminResponse.headers.get("cache-control") ?? "", /private, no-store/);
+      const geoDraftImageHeadResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { method: "HEAD", headers: { cookie }, redirect: "manual" });
+      assert.equal(geoDraftImageHeadResponse.status, 307);
+      assert.equal(await geoDraftImageHeadResponse.text(), "");
+
+      const adminAccount = await db.query<{ id: string }>("SELECT id FROM admin_accounts ORDER BY created_at LIMIT 1");
+      const contentItemId = randomUUID();
+      const contentVersionId = randomUUID();
+      await db.query(
+        `INSERT INTO geo_content_items (id,content_type,topic,slug,status,created_by_admin_id,updated_by_admin_id)
+         VALUES ($1,'guide','公开图片测试',$2,'draft',$3,$3)`,
+        [contentItemId, `published-image-${randomUUID().slice(0, 8)}`, adminAccount.rows[0]!.id],
+      );
+      await db.query(
+        `INSERT INTO geo_content_versions (id,content_item_id,version_number,title,summary,document_json,config_revision_id,created_by_admin_id,published_at)
+         VALUES ($1,$2,1,'公开图片测试','公开图片测试摘要',$3::jsonb,'geo-default-v1',$4,NOW())`,
+        [contentVersionId, contentItemId, JSON.stringify({ blocks: [{ type: "image", src: `https://www.lingxiyunai.com${geoImagePayload.data.sourceUrl}`, alt: "人物设定截图", caption: "人物设定截图", evidenceIds: [] }] }), adminAccount.rows[0]!.id],
+      );
+      await db.query(
+        "UPDATE geo_content_items SET status='published',current_draft_version_id=$2,current_published_version_id=$2 WHERE id=$1",
+        [contentItemId, contentVersionId],
+      );
+      const geoPublishedImageResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { redirect: "manual" });
+      assert.equal(geoPublishedImageResponse.status, 307);
+      const publishedCacheSeconds = Number(/max-age=(\d+)/.exec(geoPublishedImageResponse.headers.get("cache-control") ?? "")?.[1]);
+      assert.ok(Number.isInteger(publishedCacheSeconds) && publishedCacheSeconds <= 30);
+      const geoPublishedImageHeadResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { method: "HEAD", redirect: "manual" });
+      assert.equal(geoPublishedImageHeadResponse.status, 307);
+      const unrelatedPublicImageResponse = await fetch(
+        `${server.origin}/geo-assets/${uploadPayload.data.storageObjectId}`,
+        { redirect: "manual" },
+      );
+      assert.equal(unrelatedPublicImageResponse.status, 404);
       assert.equal(invalidImageResponse.status, 400, JSON.stringify(invalidImagePayload));
       assert.equal(invalidImagePayload.errorCode, "admin_asset_upload_image_invalid");
-      assert.equal(uploadedObjects.length, 3);
+      assert.equal(uploadedObjects.length, 4);
       assert.deepEqual(
         trackedUploads.rows.map((row) => ({
           sourceAction: row.source_action,
@@ -6683,6 +6750,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           kind: row.admin_upload_kind,
         })),
         [
+          { sourceAction: "admin_geo_content_image_upload", status: "uploaded", objectKey: "officialAssets", kind: "geo_content_image" },
           { sourceAction: "admin_official_asset_upload", status: "uploaded", objectKey: "officialAssets", kind: "official_asset" },
           { sourceAction: "admin_prompt_cover_upload", status: "uploaded", objectKey: "officialAssets", kind: "prompt_cover" },
           { sourceAction: "admin_settings_asset_upload", status: "uploaded", objectKey: "officialAssets", kind: "settings_asset" },
@@ -6720,6 +6788,142 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(createResponse.status, 200);
       assert.equal(createPayload.data.latestVersion.storageObjectKey, uploadPayload.data.storageObjectKey);
       assert.equal(createPayload.data.latestVersion.previewUrl, uploadPayload.data.previewUrl);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps an admin-uploaded home recommendation video playable in admin and on the public homepage", async () => {
+    const db = await createMigratedTestDb();
+    const videoBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
+    const proxiedUrls: string[] = [];
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "super_admin",
+      serverOptions: {
+        env: {
+          STORAGE_ADAPTER_MODE: "cos",
+          STORAGE_BUCKET: "home-recommendation-test-bucket",
+          STORAGE_REGION: "ap-guangzhou",
+          STORAGE_OFFICIAL_ASSET_ROOT_PREFIX: "officialAssets",
+        },
+        storageRuntime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket: "home-recommendation-test-bucket",
+          region: "ap-guangzhou",
+          publicBaseUrl: "https://cdn.example.test",
+          adapter: {
+            async createSignedReadUrl(input: { bucket: string; objectKey: string; expiresAt: Date }) {
+              return {
+                url: `/signed/${input.bucket}/${input.objectKey}`,
+                expiresAt: input.expiresAt,
+              };
+            },
+            async putObject() {
+              return { eTag: "home-recommendation-video-etag" };
+            },
+          },
+          stsDurationSeconds: 900,
+          localUploadUrlPath: "/api/storage/upload-sessions",
+        },
+        fetchImpl: async (url, init) => {
+          proxiedUrls.push(String(url));
+          const range = new Headers(init?.headers).get("range");
+          if (range === "bytes=99-100") {
+            return new Response(null, { status: 416, headers: { "accept-ranges": "bytes", "content-range": `bytes */${videoBytes.byteLength}` } });
+          }
+          return new Response(range ? videoBytes.slice(0, 4) : videoBytes, {
+            status: range ? 206 : 200,
+            headers: {
+              "accept-ranges": "bytes",
+              "content-length": String(range ? 4 : videoBytes.byteLength),
+              ...(range ? { "content-range": `bytes 0-3/${videoBytes.byteLength}` } : {}),
+              "content-type": "video/mp4",
+            },
+          });
+        },
+      },
+    });
+
+    try {
+      const uploadResponse = await fetch(
+        `${server.origin}/api/admin/home-recommendations/videos/upload?fileName=homepage.mp4`,
+        {
+          method: "POST",
+          headers: { "content-type": "video/mp4", cookie },
+          body: videoBytes,
+        },
+      );
+      const uploadPayload = await uploadResponse.json();
+      assert.equal(uploadResponse.status, 200, JSON.stringify(uploadPayload));
+      assert.match(
+        uploadPayload.data.sourceUrl,
+        /^\/api\/storage\/objects\/[0-9a-f-]+\/content\?proxy=1$/,
+      );
+
+      const anonymousPreviewResponse = await fetch(`${server.origin}${uploadPayload.data.sourceUrl}`);
+      assert.equal(anonymousPreviewResponse.status, 401);
+
+      const adminPreviewResponse = await fetch(`${server.origin}${uploadPayload.data.sourceUrl}`, {
+        headers: { cookie, range: "bytes=0-3", "x-forwarded-host": "attacker.example", "x-forwarded-proto": "https" },
+      });
+      assert.equal(adminPreviewResponse.status, 206);
+      assert.equal(adminPreviewResponse.headers.get("content-range"), `bytes 0-3/${videoBytes.byteLength}`);
+      assert.deepEqual(new Uint8Array(await adminPreviewResponse.arrayBuffer()), videoBytes.slice(0, 4));
+      assert.equal(new URL(proxiedUrls.at(-1)!).origin, server.origin);
+
+      const userCookie = await login(db, server.origin, "13800218888");
+      const combinedCookie = `${cookie.split(";")[0]}; ${userCookie.split(";")[0]}`;
+      const adminPreviewWithUserSession = await fetch(`${server.origin}${uploadPayload.data.sourceUrl}`, {
+        headers: { cookie: combinedCookie, range: "bytes=0-3" },
+      });
+      assert.equal(adminPreviewWithUserSession.status, 206);
+      assert.deepEqual(new Uint8Array(await adminPreviewWithUserSession.arrayBuffer()), videoBytes.slice(0, 4));
+
+      const categoryResponse = await fetch(`${server.origin}/api/admin/home-recommendations/categories`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ code: `upload-${randomUUID().slice(0, 8)}`, name: "上传回归", status: "active", sortOrder: 1 }),
+      });
+      const categoryPayload = await categoryResponse.json();
+      assert.equal(categoryResponse.status, 200, JSON.stringify(categoryPayload));
+
+      const createVideoResponse = await fetch(`${server.origin}/api/admin/home-recommendations/videos`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          categoryId: categoryPayload.category.id,
+          title: "后台上传视频",
+          subtitle: "回归测试",
+          coverUrl: "/assets/library/official/scenes/scene-3d-star-cliff.png",
+          videoUrl: uploadPayload.data.sourceUrl,
+          durationLabel: "00:08",
+          coverAlt: "后台上传视频封面",
+          status: "active",
+          sortOrder: 1,
+        }),
+      });
+      const createdVideoPayload = await createVideoResponse.json();
+      assert.equal(createVideoResponse.status, 200, JSON.stringify(createdVideoPayload));
+
+      const recommendationsResponse = await fetch(`${server.origin}/api/home-recommendations`);
+      const recommendationsPayload = await recommendationsResponse.json();
+      const publicVideo = recommendationsPayload.data.categories
+        .flatMap((category: { videos: Array<{ id: string; videoUrl: string }> }) => category.videos)
+        .find((video: { id: string }) => video.id === createdVideoPayload.video.id);
+      assert.ok(publicVideo);
+
+      const publicPreviewResponse = await fetch(`${server.origin}${publicVideo.videoUrl}`, {
+        headers: { range: "bytes=0-3" },
+      });
+      assert.equal(publicPreviewResponse.status, 206);
+      assert.equal(publicPreviewResponse.headers.get("content-range"), `bytes 0-3/${videoBytes.byteLength}`);
+      assert.deepEqual(new Uint8Array(await publicPreviewResponse.arrayBuffer()), videoBytes.slice(0, 4));
+      const invalidPublicRangeResponse = await fetch(`${server.origin}${publicVideo.videoUrl}`, {
+        headers: { range: "bytes=99-100" },
+      });
+      assert.equal(invalidPublicRangeResponse.status, 416);
+      assert.equal(invalidPublicRangeResponse.headers.get("content-range"), `bytes */${videoBytes.byteLength}`);
     } finally {
       await server.close();
     }

@@ -13919,14 +13919,14 @@
 
       function geoDraftBlockEditor(block, index) {
         const prefix = `block_${index}`;
-        const heading = `<div class="toolbar"><strong>正文区块 ${index + 1}</strong><span class="tag">${escapeHtml(block.type)}</span></div>`;
+        const heading = `<div class="toolbar"><div class="row-actions"><strong>正文区块 ${index + 1}</strong><span class="tag">${escapeHtml(block.type)}</span></div><div class="row-actions"><button class="icon-btn" type="button" title="上移" onclick="geoMoveDraftBlock(${index},-1)">↑</button><button class="icon-btn" type="button" title="下移" onclick="geoMoveDraftBlock(${index},1)">↓</button><button class="btn ghost" type="button" onclick="geoDuplicateDraftBlock(${index})">复制</button><button class="btn danger" type="button" onclick="geoDeleteDraftBlock(${index})">删除</button></div></div>`;
         if (block.type === "paragraph") return `<article class="geo-draft-block">${heading}<label class="field"><span>正文</span><textarea name="${prefix}_text" rows="5" required>${escapeHtml(block.text)}</textarea></label></article>`;
         if (block.type === "heading") return `<article class="geo-draft-block">${heading}<div class="form-grid"><label class="field"><span>标题级别</span><select name="${prefix}_level">${[2, 3, 4].map((level) => `<option value="${level}" ${block.level === level ? "selected" : ""}>H${level}</option>`).join("")}</select></label><label class="field"><span>标题文字</span><input name="${prefix}_text" value="${escapeAttribute(block.text)}" required /></label></div></article>`;
         if (block.type === "list") return `<article class="geo-draft-block">${heading}<label class="checkbox-row"><input name="${prefix}_ordered" type="checkbox" ${block.ordered ? "checked" : ""} />使用有序列表</label><label class="field"><span>列表项目（每行一项）</span><textarea name="${prefix}_items" rows="5" required>${escapeHtml(block.items.join("\n"))}</textarea></label></article>`;
         if (block.type === "steps") return `<article class="geo-draft-block">${heading}<label class="field"><span>步骤（每行“标题｜说明”）</span><textarea name="${prefix}_items" rows="6" required>${escapeHtml(block.items.map((item) => `${item.title}｜${item.body}`).join("\n"))}</textarea></label></article>`;
         if (block.type === "quote") return `<article class="geo-draft-block">${heading}<label class="field"><span>引用内容</span><textarea name="${prefix}_text" rows="4" required>${escapeHtml(block.text)}</textarea></label><div class="form-grid"><label class="field"><span>来源名称</span><input name="${prefix}_sourceLabel" value="${escapeAttribute(block.sourceLabel)}" required /></label><label class="field"><span>来源网址</span><input name="${prefix}_sourceUrl" type="url" value="${escapeAttribute(block.sourceUrl)}" required /></label></div></article>`;
         if (block.type === "table") return `<article class="geo-draft-block">${heading}<label class="field"><span>表头（使用 Tab 分隔）</span><input name="${prefix}_headers" value="${escapeAttribute(block.headers.join("\t"))}" required /></label><label class="field"><span>表格行（每行一条，使用 Tab 分隔列）</span><textarea name="${prefix}_rows" rows="6" required>${escapeHtml(block.rows.map((row) => row.join("\t")).join("\n"))}</textarea></label></article>`;
-        if (block.type === "image") return `<article class="geo-draft-block">${heading}<label class="field"><span>图片网址</span><input name="${prefix}_src" value="${escapeAttribute(block.src)}" required /></label><div class="form-grid"><label class="field"><span>图片说明（alt）</span><input name="${prefix}_alt" value="${escapeAttribute(block.alt)}" required /></label><label class="field"><span>图片图注</span><input name="${prefix}_caption" value="${escapeAttribute(block.caption)}" /></label></div></article>`;
+        if (block.type === "image") return `<article class="geo-draft-block geo-draft-image-block">${heading}${block.src ? `<img src="${escapeAttribute(block.src)}" alt="${escapeAttribute(block.alt || "图片预览")}" />` : ""}<div class="row-actions"><label class="btn ghost geo-upload-button">上传或粘贴图片<input type="file" accept="image/*" onchange="geoUploadDraftImage(this.files?.[0],${index})" /></label><span class="metric-note">自动存入 officialAssets/geoContent 长期目录</span></div><label class="field"><span>稳定图片地址</span><input name="${prefix}_src" value="${escapeAttribute(block.src)}" required /></label><div class="form-grid"><label class="field"><span>图片说明（alt，必填）</span><input name="${prefix}_alt" value="${escapeAttribute(block.alt)}" required /></label><label class="field"><span>图片图注</span><input name="${prefix}_caption" value="${escapeAttribute(block.caption)}" /></label></div></article>`;
         if (block.type === "note") return `<article class="geo-draft-block">${heading}<label class="field"><span>提示类型</span><select name="${prefix}_tone"><option value="info" ${block.tone === "info" ? "selected" : ""}>信息</option><option value="warning" ${block.tone === "warning" ? "selected" : ""}>警告</option></select></label><label class="field"><span>提示内容</span><textarea name="${prefix}_text" rows="4" required>${escapeHtml(block.text)}</textarea></label></article>`;
         if (block.type === "cta") return `<article class="geo-draft-block">${heading}<div class="form-grid"><label class="field"><span>行动标题</span><input name="${prefix}_title" value="${escapeAttribute(block.title)}" required /></label><label class="field"><span>按钮文字</span><input name="${prefix}_label" value="${escapeAttribute(block.label)}" required /></label></div><label class="field"><span>行动说明</span><textarea name="${prefix}_body" rows="3" required>${escapeHtml(block.body)}</textarea></label><label class="field"><span>跳转网址</span><input name="${prefix}_href" value="${escapeAttribute(block.href)}" required /></label></article>`;
         return `<article class="geo-draft-block">${heading}<p class="metric-note">暂不支持编辑此区块，保存时会原样保留。</p></article>`;
@@ -13934,9 +13934,10 @@
 
       function geoDraftEditorMarkup(item, version) {
         const document = version.document;
-        const blocks = (document.blocks || []).map(geoDraftBlockEditor).join("");
+        const blocks = (document.blocks || []).map((block, index) => `<div class="geo-draft-block-wrap" data-geo-block-index="${index}">${geoDraftBlockEditor(block, index)}<div class="geo-block-insert-point" tabindex="0"><span>点击此处后按 Ctrl+V，或</span><label class="geo-insert-image-action">在此处插入图片<input type="file" accept="image/*" onchange="geoUploadDraftImage(this.files?.[0],undefined,${index})" /></label><span>，图片会插入到本区块后面</span></div></div>`).join("");
         const faq = (document.faq || []).map((entry, index) => `<article class="geo-draft-block"><div class="toolbar"><strong>FAQ ${index + 1}</strong></div><label class="field"><span>问题</span><input name="faq_${index}_question" value="${escapeAttribute(entry.question)}" required /></label><label class="field"><span>答案</span><textarea name="faq_${index}_answer" rows="4" required>${escapeHtml(entry.answer)}</textarea></label></article>`).join("");
-        return `<aside class="drawer-panel geo-draft-editor"><div class="drawer-head"><div><h3>编辑草稿</h3><p class="metric-note">保存后生成新版本；已发布版本不会被直接覆盖。</p></div><button class="icon-btn" type="button" onclick="closeDrawer()">×</button></div><form id="geo-draft-editor-form" class="section-stack"><div class="form-grid"><label class="field"><span>内容类型</span><input value="${escapeAttribute(item.contentType)}" disabled /></label><label class="field"><span>英文 slug</span><input value="${escapeAttribute(item.slug)}" disabled /></label></div><label class="field"><span>主题</span><input name="topic" value="${escapeAttribute(item.topic)}" required /></label><label class="field"><span>标题</span><input name="title" value="${escapeAttribute(document.title)}" required /></label><label class="field"><span>摘要</span><textarea name="summary" rows="3" required>${escapeHtml(document.summary)}</textarea></label><label class="field"><span>直接答案</span><textarea name="directAnswer" rows="4" required>${escapeHtml(document.directAnswer)}</textarea></label><section class="section-stack"><div class="toolbar"><h4>正文区块</h4><span class="metric-note">保留原区块类型和证据关联</span></div>${blocks}</section><section class="section-stack"><div class="toolbar"><h4>常见问题</h4></div>${faq || `<p class="metric-note">当前内容没有 FAQ。</p>`}</section><section class="geo-draft-block"><div class="toolbar"><h4>SEO</h4></div><label class="field"><span>SEO 标题</span><input name="seoTitle" value="${escapeAttribute(document.seo?.title || "")}" required /></label><label class="field"><span>SEO 描述</span><textarea name="seoDescription" rows="3" required>${escapeHtml(document.seo?.description || "")}</textarea></label></section><div class="form-error" role="alert"></div><button class="btn primary full" type="submit">保存为新草稿版本</button></form></aside>`;
+        const addButtons = [["paragraph", "添加正文"], ["heading", "添加标题"], ["list", "添加列表"], ["steps", "添加步骤"], ["quote", "添加引用"], ["table", "添加表格"], ["image", "添加图片"], ["note", "添加提示"], ["cta", "添加行动区"]].map(([type, label]) => `<button class="btn ghost" type="button" onclick="geoAddDraftBlock('${type}')">${label}</button>`).join("");
+        return `<aside class="drawer-panel geo-draft-editor"><div class="drawer-head"><div><h3>结构化正文编辑器</h3><p class="metric-note">直接编辑、复制粘贴、插图并查看与官网一致的正式预览；保存后生成新版本。</p></div><div class="row-actions"><button class="btn ghost" type="button" onclick="geoPreviewDraft()">正式预览</button><button class="icon-btn" type="button" onclick="closeDrawer()">×</button></div></div><form id="geo-draft-editor-form" class="section-stack"><div class="form-grid"><label class="field"><span>内容类型</span><input value="${escapeAttribute(item.contentType)}" disabled /></label><label class="field"><span>英文 slug</span><input value="${escapeAttribute(item.slug)}" disabled /></label></div><label class="field"><span>主题</span><input name="topic" value="${escapeAttribute(item.topic)}" required /></label><section class="geo-draft-canvas"><label class="field geo-draft-title"><span>标题</span><textarea name="title" rows="2" required>${escapeHtml(document.title)}</textarea></label><label class="field"><span>摘要</span><textarea name="summary" rows="3" required>${escapeHtml(document.summary)}</textarea></label><label class="field geo-direct-answer-editor"><span>直接答案</span><textarea name="directAnswer" rows="4" required>${escapeHtml(document.directAnswer)}</textarea></label><div class="geo-draft-paste-zone" tabindex="0">粘贴文章文字或截图<br /><small>点击这里后 Ctrl+V；文字会转换成结构化区块，截图会自动上传。</small></div><section class="section-stack"><div class="toolbar"><h4>正文区块</h4><span class="metric-note">图片 alt 必填；原证据关联会保留</span></div>${blocks}<div class="row-actions geo-block-add-toolbar">${addButtons}</div></section></section><section id="geo-draft-preview-panel" class="geo-draft-preview-panel hidden"><div class="toolbar"><h4>即将发布的官网正文</h4><button class="btn ghost" type="button" onclick="document.getElementById('geo-draft-preview-panel').classList.add('hidden')">关闭预览</button></div><iframe id="geo-draft-preview-frame" title="GEO文章正式预览"></iframe></section><section class="section-stack"><div class="toolbar"><h4>常见问题</h4></div>${faq || `<p class="metric-note">当前内容没有 FAQ。</p>`}</section><section class="geo-draft-block"><div class="toolbar"><h4>SEO</h4></div><label class="field"><span>SEO 标题</span><input name="seoTitle" value="${escapeAttribute(document.seo?.title || "")}" required /></label><label class="field"><span>SEO 描述</span><textarea name="seoDescription" rows="3" required>${escapeHtml(document.seo?.description || "")}</textarea></label></section><div class="form-error" role="alert"></div><button class="btn primary full" type="submit">保存为新草稿版本（Ctrl+S）</button></form></aside>`;
       }
 
       function geoDraftDocumentFromForm(form, sourceDocument) {
@@ -13964,17 +13965,213 @@
         };
       }
 
+      function geoDefaultDraftBlock(type) {
+        if (type === "heading") return { type, level: 2, text: "新标题" };
+        if (type === "list") return { type, ordered: false, items: ["列表项"], evidenceIds: [] };
+        if (type === "steps") return { type, items: [{ title: "步骤一", body: "补充操作说明" }], evidenceIds: [] };
+        if (type === "quote") return { type, text: "引用内容", sourceLabel: "公开来源", sourceUrl: "https://", evidenceIds: [] };
+        if (type === "table") return { type, headers: ["项目", "说明"], rows: [["示例", "补充内容"]], evidenceIds: [] };
+        if (type === "image") return { type, src: "", alt: "", caption: "", evidenceIds: [] };
+        if (type === "note") return { type, tone: "info", text: "提示内容" };
+        if (type === "cta") return { type, title: "体验灵曦AI", body: "从公开产品入口开始体验。", href: "/", label: "体验产品" };
+        return { type: "paragraph", text: "新正文", evidenceIds: [] };
+      }
+
+      function geoSyncDraftEditorDocument() {
+        const session = geoOperationsState().activeDraftEditor;
+        const form = document.getElementById("geo-draft-editor-form");
+        if (session && form) session.version.document = geoDraftDocumentFromForm(form, session.version.document);
+        if (session && form) session.item.topic = String(new FormData(form).get("topic") || "").trim();
+        return session;
+      }
+
+      function geoMountDraftEditor() {
+        const session = geoOperationsState().activeDraftEditor;
+        if (!session) return;
+        const drawer = document.getElementById("drawer");
+        drawer.classList.remove("hidden");
+        drawer.innerHTML = geoDraftEditorMarkup(session.item, session.version);
+        hydrateDrawerPanel();
+        const form = document.getElementById("geo-draft-editor-form");
+        document.getElementById("geo-draft-preview-frame")?.setAttribute("sandbox", "allow-popups");
+        form.addEventListener("submit", (event) => geoSaveDraftEdit(event, session.item, session.version).catch(() => undefined));
+        form.addEventListener("paste", (event) => geoHandleDraftPaste(event).catch(() => undefined));
+        form.addEventListener("dragover", (event) => { if (Array.from(event.dataTransfer?.types || []).includes("Files")) event.preventDefault(); });
+        form.addEventListener("drop", (event) => geoHandleDraftDrop(event).catch(() => undefined));
+        form.addEventListener("keydown", (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+            event.preventDefault();
+            form.requestSubmit();
+          }
+        });
+      }
+
+      function geoInsertDraftBlock(blocks, block, afterIndex) {
+        if (Number.isInteger(afterIndex) && afterIndex >= 0 && afterIndex < blocks.length) {
+          blocks.splice(afterIndex + 1, 0, block);
+        } else {
+          blocks.push(block);
+        }
+      }
+
+      function geoDraftMutationBlocked() {
+        const session = geoOperationsState().activeDraftEditor;
+        if (!session?.pendingImageUploads) return false;
+        showToast("图片正在上传，请等待上传完成后再调整正文");
+        return true;
+      }
+
+      function geoAddDraftBlock(type, block) {
+        if (geoDraftMutationBlocked()) return;
+        const session = geoSyncDraftEditorDocument();
+        if (!session) return;
+        session.version.document.blocks.push(block || geoDefaultDraftBlock(type));
+        geoMountDraftEditor();
+      }
+
+      function geoMoveDraftBlock(index, direction) {
+        if (geoDraftMutationBlocked()) return;
+        const session = geoSyncDraftEditorDocument();
+        const blocks = session?.version?.document?.blocks;
+        const target = Number(index) + Number(direction);
+        if (!blocks || target < 0 || target >= blocks.length) return;
+        [blocks[index], blocks[target]] = [blocks[target], blocks[index]];
+        geoMountDraftEditor();
+      }
+
+      function geoDuplicateDraftBlock(index) {
+        if (geoDraftMutationBlocked()) return;
+        const session = geoSyncDraftEditorDocument();
+        const blocks = session?.version?.document?.blocks;
+        if (!blocks?.[index]) return;
+        blocks.splice(index + 1, 0, structuredClone(blocks[index]));
+        geoMountDraftEditor();
+      }
+
+      function geoDeleteDraftBlock(index) {
+        if (geoDraftMutationBlocked()) return;
+        const session = geoSyncDraftEditorDocument();
+        const blocks = session?.version?.document?.blocks;
+        if (!blocks?.[index]) return;
+        blocks.splice(index, 1);
+        geoMountDraftEditor();
+      }
+
+      function geoBlocksFromPastedText(text) {
+        const blocks = [];
+        String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
+          const heading = line.match(/^(#{1,4})\s+(.+)$/);
+          if (heading) return blocks.push({ type: "heading", level: Math.min(4, Math.max(2, heading[1].length + 1)), text: heading[2] });
+          const list = line.match(/^(?:[-*•]|\d+[.)、])\s*(.+)$/);
+          if (list) {
+            const previous = blocks.at(-1);
+            if (previous?.type === "list") previous.items.push(list[1]);
+            else blocks.push({ type: "list", ordered: /^\d/.test(line), items: [list[1]], evidenceIds: [] });
+            return;
+          }
+          blocks.push({ type: "paragraph", text: line, evidenceIds: [] });
+        });
+        return blocks;
+      }
+
+      async function geoUploadDraftImage(file, index, afterIndex) {
+        if (!file) return;
+        if (geoDraftMutationBlocked()) return;
+        const session = geoSyncDraftEditorDocument();
+        if (!session) return;
+        const replacementIndex = Number.isInteger(index) ? index : undefined;
+        const insertionIndex = Number.isInteger(afterIndex) ? afterIndex : undefined;
+        session.pendingImageUploads = 1;
+        const uploadForm = document.getElementById("geo-draft-editor-form");
+        if (uploadForm) {
+          uploadForm.inert = true;
+          uploadForm.setAttribute("aria-busy", "true");
+        }
+        try {
+          const uploaded = await uploadAdminImage(file, "/api/admin/geo/assets/uploads");
+          if (geoOperationsState().activeDraftEditor !== session) {
+            showToast("草稿已切换，本次图片未写入文章");
+            return;
+          }
+          geoSyncDraftEditorDocument();
+          const blocks = session.version.document.blocks;
+          const image = { type: "image", src: uploaded.sourceUrl, alt: file.name.replace(/\.[^.]+$/, ""), caption: "", evidenceIds: [] };
+          if (replacementIndex !== undefined) {
+            if (blocks[replacementIndex]?.type !== "image") return;
+            blocks[replacementIndex] = { ...blocks[replacementIndex], ...image };
+          } else {
+            geoInsertDraftBlock(blocks, image, insertionIndex);
+          }
+          geoMountDraftEditor();
+          showToast("图片已上传到 GEO 长期素材目录");
+        } catch (error) {
+          showToast(error.payload?.error?.message || error.message || "图片上传失败");
+        } finally {
+          session.pendingImageUploads = 0;
+          if (geoOperationsState().activeDraftEditor === session) {
+            const currentForm = document.getElementById("geo-draft-editor-form");
+            if (currentForm) {
+              currentForm.inert = false;
+              currentForm.removeAttribute("aria-busy");
+            }
+          }
+        }
+      }
+
+      async function geoHandleDraftPaste(event) {
+        const imageFile = Array.from(event.clipboardData?.items || []).find((item) => item.type.startsWith("image/"))?.getAsFile();
+        if (imageFile) {
+          event.preventDefault();
+          const rawIndex = event.target.closest?.("[data-geo-block-index]")?.dataset.geoBlockIndex;
+          const afterIndex = rawIndex === undefined ? undefined : Number(rawIndex);
+          return geoUploadDraftImage(imageFile, undefined, Number.isInteger(afterIndex) ? afterIndex : undefined);
+        }
+        if (!event.target.closest(".geo-draft-paste-zone")) return;
+        if (geoDraftMutationBlocked()) return;
+        const blocks = geoBlocksFromPastedText(event.clipboardData?.getData("text/plain"));
+        if (!blocks.length) return;
+        event.preventDefault();
+        const session = geoSyncDraftEditorDocument();
+        session.version.document.blocks.push(...blocks);
+        geoMountDraftEditor();
+      }
+
+      async function geoHandleDraftDrop(event) {
+        const file = Array.from(event.dataTransfer?.files || []).find((item) => item.type.startsWith("image/"));
+        if (!file) return;
+        event.preventDefault();
+        const rawIndex = event.target.closest?.("[data-geo-block-index]")?.dataset.geoBlockIndex;
+        const afterIndex = rawIndex === undefined ? undefined : Number(rawIndex);
+        await geoUploadDraftImage(file, undefined, Number.isInteger(afterIndex) ? afterIndex : undefined);
+      }
+
+      async function geoPreviewDraft() {
+        const session = geoSyncDraftEditorDocument();
+        if (!session) return;
+        const result = await api("/api/admin/geo/preview", {
+          method: "POST",
+          body: JSON.stringify({
+            contentType: session.item.contentType,
+            slug: session.item.slug,
+            document: session.version.document,
+            evidenceIds: session.version.evidenceIds || [],
+          }),
+        });
+        const panel = document.getElementById("geo-draft-preview-panel");
+        const frame = document.getElementById("geo-draft-preview-frame");
+        panel.classList.remove("hidden");
+        frame.srcdoc = result.data.html;
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
       function openGeoDraftEditor(contentId) {
         const store = geoOperationsState();
         const item = store.content.find((entry) => entry.id === contentId);
         const detail = store.details[contentId];
         const version = detail?.versions?.find((entry) => entry.id === item?.currentDraftVersionId) || detail?.versions?.[0];
         if (!item || !version?.document) return showToast("草稿详情尚未加载，请刷新后重试");
-        const drawer = document.getElementById("drawer");
-        drawer.classList.remove("hidden");
-        drawer.innerHTML = geoDraftEditorMarkup(item, version);
-        hydrateDrawerPanel();
-        document.getElementById("geo-draft-editor-form").addEventListener("submit", (event) => geoSaveDraftEdit(event, item, version).catch(() => undefined));
+        store.activeDraftEditor = { item: structuredClone(item), version: structuredClone(version) };
+        geoMountDraftEditor();
       }
 
       async function geoSaveDraftEdit(event, item, version) {
@@ -14095,9 +14292,24 @@
           .geo-platform-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
           .geo-operation-entry-grid{grid-template-columns:repeat(3,minmax(0,1fr));align-items:start}
           .geo-source-grid{grid-template-columns:1fr 1fr}
-          .geo-draft-editor{width:min(760px,92vw)}
+          .geo-draft-editor{width:min(1120px,96vw)}
           .geo-draft-editor form{padding-bottom:24px}
           .geo-draft-block{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}
+          .geo-draft-block-wrap{display:grid;gap:8px}
+          .geo-block-insert-point{display:flex;align-items:center;justify-content:center;gap:5px;min-height:38px;padding:7px 12px;border:1px dashed #b7c9db;border-radius:10px;color:var(--muted);background:#fbfdff;font-size:13px;cursor:text}
+          .geo-block-insert-point:focus{outline:3px solid rgba(47,111,237,.18);border-color:#2f6fed}
+          .geo-insert-image-action{position:relative;overflow:hidden;color:#2f6fed;font-weight:700;cursor:pointer}.geo-insert-image-action input{position:absolute;inset:0;opacity:0;cursor:pointer}
+          .geo-draft-canvas{display:grid;gap:18px;padding:clamp(18px,4vw,48px);border:1px solid var(--line);border-radius:16px;background:#fff;box-shadow:0 14px 40px rgba(30,52,72,.06)}
+          .geo-draft-canvas .field textarea,.geo-draft-canvas .field input{background:transparent}
+          .geo-draft-title textarea{font-size:clamp(30px,4vw,54px);font-weight:800;line-height:1.08;letter-spacing:-.02em}
+          .geo-direct-answer-editor{padding:18px;border-left:4px solid #176b58;background:#eef7f4;border-radius:4px 12px 12px 4px}
+          .geo-draft-paste-zone{padding:24px;border:2px dashed #9fb8cf;border-radius:14px;text-align:center;color:var(--muted);background:#f8fbff;cursor:text}
+          .geo-draft-paste-zone:focus{outline:3px solid rgba(47,111,237,.18);border-color:#2f6fed}
+          .geo-block-add-toolbar{flex-wrap:wrap;padding:12px;border:1px dashed var(--line);border-radius:12px}
+          .geo-upload-button{position:relative;overflow:hidden}.geo-upload-button input{position:absolute;inset:0;opacity:0;cursor:pointer}
+          .geo-draft-image-block>img{display:block;max-width:100%;max-height:520px;margin:auto;border-radius:12px;object-fit:contain;background:#eef2f7}
+          .geo-draft-preview-panel{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:14px;background:#eef2f7}
+          .geo-draft-preview-panel iframe{width:100%;height:75vh;border:0;border-radius:10px;background:#fff}
           .geo-content-detail{width:min(720px,92vw)}
           .geo-detail-section{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}
           .geo-detail-section h4,.geo-detail-section h5{margin:0}
@@ -15483,6 +15695,12 @@
       window.geoToggleEvidence = geoToggleEvidence;
       window.geoGenerateDraft = geoGenerateDraft;
       window.openGeoDraftEditor = openGeoDraftEditor;
+      window.geoAddDraftBlock = geoAddDraftBlock;
+      window.geoMoveDraftBlock = geoMoveDraftBlock;
+      window.geoDuplicateDraftBlock = geoDuplicateDraftBlock;
+      window.geoDeleteDraftBlock = geoDeleteDraftBlock;
+      window.geoUploadDraftImage = geoUploadDraftImage;
+      window.geoPreviewDraft = geoPreviewDraft;
       window.openGeoContentDetails = openGeoContentDetails;
       window.geoRollbackContent = geoRollbackContent;
       window.geoArchiveContent = geoArchiveContent;

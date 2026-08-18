@@ -263,6 +263,7 @@ test("admin GEO draft editor creates a new structured version without discarding
   const context = {
     result: {},
     requests: [],
+    store: { activeDraftEditor: null },
     Date,
     escapeHtml: (value) => String(value ?? ""),
     escapeAttribute: (value) => String(value ?? ""),
@@ -274,18 +275,93 @@ test("admin GEO draft editor creates a new structured version without discarding
       context.requests.push({ path, payload: JSON.parse(options.body) });
       return { data: {} };
     },
+    document: { getElementById: () => null },
+    geoOperationsState: () => context.store,
+    uploadAdminImage: async (...args) => context.uploadAdminImage(...args),
+    showToast: () => undefined,
     runAdminMutation: async (_form, _error, operation) => operation(),
     closeDrawer: () => undefined,
     loadGeoOperations: async () => undefined,
     renderShell: () => undefined,
   };
-  vm.runInNewContext(`${script.slice(editorStart, editorEnd)}\nresult.markup = geoDraftEditorMarkup; result.read = geoDraftDocumentFromForm; result.save = geoSaveDraftEdit;`, context);
+  vm.runInNewContext(`${script.slice(editorStart, editorEnd)}\nresult.markup = geoDraftEditorMarkup; result.read = geoDraftDocumentFromForm; result.save = geoSaveDraftEdit; result.insert = typeof geoInsertDraftBlock === "function" ? geoInsertDraftBlock : null; result.move = geoMoveDraftBlock; result.paste = geoHandleDraftPaste; result.upload = geoUploadDraftImage; geoMountDraftEditor = () => undefined;`, context);
 
   const markup = context.result.markup({ id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide" }, { document: sourceDocument });
-  assert.match(markup, /编辑草稿/);
+  assert.match(markup, /结构化正文编辑器/);
   assert.match(markup, /name="title"/);
   assert.match(markup, /正文区块 1/);
   assert.match(markup, /FAQ 1/);
+  assert.match(markup, /粘贴文章文字或截图/);
+  assert.match(markup, /正式预览/);
+  assert.match(markup, /添加正文/);
+  assert.match(markup, /上传或粘贴图片/);
+  assert.match(markup, /data-geo-block-index="0"/);
+  assert.match(markup, /在此处插入图片/);
+  assert.match(script.slice(editorStart, editorEnd), /\/api\/admin\/geo\/assets\/uploads/);
+  assert.match(script.slice(editorStart, editorEnd), /\/api\/admin\/geo\/preview/);
+  assert.match(script.slice(editorStart, editorEnd), /function geoMoveDraftBlock/);
+  assert.match(script.slice(editorStart, editorEnd), /function geoDuplicateDraftBlock/);
+  assert.match(script.slice(editorStart, editorEnd), /function geoDeleteDraftBlock/);
+
+  assert.equal(typeof context.result.insert, "function", "GEO editor can insert a block after the selected body block");
+  const insertedBlocks = [
+    { type: "paragraph", text: "第一段" },
+    { type: "paragraph", text: "第二段" },
+  ];
+  context.result.insert(insertedBlocks, { type: "image", src: "/between.png" }, 0);
+  assert.deepEqual(Array.from(insertedBlocks, (block) => block.type), ["paragraph", "image", "paragraph"]);
+  context.result.insert(insertedBlocks, { type: "note", text: "末尾提示" });
+  assert.equal(insertedBlocks.at(-1).type, "note");
+
+  context.store.activeDraftEditor = {
+    item: { topic: "角色一致性" },
+    version: { document: { blocks: [{ type: "paragraph", text: "第一段" }, { type: "paragraph", text: "第二段" }] } },
+  };
+  context.uploadAdminImage = async () => ({ sourceUrl: "/geo-assets/pasted-image" });
+  let pastePrevented = false;
+  await context.result.paste({
+    preventDefault: () => { pastePrevented = true; },
+    target: { closest: () => ({ dataset: { geoBlockIndex: "0" } }) },
+    clipboardData: { items: [{ type: "image/png", getAsFile: () => ({ name: "步骤截图.png" }) }] },
+  });
+  assert.equal(pastePrevented, true);
+  assert.deepEqual(Array.from(context.store.activeDraftEditor.version.document.blocks, (block) => block.type), ["paragraph", "image", "paragraph"]);
+
+  let finishUpload;
+  context.uploadAdminImage = () => new Promise((resolve) => { finishUpload = resolve; });
+  const firstBlock = { type: "paragraph", text: "第一段" };
+  const secondBlock = { type: "paragraph", text: "第二段" };
+  const originalSession = {
+    item: { id: "content-original", topic: "原文章" },
+    version: { document: { blocks: [firstBlock, secondBlock] } },
+  };
+  context.store.activeDraftEditor = originalSession;
+  const pendingUpload = context.result.upload({ name: "延迟截图.png" }, undefined, 0);
+  context.result.move(0, 1);
+  finishUpload({ sourceUrl: "/geo-assets/delayed-image" });
+  await pendingUpload;
+  assert.deepEqual(
+    Array.from(originalSession.version.document.blocks, (block) => block.text || block.type),
+    ["第一段", "image", "第二段"],
+  );
+
+  let finishSwitchedUpload;
+  context.uploadAdminImage = () => new Promise((resolve) => { finishSwitchedUpload = resolve; });
+  const switchedFrom = {
+    item: { id: "content-a", topic: "文章 A" },
+    version: { document: { blocks: [{ type: "paragraph", text: "A" }] } },
+  };
+  const switchedTo = {
+    item: { id: "content-b", topic: "文章 B" },
+    version: { document: { blocks: [{ type: "paragraph", text: "B" }] } },
+  };
+  context.store.activeDraftEditor = switchedFrom;
+  const switchedUpload = context.result.upload({ name: "切换截图.png" }, undefined, 0);
+  context.store.activeDraftEditor = switchedTo;
+  finishSwitchedUpload({ sourceUrl: "/geo-assets/switched-image" });
+  await switchedUpload;
+  assert.deepEqual(Array.from(switchedFrom.version.document.blocks, (block) => block.type), ["paragraph"]);
+  assert.deepEqual(Array.from(switchedTo.version.document.blocks, (block) => block.type), ["paragraph"]);
 
   const edited = context.result.read({ values }, sourceDocument);
   assert.equal(edited.title, "新标题");

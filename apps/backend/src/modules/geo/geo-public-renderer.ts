@@ -11,7 +11,12 @@ export function renderGeoArticle(input: {
   authorName: string;
   evidence: Array<{ id: string; name: string; factText: string; sourceUrl: string | null }>;
   related: GeoPublicSummary[];
+  robots?: string;
 }) {
+  const representativeImage = input.document.blocks.find((block) => block.type === "image");
+  const imageUrl = representativeImage?.type === "image"
+    ? absolutePublicUrl(representativeImage.src, input.canonicalUrl)
+    : null;
   const articleJsonLd = {
     "@context": "https://schema.org",
     "@type": input.contentType === "case" ? "Article" : "TechArticle",
@@ -22,6 +27,16 @@ export function renderGeoArticle(input: {
     mainEntityOfPage: input.canonicalUrl,
     author: { "@type": "Organization", name: input.authorName },
     publisher: { "@type": "Organization", name: input.brandName },
+    ...(imageUrl ? { image: imageUrl } : {}),
+  };
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: input.brandName, item: new URL("/", input.canonicalUrl).toString() },
+      { "@type": "ListItem", position: 2, name: contentTypeLabel(input.contentType), item: new URL(`/${contentTypeRoute(input.contentType)}`, input.canonicalUrl).toString() },
+      { "@type": "ListItem", position: 3, name: input.document.title, item: input.canonicalUrl },
+    ],
   };
   const faqJsonLd = input.document.faq.length > 0 ? {
     "@context": "https://schema.org",
@@ -35,8 +50,16 @@ export function renderGeoArticle(input: {
   const head = [
     `<title>${escapeHtml(input.document.seo.title)}</title>`,
     `<meta name="description" content="${escapeAttribute(input.document.seo.description)}" />`,
+    `<meta name="robots" content="${escapeAttribute(input.robots ?? "index,follow,max-image-preview:large")}" />`,
     `<link rel="canonical" href="${escapeAttribute(input.canonicalUrl)}" />`,
+    `<meta property="og:title" content="${escapeAttribute(input.document.seo.title)}" />`,
+    `<meta property="og:description" content="${escapeAttribute(input.document.seo.description)}" />`,
+    `<meta property="og:type" content="article" />`,
+    `<meta property="og:url" content="${escapeAttribute(input.canonicalUrl)}" />`,
+    imageUrl ? `<meta property="og:image" content="${escapeAttribute(imageUrl)}" />` : "",
+    `<meta name="twitter:card" content="${imageUrl ? "summary_large_image" : "summary"}" />`,
     `<script type="application/ld+json">${safeJsonLd(articleJsonLd)}</script>`,
+    `<script type="application/ld+json">${safeJsonLd(breadcrumbJsonLd)}</script>`,
     faqJsonLd ? `<script type="application/ld+json">${safeJsonLd(faqJsonLd)}</script>` : "",
   ].join("");
   const related = input.related.length > 0
@@ -47,7 +70,7 @@ export function renderGeoArticle(input: {
     ? ` · 更新：<time datetime="${escapeAttribute(input.updatedAt)}">${escapeHtml(displayDate(input.updatedAt))}</time>`
     : "";
   const evidence = renderEvidence(input.evidence);
-  const content = `<main class="geo-article"><article><header><p class="geo-brand">${escapeHtml(input.brandName)}</p><h1>${escapeHtml(input.document.title)}</h1><p class="geo-summary">${escapeHtml(input.document.summary)}</p><p class="geo-byline">作者：${escapeHtml(input.authorName)} · 发布：<time datetime="${escapeAttribute(input.publishedAt)}">${escapeHtml(displayDate(input.publishedAt))}</time>${updated}</p></header><section class="geo-direct-answer"><h2>直接回答</h2><p>${escapeHtml(input.document.directAnswer)}</p></section>${input.document.blocks.map((block) => renderBlock(block, citationIndex)).join("")}${renderFaq(input.document)}${evidence}</article>${related}</main>`;
+  const content = `<main class="geo-article"><article><header><p class="geo-brand">${escapeHtml(input.brandName)}</p><h1>${escapeHtml(input.document.title)}</h1><p class="geo-summary">${escapeHtml(input.document.summary)}</p><p class="geo-byline">作者：${escapeHtml(input.authorName)} · 发布：<time datetime="${escapeAttribute(input.publishedAt)}">${escapeHtml(displayDate(input.publishedAt))}</time>${updated}</p></header><section class="geo-direct-answer"><h2>直接回答</h2><p>${escapeHtml(input.document.directAnswer)}</p></section>${input.document.blocks.map((block, index) => renderBlock(block, citationIndex, index)).join("")}${renderFaq(input.document)}${evidence}</article>${related}</main>`;
 
   return input.template
     .replace("{{GEO_HEAD}}", head)
@@ -62,18 +85,19 @@ export function renderGeoListing(input: {
   description: string;
   items: GeoPublicSummary[];
 }) {
-  const head = `<title>${escapeHtml(input.title)}</title><meta name="description" content="${escapeAttribute(input.description)}" /><link rel="canonical" href="${escapeAttribute(input.canonicalUrl)}" />`;
+  const robots = input.items.length > 0 ? "index,follow,max-image-preview:large" : "noindex,follow";
+  const head = `<title>${escapeHtml(input.title)}</title><meta name="description" content="${escapeAttribute(input.description)}" /><meta name="robots" content="${robots}" /><link rel="canonical" href="${escapeAttribute(input.canonicalUrl)}" />`;
   const cards = input.items.map((item) => `<article class="geo-card"><a href="${escapeAttribute(item.href)}"><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary)}</p></a></article>`).join("");
   const content = `<main class="geo-listing"><header><p>${escapeHtml(input.brandName)}</p><h1>${escapeHtml(input.title)}</h1><p>${escapeHtml(input.description)}</p></header><section>${cards || "<p>内容正在准备中。</p>"}</section></main>`;
   return input.template.replace("{{GEO_HEAD}}", head).replace("{{GEO_CONTENT}}", content);
 }
 
-function renderBlock(block: GeoBlock, citationIndex: Map<string, number>) {
+function renderBlock(block: GeoBlock, citationIndex: Map<string, number>, index: number) {
   let html: string;
   const citations = renderCitations("evidenceIds" in block ? block.evidenceIds : [], citationIndex);
   switch (block.type) {
     case "paragraph": return `<p>${escapeHtml(block.text)}${citations}</p>`;
-    case "heading": html = `<h${block.level}>${escapeHtml(block.text)}</h${block.level}>`; break;
+    case "heading": html = `<h${block.level} id="${escapeAttribute(headingAnchor(block.text, index))}">${escapeHtml(block.text)}</h${block.level}>`; break;
     case "list": {
       const tag = block.ordered ? "ol" : "ul";
       html = `<${tag}>${block.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</${tag}>`;
@@ -114,6 +138,29 @@ function safePublicHref(value: string | null) {
   } catch {
     return null;
   }
+}
+
+function absolutePublicUrl(value: string, canonicalUrl: string) {
+  const safe = safePublicHref(value);
+  if (!safe) return null;
+  try {
+    return new URL(safe, canonicalUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+function headingAnchor(value: string, index: number) {
+  const slug = value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+  return `geo-heading-${index + 1}-${slug || "section"}`;
+}
+
+function contentTypeRoute(contentType: GeoContentType) {
+  return ({ guide: "guides", case: "cases", report: "reports", answer: "answers" } as const)[contentType];
+}
+
+function contentTypeLabel(contentType: GeoContentType) {
+  return ({ guide: "创作指南", case: "实践案例", report: "观察报告", answer: "常见问答" } as const)[contentType];
 }
 
 function displayDate(value: string) {

@@ -52,6 +52,18 @@ export function validateGeoDraft(input: {
     for (const url of urls) {
       if (!isSafeUrl(url)) blockers.push(issue("unsafe_url", "链接必须是站内路径或 HTTP(S) 地址。", `blocks.${index}`));
     }
+    if (block.type === "image") {
+      const imagePathname = (() => {
+        try { return new URL(block.src.trim(), "https://geo.invalid").pathname; } catch { return ""; }
+      })();
+      if (!block.alt.trim()) blockers.push(issue("image_alt_missing", "图片必须填写能够说明画面内容的替代文字。", `blocks.${index}.alt`));
+      if (/^\/api\/storage\/objects\//i.test(imagePathname)) {
+        blockers.push(issue("private_image_url", "公开文章不能使用需要登录或临时签名的内部图片地址。", `blocks.${index}.src`));
+      } else if (/^https?:\/\//i.test(block.src.trim())) {
+        warnings.push(issue("external_image_url", "外部图片可能失效，建议上传到 GEO 长期素材目录。", `blocks.${index}.src`));
+      }
+      if (!block.caption.trim()) warnings.push(issue("image_caption_missing", "建议补充图片图注，说明图片与正文结论的关系。", `blocks.${index}.caption`));
+    }
 
     const text = blockText(block);
     const evidenceIds = blockEvidenceIds(block);
