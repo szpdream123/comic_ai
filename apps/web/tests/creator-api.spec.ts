@@ -89,6 +89,28 @@ test("createCanvasProject forwards an explicit idempotency key outside the reque
   });
 });
 
+test("getStandaloneCanvas always reads the latest saved document", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ canvas: { serverRevision: calls.length } }),
+    };
+  };
+
+  const { creatorApi } = await import("../src/shared/creator-api.js");
+  await creatorApi.getStandaloneCanvas("canvas/latest");
+  await creatorApi.getStandaloneCanvas("canvas/latest");
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/creator/canvases/canvas%2Flatest/document",
+    "/api/creator/canvases/canvas%2Flatest/document",
+  ]);
+  assert.deepEqual(calls.map((call) => call.options.cache), ["no-store", "no-store"]);
+});
+
 test("tool preset API methods use the versioned creator REST contract", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

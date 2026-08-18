@@ -8075,6 +8075,15 @@
   gap: 0.5rem;
 }
 
+.canvas-project-gallery-toolbar {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  min-height: 2.55rem;
+  border-radius: 0.65rem;
+  background: rgba(28, 30, 39, 0.76);
+}
+
 .canvas-project-filter,
 .canvas-project-search {
   display: inline-flex;
@@ -8289,6 +8298,23 @@
   border-radius: 1rem;
   background: rgba(25, 27, 36, 0.96);
   box-shadow: 0 1rem 2.2rem rgba(0, 0, 0, 0.18);
+}
+
+.canvas-project-card.is-selected {
+  border-color: rgba(74, 202, 255, 0.78);
+  box-shadow:
+    0 0 0 1px rgba(124, 103, 255, 0.34),
+    0 1rem 2.2rem rgba(0, 0, 0, 0.18);
+}
+
+.canvas-project-select-toggle {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.canvas-project-select-toggle span {
+  width: 0.48rem;
+  height: 0.48rem;
 }
 
 .canvas-project-card-open {
@@ -8548,6 +8574,16 @@
   .canvas-project-gallery-controls {
     display: grid;
     grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    width: 100%;
+  }
+
+  .canvas-project-gallery-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .canvas-project-gallery-toolbar .project-gallery-toolbar-actions {
+    justify-content: flex-start;
     width: 100%;
   }
 
@@ -39273,6 +39309,7 @@ button.asset-generator-task-preview:focus-visible {
 }
 
 .workbench-body .project-gallery-card.is-selected,
+.workbench-body .canvas-project-card.is-selected,
 .workbench-body .gallery-filter.active,
 .workbench-body .episode-library-asset-card.is-selected {
   border-color: var(--theme-control-active-border);

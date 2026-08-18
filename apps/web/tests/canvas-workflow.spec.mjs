@@ -84,6 +84,12 @@ describe("canvas workflow document", () => {
     return createLegacyStarterCanvasDocument(input);
   }
 
+  it("keeps grid snapping disabled in a new canvas by default", () => {
+    const document = createDefaultCanvasDocument({ canvasProjectId: "canvas-default-snap" });
+
+    assert.equal(document.viewport.snapEnabled, false);
+  });
+
   it("reopens the editor when the selected X6 node is clicked again", () => {
     const selections = [];
     const workbench = {
@@ -404,6 +410,7 @@ describe("canvas workflow document", () => {
       x: 48,
       y: -24,
       zoom: 1.5,
+      snapEnabled: false,
       interactionMode: "default",
     });
     assert.deepEqual(workbench.ui.canvasDocument.viewport, savedDocument.viewport);
@@ -1889,7 +1896,7 @@ describe("canvas workflow document", () => {
 it("enables X6 alignment reference lines with the Canvas snap preference", () => {
   const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
   assert.match(source, /new X6\.Graph\(\{[\s\S]*?async:\s*false,[\s\S]*?moveThreshold:\s*2,[\s\S]*?clickThreshold:\s*0/);
-  assert.match(source, /snapline:\s*\{[\s\S]*?enabled:\s*viewport\.snapEnabled !== false[\s\S]*?sharp:\s*true/);
+  assert.match(source, /snapline:\s*\{[\s\S]*?enabled:\s*viewport\.snapEnabled === true[\s\S]*?sharp:\s*true/);
   assert.match(source, /const CANVAS_GRID_SIZE = 20;/);
   assert.match(source, /grid:\s*\{\s*size:\s*1,\s*visible:\s*false,\s*type:\s*"dot"/);
   assert.match(source, /setGridSize\?\.\(snapEnabled \? CANVAS_GRID_SIZE : 1\)/);
@@ -2000,6 +2007,7 @@ it("defers Canvas drag calculations until the pointer is released", () => {
   assert.match(wireSource.slice(nodeMoveStart, nodeMoveEnd), /setNodeDragMotion\(node, true\)/);
   assert.doesNotMatch(wireSource.slice(nodeMoveStart, nodeMoveEnd), /canvasGraphCellAndDescendantIds|refreshCanvasConnectedEdgeMotion|positionCanvasSelectionActionToolbar|updateStoryboardReturnTarget/);
   assert.doesNotMatch(wireSource.slice(positionChangeStart, positionChangeEnd), /refreshCanvasConnectedEdgeMotion|scheduleSelectionPresentation/);
+  assert.match(wireSource.slice(positionChangeStart, positionChangeEnd), /positionCanvasNodeActionToolbar\(graph, mount\)/);
   assert.doesNotMatch(wireSource.slice(selectionMoveStart, selectionMoveEnd), /canvasGraphCellAndDescendantIds|refreshCanvasConnectedEdgeMotion|scheduleSelectionPresentation/);
   assert.match(wireSource, /node:moved[\s\S]*?classList\?\.remove\?\.\("is-node-dragging"\)/);
   assert.match(wireSource, /node:moved[\s\S]*?setNodeDragMotion\(event\?\.node, false\)/);
@@ -2100,6 +2108,15 @@ it("uses the latest Canvas document when the asynchronous X6 mount completes", (
       < mountSource.indexOf("const canvasDocument = ensureCanvasDocument(workbench);"),
   );
   assert.match(mountSource, /workbench\.canvasGraph = graph;\s*refreshCanvasWorkflowGraph\(workbench\);/);
+});
+
+it("reapplies the saved viewport when an async Canvas document replaces the local document", () => {
+  const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
+  const refreshStart = source.indexOf("export function refreshCanvasWorkflowGraph");
+  const refreshEnd = source.indexOf("export function reconcileCanvasWorkflowGraph", refreshStart);
+  const refreshSource = source.slice(refreshStart, refreshEnd);
+
+  assert.match(refreshSource, /reconcileCanvasWorkflowGraph\(graph, nextData\);[\s\S]*?applyInitialViewport\(graph, document\.viewport\);/);
 });
 
 it("keeps existing X6 port instances when a node-only refresh does not change ports", () => {

@@ -555,7 +555,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           ...canvasDocument,
           viewport: {
             ...(canvasDocument.viewport ?? {}),
-            snapEnabled: canvasDocument.viewport?.snapEnabled === false,
+            snapEnabled: canvasDocument.viewport?.snapEnabled !== true,
           },
         };
         workbench.ui.canvasDocument = nextDocument;
@@ -730,7 +730,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
             event.preventDefault?.();
             event.stopPropagation();
             if (applySnapPreference()) {
-              const snapEnabled = workbench.ui.canvasDocument?.viewport?.snapEnabled !== false;
+              const snapEnabled = workbench.ui.canvasDocument?.viewport?.snapEnabled === true;
               actionTarget.classList?.toggle?.("active", snapEnabled);
               actionTarget.setAttribute?.("aria-label", snapEnabled ? "关闭网格吸附" : "开启网格吸附");
               void renderControls();

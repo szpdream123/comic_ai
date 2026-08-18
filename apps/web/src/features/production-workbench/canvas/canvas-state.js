@@ -605,7 +605,7 @@ export function updateCanvasViewport(document, patch = {}) {
       x: Number(patch.x ?? previousViewport.x ?? 0),
       y: Number(patch.y ?? previousViewport.y ?? 0),
       zoom: clampNumber(patch.zoom ?? previousViewport.zoom ?? 1, 0.1, 8),
-      snapEnabled: patch.snapEnabled ?? previousViewport.snapEnabled ?? true,
+      snapEnabled: patch.snapEnabled ?? previousViewport.snapEnabled ?? false,
       interactionMode: patch.interactionMode ?? previousViewport.interactionMode ?? "default",
     },
   });

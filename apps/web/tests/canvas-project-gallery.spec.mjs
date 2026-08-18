@@ -77,6 +77,34 @@ test("canvas project gallery searches titles and exposes an input bridge", () =>
   assert.match(emptyHtml, /没有匹配“角色”的画布/);
 });
 
+test("canvas project gallery supports current-page multi-select deletion", () => {
+  const html = renderCanvasProjectGallery({
+    canvasProjects: [
+      { id: "canvas-character", title: "角色探索", status: "active" },
+      { id: "canvas-scene", title: "场景探索", status: "active" },
+    ],
+    selectedCanvasProjectIds: ["canvas-character"],
+    session: { user: { phone: "+86 13800138000" } },
+  });
+
+  assert.match(html, /本页已选 1/);
+  assert.match(html, /data-action="select-current-page-canvas-projects"/);
+  assert.match(html, /data-action="clear-selected-canvas-projects"/);
+  assert.match(html, /data-action="delete-selected-canvas-projects"/);
+  assert.match(html, /data-action="toggle-canvas-project-selection"[\s\S]*?data-canvas-project-id="canvas-character"[\s\S]*?aria-pressed="true"/);
+  assert.match(html, /canvas-project-card is-selected/);
+});
+
+test("canvas project gallery does not expose delete selection controls to team members", () => {
+  const html = renderCanvasProjectGallery({
+    canvasProjects: [{ id: "canvas-assigned", title: "已分配画布", status: "active" }],
+    session: { user: { actorType: "team_member" } },
+  });
+
+  assert.doesNotMatch(html, /data-action="toggle-canvas-project-selection"/);
+  assert.doesNotMatch(html, /data-action="delete-selected-canvas-projects"/);
+});
+
 test("opened Canvas renders complete generation-history controls", () => {
   const html = renderCanvasSurfaceForHost({
     ui: {

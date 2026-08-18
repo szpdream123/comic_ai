@@ -12,6 +12,7 @@ const mimeExtensions: Record<string, readonly string[]> = {
   "audio/wav": [".wav"],
   "audio/mp4": [".m4a"],
   "audio/x-m4a": [".m4a"],
+  "application/json": [".json"],
   "text/plain": [".txt"],
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
   "font/ttf": [".ttf"],
@@ -48,6 +49,7 @@ function matchesContent(contentType: string, extension: string, bytes: Uint8Arra
     return ascii(bytes, 0, 3) === "ID3" || (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe0) === 0xe0);
   }
   if (contentType === "audio/mp4" || contentType === "audio/x-m4a") return isIsoBaseMedia(bytes);
+  if (contentType === "application/json") return isJson(bytes);
   if (contentType === "text/plain") return isPlainText(bytes);
   if (contentType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     return startsWith(bytes, [0x50, 0x4b, 0x03, 0x04]) || startsWith(bytes, [0x50, 0x4b, 0x05, 0x06]);
@@ -85,6 +87,15 @@ function isPlainText(bytes: Uint8Array) {
   if (bytes.includes(0)) return false;
   try {
     new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isJson(bytes: Uint8Array) {
+  try {
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     return true;
   } catch {
     return false;

@@ -9,6 +9,8 @@ import {
   initProductionWorkbench,
   refreshProductionWorkbenchForTest,
   restoreWorkbenchRouteFromLocationForTest,
+  setHomeWorkflowScriptFileForTest,
+  setScriptUploadFileForTest,
   syncCanvasProjectsFromApiForTest,
   syncCanvasRouteStateForTest,
   syncHomeProjectLibraryFromApiForTest,
@@ -92,6 +94,81 @@ test("project card edit menu toggle does not show a success toast", async () => 
   assert.equal(workbench.ui.assetCardMenuId, null);
   assert.equal(workbench.ui.toast, "");
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
+});
+
+test("canvas gallery deletes all selected projects from the current page", async () => {
+  const workbench = createWorkbench();
+  const deletedIds = [];
+  Object.assign(workbench.ui, {
+    activeNavTab: "tools",
+    canvasProjectView: "list",
+    canvasProjectPage: 1,
+    canvasProjectStatusFilter: "active",
+    canvasProjects: [
+      { id: "canvas-1", title: "画布 1", status: "active" },
+      { id: "canvas-2", title: "画布 2", status: "active" },
+      { id: "canvas-3", title: "画布 3", status: "active" },
+    ],
+    selectedCanvasProjectIds: ["canvas-1", "canvas-2"],
+    selectedCanvasProjectId: "canvas-1",
+    canvasDocumentsByProject: {},
+  });
+  workbench.api.deleteCanvasProject = async (projectId) => {
+    deletedIds.push(projectId);
+    return { deleted: true };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "delete-selected-canvas-projects" },
+  });
+
+  assert.equal(workbench.ui.deleteCanvasProjectMode, "bulk");
+  assert.deepEqual(workbench.ui.deleteCanvasProjectIds, ["canvas-1", "canvas-2"]);
+  assert.match(workbench.root.innerHTML, /确定删除本页选中的 2 个画布吗/);
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-canvas-project" },
+  });
+
+  assert.deepEqual(deletedIds, ["canvas-1", "canvas-2"]);
+  assert.deepEqual(workbench.ui.canvasProjects.map((project) => project.id), ["canvas-3"]);
+  assert.deepEqual(workbench.ui.selectedCanvasProjectIds, []);
+  assert.equal(workbench.ui.deleteCanvasProjectMode, "single");
+  assert.equal(workbench.ui.toast, "已删除 2 个画布。");
+});
+
+test("canvas bulk delete keeps only the failed project selected for retry", async () => {
+  const workbench = createWorkbench();
+  let deleteCalls = 0;
+  Object.assign(workbench.ui, {
+    activeNavTab: "tools",
+    canvasProjectView: "list",
+    canvasProjectStatusFilter: "active",
+    canvasProjects: [
+      { id: "canvas-1", title: "画布 1", status: "active" },
+      { id: "canvas-2", title: "画布 2", status: "active" },
+    ],
+    selectedCanvasProjectIds: ["canvas-1", "canvas-2"],
+    deleteCanvasProjectMode: "bulk",
+    deleteCanvasProjectIds: ["canvas-1", "canvas-2"],
+    canvasDocumentsByProject: {},
+  });
+  workbench.api.deleteCanvasProject = async () => {
+    deleteCalls += 1;
+    if (deleteCalls === 2) throw new Error("second canvas delete failed");
+    return { deleted: true };
+  };
+
+  await handleWorkbenchActionForTest(workbench, {
+    dataset: { action: "confirm-delete-canvas-project" },
+  });
+
+  assert.equal(deleteCalls, 2);
+  assert.deepEqual(workbench.ui.canvasProjects.map((project) => project.id), ["canvas-2"]);
+  assert.deepEqual(workbench.ui.deleteCanvasProjectIds, ["canvas-2"]);
+  assert.deepEqual(workbench.ui.selectedCanvasProjectIds, ["canvas-2"]);
+  assert.equal(workbench.ui.deleteCanvasProjectSubmitting, false);
+  assert.match(String(workbench.ui.toast), /second canvas delete failed/);
 });
 
 test("team member project delete action is blocked before the api call", async () => {
@@ -1204,6 +1281,40 @@ test("home workflow submission uploads a script and opens the shared episode wor
   assert.equal(workbench.ui.selectedProjectCardId, "workflow-project");
   assert.equal(workbench.ui.selectedEpisodeId, "episode-1");
   assert.equal(workbench.ui.museScopeMode, "assets");
+});
+
+test("home workflow rejects an oversized script when selected", () => {
+  const workbench = createWorkbench();
+  workbench.ui.homeWorkflowScriptFile = { name: "旧剧本.txt" };
+  workbench.ui.homeWorkflowScriptFileName = "旧剧本.txt";
+
+  const accepted = setHomeWorkflowScriptFileForTest(workbench, {
+    name: "超大剧本.txt",
+    size: 10 * 1024 * 1024 + 1,
+    type: "text/plain",
+  });
+
+  assert.equal(accepted, false);
+  assert.equal(workbench.ui.homeWorkflowScriptFile, null);
+  assert.equal(workbench.ui.homeWorkflowScriptFileName, "");
+  assert.equal(workbench.ui.toast, "剧本文档不能超过 10 MB，请换用更小的文件。");
+});
+
+test("script upload rejects an oversized script when selected", () => {
+  const workbench = createWorkbench();
+  workbench.ui.scriptUploadFile = { name: "旧剧本.docx" };
+  workbench.ui.scriptUploadFileName = "旧剧本.docx";
+
+  const accepted = setScriptUploadFileForTest(workbench, {
+    name: "超大剧本.docx",
+    size: 10 * 1024 * 1024 + 1,
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+
+  assert.equal(accepted, false);
+  assert.equal(workbench.ui.scriptUploadFile, null);
+  assert.equal(workbench.ui.scriptUploadFileName, "");
+  assert.equal(workbench.ui.uploadNotice, "剧本文档不能超过 10 MB，请换用更小的文件。");
 });
 
 test("home workflow refuses to start without an uploaded script", async () => {

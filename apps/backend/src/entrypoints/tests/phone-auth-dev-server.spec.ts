@@ -29,6 +29,7 @@ import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
 import { createDevDb, runWithDatabaseContext } from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
+import { createHomeRecommendationService } from "../../modules/home-recommendations/home-recommendation.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
 const directUploadPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -168,9 +169,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     const categoryId = randomUUID();
     const videoId = randomUUID();
+    const storageObjectId = randomUUID();
     const bucket = "home-media-test-1310122982";
     const region = "ap-guangzhou";
     const backgroundSourceUrl = `https://${bucket}.cos.${region}.myqcloud.com/officialAssets/homeBackgroundVideos/test.mp4`;
+    const videoObjectKey = "officialAssets/homeRecommendationVideos/test.mp4";
+    const videoSourceUrl = `/api/storage/objects/${storageObjectId}/content?proxy=1`;
     const signedRequests: Array<{ bucket: string; objectKey: string; expiresAt: Date }> = [];
     const server = createPhoneAuthDevServer({
       db,
@@ -206,9 +210,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
       VALUES ($1, 'gateway-test', 'Gateway test', 'active', 1, now(), now())
     `, [categoryId]);
     await db.query(`
+      INSERT INTO storage_objects (id, bucket, object_key, content_type, size_bytes, provider, status)
+      VALUES ($1, $2, $3, 'video/mp4', 8, 'cos', 'available')
+    `, [storageObjectId, bucket, videoObjectKey]);
+    await db.query(`
       INSERT INTO home_recommendation_videos (id, category_id, title, subtitle, cover_url, video_url, duration_label, cover_alt, status, sort_order, created_at, updated_at)
       VALUES ($1, $2, 'Gateway video', '', '', $3, '', '', 'active', 1, now(), now())
-    `, [videoId, categoryId, backgroundSourceUrl]);
+    `, [videoId, categoryId, videoSourceUrl]);
 
     try {
       await server.listen(0);
@@ -228,22 +236,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(videoResponse.status, 200);
       assert.deepEqual(signedRequests.map((request) => ({ bucket: request.bucket, objectKey: request.objectKey })), [
         { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
-        { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
+        { bucket, objectKey: videoObjectKey },
       ]);
       assert.ok(signedRequests[0]?.expiresAt.getTime() >= Date.now() + 59 * 60 * 1000);
       assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
 
-      await db.query(
-        "UPDATE home_background_settings SET video_url = $1, updated_at = updated_at + interval '1 second' WHERE id = 'homepage'",
-        [`https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`],
-      );
-      await db.query(
-        "UPDATE home_recommendation_videos SET updated_at = updated_at + interval '1 second' WHERE id = $1",
-        [videoId],
-      );
+      const recommendations = createHomeRecommendationService({ db });
+      await recommendations.saveBackground({
+        videoUrl: `https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`,
+        posterUrl: "",
+        status: "active",
+        now: new Date("2030-01-01T00:00:00.000Z"),
+      });
       const updatedPayload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
       assert.notEqual(updatedPayload.data.background.videoUrl, payload.data.background.videoUrl);
-      assert.notEqual(updatedPayload.data.categories[0]?.videos[0]?.videoUrl, payload.data.categories[0]?.videos[0]?.videoUrl);
       const blockedResponse = await fetch(`${server.origin}${updatedPayload.data.background.videoUrl}`, { redirect: "manual" });
       assert.equal(blockedResponse.status, 404);
       assert.equal(signedRequests.length, 2);

@@ -1,3 +1,10 @@
+import {
+  addCanvasNode,
+  resolveCanvasModelOptions,
+  updateCanvasNodeData,
+} from "../production-workbench/canvas/canvas-state.js";
+import { resolveCanvasMediaNodeSource } from "../production-workbench/canvas/canvas-media-node.js";
+
 const MEDIA_TOOLS = [
   { id: "crop", label: "裁剪" },
   { id: "outpaint", label: "扩图" },
@@ -9,6 +16,21 @@ const MEDIA_TOOLS = [
   { id: "annotation", label: "标注" },
   { id: "batch_grid", label: "宫格" },
 ];
+
+const CANVAS_ANNOTATION_UPLOAD_LIMITS = {
+  image: {
+    label: "标注图片",
+    maxBytes: 30 * 1024 * 1024,
+    mimeTypes: ["image/png"],
+    extensions: [".png"],
+  },
+  vector: {
+    label: "矢量标注",
+    maxBytes: 5 * 1024 * 1024,
+    mimeTypes: ["application/json"],
+    extensions: [".json"],
+  },
+};
 
 const CAMERA_STUDIO_CAMERA_PRESETS = {
   front: { yaw: 0, pitch: 0 },
@@ -84,6 +106,7 @@ export function ensureCanvasMediaToolsState(ui = {}) {
     error: "",
     derivationId: "",
     taskId: "",
+    generationModelCode: "",
     ...state,
   });
   if (state.status === "idle") {
@@ -97,8 +120,11 @@ export function renderCanvasMediaToolsShell(ui = {}) {
   const state = ensureCanvasMediaToolsState(ui);
   if (!state.open) return "";
   const selected = ui.canvasDocument?.nodes?.find?.((node) => node.id === ui.selectedCanvasNodeId);
+  const sourcePreviewUrl = resolveMediaSourcePreviewUrl(selected);
   const artifacts = mediaArtifactsForNode(ui, selected?.id);
   const canvasArtifacts = mediaArtifactsForCanvas(ui);
+  const imageModelOptions = resolveMediaImageModelOptions(ui);
+  syncMediaGenerationModelCode(ui, state, selected, imageModelOptions);
   const busy = state.status === "submitting";
   return `
     <div class="canvas-media-tools-backdrop" data-media-action="close">
@@ -110,8 +136,9 @@ export function renderCanvasMediaToolsShell(ui = {}) {
         </div>
         <section>
           <label><span>源节点</span><input value="${escapeAttr(selected?.data?.title ?? selected?.id ?? "未选择图片")}" disabled /></label>
+          ${!["crop", "annotation"].includes(state.tool) ? renderMediaSourcePreview(selected, sourcePreviewUrl) : ""}
           ${state.tool === "crop" ? `
-            ${renderCropStage(state, selected)}
+            ${renderCropStage(state, selected, sourcePreviewUrl)}
             <div class="canvas-media-crop-grid">
               ${numberField("X", "cropX", state.cropX, 0, 100)}
               ${numberField("Y", "cropY", state.cropY, 0, 100)}
@@ -120,9 +147,10 @@ export function renderCanvasMediaToolsShell(ui = {}) {
             </div>
           ` : ""}
           ${state.tool === "outpaint" ? numberField("扩展像素", "outpaintPixels", state.outpaintPixels, 32, 2048) : ""}
+          ${state.tool === "outpaint" ? renderMediaModelField(state, imageModelOptions) : ""}
           ${renderProfessionalControls(state, canvasArtifacts)}
           ${state.tool === "annotation" ? `
-            <div class="canvas-media-annotation-stage" style="background-image:url('${escapeAttr(selected?.data?.url ?? selected?.data?.previewUrl ?? "")}')">
+            <div class="canvas-media-annotation-stage" style="background-image:url('${escapeAttr(sourcePreviewUrl)}')">
               <canvas width="640" height="360" tabindex="0" data-media-annotation-canvas aria-label="图片标注画布"></canvas>
             </div>
             <div class="canvas-media-annotation-toolbar" role="toolbar" aria-label="标注工具">
@@ -135,7 +163,7 @@ export function renderCanvasMediaToolsShell(ui = {}) {
               ${numberField("画笔", "brushSize", state.brushSize, 2, 96)}
               <label><span>图层</span><select data-media-field="layerKind"><option value="mask" ${state.layerKind === "mask" ? "selected" : ""}>蒙版</option><option value="raster_annotation" ${state.layerKind === "raster_annotation" ? "selected" : ""}>栅格标注</option><option value="vector_annotation" ${state.layerKind === "vector_annotation" ? "selected" : ""}>矢量标注</option></select></label>
             </div>
-            ${renderAnnotationLayerList(state)}
+            ${renderAnnotationLayerList(state, sourcePreviewUrl)}
           ` : ""}
           ${state.tool === "batch_grid" ? renderBatchGrid(state, artifacts) : ""}
           ${!["annotation", "batch_grid"].includes(state.tool) ? `<label><span>编辑要求</span><textarea data-media-field="instruction" placeholder="描述构图、视角或需要保留的内容">${escapeHtml(state.instruction)}</textarea></label>` : ""}
@@ -485,10 +513,14 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
       if (action === "load-annotation-layer") {
         const layer = (state.annotationLayers ?? []).find((item) => item.id === target.dataset.layerId);
         await loadAnnotationLayer(surface, layer, state);
+        await rerender();
         return true;
       }
       if (action === "submit") {
-        if (state.tool === "annotation") await submitAnnotation(workbench, state, rerender, surface);
+        if (state.tool === "crop") await submitLocalCrop(workbench, state, rerender);
+        else if (state.tool === "slice") await submitLocalSlice(workbench, state, rerender);
+        else if (state.tool === "composite") await submitLocalComposite(workbench, state, rerender);
+        else if (state.tool === "annotation") await submitAnnotation(workbench, state, rerender, surface);
         else if (state.tool === "batch_grid") await submitBatchGroup(workbench, state, rerender);
         else await submitDerivation(workbench, state, rerender);
         await persistCanvasMediaRecoveryState(workbench, state);
@@ -662,6 +694,14 @@ async function submitDerivation(workbench, state, rerender) {
     rerender();
     return;
   }
+  const imageModelOptions = resolveMediaImageModelOptions(workbench.ui);
+  syncMediaGenerationModelCode(workbench.ui, state, node, imageModelOptions);
+  const modelCode = String(state.generationModelCode ?? "").trim();
+  if (state.tool === "outpaint" && !modelCode) {
+    state.error = "请选择生成模型。";
+    rerender();
+    return;
+  }
   const api = workbench.api ?? {};
   if (typeof api.startCanvasMediaDerivation !== "function" || typeof api.createImageGenerationTask !== "function" || typeof api.attachCanvasMediaDerivationTask !== "function") {
     state.error = "媒体编辑接口暂不可用。";
@@ -687,7 +727,7 @@ async function submitDerivation(workbench, state, rerender) {
       target: { kind: "canvas", canvasProjectId: canvasId, nodeId: node.id },
       targetType: "canvas",
       targetId: node.id,
-      model: node.data?.modelCode ?? workbench.ui?.canvasGenerationModelCode,
+      model: modelCode || node.data?.modelCode || workbench.ui?.canvasGenerationModelCode,
       prompt: state.instruction.trim() || MEDIA_TOOLS.find((tool) => tool.id === state.tool)?.label || "媒体编辑",
       parameters: {
         ...requestSnapshot,
@@ -706,6 +746,347 @@ async function submitDerivation(workbench, state, rerender) {
     state.error = friendlyError(error);
   }
   rerender();
+}
+
+async function submitLocalCrop(workbench, state, rerender) {
+  const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+  const node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === workbench.ui.selectedCanvasNodeId);
+  const sourceUrl = resolveMediaSourcePreviewUrl(node);
+  if (!node || !sourceUrl) {
+    state.error = "请选择包含图片源的节点。";
+    rerender();
+    return;
+  }
+  if (typeof Image !== "function" || typeof document === "undefined") {
+    state.error = "当前浏览器不支持本地裁剪。";
+    rerender();
+    return;
+  }
+  if (typeof workbench.api?.uploadFile !== "function") {
+    state.error = "图片上传接口暂不可用。";
+    rerender();
+    return;
+  }
+  state.status = "submitting";
+  state.error = "";
+  rerender();
+  try {
+    const blob = await cropImageBlob(sourceUrl, state);
+    const fileName = `canvas-crop-${Date.now()}.png`;
+    const file = typeof File === "function"
+      ? new File([blob], fileName, { type: "image/png", lastModified: Date.now() })
+      : blob;
+    const uploadedPayload = await workbench.api.uploadFile(file, {
+      category: "canvas-derivations",
+      projectId: null,
+      canvasProjectId: canvasId || null,
+    });
+    const upload = uploadedPayload?.upload ?? uploadedPayload;
+    const storageObjectId = String(upload?.storageObjectId ?? "").trim();
+    const previewUrl = String(
+      storageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+        : upload?.previewUrl ?? upload?.publicUrl ?? createObjectUrl(blob) ?? "",
+    ).trim();
+    if (!previewUrl) throw new Error("canvas_crop_upload_missing");
+    const canvasDocument = workbench.ui?.canvasDocument;
+    if (!canvasDocument || !Array.isArray(canvasDocument.nodes)) throw new Error("canvas_document_missing");
+    const position = {
+      x: Number(node.position?.x ?? 0) + Number(node.size?.width ?? 420) + 72,
+      y: Number(node.position?.y ?? 0),
+    };
+    let nextDocument = addCanvasNode(canvasDocument, { type: "source-image", position });
+    const createdNode = nextDocument.nodes.at(-1);
+    nextDocument = updateCanvasNodeData(nextDocument, createdNode.id, {
+      title: "裁剪结果",
+      status: "ready",
+      source: "canvas_crop",
+      mediaKind: "image",
+      fileName,
+      mimeType: "image/png",
+      previewUrl,
+      url: previewUrl,
+      storageObjectId: storageObjectId || null,
+      storageObjectKey: upload?.storageObjectKey ?? "",
+      parentNodeId: node.id,
+    });
+    const canSaveImmediately = typeof workbench.saveCanvasNow === "function";
+    if (typeof workbench.updateCanvasDocument === "function") {
+      workbench.updateCanvasDocument(nextDocument, canSaveImmediately ? { scheduleSave: false } : { immediateSave: true });
+    }
+    else workbench.ui.canvasDocument = nextDocument;
+    workbench.ui.selectedCanvasNodeId = createdNode.id;
+    if (canSaveImmediately) await workbench.saveCanvasNow();
+    workbench.ui.toast = "裁剪结果已创建为图片节点。";
+    state.status = "completed";
+  } catch (error) {
+    state.status = "failed";
+    state.error = friendlyError(error);
+    workbench.ui.toast = `裁剪结果保存失败：${state.error}`;
+  }
+  await workbench.refreshCanvasSurface?.();
+  rerender();
+}
+
+function cropImageBlob(sourceUrl, state) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      try {
+        const width = Number(image.naturalWidth || image.width);
+        const height = Number(image.naturalHeight || image.height);
+        if (!width || !height) throw new Error("canvas_crop_source_dimensions_missing");
+        const crop = cropRect(state);
+        const sourceX = Math.round(width * crop.x / 100);
+        const sourceY = Math.round(height * crop.y / 100);
+        const sourceWidth = Math.max(1, Math.round(width * crop.width / 100));
+        const sourceHeight = Math.max(1, Math.round(height * crop.height / 100));
+        const canvas = document.createElement("canvas");
+        canvas.width = sourceWidth;
+        canvas.height = sourceHeight;
+        const context = canvas.getContext?.("2d");
+        if (!context) throw new Error("canvas_crop_context_unavailable");
+        context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+        if (typeof canvas.toBlob !== "function") throw new Error("canvas_crop_encode_unavailable");
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("canvas_crop_encode_failed")), "image/png");
+      } catch (error) {
+        reject(error);
+      }
+    };
+    image.onerror = () => reject(new Error("canvas_crop_source_load_failed"));
+    image.src = sourceUrl;
+  });
+}
+
+async function submitLocalSlice(workbench, state, rerender) {
+  const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+  const node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === workbench.ui.selectedCanvasNodeId);
+  const sourceUrl = resolveMediaSourcePreviewUrl(node);
+  const rows = Math.max(1, Math.min(12, Math.floor(Number(state.sliceRows) || 0)));
+  const columns = Math.max(1, Math.min(12, Math.floor(Number(state.sliceColumns) || 0)));
+  const gapPixels = Math.max(0, Math.floor(Number(state.sliceGapPixels) || 0));
+  if (!node || !sourceUrl) {
+    state.error = "请选择包含图片源的节点。";
+    rerender();
+    return;
+  }
+  if (typeof Image !== "function" || typeof document === "undefined") {
+    state.error = "当前浏览器不支持本地切片。";
+    rerender();
+    return;
+  }
+  if (typeof workbench.api?.uploadFile !== "function") {
+    state.error = "图片上传接口暂不可用。";
+    rerender();
+    return;
+  }
+  state.status = "submitting";
+  state.error = "";
+  rerender();
+  try {
+    const image = await loadMediaImage(sourceUrl);
+    const width = Number(image.naturalWidth || image.width);
+    const height = Number(image.naturalHeight || image.height);
+    const usableWidth = width - gapPixels * (columns - 1);
+    const usableHeight = height - gapPixels * (rows - 1);
+    if (!width || !height || usableWidth < columns || usableHeight < rows) throw new Error("canvas_slice_gap_too_large");
+    let nextDocument = workbench.ui?.canvasDocument;
+    if (!nextDocument || !Array.isArray(nextDocument.nodes)) throw new Error("canvas_document_missing");
+    const createdNodes = [];
+    const tileWidth = Math.floor(usableWidth / columns);
+    const tileHeight = Math.floor(usableHeight / rows);
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        const sourceX = column === columns - 1 ? width - tileWidth : column * (tileWidth + gapPixels);
+        const sourceY = row === rows - 1 ? height - tileHeight : row * (tileHeight + gapPixels);
+        const blob = await renderMediaBlob(image, sourceX, sourceY, tileWidth, tileHeight);
+        const index = row * columns + column + 1;
+        const fileName = `canvas-slice-${Date.now()}-${index}.png`;
+        const upload = await uploadLocalMedia(workbench, blob, fileName, canvasId);
+        const position = {
+          x: Number(node.position?.x ?? 0) + Number(node.size?.width ?? 420) + 72 + column * 36,
+          y: Number(node.position?.y ?? 0) + row * 36,
+        };
+        nextDocument = addLocalMediaNode(nextDocument, position, {
+          title: `切片 ${index}`,
+          source: "canvas_slice",
+          parentNodeId: node.id,
+          fileName,
+          ...upload,
+        });
+        createdNodes.push(nextDocument.nodes.at(-1));
+      }
+    }
+    const canSaveImmediately = typeof workbench.saveCanvasNow === "function";
+    if (typeof workbench.updateCanvasDocument === "function") {
+      workbench.updateCanvasDocument(nextDocument, canSaveImmediately ? { scheduleSave: false } : { immediateSave: true });
+    } else workbench.ui.canvasDocument = nextDocument;
+    workbench.ui.selectedCanvasNodeId = createdNodes[0]?.id ?? node.id;
+    if (canSaveImmediately) await workbench.saveCanvasNow();
+    workbench.ui.toast = `${createdNodes.length} 个切片已创建为图片节点。`;
+    state.status = "completed";
+  } catch (error) {
+    state.status = "failed";
+    state.error = friendlyError(error);
+    workbench.ui.toast = `切片结果保存失败：${state.error}`;
+  }
+  await workbench.refreshCanvasSurface?.();
+  rerender();
+}
+
+async function submitLocalComposite(workbench, state, rerender) {
+  const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
+  const node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === workbench.ui.selectedCanvasNodeId);
+  const sourceUrl = resolveMediaSourcePreviewUrl(node);
+  const secondarySource = state.compositeSecondarySource && typeof state.compositeSecondarySource === "object"
+    ? state.compositeSecondarySource
+    : mediaArtifactsForCanvas(workbench.ui).find((artifact) => artifact.artifactId === state.compositeSecondaryArtifactId)?.source ?? null;
+  const secondaryUrl = resolveMediaArtifactSourceUrl(secondarySource);
+  if (!node || !sourceUrl) {
+    state.error = "请选择包含图片源的节点。";
+    rerender();
+    return;
+  }
+  if (!state.compositeSecondaryArtifactId || !secondaryUrl) {
+    state.error = "请选择包含可访问图片源的第二张图片。";
+    rerender();
+    return;
+  }
+  if (typeof Image !== "function" || typeof document === "undefined") {
+    state.error = "当前浏览器不支持本地合成。";
+    rerender();
+    return;
+  }
+  if (typeof workbench.api?.uploadFile !== "function") {
+    state.error = "图片上传接口暂不可用。";
+    rerender();
+    return;
+  }
+  state.status = "submitting";
+  state.error = "";
+  rerender();
+  try {
+    const [baseImage, secondaryImage] = await Promise.all([loadMediaImage(sourceUrl), loadMediaImage(secondaryUrl)]);
+    const width = Number(baseImage.naturalWidth || baseImage.width);
+    const height = Number(baseImage.naturalHeight || baseImage.height);
+    if (!width || !height) throw new Error("canvas_composite_source_dimensions_missing");
+    const blob = await compositeMediaBlob(baseImage, secondaryImage, state, width, height);
+    const fileName = `canvas-composite-${Date.now()}.png`;
+    const upload = await uploadLocalMedia(workbench, blob, fileName, canvasId);
+    const canvasDocument = workbench.ui?.canvasDocument;
+    if (!canvasDocument || !Array.isArray(canvasDocument.nodes)) throw new Error("canvas_document_missing");
+    const position = {
+      x: Number(node.position?.x ?? 0) + Number(node.size?.width ?? 420) + 72,
+      y: Number(node.position?.y ?? 0),
+    };
+    const nextDocument = addLocalMediaNode(canvasDocument, position, {
+      title: "合成结果",
+      source: "canvas_composite",
+      parentNodeId: node.id,
+      fileName,
+      ...upload,
+    });
+    const createdNode = nextDocument.nodes.at(-1);
+    const canSaveImmediately = typeof workbench.saveCanvasNow === "function";
+    if (typeof workbench.updateCanvasDocument === "function") {
+      workbench.updateCanvasDocument(nextDocument, canSaveImmediately ? { scheduleSave: false } : { immediateSave: true });
+    } else workbench.ui.canvasDocument = nextDocument;
+    workbench.ui.selectedCanvasNodeId = createdNode.id;
+    if (canSaveImmediately) await workbench.saveCanvasNow();
+    workbench.ui.toast = "合成结果已创建为图片节点。";
+    state.status = "completed";
+  } catch (error) {
+    state.status = "failed";
+    state.error = friendlyError(error);
+    workbench.ui.toast = `合成结果保存失败：${state.error}`;
+  }
+  await workbench.refreshCanvasSurface?.();
+  rerender();
+}
+
+function loadMediaImage(sourceUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("canvas_media_source_load_failed"));
+    image.src = sourceUrl;
+  });
+}
+
+function renderMediaBlob(image, sourceX, sourceY, sourceWidth, sourceHeight) {
+  const canvas = document.createElement("canvas");
+  canvas.width = sourceWidth;
+  canvas.height = sourceHeight;
+  const context = canvas.getContext?.("2d");
+  if (!context) return Promise.reject(new Error("canvas_media_context_unavailable"));
+  context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+  return canvasBlob(canvas);
+}
+
+function compositeMediaBlob(baseImage, secondaryImage, state, width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext?.("2d");
+  if (!context) return Promise.reject(new Error("canvas_media_context_unavailable"));
+  context.drawImage(baseImage, 0, 0, width, height);
+  const secondaryWidth = Number(secondaryImage.naturalWidth || secondaryImage.width);
+  const secondaryHeight = Number(secondaryImage.naturalHeight || secondaryImage.height);
+  const alignment = String(state.compositeAlignment ?? "center");
+  const x = alignment.endsWith("right") ? width - secondaryWidth : alignment.endsWith("left") ? 0 : Math.round((width - secondaryWidth) / 2);
+  const y = alignment.startsWith("bottom") ? height - secondaryHeight : alignment.startsWith("top") ? 0 : Math.round((height - secondaryHeight) / 2);
+  context.save?.();
+  context.globalAlpha = Math.max(0, Math.min(1, Number(state.compositeOpacityPercent) / 100));
+  context.globalCompositeOperation = ["normal", "multiply", "screen", "overlay"].includes(state.compositeBlendMode)
+    ? state.compositeBlendMode === "normal" ? "source-over" : state.compositeBlendMode
+    : "source-over";
+  context.drawImage(secondaryImage, x, y, secondaryWidth, secondaryHeight);
+  context.restore?.();
+  return canvasBlob(canvas);
+}
+
+async function uploadLocalMedia(workbench, blob, fileName, canvasId) {
+  const file = typeof File === "function"
+    ? new File([blob], fileName, { type: "image/png", lastModified: Date.now() })
+    : blob;
+  const uploadedPayload = await workbench.api.uploadFile(file, {
+    category: "canvas-derivations",
+    projectId: null,
+    canvasProjectId: canvasId || null,
+  });
+  const upload = uploadedPayload?.upload ?? uploadedPayload;
+  const storageObjectId = String(upload?.storageObjectId ?? "").trim();
+  const previewUrl = String(
+    storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+      : upload?.previewUrl ?? upload?.publicUrl ?? createObjectUrl(blob) ?? "",
+  ).trim();
+  if (!previewUrl) throw new Error("canvas_media_upload_missing");
+  return {
+    status: "ready",
+    mediaKind: "image",
+    mimeType: "image/png",
+    previewUrl,
+    url: previewUrl,
+    storageObjectId: storageObjectId || null,
+    storageObjectKey: upload?.storageObjectKey ?? "",
+  };
+}
+
+function addLocalMediaNode(document, position, data) {
+  let nextDocument = addCanvasNode(document, { type: "source-image", position });
+  const createdNode = nextDocument.nodes.at(-1);
+  return updateCanvasNodeData(nextDocument, createdNode.id, data);
+}
+
+function createObjectUrl(blob) {
+  try {
+    return typeof globalThis.URL?.createObjectURL === "function" ? globalThis.URL.createObjectURL(blob) : "";
+  } catch {
+    return "";
+  }
 }
 
 async function submitAnnotation(workbench, state, rerender, surface) {
@@ -731,7 +1112,11 @@ async function submitAnnotation(workbench, state, rerender, surface) {
     const file = typeof File === "function"
       ? new File([blob], `canvas-${state.layerKind}-${Date.now()}.${vector ? "json" : "png"}`, { type: blob.type })
       : blob;
-    const uploadedPayload = await workbench.api.uploadFile(file, { category: "canvas-annotations", projectId: null });
+    const uploadedPayload = await workbench.api.uploadFile(file, {
+      category: "canvas-annotations",
+      projectId: null,
+      uploadLimits: CANVAS_ANNOTATION_UPLOAD_LIMITS,
+    });
     const upload = uploadedPayload?.upload ?? uploadedPayload;
     const layerStorageObjectId = String(upload?.storageObjectId ?? "");
     if (!layerStorageObjectId) throw new Error("canvas_annotation_upload_missing");
@@ -861,6 +1246,10 @@ async function loadAnnotationLayer(surface, layer, state) {
   }
   const context = canvas.getContext?.("2d");
   if (!context) return false;
+  state.error = "";
+  state.layerKind = ["mask", "raster_annotation", "vector_annotation"].includes(layer?.layerKind)
+    ? layer.layerKind
+    : "mask";
   if (layer?.layerKind === "vector_annotation") {
     if (typeof fetch !== "function") {
       state.error = "canvas_annotation_layer_preview_unavailable";
@@ -873,6 +1262,7 @@ async function loadAnnotationLayer(surface, layer, state) {
       state.vectorStrokes = normalizeVectorStrokes(payload?.strokes);
       redrawVectorStrokes(canvas, state.vectorStrokes);
       state.layerKind = "vector_annotation";
+      state.annotationLayerId = String(layer?.id ?? "");
       return true;
     } catch (error) {
       state.error = friendlyError(error);
@@ -892,6 +1282,7 @@ async function loadAnnotationLayer(surface, layer, state) {
   }).catch((error) => {
     state.error = friendlyError(error);
   });
+  if (!state.error) state.annotationLayerId = String(layer?.id ?? "");
   return !state.error;
 }
 
@@ -920,13 +1311,16 @@ function mediaArtifactsForCanvas(ui) {
     .filter((asset) => asset.mediaKind === "image")
     .map((asset) => ({
       artifactId: String(asset.artifactId ?? asset.id ?? ""),
-      url: asset.thumbnailUrl ?? asset.url ?? "",
+      url: asset.thumbnailUrl ?? asset.url ?? (asset.storageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(asset.storageObjectId)}/content?proxy=1`
+        : ""),
       title: asset.title ?? asset.prompt ?? "图片结果",
       source: {
         artifactId: String(asset.artifactId ?? asset.id ?? "") || null,
         assetId: asset.assetId ?? null,
         assetVersionId: asset.assetVersionId ?? null,
         storageObjectId: asset.storageObjectId ?? null,
+        url: asset.thumbnailUrl ?? asset.url ?? null,
       },
     }))
     .filter((asset) => asset.artifactId);
@@ -948,21 +1342,54 @@ function renderBatchGrid(state, artifacts) {
   `;
 }
 
-function renderAnnotationLayerList(state) {
+function renderAnnotationLayerList(state, sourcePreviewUrl = "") {
   if (state.annotationLayersLoading) return '<p class="canvas-media-empty">正在加载已有图层...</p>';
   const layers = Array.isArray(state.annotationLayers) ? state.annotationLayers : [];
   if (!layers.length) return '<p class="canvas-media-empty">当前节点没有已保存图层。</p>';
   return `<div class="canvas-media-layer-list" aria-label="已有标注图层">
     ${layers.map((layer) => `<article class="canvas-media-layer-item">
-      ${layer.previewUrl ? `<img src="${escapeAttr(layer.previewUrl)}" alt="" />` : '<span class="canvas-media-layer-placeholder" aria-hidden="true"></span>'}
+      ${layer.previewUrl && sourcePreviewUrl
+        ? `<div class="canvas-media-layer-preview" style="background-image:url('${escapeAttr(sourcePreviewUrl)}')"><img src="${escapeAttr(layer.previewUrl)}" alt="" /></div>`
+        : layer.previewUrl
+          ? `<img src="${escapeAttr(layer.previewUrl)}" alt="" />`
+          : '<span class="canvas-media-layer-placeholder" aria-hidden="true"></span>'}
       <div><strong>${escapeHtml(annotationLayerLabel(layer.layerKind))}</strong><small>${escapeHtml(layer.status ?? "active")}</small></div>
       <button type="button" data-media-action="load-annotation-layer" data-layer-id="${escapeAttr(layer.id)}" ${layer.previewUrl ? "" : "disabled"}>加载</button>
     </article>`).join("")}
   </div>`;
 }
 
-function renderCropStage(state, node) {
-  const imageUrl = String(node?.data?.url ?? node?.data?.previewUrl ?? "");
+function renderMediaSourcePreview(node, previewUrl = resolveMediaSourcePreviewUrl(node)) {
+  const title = String(node?.data?.title ?? node?.id ?? "未选择图片");
+  return `<figure class="canvas-media-source-preview" aria-label="当前处理源图">
+    ${previewUrl
+      ? `<img src="${escapeAttr(previewUrl)}" alt="当前源图：${escapeAttr(title)}" />`
+      : '<div class="canvas-media-source-preview-empty">当前节点没有可预览的图片</div>'}
+    <figcaption><strong>${escapeHtml(title)}</strong><small>当前处理源图</small></figcaption>
+  </figure>`;
+}
+
+function resolveMediaSourcePreviewUrl(node) {
+  return String(
+    resolveCanvasMediaNodeSource(node, "image")
+      || node?.data?.resultImageUrl
+      || node?.data?.sourceUrl
+      || "",
+  ).trim();
+}
+
+function resolveMediaArtifactSourceUrl(source) {
+  return String(
+    source?.url
+      || source?.previewUrl
+      || (source?.storageObjectId
+        ? `/api/storage/objects/${encodeURIComponent(source.storageObjectId)}/content?proxy=1`
+        : "")
+      || "",
+  ).trim();
+}
+
+function renderCropStage(state, node, imageUrl = resolveMediaSourcePreviewUrl(node)) {
   const crop = cropRect(state);
   return `<div class="canvas-media-crop-stage" data-media-crop-stage style="background-image:url('${escapeAttr(imageUrl)}')">
     <div class="canvas-media-crop-shade" aria-hidden="true"></div>
@@ -1083,6 +1510,31 @@ function renderMediaLimits(ui, state, node) {
   ].filter(Boolean);
   if (!rows.length) return "";
   return `<dl class="canvas-media-limits" aria-label="生成配额与限制">${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
+}
+
+function resolveMediaImageModelOptions(ui = {}) {
+  return resolveCanvasModelOptions(ui.episodeGenerationConfig ?? {}, "image");
+}
+
+function syncMediaGenerationModelCode(ui, state, node, options = []) {
+  const optionCodes = new Set(options.map((option) => option.modelCode));
+  const candidates = [
+    state.generationModelCode,
+    node?.data?.modelCode,
+    ui.canvasGenerationModelCode,
+    ui.episodeGenerationConfig?.defaultImageModelCode,
+    options[0]?.modelCode,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean);
+  state.generationModelCode = candidates.find((code) => !optionCodes.size || optionCodes.has(code)) ?? "";
+  return state.generationModelCode;
+}
+
+function renderMediaModelField(state, options = []) {
+  const selected = String(state.generationModelCode ?? "");
+  const choices = options.length
+    ? options.map((option) => `<option value="${escapeAttr(option.modelCode)}" ${option.modelCode === selected ? "selected" : ""}>${escapeHtml(option.modelLabel || option.modelCode)}</option>`).join("")
+    : '<option value="">暂无可用图片模型</option>';
+  return `<label><span>图片模型</span><select data-media-field="generationModelCode" ${options.length ? "" : "disabled"}>${choices}</select></label>`;
 }
 
 function clamp(value, min, max) {
