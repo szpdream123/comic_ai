@@ -730,7 +730,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(retriedStoragePayload.task.id, storageTask.taskId);
       assert.ok(outbox.rows.every((row) => /^[0-9a-f-]{36}$/i.test(row.payload_json.attemptId)));
       assert.deepEqual(
-        outbox.rows.map(({ payload_json: { attemptId: _attemptId, ...payload } }) => payload),
+        outbox.rows.map((row) => row.payload_json),
         [
           {
             workflowId: uploadTask.workflowId,
