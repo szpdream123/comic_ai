@@ -828,7 +828,7 @@ test("admin shell resolves backend-owned requests to the dev admin API from alte
     "function resolveAdminApiUrl",
     "backendOwnedPath",
     "isAlternateDevPort",
-    '"http://127.0.0.1:4310"',
+    "localBackendOrigin.hostname = window.location.hostname",
     "fetch(resolveAdminApiUrl(path)",
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
@@ -2435,10 +2435,10 @@ test("admin login form shows submitting state while authenticating", () => {
   }
 });
 
-test("admin login form exposes remember-password option and local persistence hooks", () => {
+test("admin login form only remembers the login name", () => {
   for (const contract of [
     "remember-password",
-    "记住账号密码",
+    "记住账号",
     "admin-login-remembered-credentials",
     "saveRememberedLogin",
     "readRememberedLogin",
@@ -2447,6 +2447,8 @@ test("admin login form exposes remember-password option and local persistence ho
   ]) {
     assert.match(script, new RegExp(escapeRegExp(contract)));
   }
+  assert.doesNotMatch(script, /password:\s*String\(password/);
+  assert.doesNotMatch(script, /remembered\.password/);
 });
 
 test("admin shell provides submitting and success feedback for write actions", () => {
@@ -3103,6 +3105,192 @@ test("admin exposes a dedicated first-login onboarding editor with safe optional
   assert.doesNotMatch(editor, /cssSelector|querySelector\(tip\.target|name="selector"/);
   assert.match(editor, /tips\[candidateIndex\]\?\.placement === currentPlacement/);
   assert.doesNotMatch(editor, /\[tips\[index\], tips\[target\]\] = \[tips\[target\], tips\[index\]\]/);
+});
+
+test("admin exposes a super-admin marketing console with the frozen marketing workflow", () => {
+  for (const contract of [
+    "营销中台",
+    "/admin/marketing",
+    "/api/marketing/direct-console",
+    "confirm-plan",
+    "confirm-media",
+    "文案与素材提示词待确认",
+    "确认并生成素材",
+    "素材已生成，待确认发布",
+    "重新生成文案与素材",
+    "loadMarketingConsole",
+    "marketingPage",
+    "ADMIN_PAGE_LOADERS.marketing = loadMarketingConsole",
+    "/api/marketing/projects",
+    "/api/marketing/projects/from-comic",
+    "/api/marketing/campaigns",
+    "/research",
+    "/research-briefs/",
+    "创建调研简报",
+    "调研简报审批",
+    "selectMarketingResearchBrief",
+    "/content",
+    "/manual-review",
+    "/api/marketing/publish-jobs",
+    "/approve",
+    "/cancel",
+    "approveMarketingContent",
+    "openMarketingContentDetail",
+    "cancelMarketingPublishJob",
+    "QianFanSync 执行器",
+    "营销审计",
+    "COS 素材 JSON",
+    "/compliance",
+    "人工处置",
+    "/attention-cases/",
+    "resolveMarketingAttentionCase",
+    "研究来源白名单",
+    "/api/marketing/research-source-policies",
+    "登记授权来源",
+    "/sources",
+    "revokeMarketingSource",
+    "marketing-source-options",
+    "平台能力配置",
+    "/api/marketing/platform-profiles",
+    "知识文档",
+    "/api/marketing/knowledge-documents",
+    "/api/marketing/knowledge/search",
+    "approveMarketingKnowledgeDocument",
+    "热点结构导入",
+    "/api/marketing/trend-patterns",
+    "approveMarketingTrendPattern",
+    "启动 Agent run",
+    "Agent 用量与估算成本",
+    "/api/marketing/agent-runs",
+    "/api/marketing/agent-provider-approvals",
+    "模型调用审批",
+    "retryMarketingAgentRun",
+    "人工录入指标",
+    "/api/marketing/metrics",
+    "效果指标",
+    "adminDatetimeLocalToIso",
+    "assignMarketingAttentionCaseToCurrentAdmin",
+  ]) assert.match(script, new RegExp(escapeRegExp(contract)));
+
+  const marketing = script.slice(
+    script.indexOf("(function installMarketingAdminPage()"),
+    script.indexOf("function stripAdminReasonFields"),
+  );
+  assert.match(marketing, /state\.page = "marketing"/);
+  assert.match(marketing, /ensureAdminPageData\("marketing"\)/);
+  assert.match(marketing, /setPageForbidden\("marketing", error\)/);
+  assert.match(marketing, /roles \|\| \[\]\)\.includes\("super_admin"\)/);
+  assert.match(marketing, /idempotency-key/);
+  assert.match(marketing, /dataClassification/);
+  assert.match(marketing, /agentProviderApprovals/);
+  assert.match(marketing, /componentAdmissions/);
+  assert.match(marketing, /console: \{ projects: \[\], brandProfiles: \[\]/);
+  assert.doesNotMatch(marketing, /store\.console = \{ projects: \[\], brandProfiles: \[\]/);
+  assert.match(marketing, /marketing-component-admission-form/);
+  assert.match(marketing, /marketing-executor-key-retirement-form/);
+  assert.match(marketing, /knowledgeSegmentIds/);
+  assert.match(marketing, /assetManifest/);
+  assert.match(marketing, /内容审核依据/);
+  assert.match(marketing, /allowedInputPaths/);
+  assert.match(marketing, /knowledgeSearchResults/);
+  assert.match(marketing, /researchBriefs/);
+  assert.match(marketing, /marketingResearchWorkflow/);
+  assert.match(marketing, /sourceIds = marketingParseJson/);
+  assert.match(marketing, /researchBriefId/);
+  assert.match(marketing, /ownerAdminId/);
+  assert.match(marketing, /metricSource === "unavailable" \? null/);
+  assert.match(marketing, /marketingParseJson\(form\.get\("pattern"\), "热点结构", \{\}\)/);
+  assert.match(marketing, /knowledgeSegmentIds = String\(knowledgeField\?\.tagName/);
+  assert.match(marketing, /knowledgeSegmentIds, assetManifest/);
+  assert.match(marketing, /assetManifest: marketingParseJson/);
+  assert.match(marketing, /marketingExecutorAccountRefs\(executors, "douyin"\)/);
+  assert.match(marketing, /capabilities\.platforms/);
+  assert.match(marketing, /function marketingWorkspacePanel\(\)/);
+  assert.match(marketing, /function scheduleMarketingConsoleRefresh\(\)/);
+  assert.match(marketing, /function marketingPlanText\(value\)/);
+  assert.match(marketing, /marketingMediaModelOptions/);
+  assert.match(marketing, /marketingGenerationSkillOptions/);
+  assert.match(marketing, /name = "modelCode"/);
+  assert.match(marketing, /name = "generationSkillId"/);
+  assert.match(marketing, /modelCode: values\.get\("modelCode"\)/);
+  assert.match(marketing, /selectedSkillKind === "marketing"/);
+  assert.match(marketing, /selectedSkillKind === "video"/);
+  assert.match(marketing, /label\.textContent = "Skill"/);
+  assert.match(marketing, /marketing-generation-skill-note/);
+  assert.doesNotMatch(marketing, /label\.textContent = "营销 Skill"/);
+  assert.doesNotMatch(marketing, /label\.textContent = "视频 Skill"/);
+  assert.match(marketing, /说明：/);
+  assert.match(marketing, /内容主题/);
+  assert.match(marketing, /填写本次想制作的内容主题/);
+  assert.match(marketing, /知识摘要/);
+  assert.doesNotMatch(marketing, /常用主题/);
+  assert.doesNotMatch(marketing, /sourceFacts/);
+  assert.match(marketing, /\["queued", "knowledge", "planning", "generating"\]/);
+  assert.match(marketing, /scheduleMarketingConsoleRefresh\(\);/);
+  assert.match(marketing, /!store\.loadError && !hasPendingRun/);
+  assert.match(marketing, /\}, 2_500\);/);
+  assert.match(marketing, /function openMarketingSettings\(\)/);
+  assert.match(marketing, /function marketingSettingsPage\(\)/);
+  assert.match(marketing, /营销工作台/);
+  assert.match(marketing, /营销设置/);
+  assert.match(marketing, /1\. 项目/);
+  assert.match(marketing, /4\. 审核发布/);
+  assert.match(marketing, /location\.pathname\.includes\("\/marketing\/settings"\)/);
+  assert.match(marketing, /data-workspace-project-form="true"/);
+  assert.match(marketing, /manual-project-\$\{Date\.now\(\)\}/);
+  assert.match(marketing, /entry: "marketing_workspace"/);
+  assert.match(marketing, /name="executorAccountRef" required \$\{douyinAccountRefs\.length \? "" : "disabled"\}/);
+  assert.match(marketing, /当前没有上报可用抖音账号的执行器，暂不可排期/);
+  assert.doesNotMatch(marketing, /<input name="executorAccountRef"/);
+  assert.match(marketing, /decision, reviewDimensions, notes/);
+  assert.match(marketing, /facts: form\.get\("facts"\) === "on"/);
+  assert.match(marketing, /assetRights: form\.get\("assetRights"\) === "on"/);
+  assert.match(marketing, /disclosure: form\.get\("disclosure"\) === "on"/);
+  assert.match(marketing, /platformRules: form\.get\("platformRules"\) === "on"/);
+  assert.match(marketing, /input\.knowledgeSegmentIds = knowledgeSegmentIds\.map/);
+  assert.match(marketing, /if \(!\(state\.session\?\.roles \|\| \[\]\)\.includes\("super_admin"\)\)/);
+  assert.match(marketing, /\["draft", "manual_review_required"\]/);
+  assert.match(marketing, /\["scheduled", "leased", "downloading", "downloaded", "queued"\]/);
+});
+
+test("marketing publish account choices use active executor capabilities", () => {
+  const start = script.indexOf("function marketingValue(record, camel, snake, fallback = \"\")");
+  const end = script.indexOf("async function loadMarketingConsole()", start);
+  const context = { result: null };
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = marketingExecutorAccountRefs([
+      { status: "active", capabilities: { platforms: [{ platform: "douyin", accountRefs: ["account-b", "account-a"] }] } },
+      { status: "active", capabilities: { platforms: [{ platform: "douyin", accountRefs: ["account-a"] }, { platform: "xiaohongshu", accountRefs: ["xhs-1"] }] } },
+      { status: "disabled", capabilities: { platforms: [{ platform: "douyin", accountRefs: ["disabled-account"] }] } },
+    ], "douyin");`, context);
+  assert.deepEqual([...context.result], ["account-a", "account-b"]);
+});
+
+test("marketing direct publish shows executor account names and keeps executor order", () => {
+  const start = script.indexOf("function marketingValue(record, camel, snake, fallback = \"\")");
+  const end = script.indexOf("async function loadMarketingConsole()", start);
+  const context = { result: null };
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = marketingExecutorAccounts([
+      { status: "active", capabilities: { accounts: [
+        { platform: "douyin", executorAccountRef: "qianfan:qianfan-local:1", accountName: "悠然", status: "available" },
+        { platform: "douyin", executorAccountRef: "qianfan:qianfan-local:3", accountName: "灵曦", status: "available" },
+      ] } },
+    ], "douyin");`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.result)), [
+    { id: "qianfan:qianfan-local:1", name: "悠然", label: "悠然（抖音）" },
+    { id: "qianfan:qianfan-local:3", name: "灵曦", label: "灵曦（抖音）" },
+  ]);
+  assert.match(script, /accountLabels\.get\(accountRef\) \|\| "账号名称同步中"/);
+});
+
+test("marketing scheduling treats datetime-local values as Asia/Shanghai and submits UTC", () => {
+  const start = script.indexOf("function marketingChinaDatetimeLocalToIso(value)");
+  const end = script.indexOf("\n\n        function marketingOptions", start);
+  const context = { result: null };
+  vm.runInNewContext(`${script.slice(start, end)}
+    result = marketingChinaDatetimeLocalToIso("2026-08-16T09:30");`, context);
+  assert.equal(context.result, "2026-08-16T01:30:00.000Z");
 });
 
 function escapeRegExp(value) {

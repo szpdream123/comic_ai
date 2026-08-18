@@ -260,7 +260,7 @@ const ASSET_LIBRARY_CONFIG = {
     importNote: "可上传街道、室内、自然环境等高质量参考图，系统会自动生成场景名称。",
     importLinkLabel: "查看场景素材建议",
     dropzoneTitle: "点击或直接拖拽场景图片上传",
-    dropzoneCopy: "支持 JPG、PNG 等常见图片格式，单次最多导入20张",
+    dropzoneCopy: "支持 JPG、PNG 等常见图片格式，单次最多导入10张",
     presetKind: "scene",
     reviewFootnote: "确认后场景会立即出现在资源库中，并默认按最近导入排序。",
     addDescriptionLabel: "添加场景描述",

@@ -156,6 +156,19 @@ it("exposes Loomic brand kit CRUD to a shared main account and protects project 
     });
     assert.equal(viewerWrite.status, 403);
 
+    const viewerUpload = await api(server.origin, "/api/storage/upload-sessions", memberCookie, {
+      method: "POST",
+      headers: { "idempotency-key": "brand-viewer-project-upload" },
+      body: {
+        projectId,
+        purpose: "creator/assets",
+        fileName: "viewer-upload.png",
+        contentType: "image/png",
+        sizeBytes: 1024,
+      },
+    });
+    assert.equal(viewerUpload.status, 403);
+
     await db.query("UPDATE team_member_projects SET role = 'creator' WHERE member_id = $1 AND project_id = $2", [memberId, projectId]);
     const creatorWrite = await api(server.origin, `/api/creator/projects/${projectId}/brand-kit`, memberCookie, {
       method: "PATCH",

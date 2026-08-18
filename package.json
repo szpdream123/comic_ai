@@ -40,6 +40,7 @@
     "check:user-scope-zero-refs": "node scripts/check-user-scope-zero-refs.mjs",
     "admin:qa": "node scripts/admin-browser-qa.mjs",
     "test:admin:ui": "node --test apps/admin/index.test.mjs",
+    "test:marketing:qianfan-interop": "node --import tsx scripts/verify-marketing-qianfan-connector.mjs",
     "test:admin:http": "node scripts/run-tests.mjs apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts",
     "test:admin:http:auth": "node scripts/run-tests.mjs apps/backend/src/entrypoints/tests/admin-platform-http.spec.ts -- --test-name-pattern \"admin shell|admin login|sessions|profile|password\"",
     "smoke:text-gateway": "node --import tsx scripts/run-text-model-gateway-smoke.mjs",
@@ -50,7 +51,10 @@
     "worker:generation-repair": "node --import tsx scripts/run-generation-queue-maintenance.mjs",
     "worker:generation-video": "node --import tsx scripts/run-generation-video-worker.mjs",
     "worker:canvas-agent": "node --import tsx scripts/run-canvas-agent-worker.mjs",
-    "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs"
+    "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs",
+    "worker:marketing-maintenance": "node --import tsx scripts/run-marketing-maintenance.mjs",
+    "worker:marketing-agent": "node --import tsx scripts/run-marketing-agent-worker.mjs",
+    "worker:marketing-generation": "node --import tsx scripts/run-marketing-generation-worker.mjs"
   },
   "dependencies": {
     "@antv/x6": "^3.1.7",
@@ -85,7 +89,7 @@
     "qrcode": "^1.5.4",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "tencentcloud-sdk-nodejs-sms": "^4.1.240",
     "three": "^0.184.0",
     "tsx": "^4.22.1",
@@ -97,8 +101,11 @@
     "jszip": "^3.10.1"
   },
   "overrides": {
+    "adm-zip": "0.6.0",
     "axios": "1.18.1",
+    "brace-expansion": "5.0.9",
     "form-data": "4.0.6",
+    "sharp": "$sharp",
     "tencentcloud-sdk-nodejs-common": {
       "form-data": "3.0.5",
       "uuid": "11.1.1"

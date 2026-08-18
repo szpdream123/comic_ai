@@ -22,7 +22,7 @@ const [
   { processGenerationQueueJobCancellations },
   { reconcileActiveCanvasGenerationBatches },
   { restoreCanvasActorScope },
-  { createCanvasGenerationBatchDispatch, repairTimedOutEpisodeGenerationTasks },
+  { createCanvasGenerationBatchDispatch, repairDefinitiveProviderSubmissionFailures, repairTimedOutEpisodeGenerationTasks },
   { createStorageAdapterFromEnv },
   { reconcileCanvasMediaDerivations },
   { findGenerationArtifactHandoff },
@@ -203,6 +203,13 @@ try {
         limit: config.outbox.dispatchBatchSize,
       }),
     );
+    const definitiveProviderSubmissionFailureRepair = await runMaintenanceStep(
+      "definitive_provider_submission_failure_repair",
+      () => repairDefinitiveProviderSubmissionFailures(db, {
+        now,
+        limit: config.outbox.dispatchBatchSize,
+      }),
+    );
     const surfaceConsistencyReconciliation = await runMaintenanceStep(
       "generation_surface_consistency",
       () => reconcileGenerationSurfaceConsistency(db, {
@@ -305,6 +312,9 @@ try {
     }
     if (timedOutEpisodeGenerationRepair?.timedOutTaskIds.length) {
       console.info(`[generation-maintenance] repairedTimedOutEpisodeTasks=${timedOutEpisodeGenerationRepair.timedOutTaskIds.length}`);
+    }
+    if (definitiveProviderSubmissionFailureRepair?.repaired) {
+      console.info(`[generation-maintenance] repairedDefinitiveProviderSubmissionFailures=${definitiveProviderSubmissionFailureRepair.repaired}`);
     }
     if (surfaceConsistencyReconciliation) {
       const repairedSurfaceCount = Object.values(surfaceConsistencyReconciliation)

@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented placeholders only"
+regexes = [
+  '''replace-me''',
+  '''AKIDx+''',
+]

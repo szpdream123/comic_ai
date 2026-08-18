@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
@@ -2029,15 +2030,18 @@ describe("Seedance video worker user ownership", () => {
         task_status: string;
         progress_stage: string;
         handoff_key: string | null;
+        checksum: string | null;
         version_count: number;
       }>(
         `
           SELECT t.status AS task_status,
                  snapshot.progress_stage,
                  snapshot.provider_status_json->'artifactHandoff'->>'storageObjectKey' AS handoff_key,
+                 storage.checksum,
                  (SELECT count(*)::int FROM asset_versions WHERE source_task_id = t.id) AS version_count
           FROM tasks t
           JOIN ai_generation_task_snapshots snapshot ON snapshot.task_id = t.id
+          JOIN storage_objects storage ON storage.metadata_json->>'taskId' = t.id::text
           WHERE t.id = $1
         `,
         [seeded.taskId],
@@ -2049,6 +2053,7 @@ describe("Seedance video worker user ownership", () => {
       assert.equal(afterFetch.rows[0]?.task_status, "running");
       assert.equal(afterFetch.rows[0]?.progress_stage, "artifact_fetched");
       assert.ok(afterFetch.rows[0]?.handoff_key);
+      assert.equal(afterFetch.rows[0]?.checksum, createHash("sha256").update(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112])).digest("hex"));
       assert.equal(afterFetch.rows[0]?.version_count, 0);
       await db.query(
         "UPDATE tasks SET status = 'result_unknown', failure_code = 'provider_poll_timeout' WHERE id = $1",

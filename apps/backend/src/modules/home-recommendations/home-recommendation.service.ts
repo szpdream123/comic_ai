@@ -4,23 +4,38 @@ import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
 
 const allowedStatuses = new Set(["active", "inactive"]);
+const publicRecommendationCache = new WeakMap<SqlDatabase, {
+  expiresAtMs: number;
+  pending: Promise<ReturnType<typeof recommendationPayload>>;
+}>();
+const publicRecommendationCacheTtlMs = 30_000;
 
 export function createHomeRecommendationService(deps: { db: SqlDatabase }) {
   async function listPublicRecommendations() {
-    const background = await loadBackground();
-    const categories = await deps.db.query<CategoryRow>(`
-      SELECT * FROM home_recommendation_categories
-      WHERE status = 'active'
-      ORDER BY sort_order ASC, created_at ASC
-    `);
-    const videos = await deps.db.query<VideoRow>(`
-      SELECT video.*
-      FROM home_recommendation_videos video
-      JOIN home_recommendation_categories category ON category.id = video.category_id
-      WHERE video.status = 'active' AND category.status = 'active'
-      ORDER BY category.sort_order ASC, video.sort_order ASC, video.created_at ASC
-    `);
-    return recommendationPayload(categories.rows, videos.rows, background?.status === "active" ? background : null);
+    const cached = publicRecommendationCache.get(deps.db);
+    if (cached && cached.expiresAtMs > Date.now()) return await cached.pending;
+    const pending = Promise.all([
+      loadBackground(),
+      deps.db.query<CategoryRow>(`
+        SELECT * FROM home_recommendation_categories
+        WHERE status = 'active'
+        ORDER BY sort_order ASC, created_at ASC
+      `),
+      deps.db.query<VideoRow>(`
+        SELECT video.*
+        FROM home_recommendation_videos video
+        JOIN home_recommendation_categories category ON category.id = video.category_id
+        WHERE video.status = 'active' AND category.status = 'active'
+        ORDER BY category.sort_order ASC, video.sort_order ASC, video.created_at ASC
+      `),
+    ]).then(([background, categories, videos]) => (
+      recommendationPayload(categories.rows, videos.rows, background?.status === "active" ? background : null)
+    ));
+    publicRecommendationCache.set(deps.db, { expiresAtMs: Date.now() + publicRecommendationCacheTtlMs, pending });
+    pending.catch(() => {
+      if (publicRecommendationCache.get(deps.db)?.pending === pending) publicRecommendationCache.delete(deps.db);
+    });
+    return await pending;
   }
 
   async function listAdminRecommendations() {
@@ -60,6 +75,7 @@ export function createHomeRecommendationService(deps: { db: SqlDatabase }) {
         updated_at = EXCLUDED.updated_at
       RETURNING *
     `, [videoUrl, posterUrl, status, normalizeId(input.actorAdminAccountId), validNow(input.now)]);
+    publicRecommendationCache.delete(deps.db);
     return { status: 200, body: { background: backgroundFromRow(row!) } };
   }
 
@@ -84,6 +100,7 @@ export function createHomeRecommendationService(deps: { db: SqlDatabase }) {
           updated_at = EXCLUDED.updated_at
         RETURNING *
       `, [normalizeId(input.id) ?? randomUUID(), code, name, status, normalizeSortOrder(input.sortOrder), normalizeId(input.actorAdminAccountId), validNow(input.now)]);
+      publicRecommendationCache.delete(deps.db);
       return { status: 200, body: { category: categoryFromRow(row!) } };
     } catch (caught) {
       if (isUniqueViolation(caught)) return error(409, "home_recommendation_category_code_conflict", "分类编码已存在");
@@ -98,6 +115,7 @@ export function createHomeRecommendationService(deps: { db: SqlDatabase }) {
     if (Number(count.rows[0]?.count ?? 0) > 0) return error(409, "home_recommendation_category_in_use", "该分类下仍有视频，请先移动或删除视频");
     const row = await queryOne<CategoryRow>(deps.db, "DELETE FROM home_recommendation_categories WHERE id = $1 RETURNING *", [categoryId]);
     if (!row) return error(404, "home_recommendation_category_not_found", "分类不存在");
+    publicRecommendationCache.delete(deps.db);
     return { status: 200, body: { category: categoryFromRow(row) } };
   }
 
@@ -135,12 +153,14 @@ export function createHomeRecommendationService(deps: { db: SqlDatabase }) {
         updated_at = EXCLUDED.updated_at
       RETURNING *
     `, [normalizeId(input.id) ?? randomUUID(), categoryId, title, String(input.subtitle ?? "").trim().slice(0, 160), coverUrl, videoUrl, durationLabel, String(input.coverAlt ?? "").trim().slice(0, 160), status, normalizeSortOrder(input.sortOrder), normalizeId(input.actorAdminAccountId), validNow(input.now)]);
+    publicRecommendationCache.delete(deps.db);
     return { status: 200, body: { video: videoFromRow(row!) } };
   }
 
   async function deleteVideo(input: DeleteInput): Promise<MutationResponse> {
     const row = await queryOne<VideoRow>(deps.db, "DELETE FROM home_recommendation_videos WHERE id = $1 RETURNING *", [normalizeId(input.id)]);
     if (!row) return error(404, "home_recommendation_video_not_found", "视频不存在");
+    publicRecommendationCache.delete(deps.db);
     return { status: 200, body: { video: videoFromRow(row) } };
   }
 

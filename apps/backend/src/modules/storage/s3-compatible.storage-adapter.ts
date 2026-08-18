@@ -1,4 +1,5 @@
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -171,6 +172,36 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
     }
   }
 
+  async copyObject(input: {
+    sourceBucket: string;
+    sourceObjectKey: string;
+    destinationBucket: string;
+    destinationObjectKey: string;
+  }) {
+    try {
+      const result = await this.client.send(
+        new CopyObjectCommand({
+          Bucket: input.destinationBucket,
+          Key: input.destinationObjectKey,
+          CopySource: encodeCopySource(input.sourceBucket, input.sourceObjectKey),
+        }),
+      );
+      return {
+        eTag: result.CopyObjectResult?.ETag?.replaceAll('"', "") ?? null,
+        versionId: result.VersionId ?? null,
+      };
+    } catch (error) {
+      console.error("[storage][s3-compatible] copyObject failed", {
+        sourceBucket: input.sourceBucket,
+        sourceObjectKey: input.sourceObjectKey,
+        destinationBucket: input.destinationBucket,
+        destinationObjectKey: input.destinationObjectKey,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
   async deleteObject(input: { bucket: string; objectKey: string }) {
     try {
       await this.client.send(
@@ -188,6 +219,10 @@ export class S3CompatibleStorageAdapter implements StorageAdapter {
       throw error;
     }
   }
+}
+
+function encodeCopySource(bucket: string, objectKey: string) {
+  return `/${encodeURIComponent(bucket)}/${objectKey.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 function buildPublicObjectUrl(input: {

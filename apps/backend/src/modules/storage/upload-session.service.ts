@@ -215,6 +215,13 @@ export async function completeUploadSession(
   if (!remote?.exists) {
     throw new Error("storage_object_not_found");
   }
+  if (
+    session.expectedSizeBytes !== null &&
+    remote.contentLength !== null &&
+    Number(remote.contentLength) !== session.expectedSizeBytes
+  ) {
+    throw new Error("storage_object_size_mismatch");
+  }
 
   const updatedObject = await markStorageObjectAvailable(db, {
     storageObjectId: object.id,

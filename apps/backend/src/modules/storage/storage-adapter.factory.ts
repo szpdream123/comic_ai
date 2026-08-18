@@ -53,7 +53,11 @@ export function createStorageAdapterFromEnv(
     });
   }
 
-  return new CreatorDevStorageAdapter();
+  if (mode === "dev") {
+    return new CreatorDevStorageAdapter();
+  }
+
+  throw new Error("storage_adapter_mode_invalid");
 }
 
 function parseTimeoutMs(value: string | undefined, fallback: number) {

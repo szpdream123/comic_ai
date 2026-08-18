@@ -154,6 +154,96 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
     }
   });
 
+  it("rejects unsafe video batch media URLs before fetching and blocks private redirects", async () => {
+    const db = await createMigratedTestDb();
+    const requestedUrls: string[] = [];
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      serverOptions: {
+        fetchImpl: (async (url: string | URL | Request) => {
+          requestedUrls.push(String(url));
+          return new Response(null, {
+            status: 302,
+            headers: { location: "https://127.0.0.1/internal" },
+          });
+        }) as typeof fetch,
+      },
+    });
+
+    try {
+      for (const unsafeUrl of [
+        "http://cdn.example.test/video.mp4",
+        "https://127.0.0.1/internal",
+        "https://169.254.169.254/latest/meta-data",
+        "https://[::1]/internal",
+        "https://[fc00::1]/internal",
+      ]) {
+        const response = await fetch(
+          `${server.origin}/api/admin/video-batch/media?url=${encodeURIComponent(unsafeUrl)}`,
+          { headers: { cookie } },
+        );
+        const payload = await response.json();
+        assert.equal(response.status, 400, JSON.stringify(payload));
+        assert.equal(payload.errorCode, "video_batch_media_url_invalid");
+      }
+      assert.deepEqual(requestedUrls, []);
+
+      const redirectedResponse = await fetch(
+        `${server.origin}/api/admin/video-batch/media?url=${encodeURIComponent("https://cdn.example.test/video.mp4")}`,
+        { headers: { cookie } },
+      );
+      const redirectedPayload = await redirectedResponse.json();
+      assert.equal(redirectedResponse.status, 502, JSON.stringify(redirectedPayload));
+      assert.equal(redirectedPayload.errorCode, "video_batch_media_unavailable");
+      assert.deepEqual(requestedUrls, ["https://cdn.example.test/video.mp4"]);
+
+      const mergedRedirectedResponse = await fetch(
+        `${server.origin}/api/admin/video-batch/media?url=${encodeURIComponent("https://cdn.example.test/video.mp4")}&audio=${encodeURIComponent("https://cdn.example.test/audio.m4a")}`,
+        { headers: { cookie } },
+      );
+      const mergedRedirectedPayload = await mergedRedirectedResponse.json();
+      assert.equal(mergedRedirectedResponse.status, 502, JSON.stringify(mergedRedirectedPayload));
+      assert.equal(mergedRedirectedPayload.errorCode, "video_batch_media_unavailable");
+      assert.deepEqual(requestedUrls, [
+        "https://cdn.example.test/video.mp4",
+        "https://cdn.example.test/video.mp4",
+      ]);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
+  it("rejects oversized video batch merge inputs before writing temporary media", async () => {
+    const db = await createMigratedTestDb();
+    const requestedUrls: string[] = [];
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      serverOptions: {
+        fetchImpl: (async (url: string | URL | Request) => {
+          requestedUrls.push(String(url));
+          return new Response(new Uint8Array([0]), {
+            status: 200,
+            headers: { "content-length": String(501 * 1024 * 1024) },
+          });
+        }) as typeof fetch,
+      },
+    });
+
+    try {
+      const response = await fetch(
+        `${server.origin}/api/admin/video-batch/media?url=${encodeURIComponent("https://cdn.example.test/video.mp4")}&audio=${encodeURIComponent("https://cdn.example.test/audio.m4a")}`,
+        { headers: { cookie } },
+      );
+      const payload = await response.json();
+
+      assert.equal(response.status, 502, JSON.stringify(payload));
+      assert.equal(payload.errorCode, "video_batch_media_unavailable");
+      assert.deepEqual(requestedUrls, ["https://cdn.example.test/video.mp4"]);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("serves the admin shell for authenticated admins who open the login route", async () => {
     const db = await createMigratedTestDb();
     const { server, cookie } = await createLoggedInAdminServer(db);

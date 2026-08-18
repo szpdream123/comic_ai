@@ -46,6 +46,8 @@ export function renderCanvasConfigLibraryShell(ui = {}) {
 export function createCanvasConfigLibraryController({ surface, workbench }) {
   const state = ensureCanvasConfigLibraryState(workbench.ui ?? (workbench.ui = {}));
   let disposed = false;
+  let configLoadVersion = 0;
+  let configSelectionVersion = 0;
   const sync = () => {
     const current = surface.querySelector?.("[data-canvas-config-library]");
     if (!current || typeof document === "undefined") return false;
@@ -76,25 +78,37 @@ export function createCanvasConfigLibraryController({ surface, workbench }) {
       sync();
       return;
     }
+    const loadVersion = ++configLoadVersion;
+    const requestedType = state.type;
+    ++configSelectionVersion;
     state.loading = true;
     sync();
     try {
       const payload = await workbench.api.listCanvasUserConfigs({
-        type: state.type || undefined,
+        type: requestedType || undefined,
         includeArchived: false,
         limit: 100,
       });
+      if (disposed || loadVersion !== configLoadVersion) return;
       state.configs = Array.isArray(payload?.configs) ? payload.configs : [];
       if (!state.configs.some((item) => String(item?.id) === state.selectedConfigId)) {
         state.selectedConfigId = String(state.configs[0]?.id ?? "");
       }
-      if (state.selectedConfigId) await select(state.selectedConfigId);
+      if (state.selectedConfigId) await select(state.selectedConfigId, { loadVersion });
+    } catch (error) {
+      if (!disposed && loadVersion === configLoadVersion) {
+        state.error = String(error?.message ?? error ?? "配置库请求失败");
+      }
     } finally {
-      state.loading = false;
-      sync();
+      if (!disposed && loadVersion === configLoadVersion) {
+        state.loading = false;
+        sync();
+      }
     }
   };
-  const select = async (configId) => {
+  const select = async (configId, options = {}) => {
+    const selectionVersion = ++configSelectionVersion;
+    const loadVersion = options.loadVersion;
     state.selectedConfigId = String(configId ?? "");
     state.versions = [];
     state.selectedVersionId = "";
@@ -103,6 +117,11 @@ export function createCanvasConfigLibraryController({ surface, workbench }) {
       return;
     }
     const payload = await workbench.api.listCanvasUserConfigVersions(state.selectedConfigId, { limit: 100 });
+    if (
+      disposed ||
+      selectionVersion !== configSelectionVersion ||
+      (loadVersion != null && loadVersion !== configLoadVersion)
+    ) return;
     state.versions = Array.isArray(payload?.versions) ? payload.versions : [];
     state.selectedVersionId = String(state.versions[0]?.id ?? "");
     sync();
@@ -181,8 +200,8 @@ export function createCanvasConfigLibraryController({ surface, workbench }) {
           sync();
           return true;
         }
-        if (Number(file.size ?? 0) <= 0 || Number(file.size) > 20 * 1024 * 1024) {
-          state.error = "风格母图大小需在 20 MB 以内";
+        if (Number(file.size ?? 0) <= 0 || Number(file.size) > 30 * 1024 * 1024) {
+          state.error = "风格母图大小需在 30 MB 以内";
           sync();
           return true;
         }
@@ -240,7 +259,7 @@ export function createCanvasConfigLibraryController({ surface, workbench }) {
       const field = String(target?.dataset?.configField ?? "");
       if (!field || !Object.hasOwn(state, field)) return false;
       state[field] = String(target.value ?? "");
-      if (field === "type") void run("load", load);
+      if (field === "type") void load();
       return true;
     },
     async handleAction(target) {

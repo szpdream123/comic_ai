@@ -1,10 +1,42 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { Agent } from "undici";
 
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { CanvasAgentKnowledgeAdminService } from "../canvas-agent-knowledge.service.ts";
-import { CanvasAgentWebToolService } from "../canvas-agent-web.service.ts";
+import {
+  CanvasAgentWebToolService,
+  fetchResolvedPublicUrl,
+  resolvePublicHostname,
+} from "../canvas-agent-web.service.ts";
+
+test("external web requests connect through the public address checked by DNS", async () => {
+  let lookupCalls = 0;
+  const resolution = await resolvePublicHostname("docs.example.test", (async () => {
+    lookupCalls += 1;
+    return [{ address: "93.184.216.34", family: 4 }];
+  }) as typeof import("node:dns/promises").lookup);
+  let pinned: { hostname: string; address: string } | undefined;
+  let requestDispatcher: unknown;
+  const response = await fetchResolvedPublicUrl(
+    new URL("https://docs.example.test/article"),
+    { redirect: "manual" },
+    resolution,
+    (async (_request, init) => {
+      requestDispatcher = (init as RequestInit & { dispatcher?: unknown }).dispatcher;
+      return new Response("ok");
+    }) as typeof fetch,
+    (input) => {
+      pinned = input;
+      return new Agent();
+    },
+  );
+  assert.equal(await response.text(), "ok");
+  assert.equal(lookupCalls, 1);
+  assert.deepEqual(pinned, { hostname: "docs.example.test", address: "93.184.216.34" });
+  assert.ok(requestDispatcher instanceof Agent);
+});
 
 test("web extract enforces admin domain policy, records citation, and rejects SSRF", async () => {
   const db = await createMigratedTestDb();

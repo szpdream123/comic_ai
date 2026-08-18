@@ -214,6 +214,7 @@ export const criticalApiRouteAuthRegistrations = [
   { id: "community.features.vote", method: "POST", path: "/api/community/features/{featureId}/vote", policy: "public" },
   { id: "public.legal-documents", method: "GET", path: "/api/public/legal-documents", policy: "public" },
   { id: "public.customer-support", method: "GET", path: "/api/public/customer-support", policy: "public" },
+  { id: "public.first-login-onboarding", method: "GET", path: "/api/public/first-login-onboarding", policy: "public" },
   { id: "public.style-covers.read", method: "GET", path: "/api/public/style-covers/{styleName}", policy: "public" },
   { id: "admin.login", method: "POST", path: "/api/admin/auth/login", policy: "public" },
   { id: "admin.me", method: "GET", path: "/api/admin/auth/me", policy: "admin" },
@@ -372,6 +373,8 @@ const adminApiRouteAuthRegistrations = inventoryRegistrations("admin", [
   ["POST", "/api/admin/direct-recharge/packages/reorder"],
   ["DELETE", "/api/admin/direct-recharge/packages/{packageId}"],
   ["GET", "/api/admin/settings"],
+  ["GET", "/api/admin/first-login-onboarding"],
+  ["PATCH", "/api/admin/first-login-onboarding"],
   ["GET", "/api/admin/settings/canvas-agent"],
   ["GET", "/api/admin/settings/revisions"],
   ["POST", "/api/admin/settings/{settingKey}/rollback"],
@@ -716,7 +719,7 @@ export const apiRouteAuthRegistrations = [
  * partial until the registry can represent their exact runtime semantics.
  */
 export const apiRouteAuthInventoryCoverage = {
-  explicitMethodPath: { discovered: 188, uncovered: 0 },
+  explicitMethodPath: { discovered: 191, uncovered: 0 },
   regexDynamicMatchers: { discovered: 141, uncovered: 0 },
   wideCompositePredicates: { unresolved: 55 },
   conditionalQueryPolicies: { unresolved: 1 },

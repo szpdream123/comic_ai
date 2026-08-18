@@ -1718,6 +1718,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     enableLegalDocument,
     deleteLegalDocument,
     updateBatchImagePromptPresetCategories,
+    getFirstLoginOnboardingConfig,
     updateFirstLoginOnboardingConfig,
     updateRuntimeConfig,
     listRuntimeConfigRevisions,

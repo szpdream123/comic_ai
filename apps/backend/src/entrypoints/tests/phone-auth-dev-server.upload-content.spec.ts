@@ -57,16 +57,34 @@ it("serves an authenticated user's completed upload through the credentialed con
   const incompleteUploadSessionId = randomUUID();
   const unavailableStorageObjectId = randomUUID();
   const unavailableUploadSessionId = randomUUID();
+  const upstreamRanges: Array<string | null> = [];
   const server = createPhoneAuthDevServer({
     db,
     env: {
       NODE_ENV: "test",
       AUTH_SESSION_REDIS_CACHE_ENABLED: "false",
     },
-    fetchImpl: async () => new Response(panoramaBytes, {
-      status: 200,
-      headers: { "content-type": "image/jpeg" },
-    }),
+    fetchImpl: async (_url, init) => {
+      const range = new Headers(init?.headers).get("range");
+      upstreamRanges.push(range);
+      if (range === "bytes=999-") {
+        return new Response(null, {
+          status: 416,
+          headers: {
+            "accept-ranges": "bytes",
+            "content-range": `bytes */${panoramaBytes.byteLength}`,
+          },
+        });
+      }
+      return new Response(range ? panoramaBytes.subarray(0, 4) : panoramaBytes, {
+        status: range ? 206 : 200,
+        headers: {
+          "content-type": "image/jpeg",
+          "accept-ranges": "bytes",
+          ...(range ? { "content-range": `bytes 0-3/${panoramaBytes.byteLength}` } : {}),
+        },
+      });
+    },
     repairScheduler: { enabled: false },
     storageRuntime: {
       mode: "cos",
@@ -237,6 +255,19 @@ it("serves an authenticated user's completed upload through the credentialed con
     assert.equal(contentResponse.headers.get("content-type"), "image/jpeg");
     assert.equal(contentResponse.headers.get("cache-control"), "private, max-age=300");
     assert.deepEqual(Buffer.from(await contentResponse.arrayBuffer()), panoramaBytes);
+    const rangeResponse = await fetch(contentUrl, {
+      headers: { cookie, range: "bytes=0-3" },
+    });
+    assert.equal(rangeResponse.status, 206);
+    assert.equal(rangeResponse.headers.get("content-range"), `bytes 0-3/${panoramaBytes.byteLength}`);
+    assert.deepEqual(Buffer.from(await rangeResponse.arrayBuffer()), panoramaBytes.subarray(0, 4));
+    assert.ok(upstreamRanges.includes("bytes=0-3"));
+    const unsatisfiedRangeResponse = await fetch(contentUrl, {
+      headers: { cookie, range: "bytes=999-" },
+    });
+    assert.equal(unsatisfiedRangeResponse.status, 416);
+    assert.equal(unsatisfiedRangeResponse.headers.get("accept-ranges"), "bytes");
+    assert.equal(unsatisfiedRangeResponse.headers.get("content-range"), `bytes */${panoramaBytes.byteLength}`);
 
     const objectContentUrl = `${server.origin}/api/storage/objects/${storageObjectId}/content`;
     const unauthenticatedObjectResponse = await fetch(objectContentUrl, { redirect: "manual" });
@@ -256,10 +287,16 @@ it("serves an authenticated user's completed upload through the credentialed con
     const proxiedObjectContentResponse = await fetch(`${objectContentUrl}?proxy=1`, {
       headers: { cookie },
     });
+    const proxiedObjectEtag = proxiedObjectContentResponse.headers.get("etag");
     assert.equal(proxiedObjectContentResponse.status, 200);
     assert.equal(proxiedObjectContentResponse.headers.get("content-type"), "image/jpeg");
     assert.equal(proxiedObjectContentResponse.headers.get("cache-control"), "private, max-age=3600");
+    assert.ok(proxiedObjectEtag);
     assert.deepEqual(Buffer.from(await proxiedObjectContentResponse.arrayBuffer()), panoramaBytes);
+    const revalidatedProxiedObjectResponse = await fetch(`${objectContentUrl}?proxy=1`, {
+      headers: { cookie, "if-none-match": proxiedObjectEtag ?? "" },
+    });
+    assert.equal(revalidatedProxiedObjectResponse.status, 304);
 
     const completedResponse = await fetch(
       `${server.origin}/api/storage/upload-sessions/${completedUploadSessionId}/content`,
@@ -289,6 +326,94 @@ it("serves an authenticated user's completed upload through the credentialed con
       { headers: { cookie: otherCookie }, redirect: "manual" },
     );
     assert.equal(otherUserUnavailableObjectResponse.status, 404);
+  } finally {
+    await server.close();
+  }
+});
+
+it("does not resolve relative storage proxy URLs from forwarded host headers or follow redirects", async () => {
+  const db = await createMigratedTestDb();
+  const phone = "13900000031";
+  const userId = randomUUID();
+  const storageObjectId = randomUUID();
+  const objectKey = "private/relative-proxy.png";
+  const fetchCalls: Array<{ url: string; redirect?: RequestRedirect }> = [];
+  const server = createPhoneAuthDevServer({
+    db,
+    env: {
+      NODE_ENV: "test",
+      AUTH_SESSION_REDIS_CACHE_ENABLED: "false",
+    },
+    fetchImpl: async (url, init) => {
+      fetchCalls.push({
+        url: String(url),
+        redirect: init?.redirect,
+      });
+      return new Response(Buffer.from("relative-proxy-image"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    },
+    repairScheduler: { enabled: false },
+    storageRuntime: {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "creator-test",
+      adapter: {
+        async createSignedReadUrl({ bucket, objectKey: signedObjectKey, expiresAt }) {
+          return {
+            url: `/uploads/storage/${encodeURIComponent(bucket)}/${encodeURIComponent(signedObjectKey)}`,
+            expiresAt,
+          };
+        },
+      },
+    },
+  });
+
+  try {
+    await db.query(
+      "INSERT INTO users (id, phone_e164, password_hash, status) VALUES ($1, $2, $3, 'active')",
+      [userId, phone, await createUserPasswordHash(defaultPasswordFromPhone(phone))],
+    );
+    await db.query(
+      `
+        INSERT INTO storage_objects (
+          id, bucket, object_key, content_type, size_bytes, provider, status, created_by_user_id
+        )
+        VALUES ($1, 'creator-test', $2, 'image/png', 20, 'creator-dev', 'available', $3)
+      `,
+      [storageObjectId, objectKey, userId],
+    );
+    await server.listen(0);
+    const loginResponse = await fetch(`${server.origin}/api/auth/password/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        account: phone,
+        password: defaultPasswordFromPhone(phone),
+      }),
+    });
+    assert.equal(loginResponse.status, 200);
+    const cookie = loginResponse.headers.get("set-cookie") ?? "";
+
+    const response = await fetch(
+      `${server.origin}/api/storage/objects/${storageObjectId}/content?proxy=1`,
+      {
+        headers: {
+          cookie,
+          "x-forwarded-host": "attacker.example",
+          "x-forwarded-proto": "https",
+        },
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(
+      fetchCalls[0]?.url,
+      `${server.origin}/uploads/storage/creator-test/${encodeURIComponent(objectKey)}`,
+    );
+    assert.equal(fetchCalls[0]?.redirect, "manual");
   } finally {
     await server.close();
   }

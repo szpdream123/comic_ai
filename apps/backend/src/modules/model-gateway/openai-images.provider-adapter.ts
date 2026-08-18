@@ -8,6 +8,7 @@ import type {
 } from "./provider-adapter.contract.ts";
 import { recordProviderAdapterRequest } from "./provider-adapter.contract.ts";
 import { generationProviderHttpTimeoutMsFor } from "./generation-timeout.policy.ts";
+import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 import {
   attachProviderRawResponse,
   providerResponseDiagnostics,
@@ -21,6 +22,9 @@ const defaultEditEndpoint = "https://api.openai.com/v1/images/edits";
 const defaultModel = "gpt-image-2";
 const defaultSize = "1024x1536";
 const defaultRequestTimeoutMs = generationProviderHttpTimeoutMsFor("image");
+const maximumImageReferences = 16;
+const maximumImageReferenceBytes = 30 * 1024 * 1024;
+const maximumImageReferenceTotalBytes = 100 * 1024 * 1024;
 
 export class OpenAIImagesProviderAdapter implements ProviderAdapter {
   constructor(
@@ -30,6 +34,7 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
       endpoint?: string;
       editEndpoint?: string;
       fetchImpl?: typeof fetch;
+      referenceFetchImpl?: typeof fetch;
       requestTimeoutMs?: number;
       resultFormat?: string;
     },
@@ -129,9 +134,15 @@ export class OpenAIImagesProviderAdapter implements ProviderAdapter {
       formData.set("response_format", resultFormat);
     }
 
+    let referenceBytes = 0;
     for (const [index, reference] of imageReferences.entries()) {
-      const image = await imageReferenceToBlob(reference, fetchImpl);
-      formData.append("image[]", image, reference.name || `reference-${index + 1}.${extensionFromMimeType(reference.mimeType)}`);
+      const image = await imageReferenceToBlob(
+        reference,
+        this.config.referenceFetchImpl ?? fetchImpl,
+        Math.min(maximumImageReferenceBytes, maximumImageReferenceTotalBytes - referenceBytes),
+      );
+      referenceBytes += image.size;
+      formData.append("image[]", image.blob, reference.name || `reference-${index + 1}.${extensionFromMimeType(reference.mimeType)}`);
     }
     await recordProviderAdapterRequest(input, redactedFormDataRequestBody(formData));
 
@@ -575,6 +586,9 @@ function collectImageReferences(payload: Record<string, unknown>): ImageReferenc
     }
     seen.add(key);
     references.push(reference);
+    if (references.length > maximumImageReferences) {
+      throw new Error("image_provider_reference_limit_exceeded");
+    }
   }
 
   return references;
@@ -602,22 +616,81 @@ function normalizeImageReference(value: unknown): ImageReference | null {
   return null;
 }
 
-async function imageReferenceToBlob(reference: ImageReference, fetchImpl: typeof fetch) {
+async function imageReferenceToBlob(
+  reference: ImageReference,
+  fetchImpl: typeof fetch | undefined,
+  maxBytes: number,
+) {
   if (reference.b64Json) {
-    return new Blob([Buffer.from(reference.b64Json, "base64")], {
-      type: reference.mimeType,
-    });
+    const size = Buffer.byteLength(reference.b64Json, "base64");
+    assertImageReferenceSize(size, maxBytes);
+    return {
+      blob: new Blob([Buffer.from(reference.b64Json, "base64")], {
+        type: reference.mimeType,
+      }),
+      size,
+    };
   }
   if (!reference.url) {
     throw new Error("image_provider_reference_missing");
   }
-  const response = await fetchImpl(reference.url);
+  const response = await fetchProviderArtifactSafely(reference.url, undefined, fetchImpl);
   if (!response.ok) {
     const { diagnostics } = await readProviderResponseDiagnostics(response);
     throw providerResponseError(`image_provider_reference_${response.status}`, diagnostics);
   }
   const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || reference.mimeType;
-  return new Blob([await response.arrayBuffer()], { type: contentType });
+  const bytes = await readImageReferenceBytes(response, maxBytes);
+  return {
+    blob: new Blob([bytes], {
+      type: contentType,
+    }),
+    size: bytes.byteLength,
+  };
+}
+
+async function readImageReferenceBytes(response: Response, maxBytes: number) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength)) {
+    assertImageReferenceSize(declaredLength, maxBytes);
+  }
+  if (!response.body) {
+    return new Uint8Array();
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      size += value.byteLength;
+      assertImageReferenceSize(size, maxBytes);
+      chunks.push(value);
+    }
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function assertImageReferenceSize(sizeBytes: number, maxBytes: number) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > maxBytes) {
+    throw Object.assign(new Error("image_provider_reference_too_large"), {
+      maxBytes,
+      sizeBytes,
+    });
+  }
 }
 
 function b64JsonFromDataUrl(value: string | undefined) {

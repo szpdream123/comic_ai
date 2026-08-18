@@ -246,7 +246,7 @@ const DEFAULT_CANVAS_PROJECT_ID = "canvas-project-main";
 const CANVAS_REFRESH_DRAFT_STORAGE_PREFIX = "comic-ai:canvas-refresh-draft";
 const CANVAS_PENDING_CREATE_IDEMPOTENCY_STORAGE_KEY = "comic-ai:canvas-pending-create-idempotency";
 const CANVAS_PENDING_CREATE_IDEMPOTENCY_MAX_AGE_MS = 5 * 60_000;
-const CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+const CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const CREDIT_SESSION_REFRESH_INTERVAL_MS = 5 * 60_000;
 const SINGLE_EPISODE_AI_TABLE_SYNC_INTERVAL_MS = 220;
 const SINGLE_EPISODE_AI_PREVIEW_RENDER_INTERVAL_MS = 450;
@@ -265,10 +265,10 @@ const CANVAS_LIVE_RECONNECT_MAX_MS = 8000;
 const TEAM_MEMBER_RESOURCE_PAGE_SIZE = 10;
 const EPISODE_BATCH_IMAGE_LIMIT = 30;
 const EPISODE_BATCH_VIDEO_LIMIT = 10;
-const TOOLBOX_PROMPT_REVERSE_MAX_BYTES = 20 * 1024 * 1024;
-const TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES = 500 * 1024 * 1024;
-const TOOLBOX_VIDEO_DEPTH_MAX_BYTES = 500 * 1024 * 1024;
-const TOOLBOX_WATERMARK_REMOVAL_MAX_BYTES = 20 * 1024 * 1024;
+const TOOLBOX_PROMPT_REVERSE_MAX_BYTES = 30 * 1024 * 1024;
+const TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+const TOOLBOX_VIDEO_DEPTH_MAX_BYTES = 50 * 1024 * 1024;
+const TOOLBOX_WATERMARK_REMOVAL_MAX_BYTES = 30 * 1024 * 1024;
 const ACCOUNT_DISPLAY_NAME_MAX_LENGTH = 8;
 const PROJECT_INTERIOR_SECTIONS = new Set(["overview", "assets", "episodes", "stats"]);
 const OPEN_CREATE_AFTER_LOGIN_KEY = "comic-ai:open-create-after-login";
@@ -302,7 +302,7 @@ const PUBLIC_NAV_SEO = Object.fromEntries(
 const SCRIPT_DOCUMENT_UPLOAD_LIMITS = {
   document: {
     label: "剧本文档",
-    maxBytes: 30 * 1024 * 1024,
+    maxBytes: 10 * 1024 * 1024,
     mimeTypes: [
       "text/plain",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -388,7 +388,7 @@ function applyToolboxPromptReverseFile(workbench, file) {
   const maxBytes = mode === "video" ? TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES : TOOLBOX_PROMPT_REVERSE_MAX_BYTES;
   if (Number(file?.size ?? 0) > maxBytes) {
     updateToolboxPromptReverseActiveView(workbench.ui, {
-      error: mode === "video" ? "视频大小不能超过 500 MB。" : "图片大小不能超过 20 MB。",
+      error: mode === "video" ? "视频大小不能超过 50 MB。" : "图片大小不能超过 30 MB。",
     });
     renderWorkbenchChrome(workbench);
     return false;
@@ -423,7 +423,7 @@ function applyToolboxVideoToDirectorFile(workbench, file) {
     return false;
   }
   if (Number(file?.size ?? 0) > TOOLBOX_PROMPT_REVERSE_VIDEO_MAX_BYTES) {
-    updateToolboxVideoToDirectorState(workbench.ui, { error: "视频大小不能超过 500 MB。" });
+    updateToolboxVideoToDirectorState(workbench.ui, { error: "视频大小不能超过 50 MB。" });
     renderWorkbenchChrome(workbench);
     return false;
   }
@@ -461,7 +461,7 @@ function applyToolboxVideoDepthFile(workbench, file) {
     workbench.ui.toolboxVideoDepth = {
       ...(workbench.ui.toolboxVideoDepth ?? {}),
       open: true,
-      error: "视频大小不能超过 500 MB。",
+      error: "视频大小不能超过 50 MB。",
     };
     renderWorkbenchChrome(workbench);
     return false;
@@ -505,7 +505,7 @@ function applyToolboxWatermarkRemovalFile(workbench, file) {
     return false;
   }
   if (Number(file?.size ?? 0) > TOOLBOX_WATERMARK_REMOVAL_MAX_BYTES) {
-    updateToolboxWatermarkRemovalState(workbench.ui, { error: "图片大小不能超过 20 MB。" });
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "图片大小不能超过 30 MB。" });
     renderWorkbenchChrome(workbench);
     return false;
   }
@@ -534,8 +534,8 @@ function applyToolboxVideoWatermarkRemovalFile(workbench, file) {
     renderWorkbenchChrome(workbench);
     return false;
   }
-  if (Number(file?.size ?? 0) > 120 * 1024 * 1024) {
-    updateToolboxWatermarkRemovalState(workbench.ui, { error: "视频大小不能超过 120 MB。" });
+  if (Number(file?.size ?? 0) > 50 * 1024 * 1024) {
+    updateToolboxWatermarkRemovalState(workbench.ui, { error: "视频大小不能超过 50 MB。" });
     renderWorkbenchChrome(workbench);
     return false;
   }
@@ -2290,7 +2290,18 @@ const EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM = 46.2;
 const EPISODE_LAYOUT_MIN_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM * 16;
 const EPISODE_LAYOUT_DEFAULT_CENTER_WIDTH_PX = EPISODE_LAYOUT_DESKTOP_CENTER_WIDTH_REM * 16;
 const EPISODE_QUICK_ASSET_TOGGLE_VIEWPORT_MARGIN = 8;
-const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = 20;
+const BATCH_UPLOAD_SELECTION_LIMIT = 10;
+const BATCH_UPLOAD_CONCURRENCY = 3;
+const TEAM_ASSET_LOCAL_UPLOAD_LIMIT = BATCH_UPLOAD_SELECTION_LIMIT;
+
+function revokeAssetImportDraftPreviews(drafts = []) {
+  for (const draft of drafts ?? []) {
+    const previewUrl = String(draft?.preview ?? "");
+    if (previewUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
+      globalThis.URL.revokeObjectURL(previewUrl);
+    }
+  }
+}
 
 function revokeHomeAgentAttachmentPreviews(workbench, attachments = workbench?.ui?.homeAgentAttachments) {
   for (const attachment of attachments ?? []) {
@@ -17856,6 +17867,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportModal = "character";
     workbench.ui.assetImportModalTab = "local";
     workbench.ui.assetImportCategory = "domestic-modern-city";
+    revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportOfficialAssets = resolveAssetImportLibraryRecords(workbench, "character");
@@ -17986,6 +17998,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportModal = workbench.ui.projectAssetTab;
     workbench.ui.assetImportModalTab = "official";
     workbench.ui.assetImportCategory = workbench.ui.libraryFolder ?? "国内仿真人-现代都市";
+    revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = selectedIds;
     workbench.ui.assetImportOfficialAssets = getLibraryAssetsForImport({
@@ -18067,6 +18080,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportModal = category;
     workbench.ui.assetImportModalSource = "team";
     workbench.ui.assetImportModalTab = "local";
+    revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
     workbench.ui.toast = "";
@@ -24318,6 +24332,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetImportModalTab =
       isRealEpisodeWorkbench(workbench) && nextAssetKind !== "other" ? "official" : "local";
     workbench.ui.assetImportCategory = "domestic-modern-city";
+    revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
     workbench.ui.assetImportDrafts = [];
     workbench.ui.assetImportSelection = [];
     workbench.ui.assetImportPage = 1;
@@ -24503,6 +24518,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "close-asset-import-modal") {
     revokeAudioAssetImportPreviewUrl(workbench.ui.audioAssetImportDraft);
+    revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
     workbench.ui.assetImportModal = null;
     workbench.ui.assetImportModalSource = null;
     workbench.ui.audioAssetImportDraft = null;
@@ -24595,6 +24611,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.assetImportModal = null;
       workbench.ui.assetImportModalSource = null;
       workbench.ui.audioAssetImportDraft = null;
+      revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
       workbench.ui.assetImportDrafts = [];
       workbench.ui.assetImportSelection = [];
     });
@@ -24750,7 +24767,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       render(workbench);
       const failedDrafts = [];
       let uploadedCount = 0;
-      for (const draft of selectedDrafts) {
+      await runBatchUploadTasks(selectedDrafts, async (draft) => {
         try {
           await uploadTeamAssetLocalFile(workbench, assetKind, draft.file, {
             assetName: draft.name,
@@ -24760,17 +24777,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         } catch (error) {
           failedDrafts.push({ ...draft, uploadError: friendlyError(error) });
         }
-      }
+      });
       workbench.ui.busy = false;
       if (uploadedCount > 0) {
         workbench.assetLibraryCache?.clear?.();
         await syncAssetLibraryFromApi(workbench).catch(() => undefined);
       }
       if (failedDrafts.length > 0) {
+        const failedDraftIds = new Set(failedDrafts.map((draft) => draft.id));
+        revokeAssetImportDraftPreviews(
+          (workbench.ui.assetImportDrafts ?? []).filter((draft) => !failedDraftIds.has(draft.id)),
+        );
         workbench.ui.assetImportDrafts = failedDrafts;
         workbench.ui.assetImportSelection = failedDrafts.map((draft) => draft.id);
         workbench.ui.toast = `已上传 ${uploadedCount} 个团队素材，${failedDrafts.length} 个上传失败，可再次确认重试。`;
       } else {
+        revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
         workbench.ui.assetImportModal = null;
         workbench.ui.assetImportModalSource = null;
         workbench.ui.assetImportDrafts = [];
@@ -24927,6 +24949,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         );
       }
       workbench.ui.assetImportModal = null;
+      revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
       workbench.ui.assetImportDrafts = [];
       workbench.ui.assetImportSelection = [];
     });
@@ -27795,21 +27818,20 @@ async function loadCanvasLibraryAssets(workbench) {
   const loadToken = Symbol("canvas-library-assets-load");
   workbench.ui.canvasLibraryAssetsLoadToken = loadToken;
   try {
-    const categories = ["character", "scene", "prop", "voice"];
-    const payloads = await Promise.all(categories.map((category) => workbench.api.getLibraryAssets({ scope: "team", category })));
+    const payload = await workbench.api.getLibraryAssets({ scope: "team" });
     if (workbench.ui.canvasLibraryAssetsLoadToken !== loadToken) return workbench.ui.canvasLibraryAssets ?? [];
     const seenAssetIds = new Set();
-    workbench.ui.canvasLibraryAssets = payloads.flatMap((payload, index) => {
-      const category = categories[index];
-      return (Array.isArray(payload?.assets) ? payload.assets : [])
-        .map((asset) => normalizeCanvasLibraryAsset(asset, { source: "global", category }))
-        .filter((asset) => {
-          const assetId = String(asset?.assetId ?? "");
-          if (!assetId || seenAssetIds.has(assetId)) return false;
-          seenAssetIds.add(assetId);
-          return true;
-        });
-    });
+    workbench.ui.canvasLibraryAssets = (Array.isArray(payload?.assets) ? payload.assets : [])
+      .map((asset) => normalizeCanvasLibraryAsset(asset, {
+        source: "global",
+        category: String(asset?.category ?? asset?.assetCategory ?? "image"),
+      }))
+      .filter((asset) => {
+        const assetId = String(asset?.assetId ?? "");
+        if (!assetId || seenAssetIds.has(assetId)) return false;
+        seenAssetIds.add(assetId);
+        return true;
+      });
     workbench.ui.canvasLibraryAssetsLoaded = true;
     workbench.ui.canvasLibraryAssetsError = "";
   } catch (error) {
@@ -33207,10 +33229,10 @@ async function readCanvasVideoReferenceFile(reference = {}, options = {}) {
   if (!response.ok) throw new Error(`读取视频素材失败（${response.status}）`);
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES) {
-    throw new Error("视频大小不能超过 500 MB");
+    throw new Error("视频大小不能超过 50 MB");
   }
   const blob = await response.blob();
-  if (blob.size > CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES) throw new Error("视频大小不能超过 500 MB");
+  if (blob.size > CANVAS_FRAME_ANALYSIS_MAX_VIDEO_BYTES) throw new Error("视频大小不能超过 50 MB");
   const fileName = String(reference.name ?? "canvas-video.mp4");
   const contentType = String(blob.type || response.headers.get("content-type") || "video/mp4").split(";")[0];
   return new globalThis.File([blob], fileName, { type: contentType });
@@ -41580,6 +41602,25 @@ function stripScriptDocumentExtension(fileName) {
     .trim();
 }
 
+async function runBatchUploadTasks(items, task) {
+  let nextIndex = 0;
+  const results = new Array(items.length);
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await task(items[currentIndex], currentIndex);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(BATCH_UPLOAD_CONCURRENCY, items.length) },
+      () => worker(),
+    ),
+  );
+  return results;
+}
+
 export async function handleTeamAssetLocalUploadFiles(workbench, category, files = []) {
   const normalizedCategory = String(category ?? workbench.ui?.libraryCategory ?? "character");
   if (!canSyncTeamAssetLocalUploadsToCloud(workbench)) {
@@ -41653,7 +41694,7 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
   if (!acceptedRecords.length) {
     workbench.ui.toast =
       validationMessage ||
-      (skippedCount > 0 ? "本分类最多保留 20 个本地上传预览。" : "请选择可上传的图片或音频文件。");
+      (skippedCount > 0 ? "一次最多选择 10 个本地文件。" : "请选择可上传的图片或音频文件。");
     render(workbench, { preserveLibraryScroll: true });
     return;
   }
@@ -41668,7 +41709,7 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
   render(workbench, { preserveLibraryScroll: true });
 
   const uploadFailures = [];
-  for (const { record, file } of acceptedItems) {
+  await runBatchUploadTasks(acceptedItems, async ({ record, file }) => {
     try {
       const upload = await uploadTeamAssetLocalFile(workbench, normalizedCategory, file);
       record.status = "ready";
@@ -41686,7 +41727,7 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
       record.statusLabel = "上传失败";
       uploadFailures.push(friendlyError(error));
     }
-  }
+  });
 
   workbench.ui.toast = uploadFailures.length
     ? `已添加 ${acceptedRecords.length} 个团队素材，${uploadFailures.length} 个上传失败。`
@@ -41752,6 +41793,7 @@ async function prepareTeamAssetImageUploadReview(workbench, category, files) {
   workbench.ui.assetImportModal = category;
   workbench.ui.assetImportModalSource = "team";
   workbench.ui.assetImportModalTab = "local";
+  revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
   workbench.ui.assetImportDrafts = acceptedDrafts;
   workbench.ui.assetImportSelection = acceptedDrafts.map((draft) => draft.id);
   workbench.ui.toast = skippedCount > 0 ? `已选择 ${acceptedDrafts.length} 个图片，${skippedCount} 个文件已跳过。` : "";
@@ -41821,9 +41863,8 @@ function getTeamAssetLocalUploadLimits(category) {
 }
 
 async function createTeamAssetLocalPreviewUrl(file, mediaType) {
-  if (mediaType === "audio") {
-    return createObjectUrlPreview(file);
-  }
+  const objectUrl = createObjectUrlPreview(file);
+  if (objectUrl) return objectUrl;
   try {
     return await readFileAsDataUrl(file);
   } catch {
@@ -44126,7 +44167,7 @@ async function handleGenerationReferenceFiles(workbench, storyboardId, files) {
   );
   const importableFiles = files.filter((file) =>
     String(file.type || "").startsWith("image/") || String(file.type || "").startsWith("video/"),
-  );
+  ).slice(0, BATCH_UPLOAD_SELECTION_LIMIT);
   if (!importableFiles.length) {
     workbench.ui.toast = "Only image and video reference uploads are supported here.";
     render(workbench);
@@ -54165,11 +54206,11 @@ function syncSelectedEpisodeAssetForCurrentTab(workbench) {
 async function handleAssetImportFiles(workbench, files) {
   const assetKind = workbench.ui.assetImportModal ?? workbench.ui.projectAssetTab ?? "character";
   const existingDrafts = workbench.ui.assetImportDrafts ?? [];
-  const slotsLeft = Math.max(20 - existingDrafts.length, 0);
+  const slotsLeft = Math.max(BATCH_UPLOAD_SELECTION_LIMIT - existingDrafts.length, 0);
   const acceptedFiles = files.slice(0, slotsLeft);
 
   if (!acceptedFiles.length) {
-    workbench.ui.toast = "一次最多可导入 20 个本地资产。";
+    workbench.ui.toast = "一次最多可导入 10 个本地资产。";
     render(workbench);
     return;
   }
@@ -54193,18 +54234,22 @@ async function handleAssetImportFiles(workbench, files) {
 }
 
 async function handleLocalStoryboardVideoFiles(workbench, storyboardId, files) {
-  const acceptedFiles = files.filter((file) => String(file.type || "").startsWith("video/"));
+  const acceptedFiles = files
+    .filter((file) => String(file.type || "").startsWith("video/"))
+    .slice(0, BATCH_UPLOAD_SELECTION_LIMIT);
   if (!acceptedFiles.length) {
     workbench.ui.toast = "请选择视频文件后再上传。";
     render(workbench);
     return;
   }
 
-  for (const file of acceptedFiles) {
-    await startStoryboardVideoUpload(workbench, storyboardId, file);
-  }
+  await runBatchUploadTasks(acceptedFiles, (file) =>
+    startStoryboardVideoUpload(workbench, storyboardId, file),
+  );
 
-  workbench.ui.toast = `已添加 ${acceptedFiles.length} 个待上传视频。`;
+  workbench.ui.toast = files.length > acceptedFiles.length
+    ? `已添加 ${acceptedFiles.length} 个待上传视频，其余文件已忽略。`
+    : `已添加 ${acceptedFiles.length} 个待上传视频。`;
   render(workbench);
 }
 
@@ -55771,14 +55816,15 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
     workbench,
     `正在上传${attachmentLabel}附件...`,
     async () => {
-      const nextItems = [];
-      const uploadFiles = isSingleFrameVideoInputMode(workbench) && attachmentType === "image" ? files.slice(0, 1) : files;
-      for (const [index, file] of uploadFiles.entries()) {
+      const uploadFiles = isSingleFrameVideoInputMode(workbench) && attachmentType === "image"
+        ? files.slice(0, 1)
+        : files.slice(0, BATCH_UPLOAD_SELECTION_LIMIT);
+      const nextItems = await runBatchUploadTasks(uploadFiles, async (file, index) => {
         const resolvedAttachmentType = resolveEpisodeWorkbenchAttachmentType(attachmentType, file);
         const upload = await uploadLocalFile(workbench, file, `episode-attachments/${resolvedAttachmentType}`);
         const mediaKind = resolvedAttachmentType === "audio" ? "audio" : resolvedAttachmentType === "video" ? "video" : "image";
         const previewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl);
-        nextItems.push({
+        return {
           id: upload.storageObjectId ?? `episode-attachment-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
           type: mediaKind,
           kind: mediaKind,
@@ -55793,8 +55839,8 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
           mimeType: upload.mimeType ?? file.type ?? null,
           composerOrder: createComposerReferenceOrder(workbench),
           temporary: true,
-        });
-      }
+        };
+      });
       if (isSingleFrameVideoInputMode(workbench) && attachmentType === "image") {
         const firstImage = nextItems.find((item) => item.type === "image");
         const frameTarget = isFirstLastFrameVideoMode(workbench) && options.frameTarget === "last" ? "last" : "first";
@@ -55824,7 +55870,9 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
           normalizePromptByImageReferenceOrder(workbench, getCurrentScopePrompt(workbench), assetPromptDraft),
         );
       }
-      workbench.ui.toast = `已上传 ${nextItems.length} 个${attachmentLabel}附件。`;
+      workbench.ui.toast = files.length > uploadFiles.length
+        ? `已上传 ${nextItems.length} 个${attachmentLabel}附件，其余文件已忽略。`
+        : `已上传 ${nextItems.length} 个${attachmentLabel}附件。`;
     },
   );
 }
@@ -55892,6 +55940,7 @@ function clearAssetLibraryReturnState(workbench) {
 
 function closeAssetImportOverlays(workbench) {
   revokeAudioAssetImportPreviewUrl(workbench.ui.audioAssetImportDraft);
+  revokeAssetImportDraftPreviews(workbench.ui.assetImportDrafts);
   workbench.ui.assetImportModal = null;
   workbench.ui.assetImportModalSource = null;
   workbench.ui.audioAssetImportDraft = null;

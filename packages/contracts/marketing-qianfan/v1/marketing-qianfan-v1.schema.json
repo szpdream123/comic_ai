@@ -1,0 +1,600 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://comic-ai.local/contracts/marketing-qianfan/v1/marketing-qianfan-v1.schema.json",
+  "title": "Comic AI and QianFanSync Marketing API v1 Contract",
+  "description": "Shared request and response schemas. All timestamps are UTC RFC3339 values. This contract never carries platform credentials, cookies, secrets, or database connection information.",
+  "$ref": "#/$defs/ContractCatalog",
+  "$defs": {
+    "ContractCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "capabilities": { "$ref": "#/$defs/CapabilitiesContract" },
+        "next": { "$ref": "#/$defs/NextContract" },
+        "ack": { "$ref": "#/$defs/AckContract" },
+        "heartbeat": { "$ref": "#/$defs/HeartbeatContract" },
+        "events": { "$ref": "#/$defs/EventsContract" },
+        "cancelState": { "$ref": "#/$defs/CancelStateContract" },
+        "analytics": { "$ref": "#/$defs/AnalyticsContract" }
+      },
+      "required": ["headers", "capabilities", "next", "ack", "heartbeat", "events", "cancelState", "analytics"]
+    },
+    "SchemaVersion": {
+      "type": "string",
+      "const": "v1"
+    },
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "EventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "HttpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "MarketingHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "X-Marketing-Version": { "$ref": "#/$defs/SchemaVersion" },
+        "X-Marketing-Worker-Id": { "$ref": "#/$defs/Identifier" },
+        "X-Marketing-Key-Id": { "$ref": "#/$defs/Identifier" },
+        "X-Marketing-Timestamp": {
+          "type": "string",
+          "pattern": "^[0-9]{13}$",
+          "description": "UTC Unix time in milliseconds."
+        },
+        "X-Marketing-Nonce": { "$ref": "#/$defs/EventId" },
+        "X-Marketing-Content-SHA256": {
+          "$ref": "#/$defs/Sha256",
+          "description": "SHA-256 of the exact raw body; use the SHA-256 of an empty body when no body is sent."
+        },
+        "X-Marketing-Signature": {
+          "type": "string",
+          "pattern": "^v1=[A-Za-z0-9_-]+$"
+        }
+      },
+      "required": [
+        "X-Marketing-Version",
+        "X-Marketing-Worker-Id",
+        "X-Marketing-Key-Id",
+        "X-Marketing-Timestamp",
+        "X-Marketing-Nonce",
+        "X-Marketing-Content-SHA256",
+        "X-Marketing-Signature"
+      ]
+    },
+    "Envelope": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+        "eventId": { "$ref": "#/$defs/EventId" },
+        "occurredAt": { "$ref": "#/$defs/Timestamp" },
+        "idempotencyKey": { "$ref": "#/$defs/Identifier" }
+      },
+      "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey"]
+    },
+    "PlatformCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platform": { "$ref": "#/$defs/Identifier" },
+        "supportsVideo": { "type": "boolean" },
+        "supportsImagePost": { "type": "boolean" },
+        "supportsTags": { "type": "boolean" },
+        "supportsNativeScheduling": { "type": "boolean" }
+      },
+      "required": ["platform", "supportsVideo", "supportsImagePost"]
+    },
+    "AccountCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platform": { "$ref": "#/$defs/Identifier" },
+        "executorAccountRef": { "$ref": "#/$defs/Identifier" },
+        "accountName": { "type": "string", "maxLength": 120 },
+        "status": {
+          "type": "string",
+          "enum": ["available", "login_required", "needs_attention", "disabled"]
+        }
+      },
+      "required": ["platform", "executorAccountRef", "status"]
+    },
+    "CapabilitiesRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "available" },
+            "workerVersion": { "$ref": "#/$defs/Identifier" },
+            "platformCapabilities": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/PlatformCapability" }
+            },
+            "accounts": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/AccountCapability" }
+            },
+            "maxConcurrentPublishWorkers": { "type": "integer", "minimum": 1, "maximum": 2 },
+            "maxBrowserSessions": { "type": "integer", "minimum": 1, "maximum": 2 },
+            "freeDiskBytes": { "type": "integer", "minimum": 0 },
+            "executorStatus": { "type": "string", "enum": ["active", "degraded"] },
+            "healthReasons": {
+              "type": "array",
+              "maxItems": 8,
+              "items": { "$ref": "#/$defs/Identifier" }
+            }
+          },
+          "required": [
+            "schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status",
+            "workerVersion", "platformCapabilities", "accounts",
+            "maxConcurrentPublishWorkers", "maxBrowserSessions", "freeDiskBytes"
+          ]
+        }
+      ]
+    },
+    "CapabilitiesResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "enum": ["registered", "available", "rejected"] },
+            "workerId": { "$ref": "#/$defs/Identifier" },
+            "message": { "type": "string", "maxLength": 512 }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "workerId"]
+        }
+      ]
+    },
+    "Asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assetId": { "$ref": "#/$defs/Identifier" },
+        "kind": { "type": "string", "enum": ["video", "image", "cover", "subtitle", "document"] },
+        "downloadUrl": { "$ref": "#/$defs/HttpsUrl" },
+        "sha256": { "$ref": "#/$defs/Sha256" },
+        "contentType": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sizeBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "expiresAt": { "$ref": "#/$defs/Timestamp" }
+      },
+      "required": ["assetId", "kind", "downloadUrl", "sha256", "contentType", "sizeBytes", "expiresAt"]
+    },
+    "ApprovedContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 10000 },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "maxItems": 30
+        },
+        "disclosures": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "maxItems": 10
+        }
+      },
+      "required": ["title", "description", "tags"]
+    },
+    "LeasedPublishJob": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "leased" },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" },
+            "leaseExpiresAt": { "$ref": "#/$defs/Timestamp" },
+            "platform": { "$ref": "#/$defs/Identifier" },
+            "executorAccountRef": { "$ref": "#/$defs/Identifier" },
+            "scheduledAt": { "$ref": "#/$defs/Timestamp" },
+            "notBefore": { "$ref": "#/$defs/Timestamp" },
+            "executeDeadline": { "$ref": "#/$defs/Timestamp" },
+            "content": { "$ref": "#/$defs/ApprovedContent" },
+            "assets": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/Asset" } }
+          },
+          "required": [
+            "schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId",
+            "leaseExpiresAt", "platform", "executorAccountRef", "notBefore", "executeDeadline", "content", "assets"
+          ]
+        }
+      ]
+    },
+    "NextRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "ready" },
+            "workerVersion": { "$ref": "#/$defs/Identifier" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "workerVersion"]
+        }
+      ]
+    },
+    "NoPublishJob": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "no_task" },
+            "jobId": { "type": "null" },
+            "attemptId": { "type": "null" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "AckRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "downloaded" },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" },
+            "verifiedAssets": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "assetId": { "$ref": "#/$defs/Identifier" },
+                  "sha256": { "$ref": "#/$defs/Sha256" }
+                },
+                "required": ["assetId", "sha256"]
+              }
+            }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId", "verifiedAssets"]
+        }
+      ]
+    },
+    "AckResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "enum": ["acknowledged", "rejected", "canceled"] },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "HeartbeatRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "heartbeat" },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "HeartbeatResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "accepted" },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" },
+            "leaseExpiresAt": { "$ref": "#/$defs/Timestamp" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId", "leaseExpiresAt"]
+        }
+      ]
+    },
+    "PublishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platformContentId": { "type": ["string", "null"], "maxLength": 512 },
+        "publishUrl": { "anyOf": [{ "$ref": "#/$defs/HttpsUrl" }, { "type": "null" }] },
+        "publishedAt": { "anyOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }] },
+        "status": { "type": "string", "enum": ["succeeded", "failed", "needs_attention"] },
+        "failureCode": { "type": ["string", "null"], "maxLength": 128 },
+        "failureMessage": { "type": ["string", "null"], "maxLength": 1024 },
+        "rawResultRef": { "type": ["string", "null"], "maxLength": 512 }
+      },
+      "required": ["platformContentId", "publishUrl", "publishedAt", "status", "failureCode", "failureMessage", "rawResultRef"],
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+          "then": {
+            "anyOf": [
+              { "properties": { "platformContentId": { "type": "string", "minLength": 1 } }, "required": ["platformContentId"] },
+              { "properties": { "publishUrl": { "$ref": "#/$defs/HttpsUrl" } }, "required": ["publishUrl"] },
+              { "properties": { "failureCode": { "const": "result_unavailable" } }, "required": ["failureCode"] }
+            ]
+          }
+        }
+      ]
+    },
+    "EventRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "type": "string", "enum": ["queued", "running", "succeeded", "failed", "needs_attention", "canceled"] },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" },
+            "publishResult": { "$ref": "#/$defs/PublishResult" },
+            "message": { "type": "string", "maxLength": 1024 }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "EventResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "enum": ["accepted", "duplicate", "rejected"] },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "CancelStateRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "cancel_state_check" },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "CancelStateResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "enum": ["active", "canceled", "result_unknown"] },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" },
+            "canceled": { "type": "boolean" },
+            "reason": { "type": ["string", "null"], "maxLength": 512 }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId", "canceled", "reason"]
+        }
+      ]
+    },
+    "AnalyticsRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "const": "observed" },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" },
+            "metricName": { "$ref": "#/$defs/Identifier" },
+            "metricValue": { "type": ["number", "null"] },
+            "metricSource": { "enum": ["platform_api", "executor_observed", "unavailable"] },
+            "observedAt": { "$ref": "#/$defs/Timestamp" },
+            "observationWindow": { "type": "object" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId", "metricName", "metricValue", "metricSource", "observedAt"]
+        }
+      ]
+    },
+    "AnalyticsResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "$ref": "#/$defs/SchemaVersion" },
+            "eventId": { "$ref": "#/$defs/EventId" },
+            "occurredAt": { "$ref": "#/$defs/Timestamp" },
+            "idempotencyKey": { "$ref": "#/$defs/Identifier" },
+            "status": { "enum": ["accepted", "duplicate"] },
+            "jobId": { "$ref": "#/$defs/Identifier" },
+            "attemptId": { "$ref": "#/$defs/Identifier" }
+          },
+          "required": ["schemaVersion", "eventId", "occurredAt", "idempotencyKey", "status", "jobId", "attemptId"]
+        }
+      ]
+    },
+    "CapabilitiesContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "const": "/api/integrations/qianfan/capabilities" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/CapabilitiesRequest" },
+        "response": { "$ref": "#/$defs/CapabilitiesResponse" }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    },
+    "NextContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "const": "/api/integrations/qianfan/publish-jobs/next" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/NextRequest" },
+        "response": { "oneOf": [{ "$ref": "#/$defs/LeasedPublishJob" }, { "$ref": "#/$defs/NoPublishJob" }] }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    },
+    "AckContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "const": "/api/integrations/qianfan/publish-jobs/{jobId}/ack" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/AckRequest" },
+        "response": { "$ref": "#/$defs/AckResponse" }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    },
+    "HeartbeatContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "const": "/api/integrations/qianfan/publish-jobs/{jobId}/heartbeat" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/HeartbeatRequest" },
+        "response": { "$ref": "#/$defs/HeartbeatResponse" }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    },
+    "EventsContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "const": "/api/integrations/qianfan/publish-jobs/{jobId}/events" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/EventRequest" },
+        "response": { "$ref": "#/$defs/EventResponse" }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    },
+    "CancelStateContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "GET" },
+        "path": { "const": "/api/integrations/qianfan/publish-jobs/{jobId}/cancel-state" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/CancelStateRequest" },
+        "response": { "$ref": "#/$defs/CancelStateResponse" }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    },
+    "AnalyticsContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "const": "POST" },
+        "path": { "const": "/api/integrations/qianfan/analytics" },
+        "headers": { "$ref": "#/$defs/MarketingHeaders" },
+        "request": { "$ref": "#/$defs/AnalyticsRequest" },
+        "response": { "$ref": "#/$defs/AnalyticsResponse" }
+      },
+      "required": ["method", "path", "headers", "request", "response"]
+    }
+  }
+}

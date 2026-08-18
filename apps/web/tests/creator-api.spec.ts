@@ -498,6 +498,53 @@ test("cached session reads do not silently request the session endpoint again", 
   assert.deepEqual(third, first);
 });
 
+test("profile and password updates invalidate the cached session", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ user: { displayName: `用户 ${calls.length}` } }),
+    };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?session-invalidation=${Date.now()}`);
+  await creatorApi.getSession();
+  await creatorApi.updateAccountProfile({ displayName: "已更新" });
+  const updatedProfileSession = await creatorApi.getSession();
+  await creatorApi.changeAccountPassword({ currentPassword: "old-password", newPassword: "new-password" });
+  const updatedPasswordSession = await creatorApi.getSession();
+
+  assert.deepEqual(updatedProfileSession, { user: { displayName: "用户 3" } });
+  assert.deepEqual(updatedPasswordSession, { user: { displayName: "用户 5" } });
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/auth/session",
+    "/api/auth/profile",
+    "/api/auth/session",
+    "/api/auth/password",
+    "/api/auth/session",
+  ]);
+});
+
+test("batch generation task reads preserve unrelated read caches", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, text: async () => JSON.stringify({ items: [] }) };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?batch-read-cache=${Date.now()}`);
+  await creatorApi.getCustomerSupportConfig();
+  await creatorApi.getGenerationTasks(["task-1", "task-1"]);
+  await creatorApi.getCustomerSupportConfig();
+
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/public/customer-support",
+    "/api/generation-tasks/batch",
+  ]);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { taskIds: ["task-1"] });
+});
+
 test("getCreditBalance reads the dedicated uncached balance endpoint", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -922,9 +969,11 @@ test("Canvas Agent model catalog targets the canvas-scoped eligible model route"
 
   const { creatorApi } = await import("../src/shared/creator-api.js");
   await creatorApi.listCanvasAgentModels("canvas/1");
+  await creatorApi.listCanvasAgentModels("canvas/1");
   assert.equal(calls[0].url, "/api/canvas/canvas%2F1/agent-models");
   assert.equal(calls[0].options.credentials, "include");
-  assert.equal(calls[0].options.cache, "no-store");
+  assert.equal(calls[0].options.cache, undefined);
+  assert.equal(calls.length, 1);
 });
 
 test("Canvas Agent conversation aliases expose list, update, and delete lifecycle routes", async () => {
@@ -1846,14 +1895,14 @@ test("uploadFile rejects files that exceed configured limits before upload", asy
       {
         name: "huge.png",
         type: "image/png",
-        size: 20 * 1024 * 1024 + 1,
+        size: 30 * 1024 * 1024 + 1,
         lastModified: 1,
       },
       { projectId: "project-1" },
     ),
     (error) => {
       assert.equal(error.errorCode, "upload_file_too_large");
-      assert.equal(error.details.maxBytes, 20 * 1024 * 1024);
+      assert.equal(error.details.maxBytes, 30 * 1024 * 1024);
       return true;
     },
   );
@@ -1884,6 +1933,7 @@ test("uploadFile uses single-put COS uploads for videos and forwards progress", 
   }
 
   globalThis.COS = FakeCOS;
+  globalThis.window.COS = FakeCOS;
 
   try {
     const { creatorApi } = await import("../src/shared/creator-api.js");
@@ -2045,10 +2095,9 @@ test("uploadFile prefers same-origin proxy uploads on localhost even when COS cr
   }
 });
 
-test("uploadFile prefers the backend upload proxy for team asset uploads even on non-localhost hosts", async () => {
+test("uploadFile uses COS direct upload for team asset uploads on non-localhost hosts", async () => {
   const previousWindow = globalThis.window;
   const previousCos = globalThis.COS;
-  const previousXmlHttpRequest = globalThis.XMLHttpRequest;
   globalThis.window = {
     location: {
       protocol: "https:",
@@ -2057,36 +2106,17 @@ test("uploadFile prefers the backend upload proxy for team asset uploads even on
     },
   };
 
-  class FakeXmlHttpRequest {
-    headers = {};
-    upload = {};
-    status = 200;
-
-    open() {}
-
-    setRequestHeader(key, value) {
-      this.headers[key] = value;
-    }
-
-    getResponseHeader(name) {
-      return name.toLowerCase() === "etag" ? "etag-team-proxy-1" : null;
-    }
-
-    send() {
-      queueMicrotask(() => this.onload?.());
-    }
-  }
-
-  class FailingCOS {
+  class FakeCOS {
     constructor() {}
 
-    putObject() {
-      throw new Error("cos_should_not_be_called_for_team_assets");
+    putObject(input, callback) {
+      input.onProgress?.({ loaded: 12, total: 12, percent: 1 });
+      queueMicrotask(() => callback(null, { ETag: '"etag-team-cos-1"' }));
     }
   }
 
-  globalThis.XMLHttpRequest = FakeXmlHttpRequest;
-  globalThis.COS = FailingCOS;
+  globalThis.COS = FakeCOS;
+  globalThis.window.COS = FakeCOS;
 
   try {
     const { creatorApi } = await import("../src/shared/creator-api.js");
@@ -2114,7 +2144,7 @@ test("uploadFile prefers the backend upload proxy for team asset uploads even on
         objectKey: "objects/team-asset.png",
         contentType: "image/png",
         sizeBytes: 12,
-        etag: "etag-team-proxy-1",
+        etag: "etag-team-cos-1",
       },
       urls: {
         sourceUrl: "https://cos.example.test/team-asset.png",
@@ -2131,14 +2161,9 @@ test("uploadFile prefers the backend upload proxy for team asset uploads even on
       { category: "team-assets/character" },
     );
 
-    assert.equal(result.upload.eTag, "etag-team-proxy-1");
+    assert.equal(result.upload.eTag, "etag-team-cos-1");
   } finally {
     globalThis.window = previousWindow;
-    if (previousXmlHttpRequest === undefined) {
-      delete globalThis.XMLHttpRequest;
-    } else {
-      globalThis.XMLHttpRequest = previousXmlHttpRequest;
-    }
     if (previousCos === undefined) {
       delete globalThis.COS;
     } else {
@@ -2275,7 +2300,7 @@ test("uploadFile surfaces structured same-origin proxy upload errors", async () 
       error: {
         code: "upload_file_too_large",
         message: "视频文件超过上传大小限制",
-        details: { maxBytes: 500 },
+        details: { maxBytes: 50 },
       },
     });
 
@@ -2319,7 +2344,7 @@ test("uploadFile surfaces structured same-origin proxy upload errors", async () 
         assert.equal(error.status, 413);
         assert.equal(error.errorCode, "upload_file_too_large");
         assert.equal(error.message, "视频文件超过上传大小限制");
-        assert.deepEqual(error.details, { maxBytes: 500 });
+        assert.deepEqual(error.details, { maxBytes: 50 });
         return true;
       },
     );

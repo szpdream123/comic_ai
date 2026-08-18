@@ -46,6 +46,7 @@ const CONCURRENT_MIGRATION_INDEX_NAMES = new Map([
   ["20260731-failed-image-submission-active-repair-index.sql", "tasks_failed_image_submission_active_repair_idx"],
   ["20260731-failed-image-submission-snapshot-repair-index.sql", "generation_snapshots_failed_image_submission_repair_idx"],
   ["20260824-z-task-center-provider-diagnostics-index.sql", "provider_requests_task_center_diagnostics_idx"],
+  ["20260911-project-upload-storage-object-index.sql", "project_upload_records_storage_object_created_id_idx"],
 ]);
 const CANVAS_AGENT_MODEL_PROBES_RELATIVE_PATH = ["packages", "db", "migrations", "20260731-z-canvas-agent-model-compatibility-probes.sql"];
 const PROMPT_RATINGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260801-z-create-prompt-ratings.sql"];
@@ -98,6 +99,20 @@ const HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH = ["packages", "db", "mi
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_RELATIVE_PATH = ["packages", "db", "migrations", "20260909-backfill-project-cover-storage-objects.sql"];
 const TEAM_ASSET_PROXY_URLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-allow-bound-team-asset-proxy-urls.sql"];
 const GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-repair-globalaiopc-model-center-video-classification.sql"];
+const MARKETING_MODULE_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-create-marketing-module.sql"];
+const PROJECT_UPLOAD_STORAGE_OBJECT_INDEX_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-project-upload-storage-object-index.sql"];
+const MARKETING_BRAND_PROFILES_RELATIVE_PATH = ["packages", "db", "migrations", "20260912-create-marketing-brand-profiles.sql"];
+const MARKETING_EXECUTOR_HEALTH_RELATIVE_PATH = ["packages", "db", "migrations", "20260913-marketing-executor-health.sql"];
+const MARKETING_EXECUTOR_ALERTS_RELATIVE_PATH = ["packages", "db", "migrations", "20260914-marketing-executor-alerts.sql"];
+const MARKETING_RESEARCH_REQUEST_LOG_RELATIVE_PATH = ["packages", "db", "migrations", "20260915-marketing-research-request-log.sql"];
+const MARKETING_AGENT_USAGE_RECORDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260916-marketing-agent-usage-records.sql"];
+const MARKETING_TEXT_AGENT_PROVIDER_AUDIT_RELATIVE_PATH = ["packages", "db", "migrations", "20260917-marketing-text-agent-provider-audit.sql"];
+const MARKETING_COMPONENT_ADMISSIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260918-marketing-component-admissions.sql"];
+const MARKETING_GENERATION_RUNS_RELATIVE_PATH = ["packages", "db", "migrations", "20260919-marketing-generation-runs.sql"];
+const MARKETING_EXECUTION_OWNER_BINDINGS_RELATIVE_PATH = ["packages", "db", "migrations", "20260920-marketing-execution-owner-bindings.sql"];
+const MARKETING_GENERATION_CONFIRMATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260921-marketing-generation-confirmations.sql"];
+const MARKETING_GENERATION_SKILLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260922-marketing-generation-skills.sql"];
+const MARKETING_SKILL_KINDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260923-marketing-skill-kinds.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -536,6 +551,61 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       name: "20260911-repair-globalaiopc-model-center-video-classification.sql",
       sql: await readFile(join(rootDir, ...GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH), "utf8"),
     },
+      name: "20260910-create-marketing-module.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_MODULE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260911-project-upload-storage-object-index.sql",
+      sql: await readFile(join(rootDir, ...PROJECT_UPLOAD_STORAGE_OBJECT_INDEX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260912-create-marketing-brand-profiles.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_BRAND_PROFILES_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260913-marketing-executor-health.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_EXECUTOR_HEALTH_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260914-marketing-executor-alerts.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_EXECUTOR_ALERTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260915-marketing-research-request-log.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_RESEARCH_REQUEST_LOG_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260916-marketing-agent-usage-records.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_AGENT_USAGE_RECORDS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260917-marketing-text-agent-provider-audit.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_TEXT_AGENT_PROVIDER_AUDIT_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260918-marketing-component-admissions.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_COMPONENT_ADMISSIONS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260919-marketing-generation-runs.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_GENERATION_RUNS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260920-marketing-execution-owner-bindings.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_EXECUTION_OWNER_BINDINGS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260921-marketing-generation-confirmations.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_GENERATION_CONFIRMATIONS_RELATIVE_PATH), "utf8"),
+    },
+      {
+        name: "20260922-marketing-generation-skills.sql",
+        sql: await readFile(join(rootDir, ...MARKETING_GENERATION_SKILLS_RELATIVE_PATH), "utf8"),
+      },
+      {
+        name: "20260923-marketing-skill-kinds.sql",
+        sql: await readFile(join(rootDir, ...MARKETING_SKILL_KINDS_RELATIVE_PATH), "utf8"),
+      },
   ];
   return fromName
     ? migrations.filter((migration) => migration.name.localeCompare(fromName) >= 0)

@@ -1,5 +1,5 @@
 const REQUIRED_FRAME_RATE = 6;
-const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const FRAME_MAX_EDGE = 1920;
 const INSTALL_CACHE_KEY = "comic-ai-browser-video-analysis-v3";
 const INSTALL_DB_NAME = "comic-ai-browser-video-analysis";
@@ -233,7 +233,7 @@ export function disposeBrowserVideoAnalysisResult(result) {
 
 function validateVideoFile(file) {
   if (!(file instanceof Blob) || file.size < 1) throw new Error("未找到可处理的视频文件");
-  if (file.size > MAX_VIDEO_BYTES) throw new Error("视频大小不能超过 500 MB");
+  if (file.size > MAX_VIDEO_BYTES) throw new Error("视频大小不能超过 50 MB");
   const fileName = String(file.name || "").toLowerCase();
   if (file.type && !SUPPORTED_VIDEO_TYPES.has(String(file.type).toLowerCase())) {
     throw new Error("仅支持 MP4、WEBM 或 MOV 视频");

@@ -4,7 +4,7 @@ import {
   runBrowserWatermarkRemovalCanvas,
 } from "./browser-watermark-removal-client.js";
 
-const MAX_VIDEO_BYTES = 120 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const MAX_DURATION_SECONDS = 15;
 const FRAME_RATE = 6;
 const MAX_OUTPUT_FRAME_RATE = 12;
@@ -12,7 +12,7 @@ const MAX_OUTPUT_EDGE = 854;
 
 export async function runBrowserVideoWatermarkRemoval(file, maskDataUrl, { onProgress } = {}) {
   if (!(file instanceof Blob)) throw new Error("请先选择需要处理的视频。");
-  if (file.size > MAX_VIDEO_BYTES) throw new Error("视频不能超过 120 MB。");
+  if (file.size > MAX_VIDEO_BYTES) throw new Error("视频不能超过 50 MB。");
   if (!String(maskDataUrl ?? "").startsWith("data:image/")) throw new Error("请先在首帧标记需要去除的水印区域。");
   const support = await checkBrowserWatermarkRemoval();
   if (!support.ready) throw new Error(support.error);

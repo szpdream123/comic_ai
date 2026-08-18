@@ -14,6 +14,7 @@ export interface UserModelRequestLogCreateInput {
   agentTaskId?: string | null;
   agentStepId?: string | null;
   userId?: string | null;
+  adminAccountId?: string | null;
   providerName: string;
   providerOperation: string;
   modelId: string;
@@ -49,6 +50,7 @@ interface UserModelRequestLogRow {
   agent_task_id: string | null;
   agent_step_id: string | null;
   user_id: string | null;
+  admin_account_id: string | null;
   provider_name: string;
   provider_operation: string;
   model_id: string;
@@ -82,6 +84,7 @@ export interface UserModelRequestLogRecord {
   agentTaskId?: string | null;
   agentStepId?: string | null;
   userId: string | null;
+  adminAccountId: string | null;
   providerName: string;
   providerOperation: string;
   modelId: string;
@@ -124,6 +127,7 @@ export async function createUserModelRequestLog(
         agent_task_id,
         agent_step_id,
         user_id,
+        admin_account_id,
         provider_name,
         provider_operation,
         model_id,
@@ -142,8 +146,8 @@ export async function createUserModelRequestLog(
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13, $14, $15, $16, $17, $18,
-        COALESCE($19, 'openai_chat_completions'), $20::jsonb, $21, 'submitted', $22, $22, $22
+        $11, $12, $13, $14, $15, $16, $17, $18, $19,
+        COALESCE($20, 'openai_chat_completions'), $21::jsonb, $22, 'submitted', $23, $23, $23
       )
       ON CONFLICT (provider_request_id)
       DO UPDATE SET
@@ -165,6 +169,7 @@ export async function createUserModelRequestLog(
       input.agentTaskId ?? null,
       input.agentStepId ?? null,
       input.userId ?? null,
+      input.adminAccountId ?? null,
       input.providerName,
       input.providerOperation,
       input.modelId,
@@ -230,6 +235,7 @@ function userModelRequestLogFromRow(
     ...(row.agent_task_id ? { agentTaskId: row.agent_task_id } : {}),
     ...(row.agent_step_id ? { agentStepId: row.agent_step_id } : {}),
     userId: row.user_id,
+    adminAccountId: row.admin_account_id,
     providerName: row.provider_name,
     providerOperation: row.provider_operation,
     modelId: row.model_id,

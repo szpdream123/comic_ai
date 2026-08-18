@@ -3,7 +3,7 @@ const MODEL_CACHE_PATH = "/models/Carve/LaMa-ONNX/lama_fp32.onnx";
 const MODEL_URL = "/api/toolbox/watermark-removal/model";
 const MODEL_EDGE = 512;
 const MODEL_SIZE_BYTES = 208_044_816;
-const MAX_INPUT_BYTES = 20 * 1024 * 1024;
+const MAX_INPUT_BYTES = 30 * 1024 * 1024;
 const OCR_DETECTION_MODEL_CACHE_PATH = "/models/RapidOCR/PP-OCRv4/det.onnx";
 const OCR_RECOGNITION_MODEL_CACHE_PATH = "/models/RapidOCR/PP-OCRv4/rec.onnx";
 const OCR_DICTIONARY_CACHE_PATH = "/models/RapidOCR/PP-OCRv4/ppocr_keys_v1.txt";
@@ -149,7 +149,7 @@ async function releaseWatermarkRemovalSession(pendingSession, sessionKeys) {
 
 export async function runBrowserWatermarkRemoval(file, maskDataUrl, { onProgress } = {}) {
   if (!(file instanceof Blob)) throw new Error("请先选择需要去水印的图片。");
-  if (file.size > MAX_INPUT_BYTES) throw new Error("图片不能超过 20 MB。");
+  if (file.size > MAX_INPUT_BYTES) throw new Error("图片不能超过 30 MB。");
   if (!String(maskDataUrl ?? "").startsWith("data:image/")) throw new Error("请先框选需要去除的水印区域。");
   const support = await checkBrowserWatermarkRemoval();
   if (!support.ready) throw new Error(support.error);
@@ -286,7 +286,7 @@ export async function runBrowserWatermarkRemovalCanvas(sourceCanvas, maskCanvas,
 
 export async function detectBrowserWatermarkRegions(file, { onProgress } = {}) {
   if (!(file instanceof Blob)) throw new Error("请先选择需要识别的图片。");
-  if (file.size > MAX_INPUT_BYTES) throw new Error("图片不能超过 20 MB。");
+  if (file.size > MAX_INPUT_BYTES) throw new Error("图片不能超过 30 MB。");
   if (typeof globalThis.document?.createElement !== "function") {
     throw new Error("当前浏览器无法执行本地文字识别");
   }
