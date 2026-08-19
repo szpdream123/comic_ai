@@ -35994,11 +35994,11 @@ describe("production workbench project tab", () => {
 
     assert.match(graphBlock, /restrict\(view\)\s*\{[\s\S]*?return resolveCanvasGraphTranslationRestriction\(view\)/);
     assert.match(source, /graph\.on\("node:moved", \(event\) => \{/);
-    assert.match(source, /syncMovedNodeEditor\(event\)/);
+    assert.doesNotMatch(source, /syncMovedNodeEditor\(event\)/);
     assert.doesNotMatch(source, /Math\.max\((?:0|8),\s*Math\.round\([^)]*position/);
   });
 
-  it("keeps the canvas editor centered below nodes while dragging at a non-default zoom", () => {
+  it("renders the canvas editor as a separate transient node below its selected node", () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
       "utf8",
@@ -36010,13 +36010,15 @@ describe("production workbench project tab", () => {
     const editorBlock = source.match(/export function mountCanvasGraphEditorOverlay[\s\S]*?export function clearCanvasGraphEditorOverlay/)?.[0] ?? "";
     const editorCssBlock = css.match(/\.canvas-x6-editor-overlay\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
 
+    assert.match(editorBlock, /id:\s*CANVAS_EDITOR_OVERLAY_ID/);
+    assert.match(editorBlock, /shape:\s*"comic-ai-canvas-editor-overlay"/);
     assert.match(editorBlock, /x:\s*position\.x \+ \(size\.width - editorSize\.width\) \/ 2/);
     assert.match(editorBlock, /y:\s*position\.y \+ size\.height/);
-    assert.match(source, /graph\.on\("node:moved", \(event\) => \{/);
-    assert.match(source, /syncMovedNodeEditor\(event\)/);
+    assert.match(editorBlock, /width:\s*editorSize\.width/);
+    assert.match(editorBlock, /height:\s*editorSize\.height/);
     assert.match(editorCssBlock, /width:\s*100%/);
     assert.match(editorCssBlock, /height:\s*100%/);
-    assert.match(editorBlock, /zIndex:\s*1002/);
+    assert.doesNotMatch(editorBlock, /parent\.resize\?\./);
   });
 
   it("centers the canvas editor using the persisted node width", () => {
@@ -40646,6 +40648,52 @@ describe("production workbench project tab", () => {
       assert.equal(workbench.ui.canvasRevisionConflict, null);
       assert.equal(saveCount, 0);
       assert.equal(stored.has("comic-ai:canvas-refresh-draft:canvas-conflict"), false);
+    } finally {
+      globalThis.window = previousWindow;
+    }
+  });
+
+  it("restores an in-progress Canvas generation from a refresh draft", async () => {
+    const previousWindow = globalThis.window;
+    const stored = new Map();
+    const saveCalls = [];
+    globalThis.window = {
+      localStorage: {
+        getItem(key) { return stored.get(key) ?? null; },
+        setItem(key, value) { stored.set(key, value); },
+        removeItem(key) { stored.delete(key); },
+      },
+    } as typeof globalThis.window;
+    const serverDocument = { canvasProjectId: "canvas-running", viewport: {}, nodes: [], edges: [] };
+    const draftDocument = {
+      ...serverDocument,
+      nodes: [{
+        id: "running-node",
+        type: "send",
+        position: { x: 20, y: 30 },
+        data: { status: "running", generationProgress: 25, taskId: "task-running" },
+      }],
+    };
+    const workbench = {
+      api: {
+        async getStandaloneCanvas() {
+          return { canvas: { serverRevision: 3, document: serverDocument } };
+        },
+        async saveStandaloneCanvas(canvasProjectId, input) {
+          saveCalls.push({ canvasProjectId, input });
+          return { canvas: { canvasProjectId, serverRevision: 4, document: input.document } };
+        },
+      },
+      ui: { selectedCanvasProjectId: "canvas-running", canvasServerRevision: 3, canvasDocumentsByProject: {} },
+    };
+
+    try {
+      assert.equal(writeCanvasRefreshDraftForTest(workbench, "canvas-running", draftDocument), true);
+      assert.equal(await loadStandaloneCanvasProjectForTest(workbench, "canvas-running"), true);
+      assert.equal(workbench.ui.canvasDocument.nodes[0].data.status, "running");
+      assert.equal(workbench.ui.canvasSaveStatus, "saved");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(saveCalls.length, 1);
     } finally {
       globalThis.window = previousWindow;
     }
@@ -50888,6 +50936,59 @@ describe("production workbench project tab", () => {
     assert.match(html, /中景固定镜头/);
   });
 
+  it("waits for complete before finalizing an ordinary single-episode preview", async () => {
+    let releaseRemainingStages;
+    const remainingStages = new Promise((resolve) => { releaseRemainingStages = resolve; });
+    let signalSceneCompleted;
+    const sceneCompleted = new Promise((resolve) => { signalSceneCompleted = resolve; });
+    const workbench = {
+      state: buildProjectState(),
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        createAiStoryboardPreviewStream: async function* () {
+          yield { event: "script_done", data: { text: "任小野托付妹妹。", rawText: "任小野托付妹妹。" } };
+          yield { event: "asset_done", data: { stage: "scene", title: "场景提示词生成", text: '{"scenes":[{"sceneName":"闵婶家门前"}]}' } };
+          signalSceneCompleted();
+          await remainingStages;
+          yield { event: "asset_done", data: { stage: "character", title: "角色提示词生成", text: '{"characters":[{"characterName":"任小野"}]}' } };
+          yield { event: "asset_done", data: { stage: "prop", title: "道具提示词生成", text: '{"props":[{"propName":"饭食"}]}' } };
+          yield { event: "asset_done", data: { stage: "shot", title: "分镜提示词生成", text: '{"storyboards":[{"plot":"递出饭食"}]}' } };
+          yield { event: "complete", data: { scriptText: "任小野托付妹妹。" } };
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "detail",
+        projectInteriorSection: "episodes",
+        selectedProjectCardId: "project-1",
+        singleEpisodeScript: "任小野把小草托付给闵婶子。",
+        singleEpisodeTextModelCode: "deepseek-noval",
+        selectedEpisodePromptSkillIds: { script: "official-script-skill", shot: "official-shot-skill" },
+        episodeGenerationConfig: {
+          models: [{ modelCode: "deepseek-noval", modelLabel: "DeepSeek", mediaType: "text" }],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    const generation = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-single-episode" },
+    });
+    await sceneCompleted;
+
+    assert.equal(workbench.ui.singleEpisodeAiPreview.status, "loading");
+    assert.equal(workbench.ui.singleEpisodeAiPreview.streamStagesCompleted, undefined);
+    assert.equal(workbench.ui.singleEpisodeAiPreview.selectedStages, null);
+
+    releaseRemainingStages();
+    await generation;
+
+    const preview = workbench.ui.singleEpisodeAiPreview;
+    assert.equal(preview.status, "ready");
+    assert.equal(preview.data.commitPayload.characters[0].characterName, "任小野");
+    assert.equal(preview.data.commitPayload.props[0].propName, "饭食");
+    assert.equal(preview.data.commitPayload.storyboards[0].plot, "递出饭食");
+  });
+
   it("paints buffered storyboard stream chunks before the stage completes", async () => {
     const renderHistory = [];
     let rootHtml = "";
@@ -51628,7 +51729,7 @@ describe("production workbench project tab", () => {
     assert.match(String(rows[0]?.displayVideoPrompt ?? shotStep?.fullResponseText ?? ""), /动态镜头说明/);
   });
 
-  it("patches only the AI preview overlay during streaming and preserves manual scroll position", async () => {
+  it("patches only the AI preview overlay during streaming and pins live output to the latest content", async () => {
     const overlay = {
       patchCount: 0,
       _outerHTML: "<section class=\"single-episode-ai-overlay\"></section>",
@@ -51672,7 +51773,7 @@ describe("production workbench project tab", () => {
         if (selector === "[data-single-episode-ai-preview-surface]") {
           return previewSurface;
         }
-        if (selector === ".single-episode-ai-script-text div") {
+        if (selector === ".single-episode-ai-script-text > div") {
           return scriptOutput;
         }
         if (selector === ".manual-script-analysis-output pre, .single-episode-ai-live-output pre") {
@@ -51727,9 +51828,9 @@ describe("production workbench project tab", () => {
 
     assert.equal(root.renderCount, 2);
     assert.ok(overlay.patchCount >= 1);
-    assert.equal(previewSurface.scrollTop, 120);
-    assert.equal(scriptOutput.scrollTop, 64);
-    assert.equal(liveOutput.scrollTop, 48);
+    assert.equal(previewSurface.scrollTop, previewSurface.scrollHeight);
+    assert.equal(scriptOutput.scrollTop, scriptOutput.scrollHeight);
+    assert.equal(liveOutput.scrollTop, liveOutput.scrollHeight);
   });
 
   it("keeps the streaming script output pinned to the latest content when already at the bottom", async () => {
@@ -51754,6 +51855,11 @@ describe("production workbench project tab", () => {
       scrollHeight: 1200,
       clientHeight: 280,
     };
+    const scriptActions = {
+      scrollTop: 0,
+      scrollHeight: 0,
+      clientHeight: 0,
+    };
     const root = {
       renderCount: 0,
       _innerHTML: "",
@@ -51772,6 +51878,9 @@ describe("production workbench project tab", () => {
           return previewSurface;
         }
         if (selector === ".single-episode-ai-script-text div") {
+          return scriptActions;
+        }
+        if (selector === ".single-episode-ai-script-text > div") {
           return scriptOutput;
         }
         return null;
@@ -51822,6 +51931,7 @@ describe("production workbench project tab", () => {
     });
 
     assert.equal(scriptOutput.scrollTop, scriptOutput.scrollHeight);
+    assert.equal(scriptActions.scrollTop, 0);
   });
 
   it("paints the first script delta before a buffered complete event can replace the loading preview", async () => {

@@ -31,6 +31,8 @@ const MODEL_MODE_BY_MEDIA_KIND = {
     "image-edit",
     "image_edit",
     "image-reference",
+    "reference-image",
+    "reference_image",
     "image-reference-generate",
     "image_reference_generate",
   ]),
@@ -1068,7 +1070,7 @@ export function removeCanvasNode(document, nodeId) {
   return touchCanvasDocument({
     ...clone(document),
     nodes: remainingNodes.map((node) => normalizeCanvasGroupNode(
-      removeCanvasNodePromptReferences(node, normalizedNodeId),
+      removeCanvasNodeReferences(node, normalizedNodeId),
       grouping.childParent.get(String(node?.id ?? "")) === normalizedNodeId
         ? null
         : grouping.childParent.get(String(node?.id ?? "")),
@@ -1082,16 +1084,37 @@ export function removeCanvasNode(document, nodeId) {
   });
 }
 
-function removeCanvasNodePromptReferences(node, nodeId) {
-  const prompt = node?.data?.prompt;
-  if (typeof prompt !== "string" || !prompt.includes("@node:")) return node;
-  const nextPrompt = removeCanvasNodeReferencesFromPrompt(prompt, nodeId);
-  if (nextPrompt === prompt) return node;
+function removeCanvasNodeReferences(node, nodeId) {
+  const data = node?.data;
+  if (!data || typeof data !== "object") return node;
+  const nextPrompt = typeof data.prompt === "string"
+    ? removeCanvasNodeReferencesFromPrompt(data.prompt, nodeId)
+    : data.prompt;
+  const previousReferenceNodeIds = Array.isArray(data.scriptWorkflowReferenceNodeIds)
+    ? data.scriptWorkflowReferenceNodeIds.map(String)
+    : null;
+  const nextReferenceNodeIds = previousReferenceNodeIds
+    ? previousReferenceNodeIds.filter((value) => value !== String(nodeId))
+    : null;
+  const previousBindings = Array.isArray(data.scriptWorkflowReferenceBindings)
+    ? data.scriptWorkflowReferenceBindings
+    : null;
+  const nextBindings = previousBindings
+    ? previousBindings.filter((binding) => String(binding?.nodeId ?? "") !== String(nodeId))
+    : null;
+  const promptChanged = nextPrompt !== data.prompt;
+  const nodeIdsChanged = previousReferenceNodeIds
+    && JSON.stringify(previousReferenceNodeIds) !== JSON.stringify(nextReferenceNodeIds);
+  const bindingsChanged = previousBindings
+    && nextBindings.length !== previousBindings.length;
+  if (!promptChanged && !nodeIdsChanged && !bindingsChanged) return node;
   return {
     ...node,
     data: {
-      ...(node.data ?? {}),
-      prompt: nextPrompt,
+      ...data,
+      ...(promptChanged ? { prompt: nextPrompt } : {}),
+      ...(nodeIdsChanged ? { scriptWorkflowReferenceNodeIds: nextReferenceNodeIds } : {}),
+      ...(bindingsChanged ? { scriptWorkflowReferenceBindings: nextBindings } : {}),
     },
   };
 }
@@ -1202,6 +1225,7 @@ export function resolveCanvasModelOptions(generationConfig, mediaKind = "image")
     .map((model) => ({
       modelCode: String(model.modelCode ?? model.id ?? "").trim(),
       modelLabel: String(model.modelLabel ?? model.name ?? model.label ?? model.modelCode ?? model.id ?? "").trim(),
+      providerName: String(model.providerName ?? model.provider_name ?? model.providerGroup ?? model.group ?? "").trim(),
       raw: model,
     }))
     .filter((model) => model.modelCode);

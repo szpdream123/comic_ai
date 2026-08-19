@@ -4,6 +4,7 @@ import {
   updateCanvasNodeData,
 } from "../production-workbench/canvas/canvas-state.js";
 import { resolveCanvasMediaNodeSource } from "../production-workbench/canvas/canvas-media-node.js";
+import { createCanvasCameraStudioViewportController } from "./camera-studio-viewport.js";
 
 const MEDIA_TOOLS = [
   { id: "crop", label: "裁剪" },
@@ -16,6 +17,8 @@ const MEDIA_TOOLS = [
   { id: "annotation", label: "标注" },
   { id: "batch_grid", label: "宫格" },
 ];
+
+const MEDIA_TOOLS_WITH_INSTRUCTION = new Set(["outpaint", "remove_background", "free_view"]);
 
 const CANVAS_ANNOTATION_UPLOAD_LIMITS = {
   image: {
@@ -83,18 +86,30 @@ export function ensureCanvasMediaToolsState(ui = {}) {
     lightPitchDegrees: 30,
     lightIntensityPercent: 65,
     lightTemperature: "neutral",
+    lightColor: "#ffffff",
     lightRimEnabled: false,
     lightFillEnabled: true,
     cameraPromptCopied: false,
     sliceRows: 2,
     sliceColumns: 2,
     sliceGapPixels: 0,
+    sliceRowPositions: [0.5],
+    sliceColumnPositions: [0.5],
     compositeBlendMode: "normal",
     compositeOpacityPercent: 100,
     compositeAlignment: "center",
     compositeSecondaryArtifactId: "",
     compositeSecondarySource: null,
+    compositeUpload: null,
     brushSize: 24,
+    annotationTool: "brush",
+    annotationColor: "#ef4444",
+    annotationText: "",
+    annotationFontSize: 32,
+    annotationNumber: 1,
+    annotations: [],
+    selectedAnnotationId: "",
+    annotationRedo: [],
     layerKind: "mask",
     annotationMode: "draw",
     vectorStrokes: [],
@@ -122,13 +137,15 @@ export function renderCanvasMediaToolsShell(ui = {}) {
   const selected = ui.canvasDocument?.nodes?.find?.((node) => node.id === ui.selectedCanvasNodeId);
   const sourcePreviewUrl = resolveMediaSourcePreviewUrl(selected);
   const artifacts = mediaArtifactsForNode(ui, selected?.id);
-  const canvasArtifacts = mediaArtifactsForCanvas(ui);
+  const canvasArtifacts = mediaArtifactsForCanvas(ui, selected?.id);
   const imageModelOptions = resolveMediaImageModelOptions(ui);
   syncMediaGenerationModelCode(ui, state, selected, imageModelOptions);
-  const busy = state.status === "submitting";
+  const generating = state.status === "running";
+  const busy = generating || state.status === "submitting";
+  const submitLabel = generating ? "生成中" : busy ? "提交中" : "开始处理";
   return `
     <div class="canvas-media-tools-backdrop" data-media-action="close">
-      <aside class="canvas-media-tools-drawer" role="dialog" aria-label="媒体编辑" aria-modal="true">
+      <aside class="canvas-media-tools-drawer canvas-media-tools-modal is-${escapeAttr(state.tool)} ${state.tool === "camera_studio" ? "is-camera-studio" : ""}" role="dialog" aria-label="媒体编辑" aria-modal="true">
         <button type="button" class="canvas-media-drawer-grip" data-media-drawer-grip data-media-action="drawer-grip" aria-label="关闭媒体编辑" title="点击或向下滑动关闭"></button>
         <header><strong>媒体编辑</strong><button type="button" data-media-action="close" aria-label="关闭">×</button></header>
         <div class="canvas-media-tool-tabs" role="tablist">
@@ -136,7 +153,10 @@ export function renderCanvasMediaToolsShell(ui = {}) {
         </div>
         <section>
           <label><span>源节点</span><input value="${escapeAttr(selected?.data?.title ?? selected?.id ?? "未选择图片")}" disabled /></label>
-          ${!["crop", "annotation"].includes(state.tool) ? renderMediaSourcePreview(selected, sourcePreviewUrl) : ""}
+          ${MEDIA_TOOLS_WITH_INSTRUCTION.has(state.tool) ? `<label class="canvas-media-instruction-field"><span>编辑要求</span><textarea data-media-field="instruction" placeholder="描述构图、视角或需要保留的内容">${escapeHtml(state.instruction)}</textarea></label>` : ""}
+          ${state.tool === "free_view"
+            ? renderFreeViewPreview(selected, sourcePreviewUrl, state)
+            : !["crop", "slice", "annotation", "camera_studio"].includes(state.tool) ? renderMediaSourcePreview(selected, sourcePreviewUrl) : ""}
           ${state.tool === "crop" ? `
             ${renderCropStage(state, selected, sourcePreviewUrl)}
             <div class="canvas-media-crop-grid">
@@ -147,32 +167,44 @@ export function renderCanvasMediaToolsShell(ui = {}) {
             </div>
           ` : ""}
           ${state.tool === "outpaint" ? numberField("扩展像素", "outpaintPixels", state.outpaintPixels, 32, 2048) : ""}
-          ${state.tool === "outpaint" ? renderMediaModelField(state, imageModelOptions) : ""}
-          ${renderProfessionalControls(state, canvasArtifacts)}
+          ${state.tool === "slice" ? renderSliceStage(state, selected, sourcePreviewUrl) : ""}
+          ${renderProfessionalControls(state, canvasArtifacts, sourcePreviewUrl)}
           ${state.tool === "annotation" ? `
             <div class="canvas-media-annotation-stage" style="background-image:url('${escapeAttr(sourcePreviewUrl)}')">
               <canvas width="640" height="360" tabindex="0" data-media-annotation-canvas aria-label="图片标注画布"></canvas>
+              <textarea class="canvas-media-annotation-text-editor" data-media-annotation-text-editor aria-label="编辑标注文字" hidden></textarea>
             </div>
             <div class="canvas-media-annotation-toolbar" role="toolbar" aria-label="标注工具">
-              <button type="button" class="${state.annotationMode === "draw" ? "active" : ""}" aria-pressed="${state.annotationMode === "draw"}" data-media-action="annotation-mode" data-annotation-mode="draw">画笔</button>
-              <button type="button" class="${state.annotationMode === "erase" ? "active" : ""}" aria-pressed="${state.annotationMode === "erase"}" data-media-action="annotation-mode" data-annotation-mode="erase">橡皮擦</button>
+              <button type="button" class="${state.annotationTool === "select" ? "active" : ""}" aria-pressed="${state.annotationTool === "select"}" data-media-action="annotation-tool" data-annotation-tool="select">选择</button>
+              <button type="button" class="${state.annotationTool === "brush" ? "active" : ""}" aria-pressed="${state.annotationTool === "brush"}" data-media-action="annotation-tool" data-annotation-tool="brush">画笔</button>
+              <button type="button" class="${state.annotationTool === "rectangle" ? "active" : ""}" aria-pressed="${state.annotationTool === "rectangle"}" data-media-action="annotation-tool" data-annotation-tool="rectangle">矩形</button>
+              <button type="button" class="${state.annotationTool === "arrow" ? "active" : ""}" aria-pressed="${state.annotationTool === "arrow"}" data-media-action="annotation-tool" data-annotation-tool="arrow">箭头</button>
+              <button type="button" class="${state.annotationTool === "marker" ? "active" : ""}" aria-pressed="${state.annotationTool === "marker"}" data-media-action="annotation-tool" data-annotation-tool="marker">编号</button>
+              <button type="button" class="${state.annotationTool === "text" ? "active" : ""}" aria-pressed="${state.annotationTool === "text"}" data-media-action="annotation-tool" data-annotation-tool="text">文字</button>
+              <button type="button" class="${state.annotationTool === "eraser" ? "active" : ""}" aria-pressed="${state.annotationTool === "eraser"}" data-media-action="annotation-tool" data-annotation-tool="eraser">橡皮擦</button>
               <button type="button" data-media-action="annotation-undo">撤销</button>
+              <button type="button" data-media-action="annotation-redo">重做</button>
               <button type="button" data-media-action="annotation-clear">清空</button>
             </div>
             <div class="canvas-media-crop-grid">
               ${numberField("画笔", "brushSize", state.brushSize, 2, 96)}
+              <label><span>颜色</span><input type="color" data-media-field="annotationColor" value="${escapeAttr(state.annotationColor)}" /></label>
+              ${state.annotationTool === "text" ? `<label><span>文字</span><input data-media-field="annotationText" value="${escapeAttr(state.annotationText)}" /></label>` : ""}
+              ${state.annotationTool === "text" ? numberField("字号", "annotationFontSize", state.annotationFontSize, 8, 120) : ""}
               <label><span>图层</span><select data-media-field="layerKind"><option value="mask" ${state.layerKind === "mask" ? "selected" : ""}>蒙版</option><option value="raster_annotation" ${state.layerKind === "raster_annotation" ? "selected" : ""}>栅格标注</option><option value="vector_annotation" ${state.layerKind === "vector_annotation" ? "selected" : ""}>矢量标注</option></select></label>
             </div>
             ${renderAnnotationLayerList(state, sourcePreviewUrl)}
           ` : ""}
           ${state.tool === "batch_grid" ? renderBatchGrid(state, artifacts) : ""}
-          ${!["annotation", "batch_grid"].includes(state.tool) ? `<label><span>编辑要求</span><textarea data-media-field="instruction" placeholder="描述构图、视角或需要保留的内容">${escapeHtml(state.instruction)}</textarea></label>` : ""}
         </section>
         ${renderMediaLimits(ui, state, selected)}
-        ${renderRecoverySummary(state)}
         <footer>
-          <span class="canvas-media-status">${statusLabel(state)}</span>
-          <button type="button" data-media-action="submit" ${busy || !selected ? "disabled" : ""}>${busy ? "提交中" : "开始处理"}</button>
+          ${["outpaint", "remove_background", "free_view", "camera_studio"].includes(state.tool)
+            ? renderMediaModelField(state, imageModelOptions)
+            : ""}
+          <div class="canvas-media-submit-controls">
+            <button type="button" data-media-action="submit" ${busy || !selected ? "disabled" : ""}>${submitLabel}</button>
+          </div>
         </footer>
         ${state.error ? `<p class="canvas-media-error" role="alert">${escapeHtml(state.error)}</p>` : ""}
       </aside>
@@ -182,14 +214,27 @@ export function renderCanvasMediaToolsShell(ui = {}) {
 
 export function createCanvasMediaToolsController({ surface, workbench, render }) {
   const state = ensureCanvasMediaToolsState(workbench.ui ?? (workbench.ui = {}));
+  let cameraStudioViewportController = null;
+  const bindCameraStudioViewport = () => cameraStudioViewportController?.bind?.(cameraStudioViewportState(workbench, state));
   const rerender = () => {
     const current = surface?.querySelector?.(".canvas-media-tools-backdrop");
-    if (!current || typeof document === "undefined") return render?.();
+    if (!current || typeof document === "undefined") {
+      const result = render?.();
+      if (result && typeof result.then === "function") {
+        return result.then((value) => {
+          void bindCameraStudioViewport();
+          return value;
+        });
+      }
+      void bindCameraStudioViewport();
+      return result;
+    }
     const template = document.createElement("template");
     template.innerHTML = renderCanvasMediaToolsShell(workbench.ui);
     const next = template.content.firstElementChild;
     if (!next) {
       current.remove?.();
+      void bindCameraStudioViewport();
       return true;
     }
     const currentAnnotationCanvas = current.querySelector?.("[data-media-annotation-canvas]");
@@ -198,35 +243,59 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
       nextAnnotationCanvas.replaceWith(currentAnnotationCanvas);
     }
     current.replaceWith?.(next);
+    void bindCameraStudioViewport();
     return true;
   };
+  const applyViewportPatch = (kind, patch = {}) => {
+    const prefix = kind === "light" ? "light" : "camera";
+    const fields = [
+      [`${prefix}YawDegrees`, patch.yaw ?? patch.yawDegrees],
+      [`${prefix}PitchDegrees`, patch.pitch ?? patch.pitchDegrees],
+    ];
+    for (const [field, value] of fields) {
+      if (!Number.isFinite(Number(value))) continue;
+      state[field] = Math.round(Number(value) * 10) / 10;
+      syncCameraStudioLiveElements(surface, state, field);
+    }
+    cameraStudioViewportController?.update?.(cameraStudioViewportState(workbench, state));
+  };
+  cameraStudioViewportController = createCanvasCameraStudioViewportController({
+    surface,
+    onCameraChange: (patch) => applyViewportPatch("camera", patch),
+    onLightChange: (patch) => applyViewportPatch("light", patch),
+  });
   const annotationHistory = [];
   let cropDrag = null;
+  let sliceDrag = null;
+  let freeViewDrag = null;
+  let annotationDrag = null;
+  let annotationSelectionDrag = null;
+  let annotationTextEditor = null;
   let drawerDrag = null;
   let suppressDrawerGripClick = false;
   let restoreFocusTarget = null;
-  let recoveryTimer = null;
-  let recoveryGeneration = 0;
   let copyFeedbackTimer = null;
-  const stopRecoveryPolling = () => {
-    recoveryGeneration += 1;
-    if (recoveryTimer !== null) clearTimeout(recoveryTimer);
-    recoveryTimer = null;
+  const commitAnnotationTextEdit = () => {
+    if (!annotationTextEditor) return false;
+    const { element, annotation } = annotationTextEditor;
+    const text = String(element.value ?? "").trim();
+    if (text) annotation.text = text;
+    else state.annotations = (state.annotations ?? []).filter((item) => item.id !== annotation.id);
+    element.hidden = true;
+    annotationTextEditor = null;
+    const canvas = surface?.querySelector?.("[data-media-annotation-canvas]");
+    redrawStructuredAnnotations(canvas, state);
+    return true;
   };
-  const startRecoveryPolling = async () => {
-    stopRecoveryPolling();
-    const generation = recoveryGeneration;
-    const result = await refreshCanvasMediaRecoveryState(workbench, state).catch((error) => {
+  const refreshRecoveryState = async () => {
+    const before = mediaRecoveryRenderSnapshot(state);
+    await refreshCanvasMediaRecoveryState(workbench, state).catch((error) => {
       state.error = friendlyError(error);
       rerender();
-      return { active: false };
     });
-    rerender();
-    if (!state.open || generation !== recoveryGeneration || !result.active) return;
-    recoveryTimer = setTimeout(() => { void startRecoveryPolling(); }, 2_000);
+    if (before !== mediaRecoveryRenderSnapshot(state)) rerender();
   };
   const closeAndRestoreFocus = async () => {
-    stopRecoveryPolling();
     const closeAnimation = animateMediaDrawerClose(surface);
     if (closeAnimation) await closeAnimation;
     state.open = false;
@@ -237,8 +306,63 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
     restoreFocusTarget = null;
   };
   return {
+    async handleChange(target) {
+      if (!target?.matches?.("[data-media-composite-upload]")) return false;
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (!file) return true;
+      if (!String(file.type ?? "").toLowerCase().startsWith("image/")) {
+        state.error = "合成只支持上传图片。";
+        await rerender();
+        return true;
+      }
+      if (typeof workbench.api?.uploadFile !== "function") {
+        state.error = "图片上传接口暂不可用。";
+        await rerender();
+        return true;
+      }
+      state.status = "submitting";
+      state.error = "";
+      await rerender();
+      try {
+        const payload = await workbench.api.uploadFile(file, {
+          category: "canvas-derivations",
+          projectId: null,
+          canvasProjectId: String(workbench.ui?.selectedCanvasProjectId ?? "") || null,
+        });
+        const upload = payload?.upload ?? payload;
+        const storageObjectId = String(upload?.storageObjectId ?? "").trim();
+        const url = String(
+          storageObjectId
+            ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+            : upload?.previewUrl ?? upload?.publicUrl ?? "",
+        ).trim();
+        if (!url) throw new Error("canvas_media_upload_missing");
+        const artifactId = `upload:${storageObjectId || Date.now()}`;
+        state.compositeUpload = { artifactId, title: file.name || "上传图片", url, source: { storageObjectId: storageObjectId || null, url } };
+        state.compositeSecondaryArtifactId = artifactId;
+        state.compositeSecondarySource = state.compositeUpload.source;
+        state.status = "idle";
+      } catch (error) {
+        state.status = "failed";
+        state.error = friendlyError(error);
+      }
+      await rerender();
+      return true;
+    },
     handleInput(target) {
       const field = String(target?.dataset?.mediaField ?? "");
+      const colorField = String(target?.dataset?.mediaColorHex ?? "");
+      if (colorField === "lightColor") {
+        const color = normalizeCameraStudioLightColor(target.value);
+        if (String(target.value ?? "").trim().toLowerCase() !== color) return false;
+        state.lightColor = color;
+        state.lightTemperature = "custom";
+        state.cameraPromptCopied = false;
+        syncCameraStudioLiveElements(surface, state, colorField);
+        cameraStudioViewportController.update(cameraStudioViewportState(workbench, state));
+        return true;
+      }
       if (!field) return false;
       if (field === "batchArtifact") {
         const id = String(target.value ?? "");
@@ -251,14 +375,61 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
           : target.type === "checkbox"
             ? target.checked === true
             : String(target.value ?? "");
+        if (field === "lightColor") {
+          state.lightColor = normalizeCameraStudioLightColor(state.lightColor);
+          state.lightTemperature = "custom";
+        }
+        if (field === "cameraLens" && state.cameraLens !== "fisheye") {
+          const focalLength = Number.parseInt(state.cameraLens, 10);
+          if (Number.isFinite(focalLength)) {
+            state.cameraFocalLengthMm = focalLength;
+            if (state.tool === "camera_studio") syncCameraStudioLiveElements(surface, state, "cameraFocalLengthMm");
+          }
+        }
         if (field === "compositeSecondaryArtifactId") {
-          const artifact = mediaArtifactsForCanvas(workbench.ui).find((item) => item.artifactId === state.compositeSecondaryArtifactId);
+          const artifact = [...mediaArtifactsForCanvas(workbench.ui, workbench.ui?.selectedCanvasNodeId), state.compositeUpload].filter(Boolean).find((item) => item.artifactId === state.compositeSecondaryArtifactId);
           state.compositeSecondarySource = artifact ? artifact.source : null;
         }
+        if (field === "sliceRows" || field === "sliceColumns") {
+          normalizeAllSliceLinePositions(state);
+          const focusField = field;
+          const focusValue = String(target.value ?? "");
+          const nextRender = rerender();
+          if (nextRender && typeof nextRender.then === "function") {
+            void nextRender.then(() => {
+              const nextField = surface?.querySelector?.(`[data-media-field="${focusField}"]`);
+              if (!nextField) return;
+              nextField.focus?.();
+              nextField.value = focusValue;
+            });
+          } else {
+            const nextField = surface?.querySelector?.(`[data-media-field="${focusField}"]`);
+            if (nextField) {
+              nextField.focus?.();
+              nextField.value = focusValue;
+            }
+          }
+        }
+      }
+      if (field === "layerKind" && state.tool === "annotation") {
+        syncAnnotationLayerPreview(surface, state);
+      }
+      if (["annotationColor", "brushSize"].includes(field) && state.tool === "annotation") {
+        syncAnnotationLayerPreview(surface, state);
+      }
+      if (field === "lightTemperature") {
+        if (state.lightTemperature !== "custom") {
+          state.lightColor = cameraStudioTemperatureColor(state.lightTemperature);
+        }
+        if (state.tool === "camera_studio") syncCameraStudioLiveElements(surface, state, "lightColor");
       }
       if (state.tool === "camera_studio" && /^(camera|light)/.test(field)) {
         state.cameraPromptCopied = false;
         syncCameraStudioLiveElements(surface, state, field);
+        cameraStudioViewportController.update(cameraStudioViewportState(workbench, state));
+      }
+      if (state.tool === "free_view" && /^(viewAzimuthDegrees|viewElevationDegrees|viewDistanceScale)$/.test(field)) {
+        syncFreeViewLiveElements(surface, state);
       }
       if (state.tool === "crop" && field.startsWith("crop")) {
         syncCropVisualElements(surface, state);
@@ -266,6 +437,10 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
       return true;
     },
     handlePointerDown(event, target) {
+      if (annotationTextEditor && !target?.closest?.("[data-media-annotation-text-editor]")) {
+        commitAnnotationTextEdit();
+        if (target?.matches?.("[data-media-annotation-canvas]")) return true;
+      }
       const drawerGripCandidate = target?.matches?.("[data-media-drawer-grip]")
         ? target
         : target?.closest?.("[data-media-drawer-grip]");
@@ -302,16 +477,86 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         cropHandle.setPointerCapture?.(event.pointerId);
         return true;
       }
+      const sliceHandle = target?.closest?.("[data-media-slice-handle]") ?? (target?.matches?.("[data-media-slice-handle]") ? target : null);
+      if (sliceHandle && state.tool === "slice") {
+        const stage = sliceHandle.closest?.("[data-media-slice-stage]") ?? surface?.querySelector?.("[data-media-slice-stage]");
+        const rect = stage?.getBoundingClientRect?.();
+        if (!rect?.width || !rect?.height) return false;
+        sliceDrag = {
+          axis: sliceHandle.dataset.mediaSliceAxis === "row" ? "row" : "column",
+          index: Math.max(0, Number(sliceHandle.dataset.mediaSliceIndex) || 0),
+          pointerId: event.pointerId,
+          rect,
+        };
+        sliceHandle.setPointerCapture?.(event.pointerId);
+        return true;
+      }
+      const freeViewPreview = state.tool === "free_view"
+        ? target?.closest?.("[data-free-view-preview]")
+        : null;
+      if (freeViewPreview) {
+        freeViewDrag = {
+          pointerId: event.pointerId,
+          clientX: Number(event.clientX),
+          clientY: Number(event.clientY),
+          preview: freeViewPreview,
+        };
+        freeViewPreview.setPointerCapture?.(event.pointerId);
+        freeViewPreview.classList?.add?.("is-dragging");
+        return true;
+      }
       if (!target?.matches?.("[data-media-annotation-canvas]")) return false;
+      const annotationPointValue = annotationPoint(target, event);
+      if (!annotationPointValue) return false;
       const snapshot = captureAnnotationCanvas(target);
       if (snapshot) {
         annotationHistory.push(snapshot);
         if (annotationHistory.length > 30) annotationHistory.shift();
       }
       state.annotationDrawing = true;
-      if (state.layerKind === "vector_annotation") {
-        const point = annotationPoint(target, event);
-        if (point) state.vectorStrokes.push({ width: Number(state.brushSize) || 24, points: [point] });
+      if (state.annotationTool === "select") {
+        const hit = findAnnotationAtPoint(state.annotations, annotationPointValue);
+        state.selectedAnnotationId = hit?.id ?? "";
+        const selected = hit ? state.annotations.find((item) => item.id === hit.id) : null;
+        if (selected) annotationSelectionDrag = { canvas: target, pointerId: event.pointerId, last: annotationPointValue, annotation: selected };
+        redrawStructuredAnnotations(target, state);
+        target.setPointerCapture?.(event.pointerId);
+        return true;
+      }
+      if (state.annotationTool === "eraser") {
+        const hit = findAnnotationAtPoint(state.annotations, annotationPointValue);
+        if (hit) {
+          const removedIndex = (state.annotations ?? []).findIndex((item) => item.id === hit.id);
+          state.annotations = (state.annotations ?? []).filter((item) => item.id !== hit.id);
+          if (hit.type === "brush" && removedIndex >= 0) state.vectorStrokes.splice(removedIndex, 1);
+          redrawStructuredAnnotations(target, state);
+        } else {
+          const legacyHit = findAnnotationAtPoint(strokesToAnnotations(state.vectorStrokes), annotationPointValue);
+          if (legacyHit) {
+            const legacyIndex = Number(String(legacyHit.id).split('-').at(-1));
+            if (Number.isInteger(legacyIndex) && legacyIndex >= 0) state.vectorStrokes.splice(legacyIndex, 1);
+            redrawVectorStrokes(target, state.vectorStrokes, state.layerKind);
+          } else {
+            eraseAnnotationPixel(target, event, state);
+            state.annotationDrawing = true;
+          }
+        }
+        if (state.annotationTool === "eraser" && state.annotationDrawing !== true) state.annotationDrawing = false;
+        return true;
+      }
+      if (["rectangle", "arrow"].includes(state.annotationTool)) {
+        annotationDrag = { canvas: target, pointerId: event.pointerId, start: annotationPointValue, end: annotationPointValue };
+        target.setPointerCapture?.(event.pointerId);
+        return true;
+      }
+      if (state.annotationTool === "marker" || state.annotationTool === "text") {
+        addStructuredAnnotation(state, annotationPointValue, annotationPointValue);
+        redrawStructuredAnnotations(target, state);
+        state.annotationDrawing = false;
+        return true;
+      }
+      if (state.annotationMode !== "erase") {
+        state.vectorStrokes.push({ width: Number(state.brushSize) || 24, points: [annotationPointValue] });
       }
       drawAnnotationPoint(target, event, state, true);
       target.setPointerCapture?.(event.pointerId);
@@ -329,8 +574,44 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         syncCropVisualElements(surface, state);
         return true;
       }
+      if (sliceDrag && event.pointerId === sliceDrag.pointerId) {
+        updateSliceLineFromPointer(state, sliceDrag, event);
+        syncSliceVisualElements(surface, state);
+        return true;
+      }
+      if (freeViewDrag && event.pointerId === freeViewDrag.pointerId) {
+        const deltaX = Number(event.clientX) - freeViewDrag.clientX;
+        const deltaY = Number(event.clientY) - freeViewDrag.clientY;
+        freeViewDrag.clientX = Number(event.clientX);
+        freeViewDrag.clientY = Number(event.clientY);
+        state.viewAzimuthDegrees = clamp((Number(state.viewAzimuthDegrees) || 0) + deltaX * 0.6, -180, 180);
+        state.viewElevationDegrees = clamp((Number(state.viewElevationDegrees) || 0) - deltaY * 0.45, -90, 90);
+        syncFreeViewLiveElements(surface, state);
+        return true;
+      }
+      if (annotationDrag && target?.matches?.("[data-media-annotation-canvas]")) {
+        const point = annotationPoint(target, event);
+        if (point) annotationDrag.end = point;
+        redrawStructuredAnnotations(target, state, createAnnotationDraft(state, annotationDrag.start, annotationDrag.end));
+        return true;
+      }
+      if (annotationSelectionDrag && event.pointerId === annotationSelectionDrag.pointerId) {
+        const point = annotationPoint(target, event);
+        if (point) {
+          const dx = point.x - annotationSelectionDrag.last.x;
+          const dy = point.y - annotationSelectionDrag.last.y;
+          moveAnnotation(annotationSelectionDrag.annotation, dx, dy);
+          annotationSelectionDrag.last = point;
+          redrawStructuredAnnotations(target, state);
+        }
+        return true;
+      }
       if (!state.annotationDrawing || !target?.matches?.("[data-media-annotation-canvas]")) return false;
-      if (state.layerKind === "vector_annotation") {
+      if (state.annotationTool === "eraser") {
+        eraseAnnotationPixel(target, event, state);
+        return true;
+      }
+      if (state.annotationMode !== "erase") {
         const point = annotationPoint(target, event);
         if (point) state.vectorStrokes.at(-1)?.points?.push?.(point);
       }
@@ -359,13 +640,68 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         if (changed) rerender();
         return true;
       }
+      if (sliceDrag && event.pointerId === sliceDrag.pointerId) {
+        target?.releasePointerCapture?.(event.pointerId);
+        sliceDrag = null;
+        rerender();
+        return true;
+      }
+      if (freeViewDrag && event.pointerId === freeViewDrag.pointerId) {
+        freeViewDrag.preview?.releasePointerCapture?.(event.pointerId);
+        freeViewDrag.preview?.classList?.remove?.("is-dragging");
+        freeViewDrag = null;
+        return true;
+      }
+      if (annotationDrag && event.pointerId === annotationDrag.pointerId) {
+        const canvas = annotationDrag.canvas;
+        const point = annotationPoint(canvas, event);
+        if (point) annotationDrag.end = point;
+        addStructuredAnnotation(state, annotationDrag.start, annotationDrag.end);
+        redrawStructuredAnnotations(canvas, state);
+        canvas.releasePointerCapture?.(event.pointerId);
+        annotationDrag = null;
+        state.annotationDrawing = false;
+        return true;
+      }
+      if (annotationSelectionDrag && event.pointerId === annotationSelectionDrag.pointerId) {
+        annotationSelectionDrag.canvas.releasePointerCapture?.(event.pointerId);
+        annotationSelectionDrag = null;
+        state.annotationDrawing = false;
+        return true;
+      }
       if (!state.annotationDrawing) return false;
       state.annotationDrawing = false;
+      if (state.annotationTool === "brush" && state.annotationMode !== "erase") {
+        const stroke = state.vectorStrokes?.at?.(-1);
+        if (stroke?.points?.length > 1) {
+          state.annotations = [...(state.annotations ?? []), {
+            id: `brush-${Date.now()}-${state.annotations?.length ?? 0}`,
+            type: "brush",
+            color: state.annotationColor,
+            strokeWidth: stroke.width,
+            points: stroke.points,
+          }];
+        }
+      }
       target?.releasePointerCapture?.(event.pointerId);
       return true;
     },
     handleKeydown(event, target) {
       if (!state.open) return false;
+      if (target?.matches?.("[data-media-annotation-text-editor]")) {
+        if (event.key === "Escape") {
+          event.preventDefault?.();
+          target.hidden = true;
+          annotationTextEditor = null;
+          return true;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          event.preventDefault?.();
+          commitAnnotationTextEdit();
+          return true;
+        }
+        return false;
+      }
       const cropHandle = target?.closest?.("[data-media-crop-handle]") ?? (target?.matches?.("[data-media-crop-handle]") ? target : null);
       if (cropHandle && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event?.key)) {
         event.preventDefault?.();
@@ -402,10 +738,35 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
       }
       return false;
     },
+    handleDoubleClick(event, target) {
+      if (state.tool !== "annotation" || !target?.matches?.("[data-media-annotation-canvas]")) return false;
+      const point = annotationPoint(target, event);
+      const hit = findAnnotationAtPoint(state.annotations, point);
+      if (!hit || hit.type !== "text") return false;
+      const annotation = state.annotations.find((item) => item.id === hit.id);
+      const editor = surface?.querySelector?.("[data-media-annotation-text-editor]");
+      const rect = target.getBoundingClientRect?.();
+      if (!annotation || !editor || !rect?.width || !rect?.height) return false;
+      commitAnnotationTextEdit();
+      editor.value = annotation.text;
+      editor.style.left = `${Math.max(0, annotation.x * rect.width / target.width)}px`;
+      editor.style.top = `${Math.max(0, annotation.y * rect.height / target.height)}px`;
+      editor.style.fontSize = `${Math.max(12, annotation.fontSize * rect.width / target.width)}px`;
+      editor.hidden = false;
+      annotationTextEditor = { element: editor, annotation };
+      editor.focus?.();
+      editor.select?.();
+      return true;
+    },
+    handleBlur(target) {
+      if (target?.matches?.("[data-media-annotation-text-editor]")) return commitAnnotationTextEdit();
+      return false;
+    },
     async handleAction(target, event) {
       const action = String(target?.dataset?.mediaAction ?? "");
       if (!action) return false;
       if (action === "drawer-grip") {
+        commitAnnotationTextEdit();
         if (suppressDrawerGripClick) {
           suppressDrawerGripClick = false;
           return true;
@@ -414,6 +775,7 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         return true;
       }
       if (action === "close") {
+        commitAnnotationTextEdit();
         if (target.matches?.(".canvas-media-tools-backdrop") && event && target !== event.target) {
           return true;
         }
@@ -422,22 +784,39 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
       }
       if (action === "open") {
         restoreFocusTarget = target?.focus ? target : activeElementForSurface(surface);
+        state.recoveryNodeId = String(workbench.ui?.selectedCanvasNodeId ?? "");
         if (MEDIA_TOOLS.some((tool) => tool.id === target.dataset.mediaTool)) {
           state.tool = target.dataset.mediaTool;
         }
         state.open = true;
         state.error = "";
+        if (typeof workbench.ensureCanvasGenerationConfig === "function") {
+          await workbench.ensureCanvasGenerationConfig({ mediaType: "image" }).catch((error) => {
+            state.error = `模型列表加载失败：${friendlyError(error)}`;
+          });
+        }
         await rerender();
         focusFirstMediaDrawerControl(surface);
         if (state.tool === "annotation") await loadAnnotationLayers(workbench, state, rerender);
-        void startRecoveryPolling();
+        void refreshRecoveryState();
         return true;
       }
       if (action === "select-tool") {
+        commitAnnotationTextEdit();
         state.tool = MEDIA_TOOLS.some((tool) => tool.id === target.dataset.mediaTool) ? target.dataset.mediaTool : "crop";
         state.error = "";
+        if (["outpaint", "remove_background", "free_view", "camera_studio"].includes(state.tool)
+          && typeof workbench.ensureCanvasGenerationConfig === "function") {
+          await workbench.ensureCanvasGenerationConfig({ mediaType: "image" }).catch((error) => {
+            state.error = `模型列表加载失败：${friendlyError(error)}`;
+          });
+        }
         await rerender();
         if (state.tool === "annotation") await loadAnnotationLayers(workbench, state, rerender);
+        return true;
+      }
+      if (action === "composite-upload-trigger") {
+        surface?.querySelector?.("[data-media-composite-upload]")?.click?.();
         return true;
       }
       if (action === "camera-studio-mode") {
@@ -495,11 +874,32 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         }
         return true;
       }
+      if (action === "annotation-tool") {
+        commitAnnotationTextEdit();
+        state.annotationTool = ["select", "brush", "rectangle", "arrow", "marker", "text", "eraser"].includes(target.dataset.annotationTool)
+          ? target.dataset.annotationTool
+          : "brush";
+        state.annotationMode = "draw";
+        rerender();
+        return true;
+      }
       if (action === "annotation-undo") {
-        if (state.layerKind === "vector_annotation") state.vectorStrokes.pop();
+        const removedAnnotation = state.annotations?.at?.(-1);
+        const removedStroke = state.vectorStrokes?.at?.(-1);
+        if (removedAnnotation || removedStroke) state.annotationRedo.push({ annotation: removedAnnotation ?? null, stroke: removedStroke ?? null });
+        state.vectorStrokes.pop();
+        state.annotations = (state.annotations ?? []).slice(0, -1);
         const canvas = surface?.querySelector?.("[data-media-annotation-canvas]");
         restoreAnnotationCanvas(canvas, annotationHistory.pop());
-        if (state.layerKind === "vector_annotation") redrawVectorStrokes(canvas, state.vectorStrokes);
+        syncAnnotationLayerPreview(surface, state);
+        return true;
+      }
+      if (action === "annotation-redo") {
+        const next = state.annotationRedo?.pop?.();
+        if (next?.annotation) state.annotations = [...(state.annotations ?? []), next.annotation];
+        if (next?.stroke) state.vectorStrokes = [...(state.vectorStrokes ?? []), next.stroke];
+        const canvas = surface?.querySelector?.("[data-media-annotation-canvas]");
+        redrawStructuredAnnotations(canvas, state);
         return true;
       }
       if (action === "annotation-clear") {
@@ -507,7 +907,8 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         const snapshot = captureAnnotationCanvas(canvas);
         if (snapshot) annotationHistory.push(snapshot);
         canvas?.getContext?.("2d")?.clearRect?.(0, 0, canvas.width, canvas.height);
-        if (state.layerKind === "vector_annotation") state.vectorStrokes = [];
+        state.vectorStrokes = [];
+        state.annotations = [];
         return true;
       }
       if (action === "load-annotation-layer") {
@@ -524,7 +925,6 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
         else if (state.tool === "batch_grid") await submitBatchGroup(workbench, state, rerender);
         else await submitDerivation(workbench, state, rerender);
         await persistCanvasMediaRecoveryState(workbench, state);
-        if (state.status === "running") void startRecoveryPolling();
         return true;
       }
       if (action === "select-batch-artifact") {
@@ -539,19 +939,46 @@ export function createCanvasMediaToolsController({ surface, workbench, render })
       }
       return false;
     },
+    handleWheel(event, target) {
+      if (state.tool !== "free_view" || !target?.closest?.("[data-free-view-preview]")) return false;
+      state.viewDistanceScale = clamp((Number(state.viewDistanceScale) || 1) + Number(event.deltaY || 0) * 0.004, 0.1, 5);
+      syncFreeViewLiveElements(surface, state);
+      return true;
+    },
     dispose() {
-      stopRecoveryPolling();
       state.open = false;
       state.annotationDrawing = false;
       cropDrag = null;
+      freeViewDrag = null;
       drawerDrag = null;
       suppressDrawerGripClick = false;
       annotationHistory.length = 0;
       restoreFocusTarget = null;
       if (copyFeedbackTimer !== null) clearTimeout(copyFeedbackTimer);
       copyFeedbackTimer = null;
+      cameraStudioViewportController.dispose();
       surface?.querySelector?.(".canvas-media-tools-backdrop")?.remove?.();
     },
+  };
+}
+
+function cameraStudioViewportState(workbench, state) {
+  const selected = workbench?.ui?.canvasDocument?.nodes?.find?.((node) => node.id === workbench?.ui?.selectedCanvasNodeId);
+  return {
+    imageUrl: resolveMediaSourcePreviewUrl(selected),
+    cameraStudioMode: state.cameraStudioMode,
+    cameraStudioActiveControl: state.cameraStudioActiveControl,
+    cameraYawDegrees: state.cameraYawDegrees,
+    cameraPitchDegrees: state.cameraPitchDegrees,
+    cameraRollDegrees: state.cameraRollDegrees,
+    lightYawDegrees: state.lightYawDegrees,
+    lightPitchDegrees: state.lightPitchDegrees,
+    lightIntensityPercent: state.lightIntensityPercent,
+    lightTemperature: state.lightTemperature,
+    lightColor: state.lightColor,
+    lightPreset: state.cameraLightingPreset,
+    lightRimEnabled: state.lightRimEnabled,
+    lightFillEnabled: state.lightFillEnabled,
   };
 }
 
@@ -576,7 +1003,7 @@ function animateMediaDrawerClose(surface) {
 
 export async function refreshCanvasMediaRecoveryState(workbench, state = ensureCanvasMediaToolsState(workbench?.ui ?? {})) {
   const canvasId = String(workbench?.ui?.selectedCanvasProjectId ?? "");
-  const nodeId = String(workbench?.ui?.selectedCanvasNodeId ?? "");
+  const nodeId = String(state.recoveryNodeId ?? workbench?.ui?.selectedCanvasNodeId ?? "");
   if (!canvasId || !nodeId) return { active: false };
   const recovery = readCanvasMediaRecovery(workbench, nodeId);
   if (state.recoveryNodeId !== nodeId) {
@@ -588,12 +1015,25 @@ export async function refreshCanvasMediaRecoveryState(workbench, state = ensureC
   }
   const derivationId = String(state.derivationId ?? recovery.derivationId ?? "");
   const batchGroupId = String(state.batchGroup?.id ?? recovery.batchGroupId ?? "");
+  const taskId = String(state.taskId ?? recovery.taskId ?? "");
+  const canPollTask = Boolean(taskId && typeof workbench.api?.getGenerationTask === "function");
   const canRefresh = Boolean(
-    derivationId && typeof workbench.api?.getCanvasMediaDerivation === "function"
+    canPollTask
+      || derivationId && typeof workbench.api?.getCanvasMediaDerivation === "function"
       || batchGroupId && typeof workbench.api?.getCanvasImageBatchGroup === "function",
   );
+  const taskResult = canPollTask
+    ? await workbench.api.getGenerationTask(taskId).catch(() => null)
+    : null;
+  const task = taskResult?.task ?? taskResult?.data?.task ?? taskResult;
+  const taskStatus = normalizeMediaTaskStatus(task?.status ?? task?.taskStatus ?? task?.workflowStatus);
+  const shouldReadDerivation = Boolean(
+    derivationId
+      && typeof workbench.api?.getCanvasMediaDerivation === "function"
+      && (!canPollTask || ["completed", "failed"].includes(taskStatus)),
+  );
   const [derivationResult, batchResult] = await Promise.all([
-    derivationId && typeof workbench.api?.getCanvasMediaDerivation === "function"
+    shouldReadDerivation
       ? workbench.api.getCanvasMediaDerivation(canvasId, derivationId).catch(() => null)
       : null,
     batchGroupId && typeof workbench.api?.getCanvasImageBatchGroup === "function"
@@ -605,10 +1045,18 @@ export async function refreshCanvasMediaRecoveryState(workbench, state = ensureC
   if (derivation && typeof derivation === "object") {
     state.derivationId = String(derivation.id ?? derivationId);
     state.taskId = String(derivation.taskId ?? derivation.task_id ?? state.taskId ?? "");
+    applyDerivationNodeState(workbench, derivation, task);
+  } else if (task && typeof task === "object") {
+    applyDerivationNodeState(workbench, {
+      node_key: nodeId,
+      task_id: taskId,
+      status: taskStatus || "running",
+      task,
+    }, task);
   }
   if (batchGroup && typeof batchGroup === "object") state.batchGroup = batchGroup;
   const statuses = [
-    derivationId ? normalizeMediaRecoveryStatus(derivation?.status ?? "running") : null,
+    derivation ? normalizeMediaRecoveryStatus(derivation.status ?? "running") : taskStatus || null,
     state.batchGroup?.id ? recoveredBatchStatus(state.batchGroup) : null,
   ].filter(Boolean);
   if (statuses.includes("failed")) state.status = "failed";
@@ -618,9 +1066,80 @@ export async function refreshCanvasMediaRecoveryState(workbench, state = ensureC
   return { active: state.status === "running" && canRefresh, status: state.status };
 }
 
+function applyDerivationNodeState(workbench, derivation, task = null) {
+  const document = workbench?.ui?.canvasDocument;
+  const nodeId = String(derivation?.node_key ?? derivation?.nodeKey ?? workbench?.ui?.selectedCanvasNodeId ?? "");
+  if (!document || !nodeId || !Array.isArray(document.nodes)) return;
+  const derivationStatus = normalizeMediaRecoveryStatus(derivation?.status ?? "running");
+  const status = ["completed", "failed"].includes(derivationStatus)
+    ? derivationStatus
+    : normalizeMediaTaskStatus(task?.status ?? task?.taskStatus ?? derivation?.status ?? "running") || "running";
+  const artifact = derivation?.output_artifact ?? derivation?.outputArtifact ?? null;
+  const artifactUrl = String(artifact?.url ?? artifact?.thumbnail_url ?? artifact?.thumbnailUrl ?? "").trim()
+    || (artifact?.storage_object_id || artifact?.storageObjectId
+      ? `/api/storage/objects/${encodeURIComponent(String(artifact.storage_object_id ?? artifact.storageObjectId))}/content?proxy=1`
+      : "");
+  const patch = status === "completed"
+    ? {
+        status: "ready",
+        generationStage: "completed",
+        generationProgress: 100,
+        ...(artifactUrl ? { url: artifactUrl, previewUrl: artifactUrl, resultUrl: artifactUrl, resultImageUrl: artifactUrl } : {}),
+        ...(artifact?.storage_object_id || artifact?.storageObjectId ? { storageObjectId: artifact.storage_object_id ?? artifact.storageObjectId } : {}),
+        ...(artifact?.asset_id || artifact?.assetId ? { assetId: artifact.asset_id ?? artifact.assetId } : {}),
+        ...(artifact?.asset_version_id || artifact?.assetVersionId ? { assetVersionId: artifact.asset_version_id ?? artifact.assetVersionId } : {}),
+        source: "canvas_derivation",
+      }
+    : status === "failed"
+      ? { status: "error", generationStage: "failed" }
+      : {
+          status: "running",
+          source: "canvas_derivation",
+          generationStage: String(task?.progressStage ?? task?.progress_stage ?? task?.stage ?? "image_generating"),
+          generationProgress: Number(task?.progress ?? task?.progressPercent ?? task?.progress_percent ?? 0) || 0,
+          taskId: derivation?.task_id ?? derivation?.taskId ?? task?.id ?? undefined,
+        };
+  const current = document.nodes.find((node) => String(node?.id ?? "") === nodeId);
+  if (!current) return;
+  const changed = Object.entries(patch).some(([key, value]) => current.data?.[key] !== value);
+  if (!changed) return;
+  const nextDocument = updateCanvasNodeData(document, nodeId, patch);
+  workbench.ui.canvasDocument = nextDocument;
+  if (typeof workbench.updateCanvasDocument === "function") {
+    workbench.updateCanvasDocument(nextDocument, { scheduleSave: false });
+  }
+  if (status === "completed" && typeof workbench.saveCanvasNow === "function") {
+    void workbench.saveCanvasNow();
+  }
+  if (typeof workbench.newCanvasInstance?.update === "function") {
+    void workbench.newCanvasInstance.update({ nodeOnly: true, nodeId });
+  } else if (typeof workbench.refreshCanvasSurface === "function") {
+    void workbench.refreshCanvasSurface();
+  }
+}
+
+function normalizeMediaTaskStatus(status) {
+  const value = String(status ?? "").trim().toLowerCase();
+  if (["succeeded", "completed", "success"].includes(value)) return "completed";
+  if (["failed", "canceled", "cancelled", "result_unknown", "manual_review_required"].includes(value)) return "failed";
+  if (["queued", "pending", "running", "processing", "submitted", "in_progress"].includes(value)) return "running";
+  return "";
+}
+
+function mediaRecoveryRenderSnapshot(state) {
+  return JSON.stringify([
+    state?.status ?? "",
+    state?.error ?? "",
+    state?.derivationId ?? "",
+    state?.taskId ?? "",
+    state?.batchGroup?.status ?? "",
+    state?.batchGroup?.selectedArtifactId ?? "",
+  ]);
+}
+
 export async function persistCanvasMediaRecoveryState(workbench, state) {
   const canvasId = String(workbench?.ui?.selectedCanvasProjectId ?? "");
-  const nodeId = String(workbench?.ui?.selectedCanvasNodeId ?? "");
+  const nodeId = String(state?.recoveryNodeId ?? workbench?.ui?.selectedCanvasNodeId ?? "");
   if (!canvasId || !nodeId) return null;
   state.recoveryNodeId = nodeId;
   const uiState = workbench.ui.canvasSessionUiState && typeof workbench.ui.canvasSessionUiState === "object"
@@ -682,8 +1201,9 @@ function mediaDrawerFocusableElements(drawer) {
 
 async function submitDerivation(workbench, state, rerender) {
   const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
-  const node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === workbench.ui.selectedCanvasNodeId);
-  const source = sourceBinding(node);
+  const selectedNodeId = String(workbench.ui?.selectedCanvasNodeId ?? "");
+  let node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === selectedNodeId);
+  let source = sourceBinding(node);
   if (!canvasId || !node || !Object.values(source).some(Boolean)) {
     state.error = "请选择包含云端资产的图片节点。";
     rerender();
@@ -712,40 +1232,92 @@ async function submitDerivation(workbench, state, rerender) {
   state.error = "";
   rerender();
   try {
+    // Keep the derivation base revision aligned with the live canvas before creating a task.
+    if (typeof workbench.refreshCanvasAfterAgentPatch === "function") {
+      await workbench.refreshCanvasAfterAgentPatch().catch(() => null);
+    }
+    node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === selectedNodeId);
+    source = sourceBinding(node);
+    if (!node || !Object.values(source).some(Boolean)) throw new Error("canvas_derivation_source_missing");
+    const baseCanvasRevision = Number(workbench.ui?.canvasServerRevision ?? 1) || 1;
     const requestSnapshot = buildRequestSnapshot(state);
-    const startedPayload = await api.startCanvasMediaDerivation(canvasId, {
+    const derivationInput = {
       nodeKey: node.id,
       derivationType: state.tool,
-      baseCanvasRevision: Number(workbench.ui?.canvasServerRevision ?? 1) || 1,
+      baseCanvasRevision,
       source,
       requestSnapshot,
-    });
+    };
+    let startedPayload;
+    try {
+      startedPayload = await api.startCanvasMediaDerivation(canvasId, derivationInput);
+    } catch (error) {
+      const code = String(error?.errorCode ?? error?.code ?? "");
+      if (Number(error?.status) !== 409 || !/(stale|mismatch)/i.test(code)) throw error;
+      if (typeof workbench.refreshCanvasAfterAgentPatch !== "function") throw error;
+      await workbench.refreshCanvasAfterAgentPatch().catch(() => null);
+      startedPayload = await api.startCanvasMediaDerivation(canvasId, {
+        ...derivationInput,
+        baseCanvasRevision: Number(workbench.ui?.canvasServerRevision ?? baseCanvasRevision) || baseCanvasRevision,
+      });
+    }
     const derivation = startedPayload?.derivation ?? startedPayload;
     const derivationId = String(derivation?.id ?? "");
     if (!derivationId) throw new Error("canvas_derivation_missing");
+    state.derivationId = derivationId;
+    state.recoveryNodeId = node.id;
+    const generationPrompt = ["camera_studio", "free_view"].includes(state.tool)
+      ? [state.instruction.trim(), state.tool === "camera_studio" ? requestSnapshot.cameraStudio?.prompt : buildFreeViewPrompt(state)].filter(Boolean).join(", ")
+      : state.instruction.trim() || MEDIA_TOOLS.find((tool) => tool.id === state.tool)?.label || "媒体编辑";
     const generationPayload = await api.createImageGenerationTask({
       target: { kind: "canvas", canvasProjectId: canvasId, nodeId: node.id },
       targetType: "canvas",
       targetId: node.id,
       model: modelCode || node.data?.modelCode || workbench.ui?.canvasGenerationModelCode,
-      prompt: state.instruction.trim() || MEDIA_TOOLS.find((tool) => tool.id === state.tool)?.label || "媒体编辑",
+      prompt: generationPrompt,
       parameters: {
         ...requestSnapshot,
         derivationId,
-        referenceImages: node.data?.url ? [node.data.url] : [],
+        referenceImages: buildGenerationReferenceImages(node),
       },
     });
     const taskId = String(generationPayload?.taskId ?? generationPayload?.task?.id ?? "");
     if (!taskId) throw new Error("canvas_derivation_task_missing");
     await api.attachCanvasMediaDerivationTask(canvasId, derivationId, taskId);
-    state.derivationId = derivationId;
+    workbench.registerCanvasMediaGenerationTask?.(generationPayload?.task ?? generationPayload, {
+      taskId,
+      status: "queued",
+      kind: "image",
+      mediaKind: "image",
+      targetType: "canvas",
+      targetId: node.id,
+      prompt: generationPrompt,
+      model: modelCode || node.data?.modelCode || workbench.ui?.canvasGenerationModelCode || null,
+    });
     state.taskId = taskId;
     state.status = "running";
+    applyDerivationNodeState(workbench, { id: derivationId, node_key: node.id, task_id: taskId, status: "running" });
   } catch (error) {
+    if (state.derivationId && typeof api.failCanvasMediaDerivation === "function") {
+      await api.failCanvasMediaDerivation(canvasId, state.derivationId, {
+        failure: {
+          failureCode: String(error?.errorCode ?? error?.code ?? "canvas_generation_submit_failed"),
+          message: String(error?.message ?? "媒体生成任务创建失败"),
+        },
+      }).catch(() => null);
+    }
     state.status = "failed";
     state.error = friendlyError(error);
   }
   rerender();
+}
+
+function buildGenerationReferenceImages(node) {
+  const data = node?.data ?? {};
+  const url = resolveMediaSourcePreviewUrl(node);
+  const storageObjectId = String(data.storageObjectId ?? data.sourceStorageObjectId ?? data.resultStorageObjectId ?? "").trim();
+  if (storageObjectId) return [{ storageObjectId, ...(url ? { url } : {}) }];
+  return url ? [url] : [];
 }
 
 async function submitLocalCrop(workbench, state, rerender) {
@@ -866,6 +1438,8 @@ async function submitLocalSlice(workbench, state, rerender) {
   const rows = Math.max(1, Math.min(12, Math.floor(Number(state.sliceRows) || 0)));
   const columns = Math.max(1, Math.min(12, Math.floor(Number(state.sliceColumns) || 0)));
   const gapPixels = Math.max(0, Math.floor(Number(state.sliceGapPixels) || 0));
+  const rowBounds = [0, ...getSliceLinePositions(state, "row", rows), 1];
+  const columnBounds = [0, ...getSliceLinePositions(state, "column", columns), 1];
   if (!node || !sourceUrl) {
     state.error = "请选择包含图片源的节点。";
     rerender();
@@ -888,18 +1462,22 @@ async function submitLocalSlice(workbench, state, rerender) {
     const image = await loadMediaImage(sourceUrl);
     const width = Number(image.naturalWidth || image.width);
     const height = Number(image.naturalHeight || image.height);
-    const usableWidth = width - gapPixels * (columns - 1);
-    const usableHeight = height - gapPixels * (rows - 1);
-    if (!width || !height || usableWidth < columns || usableHeight < rows) throw new Error("canvas_slice_gap_too_large");
+    if (!width || !height || gapPixels * (columns - 1) >= width || gapPixels * (rows - 1) >= height) throw new Error("canvas_slice_gap_too_large");
     let nextDocument = workbench.ui?.canvasDocument;
     if (!nextDocument || !Array.isArray(nextDocument.nodes)) throw new Error("canvas_document_missing");
     const createdNodes = [];
-    const tileWidth = Math.floor(usableWidth / columns);
-    const tileHeight = Math.floor(usableHeight / rows);
     for (let row = 0; row < rows; row += 1) {
       for (let column = 0; column < columns; column += 1) {
-        const sourceX = column === columns - 1 ? width - tileWidth : column * (tileWidth + gapPixels);
-        const sourceY = row === rows - 1 ? height - tileHeight : row * (tileHeight + gapPixels);
+        const rawX = Math.round(width * columnBounds[column]);
+        const rawY = Math.round(height * rowBounds[row]);
+        const rawRight = Math.round(width * columnBounds[column + 1]);
+        const rawBottom = Math.round(height * rowBounds[row + 1]);
+        const sourceX = rawX + (column > 0 ? Math.floor(gapPixels / 2) : 0);
+        const sourceY = rawY + (row > 0 ? Math.floor(gapPixels / 2) : 0);
+        const sourceRight = rawRight - (column < columns - 1 ? Math.ceil(gapPixels / 2) : 0);
+        const sourceBottom = rawBottom - (row < rows - 1 ? Math.ceil(gapPixels / 2) : 0);
+        const tileWidth = Math.max(1, sourceRight - sourceX);
+        const tileHeight = Math.max(1, sourceBottom - sourceY);
         const blob = await renderMediaBlob(image, sourceX, sourceY, tileWidth, tileHeight);
         const index = row * columns + column + 1;
         const fileName = `canvas-slice-${Date.now()}-${index}.png`;
@@ -912,6 +1490,13 @@ async function submitLocalSlice(workbench, state, rerender) {
           title: `切片 ${index}`,
           source: "canvas_slice",
           parentNodeId: node.id,
+          slice: {
+            row,
+            column,
+            rows,
+            columns,
+            gapPixels,
+          },
           fileName,
           ...upload,
         });
@@ -941,7 +1526,7 @@ async function submitLocalComposite(workbench, state, rerender) {
   const sourceUrl = resolveMediaSourcePreviewUrl(node);
   const secondarySource = state.compositeSecondarySource && typeof state.compositeSecondarySource === "object"
     ? state.compositeSecondarySource
-    : mediaArtifactsForCanvas(workbench.ui).find((artifact) => artifact.artifactId === state.compositeSecondaryArtifactId)?.source ?? null;
+    : mediaArtifactsForCanvas(workbench.ui, node?.id).find((artifact) => artifact.artifactId === state.compositeSecondaryArtifactId)?.source ?? null;
   const secondaryUrl = resolveMediaArtifactSourceUrl(secondarySource);
   if (!node || !sourceUrl) {
     state.error = "请选择包含图片源的节点。";
@@ -1025,6 +1610,30 @@ function renderMediaBlob(image, sourceX, sourceY, sourceWidth, sourceHeight) {
   return canvasBlob(canvas);
 }
 
+async function renderAnnotatedMediaBlob(sourceUrl, annotationCanvas) {
+  const image = await loadMediaImage(sourceUrl);
+  const sourceWidth = Number(image.naturalWidth || image.width);
+  const sourceHeight = Number(image.naturalHeight || image.height);
+  const annotationWidth = Number(annotationCanvas?.width);
+  const annotationHeight = Number(annotationCanvas?.height);
+  if (!sourceWidth || !sourceHeight || !annotationWidth || !annotationHeight) {
+    throw new Error("canvas_annotation_source_dimensions_missing");
+  }
+  const output = document.createElement("canvas");
+  output.width = sourceWidth;
+  output.height = sourceHeight;
+  const context = output.getContext?.("2d");
+  if (!context) throw new Error("canvas_annotation_context_unavailable");
+  const scale = Math.min(annotationWidth / sourceWidth, annotationHeight / sourceHeight);
+  const renderedWidth = sourceWidth * scale;
+  const renderedHeight = sourceHeight * scale;
+  const offsetX = (annotationWidth - renderedWidth) / 2;
+  const offsetY = (annotationHeight - renderedHeight) / 2;
+  context.drawImage(image, 0, 0, sourceWidth, sourceHeight);
+  context.drawImage(annotationCanvas, offsetX, offsetY, renderedWidth, renderedHeight, 0, 0, sourceWidth, sourceHeight);
+  return canvasBlob(output);
+}
+
 function compositeMediaBlob(baseImage, secondaryImage, state, width, height) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -1093,6 +1702,7 @@ async function submitAnnotation(workbench, state, rerender, surface) {
   const canvasId = String(workbench.ui?.selectedCanvasProjectId ?? "");
   const node = workbench.ui?.canvasDocument?.nodes?.find?.((item) => item.id === workbench.ui.selectedCanvasNodeId);
   const canvas = surface?.querySelector?.("[data-media-annotation-canvas]");
+  const sourceUrl = resolveMediaSourcePreviewUrl(node);
   if (!canvasId || !node || !canvas || typeof workbench.api?.uploadFile !== "function" || typeof workbench.api?.createCanvasAnnotationLayer !== "function") {
     state.error = "标注上传接口暂不可用。";
     rerender();
@@ -1107,7 +1717,7 @@ async function submitAnnotation(workbench, state, rerender, surface) {
       throw new Error("canvas_vector_annotation_empty");
     }
     const blob = vector
-      ? new Blob([JSON.stringify({ version: 1, width: canvas.width, height: canvas.height, strokes: state.vectorStrokes })], { type: "application/json" })
+      ? new Blob([JSON.stringify({ version: 1, width: canvas.width, height: canvas.height, annotations: normalizeAnnotations(state.annotations), strokes: state.vectorStrokes })], { type: "application/json" })
       : await canvasBlob(canvas);
     const file = typeof File === "function"
       ? new File([blob], `canvas-${state.layerKind}-${Date.now()}.${vector ? "json" : "png"}`, { type: blob.type })
@@ -1135,17 +1745,48 @@ async function submitAnnotation(workbench, state, rerender, surface) {
       },
     });
     state.annotationLayerId = String(result?.layer?.id ?? result?.id ?? "");
+    if (!sourceUrl || typeof Image !== "function" || typeof document === "undefined") {
+      throw new Error("canvas_annotation_output_unavailable");
+    }
+    const annotatedBlob = await renderAnnotatedMediaBlob(sourceUrl, canvas);
+    const fileName = `canvas-annotation-result-${Date.now()}.png`;
+    const annotationResult = await uploadLocalMedia(workbench, annotatedBlob, fileName, canvasId);
+    const canvasDocument = workbench.ui?.canvasDocument;
+    if (!canvasDocument || !Array.isArray(canvasDocument.nodes)) throw new Error("canvas_document_missing");
+    const position = {
+      x: Number(node.position?.x ?? 0) + Number(node.size?.width ?? 420) + 72,
+      y: Number(node.position?.y ?? 0),
+    };
+    const nextDocument = addLocalMediaNode(canvasDocument, position, {
+      title: "标注结果",
+      source: "canvas_annotation",
+      parentNodeId: node.id,
+      annotationLayerId: state.annotationLayerId || null,
+      annotationLayerStorageObjectId: layerStorageObjectId,
+      fileName,
+      ...annotationResult,
+    });
+    const createdNode = nextDocument.nodes.at(-1);
+    const canSaveImmediately = typeof workbench.saveCanvasNow === "function";
+    if (typeof workbench.updateCanvasDocument === "function") {
+      workbench.updateCanvasDocument(nextDocument, canSaveImmediately ? { scheduleSave: false } : { immediateSave: true });
+    } else workbench.ui.canvasDocument = nextDocument;
+    workbench.ui.selectedCanvasNodeId = createdNode?.id ?? node.id;
+    if (canSaveImmediately) await workbench.saveCanvasNow();
     if (typeof workbench.api?.listCanvasAnnotationLayers === "function") {
       const layersPayload = await workbench.api.listCanvasAnnotationLayers(canvasId, { nodeKey: node.id, limit: 100 });
       state.annotationLayers = Array.isArray(layersPayload?.layers)
         ? layersPayload.layers
         : Array.isArray(layersPayload?.data?.layers) ? layersPayload.data.layers : [];
     }
+    workbench.ui.toast = "标注结果已创建为图片节点。";
     state.status = "completed";
   } catch (error) {
     state.status = "failed";
     state.error = friendlyError(error);
+    workbench.ui.toast = `标注结果保存失败：${state.error}`;
   }
+  await workbench.refreshCanvasSurface?.();
   rerender();
 }
 
@@ -1181,10 +1822,11 @@ function drawAnnotationPoint(canvas, event, state, start) {
   if (!context || !rect?.width || !rect?.height) return;
   const x = (Number(event.clientX) - rect.left) * canvas.width / rect.width;
   const y = (Number(event.clientY) - rect.top) * canvas.height / rect.height;
+  context.save?.();
   context.lineCap = "round";
   context.lineJoin = "round";
   context.globalCompositeOperation = state.annotationMode === "erase" ? "destination-out" : "source-over";
-  context.strokeStyle = state.layerKind === "mask" ? "rgba(255,255,255,.95)" : "rgba(255,64,64,.9)";
+  context.strokeStyle = String(state.annotationColor || "#ef4444");
   context.lineWidth = Math.max(2, Math.min(96, Number(state.brushSize) || 24));
   if (start) {
     context.beginPath();
@@ -1193,6 +1835,7 @@ function drawAnnotationPoint(canvas, event, state, start) {
     context.lineTo(x, y);
     context.stroke();
   }
+  context.restore?.();
 }
 
 function annotationPoint(canvas, event) {
@@ -1260,8 +1903,9 @@ async function loadAnnotationLayer(surface, layer, state) {
       if (!response.ok) throw new Error(`canvas_vector_annotation_load_failed:${response.status}`);
       const payload = await response.json();
       state.vectorStrokes = normalizeVectorStrokes(payload?.strokes);
-      redrawVectorStrokes(canvas, state.vectorStrokes);
+      state.annotations = normalizeAnnotations(payload?.annotations ?? strokesToAnnotations(state.vectorStrokes));
       state.layerKind = "vector_annotation";
+      redrawStructuredAnnotations(canvas, state);
       state.annotationLayerId = String(layer?.id ?? "");
       return true;
     } catch (error) {
@@ -1306,8 +1950,8 @@ function mediaArtifactsForNode(ui, nodeId) {
     .filter((asset) => asset.artifactId);
 }
 
-function mediaArtifactsForCanvas(ui) {
-  return (Array.isArray(ui.canvasAssets) ? ui.canvasAssets : [])
+function mediaArtifactsForCanvas(ui, excludeNodeId = "") {
+  const assets = (Array.isArray(ui.canvasAssets) ? ui.canvasAssets : [])
     .filter((asset) => asset.mediaKind === "image")
     .map((asset) => ({
       artifactId: String(asset.artifactId ?? asset.id ?? ""),
@@ -1324,6 +1968,35 @@ function mediaArtifactsForCanvas(ui) {
       },
     }))
     .filter((asset) => asset.artifactId);
+  const nodes = (Array.isArray(ui.canvasDocument?.nodes) ? ui.canvasDocument.nodes : [])
+    .filter((node) => String(node?.id ?? "") !== String(excludeNodeId ?? ""))
+    .filter((node) => ["image", "source-image", "upload"].includes(String(node?.type ?? "")) && String(node?.data?.mediaKind ?? "image") === "image")
+    .map((node) => {
+      const url = resolveMediaSourcePreviewUrl(node);
+      const data = node?.data ?? {};
+      const artifactId = String(data.artifactId ?? data.assetId ?? data.assetVersionId ?? data.storageObjectId ?? node?.id ?? "");
+      if (!url || !artifactId) return null;
+      return {
+        artifactId: `node:${artifactId}`,
+        url,
+        title: data.title ?? data.fileName ?? "画布图片",
+        source: {
+          artifactId: null,
+          assetId: data.assetId ?? null,
+          assetVersionId: data.assetVersionId ?? null,
+          storageObjectId: data.storageObjectId ?? null,
+          url,
+        },
+      };
+    })
+    .filter(Boolean);
+  const seen = new Set();
+  return [...assets, ...nodes].filter((asset) => {
+    const key = `${asset.artifactId}|${asset.url}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function renderBatchGrid(state, artifacts) {
@@ -1369,6 +2042,51 @@ function renderMediaSourcePreview(node, previewUrl = resolveMediaSourcePreviewUr
   </figure>`;
 }
 
+function renderFreeViewPreview(node, previewUrl, state) {
+  const title = String(node?.data?.title ?? node?.id ?? "未选择图片");
+  const yaw = clamp(Number(state.viewAzimuthDegrees) || 0, -180, 180);
+  const pitch = clamp(Number(state.viewElevationDegrees) || 0, -90, 90);
+  const distance = clamp(Number(state.viewDistanceScale) || 1, 0.1, 5);
+  const rotateY = clamp(yaw * 0.3, -54, 54);
+  const rotateX = clamp(-pitch * 0.22, -20, 20);
+  const scale = clamp(1.08 - distance * 0.08, 0.7, 1.08);
+  return `<figure class="canvas-media-source-preview canvas-free-view-preview" data-free-view-preview style="--free-view-yaw:${rotateY}deg;--free-view-pitch:${rotateX}deg;--free-view-scale:${scale}">
+    <div class="canvas-free-view-stage">
+      ${previewUrl
+        ? `<img data-free-view-image src="${escapeAttr(previewUrl)}" alt="当前源图：${escapeAttr(title)}" />`
+        : '<div class="canvas-media-source-preview-empty">当前节点没有可预览的图片</div>'}
+      <span class="canvas-free-view-readout" data-free-view-readout>${formatFreeViewReadout(yaw, pitch, distance)}</span>
+    </div>
+    <figcaption><strong>${escapeHtml(title)}</strong><small>自由视角预览</small></figcaption>
+  </figure>`;
+}
+
+function formatFreeViewReadout(yaw, pitch, distance) {
+  return `水平 ${Math.round(yaw)}° · 俯仰 ${Math.round(pitch)}° · 距离 ${distance.toFixed(1)}x`;
+}
+
+function syncFreeViewLiveElements(surface, state) {
+  const preview = surface?.querySelector?.("[data-free-view-preview]");
+  const yaw = clamp(Number(state.viewAzimuthDegrees) || 0, -180, 180);
+  const pitch = clamp(Number(state.viewElevationDegrees) || 0, -90, 90);
+  const distance = clamp(Number(state.viewDistanceScale) || 1, 0.1, 5);
+  const fields = {
+    viewAzimuthDegrees: yaw,
+    viewElevationDegrees: pitch,
+    viewDistanceScale: distance,
+  };
+  for (const [field, value] of Object.entries(fields)) {
+    const input = surface?.querySelector?.(`[data-media-field="${field}"]`);
+    if (input && String(input.value) !== String(value)) input.value = String(value);
+  }
+  if (!preview) return;
+  preview.style?.setProperty?.("--free-view-yaw", `${clamp(yaw * 0.3, -54, 54)}deg`);
+  preview.style?.setProperty?.("--free-view-pitch", `${clamp(-pitch * 0.22, -20, 20)}deg`);
+  preview.style?.setProperty?.("--free-view-scale", String(clamp(1.08 - distance * 0.08, 0.7, 1.08)));
+  const readout = preview.querySelector?.("[data-free-view-readout]");
+  if (readout) readout.textContent = formatFreeViewReadout(yaw, pitch, distance);
+}
+
 function resolveMediaSourcePreviewUrl(node) {
   return String(
     resolveCanvasMediaNodeSource(node, "image")
@@ -1397,6 +2115,86 @@ function renderCropStage(state, node, imageUrl = resolveMediaSourcePreviewUrl(no
       ${["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((handle) => `<button type="button" class="canvas-media-crop-handle is-${handle}" data-media-crop-handle="${handle}" aria-label="调整裁剪区域 ${handle}"></button>`).join("")}
     </div>
   </div>`;
+}
+
+function renderSliceStage(state, node, imageUrl = resolveMediaSourcePreviewUrl(node)) {
+  const rows = Math.max(1, Math.min(12, Math.floor(Number(state.sliceRows) || 0)));
+  const columns = Math.max(1, Math.min(12, Math.floor(Number(state.sliceColumns) || 0)));
+  const rowPositions = getSliceLinePositions(state, "row", rows);
+  const columnPositions = getSliceLinePositions(state, "column", columns);
+  const rowBounds = [0, ...rowPositions, 1];
+  const columnBounds = [0, ...columnPositions, 1];
+  const cells = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      cells.push(`<span class="canvas-media-slice-cell" data-media-slice-cell data-media-slice-row="${row}" data-media-slice-column="${column}" style="left:${columnBounds[column] * 100}%;top:${rowBounds[row] * 100}%;width:${(columnBounds[column + 1] - columnBounds[column]) * 100}%;height:${(rowBounds[row + 1] - rowBounds[row]) * 100}%">${row + 1}-${column + 1}</span>`);
+    }
+  }
+  return `<div class="canvas-media-slice-stage" data-media-slice-stage>
+    <img src="${escapeAttr(imageUrl)}" alt="切片预览" draggable="false" />
+    <div class="canvas-media-slice-overlay" aria-label="切片网格 ${rows} 行 ${columns} 列">
+      ${cells.join("")}
+      ${rowPositions.map((position, index) => `<button type="button" class="canvas-media-slice-line is-row" data-media-slice-handle data-media-slice-axis="row" data-media-slice-index="${index}" style="top:${position * 100}%" aria-label="移动第 ${index + 1} 条行切片线"><span>行 ${index + 1}</span></button>`).join("")}
+      ${columnPositions.map((position, index) => `<button type="button" class="canvas-media-slice-line is-column" data-media-slice-handle data-media-slice-axis="column" data-media-slice-index="${index}" style="left:${position * 100}%" aria-label="移动第 ${index + 1} 条纵向切片线"><span>列 ${index + 1}</span></button>`).join("")}
+      <strong class="canvas-media-slice-count">${rows} 行 × ${columns} 列</strong>
+    </div>
+  </div>`;
+}
+
+function getSliceLinePositions(state, axis, count = axis === "row" ? state.sliceRows : state.sliceColumns) {
+  const lineCount = Math.max(0, Math.min(11, Math.floor(Number(count) || 0) - 1));
+  const key = axis === "row" ? "sliceRowPositions" : "sliceColumnPositions";
+  const existing = Array.isArray(state[key]) ? state[key].map(Number).filter(Number.isFinite) : [];
+  const positions = Array.from({ length: lineCount }, (_, index) => existing[index] ?? (index + 1) / (lineCount + 1));
+  positions.sort((left, right) => left - right);
+  for (let index = 0; index < positions.length; index += 1) {
+    const minimum = index === 0 ? 0.01 : positions[index - 1] + 0.01;
+    const maximum = index === positions.length - 1 ? 0.99 : 0.99 - (positions.length - index - 1) * 0.01;
+    positions[index] = roundSlicePosition(clamp(positions[index], minimum, maximum));
+  }
+  state[key] = positions;
+  return positions;
+}
+
+function normalizeAllSliceLinePositions(state) {
+  getSliceLinePositions(state, "row", state.sliceRows);
+  getSliceLinePositions(state, "column", state.sliceColumns);
+}
+
+function roundSlicePosition(value) {
+  return Math.round(Number(value) * 10_000) / 10_000;
+}
+
+function updateSliceLineFromPointer(state, drag, event) {
+  const coordinate = drag.axis === "row"
+    ? (Number(event.clientY) - drag.rect.top) / drag.rect.height
+    : (Number(event.clientX) - drag.rect.left) / drag.rect.width;
+  const positions = getSliceLinePositions(state, drag.axis, drag.axis === "row" ? state.sliceRows : state.sliceColumns);
+  const previous = positions[drag.index - 1] ?? 0.01;
+  const next = positions[drag.index + 1] ?? 0.99;
+  positions[drag.index] = roundSlicePosition(clamp(coordinate, previous + 0.01, next - 0.01));
+  state[drag.axis === "row" ? "sliceRowPositions" : "sliceColumnPositions"] = positions;
+}
+
+function syncSliceVisualElements(surface, state) {
+  const rows = Math.max(1, Math.min(12, Math.floor(Number(state.sliceRows) || 0)));
+  const columns = Math.max(1, Math.min(12, Math.floor(Number(state.sliceColumns) || 0)));
+  const rowBounds = [0, ...getSliceLinePositions(state, "row", rows), 1];
+  const columnBounds = [0, ...getSliceLinePositions(state, "column", columns), 1];
+  for (const line of surface?.querySelectorAll?.("[data-media-slice-handle]") ?? []) {
+    const index = Math.max(0, Number(line.dataset.mediaSliceIndex) || 0);
+    const axis = line.dataset.mediaSliceAxis === "row" ? "row" : "column";
+    const position = (axis === "row" ? rowBounds[index + 1] : columnBounds[index + 1]) * 100;
+    line.style[axis === "row" ? "top" : "left"] = `${position}%`;
+  }
+  for (const cell of surface?.querySelectorAll?.("[data-media-slice-cell]") ?? []) {
+    const row = Math.max(0, Number(cell.dataset.mediaSliceRow) || 0);
+    const column = Math.max(0, Number(cell.dataset.mediaSliceColumn) || 0);
+    cell.style.left = `${columnBounds[column] * 100}%`;
+    cell.style.top = `${rowBounds[row] * 100}%`;
+    cell.style.width = `${(columnBounds[column + 1] - columnBounds[column]) * 100}%`;
+    cell.style.height = `${(rowBounds[row + 1] - rowBounds[row]) * 100}%`;
+  }
 }
 
 function cropRect(state) {
@@ -1478,14 +2276,158 @@ function normalizeVectorStrokes(input) {
   })).filter((stroke) => stroke.points.length > 1);
 }
 
-function redrawVectorStrokes(canvas, strokes) {
+function strokesToAnnotations(strokes) {
+  return normalizeVectorStrokes(strokes).map((stroke, index) => ({
+    id: `brush-${index}`,
+    type: "brush",
+    color: "#ef4444",
+    strokeWidth: stroke.width,
+    points: stroke.points,
+  }));
+}
+
+function normalizeAnnotations(input) {
+  if (!Array.isArray(input)) return [];
+  return input.slice(0, 1000).filter((item) => ["rectangle", "brush", "arrow", "marker", "text"].includes(item?.type)).map((item, index) => ({
+    ...item,
+    id: String(item.id ?? `annotation-${index}`),
+    color: String(item.color ?? "#ef4444"),
+    strokeWidth: clamp(Number(item.strokeWidth) || 4, 1, 96),
+  }));
+}
+
+function addStructuredAnnotation(state, start, end) {
+  const tool = state.annotationTool;
+  const color = String(state.annotationColor || "#ef4444");
+  const strokeWidth = ["rectangle", "arrow"].includes(tool)
+    ? clamp(Number(state.brushSize) || 4, 1, 8)
+    : clamp(Number(state.brushSize) || 4, 1, 96);
+  const base = { id: `${tool}-${Date.now()}-${state.annotations?.length ?? 0}`, color, strokeWidth };
+  let annotation;
+  if (tool === "rectangle") annotation = { ...base, type: "rectangle", x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
+  else if (tool === "arrow") annotation = { ...base, type: "arrow", startX: start.x, startY: start.y, endX: end.x, endY: end.y };
+  else if (tool === "marker") {
+    annotation = { ...base, type: "marker", number: Number(state.annotationNumber) || 1, x: end.x, y: end.y, size: 24 };
+    state.annotationNumber = Math.max(1, Number(state.annotationNumber) || 1) + 1;
+  }
+  else if (tool === "text") annotation = { ...base, type: "text", text: String(state.annotationText || "标注"), x: end.x, y: end.y, fontSize: clamp(Number(state.annotationFontSize) || 32, 8, 120) };
+  if (annotation) state.annotations = [...(state.annotations ?? []), annotation];
+}
+
+function createAnnotationDraft(state, start, end) {
+  const tool = state.annotationTool;
+  if (!['rectangle', 'arrow'].includes(tool)) return null;
+  const base = {
+    id: '__draft__',
+    color: String(state.annotationColor || '#ef4444'),
+    strokeWidth: clamp(Number(state.brushSize) || 4, 1, 8),
+    type: tool,
+  };
+  return tool === 'rectangle'
+    ? { ...base, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) }
+    : { ...base, startX: start.x, startY: start.y, endX: end.x, endY: end.y };
+}
+
+function eraseAnnotationPixel(canvas, event, state) {
+  const context = canvas?.getContext?.('2d');
+  if (!context) return;
+  const previousMode = state.annotationMode;
+  state.annotationMode = 'erase';
+  drawAnnotationPoint(canvas, event, state, true);
+  drawAnnotationPoint(canvas, event, state, false);
+  state.annotationMode = previousMode;
+}
+
+function findAnnotationAtPoint(annotations, point) {
+  const items = normalizeAnnotations(annotations).reverse();
+  return items.find((item) => {
+    if (item.type === "rectangle") return point.x >= item.x - 12 && point.x <= item.x + item.width + 12 && point.y >= item.y - 12 && point.y <= item.y + item.height + 12;
+    if (item.type === "marker" || item.type === "text") return Math.hypot(point.x - item.x, point.y - item.y) <= Math.max(item.size ?? item.fontSize ?? 32, 32);
+    if (item.type === "arrow") return distanceToSegment(point, { x: item.startX, y: item.startY }, { x: item.endX, y: item.endY }) < 18;
+    return item.points?.some((candidate) => Math.hypot(point.x - candidate.x, point.y - candidate.y) < 18);
+  });
+}
+
+function distanceToSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (!dx && !dy) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy), 0, 1);
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+function moveAnnotation(annotation, dx, dy) {
+  if (!annotation) return;
+  if (annotation.type === "rectangle" || annotation.type === "marker" || annotation.type === "text") {
+    annotation.x += dx; annotation.y += dy;
+  } else if (annotation.type === "arrow") {
+    annotation.startX += dx; annotation.startY += dy; annotation.endX += dx; annotation.endY += dy;
+  } else if (annotation.type === "brush") {
+    annotation.points = annotation.points.map((point) => ({ x: point.x + dx, y: point.y + dy }));
+  }
+}
+
+function redrawStructuredAnnotations(canvas, state, draft = null) {
+  const context = canvas?.getContext?.("2d");
+  if (!context) return;
+  context.save?.();
+  context.globalCompositeOperation = "source-over";
+  context.clearRect?.(0, 0, canvas.width, canvas.height);
+  for (const item of [...normalizeAnnotations(state.annotations), ...(draft ? [draft] : [])]) {
+    const drawColor = String(item.color || state.annotationColor || "#ef4444");
+    context.strokeStyle = drawColor;
+    context.fillStyle = drawColor;
+    context.lineWidth = ["rectangle", "arrow"].includes(item.type) ? Math.min(item.strokeWidth, 8) : item.strokeWidth;
+    context.lineCap = item.type === "arrow" ? "butt" : "round";
+    context.lineJoin = item.type === "arrow" ? "miter" : "round";
+    if (item.id === '__draft__') context.setLineDash?.([8, 6]);
+    if (item.type === "rectangle") context.strokeRect?.(item.x, item.y, item.width, item.height);
+    else if (item.type === "arrow") {
+      context.beginPath?.(); context.moveTo?.(item.startX, item.startY); context.lineTo?.(item.endX, item.endY); context.stroke?.();
+      const angle = Math.atan2(item.endY - item.startY, item.endX - item.startX);
+      const head = Math.max(10, Math.min(22, context.lineWidth * 3));
+      context.beginPath?.(); context.moveTo?.(item.endX, item.endY); context.lineTo?.(item.endX - head * Math.cos(angle - Math.PI / 6), item.endY - head * Math.sin(angle - Math.PI / 6)); context.moveTo?.(item.endX, item.endY); context.lineTo?.(item.endX - head * Math.cos(angle + Math.PI / 6), item.endY - head * Math.sin(angle + Math.PI / 6)); context.stroke?.();
+    } else if (item.type === "marker") { context.beginPath?.(); context.arc?.(item.x, item.y, item.size / 2, 0, Math.PI * 2); context.fill?.(); context.fillStyle = "#fff"; context.font = `${Math.max(12, item.size * .6)}px sans-serif`; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText?.(String(item.number), item.x, item.y); }
+    else if (item.type === "text") context.font = `${item.fontSize}px sans-serif`, context.fillText?.(item.text, item.x, item.y);
+    else if (item.type === "brush") { context.beginPath?.(); context.moveTo?.(item.points[0].x, item.points[0].y); for (const point of item.points.slice(1)) context.lineTo?.(point.x, point.y); context.stroke?.(); }
+    if (item.id === '__draft__') context.setLineDash?.([]);
+  }
+  const selected = normalizeAnnotations(state.annotations).find((item) => item.id === state.selectedAnnotationId);
+  if (selected) {
+    context.save?.();
+    context.strokeStyle = "rgba(14,165,233,.95)";
+    context.setLineDash?.([6, 4]);
+    const bounds = annotationBounds(selected);
+    if (bounds) context.strokeRect?.(bounds.x - 8, bounds.y - 8, bounds.width + 16, bounds.height + 16);
+    context.restore?.();
+  }
+  context.restore?.();
+}
+
+function annotationBounds(item) {
+  if (item.type === "rectangle") return { x: item.x, y: item.y, width: item.width, height: item.height };
+  if (item.type === "arrow") return { x: Math.min(item.startX, item.endX), y: Math.min(item.startY, item.endY), width: Math.abs(item.endX - item.startX), height: Math.abs(item.endY - item.startY) };
+  if (item.type === "marker" || item.type === "text") return { x: item.x - 16, y: item.y - 16, width: item.size ?? item.fontSize ?? 32, height: item.size ?? item.fontSize ?? 32 };
+  const xs = item.points?.map((point) => point.x) ?? [], ys = item.points?.map((point) => point.y) ?? [];
+  if (!xs.length) return null;
+  return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+}
+
+function syncAnnotationLayerPreview(surface, state) {
+  const canvas = surface?.querySelector?.("[data-media-annotation-canvas]");
+  if (!canvas) return;
+  if (state.annotations?.length) redrawStructuredAnnotations(canvas, state);
+  else if (state.vectorStrokes?.length) redrawVectorStrokes(canvas, state.vectorStrokes, state.layerKind);
+}
+
+function redrawVectorStrokes(canvas, strokes, layerKind = "vector_annotation") {
   const context = canvas?.getContext?.("2d");
   if (!context) return;
   context.clearRect?.(0, 0, canvas.width, canvas.height);
   context.lineCap = "round";
   context.lineJoin = "round";
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = "rgba(255,64,64,.9)";
+  context.strokeStyle = layerKind === "mask" ? "rgba(255,255,255,.95)" : "rgba(255,64,64,.9)";
   for (const stroke of normalizeVectorStrokes(strokes)) {
     context.lineWidth = stroke.width;
     context.beginPath?.();
@@ -1532,9 +2474,12 @@ function syncMediaGenerationModelCode(ui, state, node, options = []) {
 function renderMediaModelField(state, options = []) {
   const selected = String(state.generationModelCode ?? "");
   const choices = options.length
-    ? options.map((option) => `<option value="${escapeAttr(option.modelCode)}" ${option.modelCode === selected ? "selected" : ""}>${escapeHtml(option.modelLabel || option.modelCode)}</option>`).join("")
+    ? options.map((option) => {
+      const label = option.modelLabel || option.modelCode;
+      return `<option value="${escapeAttr(option.modelCode)}" ${option.modelCode === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("")
     : '<option value="">暂无可用图片模型</option>';
-  return `<label><span>图片模型</span><select data-media-field="generationModelCode" ${options.length ? "" : "disabled"}>${choices}</select></label>`;
+  return `<label class="canvas-media-submit-model"><select aria-label="图片模型" data-media-field="generationModelCode" ${options.length ? "" : "disabled"}>${choices}</select></label>`;
 }
 
 function clamp(value, min, max) {
@@ -1577,6 +2522,7 @@ function buildRequestSnapshot(state) {
         pitchDegrees: Number(state.lightPitchDegrees),
         intensityPercent: Number(state.lightIntensityPercent),
         temperature: String(state.lightTemperature),
+        color: normalizeCameraStudioLightColor(state.lightColor),
         rimLight: state.lightRimEnabled === true,
         fillLight: state.lightFillEnabled === true,
       },
@@ -1595,7 +2541,14 @@ function buildRequestSnapshot(state) {
   };
 }
 
-function renderProfessionalControls(state, artifacts = []) {
+function buildFreeViewPrompt(state) {
+  const yaw = Math.round(clamp(Number(state.viewAzimuthDegrees) || 0, -180, 180));
+  const pitch = Math.round(clamp(Number(state.viewElevationDegrees) || 0, -90, 90));
+  const distance = clamp(Number(state.viewDistanceScale) || 1, 0.1, 5).toFixed(1);
+  return `Edit the reference image only. Preserve the same subject and scene. Change viewpoint to horizontal ${yaw} degrees, vertical ${pitch} degrees, camera distance ${distance}x.`;
+}
+
+function renderProfessionalControls(state, artifacts = [], sourcePreviewUrl = "") {
   if (state.tool === "remove_background") {
     return `<div class="canvas-media-parameter-grid">
       ${numberField("边缘羽化", "backgroundFeatherPixels", state.backgroundFeatherPixels, 0, 64)}
@@ -1610,7 +2563,7 @@ function renderProfessionalControls(state, artifacts = []) {
     </div>`;
   }
   if (state.tool === "camera_studio") {
-    return renderCameraStudioControls(state);
+    return renderCameraStudioControls(state, sourcePreviewUrl);
   }
   if (state.tool === "slice") {
     return `<div class="canvas-media-parameter-grid">
@@ -1620,10 +2573,12 @@ function renderProfessionalControls(state, artifacts = []) {
     </div>`;
   }
   if (state.tool === "composite") {
-    const selected = artifacts.find((artifact) => artifact.artifactId === state.compositeSecondaryArtifactId);
+    const options = [...artifacts, state.compositeUpload].filter(Boolean);
+    const selected = options.find((artifact) => artifact.artifactId === state.compositeSecondaryArtifactId);
     return `<div class="canvas-media-parameter-grid">
-      <label class="canvas-media-parameter-span"><span>第二张图片</span><select data-media-field="compositeSecondaryArtifactId" required><option value="">请选择图片结果</option>${artifacts.map((artifact) => `<option value="${escapeAttr(artifact.artifactId)}" ${artifact.artifactId === state.compositeSecondaryArtifactId ? "selected" : ""}>${escapeHtml(artifact.title)}</option>`).join("")}</select></label>
-      ${selected?.url ? `<figure class="canvas-media-composite-preview"><img src="${escapeAttr(selected.url)}" alt="${escapeAttr(selected.title)}" /><figcaption>${escapeHtml(selected.title)}</figcaption></figure>` : ""}
+      <label class="canvas-media-parameter-span"><span>第二张图片</span><select data-media-field="compositeSecondaryArtifactId" required><option value="">请选择图片节点</option>${options.map((artifact) => `<option value="${escapeAttr(artifact.artifactId)}" ${artifact.artifactId === state.compositeSecondaryArtifactId ? "selected" : ""}>${escapeHtml(artifact.title)}</option>`).join("")}</select></label>
+      <div class="canvas-media-composite-upload canvas-media-parameter-span"><input type="file" accept="image/*" data-media-composite-upload hidden /><button type="button" data-media-action="composite-upload-trigger">上传图片</button><small>仅支持图片文件</small></div>
+      <figure class="canvas-media-composite-preview ${selected?.url ? "is-selected" : "is-empty"}">${selected?.url ? `<img src="${escapeAttr(selected.url)}" alt="${escapeAttr(selected.title)}" /><figcaption><strong>${escapeHtml(selected.title)}</strong><small>已选择作为第二张图片</small></figcaption>` : `<div class="canvas-media-composite-preview-empty">请选择图片节点或上传图片</div>`}</figure>
       ${selectField("混合模式", "compositeBlendMode", state.compositeBlendMode, [["normal", "正常"], ["multiply", "正片叠底"], ["screen", "滤色"], ["overlay", "叠加"]])}
       ${numberField("不透明度 %", "compositeOpacityPercent", state.compositeOpacityPercent, 0, 100)}
       ${selectField("对齐", "compositeAlignment", state.compositeAlignment, [["center", "居中"], ["top_left", "左上"], ["top_right", "右上"], ["bottom_left", "左下"], ["bottom_right", "右下"]])}
@@ -1632,13 +2587,18 @@ function renderProfessionalControls(state, artifacts = []) {
   return "";
 }
 
-function renderCameraStudioControls(state) {
+function renderCameraStudioControls(state, sourcePreviewUrl = "") {
   const mode = ["camera", "lighting", "dual"].includes(state.cameraStudioMode) ? state.cameraStudioMode : "camera";
   const activeControl = mode === "dual"
     ? (state.cameraStudioActiveControl === "lighting" ? "lighting" : "camera")
     : mode;
   const prompt = buildCameraStudioPrompt(state);
-  return `<div class="canvas-camera-studio-controls">
+  return `<div class="canvas-camera-studio-workspace">
+    <div class="canvas-camera-studio-main">
+      ${renderCameraStudioViewport(state, sourcePreviewUrl)}
+      <label class="canvas-media-instruction-field canvas-camera-studio-instruction"><span>编辑要求</span><textarea data-media-field="instruction" placeholder="描述构图、视角或需要保留的内容">${escapeHtml(state.instruction)}</textarea></label>
+    </div>
+    <div class="canvas-camera-studio-controls">
     <div class="canvas-camera-studio-segments" role="tablist" aria-label="摄影棚模式">
       ${cameraStudioSegment("camera", "摄影机", mode, "camera-studio-mode", "cameraStudioMode")}
       ${cameraStudioSegment("lighting", "打光", mode, "camera-studio-mode", "cameraStudioMode")}
@@ -1656,7 +2616,29 @@ function renderCameraStudioControls(state) {
         <button type="button" data-media-action="camera-studio-reset">重置参数</button>
         <button type="button" data-media-action="camera-studio-copy">${state.cameraPromptCopied ? "已复制" : "复制提示词"}</button>
       </div>
+      </div>
     </div>
+  </div>`;
+}
+
+function renderCameraStudioViewport(state, sourcePreviewUrl) {
+  const mode = ["camera", "lighting", "dual"].includes(state.cameraStudioMode) ? state.cameraStudioMode : "camera";
+  const activeControl = mode === "dual"
+    ? (state.cameraStudioActiveControl === "lighting" ? "lighting" : "camera")
+    : mode;
+  const readoutValue = activeControl === "lighting" ? state.lightYawDegrees : state.cameraYawDegrees;
+  return `<div class="canvas-camera-studio-viewport canvas-media-source-preview" role="application" tabindex="0" aria-label="摄影棚三维视口，可拖动调整${activeControl === "lighting" ? "灯光" : "摄影机"}方向"
+    data-camera-studio-viewport data-source-url="${escapeAttr(sourcePreviewUrl)}" data-studio-mode="${escapeAttr(mode)}" data-active-control="${escapeAttr(activeControl)}"
+    data-camera-yaw="${escapeAttr(state.cameraYawDegrees)}" data-camera-pitch="${escapeAttr(state.cameraPitchDegrees)}" data-camera-roll="${escapeAttr(state.cameraRollDegrees)}"
+    data-camera-focal-length="${escapeAttr(state.cameraFocalLengthMm)}" data-camera-aperture="${escapeAttr(state.cameraAperture)}"
+    data-light-yaw="${escapeAttr(state.lightYawDegrees)}" data-light-pitch="${escapeAttr(state.lightPitchDegrees)}" data-light-intensity="${escapeAttr(state.lightIntensityPercent)}"
+    data-light-temperature="${escapeAttr(state.lightTemperature)}" data-light-color="${escapeAttr(normalizeCameraStudioLightColor(state.lightColor))}" data-light-preset="${escapeAttr(state.cameraLightingPreset)}" data-light-rim="${escapeAttr(state.lightRimEnabled)}" data-light-fill="${escapeAttr(state.lightFillEnabled)}">
+    <canvas data-camera-studio-canvas aria-hidden="true"></canvas>
+    ${sourcePreviewUrl ? `<img class="canvas-camera-studio-viewport-image" src="${escapeAttr(sourcePreviewUrl)}" alt="" aria-hidden="true" draggable="false" />` : '<div class="canvas-camera-studio-viewport-empty">当前节点没有可预览的图片</div>'}
+    <span class="canvas-camera-studio-axis is-yaw" aria-hidden="true">YAW</span>
+    <span class="canvas-camera-studio-axis is-pitch" aria-hidden="true">PITCH</span>
+    <div class="canvas-camera-studio-readout" aria-live="polite"><span data-camera-studio-readout-kind>${activeControl === "lighting" ? "LIGHT" : "CAM"}</span><strong data-camera-studio-readout-value>${escapeHtml(readoutValue)}°</strong></div>
+    <div class="canvas-camera-studio-legend" aria-hidden="true"><span class="canvas-camera-studio-legend-item is-camera">摄影机</span><span class="canvas-camera-studio-legend-item is-light">主光源</span></div>
   </div>`;
 }
 
@@ -1695,7 +2677,8 @@ function renderCameraStudioLightControls(state) {
       ${rangeField("光照强度", "lightIntensityPercent", state.lightIntensityPercent, 0, 100, 1, "%")}
     </div>
     <div class="canvas-media-parameter-grid">
-      ${selectField("色温", "lightTemperature", state.lightTemperature, [["cool", "冷光"], ["neutral", "中性"], ["warm", "暖光"]])}
+      ${renderCameraStudioLightColorField(state)}
+      ${selectField("色温", "lightTemperature", state.lightTemperature, [["cool", "冷光"], ["neutral", "中性"], ["warm", "暖光"], ["custom", "自定义"]])}
       ${selectField("布光", "cameraLightingPreset", state.cameraLightingPreset, [["softbox", "柔光箱"], ["three_point", "三点布光"], ["rim_light", "轮廓光"], ["natural", "自然光"]])}
       ${checkboxField("轮廓光", "lightRimEnabled", state.lightRimEnabled)}
       ${checkboxField("柔和补光", "lightFillEnabled", state.lightFillEnabled)}
@@ -1712,13 +2695,52 @@ function rangeField(label, field, value, min, max, step = 1, suffix = "") {
   return `<label class="canvas-camera-studio-range"><span>${label}</span><output data-media-output="${field}" data-suffix="${escapeAttr(suffix)}">${escapeHtml(value)}${escapeHtml(suffix)}</output><input type="range" min="${min}" max="${max}" step="${step}" data-media-field="${field}" value="${escapeAttr(value)}" /></label>`;
 }
 
+function renderCameraStudioLightColorField(state) {
+  const color = normalizeCameraStudioLightColor(state.lightColor);
+  return `<label class="canvas-camera-studio-light-color canvas-media-parameter-span"><span>光源颜色</span><span class="canvas-camera-studio-light-color-controls"><input type="color" data-media-field="lightColor" value="${escapeAttr(color)}" aria-label="选择光源颜色" /><input type="text" data-media-color-hex="lightColor" value="${escapeAttr(color)}" inputmode="text" maxlength="7" spellcheck="false" aria-label="光源颜色 HEX 值" /></span></label>`;
+}
+
 function syncCameraStudioLiveElements(surface, state, field) {
   const output = surface?.querySelector?.(`[data-media-output="${field}"]`);
   if (output) output.textContent = `${state[field]}${output.dataset?.suffix ?? ""}`;
+  const input = surface?.querySelector?.(`[data-media-field="${field}"]`);
+  if (input && String(input.value) !== String(state[field])) input.value = String(state[field]);
+  if (field === "lightColor") {
+    const color = normalizeCameraStudioLightColor(state.lightColor);
+    const hexInput = surface?.querySelector?.('[data-media-color-hex="lightColor"]');
+    if (hexInput && String(hexInput.value) !== color) hexInput.value = color;
+  }
   const prompt = surface?.querySelector?.("[data-camera-studio-prompt]");
   if (prompt) prompt.textContent = buildCameraStudioPrompt(state);
   const copyButton = surface?.querySelector?.('[data-media-action="camera-studio-copy"]');
   if (copyButton) copyButton.textContent = "复制提示词";
+  syncCameraStudioViewportDataset(surface?.querySelector?.("[data-camera-studio-viewport]"), state);
+  const activeControl = state.cameraStudioMode === "dual" ? state.cameraStudioActiveControl : state.cameraStudioMode;
+  const readoutKind = surface?.querySelector?.("[data-camera-studio-readout-kind]");
+  const readoutValue = surface?.querySelector?.("[data-camera-studio-readout-value]");
+  if (readoutKind) readoutKind.textContent = activeControl === "lighting" ? "LIGHT" : "CAM";
+  if (readoutValue) readoutValue.textContent = `${activeControl === "lighting" ? state.lightYawDegrees : state.cameraYawDegrees}°`;
+}
+
+function syncCameraStudioViewportDataset(viewport, state) {
+  if (!viewport?.dataset) return;
+  Object.assign(viewport.dataset, {
+    studioMode: String(state.cameraStudioMode),
+    activeControl: String(state.cameraStudioMode === "dual" ? state.cameraStudioActiveControl : state.cameraStudioMode),
+    cameraYaw: String(state.cameraYawDegrees),
+    cameraPitch: String(state.cameraPitchDegrees),
+    cameraRoll: String(state.cameraRollDegrees),
+    cameraFocalLength: String(state.cameraFocalLengthMm),
+    cameraAperture: String(state.cameraAperture),
+    lightYaw: String(state.lightYawDegrees),
+    lightPitch: String(state.lightPitchDegrees),
+    lightIntensity: String(state.lightIntensityPercent),
+    lightTemperature: String(state.lightTemperature),
+    lightColor: normalizeCameraStudioLightColor(state.lightColor),
+    lightPreset: String(state.cameraLightingPreset),
+    lightRim: String(state.lightRimEnabled),
+    lightFill: String(state.lightFillEnabled),
+  });
 }
 
 function applyCameraStudioPreset(state, presetToken) {
@@ -1763,6 +2785,7 @@ function resetCameraStudioState(state) {
     lightPitchDegrees: 30,
     lightIntensityPercent: 65,
     lightTemperature: "neutral",
+    lightColor: "#ffffff",
     lightRimEnabled: false,
     lightFillEnabled: true,
     cameraPromptCopied: false,
@@ -1774,41 +2797,70 @@ function buildCameraStudioPrompt(state) {
   const cameraTerms = [
     describeCameraYaw(state.cameraYawDegrees),
     describeCameraPitch(state.cameraPitchDegrees),
-    ({ far: "wide establishing framing", full: "full-body framing", medium: "medium-shot framing", close: "close-up framing", "extreme-close": "extreme close-up framing" })[state.cameraDistance] ?? "medium-shot framing",
-    ({ "15mm": "15mm ultra-wide lens", "24mm": "24mm wide-angle lens", "35mm": "35mm cinematic lens", "50mm": "50mm natural perspective lens", "85mm": "85mm portrait lens", "200mm": "200mm telephoto lens compression", fisheye: "fisheye lens distortion" })[state.cameraLens] ?? `${Number(state.cameraFocalLengthMm) || 50}mm lens`,
+    ({ far: "wide framing", full: "full-body framing", medium: "medium framing", close: "close framing", "extreme-close": "extreme close framing" })[state.cameraDistance] ?? "medium framing",
+    describeCameraStudioLens(state),
+    describeCameraStudioAperture(state.cameraAperture),
   ];
   if (Math.abs(Number(state.cameraRollDegrees)) >= 1) cameraTerms.push(`${Math.round(Number(state.cameraRollDegrees))} degree dutch angle`);
-  if (state.cameraPromptEnhance === true) cameraTerms.push("cinematic composition, coherent subject identity, high detail");
+  if (state.cameraPromptEnhance === true) cameraTerms.push("natural composition, clear detail");
   const lightTerms = [
     describeLightDirection(state.lightYawDegrees, state.lightPitchDegrees),
     `${Math.round(Number(state.lightIntensityPercent) || 0)}% intensity`,
     ({ cool: "cool daylight color temperature", neutral: "neutral studio color temperature", warm: "warm tungsten color temperature" })[state.lightTemperature] ?? "neutral studio color temperature",
+    ({ softbox: "softbox lighting", three_point: "three-point studio lighting", rim_light: "rim-light setup", natural: "natural-light setup" })[state.cameraLightingPreset] ?? "softbox lighting",
   ];
+  if (state.lightTemperature === "custom") lightTerms.push(`custom ${normalizeCameraStudioLightColor(state.lightColor)} light color`);
   if (state.lightRimEnabled === true) lightTerms.push("subtle rim light");
   if (state.lightFillEnabled === true) lightTerms.push("soft fill light");
-  if (mode === "camera") return cameraTerms.join(", ");
-  if (mode === "lighting") return lightTerms.join(", ");
-  return [...cameraTerms, ...lightTerms].join(", ");
+  const sections = ["Edit the reference image only. Preserve the same subject, clothing, and scene."];
+  if (mode === "camera" || mode === "dual") sections.push(`Camera: ${cameraTerms.join(", ")}.`);
+  if (mode === "lighting" || mode === "dual") sections.push(`Lighting: ${lightTerms.join(", ")}.`);
+  return sections.join(" ");
+}
+
+function cameraStudioTemperatureColor(value) {
+  return ({ cool: "#90c8ff", warm: "#ffa652", neutral: "#ffffff" })[String(value ?? "")] ?? "#ffffff";
+}
+
+function normalizeCameraStudioLightColor(value) {
+  const color = String(value ?? "").trim();
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "#ffffff";
+}
+
+function describeCameraStudioLens(state) {
+  if (state.cameraLens === "fisheye") return "fisheye lens";
+  const focalLength = Math.max(12, Math.min(200, Number(state.cameraFocalLengthMm) || Number.parseInt(state.cameraLens, 10) || 35));
+  if (focalLength <= 15) return `${focalLength}mm ultra-wide lens`;
+  if (focalLength <= 28) return `${focalLength}mm wide lens`;
+  return `${focalLength}mm lens`;
+}
+
+function describeCameraStudioAperture(value) {
+  const aperture = Math.max(1, Math.min(22, Number(value) || 2.8));
+  if (aperture <= 2) return `f/${aperture}, shallow depth of field`;
+  if (aperture <= 4) return `f/${aperture}, soft background`;
+  if (aperture <= 8) return `f/${aperture}, balanced depth of field`;
+  return `f/${aperture}, deep depth of field`;
 }
 
 function describeCameraYaw(value) {
   const yaw = normalizeAngle(value);
-  if (yaw >= -22.5 && yaw < 22.5) return "front camera view";
-  if (yaw >= 22.5 && yaw < 67.5) return "front-right three-quarter view";
-  if (yaw >= 67.5 && yaw < 112.5) return "right profile camera view";
-  if (yaw >= 112.5 && yaw < 157.5) return "rear-right three-quarter view";
-  if (yaw >= 157.5 || yaw < -157.5) return "rear camera view";
-  if (yaw >= -157.5 && yaw < -112.5) return "rear-left three-quarter view";
-  if (yaw >= -112.5 && yaw < -67.5) return "left profile camera view";
-  return "front-left three-quarter view";
+  if (yaw >= -22.5 && yaw < 22.5) return "front angle";
+  if (yaw >= 22.5 && yaw < 67.5) return "front-right three-quarter angle";
+  if (yaw >= 67.5 && yaw < 112.5) return "right profile angle";
+  if (yaw >= 112.5 && yaw < 157.5) return "rear-right three-quarter angle";
+  if (yaw >= 157.5 || yaw < -157.5) return "rear angle";
+  if (yaw >= -157.5 && yaw < -112.5) return "rear-left three-quarter angle";
+  if (yaw >= -112.5 && yaw < -67.5) return "left profile angle";
+  return "front-left three-quarter angle";
 }
 
 function describeCameraPitch(value) {
   const pitch = Number(value) || 0;
-  if (pitch >= 65) return "overhead top-down shot";
-  if (pitch > 15) return "high-angle shot";
-  if (pitch < -12) return "low-angle shot";
-  return "eye-level shot";
+  if (pitch >= 65) return "overhead angle";
+  if (pitch > 15) return "high angle";
+  if (pitch < -12) return "low angle";
+  return "eye-level angle";
 }
 
 function describeLightDirection(yawValue, pitchValue) {
@@ -1825,19 +2877,6 @@ function describeLightDirection(yawValue, pitchValue) {
 function normalizeAngle(value) {
   const normalized = ((Number(value) + 180) % 360 + 360) % 360 - 180;
   return Object.is(normalized, -0) ? 0 : normalized;
-}
-
-function renderRecoverySummary(state) {
-  const rows = [
-    state.derivationId ? ["派生任务", state.derivationId] : null,
-    state.taskId ? ["生成任务", state.taskId] : null,
-    state.annotationLayerId ? ["标注图层", state.annotationLayerId] : null,
-    state.batchGroup?.id ? ["宫格分组", state.batchGroup.id] : null,
-  ].filter(Boolean);
-  if (!rows.length) return "";
-  return `<dl class="canvas-media-recovery" aria-label="已恢复的媒体任务">
-    ${rows.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
-  </dl>`;
 }
 
 function recoveredMediaStatus(state) {
@@ -1876,7 +2915,7 @@ function selectField(label, field, value, options) {
 }
 
 function statusLabel(state) {
-  if (state.status === "running") return "处理中";
+  if (state.status === "running") return "图片生成中（处理中）";
   if (state.status === "completed") return "处理完成";
   if (state.status === "failed") return "提交失败";
   if (state.status === "submitting") return "正在创建任务";

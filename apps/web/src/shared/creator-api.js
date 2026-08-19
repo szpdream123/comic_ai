@@ -2484,8 +2484,11 @@ export const creatorApi = {
     });
   },
 
-  getProjectEpisodes(projectId) {
+  getProjectEpisodes(projectId, options = {}) {
     const path = `/api/creator/projects/${encodeURIComponent(projectId)}/episodes`;
+    if (options.force === true) {
+      return fetchJson(path, { cache: "no-store" });
+    }
     return fetchJsonWithTtl(path, {
       cacheKey: `GET ${path}`,
       cacheTtlMs: 30000,

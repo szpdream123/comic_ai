@@ -316,7 +316,10 @@ export class TextModelGatewayService {
         usage,
         usageSource,
       };
-      const finishFailureCode = failureCodeFromFinishReasons(input.tracker.finishReasons);
+      const finishFailureCode = failureCodeFromFinishReasons(
+        input.tracker.finishReasons,
+        input.tracker.responseText,
+      );
       if (finishFailureCode) {
         await markProviderRequestFailed(this.config.db, {
           providerRequestId: input.providerRequestId,
@@ -421,8 +424,8 @@ export class TextModelGatewayService {
   }
 }
 
-function failureCodeFromFinishReasons(finishReasons: string[]) {
-  return finishReasons.some((reason) => /(?:error|failed|failure|错误|失败)/i.test(reason))
+function failureCodeFromFinishReasons(finishReasons: string[], responseText: string) {
+  return finishReasons.some((reason) => /(?:error|failed|failure|错误|失败)/i.test(reason)) && !responseText.trim()
     ? "provider_stream_error"
     : null;
 }

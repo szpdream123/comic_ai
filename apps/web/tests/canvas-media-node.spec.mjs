@@ -22,6 +22,7 @@ import {
   renderCanvasVideoFullscreen,
   renderCanvasVideoNodeBody,
   resolveCanvasMediaActionBody,
+  resolveCanvasVideoElement,
   resolveCanvasMediaArtifactPatch,
   resolveCanvasMediaNodeSource,
   resolveCanvasMediaUrl,
@@ -262,6 +263,25 @@ test("Canvas media toolbar actions find the requested X6 media body and controls
   assert.equal(stopped, 2);
   assert.equal(control.dataset.canvasMediaPointerGuard, "true");
   assert.equal(bindCanvasMediaControlPointerGuards({ querySelectorAll: () => [control] }), 1);
+});
+
+test("Canvas video actions find videos rendered directly inside X6 source nodes", () => {
+  const video = { tagName: "VIDEO" };
+  const sourceNode = {
+    dataset: { nodeId: "source-video-1" },
+    querySelector(selector) { return selector === "video" ? video : null; },
+  };
+  const root = {
+    querySelectorAll(selector) {
+      return selector === ".canvas-x6-special-node[data-node-id]" ? [sourceNode] : [];
+    },
+  };
+  const target = {
+    dataset: { nodeId: "source-video-1" },
+    closest: () => null,
+    getRootNode: () => root,
+  };
+  assert.equal(resolveCanvasVideoElement(target, { root }), video);
 });
 
 test("Canvas media pointer guards leave inline video surfaces draggable", () => {

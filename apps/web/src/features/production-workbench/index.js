@@ -196,6 +196,7 @@ import {
   isCanvasVideoFrameSecurityError,
   reconcileCanvasMediaDocumentSources,
   resolveCanvasMediaActionBody,
+  resolveCanvasVideoElement,
 } from "./canvas/canvas-media-node.js";
 import {
   buildCanvasMarkdownTextPatch,
@@ -3395,6 +3396,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     render(workbench);
   };
   workbench.updateCanvasDocument = (canvasDocument, options = {}) => updateActiveCanvasDocument(workbench, canvasDocument, options);
+  workbench.ensureCanvasGenerationConfig = (options = {}) => ensureCanvasGenerationConfig(workbench, options);
   workbench.updateCanvasViewport = (canvasDocument) => {
     const updated = updateActiveCanvasDocument(workbench, canvasDocument, { immediateSave: true });
     void persistCanvasSession(
@@ -3412,6 +3414,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   );
   workbench.saveCanvasNow = () => saveProjectCanvasNow(workbench);
   workbench.persistCanvasNodePositions = (positions = []) => persistCanvasNodePositions(workbench, positions);
+  workbench.registerCanvasMediaGenerationTask = (taskOrId, defaults = {}) => {
+    const taskId = registerTaskCenterTask(workbench, taskOrId, defaults);
+    if (taskId) scheduleTaskCenterPolling(workbench, { immediate: true });
+    return taskId;
+  };
   workbench.persistCanvasSession = () => persistCanvasSession(
     workbench,
     resolveCanvasSaveProjectId(workbench),
@@ -3806,6 +3813,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     }
     if (
       actionTarget.matches?.('input[data-action="upload-project-cover"]') ||
+      actionTarget.matches?.('input[data-action="upload-episode-cover"]') ||
       actionTarget.matches?.('input[data-action="upload-asset-generator-image"]') ||
       actionTarget.matches?.('input[data-action="upload-prompt-marketplace-cover"]') ||
       actionTarget.matches?.('input[data-action="toggle-membership-payment-agreement"]') ||
@@ -4517,6 +4525,43 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       workbench.ui.projectCardMenuId = null;
       await runAction(workbench, "正在上传项目封面...", async () => {
         await uploadProjectCoverFile(workbench, file, projectId);
+      });
+      return;
+    }
+
+    if (target?.matches?.('input[data-action="upload-episode-cover"]')) {
+      const [file] = [...(target.files ?? [])];
+      target.value = "";
+      if (!file) return;
+      const episodeId = target.dataset.episodeId ?? "";
+      await runAction(workbench, "正在上传剧集封面...", async () => {
+        const projectId =
+          String(target.dataset.projectId ?? "").trim() ||
+          String(workbench.ui.homeProjectWorkflowProjectId ?? "").trim() ||
+          resolveActiveProjectId(workbench);
+        const uploadLimits = getProjectCoverUploadLimits();
+        validateUploadFile(file, uploadLimits);
+        const uploadFile = await prepareProjectCoverUploadFile(file);
+        const upload = await uploadLocalFile(workbench, uploadFile, "episode-covers", {
+          projectId,
+          uploadLimits,
+        });
+        const updateInput = {
+          uploadSessionId: upload.uploadSessionId,
+          storageObjectId: upload.storageObjectId,
+        };
+        const result = typeof workbench.api.updateProjectEpisode === "function"
+          ? await workbench.api.updateProjectEpisode(projectId, episodeId, updateInput)
+          : await workbench.api.updateEpisode({ projectId, episodeId, ...updateInput });
+        const updatedEpisode = result?.episode;
+        if (updatedEpisode?.id) {
+          applyProjectDetailPatch(workbench, {
+            episodes: (workbench.state?.projectDetail?.episodes ?? []).map((episode) =>
+              episode.id === updatedEpisode.id ? { ...episode, ...updatedEpisode } : episode,
+            ),
+          });
+        }
+        await ensureProjectEpisodesLoaded(workbench, projectId, { force: true });
       });
       return;
     }
@@ -6239,7 +6284,7 @@ async function ensureProjectEpisodesLoaded(workbench, projectId = resolveActiveP
     return workbench.projectEpisodesLoadPromise;
   }
   const pending = ensureProjectOverviewLoaded(workbench, normalizedProjectId)
-    .then(() => workbench.api.getProjectEpisodes(normalizedProjectId))
+    .then(() => workbench.api.getProjectEpisodes(normalizedProjectId, { force: options.force === true }))
     .then((payload) => {
       const episodes = Array.isArray(payload?.episodes) ? payload.episodes : [];
       if (String(workbench.ui.selectedProjectCardId ?? normalizedProjectId) === normalizedProjectId) {
@@ -10336,7 +10381,7 @@ function captureSingleEpisodeAiPreviewScrollState(root) {
       root.querySelector("[data-single-episode-ai-preview-surface]"),
     ),
     scriptOutput: captureSingleEpisodeAiScrollTargetState(
-      root.querySelector(".single-episode-ai-script-text div"),
+      root.querySelector(".single-episode-ai-script-text > div"),
     ),
     liveOutput: captureSingleEpisodeAiScrollTargetState(
       root.querySelector(".manual-script-analysis-output pre, .single-episode-ai-live-output pre"),
@@ -10378,7 +10423,7 @@ function restoreSingleEpisodeAiPreviewScrollState(root, scrollState) {
     scrollState.previewSurface,
   );
   restoreSingleEpisodeAiScrollTargetState(
-    root.querySelector(".single-episode-ai-script-text div"),
+    root.querySelector(".single-episode-ai-script-text > div"),
     scrollState.scriptOutput,
   );
   restoreSingleEpisodeAiScrollTargetState(
@@ -10881,19 +10926,17 @@ function keepSingleEpisodeAiLiveOutputPinnedToLatest(workbench, scrollState = nu
     const previewSurface = workbench.root.querySelector?.(
       "[data-single-episode-ai-preview-surface]",
     );
-    if (previewSurface && (
-      activePromptStage || scrollState?.previewSurface?.stickToBottom !== false
-    )) {
+    if (previewSurface) {
       previewSurface.scrollTop = previewSurface.scrollHeight;
     }
-    const scriptOutput = workbench.root.querySelector?.(".single-episode-ai-script-text div");
-    if (scriptOutput && scrollState?.scriptOutput?.stickToBottom !== false) {
+    const scriptOutput = workbench.root.querySelector?.(".single-episode-ai-script-text > div");
+    if (scriptOutput) {
       scriptOutput.scrollTop = scriptOutput.scrollHeight;
     }
     const liveOutput = workbench.root.querySelector?.(
       ".manual-script-analysis-output pre, .single-episode-ai-live-output pre",
     );
-    if (liveOutput && scrollState?.liveOutput?.stickToBottom !== false) {
+    if (liveOutput) {
       liveOutput.scrollTop = liveOutput.scrollHeight;
     }
     if (activePromptStage) {
@@ -15603,7 +15646,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       nodeId,
       root: workbench.root,
     });
-    const video = body?.querySelector?.("[data-canvas-video-player]");
+    const video = body?.querySelector?.("[data-canvas-video-player]")
+      ?? resolveCanvasVideoElement(target, { nodeId, root: workbench.root });
     const node = ensureWorkbenchCanvasDocument(workbench).nodes?.find?.((item) => item.id === nodeId);
     if (!video || !node) return;
     try {
@@ -19754,11 +19798,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       let shouldStartAiWorkflow = false;
       await runAction(workbench, "正在解析剧本并创建工作流...", async () => {
         const scriptFile = workflowScriptFile;
+        const showWorkflowProgress = (message) => {
+          workbench.ui.toast = message;
+          render(workbench);
+        };
+        showWorkflowProgress("正在上传剧本文档...");
         const scriptUpload = await uploadLocalFile(workbench, scriptFile, "script-documents", {
           projectId: null,
           uploadLimits: SCRIPT_DOCUMENT_UPLOAD_LIMITS,
         });
         const projectName = (stripScriptDocumentExtension(scriptFile.name) || "工作流项目").slice(0, 60);
+        showWorkflowProgress("正在创建项目...");
         const created = await workbench.api.createProject(buildProjectCreateRequest({
           name: projectName,
           aspectRatio: "9:16",
@@ -19775,6 +19825,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           throw new Error("project_create_result_missing");
         }
         workbench.ui.selectedProjectCardId = projectId;
+        showWorkflowProgress("正在加载项目工作区...");
         applyProjectDetail(workbench, await loadProjectDetailForWorkbench(workbench, projectId));
         const createdState = created?.state ?? created?.body?.state ?? {};
         const sourceScript = String(
@@ -19782,11 +19833,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           workbench.state?.script?.inputText,
         ).trim();
         if (!sourceScript) throw new Error("script_text_required");
-        await Promise.all([
-          syncEpisodePromptSkills(workbench),
-          loadGlobalGenerationConfig(workbench, { fresh: true, mediaType: "text" }),
-        ]);
-        workbench.ui.singleEpisodeTextModelCode = resolveSingleEpisodeTextModelCode(workbench.ui);
+        // The home workflow uses the server's default stages and model; loading
+        // the optional skill catalogs here only delays the first visible result.
+        workbench.ui.singleEpisodeTextModelCode =
+          resolveSingleEpisodeTextModelCode(workbench.ui) || "deepseek-noval";
         workbench.ui.singleEpisodeName = buildSingleEpisodeTitle(sourceScript, getDetailEpisodes(workbench.state));
         workbench.ui.singleEpisodeScript = sourceScript;
         workbench.ui.singleEpisodeNotice = "";
@@ -19796,6 +19846,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         workbench.ui.homeWorkflowOrigin = true;
         workbench.ui.workflowGenerationWorkbenchOpen = false;
         shouldStartAiWorkflow = true;
+        showWorkflowProgress("正在启动剧本解析...");
       }, { successToast: null });
       if (shouldStartAiWorkflow) {
         await handleAction(workbench, { dataset: { action: "confirm-single-episode", workflowOrigin: "home" } });
@@ -25663,6 +25714,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "pick-episode-cover") {
+    if (target.tagName === "LABEL") {
+      return;
+    }
+    const episodeId = target.dataset.episodeId ?? "";
+    findEpisodeCoverInput(workbench.root, episodeId)?.click();
+    return;
+  }
+
   if (action === "pick-script-cover") {
     if (target.tagName === "LABEL") {
       return;
@@ -30673,8 +30733,12 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   if (!serverDocument) {
     return false;
   }
-  clearCanvasRefreshDraft(workbench, projectId);
-  const document = serverDocument;
+  const refreshDraft = readCanvasRefreshDraft(workbench, projectId);
+  const restoreRefreshDraft = shouldRestoreCanvasGenerationRefreshDraft(refreshDraft, serverDocument, serverRevision);
+  const document = restoreRefreshDraft ? refreshDraft.document : serverDocument;
+  if (!restoreRefreshDraft) {
+    clearCanvasRefreshDraft(workbench, projectId);
+  }
   if (canLoadSession) {
     const session = sessionPayload?.session ?? sessionPayload;
     workbench.ui.selectedCanvasNodeId = Array.isArray(session?.selectedNodeKeys)
@@ -30695,7 +30759,7 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   workbench.ui.activeCanvasProjectId = projectId;
   workbench.ui.selectedCanvasProjectId = projectId;
   workbench.ui.canvasServerRevision = serverRevision;
-  workbench.ui.canvasSaveStatus = "idle";
+  workbench.ui.canvasSaveStatus = restoreRefreshDraft ? "pending" : "idle";
   workbench.ui.canvasSaveError = "";
   workbench.ui.canvasRevisionConflict = null;
   workbench.ui.canvasDocumentsByProject = {
@@ -30706,7 +30770,39 @@ async function loadStandaloneCanvasProject(workbench, canvasProjectId) {
   };
   workbench.ui.canvasDocument = document;
   applyCanvasGraphViewport(workbench);
+  if (restoreRefreshDraft) {
+    void saveProjectCanvasNow(workbench).catch(() => undefined);
+  }
   return true;
+}
+
+function shouldRestoreCanvasGenerationRefreshDraft(refreshDraft, serverDocument, serverRevision) {
+  const draftRevision = Number(refreshDraft?.clientRevision ?? 0);
+  if (!Number.isFinite(draftRevision) || draftRevision < Number(serverRevision ?? 0)) return false;
+  const draftDocument = refreshDraft?.document;
+  const draftNodes = Array.isArray(draftDocument?.nodes) ? draftDocument.nodes : [];
+  const serverNodes = Array.isArray(serverDocument?.nodes) ? serverDocument.nodes : [];
+  const serverById = new Map(serverNodes.map((node) => [String(node?.id ?? ""), node]));
+  return draftNodes.some((draftNode) => {
+    const status = String(draftNode?.data?.status ?? "").trim().toLowerCase();
+    if (!["running", "queued", "processing"].includes(status)) return false;
+    const serverNode = serverById.get(String(draftNode?.id ?? ""));
+    const serverStatus = String(serverNode?.data?.status ?? "").trim().toLowerCase();
+    if (!["running", "queued", "processing"].includes(serverStatus)) return true;
+    const draftTaskId = String(
+      draftNode?.data?.lastTaskId
+        ?? draftNode?.data?.taskId
+        ?? draftNode?.data?.generationTaskId
+        ?? "",
+    ).trim();
+    const serverTaskId = String(
+      serverNode?.data?.lastTaskId
+        ?? serverNode?.data?.taskId
+        ?? serverNode?.data?.generationTaskId
+        ?? "",
+    ).trim();
+    return Boolean(draftTaskId && draftTaskId !== serverTaskId);
+  });
 }
 
 function isSelectedStandaloneCanvasDocumentLoaded(workbench) {
@@ -31230,7 +31326,6 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
       error?.details?.serverDocument
     ) {
       const localDocument = normalizeStandaloneCanvasDocument(workbench.ui.canvasDocument ?? documentToSave, projectId);
-      const serverDocument = normalizeStandaloneCanvasDocument(error.details.serverDocument, projectId);
       const serverRevision = Number(error.details.serverRevision ?? revision) || revision;
       workbench.ui.canvasDocument = localDocument;
       workbench.ui.canvasDocumentsByProject = {
@@ -31239,10 +31334,44 @@ async function saveProjectCanvasNowUnlocked(workbench, options = {}) {
           : {}),
         [projectId]: localDocument,
       };
+      // Canvas editing is local-first: rebase the local draft on the latest
+      // server revision once before exposing a conflict to the user.
+      if (options.localConflictRetry !== true) {
+        try {
+          revision = serverRevision;
+          documentToSave = localDocument;
+          savePromise = saveCanvas.call(workbench.api, projectId, {
+            clientRevision: revision,
+            document: documentToSave,
+            events: [],
+          }, requestOptions);
+          workbench.canvasSaveInFlight = savePromise;
+          const retryPayload = await savePromise;
+          const retryCanvas = retryPayload?.canvas ?? retryPayload;
+          if (workbench.canvasSaveRequestId !== saveRequestId) return retryCanvas;
+          workbench.ui.activeCanvasProjectId = retryCanvas?.canvasProjectId ?? workbench.ui.selectedCanvasProjectId ?? projectId;
+          workbench.ui.canvasServerRevision = Number(retryCanvas?.serverRevision ?? revision) || revision;
+          workbench.ui.canvasSaveStatus = "saved";
+          workbench.ui.canvasSaveError = "";
+          workbench.ui.canvasRevisionConflict = null;
+          clearCanvasRefreshDraft(workbench, projectId, documentToSave);
+          return retryCanvas;
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+      if (error?.errorCode !== "canvas_revision_conflict" || !error?.details?.serverDocument) {
+        workbench.ui.canvasSaveStatus = "error";
+        workbench.ui.canvasSaveError = friendlyError(error);
+        workbench.ui.canvasRevisionConflict = null;
+        throw error;
+      }
+      const serverDocument = normalizeStandaloneCanvasDocument(error.details?.serverDocument ?? {}, projectId);
+      const latestServerRevision = Number(error.details?.serverRevision ?? serverRevision) || serverRevision;
       workbench.ui.canvasRevisionConflict = {
         canvasProjectId: projectId,
         clientRevision: revision,
-        serverRevision,
+        serverRevision: latestServerRevision,
         localDocument,
         serverDocument,
       };
@@ -35743,7 +35872,7 @@ function finalizeSingleEpisodeAiPreviewCompletedStages(workbench) {
   }
   const selectedStages = Array.isArray(preview.selectedStages) && preview.selectedStages.length > 0
     ? preview.selectedStages.map((stage) => String(stage ?? "")).filter(Boolean)
-    : (preview.assetPromptSteps ?? []).map((step) => String(step?.stage ?? "")).filter(Boolean);
+    : [];
   if (!selectedStages.length) {
     return false;
   }
@@ -50541,6 +50670,35 @@ async function applyTaskCenterTaskProjection(workbench, task, options = {}) {
   }
 
   const canvasTargets = resolveCanvasGenerationPollTargets(workbench).filter((target) => target.taskId === taskId);
+  if (!canvasTargets.length && workbench.ui.canvasDocument) {
+    const targetType = String(task?.targetType ?? "").trim().toLowerCase();
+    const targetNodeId = String(task?.targetId ?? task?.target?.nodeId ?? "").trim();
+    const targetNode = targetNodeId
+      ? workbench.ui.canvasDocument.nodes?.find?.((node) => String(node?.id ?? "") === targetNodeId)
+      : null;
+    if (
+      targetNode &&
+      ["canvas", "canvas_node"].includes(targetType) &&
+      ["queued", "running", "processing", "completed", "succeeded", "failed", "canceled", "cancelled", "result_unknown", "manual_review_required"].includes(
+        String(targetNode.data?.status ?? "").trim().toLowerCase(),
+      )
+    ) {
+      canvasTargets.push({
+        nodeId: targetNodeId,
+        taskId,
+        preview: {
+          ok: true,
+          nodeId: targetNodeId,
+          mediaKind,
+          modelCode: String(targetNode.data?.modelCode ?? task?.modelCode ?? ""),
+          prompt: String(targetNode.data?.prompt ?? task?.prompt ?? ""),
+          taskId,
+          upstreamNodeIds: [],
+          upstreamTextFragments: [],
+        },
+      });
+    }
+  }
   if (canvasTargets.length && workbench.ui.canvasDocument) {
     let document = workbench.ui.canvasDocument;
     canvasTargets.forEach((target) => {
@@ -58205,6 +58363,13 @@ export function findScriptCoverInput(root, scriptId) {
   }
   return root.querySelector(
     `input[data-action="upload-script-cover"][data-script-id="${scriptId}"]`,
+  );
+}
+
+export function findEpisodeCoverInput(root, episodeId) {
+  if (!episodeId) return null;
+  return root.querySelector(
+    `input[data-action="upload-episode-cover"][data-episode-id="${episodeId}"]`,
   );
 }
 

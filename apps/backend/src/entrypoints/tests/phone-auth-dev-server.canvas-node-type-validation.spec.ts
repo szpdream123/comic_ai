@@ -210,6 +210,15 @@ it("accepts Canvas image derivations and generators while rejecting non-generato
               ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
             },
           }, {
+            id: "upload-image-node",
+            type: "upload",
+            position: { x: 400, y: 300 },
+            data: {
+              mediaKind: "image",
+              url: "https://cdn.test/upload.png",
+              ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
+            },
+          }, {
             id: "ai-image-node",
             type: "ai-image",
             position: { x: 500, y: 100 },
@@ -357,6 +366,24 @@ it("accepts Canvas image derivations and generators while rejecting non-generato
     const sourceImagePayload = await sourceImageResponse.json();
     assert.equal(sourceImageResponse.status, 200, JSON.stringify(sourceImagePayload));
     assert.ok(sourceImagePayload.data.taskId);
+
+    const uploadImageResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "canvas-upload-image-node",
+        cookie,
+      },
+      body: JSON.stringify({
+        target: { kind: "canvas", canvasProjectId, nodeId: "upload-image-node" },
+        prompt: "摄影棚灯光调整",
+        model: "cumob-gpt-image-2-pro",
+        parameters: { referenceImages: ["https://cdn.test/upload.png"] },
+      }),
+    });
+    const uploadImagePayload = await uploadImageResponse.json();
+    assert.equal(uploadImageResponse.status, 200, JSON.stringify(uploadImagePayload));
+    assert.ok(uploadImagePayload.data.taskId);
 
     const acceptedResponse = await fetch(`${server.origin}/api/generation/image-tasks`, {
       method: "POST",

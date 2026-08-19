@@ -404,6 +404,23 @@ export function resolveCanvasMediaActionBody(target, options = {}) {
   return null;
 }
 
+export function resolveCanvasVideoElement(target, options = {}) {
+  const nodeId = firstText(options.nodeId, target?.dataset?.nodeId);
+  const body = resolveCanvasMediaActionBody(target, { ...options, mediaKind: "video", nodeId });
+  const bodyVideo = body?.querySelector?.("[data-canvas-video-player]");
+  if (bodyVideo) return bodyVideo;
+
+  const roots = [target?.getRootNode?.(), options.root, options.root?.shadowRoot]
+    .filter((root, index, list) => root?.querySelectorAll && list.indexOf(root) === index);
+  for (const root of roots) {
+    const nodes = [...root.querySelectorAll(".canvas-x6-special-node[data-node-id]")];
+    const node = nodes.find((item) => !nodeId || String(item.dataset?.nodeId ?? "") === nodeId);
+    const video = node?.querySelector?.("video");
+    if (video) return video;
+  }
+  return null;
+}
+
 export function bindCanvasMediaControlPointerGuards(root) {
   const controls = [...(root?.querySelectorAll?.(
     "[data-canvas-audio-body] button, [data-canvas-audio-body] audio, [data-canvas-audio-body] [role='slider'], [data-canvas-video-body] button, [data-canvas-video-fullscreen] button, [data-canvas-video-fullscreen] video, [data-canvas-image-preview-trigger], .canvas-x6-source-upload-action[data-action='pick-canvas-upload-file'], [data-canvas-image-fullscreen] button",

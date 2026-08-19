@@ -75,8 +75,12 @@ export async function mountCanvasWorkflowIfPresent(workbench) {
     workbench.canvasGraph = graph;
     refreshCanvasWorkflowGraph(workbench);
     mount.dataset.x6Mounted = "true";
+    await stabilizeInitialCanvasViewport(
+      graph,
+      workbench.ui.canvasDocument?.viewport ?? canvasDocument.viewport,
+      mount,
+    );
     mount.closest(".canvas-stage")?.classList.add("is-x6-ready");
-    void stabilizeInitialCanvasViewport(graph, workbench.ui.canvasDocument?.viewport ?? canvasDocument.viewport, mount);
     return graph;
   } catch (error) {
     console.warn("Failed to mount canvas workflow graph", error);
@@ -609,6 +613,7 @@ function createCanvasSpecialMediaX6Node(node = {}) {
   element?.querySelectorAll?.("button, input, textarea, select, a, [contenteditable='true'], [role='application'], [data-canvas-text-output]").forEach((control) => {
     control.addEventListener("pointerdown", (event) => event.stopPropagation());
     control.addEventListener("mousedown", (event) => event.stopPropagation());
+    control.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   });
   syncCanvasStoryboardGridAspectRatio(element);
   element?.querySelectorAll?.("[data-canvas-video-fallback-src]").forEach((video) => {
@@ -871,14 +876,18 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
     && !generationFailed
     && !generationCompleted
     && (generationTaskId.length > 0 || ["queued", "running", "processing"].includes(status));
-  const emptyUploadAttrs = mediaUrl || uploading || agentGenerating
+  const mediaDerivationGenerating = data.source === "canvas_derivation"
+    && ["queued", "running", "processing"].includes(status);
+  const generating = agentGenerating || mediaDerivationGenerating;
+  const emptyUploadAttrs = mediaUrl || uploading || generating
     ? ""
     : ` data-action="pick-canvas-upload-file" data-node-id="${escapeCanvasX6Html(nodeId)}" role="button" tabindex="0"`;
   const uploadingMask = uploading
     ? `<div class="canvas-x6-source-uploading-mask" role="status" aria-live="polite"><span class="canvas-x6-source-uploading-spinner" aria-hidden="true"></span><strong>${mediaKind === "video" ? "视频正在上传中" : "素材正在上传中"}</strong><small>请稍候</small></div>`
     : "";
-  const generationMask = agentGenerating
-    ? `<div class="canvas-x6-source-generation-mask" role="status" aria-live="polite" aria-label="${mediaLabel}正在生成"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>${mediaLabel}正在生成中</strong><small>请稍候</small></div>`
+  const generationLabel = mediaDerivationGenerating && mediaKind === "image" ? "图片生成中" : `${mediaLabel}正在生成中`;
+  const generationMask = generating
+    ? `<div class="canvas-x6-source-generation-mask canvas-image-generation-mask" role="status" aria-live="polite" aria-label="${generationLabel}"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>${generationLabel}</strong><small>请稍候</small></div>`
     : "";
   const preview = mediaUrl
     ? mediaKind === "video"
@@ -888,8 +897,8 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
       : mediaKind === "audio"
         ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}${generationMask}`
         : `<button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看图片" title="放大查看图片"><img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} /></button>${uploadingMask}${generationMask}`
-    : `${uploadingMask}${generationMask}<strong>${agentGenerating ? `${mediaLabel}正在生成中` : emptyUploadLabel}</strong><small>${agentGenerating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
-  return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${agentGenerating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || agentGenerating ? " aria-busy=\"true\"" : ""}>
+    : `${uploadingMask}${generationMask}<strong>${generating ? generationLabel : emptyUploadLabel}</strong><small>${generating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
+  return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${generating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || generating ? " aria-busy=\"true\"" : ""}>
     <div class="canvas-x6-source-media-preview"${emptyUploadAttrs}>${preview}</div>
     <button class="canvas-x6-source-upload-action" type="button" data-action="pick-canvas-upload-file" data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="${actionLabel}" title="${actionLabel}"${uploading || agentGenerating ? " disabled aria-disabled=\"true\"" : ""}>${actionLabel}</button>
     <input type="file" accept="${accept}" data-canvas-upload-input data-node-id="${escapeCanvasX6Html(nodeId)}" tabindex="-1" aria-hidden="true" hidden />
@@ -1245,7 +1254,7 @@ function renderCanvasX6GenerationState(node = {}, status = "") {
 }
 
 function isCanvasX6GenerationNode(type) {
-  return ["send", "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard"].includes(String(type ?? ""));
+  return ["send", "source-image", "upload", "ai-text", "ai-image", "ai-video", "ai-audio", "ai-animation", "ai-panorama", "ai-markdown", "ai-storyboard"].includes(String(type ?? ""));
 }
 
 function canvasX6GenerationStatusLabel(status, fallback) {
@@ -2013,7 +2022,6 @@ function wireGraphSync(graph, workbench, mount) {
     dragSnaplineSuspended = false;
     if (snapEnabled()) graph.getPlugin?.("snapline")?.enable?.();
   };
-  const syncMovedNodeEditor = ({ node }) => syncCanvasGraphEditorOverlay(graph, node);
   const updateStoryboardReturnTarget = (event) => {
     const target = resolveCanvasStoryboardReturnTarget(mount, event?.node, event);
     if (storyboardReturnCell !== target?.cell) {
@@ -2053,7 +2061,7 @@ function wireGraphSync(graph, workbench, mount) {
         }
       }
     }
-    if (!event?.options?.ui && !event?.options?.selection) syncMovedNodeEditor(event);
+    if (!event?.options?.selection) syncCanvasGraphEditorOverlay(graph, event?.node);
     if (!event?.options?.selection) positionCanvasNodeActionToolbar(graph, mount);
     if (event?.options?.selection) {
       selectionMovePending = true;
@@ -2083,7 +2091,7 @@ function wireGraphSync(graph, workbench, mount) {
       return;
     }
     snapCanvasGraphNodesToGrid([event?.node], snapEnabled());
-    syncMovedNodeEditor(event);
+    syncCanvasGraphEditorOverlay(graph, event?.node);
     refreshCanvasDistributionGapHandles(graph, workbench, mount);
     refreshCanvasConnectedEdgeMotion(graph);
     positionCanvasSelectionActionToolbar(graph, mount);
@@ -2136,15 +2144,6 @@ function wireGraphSync(graph, workbench, mount) {
   const selectGraphNode = (node) => {
     if (node?.getData?.()?.canvasTransientEditor === true) return;
     node?.setZIndex?.(resolveCanvasGraphNodeSelectionZIndex(node));
-    graph.getCellById?.(CANVAS_EDITOR_OVERLAY_ID)?.setZIndex?.(1002);
-    if (
-      String(node?.id ?? "") === String(workbench.ui.selectedCanvasNodeId ?? "")
-      && workbench.ui.canvasEditorOpen === true
-      && !graph.getCellById?.(CANVAS_EDITOR_OVERLAY_ID)
-    ) {
-      workbench.onCanvasNodeSelected?.(node.id);
-      return;
-    }
     selectCanvasNodeFromGraph(workbench, node?.id);
   };
   graph.on("node:click", ({ node }) => selectGraphNode(node));
@@ -2202,7 +2201,6 @@ function wireGraphSync(graph, workbench, mount) {
     requestFrame(() => refreshCanvasSelectionActionToolbar(graph, workbench, mount));
     if (selectionMovePending) {
       selectionMovePending = false;
-      (graph.getSelectedCells?.() ?? []).forEach((node) => syncCanvasGraphEditorOverlay(graph, node));
       snapCanvasGraphNodesToGrid(graph.getSelectedCells?.(), snapEnabled());
       scheduleGraphCommit({ clearToast: true });
     }
@@ -2474,7 +2472,7 @@ export function mountCanvasGraphEditorOverlay(graph, nodeId, editorHtml) {
   const size = parent.getSize?.() ?? { width: 360, height: 170 };
   const position = parent.getPosition?.() ?? { x: 0, y: 0 };
   const editorSize = { width: 600, height: 220 };
-  const editor = graph.addNode({
+  graph.addNode({
     id: CANVAS_EDITOR_OVERLAY_ID,
     shape: "comic-ai-canvas-editor-overlay",
     x: position.x + (size.width - editorSize.width) / 2,

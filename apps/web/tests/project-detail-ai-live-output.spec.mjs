@@ -868,7 +868,7 @@ test("ready AI storyboard preview shows a creating state while committing", () =
   assert.match(html, /single-episode-ai-preview ready submitting/);
   assert.match(html, /single-episode-ai-submitting-lock/);
   assert.match(html, /single-episode-ai-submitting-dialog" role="status" aria-live="assertive"/);
-  assert.match(html, /aria-busy="true" aria-label="正在创建章节"/);
+  assert.match(html, /aria-busy="true" aria-label="正在创建项目"/);
   assert.match(html, /创建中\.\.\./);
   assert.match(html, /创建中，请稍候，完成后会自动进入分镜工作台。/);
   assert.match(html, /正在保存剧本、角色、场景和分镜，请稍候。/);

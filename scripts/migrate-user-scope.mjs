@@ -123,6 +123,7 @@ const migrations = [
   ["20260921-marketing-generation-confirmations.sql", "packages/db/migrations/20260921-marketing-generation-confirmations.sql"],
   ["20260922-marketing-generation-skills.sql", "packages/db/migrations/20260922-marketing-generation-skills.sql"],
   ["20260923-marketing-skill-kinds.sql", "packages/db/migrations/20260923-marketing-skill-kinds.sql"],
+  ["20260924-add-episode-cover-storage.sql", "packages/db/migrations/20260924-add-episode-cover-storage.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -157,6 +158,7 @@ const runtimeSafeMigrationNames = new Set([
   "20260921-marketing-generation-confirmations.sql",
   "20260922-marketing-generation-skills.sql",
   "20260923-marketing-skill-kinds.sql",
+  "20260924-add-episode-cover-storage.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

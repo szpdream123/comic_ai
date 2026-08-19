@@ -3719,17 +3719,24 @@ function renderEpisodeHub({ episodes = [], ui }) {
 
 function renderEpisodeHubCard(episode, ui) {
   const isMenuOpen = ui.episodeCardMenuId === episode.id;
+  const coverInputId = `episode-cover-input-${String(episode.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const hasCover = Boolean(
+    episode.coverImageUrl ??
+    episode.cover_image_url ??
+    episode.coverStorageObjectId ??
+    episode.cover_storage_object_id,
+  );
   return `
     <article class="episode-card episode-library-card" data-action="open-episode-workbench" data-episode-id="${escapeHtml(episode.id)}">
-      <div class="episode-card-preview ${episode.previewMedia?.kind === "video" ? "has-video-preview" : ""}" aria-hidden="true">
-        ${
-          episode.previewMedia?.src
-            ? episode.previewMedia.kind === "video"
-              ? `<video src="${escapeAttr(episode.previewMedia.src)}" muted playsinline preload="metadata"></video><i>▶</i>`
-              : `<img src="${escapeAttr(episode.previewMedia.src)}" alt="" />`
-            : "<span>剧</span>"
-        }
+      <div class="episode-card-preview project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}" aria-label="${escapeAttr(episode.title)}封面">
+        <label class="project-cover-placeholder" for="${escapeAttr(coverInputId)}" data-action="pick-episode-cover" data-episode-id="${escapeAttr(episode.id)}">
+          <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
+          <strong>上传封面</strong>
+        </label>
+        <img class="project-gallery-cover" src="${escapeAttr(getEpisodeCoverSrc(episode))}" alt="${escapeAttr(episode.title)} 封面" loading="lazy" decoding="async" />
+        ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-episode-cover" data-episode-id="${escapeAttr(episode.id)}" aria-label="替换 ${escapeAttr(episode.title)} 的剧集封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
       </div>
+      <input id="${escapeAttr(coverInputId)}" class="project-cover-input" type="file" accept="image/*" data-action="upload-episode-cover" data-episode-id="${escapeAttr(episode.id)}" />
       <div class="episode-card-body">
         <div class="episode-card-copy">
           <h3 title="${escapeHtml(episode.title)}">${escapeHtml(truncateEpisodeTitle(episode.title))}</h3>
@@ -3750,6 +3757,17 @@ function renderEpisodeHubCard(episode, ui) {
       </div>
     </article>
   `;
+}
+
+function getEpisodeCoverSrc(episode) {
+  const storageObjectId = String(episode?.coverStorageObjectId ?? episode?.cover_storage_object_id ?? "").trim();
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
+  const coverImageUrl = String(episode?.coverImageUrl ?? episode?.cover_image_url ?? "").trim();
+  return coverImageUrl
+    ? resolveApiUrl(coverImageUrl)
+    : "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 }
 
 function renderEpisodeHubMenu(episode) {
@@ -4234,7 +4252,7 @@ function resolveSingleEpisodeTextModels(ui = {}) {
   if (models.length) {
     return models;
   }
-  const fallbackCode = String(ui.singleEpisodeTextModelCode ?? "deepseek-script").trim() || "deepseek-script";
+  const fallbackCode = String(ui.singleEpisodeTextModelCode ?? "deepseek-noval").trim() || "deepseek-noval";
   return [{ modelCode: fallbackCode, modelLabel: fallbackCode, raw: {} }];
 }
 
@@ -4375,7 +4393,7 @@ export function renderSingleEpisodeAiPreview(ui) {
             </div>
           ` : ""}
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create" type="button" disabled>${preview.activeStage === "intent" ? "分析中" : canCreateEpisode ? "创建章节" : "生成中"}</button>
+            <button class="single-episode-ai-create" type="button" disabled>${preview.activeStage === "intent" ? "分析中" : canCreateEpisode ? "创建项目" : "生成中"}</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
@@ -4412,7 +4430,7 @@ export function renderSingleEpisodeAiPreview(ui) {
   }
   if (preview.status === "submitting") {
     return `
-      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-busy="true" aria-label="正在创建章节">
+      <section class="single-episode-ai-overlay" role="dialog" aria-modal="true" aria-busy="true" aria-label="正在创建项目">
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" disabled>‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
@@ -4440,7 +4458,7 @@ export function renderSingleEpisodeAiPreview(ui) {
             <span class="single-episode-ai-submitting-spinner" aria-hidden="true"></span>
             <div>
               <p>灵曦AI</p>
-              <h3>${preview.source === "home-workflow" ? "正在进入工作流" : "正在创建章节"}</h3>
+              <h3>${preview.source === "home-workflow" ? "正在进入工作流" : "正在创建项目"}</h3>
             </div>
             <p class="single-episode-ai-submitting-message">正在保存剧本、角色、场景和分镜，请稍候。</p>
           </div>
@@ -4454,7 +4472,7 @@ export function renderSingleEpisodeAiPreview(ui) {
         <div class="single-episode-ai-overlay-top">
           <button class="single-episode-ai-back" type="button" data-action="close-ai-storyboard-preview">‹ 返回</button>
           <div class="single-episode-ai-overlay-actions">
-            <button class="single-episode-ai-create ${canCreateEpisode && guideTargetKey === "commit-storyboard-button" ? "first-login-guide-target" : ""}" type="button" data-action="${canCreateEpisode ? "commit-ai-storyboard-preview" : "close-ai-storyboard-preview"}"${canCreateEpisode ? ' data-first-login-target="commit-storyboard-button"' : ""}>${canCreateEpisode ? (preview.source === "home-workflow" ? "进入工作流" : "创建章节") : "完成"}</button>
+            <button class="single-episode-ai-create ${canCreateEpisode && guideTargetKey === "commit-storyboard-button" ? "first-login-guide-target" : ""}" type="button" data-action="${canCreateEpisode ? "commit-ai-storyboard-preview" : "close-ai-storyboard-preview"}"${canCreateEpisode ? ' data-first-login-target="commit-storyboard-button"' : ""}>${canCreateEpisode ? (preview.source === "home-workflow" ? "进入工作流" : "创建项目") : "完成"}</button>
             <button class="single-episode-ai-close" type="button" data-action="close-ai-storyboard-preview" aria-label="关闭">×</button>
           </div>
         </div>
@@ -5763,7 +5781,14 @@ function getEpisodeHubEntries(state, ui) {
       createdAt: episode.createdAt ?? fallbackProjectCreatedAt,
       createdAtMs: getEpisodeCreatedAtValue(episode.createdAt ?? fallbackProjectCreatedAt),
       storyboardCount: episode.storyboardCount ?? 0,
-      previewMedia: getEpisodePreviewMedia(episode.id, ui, episode.previewUrl ?? null),
+      coverImageUrl: episode.coverImageUrl ?? episode.cover_image_url ?? null,
+      coverStorageObjectId: episode.coverStorageObjectId ?? episode.cover_storage_object_id ?? null,
+      previewMedia: getEpisodePreviewMedia(
+        episode.id,
+        ui,
+        episode.previewUrl ?? null,
+        episode.coverImageUrl ?? episode.cover_image_url ?? null,
+      ),
       }));
     const primaryEpisode = buildPrimaryEpisodeEntry(state, ui);
     const mergedEpisodes = primaryEpisode
@@ -5859,7 +5884,13 @@ function getEpisodeCreatedAtValue(value) {
   return 0;
 }
 
-function getEpisodePreviewMedia(episodeId, ui, fallbackSource) {
+function getEpisodePreviewMedia(episodeId, ui, fallbackSource, coverSource = null) {
+  if (coverSource) {
+    return {
+      kind: "image",
+      src: coverSource,
+    };
+  }
   const storyboards = getEpisodePreviewStoryboards(episodeId, ui);
   const firstVideoStoryboard = storyboards.find((storyboard) => getStoryboardVideoSource(storyboard));
 
@@ -9058,18 +9089,28 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
           ${episodes.map((episode) => {
             const episodeId = String(episode.id ?? episode.episodeId ?? "").trim();
             const title = String(episode.title ?? "未命名分集").trim() || "未命名分集";
-            const previewUrl = String(episode.previewUrl ?? episode.previewMedia?.url ?? "").trim();
+            const coverInputId = `home-workflow-episode-cover-${episodeId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+            const hasCover = Boolean(
+              episode.coverImageUrl ??
+              episode.cover_image_url ??
+              episode.coverStorageObjectId ??
+              episode.cover_storage_object_id,
+            );
             return `
-              <button class="home-project-episode-option" type="button" data-action="select-home-project-workflow-episode" data-episode-id="${escapeAttr(episodeId)}">
-                <span class="home-project-episode-option-cover">
-                  ${previewUrl
-                    ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" onerror="this.remove()">`
-                    : ""}
-                </span>
-                <span class="home-project-episode-option-content">
+              <article class="home-project-episode-option" role="listitem" data-action="select-home-project-workflow-episode" data-episode-id="${escapeAttr(episodeId)}" tabindex="0">
+                <div class="home-project-episode-option-cover project-gallery-poster ${hasCover ? "has-cover" : "needs-cover"}" aria-label="${escapeAttr(title)}封面">
+                  <label class="project-cover-placeholder" for="${escapeAttr(coverInputId)}" data-action="pick-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}">
+                    <span class="project-cover-placeholder-icon" aria-hidden="true">+</span>
+                    <strong>上传封面</strong>
+                  </label>
+                  <img class="project-gallery-cover" src="${escapeAttr(getEpisodeCoverSrc(episode))}" alt="${escapeAttr(title)} 封面" loading="lazy" decoding="async" />
+                  ${hasCover ? `<button class="project-cover-replace-button" type="button" data-action="pick-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}" aria-label="替换 ${escapeAttr(title)} 的剧集封面" title="替换封面">${renderCanvasIcon("upload")}<span>替换封面</span></button>` : ""}
+                </div>
+                <input id="${escapeAttr(coverInputId)}" class="project-cover-input" type="file" accept="image/*" data-action="upload-episode-cover" data-project-id="${escapeAttr(projectId)}" data-episode-id="${escapeAttr(episodeId)}" />
+                <button class="home-project-episode-option-enter" type="button" data-action="select-home-project-workflow-episode" data-episode-id="${escapeAttr(episodeId)}">
                   <span class="home-project-episode-option-title">${escapeHtml(title)}</span>
-                </span>
-              </button>
+                </button>
+              </article>
             `;
           }).join("")}
         </div>
@@ -10409,10 +10450,9 @@ function renderCanvasNodeToolbar(node) {
     outpaint: "fullscreen",
     "remove-background": "image",
     "camera-studio": "role",
-    annotation: "text",
     "batch-grid": "grid",
     composite: "group",
-    history: "clock",
+    annotation: "brush",
     "capture-frame": "image",
     fullscreen: "fullscreen",
     transcription: "text",
@@ -10428,13 +10468,13 @@ function renderCanvasNodeToolbar(node) {
         : tool.action === "set-canvas-audio-generation-mode"
           ? `data-action="set-canvas-audio-generation-mode" data-mode="transcription" data-node-id="${nodeId}"`
           : `data-action="${escapeAttr(tool.action)}" data-node-id="${nodeId}"`;
-    return `<button type="button" ${attributes} aria-label="${escapeAttr(tool.label)}" title="${escapeAttr(tool.label)}">${renderCanvasIcon(iconByTool[tool.id] ?? "image")}</button>`;
+    return `<button type="button" ${attributes} aria-label="${escapeAttr(tool.label)}" data-tooltip="${escapeAttr(tool.label)}">${renderCanvasIcon(iconByTool[tool.id] ?? "image")}</button>`;
   }).join("");
   return `<div class="canvas-node-action-toolbar" role="toolbar" aria-label="节点工具栏">
     ${primary ? `<span class="canvas-node-action-zone" data-toolbar-zone="primary">${primary}</span>` : ""}
     <span class="canvas-node-action-zone" data-toolbar-zone="secondary">
-      <button type="button" data-action="duplicate-canvas-node" data-node-id="${nodeId}" aria-label="复制节点" title="复制节点">${renderCanvasIcon("copy")}</button>
-      <button type="button" class="danger" data-action="delete-canvas-node" data-node-id="${nodeId}" aria-label="删除节点" title="删除节点">${renderCanvasIcon("trash")}</button>
+      <button type="button" data-action="duplicate-canvas-node" data-node-id="${nodeId}" aria-label="复制节点" data-tooltip="复制节点">${renderCanvasIcon("copy")}</button>
+      <button type="button" class="danger" data-action="delete-canvas-node" data-node-id="${nodeId}" aria-label="删除节点" data-tooltip="删除节点">${renderCanvasIcon("trash")}</button>
     </span>
   </div>`;
 }
@@ -10539,6 +10579,7 @@ function resolveCanvasReferenceMedia(node, document = {}) {
 }
 
 function renderCanvasGenerationReferences(references = []) {
+  if (!references.length) return "";
   return `
     <div class="canvas-generation-references" aria-label="连接的参考素材">
       ${references.map((item) => `
@@ -11191,6 +11232,10 @@ export function renderCanvasPromptDisplayValue(prompt, canvasDocument = {}, prev
     parseCanvasPromptReferences(displayValue).map((reference) => [reference.token, reference]),
   ).values()].sort((left, right) => right.token.length - left.token.length);
   for (const reference of references) {
+    if (reference.type === "node" && !nodeById.has(String(reference.id ?? ""))) {
+      displayValue = displayValue.split(reference.token).join("");
+      continue;
+    }
     const collection = canvasDocument?.promptReferenceCatalog?.[reference.type];
     const baseRecord = collection && typeof collection === "object" ? collection[reference.id] : null;
     const record = reference.version && baseRecord?.versions && typeof baseRecord.versions === "object"
@@ -11207,12 +11252,16 @@ export function renderCanvasPromptDisplayValue(prompt, canvasDocument = {}, prev
 }
 
 export function renderCanvasPromptReferenceThumbnails(node, canvasDocument = {}, previewByToken = {}) {
+  const nodeIds = new Set((Array.isArray(canvasDocument?.nodes) ? canvasDocument.nodes : [])
+    .map((item) => String(item?.id ?? "")));
   const connectedNodeIds = new Set((Array.isArray(canvasDocument?.edges) ? canvasDocument.edges : [])
     .filter((edge) => String(edge?.targetNodeId ?? "") === String(node?.id ?? ""))
     .map((edge) => String(edge?.sourceNodeId ?? "")));
   const references = parseCanvasPromptReferences(node?.data?.prompt ?? "")
-    .filter((reference) => reference.type !== "node" || !connectedNodeIds.has(String(reference.id ?? "")));
+    .filter((reference) => reference.type !== "node"
+      || (nodeIds.has(String(reference.id ?? "")) && !connectedNodeIds.has(String(reference.id ?? ""))));
   const uniqueReferences = [...new Map(references.map((reference) => [reference.token, reference])).values()];
+  if (!uniqueReferences.length) return "";
   return `<div class="canvas-prompt-reference-thumbs" data-canvas-prompt-reference-thumbs aria-label="素材引用">
     ${uniqueReferences.map((reference) => {
       const collection = canvasDocument?.promptReferenceCatalog?.[reference.type];
@@ -11771,7 +11820,7 @@ function canvasEditorPositionStyle(node, options = {}) {
   const top = Math.round(nodeY >= 260
     ? Math.max(12, nodeY - editorHeight - 12)
     : nodeY + nodeHeight + 2);
-  return `left:${left}px;top:${top}px;--editor-width:${editorWidth}px`;
+  return `left:${left}px;top:${top}px;--editor-width:${editorWidth}px;--editor-height:${editorHeight}px`;
 }
 
 function canvasGridStyle(viewport = {}) {
@@ -11805,6 +11854,7 @@ function renderCanvasIcon(icon) {
     audio: '<path d="M9 18V6l10-2v12" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="16" r="2" />',
     align: '<path d="M5 5v14" /><path d="M9 8h10M9 12h7M9 16h10" />',
     book: '<path d="M5 5.5h6.2a2.8 2.8 0 0 1 2.8 2.8v10.2H7.8A2.8 2.8 0 0 1 5 15.7V5.5Z" /><path d="M14 8.3h5v10.2h-5" />',
+    brush: '<path d="m14.5 5.5 4 4" /><path d="m13 7 4 4" /><path d="m16.8 4.2 3 3a2 2 0 0 1 0 2.8L10 19.8 4 20l.2-6L17.8 4.2a2 2 0 0 1 2.8 0Z" /><path d="M4.5 19.5c1.5-1.5 3-2.3 4.8-2.3" />',
     clock: '<circle cx="12" cy="12" r="8" /><path d="M12 7.8v4.6l3 1.8" />',
     collapse: '<path d="M14 6 8 12l6 6" /><path d="M20 6 14 12l6 6" />',
     clipboard: '<path d="M9 5.5h6" /><rect x="6" y="5" width="12" height="15" rx="2" /><path d="M9 4h6v3H9z" />',

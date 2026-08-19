@@ -432,6 +432,56 @@ describe("ai storyboard preview service", () => {
     assert.equal(events.at(-1)?.preview.displayTables.script.rows[0]?.scriptContent, "这是现成剧本。");
   });
 
+  it("runs scene, character and prop extraction in parallel before replaying their events", async () => {
+    let activeCalls = 0;
+    let maximumActiveCalls = 0;
+    let releaseCalls!: () => void;
+    const allCallsStarted = new Promise<void>((resolve) => {
+      releaseCalls = resolve;
+    });
+    const calls: string[] = [];
+    const gateway: TextChatGatewayLike = {
+      async completeJson() {
+        throw new Error("streaming gateway expected");
+      },
+      async *streamJson(input) {
+        const prompt = String(input.prompt ?? "");
+        calls.push(prompt);
+        activeCalls += 1;
+        maximumActiveCalls = Math.max(maximumActiveCalls, activeCalls);
+        if (activeCalls === 3) releaseCalls();
+        await allCallsStarted;
+        activeCalls -= 1;
+        if (prompt.startsWith("SCENE")) {
+          yield JSON.stringify({ scenes: [{ sceneName: "旧城门" }] });
+        } else if (prompt.startsWith("CHARACTER")) {
+          yield JSON.stringify({ characters: [{ characterName: "任小野" }] });
+        } else {
+          yield JSON.stringify({ props: [{ propName: "短刀" }] });
+        }
+      },
+    };
+
+    const result = await createAiStoryboardPreviewService({ gateway }).generatePreview({
+      projectId: "40000000-0000-4000-8000-000000000019",
+      scriptText: "任小野在旧城门前拔出短刀。",
+      skipScriptStage: true,
+      selectedStages: ["scene", "character", "prop"],
+      packages: {},
+      templates: {
+        scenePrompt: "SCENE {{script_text}}",
+        characterPrompt: "CHARACTER {{script_text}}",
+        propPrompt: "PROP {{script_text}}",
+      },
+    });
+
+    assert.equal(calls.length, 3);
+    assert.equal(maximumActiveCalls, 3);
+    assert.equal(result.displayTables.scenes.rows[0]?.sceneName, "旧城门");
+    assert.equal(result.displayTables.characters.rows[0]?.characterName, "任小野");
+    assert.equal(result.displayTables.props.rows[0]?.propName, "短刀");
+  });
+
   it("runs only the selected script skill with the selected text model", async () => {
     const gateway = new FakeTextGateway(["改编后的剧本。"]);
     const service = createAiStoryboardPreviewService({ gateway });

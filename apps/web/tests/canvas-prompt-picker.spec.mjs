@@ -723,6 +723,23 @@ test("Canvas prompt reference thumbnails disappear with a deleted source node", 
   assert.doesNotMatch(html, /canvas-generation-reference-thumb|deleted\.png/);
 });
 
+test("Canvas generation editors hide stale node references when the source node is missing", () => {
+  const document = {
+    nodes: [{ id: "video-node", type: "ai-video", data: { prompt: "参考 @node:missing-image" } }],
+    edges: [],
+  };
+  const node = document.nodes[0];
+  const display = renderCanvasPromptDisplayValue(node.data.prompt, document, {
+    "@node:missing-image": { label: "已删除素材", previewUrl: "/uploads/deleted.png" },
+  }, node.id);
+  const thumbnails = renderCanvasPromptReferenceThumbnails(node, document, {
+    "@node:missing-image": { label: "已删除素材", previewUrl: "/uploads/deleted.png" },
+  });
+
+  assert.equal(display, "参考 ");
+  assert.doesNotMatch(thumbnails, /已删除素材|deleted\.png|canvas-generation-reference-thumb/);
+});
+
 test("Canvas generation expands a named prompt reference and submits after clicking generate", async () => {
   const calls = [];
   const workbench = createWorkbench({

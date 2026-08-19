@@ -253,6 +253,50 @@ describe("text model gateway service", () => {
     }
   });
 
+  it("keeps a non-empty response when the provider sends an error reason after streaming it", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([
+      chunk("chatcmpl-provider-error-with-content", "{\"ok\":true}", "模型服务返回错误，任务没有拿到生成结果，请稍后重试。"),
+      {
+        id: "chatcmpl-provider-error-with-content",
+        object: "chat.completion.chunk",
+        created: 1716026400,
+        model: "deepseek-chat",
+        choices: [],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      } as TextGatewayChatCompletionChunk,
+    ]);
+    const gateway = createGateway(db, adapter);
+
+    try {
+      const result = await gateway.chat.completions.create(
+        {
+          model: "deepseek-chat",
+          messages: [{ role: "user", content: "Return JSON" }],
+          stream: true,
+        },
+        requestContext("provider-finish-error-with-content"),
+      );
+
+      const text = [];
+      for await (const item of result.stream) {
+        text.push(item.choices?.[0]?.delta?.content ?? "");
+      }
+      const final = await result.completed;
+
+      assert.equal(text.join(""), "{\"ok\":true}");
+      assert.equal(final.status, "succeeded");
+
+      const stored = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status, failure_code FROM provider_requests WHERE id = $1",
+        [result.providerRequestId],
+      );
+      assert.deepEqual(stored.rows[0], { status: "succeeded", failure_code: null });
+    } finally {
+      await db.close();
+    }
+  });
+
   it("aborts the upstream stream and marks the provider request canceled", async () => {
     const db = await createMigratedTestDb();
     const adapter = new AbortAwareTextAdapter();

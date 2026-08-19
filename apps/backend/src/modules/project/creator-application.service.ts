@@ -2445,6 +2445,9 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         episodeId?: string | null;
         title?: string | null;
         status?: "draft" | "ready" | "archived" | null;
+        coverImageUrl?: string | null;
+        uploadSessionId?: string | null;
+        storageObjectId?: string | null;
       };
       now: Date;
     }): Promise<CreatorHttpResponse<Record<string, unknown>>> {
@@ -2460,17 +2463,48 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
         capability: capabilities.projectEdit,
         now: input.now,
       });
+      const hasCoverUpdate =
+        input.body.coverImageUrl !== undefined ||
+        Boolean(input.body.uploadSessionId) ||
+        Boolean(input.body.storageObjectId);
+      if (
+        deps.storageRuntime &&
+        input.body.coverImageUrl !== undefined &&
+        input.body.coverImageUrl !== null &&
+        !input.body.uploadSessionId &&
+        !input.body.storageObjectId &&
+        !isLegacyInlineDataUrl(input.body.coverImageUrl)
+      ) {
+        return { status: 400, body: { error: "cover_upload_reference_required" } };
+      }
+      const resolvedCoverUpload =
+        input.body.uploadSessionId || input.body.storageObjectId
+          ? await resolveImportedStorageObject(
+              input.user,
+              {
+                projectId,
+                uploadSessionId: input.body.uploadSessionId ?? null,
+                storageObjectId: input.body.storageObjectId ?? null,
+              },
+              input.now,
+            )
+          : null;
       const episode = await updateEpisodeForProject(deps.db, {
         projectId,
         episodeId: input.body.episodeId,
         title: input.body.title,
         status: input.body.status,
+        coverImageUrl: resolvedCoverUpload?.sourceUrl ?? input.body.coverImageUrl,
+        coverStorageObjectId: resolvedCoverUpload?.id ?? (hasCoverUpdate ? null : undefined),
         now: input.now,
       });
       if (!episode) {
         return { status: 404, body: { error: "episode_not_found" } };
       }
-      return { status: 200, body: { episode } };
+      const hydratedEpisode = deps.storageRuntime
+        ? await hydrateEpisodeCoverUrl({ episode, runtime: deps.storageRuntime })
+        : episode;
+      return { status: 200, body: { episode: hydratedEpisode } };
     },
 
     async deleteEpisode(input: {
@@ -5936,6 +5970,8 @@ interface ProjectEpisodeSummaryRow {
   created_at: Date | string;
   updated_at: Date | string;
   storyboard_count: number | string;
+  cover_image_url: string | null;
+  cover_storage_object_id: string | null;
   image_storage_object_id: string | null;
   image_storage_object_key: string | null;
   image_metadata_json: Record<string, unknown> | string | null;
@@ -5964,6 +6000,8 @@ async function listProjectEpisodeSummaries(
         episode.status,
         episode.created_at,
         episode.updated_at,
+        episode.cover_image_url,
+        episode.cover_storage_object_id,
         COUNT(shot.id)::int AS storyboard_count,
         (ARRAY_AGG(image_version.storage_object_id ORDER BY shot.sort_order ASC, shot.created_at ASC)
           FILTER (WHERE image_version.id IS NOT NULL))[1] AS image_storage_object_id,
@@ -5992,7 +6030,9 @@ async function listProjectEpisodeSummaries(
         episode.sequence,
         episode.status,
         episode.created_at,
-        episode.updated_at
+        episode.updated_at,
+        episode.cover_image_url,
+        episode.cover_storage_object_id
       ORDER BY episode.sequence ASC, episode.created_at ASC, episode.id ASC
     `,
     [input.projectId],
@@ -6011,6 +6051,8 @@ async function listProjectEpisodeSummaries(
         'draft'::text AS status,
         $2::timestamptz AS created_at,
         $3::timestamptz AS updated_at,
+        NULL::text AS cover_image_url,
+        NULL::uuid AS cover_storage_object_id,
         COUNT(shot.id)::int AS storyboard_count,
         (ARRAY_AGG(image_version.storage_object_id ORDER BY shot.sort_order ASC, shot.created_at ASC)
           FILTER (WHERE image_version.id IS NOT NULL))[1] AS image_storage_object_id,
@@ -6084,6 +6126,10 @@ async function projectEpisodeSummaryFromRow(
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
     storyboardCount: Number(row.storyboard_count),
+    coverImageUrl: row.cover_storage_object_id && input.runtime
+      ? `/api/storage/objects/${encodeURIComponent(row.cover_storage_object_id)}/content?proxy=1`
+      : row.cover_image_url,
+    coverStorageObjectId: row.cover_storage_object_id,
     previewUrl,
   };
 }
@@ -6260,6 +6306,11 @@ async function buildProjectDetail(
           },
         ]
       : [];
+  const signedProjectEpisodes = input.runtime
+    ? await Promise.all(
+        projectEpisodes.map((episode) => hydrateEpisodeCoverUrl({ episode, runtime: input.runtime! })),
+      )
+    : projectEpisodes;
   const signedProject = runtime
     ? await hydrateProjectCoverUrl(db, {
         project: projectBundle.project,
@@ -6299,7 +6350,7 @@ async function buildProjectDetail(
     scripts: signedScripts,
     assetSummary: buildAssetSummary(signedAssetsByType),
     assetsByType: signedAssetsByType,
-    episodes: projectEpisodes.map((episode) => {
+    episodes: signedProjectEpisodes.map((episode) => {
       const episodeShots = shots.filter((shot) =>
         episode.id === "episode-primary" ? true : shot.episodeId === episode.id,
       );
@@ -6308,6 +6359,8 @@ async function buildProjectDetail(
         title: episode.title,
         sequence: episode.sequence,
         status: episode.status,
+        coverImageUrl: "coverImageUrl" in episode ? episode.coverImageUrl ?? null : null,
+        coverStorageObjectId: "coverStorageObjectId" in episode ? episode.coverStorageObjectId ?? null : null,
         createdAt: episode.createdAt,
         updatedAt: episode.updatedAt,
         storyboardCount: episodeShots.length,
@@ -6781,6 +6834,18 @@ async function hydrateProjectCoverUrl(
   return {
     ...input.project,
     coverImageUrl: `/api/storage/objects/${encodeURIComponent(input.project.coverStorageObjectId)}/content?proxy=1`,
+  };
+}
+
+function hydrateEpisodeCoverUrl<T extends { coverStorageObjectId?: string | null; coverImageUrl?: string | null }>(
+  input: { episode: T; runtime: UploadSessionRuntime },
+): T {
+  if (!input.episode.coverStorageObjectId) {
+    return input.episode;
+  }
+  return {
+    ...input.episode,
+    coverImageUrl: `/api/storage/objects/${encodeURIComponent(input.episode.coverStorageObjectId)}/content?proxy=1`,
   };
 }
 

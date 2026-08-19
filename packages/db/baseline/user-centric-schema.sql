@@ -733,6 +733,8 @@ CREATE TABLE IF NOT EXISTS "episodes" (
   "title" text NOT NULL,
   "sequence" integer NOT NULL,
   "status" text NOT NULL,
+  "cover_image_url" text,
+  "cover_storage_object_id" uuid,
   "created_by_user_id" uuid,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL,
   "updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -2767,6 +2769,8 @@ ALTER TABLE "episode_generation_drafts" ADD CONSTRAINT "episode_generation_draft
 
 ALTER TABLE "episodes" ADD CONSTRAINT "episodes_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
 
+ALTER TABLE "episodes" ADD CONSTRAINT "episodes_cover_storage_object_id_fkey" FOREIGN KEY (cover_storage_object_id) REFERENCES storage_objects(id);
+
 ALTER TABLE "episodes" ADD CONSTRAINT "episodes_project_id_fkey" FOREIGN KEY (project_id) REFERENCES projects(id);
 
 ALTER TABLE "export_records" ADD CONSTRAINT "export_records_created_by_user_id_fkey" FOREIGN KEY (created_by_user_id) REFERENCES users(id);
@@ -3224,6 +3228,8 @@ CREATE INDEX IF NOT EXISTS episode_generation_drafts_episode_updated_idx ON epis
 CREATE UNIQUE INDEX IF NOT EXISTS episode_generation_drafts_target_uidx ON episode_generation_drafts USING btree (episode_id, target_type, target_id, mode);
 
 CREATE INDEX IF NOT EXISTS episodes_project_created_idx ON episodes USING btree (project_id, sequence, created_at);
+
+CREATE INDEX IF NOT EXISTS episodes_cover_storage_object_idx ON episodes USING btree (cover_storage_object_id) WHERE (cover_storage_object_id IS NOT NULL);
 
 CREATE UNIQUE INDEX IF NOT EXISTS episodes_project_sequence_uidx ON episodes USING btree (project_id, sequence);
 

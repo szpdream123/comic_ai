@@ -2592,6 +2592,8 @@ function startSseHeartbeat(response: ServerResponse, intervalMs = 15_000, option
   return () => clearInterval(timer);
 }
 
+const AI_STORYBOARD_STREAM_IDLE_TIMEOUT_MS = 120_000;
+
 function normalizeRecordJson(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === "string") return JSON.parse(value) as Record<string, unknown>;
@@ -3735,6 +3737,7 @@ function createRequestAbortController(
   response.once("close", abort);
   return {
     signal: controller.signal,
+    abort,
     cleanup: () => {
       request.off("aborted", abort);
       response.off("close", abort);
@@ -4986,6 +4989,9 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
   return {
     modelCode: modelConfig.modelCode,
     modelLabel: modelConfig.displayName,
+    providerName: modelConfig.providerName,
+    providerModel: modelConfig.providerModel,
+    providerProtocol: modelConfig.providerProtocol,
     remark: modelConfig.remark,
     mediaType: modelConfig.mediaType,
     modelKind: readString(modelConfig.uiConfig.modelKind),
@@ -5730,7 +5736,7 @@ function normalizeProjectDetailForEpisodeContract(detail: Record<string, unknown
     },
     episodes: episodes.map((episode) => {
       const item = episode && typeof episode === "object" ? episode as Record<string, unknown> : {};
-      const previewUrl = item.previewUrl ?? null;
+      const previewUrl = item.coverImageUrl ?? item.cover_image_url ?? item.previewUrl ?? null;
       return {
         ...item,
         episodeId: item.episodeId ?? item.id ?? null,
@@ -10193,7 +10199,7 @@ async function createGenerationTask(
       throw new GenerationRequestValidationError("model_reference_not_found", "Canvas storage reference was not found");
     }
     try {
-      if (context.canvasActorScope) {
+      if (context.canvasActorScope?.canvasId === object.canvasProjectId) {
         return (await createSignedReadUrl(db, {
           sessionToken: input.authenticated.sessionToken,
           actorScope: context.canvasActorScope,
@@ -10211,7 +10217,7 @@ async function createGenerationTask(
         expiresInSeconds: modelSignedUrlExpiresInSeconds,
       })).url;
     } catch (error) {
-      if (error instanceof AuthorizationError) {
+      if (error instanceof AuthorizationError || error instanceof StorageAccessError) {
         throw new GenerationRequestValidationError("model_reference_not_found", "Canvas storage reference was not found");
       }
       throw error;
@@ -11697,7 +11703,8 @@ function createImageGenerationTargetRegistry() {
             envelopedError(404, "canvas_node_not_found", "canvas node not found"),
           );
         }
-        if (!["image", "source-image", "ai-image", "ai-animation", "ai-panorama", "ai-storyboard"].includes(requestedNode.type)) {
+        if (!["image", "source-image", "upload", "ai-image", "ai-animation", "ai-panorama", "ai-storyboard"].includes(requestedNode.type)
+          || (requestedNode.type === "upload" && String(requestedNode.data?.mediaKind ?? "image") !== "image")) {
           throw new ImageGenerationTargetRouteError(
             envelopedError(400, "canvas_image_node_invalid", "Only an image generation node can run an image task"),
           );
@@ -18806,7 +18813,7 @@ export function createPhoneAuthDevServer(
           db,
           adapter: new OpenAICompatibleTextAdapter(),
           modelflareAdapter: new ModelflareResponsesAdapter(),
-          resolver: new AdminBackedTextModelResolver(db),
+          resolver: new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }),
             env: runtimeEnv,
           }),
           disableThinking: true,
@@ -27604,8 +27611,8 @@ export function createPhoneAuthDevServer(
           const task = taskId
             ? await queryOne<{ task_id: string }>(db, "SELECT id AS task_id FROM tasks WHERE id=$1 AND canvas_project_id=$2", [taskId, canvasProjectId])
             : null;
-          if (!task) return writeJson(response, envelopedError(400, "canvas_derivation_task_required", "derivation task is required"));
           if (action === "attach-task") {
+            if (!task) return writeJson(response, envelopedError(400, "canvas_derivation_task_required", "derivation task is required"));
             return writeJson(response, enveloped(200, { derivation: await attachCanvasMediaDerivationTask(db, { derivationId, canvasProjectId, taskId: task.task_id, now: new Date() }) }));
           }
           if (action === "complete") {
@@ -27641,6 +27648,15 @@ export function createPhoneAuthDevServer(
             "SELECT * FROM creator_canvas_media_derivations WHERE id=$1 AND canvas_project_id=$2",
             [decodeURIComponent(canvasDerivationItemMatch[2] ?? ""), canvasProjectId],
           );
+          if (derivation?.output_artifact_id) {
+            const artifact = await queryOne<Record<string, unknown>>(
+              db,
+              `SELECT id, artifact_kind, asset_id, asset_version_id, storage_object_id, url, thumbnail_url
+               FROM creator_canvas_node_artifacts WHERE id=$1 AND canvas_project_id=$2`,
+              [derivation.output_artifact_id, canvasProjectId],
+            );
+            if (artifact) derivation.output_artifact = artifact;
+          }
           return derivation
             ? writeJson(response, enveloped(200, { derivation }))
             : writeJson(response, envelopedError(404, "canvas_derivation_not_found", "derivation not found"));
@@ -28340,6 +28356,9 @@ export function createPhoneAuthDevServer(
           const body = (await readJsonBody(request)) as {
             title?: string | null;
             status?: "draft" | "ready" | "archived" | null;
+            coverImageUrl?: string | null;
+            uploadSessionId?: string | null;
+            storageObjectId?: string | null;
           };
           const result = await creatorApplication.updateEpisode({
             user: {
@@ -28351,6 +28370,9 @@ export function createPhoneAuthDevServer(
               episodeId,
               title: body.title,
               status: body.status,
+              coverImageUrl: body.coverImageUrl,
+              uploadSessionId: body.uploadSessionId,
+              storageObjectId: body.storageObjectId,
             },
             now: new Date(),
           });
@@ -30568,7 +30590,7 @@ export function createPhoneAuthDevServer(
             throw new GenerationMembershipRequiredError();
           }
           if (!options.textChatGateway) {
-            await new AdminBackedTextModelResolver(db).resolve(modelCode);
+            await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(modelCode);
           }
           const scriptModelConfig = await findActiveAiModelConfigByCode(db, modelCode);
           if (!scriptModelConfig || !modelConfigSupportsScriptGeneration(scriptModelConfig)) {
@@ -31146,7 +31168,16 @@ export function createPhoneAuthDevServer(
             response.setHeader("x-accel-buffering", "no");
             response.flushHeaders?.();
             const stopHeartbeat = startSseHeartbeat(response, 15_000, { dataOnly: true });
-              const abortController = createRequestAbortController(request, response);
+            const abortController = createRequestAbortController(request, response);
+            let modelStreamTimedOut = false;
+            let lastModelContentAt = Date.now();
+            const modelStreamIdleTimer = setInterval(() => {
+              if (Date.now() - lastModelContentAt < AI_STORYBOARD_STREAM_IDLE_TIMEOUT_MS) {
+                return;
+              }
+              modelStreamTimedOut = true;
+              abortController.abort();
+            }, Math.min(AI_STORYBOARD_STREAM_IDLE_TIMEOUT_MS, 15_000));
             try {
               let generationCompleted = false;
               const creditBalance = await getAiStoryboardPreviewCreditBalance(db, {
@@ -31162,6 +31193,9 @@ export function createPhoneAuthDevServer(
               })) {
                 if (abortController.signal.aborted) {
                   break;
+                }
+                if (event.type === "script_delta" || event.type === "asset_delta") {
+                  lastModelContentAt = Date.now();
                 }
                 if (event.type === "complete") {
                   generationCompleted = true;
@@ -31196,15 +31230,24 @@ export function createPhoneAuthDevServer(
                   now: new Date(),
                 });
               }
+              clearInterval(modelStreamIdleTimer);
               stopHeartbeat();
               abortController.cleanup();
               if (!response.destroyed && !response.writableEnded) {
                 response.end();
               }
             } catch (error) {
+              clearInterval(modelStreamIdleTimer);
               stopHeartbeat();
               abortController.cleanup();
-              if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
+              if (modelStreamTimedOut && !response.destroyed && !response.writableEnded) {
+                writeSseData(response, {
+                  type: "error",
+                  error: "模型长时间未返回内容，已停止本次生成，请稍后重试。",
+                  errorCode: "ai_storyboard_stream_idle_timeout",
+                });
+                response.end();
+              } else if (!abortController.signal.aborted && !isAbortError(error) && !response.destroyed && !response.writableEnded) {
                 const failureMessage = translateProviderErrorMessage(error instanceof Error ? error : "分镜预览生成失败，请稍后重试。");
                 if (actor.teamMember) {
                   try {
@@ -32937,6 +32980,9 @@ export function createPhoneAuthDevServer(
             episodeId?: string | null;
             title?: string | null;
             status?: "draft" | "ready" | "archived" | null;
+            coverImageUrl?: string | null;
+            uploadSessionId?: string | null;
+            storageObjectId?: string | null;
           };
           return writeJson(
             response,

@@ -3,10 +3,9 @@ const IMAGE_TOOLS = Object.freeze([
   tool("outpaint", "扩图", "open", "outpaint", "mdi:arrow-expand-all"),
   tool("remove-background", "抠图", "open", "remove_background", "mdi:hexagon-outline"),
   tool("camera-studio", "摄影棚", "open", "camera_studio", "mdi:camera-control"),
-  tool("annotation", "标注", "open", "annotation", "mdi:draw-pen"),
   tool("batch-grid", "宫格", "open", "batch_grid", "mdi:grid"),
   tool("composite", "合成", "open", "composite", "mdi:layers-triple-outline"),
-  tool("history", "历史", "set-canvas-sidebar-mode", "history", "mdi:history"),
+  tool("annotation", "标注", "open", "annotation", "mdi:draw-pen"),
 ]);
 
 const VIDEO_TOOLS = Object.freeze([

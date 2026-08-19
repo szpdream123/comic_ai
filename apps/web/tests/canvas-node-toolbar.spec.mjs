@@ -13,10 +13,9 @@ test("Canvas image node toolbar reuses every supported media drawer tool", () =>
     { id: "outpaint", label: "扩图", action: "open", mediaTool: "outpaint", icon: "mdi:arrow-expand-all" },
     { id: "remove-background", label: "抠图", action: "open", mediaTool: "remove_background", icon: "mdi:hexagon-outline" },
     { id: "camera-studio", label: "摄影棚", action: "open", mediaTool: "camera_studio", icon: "mdi:camera-control" },
-    { id: "annotation", label: "标注", action: "open", mediaTool: "annotation", icon: "mdi:draw-pen" },
     { id: "batch-grid", label: "宫格", action: "open", mediaTool: "batch_grid", icon: "mdi:grid" },
     { id: "composite", label: "合成", action: "open", mediaTool: "composite", icon: "mdi:layers-triple-outline" },
-    { id: "history", label: "历史", action: "set-canvas-sidebar-mode", mediaTool: "history", icon: "mdi:history" },
+    { id: "annotation", label: "标注", action: "open", mediaTool: "annotation", icon: "mdi:draw-pen" },
   ]);
 });
 

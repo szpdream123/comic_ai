@@ -69,7 +69,7 @@ test("new-canvas exposes an in-app mount lifecycle and does not require a DOM fo
   assert.match(source, /addEventListener\("click", onClick, true\)/);
   assert.match(source, /removeEventListener\("click", onClick, true\)/);
   assert.match(source, /getAttribute\?\.\("data-cell-id"\)/);
-  assert.match(source, /nodeId === "__comic-ai-canvas-editor-overlay__" \? "" : nodeId/);
+  assert.match(source, /__comic-ai-canvas-editor-overlay__/);
   assert.match(source, /event\.target\?\.closest\?\.\("\.canvas-node-editor"\)/);
   assert.match(source, /event\.target\?\.closest\?\.\("input, textarea, select, \[contenteditable='true'\], \[role='textbox'\], \.canvas-prompt-mention-menu"\)[\s\S]*?event\.stopPropagation\(\)[\s\S]*?return/);
   assert.match(source, /__canvasDirectorHandled/);
@@ -357,6 +357,7 @@ test("Canvas node controls refresh only their target X6 node", () => {
   const hostSource = readFileSync(new URL("../src/features/new-canvas/index.js", import.meta.url), "utf8");
   const nodeRender = hostSource.match(/const renderNode = async \(nodeId\) => \{[\s\S]*?const applyInteractionMode/)?.[0] ?? "";
   assert.match(nodeRender, /refreshCanvasWorkflowNode\(workbench, normalizedNodeId\)/);
+  assert.match(nodeRender, /canvasEditorOpen !== true[\s\S]*?const currentStage = surface\.querySelector\?\.\("\.canvas-stage"\)[\s\S]*?syncCanvasNodeEditor\(currentStage, currentStage, graph, ""\)/);
   assert.doesNotMatch(nodeRender, /refreshCanvasWorkflowGraph/);
   assert.match(hostSource, /if \(next\.nodeOnly === true\) return renderNode\(next\.nodeId\)/);
   assert.match(hostSource, /if \(next\.sidebarOnly === true\) return renderSidebar\(\)/);
@@ -396,7 +397,7 @@ test("Canvas node controls refresh only their target X6 node", () => {
   assert.match(pollingSource, /nodeOnly: true, nodeId/);
 
   const graphSource = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
-  assert.match(graphSource, /editor\?\.addEventListener\?\.\("wheel", \(event\) => event\.stopPropagation\(\), \{ passive: true \}\)/);
+  assert.match(graphSource, /control\.addEventListener\("wheel", \(event\) => event\.stopPropagation\(\), \{ passive: true \}\)/);
   const nodeRefresh = graphSource.match(/export function refreshCanvasWorkflowNode[\s\S]*?export function classifyCanvasNodeMotion/)?.[0] ?? "";
   assert.match(nodeRefresh, /cell\.setPosition/);
   assert.match(nodeRefresh, /cell\.setSize/);
@@ -1133,7 +1134,7 @@ test("Canvas selection and deselection stay local instead of rebuilding the canv
   assert.doesNotMatch(blankDismiss, /renderInteraction\(|render\(|createMarkup\(|refreshCanvasWorkflowGraph\(/);
   assert.match(blankDismiss, /dismissCanvasSurfaceOverlays\(workbench\.ui\)/);
   assert.match(source, /clearCanvasGraphSelection,/);
-  assert.match(source, /function clearCanvasSelectionPresentation\(surface, graph, workbench\) \{[\s\S]*?clearCanvasGraphEditorOverlay\(graph\);[\s\S]*?clearCanvasGraphSelection\(graph\);[\s\S]*?refreshCanvasSelectionActionToolbar/);
+  assert.match(source, /function clearCanvasSelectionPresentation\(surface, graph, workbench\) \{[\s\S]*?syncCanvasNodeEditor\(stage, stage, graph, ""\);[\s\S]*?clearCanvasGraphSelection\(graph\);[\s\S]*?refreshCanvasSelectionActionToolbar/);
 });
 
 test("Canvas treats the script workspace as interactive instead of dismissing it as blank canvas", () => {
@@ -1300,7 +1301,7 @@ test("ordinary Markdown stays inline while AI Markdown keeps its text generation
   assert.doesNotMatch(aiMarkdownHtml, /请输入您的生图要求/);
 });
 
-test("AI text generation editor opens above low canvas nodes", () => {
+test("AI text generation editor exposes its persisted inline dimensions", () => {
   const html = renderCanvasSurfaceForHost({
     ui: {
       selectedCanvasProjectId: "canvas-text",
@@ -1323,7 +1324,7 @@ test("AI text generation editor opens above low canvas nodes", () => {
     },
   });
   assert.match(html, /class="canvas-node-editor generation-editor text"/);
-  assert.match(html, /style="left:12px;top:168px;--editor-width:800px"/);
+  assert.match(html, /--editor-width:800px;--editor-height:320px/);
   assert.match(html, /data-action="run-canvas-node"/);
 });
 

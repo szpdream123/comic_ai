@@ -1323,6 +1323,137 @@ it("blocks direct Canvas image intake when the new Canvas feature is disabled", 
   }
 });
 
+it("accepts an authorized image reference from another Canvas and rejects inaccessible references", async () => {
+  const db = await createMigratedTestDb();
+  const signedObjectKeys: string[] = [];
+  const server = createPhoneAuthDevServer({
+    db,
+    env: { NODE_ENV: "test", AUTH_SESSION_REDIS_CACHE_ENABLED: "false", NEW_CANVAS_ENABLED: "true" },
+    repairScheduler: { enabled: false },
+    storageRuntime: {
+      mode: "cos",
+      provider: "tencent_cos",
+      bucket: "canvas-cross-reference-test",
+      adapter: {
+        async createSignedReadUrl(input) {
+          signedObjectKeys.push(input.objectKey);
+          return { url: `https://canvas-assets.example.test/${input.objectKey}`, expiresAt: input.expiresAt };
+        },
+      },
+    },
+  });
+  const userId = randomUUID();
+  const phone = `133${String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0")}`;
+  const foreignUserId = randomUUID();
+  const foreignPhone = `132${String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0")}`;
+  try {
+    await db.query(
+      "INSERT INTO users (id, phone_e164, password_hash, status) VALUES ($1,$2,$3,'active'),($4,$5,$6,'active')",
+      [
+        userId,
+        phone,
+        await createUserPasswordHash(defaultPasswordFromPhone(phone)),
+        foreignUserId,
+        foreignPhone,
+        await createUserPasswordHash(defaultPasswordFromPhone(foreignPhone)),
+      ],
+    );
+    await seedGenerationAccess(db, userId);
+    await server.listen(0);
+    const cookie = await passwordLogin(server.origin, phone);
+    const sourceCanvas = await api(server.origin, "/api/creator/canvas-projects", cookie, {
+      method: "POST",
+      body: { title: "Cross-reference source" },
+    });
+    const targetCanvas = await api(server.origin, "/api/creator/canvas-projects", cookie, {
+      method: "POST",
+      body: { title: "Cross-reference target" },
+    });
+    const foreignCookie = await passwordLogin(server.origin, foreignPhone);
+    const foreignCanvas = await api(server.origin, "/api/creator/canvas-projects", foreignCookie, {
+      method: "POST",
+      body: { title: "Foreign source" },
+    });
+    const sourceCanvasId = String(sourceCanvas.body.data.project.id);
+    const targetCanvasId = String(targetCanvas.body.data.project.id);
+    const foreignCanvasId = String(foreignCanvas.body.data.project.id);
+    const saved = await api(server.origin, `/api/creator/canvas-projects/${targetCanvasId}/canvas`, cookie, {
+      method: "PUT",
+      body: {
+        clientRevision: 1,
+        document: {
+          version: 1,
+          canvasProjectId: targetCanvasId,
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [imageNode("image")],
+          edges: [],
+        },
+        events: [],
+      },
+    });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const now = new Date();
+    const sourceStorage = await createScopedStorageObject(db, {
+      userId,
+      canvasProjectId: sourceCanvasId,
+      bucket: "canvas-cross-reference-test",
+      objectName: "source.png",
+      contentType: "image/png",
+      sizeBytes: 128,
+      provider: "tencent_cos",
+      status: "available",
+      metadata: {},
+      createdByUserId: userId,
+      now,
+    });
+    const accepted = await api(server.origin, "/api/generation/image-tasks", cookie, {
+      method: "POST",
+      headers: { "idempotency-key": `cross-canvas-${randomUUID()}` },
+      body: {
+        target: { kind: "canvas", canvasProjectId: targetCanvasId, nodeId: "image" },
+        model: "nano_banana_2",
+        prompt: "Use the authorized source image",
+        parameters: {
+          referenceImages: [`/api/storage/objects/${sourceStorage.id}/content?proxy=1`],
+        },
+      },
+    });
+    assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+    assert.ok(signedObjectKeys.includes(sourceStorage.objectKey));
+
+    const foreignStorage = await createScopedStorageObject(db, {
+      userId: foreignUserId,
+      canvasProjectId: foreignCanvasId,
+      bucket: "canvas-cross-reference-test",
+      objectName: "foreign.png",
+      contentType: "image/png",
+      sizeBytes: 128,
+      provider: "tencent_cos",
+      status: "available",
+      metadata: {},
+      createdByUserId: foreignUserId,
+      now,
+    });
+    const rejected = await api(server.origin, "/api/generation/image-tasks", cookie, {
+      method: "POST",
+      headers: { "idempotency-key": `foreign-canvas-${randomUUID()}` },
+      body: {
+        target: { kind: "canvas", canvasProjectId: targetCanvasId, nodeId: "image" },
+        model: "nano_banana_2",
+        prompt: "Must not access the foreign source image",
+        parameters: {
+          referenceImages: [`/api/storage/objects/${foreignStorage.id}/content?proxy=1`],
+        },
+      },
+    });
+    assert.equal(rejected.status, 400, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.errorCode, "model_reference_not_found");
+  } finally {
+    await server.close().catch(() => undefined);
+    await db.close();
+  }
+});
+
 it("rejects unresolved Canvas prompt references before creating a generation task", async () => {
   const db = await createMigratedTestDb();
   const server = createPhoneAuthDevServer({

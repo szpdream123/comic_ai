@@ -45,7 +45,7 @@ describe("admin-backed Canvas Agent model compatibility isolation", { concurrenc
     }
   });
 
-  it("hides and rejects a model after a failed probe while allowing an explicit re-probe", async () => {
+  it("keeps a failed Agent probe isolated from text-script model resolution", async () => {
     const db = await createMigratedTestDb();
     const modelConfigId = randomUUID();
     const modelCode = `canvas-agent-probe-${randomUUID()}`;
@@ -60,7 +60,7 @@ describe("admin-backed Canvas Agent model compatibility isolation", { concurrenc
             status, sort_order, created_at, updated_at
           ) VALUES (
             $1, $2, 'Canvas Agent Probe', 'test-provider', 'agent-model',
-            'openai_compatible_chat', 'stream', 'text', '["text.canvas_agent"]'::jsonb,
+            'openai_compatible_chat', 'stream', 'text', '["text.canvas_agent","text.script"]'::jsonb,
             '{"stream":true,"toolCalling":true,"jsonSchema":true,"contextWindow":32000}'::jsonb,
             '{}'::jsonb, '{}'::jsonb,
             '{"baseURL":"https://provider.example/v1","apiKey":"must-not-leak"}'::jsonb,
@@ -90,6 +90,11 @@ describe("admin-backed Canvas Agent model compatibility isolation", { concurrenc
         () => new AdminBackedTextModelResolver(db).resolve(modelCode),
         (error) => error instanceof TextModelGatewayError && error.code === "model_disabled",
       );
+
+      const scriptResolution = await new AdminBackedTextModelResolver(db, {
+        requireAgentCompatibility: false,
+      }).resolve(modelCode);
+      assert.equal(scriptResolution.id, modelCode);
 
       const probeResolution = await new AdminBackedTextModelResolver(db, {
         allowFailedCompatibilityProbe: true,

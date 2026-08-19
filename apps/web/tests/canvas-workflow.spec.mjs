@@ -79,6 +79,24 @@ function loadCanvasGenericX6Renderer() {
   return Function("resolveCanvasMediaNodeSource", `"use strict";\n${source.slice(start, end)}\nreturn renderCanvasGenericX6Node;`)(resolveCanvasMediaNodeSource);
 }
 
+function loadCanvasSourceMediaX6Renderer() {
+  const source = readFileSync(
+    new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("function resolveCanvasUploadMediaKind");
+  const end = source.indexOf("function renderCanvasGenericX6Node", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  return Function(
+    "resolveCanvasMediaNodeSource",
+    "resolveCanvasMediaDirectUrl",
+    "resolveCanvasMediaUrl",
+    "escapeCanvasX6Html",
+    `"use strict";\n${source.slice(start, end)}\nreturn renderCanvasSourceMediaNodeBody;`,
+  )(resolveCanvasMediaNodeSource, () => "", (value) => value, (value) => String(value));
+}
+
 describe("canvas workflow document", () => {
   function createStarterCanvasDocument(input = {}) {
     return createLegacyStarterCanvasDocument(input);
@@ -151,13 +169,6 @@ describe("canvas workflow document", () => {
     handlers.get("pointerup")({ composedPath: () => [button, node, application], clientX: 10, clientY: 10 });
     assert.deepEqual(selections, ["node-1"]);
 
-    const editorOverlay = {
-      classList: { contains: (className) => className === "x6-node" },
-      getAttribute: (name) => name === "data-cell-id" ? "__comic-ai-canvas-editor-overlay__" : "",
-    };
-    handlers.get("pointerdown")({ composedPath: () => [editorOverlay], clientX: 10, clientY: 10 });
-    handlers.get("pointerup")({ composedPath: () => [editorOverlay], clientX: 10, clientY: 10 });
-    assert.deepEqual(selections, ["node-1"]);
   });
 
   it("enables the X6 selection plugin for node and rubberband selection", () => {
@@ -271,46 +282,41 @@ describe("canvas workflow document", () => {
     assert.equal(selectionOptions.rubberband, false);
   });
 
-  it("mounts one transient X6 editor directly below its selected node", () => {
+  it("renders the editor as a separate overlay without resizing its node", () => {
     const cells = new Map();
-    const removals = [];
+    let size = { width: 360, height: 170 };
+    let data = { canvasNode: { type: "send" } };
     const parent = {
       id: "node-1",
       isNode: () => true,
-      getSize: () => ({ width: 360, height: 170 }),
-      getPosition: () => ({ x: 220, y: 180 }),
-      setZIndex: (...args) => { parent.zIndexArgs = args; },
+      getData: () => data,
+      setData: (nextData) => { data = nextData; },
+      getSize: () => size,
+      resize: (width, height) => { size = { width, height }; },
     };
     cells.set(parent.id, parent);
     const graph = {
       getCellById: (id) => cells.get(id),
+      getNodes: () => [...cells.values()],
       addNode: (config) => {
-        const node = { ...config, getData: () => config.data, getSize: () => ({ width: config.width, height: config.height }) };
-        cells.set(config.id, node);
-        return node;
+        const editor = { id: config.id, getData: () => config.data, getSize: () => ({ width: config.width, height: config.height }), position: () => {} };
+        cells.set(editor.id, editor);
+        return editor;
       },
-      removeCell: (...args) => {
-        removals.push(args);
-        cells.delete(args[0].id);
-      },
+      removeCell: (cell) => cells.delete(cell.id),
     };
 
-    assert.equal(mountCanvasGraphEditorOverlay(graph, "node-1", '<aside class="canvas-node-editor"></aside>'), true);
-    const editor = cells.get("__comic-ai-canvas-editor-overlay__");
-    assert.equal(editor.id, "__comic-ai-canvas-editor-overlay__");
-    assert.equal(editor.x, 100);
-    assert.equal(editor.y, 350);
-    assert.equal(editor.zIndex, 1002);
-    assert.deepEqual(parent.zIndexArgs, [1001]);
+    assert.equal(mountCanvasGraphEditorOverlay(graph, "node-1", '<aside class="canvas-node-editor" style="--editor-width:600px;--editor-height:220px"></aside>'), true);
+    assert.equal(cells.has("__comic-ai-canvas-editor-overlay__"), true);
+    assert.deepEqual(size, { width: 360, height: 170 });
     assert.equal(clearCanvasGraphEditorOverlay(graph), true);
-    assert.equal(removals.length, 1);
-    assert.equal(removals[0].length, 1);
+    assert.equal(cells.has("__comic-ai-canvas-editor-overlay__"), false);
+    assert.deepEqual(size, { width: 360, height: 170 });
 
     const group = {
       id: "group-1",
       isNode: () => true,
       getData: () => ({ canvasNode: { type: "group" } }),
-      setZIndex() { throw new Error("group must stay behind its children"); },
     };
     cells.set(group.id, group);
     assert.equal(mountCanvasGraphEditorOverlay(graph, group.id, '<aside class="canvas-node-editor"></aside>'), false);
@@ -319,8 +325,8 @@ describe("canvas workflow document", () => {
 
   it("keeps editor controls from bubbling pointer drags into X6", () => {
     const source = readFileSync(new URL("../src/features/production-workbench/canvas/canvas-x6-graph.js", import.meta.url), "utf8");
-    assert.match(source, /editor\?\.addEventListener\?\.\("pointerdown", \(event\) => event\.stopPropagation\(\)\)/);
-    assert.match(source, /editor\?\.addEventListener\?\.\("mousedown", \(event\) => event\.stopPropagation\(\)\)/);
+    assert.match(source, /control\.addEventListener\("pointerdown", \(event\) => event\.stopPropagation\(\)\)/);
+    assert.match(source, /control\.addEventListener\("mousedown", \(event\) => event\.stopPropagation\(\)\)/);
   });
 
   it("applies the selected connector style to every mounted X6 edge", () => {
@@ -1563,7 +1569,15 @@ describe("canvas workflow document", () => {
         {
           id: "video-generator",
           type: "ai-video",
-          data: { prompt: "参考 @node:source-image@4 @asset:hero", mediaKind: "video" },
+          data: {
+            prompt: "参考 @node:source-image@4 @asset:hero",
+            mediaKind: "video",
+            scriptWorkflowReferenceNodeIds: ["source-image", "other-source"],
+            scriptWorkflowReferenceBindings: [
+              { mention: "@已删除", nodeId: "source-image" },
+              { mention: "@保留", nodeId: "other-source" },
+            ],
+          },
         },
       ],
       edges: [{
@@ -1578,6 +1592,8 @@ describe("canvas workflow document", () => {
     const nextDocument = removeCanvasNode(document, "source-image");
 
     assert.equal(nextDocument.nodes[0].data.prompt, "参考 @asset:hero");
+    assert.deepEqual(nextDocument.nodes[0].data.scriptWorkflowReferenceNodeIds, ["other-source"]);
+    assert.deepEqual(nextDocument.nodes[0].data.scriptWorkflowReferenceBindings, [{ mention: "@保留", nodeId: "other-source" }]);
     assert.deepEqual(nextDocument.edges, []);
   });
 
@@ -1754,6 +1770,24 @@ describe("canvas workflow document", () => {
     assert.doesNotMatch(textCompleted, /canvas-x6-text-generation-mask|正在生成剧本中/);
   });
 
+  it("masks a running media derivation image while retaining its preview", () => {
+    const render = loadCanvasSourceMediaX6Renderer();
+    const html = render({
+      id: "media-derivation",
+      type: "source-image",
+      data: {
+        source: "canvas_derivation",
+        status: "running",
+        previewUrl: "https://example.test/previous-result.png",
+      },
+    });
+
+    assert.match(html, /src="https:\/\/example\.test\/previous-result\.png"/);
+    assert.match(html, /class="canvas-x6-source-generation-mask canvas-image-generation-mask"[^>]*aria-label="图片生成中"/);
+    assert.match(html, /<strong>图片生成中<\/strong>/);
+    assert.match(html, /canvas-x6-source-media-body[^>]*is-generating[^>]*aria-busy="true"/);
+  });
+
   it("renders escaped X6 image generation failures without changing ordinary nodes", () => {
     const render = loadCanvasGenericX6Renderer();
     const failed = render({
@@ -1862,7 +1896,8 @@ describe("canvas workflow document", () => {
     const workbenchStyles = readFileSync(new URL("../src/features/production-workbench/production-workbench.css", import.meta.url), "utf8");
     assert.match(graphSource, /setProperty\?\.\("--canvas-input-scale", String\(1 \/ Math\.max\(0\.1, normalizedZoom\)\)\)/);
     assert.doesNotMatch(workbenchStyles, /\.canvas-flow/);
-    assert.match(workbenchStyles, /\.canvas-stage\.is-x6-ready \.canvas-x6-editor-overlay\s*\{[\s\S]*?scale\(var\(--canvas-input-scale, 1\)\)[\s\S]*?transform-origin:\s*center top/);
+    assert.match(workbenchStyles, /\.canvas-x6-editor-overlay\s*\{[\s\S]*?position:\s*absolute[\s\S]*?width:\s*100%[\s\S]*?height:\s*100%/);
+    assert.match(workbenchStyles, /\.canvas-x6-editor-overlay \.canvas-node-editor\s*\{[\s\S]*?position:\s*relative !important[\s\S]*?transform:\s*none !important/);
     assert.match(graphSource, /followLatest:\s*!textOutput\.matches\?\.\("\[data-canvas-source-text-output\]"\)/);
   });
 
@@ -2038,16 +2073,15 @@ it("keeps X6 edge rendering native while a node is dragged", () => {
   assert.match(wireSource, /node:mousedown[\s\S]*?suspendDragSnapline\(\)/);
   assert.doesNotMatch(wireSource, /node:mousedown[\s\S]*?enableSynchronousDragRendering\(\)/);
   assert.doesNotMatch(wireSource, /node:mousedown[\s\S]*?deferDragEdgeRendering\(\)/);
-  assert.match(wireSource, /node:moved[\s\S]*?restoreDragSnapline\(\)[\s\S]*?syncMovedNodeEditor\(event\)/);
+  assert.match(wireSource, /syncCanvasGraphEditorOverlay/);
   assert.match(wireSource, /node:moved[\s\S]*?scheduleGraphCommit\(\{ clearToast: true \}\)/);
   assert.match(wireSource, /node:mouseup[\s\S]*?restoreDragSnapline\(\)/);
   assert.doesNotMatch(wireSource, /node:mouseup[\s\S]*?restoreAsyncRendering\(\)/);
   assert.doesNotMatch(wireSource, /node:mouseup[\s\S]*?restoreDragEdgeRendering\(\)/);
-  assert.match(wireSource.slice(positionChangeStart, positionChangeEnd), /!event\?\.options\?\.ui && !event\?\.options\?\.selection/);
-  assert.match(wireSource, /box:mouseup[\s\S]*?syncCanvasGraphEditorOverlay\(graph, node\)/);
+  assert.match(wireSource.slice(positionChangeStart, positionChangeEnd), /!event\?\.options\?\.selection\) positionCanvasNodeActionToolbar/);
   assert.match(createGraphSource, /async:\s*false/);
   assert.doesNotMatch(createGraphSource, /virtual:\s*\{/);
-  assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.x6-node\[data-cell-id="__comic-ai-canvas-editor-overlay__"\][\s\S]*?visibility:\s*hidden/);
+  assert.match(hostSource, /__comic-ai-canvas-editor-overlay__/);
   assert.match(hostSource, /\.canvas-stage\.is-node-dragging \.x6-node-selected\.is-canvas-node-flowing \.canvas-x6-special-node::after[\s\S]*?canvas-x6-selected-border-flow 1\.2s linear infinite/);
   assert.doesNotMatch(wireSource, /requestCanvasDragViewUpdate[\s\S]*?view\?\.cell\?\.isEdge\?\.\(\)[\s\S]*?deferredUpdates\.set/);
   assert.doesNotMatch(cssSource, /\.canvas-stage\.is-node-dragging \.canvas-x6-mount \.x6-edge\.is-canvas-edge-flowing\s*\{[\s\S]*?visibility:\s*hidden/);
@@ -2088,7 +2122,7 @@ it("restores the saved X6 viewport without replacing it during initial mount", (
   assert.match(mountSource, /applyInitialViewport\(graph, canvasDocument\.viewport\)/);
   assert.match(
     mountSource,
-    /classList\.add\("is-x6-ready"\);\s*void stabilizeInitialCanvasViewport\(graph, workbench\.ui\.canvasDocument\?\.viewport \?\? canvasDocument\.viewport, mount\)/,
+    /await stabilizeInitialCanvasViewport\(\s*graph,\s*workbench\.ui\.canvasDocument\?\.viewport \?\? canvasDocument\.viewport,\s*mount,?\s*\);\s*mount\.closest\("\.canvas-stage"\)\?\.classList\.add\("is-x6-ready"\)/,
   );
   assert.match(mountSource, /syncCanvasZoomControlDisplay\(workbench\.root, graph\.zoom\?\.\(\)\)/);
   assert.doesNotMatch(mountSource, /syncCanvasGraphViewport\(graph, workbench\)/);

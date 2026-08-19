@@ -200,6 +200,48 @@ describe("production workbench task center", () => {
     });
   });
 
+  it("projects a completed canvas media task by its registered canvas target", async () => {
+    const document = {
+      version: 1,
+      nodes: [{
+        id: "media-node-1",
+        type: "image",
+        data: {
+          source: "canvas_derivation",
+          status: "running",
+          previewUrl: "/old-preview.png",
+        },
+      }],
+      edges: [],
+    };
+    const workbench = {
+      taskCenterAppliedVersions: new Map(),
+      ui: {
+        selectedCanvasProjectId: "canvas-1",
+        canvasProjects: [{ id: "canvas-1" }],
+        canvasDocument: document,
+        canvasDocumentsByProject: { "canvas-1": document },
+        canvasGenerationHistoryItems: [],
+      },
+    };
+
+    await applyTaskCenterTaskProjectionForTest(workbench, {
+      taskId: "task-media-1",
+      kind: "image",
+      mediaKind: "image",
+      status: "succeeded",
+      targetType: "canvas",
+      targetId: "media-node-1",
+      result: { imageUrl: "/completed-preview.png" },
+      updatedAt: "2026-08-19T10:00:00.000Z",
+    });
+
+    const node = workbench.ui.canvasDocument.nodes[0];
+    assert.equal(node.data.status, "completed");
+    assert.equal(node.data.previewUrl, "/completed-preview.png");
+    assert.equal(node.data.lastTaskId, "task-media-1");
+  });
+
   it("shows storage retry and manual storage review states instead of generation progress", () => {
     const html = renderProjectDetail({
       state: {},

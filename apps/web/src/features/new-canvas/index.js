@@ -492,6 +492,10 @@ function createProductionCanvasAdapter(dependencies = {}) {
         const normalizedNodeId = String(nodeId ?? "").trim();
         if (disposed || !graph || !normalizedNodeId || typeof document === "undefined") return render();
         if (!refreshCanvasWorkflowNode(workbench, normalizedNodeId)) return render();
+        if (workbench.ui?.canvasEditorOpen !== true) {
+          const currentStage = surface.querySelector?.(".canvas-stage");
+          if (currentStage) syncCanvasNodeEditor(currentStage, currentStage, graph, "");
+        }
         if (!canvasNodeRefreshNeedsFullMarkup(workbench.ui, normalizedNodeId)) {
           if (!["assets", "history"].includes(workbench.ui?.canvasSidebarMode)) {
             const markup = createNodeMarkup(normalizedNodeId);
@@ -676,7 +680,9 @@ function createProductionCanvasAdapter(dependencies = {}) {
           return;
         }
         const mediaActionTarget = event.target?.closest?.("[data-media-action]");
-        if (mediaActionTarget) {
+        const isMediaBackdropClick = mediaActionTarget?.dataset?.mediaAction === "close"
+          && mediaActionTarget === event.target;
+        if (mediaActionTarget && (mediaActionTarget.dataset?.mediaAction !== "close" || isMediaBackdropClick)) {
           event.preventDefault?.();
           event.stopPropagation();
           void mediaToolsController?.handleAction(mediaActionTarget, event);
@@ -790,7 +796,7 @@ function createProductionCanvasAdapter(dependencies = {}) {
           const overlaysChanged = dismissCanvasSurfaceOverlays(workbench.ui);
           settleCanvasGraphBlankConnectionDraft(graph, { document: workbench.ui.canvasDocument });
           if (workbench.ui.canvasEditorOpen === true) {
-            clearCanvasGraphEditorOverlay(graph);
+            syncCanvasNodeEditor(canvasStage, canvasStage, graph, "");
             workbench.ui.canvasEditorOpen = false;
           }
           const shouldSyncSelection = hadEditor
@@ -805,6 +811,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
       };
       const onDoubleClick = (event) => {
         if (event.__canvasDirectorHandled === true) return;
+        if (mediaToolsController?.handleDoubleClick?.(event, event.target)) {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          return;
+        }
         if (agentController.handleDoubleClick(event.target)) {
           event.preventDefault?.();
           event.stopPropagation?.();
@@ -917,10 +928,12 @@ function createProductionCanvasAdapter(dependencies = {}) {
         event.stopPropagation();
       };
       const onBlur = (event) => {
+        mediaToolsController?.handleBlur?.(event.target);
         agentController.handleBlur(event.target);
       };
       const onChange = (event) => {
         mediaToolsController?.handleInput(event.target);
+        void mediaToolsController?.handleChange?.(event.target);
         agentController.handleInput(event.target);
         configLibraryController.handleInput(event.target);
         characterLibraryController.handleInput(event.target);
@@ -1225,6 +1238,11 @@ function createProductionCanvasAdapter(dependencies = {}) {
           event.stopPropagation();
           return;
         }
+        if (mediaToolsController?.handleWheel?.(event, event.target)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         const panoramaViewer = event.target?.closest?.("[data-panorama-drag-target]");
         if (!panoramaViewer) return;
         const nextView = applyCanvasPanoramaZoom(readCanvasPanoramaView(panoramaViewer), event.deltaY);
@@ -1393,7 +1411,8 @@ function showCanvasGraphMountFailure(surface) {
 }
 
 function clearCanvasSelectionPresentation(surface, graph, workbench) {
-  clearCanvasGraphEditorOverlay(graph);
+  const stage = surface.querySelector?.(".canvas-stage");
+  if (stage) syncCanvasNodeEditor(stage, stage, graph, "");
   clearCanvasGraphSelection(graph);
   for (const element of surface.querySelectorAll?.(
     '.canvas-sidebar [data-action="select-canvas-node"][data-node-id], [data-canvas-minimap] [data-node-id]',
@@ -1411,7 +1430,8 @@ function clearCanvasSelectionPresentation(surface, graph, workbench) {
 function canvasNodeRefreshNeedsFullMarkup(ui, nodeId) {
   const normalizedNodeId = String(nodeId ?? "").trim();
   const selectedNodeId = String(ui?.selectedCanvasNodeId ?? "").trim();
-  if (!normalizedNodeId || normalizedNodeId === selectedNodeId) return true;
+  if (!normalizedNodeId) return true;
+  if (normalizedNodeId === selectedNodeId && ui?.canvasEditorOpen === true) return true;
   if (ui?.toast) return true;
   for (const state of [
     ui?.canvasMarkdownFullscreen,

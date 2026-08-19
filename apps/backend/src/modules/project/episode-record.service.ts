@@ -8,6 +8,8 @@ export interface EpisodeRecord {
   title: string;
   sequence: number;
   status: "draft" | "ready" | "archived";
+  coverImageUrl: string | null;
+  coverStorageObjectId: string | null;
   createdByUserId: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -19,6 +21,8 @@ interface EpisodeRow {
   title: string;
   sequence: number | string;
   status: EpisodeRecord["status"];
+  cover_image_url: string | null;
+  cover_storage_object_id: string | null;
   created_by_user_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -155,6 +159,8 @@ export async function updateEpisodeForProject(
     episodeId: string;
     title?: string | null;
     status?: EpisodeRecord["status"] | null;
+    coverImageUrl?: string | null;
+    coverStorageObjectId?: string | null;
     now: Date;
   },
 ): Promise<EpisodeRecord | null> {
@@ -164,7 +170,9 @@ export async function updateEpisodeForProject(
         UPDATE episodes
         SET title = COALESCE(NULLIF($3, ''), title),
             status = COALESCE($4, status),
-            updated_at = $5
+            cover_image_url = CASE WHEN $7::boolean THEN $5::text ELSE cover_image_url END,
+            cover_storage_object_id = CASE WHEN $8::boolean THEN $6::uuid ELSE cover_storage_object_id END,
+            updated_at = $9
         WHERE project_id = $1
           AND id = $2
         RETURNING *
@@ -174,6 +182,10 @@ export async function updateEpisodeForProject(
         input.episodeId,
         input.title?.trim() ?? null,
         input.status ?? null,
+        input.coverImageUrl ?? null,
+        input.coverStorageObjectId ?? null,
+        input.coverImageUrl !== undefined,
+        input.coverStorageObjectId !== undefined,
         input.now,
       ],
     )
@@ -379,6 +391,8 @@ function episodeFromRow(row: EpisodeRow): EpisodeRecord {
     title: row.title,
     sequence: Number(row.sequence),
     status: row.status,
+    coverImageUrl: row.cover_image_url,
+    coverStorageObjectId: row.cover_storage_object_id,
     createdByUserId: row.created_by_user_id,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
