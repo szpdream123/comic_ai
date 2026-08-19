@@ -9,6 +9,13 @@ test("retries runtime database initialization without duplicating concurrent att
   const databaseUrl = process.env.DATABASE_URL?.trim();
   assert.ok(databaseUrl, "DATABASE_URL is required");
 
+  const staticWarmupServer = createPhoneAuthDevServer({
+    db: { query: async () => ({ rows: [], rowCount: 0 }) } as never,
+    repairScheduler: { enabled: false },
+  });
+  await staticWarmupServer.listen(0);
+  await staticWarmupServer.close();
+
   let connectionAttempts = 0;
   let closedConnections = 0;
   const unavailableDatabase = createServer((socket) => {
@@ -43,7 +50,7 @@ test("retries runtime database initialization without duplicating concurrent att
 
   try {
     await server.listen(0);
-    await waitFor(() => closedConnections === 1);
+    await waitFor(() => connectionAttempts >= 1);
 
     const failedResponses = await Promise.all(
       Array.from({ length: 5 }, () => fetch(`${server.origin}/api/auth/session`, {
@@ -51,7 +58,7 @@ test("retries runtime database initialization without duplicating concurrent att
       })),
     );
     assert.deepEqual(failedResponses.map((response) => response.status), [500, 500, 500, 500, 500]);
-    assert.equal(connectionAttempts, 2);
+    assert.equal(connectionAttempts, 3);
 
     process.env.DATABASE_URL = databaseUrl;
     const recoveredResponse = await fetch(`${server.origin}/api/auth/session`, {

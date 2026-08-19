@@ -6,6 +6,489 @@ import vm from "node:vm";
 const html = await readFile(new URL("./index.html", import.meta.url), "utf8");
 const script = (html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "").replace(/\r\n/g, "\n");
 
+test("admin shell exposes the super-admin GEO workflow", () => {
+  for (const text of [
+    "GEO运营", "问题库", "证据库", "内容中心", "自动质检", "提交审核", "发布官网",
+    "/api/admin/geo/questions", "/api/admin/geo/evidence", "/api/admin/geo/content",
+    "/api/admin/geo/generate", "/submit-review", "/publish",
+  ]) assert.match(script, new RegExp(escapeRegExp(text)));
+  assert.match(script, /state\.adminRoles\.includes\("super_admin"\)/);
+  assert.doesNotMatch(script, /一键发布/);
+});
+
+test("admin keeps the GEO entry in the immediately visible primary navigation", () => {
+  const installStart = script.indexOf("(function installGeoOperationsPage()");
+  const installEnd = script.indexOf("      })();", installStart) + "      })();".length;
+  assert.notEqual(installStart, -1, "GEO page installer exists");
+
+  const buttons = ["dashboard", "models", "settings"].map((page) => ({ dataset: { page } }));
+  const nav = {
+    querySelector(selector) {
+      const page = selector.match(/data-page=\"([^\"]+)\"/)?.[1];
+      return buttons.find((button) => button.dataset.page === page) || null;
+    },
+    insertBefore(button, reference) {
+      buttons.splice(buttons.indexOf(reference), 0, button);
+    },
+  };
+  const context = {
+    pages: {},
+    state: { page: "dashboard", session: { roles: ["super_admin"] } },
+    routeFromPath: () => "dashboard",
+    navigate: () => undefined,
+    renderPage: () => "",
+    geoOperationsPage: () => "",
+    renderShell: () => undefined,
+    ensureAdminPageData: () => Promise.resolve(),
+    history: { pushState() {} },
+    document: {
+      querySelector: (selector) => selector === ".nav" ? nav : null,
+      createElement: () => ({ dataset: {}, classList: { add() {} }, addEventListener() {} }),
+    },
+  };
+  vm.runInNewContext(script.slice(installStart, installEnd), context);
+  context.renderShell();
+
+  assert.deepEqual(buttons.map((button) => button.dataset.page), [
+    "dashboard", "geoOperations", "models", "settings",
+  ]);
+});
+
+test("admin GEO platform picker loads the catalog, submits selections, and preserves unknown labels", async () => {
+  const runtimeStart = script.indexOf("function geoOperationsState");
+  const runtimeEnd = script.indexOf("function geoQualityCounts", runtimeStart);
+  const submitStart = script.indexOf("async function geoCreateQuestion");
+  const submitEnd = script.indexOf("async function geoCreateEvidence", submitStart);
+  assert.notEqual(runtimeStart, -1, "GEO runtime exists");
+  assert.notEqual(runtimeEnd, -1, "GEO platform helpers are followed by quality helpers");
+  assert.notEqual(submitStart, -1, "GEO question submission exists");
+  assert.notEqual(submitEnd, -1, "GEO question submission has a stable boundary");
+
+  const requests = [];
+  const result = {};
+  const platforms = [
+    { id: "deepseek", label: "DeepSeek", group: "general_model", enabled: true, defaultSelected: true },
+    { id: "baidu", label: "百度文心助手", group: "general_model", enabled: true, defaultSelected: true },
+    { id: "quark", label: "夸克AI", group: "ai_search", enabled: true, defaultSelected: true },
+  ];
+  const context = {
+    result,
+    requests,
+    state: {},
+    Date,
+    escapeHtml: (value) => String(value),
+    escapeAttribute: (value) => String(value),
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+      getAll(name) { return this.form.values[name] ?? []; }
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: options?.body ? JSON.parse(options.body) : null });
+      if (path === "/api/admin/geo/platforms") return { data: platforms };
+      if (path === "/api/admin/geo/settings") return { data: { defaultModelCode: "test-model" } };
+      return { data: [] };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    setPageLoading: () => undefined,
+    setPageForbidden: () => undefined,
+    clearPageForbidden: () => undefined,
+    renderShell: () => undefined,
+  };
+  const runtimeSource = script.slice(runtimeStart, runtimeEnd);
+  const submitSource = script.slice(submitStart, submitEnd);
+  vm.runInNewContext(`${runtimeSource}\n${submitSource}\nresult.load = loadGeoOperations; result.state = geoOperationsState; result.picker = geoPlatformPicker; result.tags = geoPlatformTags; result.create = geoCreateQuestion;`, context);
+
+  await result.load();
+  assert.equal(requests.some((request) => request.path === "/api/admin/geo/platforms"), true);
+  assert.deepEqual(Array.from(result.state().platforms, (item) => item.id), ["deepseek", "baidu", "quark"]);
+
+  const picker = result.picker(platforms);
+  assert.match(picker, /综合大模型/);
+  assert.match(picker, /AI搜索/);
+  assert.match(picker, /name="targetPlatforms"/);
+  assert.match(picker, /value="baidu" checked/);
+  const tags = result.tags(["baidu", "legacy-platform"], platforms);
+  assert.match(tags, /百度文心助手/);
+  assert.match(tags, /legacy-platform/);
+
+  requests.length = 0;
+  const error = { textContent: "" };
+  const form = {
+    values: { rawQuestion: "问题", topic: "主题", intent: "tutorial", priority: "80", targetPlatforms: ["deepseek", "quark"] },
+    querySelector: () => error,
+    reset: () => undefined,
+  };
+  await result.create({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests[0].path, "/api/admin/geo/questions");
+  assert.deepEqual(Array.from(requests[0].payload.targetPlatforms), ["deepseek", "quark"]);
+
+  requests.length = 0;
+  form.values.targetPlatforms = [];
+  await result.create({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests.length, 0);
+  assert.equal(error.textContent, "至少选择一个目标平台");
+});
+
+test("admin GEO entry cards expose a narrow-screen single-column layout", () => {
+  const pageStart = script.indexOf("function geoOperationsPage");
+  const pageEnd = script.indexOf("async function geoCreateQuestion", pageStart);
+  assert.notEqual(pageStart, -1, "GEO page renderer exists");
+  assert.notEqual(pageEnd, -1, "GEO page renderer has a stable boundary");
+
+  const context = {
+    result: "",
+    geoOperationsState: () => ({
+      loadError: "",
+      platforms: [],
+      questions: [],
+      evidence: [],
+      content: [],
+      details: {},
+      settings: {},
+      selectedQuestionId: "",
+      selectedEvidenceIds: [],
+    }),
+    escapeHtml: (value) => String(value ?? ""),
+    geoPlatformTags: () => "",
+    geoPlatformPicker: () => "",
+    geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+  };
+  vm.runInNewContext(`${script.slice(pageStart, pageEnd)}\nresult = geoOperationsPage();`, context);
+
+  assert.match(context.result, /class="grid geo-operation-entry-grid"/);
+  assert.match(context.result, /@media\(max-width:720px\)\{\.geo-operation-entry-grid\{grid-template-columns:1fr\}\}/);
+  assert.match(context.result, /class="grid geo-source-grid"/);
+  assert.match(context.result, /@media\(max-width:720px\)\{\.geo-source-grid\{grid-template-columns:1fr\}\}/);
+  assert.doesNotMatch(context.result, /class="grid geo-source-grid" style=/);
+  assert.doesNotMatch(context.result, /class="grid" style="grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+});
+
+test("admin GEO generation groups multiple selected questions into one draft", async () => {
+  const pageStart = script.indexOf("function geoOperationsPage");
+  const pageEnd = script.indexOf("async function geoCreateQuestion", pageStart);
+  const selectionStart = script.indexOf("function geoSelectQuestion");
+  const selectionEnd = script.indexOf("async function geoSubmitReview", selectionStart);
+  assert.notEqual(pageStart, -1, "GEO page renderer exists");
+  assert.notEqual(selectionStart, -1, "GEO question selection exists");
+
+  const store = {
+    loadError: "",
+    platforms: [],
+    questions: [
+      { id: "question-1", rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", priority: 90, coverageStatus: "uncovered", targetPlatforms: [] },
+      { id: "question-2", rawQuestion: "多个镜头怎样保持同一张脸？", topic: "角色一致性", intent: "tutorial", priority: 85, coverageStatus: "uncovered", targetPlatforms: [] },
+    ],
+    evidence: [],
+    content: [],
+    details: {},
+    settings: { defaultModelCode: "test-model" },
+    selectedQuestionIds: ["question-1"],
+    selectedEvidenceIds: ["evidence-1"],
+  };
+  const requests = [];
+  const result = {};
+  const context = {
+    result,
+    Date,
+    geoOperationsState: () => store,
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+    geoPlatformTags: () => "",
+    geoPlatformPicker: () => "",
+    geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+    renderShell: () => undefined,
+    showToast: (message) => { throw new Error(message); },
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: JSON.parse(options.body) });
+      return { data: {} };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    loadGeoOperations: async () => undefined,
+  };
+  vm.runInNewContext(`${script.slice(pageStart, pageEnd)}\n${script.slice(selectionStart, selectionEnd)}\nresult.render = geoOperationsPage; result.legacySelect = geoSelectQuestion; result.toggle = geoToggleQuestion; result.generate = geoGenerateDraft;`, context);
+
+  const rendered = result.render();
+  assert.match(rendered, /type="checkbox"[^>]*question-1[^>]*checked/);
+  assert.match(rendered, /type="checkbox"[^>]*question-2/);
+
+  result.toggle("question-2", true);
+  assert.deepEqual(Array.from(store.selectedQuestionIds), ["question-1", "question-2"]);
+
+  const form = { values: { contentType: "guide", slug: "ai-character-consistency", modelCode: "test-model" }, querySelector: () => ({ textContent: "" }) };
+  await result.generate({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests[0].path, "/api/admin/geo/generate");
+  assert.deepEqual(Array.from(requests[0].payload.questionIds), ["question-1", "question-2"]);
+  assert.equal(requests[0].payload.questionId, "question-1");
+
+  result.legacySelect("question-2");
+  assert.deepEqual(Array.from(store.selectedQuestionIds), ["question-2"]);
+});
+
+test("admin GEO draft editor creates a new structured version without discarding linked evidence", async () => {
+  const editorStart = script.indexOf("function geoDraftBlockEditor");
+  const editorEnd = script.indexOf("async function geoSubmitReview", editorStart);
+  assert.notEqual(editorStart, -1, "GEO draft editor exists");
+  assert.notEqual(editorEnd, -1, "GEO draft editor has a stable boundary");
+
+  const sourceDocument = {
+    title: "原标题",
+    summary: "原摘要",
+    directAnswer: "原直接答案",
+    blocks: [
+      { type: "paragraph", text: "原正文", evidenceIds: ["evidence-1"] },
+      { type: "image", src: "/proof.png", alt: "原图片说明", caption: "原图注", evidenceIds: ["evidence-1"] },
+    ],
+    faq: [{ question: "原问题", answer: "原答案" }],
+    socialDrafts: { zhihu: "保留知乎文案", xiaohongshu: "", bilibili: "", wechat: "" },
+    seo: { title: "原SEO标题", description: "原SEO描述" },
+  };
+  const values = {
+    title: "新标题",
+    summary: "新摘要",
+    directAnswer: "新直接答案",
+    block_0_text: "新正文",
+    block_1_src: "/proof-new.png",
+    block_1_alt: "新图片说明",
+    block_1_caption: "新图注",
+    faq_0_question: "新问题",
+    faq_0_answer: "新答案",
+    seoTitle: "新SEO标题",
+    seoDescription: "新SEO描述",
+  };
+  const context = {
+    result: {},
+    requests: [],
+    store: { activeDraftEditor: null },
+    Date,
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+    },
+    api: async (path, options) => {
+      context.requests.push({ path, payload: JSON.parse(options.body) });
+      return { data: {} };
+    },
+    document: { getElementById: () => null },
+    geoOperationsState: () => context.store,
+    uploadAdminImage: async (...args) => context.uploadAdminImage(...args),
+    showToast: () => undefined,
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    closeDrawer: () => undefined,
+    loadGeoOperations: async () => undefined,
+    renderShell: () => undefined,
+  };
+  vm.runInNewContext(`${script.slice(editorStart, editorEnd)}\nresult.markup = geoDraftEditorMarkup; result.read = geoDraftDocumentFromForm; result.save = geoSaveDraftEdit; result.insert = typeof geoInsertDraftBlock === "function" ? geoInsertDraftBlock : null; result.move = geoMoveDraftBlock; result.paste = geoHandleDraftPaste; result.upload = geoUploadDraftImage; geoMountDraftEditor = () => undefined;`, context);
+
+  const markup = context.result.markup({ id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide" }, { document: sourceDocument });
+  assert.match(markup, /结构化正文编辑器/);
+  assert.match(markup, /name="title"/);
+  assert.match(markup, /正文区块 1/);
+  assert.match(markup, /FAQ 1/);
+  assert.match(markup, /粘贴文章文字或截图/);
+  assert.match(markup, /正式预览/);
+  assert.match(markup, /添加正文/);
+  assert.match(markup, /上传或粘贴图片/);
+  assert.match(markup, /data-geo-block-index="0"/);
+  assert.match(markup, /在此处插入图片/);
+  assert.match(script.slice(editorStart, editorEnd), /\/api\/admin\/geo\/assets\/uploads/);
+  assert.match(script.slice(editorStart, editorEnd), /\/api\/admin\/geo\/preview/);
+  assert.match(script.slice(editorStart, editorEnd), /function geoMoveDraftBlock/);
+  assert.match(script.slice(editorStart, editorEnd), /function geoDuplicateDraftBlock/);
+  assert.match(script.slice(editorStart, editorEnd), /function geoDeleteDraftBlock/);
+
+  assert.equal(typeof context.result.insert, "function", "GEO editor can insert a block after the selected body block");
+  const insertedBlocks = [
+    { type: "paragraph", text: "第一段" },
+    { type: "paragraph", text: "第二段" },
+  ];
+  context.result.insert(insertedBlocks, { type: "image", src: "/between.png" }, 0);
+  assert.deepEqual(Array.from(insertedBlocks, (block) => block.type), ["paragraph", "image", "paragraph"]);
+  context.result.insert(insertedBlocks, { type: "note", text: "末尾提示" });
+  assert.equal(insertedBlocks.at(-1).type, "note");
+
+  context.store.activeDraftEditor = {
+    item: { topic: "角色一致性" },
+    version: { document: { blocks: [{ type: "paragraph", text: "第一段" }, { type: "paragraph", text: "第二段" }] } },
+  };
+  context.uploadAdminImage = async () => ({ sourceUrl: "/geo-assets/pasted-image" });
+  let pastePrevented = false;
+  await context.result.paste({
+    preventDefault: () => { pastePrevented = true; },
+    target: { closest: () => ({ dataset: { geoBlockIndex: "0" } }) },
+    clipboardData: { items: [{ type: "image/png", getAsFile: () => ({ name: "步骤截图.png" }) }] },
+  });
+  assert.equal(pastePrevented, true);
+  assert.deepEqual(Array.from(context.store.activeDraftEditor.version.document.blocks, (block) => block.type), ["paragraph", "image", "paragraph"]);
+
+  let finishUpload;
+  context.uploadAdminImage = () => new Promise((resolve) => { finishUpload = resolve; });
+  const firstBlock = { type: "paragraph", text: "第一段" };
+  const secondBlock = { type: "paragraph", text: "第二段" };
+  const originalSession = {
+    item: { id: "content-original", topic: "原文章" },
+    version: { document: { blocks: [firstBlock, secondBlock] } },
+  };
+  context.store.activeDraftEditor = originalSession;
+  const pendingUpload = context.result.upload({ name: "延迟截图.png" }, undefined, 0);
+  context.result.move(0, 1);
+  finishUpload({ sourceUrl: "/geo-assets/delayed-image" });
+  await pendingUpload;
+  assert.deepEqual(
+    Array.from(originalSession.version.document.blocks, (block) => block.text || block.type),
+    ["第一段", "image", "第二段"],
+  );
+
+  let finishSwitchedUpload;
+  context.uploadAdminImage = () => new Promise((resolve) => { finishSwitchedUpload = resolve; });
+  const switchedFrom = {
+    item: { id: "content-a", topic: "文章 A" },
+    version: { document: { blocks: [{ type: "paragraph", text: "A" }] } },
+  };
+  const switchedTo = {
+    item: { id: "content-b", topic: "文章 B" },
+    version: { document: { blocks: [{ type: "paragraph", text: "B" }] } },
+  };
+  context.store.activeDraftEditor = switchedFrom;
+  const switchedUpload = context.result.upload({ name: "切换截图.png" }, undefined, 0);
+  context.store.activeDraftEditor = switchedTo;
+  finishSwitchedUpload({ sourceUrl: "/geo-assets/switched-image" });
+  await switchedUpload;
+  assert.deepEqual(Array.from(switchedFrom.version.document.blocks, (block) => block.type), ["paragraph"]);
+  assert.deepEqual(Array.from(switchedTo.version.document.blocks, (block) => block.type), ["paragraph"]);
+
+  const edited = context.result.read({ values }, sourceDocument);
+  assert.equal(edited.title, "新标题");
+  assert.equal(edited.blocks[0].text, "新正文");
+  assert.deepEqual(Array.from(edited.blocks[0].evidenceIds), ["evidence-1"]);
+  assert.equal(edited.blocks[1].src, "/proof-new.png");
+  assert.deepEqual(Array.from(edited.blocks[1].evidenceIds), ["evidence-1"]);
+  assert.equal(edited.faq[0].question, "新问题");
+  assert.equal(edited.socialDrafts.zhihu, "保留知乎文案");
+  assert.equal(edited.seo.title, "新SEO标题");
+
+  const form = {
+    values: { ...values, topic: "角色一致性新主题" },
+    dataset: {},
+    querySelector: () => ({ textContent: "" }),
+  };
+  await context.result.save(
+    { preventDefault() {}, currentTarget: form },
+    { id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide", lockVersion: 7 },
+    { document: sourceDocument, questionIds: ["question-1"], evidenceIds: ["evidence-1"], configRevisionId: "geo-default-v1" },
+  );
+  assert.equal(context.requests[0].path, "/api/admin/geo/content");
+  assert.equal(context.requests[0].payload.contentItemId, "content-1");
+  assert.equal(context.requests[0].payload.expectedLockVersion, 7);
+  assert.deepEqual(Array.from(context.requests[0].payload.questionIds), ["question-1"]);
+  assert.deepEqual(Array.from(context.requests[0].payload.evidenceIds), ["evidence-1"]);
+  assert.equal(context.requests[0].payload.document.title, "新标题");
+});
+
+test("admin GEO content details expose actionable quality issues and version history", () => {
+  const detailsStart = script.indexOf("function geoContentDetailMarkup");
+  const detailsEnd = script.indexOf("function geoOperationsPage", detailsStart);
+  assert.notEqual(detailsStart, -1, "GEO content details exist");
+  assert.notEqual(detailsEnd, -1, "GEO content details have a stable boundary");
+
+  const context = {
+    result: {},
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+  };
+  vm.runInNewContext(`${script.slice(detailsStart, detailsEnd)}\nresult.markup = geoContentDetailMarkup;`, context);
+
+  const item = {
+    id: "content-1",
+    topic: "角色一致性",
+    slug: "ai-character-consistency",
+    contentType: "guide",
+    status: "published",
+    currentDraftVersionId: "version-3",
+    currentPublishedVersionId: "version-2",
+  };
+  const markup = context.result.markup(item, {
+    versions: [
+      {
+        id: "version-3",
+        versionNumber: 3,
+        title: "待修改版本",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        publishedAt: null,
+        qualityReport: {
+          blockers: [{ code: "invalid_evidence", message: "证据已失效。", path: "blocks.1" }],
+          warnings: [{ code: "seo_description_short", message: "SEO描述过短。", path: "seo.description" }],
+          checkedAt: "2026-08-16T10:01:00.000Z",
+        },
+      },
+      { id: "version-2", versionNumber: 2, title: "当前线上版本", createdAt: "2026-08-15T10:00:00.000Z", publishedAt: "2026-08-15T11:00:00.000Z", qualityReport: { blockers: [], warnings: [], checkedAt: "2026-08-15T10:01:00.000Z" } },
+      { id: "version-1", versionNumber: 1, title: "首发版本", createdAt: "2026-08-14T10:00:00.000Z", publishedAt: "2026-08-14T11:00:00.000Z", qualityReport: { blockers: [], warnings: [], checkedAt: "2026-08-14T10:01:00.000Z" } },
+    ],
+  });
+
+  assert.match(markup, /版本与质检/);
+  assert.match(markup, /证据已失效。/);
+  assert.match(markup, /blocks\.1/);
+  assert.match(markup, /SEO描述过短。/);
+  assert.match(markup, /当前草稿/);
+  assert.match(markup, /当前线上/);
+  assert.match(markup, /geoRollbackContent\('content-1', 'version-1'\)/);
+  assert.doesNotMatch(markup, /geoRollbackContent\('content-1', 'version-2'\)/);
+  assert.match(markup, /geoArchiveContent\('content-1'\)/);
+});
+
+test("admin GEO rollback and archive operations send guarded mutation payloads", async () => {
+  const detailsStart = script.indexOf("function geoContentDetailMarkup");
+  const detailsEnd = script.indexOf("function geoOperationsPage", detailsStart);
+  assert.notEqual(detailsStart, -1, "GEO content operations exist");
+
+  const prompts = ["回滚错误发布", "内容过期", "/guides/replacement-guide"];
+  const requests = [];
+  const toasts = [];
+  let failNext = false;
+  const context = {
+    result: {},
+    Date,
+    window: {
+      confirm: () => true,
+      prompt: () => prompts.shift(),
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: JSON.parse(options.body) });
+      if (failNext) throw Object.assign(new Error("替代地址无效"), { payload: { error: { message: "替代地址必须指向已发布内容" } } });
+      return { data: {} };
+    },
+    showToast: (message) => toasts.push(message),
+    closeDrawer: () => undefined,
+    loadGeoOperations: async () => undefined,
+    renderShell: () => undefined,
+    escapeHtml: (value) => String(value ?? ""),
+    escapeAttribute: (value) => String(value ?? ""),
+  };
+  vm.runInNewContext(`${script.slice(detailsStart, detailsEnd)}\nresult.rollback = geoRollbackContent; result.archive = geoArchiveContent;`, context);
+
+  await context.result.rollback("content-1", "version-1");
+  await context.result.archive("content-1");
+
+  assert.deepEqual(requests.map((request) => request.path), [
+    "/api/admin/geo/content/content-1/rollback",
+    "/api/admin/geo/content/content-1/archive",
+  ]);
+  assert.deepEqual(requests[0].payload, { versionId: "version-1", reason: "回滚错误发布" });
+  assert.deepEqual(requests[1].payload, { reason: "内容过期", redirectPath: "/guides/replacement-guide" });
+
+  prompts.push("再次归档", "/guides/not-published");
+  failNext = true;
+  await context.result.archive("content-1");
+  assert.equal(toasts.at(-1), "替代地址必须指向已发布内容");
+});
+
 test("admin queue operations expose dead-letter replay", () => {
   assert.match(script, /queue\.role === "dead_letter"/);
   assert.match(script, /<option value="replay">重放到原队列<\/option>/);

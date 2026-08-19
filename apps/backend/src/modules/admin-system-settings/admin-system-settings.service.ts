@@ -1709,6 +1709,7 @@ export function createAdminSystemSettingsService(deps: { db: SqlDatabase }) {
     getVideoBatchCookie,
     updateVideoBatchCookie,
     getBatchImagePromptPresetCategories,
+    getFirstLoginOnboardingConfig,
     getPublicLegalDocuments,
     getPublicCustomerSupportConfig,
     listLegalDocuments,

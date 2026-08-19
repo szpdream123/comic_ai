@@ -4571,7 +4571,7 @@ export function renderEpisodeBatchModal(modal) {
     modal.isSubmitting === true
       ? "提交中..."
       : mode === "video"
-      ? "生成"
+      ? `生成 ${totalCredits} 积分`
       : mode === "upscale"
         ? `处理 ${selectedCount} 项素材 | ${totalCredits} 积分`
         : skillCredits > 0

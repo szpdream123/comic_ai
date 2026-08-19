@@ -34800,6 +34800,10 @@ function mergeSingleEpisodeAiRegeneratedStage({ currentPreview, finalizedStage, 
     activeStage: "complete",
     regeneratingStage: "",
     regenerationError: "",
+    completionMessage: Array.isArray(normalizedData.commitPayload?.storyboards)
+      && normalizedData.commitPayload.storyboards.length > 0
+      ? `${stageConfig.label}已重新生成，可以创建章节。`
+      : `${stageConfig.label}已重新生成，解析结果已更新。`,
   };
 }
 

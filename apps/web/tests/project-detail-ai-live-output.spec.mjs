@@ -51,6 +51,58 @@ function renderLoadingPreview(activeStage, responseText, options = {}) {
   });
 }
 
+function renderReadyPreview(options = {}) {
+  const hasStoryboards = options.hasStoryboards !== false;
+  const storyboardRows = hasStoryboards
+    ? [{ plot: "任小野走入城门", dialogue: "", imagePrompt: "城门静态画面", videoPrompt: "跟拍进入城门" }]
+    : [];
+  return renderProjectDetail({
+    state: {
+      project: { id: "project-1", name: "try", phase: "asset_review", aspectRatio: "9:16" },
+      projectDetail: {
+        project: { id: "project-1", projectId: "project-1", name: "try" },
+        episodes: [],
+        assetsByType: { character: [], scene: [], prop: [], other: { image: [], video: [] } },
+        shots: [],
+      },
+    },
+    session: { user: { phone: "+86 13800138000" } },
+    ui: {
+      activeNavTab: "project",
+      projectPanelMode: "detail",
+      projectInteriorSection: "episodes",
+      selectedProjectCardId: "project-1",
+      singleEpisodeAiPreview: {
+        status: "ready",
+        source: "single-episode-storyboard",
+        projectId: "project-1",
+        selectedStages: options.selectedStages ?? ["script", "scene", "character", "prop", "shot"],
+        regeneratingStage: options.regeneratingStage ?? "",
+        regenerationError: options.regenerationError ?? "",
+        completionMessage: options.completionMessage ?? "",
+        data: {
+          ...(options.omitCommitPayload ? {} : {
+            commitPayload: {
+              scriptText: "任小野走入城门。",
+              scenes: [{ sceneName: "城门" }],
+              characters: [{ characterName: "任小野" }],
+              props: [],
+              storyboards: storyboardRows,
+            },
+          }),
+          displayTables: {
+            script: { title: "剧本", rows: [{ scriptContent: "任小野走入城门。" }] },
+            scenes: { title: "场景", rows: [{ sceneName: "城门", sceneDescription: "雨后" }] },
+            characters: { title: "角色", rows: [{ characterName: "任小野", characterDescription: "少年" }] },
+            props: { title: "道具", rows: [] },
+            storyboards: { title: "分镜", rows: storyboardRows },
+          },
+        },
+      },
+    },
+  });
+}
+
 test("loading AI storyboard preview renders streamed stage output without duplicate inferred tables", () => {
   const cases = [
     {
@@ -96,6 +148,61 @@ test("loading AI storyboard preview shows each streamed response body as it arri
   assert.match(html, /data-prompt-stage="scene-response"/);
   assert.match(html, new RegExp(rawMarker));
   assert.match(html, /生成中/);
+});
+
+test("loading AI storyboard preview shows live parsing status and keeps create chapter frozen", () => {
+  const html = renderLoadingPreview("scene", "模型正在返回场景解析结果", {
+    scenes: [{ sceneName: "城门", sceneDescription: "雨后" }],
+  });
+
+  assert.match(html, /single-episode-ai-progress-state/);
+  assert.match(html, /模型正在解析文本，请稍候/);
+  assert.match(html, /场景提示词生成中/);
+  assert.match(html, /single-episode-ai-create[^>]*disabled[^>]*>解析中\.\.\.<\/button>/s);
+  assert.doesNotMatch(html, /data-action="commit-ai-storyboard-preview"/);
+});
+
+test("ready AI storyboard preview explicitly confirms completion before enabling create chapter", () => {
+  const html = renderReadyPreview();
+
+  assert.match(html, /single-episode-ai-completion-state success/);
+  assert.match(html, /解析完成，可以创建章节/);
+  assert.match(html, /data-action="commit-ai-storyboard-preview"/);
+  assert.doesNotMatch(html, /single-episode-ai-create[^>]*disabled/s);
+});
+
+test("ready AI storyboard preview keeps legacy table-only storyboard results committable", () => {
+  const html = renderReadyPreview({ omitCommitPayload: true });
+
+  assert.match(html, /解析完成，可以创建章节/);
+  assert.match(html, /data-action="commit-ai-storyboard-preview"/);
+  assert.doesNotMatch(html, /single-episode-ai-create[^>]*disabled/s);
+});
+
+test("ready AI storyboard preview keeps create chapter frozen when storyboard output is incomplete", () => {
+  const html = renderReadyPreview({ hasStoryboards: false, selectedStages: null });
+
+  assert.match(html, /解析结果不完整，请重新生成/);
+  assert.match(html, /single-episode-ai-create[^>]*disabled[^>]*>创建章节<\/button>/s);
+  assert.doesNotMatch(html, /data-action="commit-ai-storyboard-preview"/);
+});
+
+test("regenerating an AI storyboard stage freezes every generation action and shows progress", () => {
+  const html = renderReadyPreview({ regeneratingStage: "character" });
+  const regenerateButtons = html.match(/<button[\s\S]*?class="single-episode-ai-stage-regenerate"[\s\S]*?<\/button>/g) ?? [];
+
+  assert.match(html, /角色重新生成中，请稍候/);
+  assert.ok(regenerateButtons.length >= 4);
+  assert.ok(regenerateButtons.every((button) => /disabled/.test(button)));
+  assert.match(html, /single-episode-ai-create[^>]*disabled[^>]*>创建章节<\/button>/s);
+  assert.doesNotMatch(html, /data-action="commit-ai-storyboard-preview"/);
+});
+
+test("ready AI storyboard preview keeps regeneration failure visible inside the fullscreen result", () => {
+  const html = renderReadyPreview({ regenerationError: "模型连接暂时中断" });
+
+  assert.match(html, /single-episode-ai-completion-state error/);
+  assert.match(html, /重新生成失败：模型连接暂时中断/);
 });
 
 test("loading AI storyboard preview uses matching prompt detail columns before details arrive", () => {

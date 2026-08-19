@@ -50,7 +50,7 @@ export async function createDevDb(): Promise<DevDatabase> {
       return db;
     } catch (error) {
       await pool.end().catch(() => undefined);
-      if (attempt < 3 && isTransientDatabaseStartupError(error)) {
+      if (attempt < 3 && isTransientDatabaseConnectionError(error)) {
         const delayMs = attempt * 500;
         console.warn(`[database] PostgreSQL startup connection failed; retrying in ${delayMs}ms (attempt ${attempt + 1}/3).`);
         await sleep(delayMs);
@@ -65,7 +65,7 @@ export async function createDevDb(): Promise<DevDatabase> {
   throw new Error("PostgreSQL database initialization failed: startup retry limit reached");
 }
 
-function isTransientDatabaseStartupError(error: unknown) {
+export function isTransientDatabaseConnectionError(error: unknown) {
   const code = typeof (error as { code?: unknown })?.code === "string"
     ? (error as { code: string }).code
     : "";
@@ -79,6 +79,29 @@ function isTransientDatabaseStartupError(error: unknown) {
     "ENETUNREACH",
   ].includes(code) || /\b(?:ECONNABORTED|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH)\b/i.test(message)
     || /connection terminated(?: unexpectedly| due to connection timeout)/i.test(message);
+}
+
+export class TransientDatabasePersistenceError extends Error {
+  readonly code = "transient_database_persistence_error";
+
+  constructor(error: unknown, readonly retrySafe = true) {
+    super(error instanceof Error ? error.message : String(error), { cause: error });
+    this.name = "TransientDatabasePersistenceError";
+  }
+}
+
+export function markTransientDatabasePersistenceError(error: unknown, options?: { retrySafe?: boolean }) {
+  return error instanceof TransientDatabasePersistenceError
+    ? error
+    : new TransientDatabasePersistenceError(error, options?.retrySafe ?? true);
+}
+
+export function isTransientDatabasePersistenceError(error: unknown) {
+  return error instanceof TransientDatabasePersistenceError;
+}
+
+export function isRetrySafeTransientDatabasePersistenceError(error: unknown) {
+  return error instanceof TransientDatabasePersistenceError && error.retrySafe;
 }
 
 function isManagedProductionWorkerSchemaReady() {

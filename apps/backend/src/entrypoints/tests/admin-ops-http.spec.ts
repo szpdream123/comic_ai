@@ -27,6 +27,7 @@ function createPhoneAuthDevServer(
     ...(options ?? {}),
     env: {
       NODE_ENV: "test",
+      PAYMENT_PROVIDER_MODE: "local",
       PAYMENT_MERCHANT_ID: "comic-ai-test-merchant",
       ...(options?.env ?? {}),
     },
@@ -692,8 +693,24 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       const retriedFinalizePayload = await retriedFinalize.json();
       const retriedPersistPayload = await retriedPersist.json();
       const retriedStoragePayload = await retriedStorage.json();
+      const attempts = await db.query<{ id: string; current_attempt_id: string }>(
+        `
+          SELECT id::text, current_attempt_id::text
+          FROM tasks
+          WHERE id = ANY($1::uuid[])
+        `,
+        [[uploadTask.taskId, persistTask.taskId, storageTask.taskId]],
+      );
+      const attemptIdByTaskId = new Map(
+        attempts.rows.map((row) => [row.id, row.current_attempt_id]),
+      );
       const outbox = await db.query<{
-        payload_json: { taskId: string; attemptId: string; finalizeMode: string; providerExecutor: string };
+        payload_json: {
+          attemptId: string;
+          taskId: string;
+          finalizeMode: string;
+          providerExecutor: string;
+        };
       }>(
         `
           SELECT payload_json
@@ -713,11 +730,12 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
       assert.equal(retriedStoragePayload.task.id, storageTask.taskId);
       assert.ok(outbox.rows.every((row) => /^[0-9a-f-]{36}$/i.test(row.payload_json.attemptId)));
       assert.deepEqual(
-        outbox.rows.map(({ payload_json: { attemptId: _attemptId, ...payload } }) => payload),
+        outbox.rows.map((row) => row.payload_json),
         [
           {
             workflowId: uploadTask.workflowId,
             taskId: uploadTask.taskId,
+            attemptId: attemptIdByTaskId.get(uploadTask.taskId),
             mediaType: "image",
             modelCode: "gpt-image-2-cn",
             providerExecutor: "gpt-image-2",
@@ -729,6 +747,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           {
             workflowId: persistTask.workflowId,
             taskId: persistTask.taskId,
+            attemptId: attemptIdByTaskId.get(persistTask.taskId),
             mediaType: "image",
             modelCode: "gpt-image-2-cn",
             providerExecutor: "gpt-image-2",
@@ -740,6 +759,7 @@ describe("admin ops HTTP routes", { concurrency: false }, () => {
           {
             workflowId: storageTask.workflowId,
             taskId: storageTask.taskId,
+            attemptId: attemptIdByTaskId.get(storageTask.taskId),
             mediaType: "image",
             modelCode: "gpt-image-2-cn",
             providerExecutor: "gpt-image-2",

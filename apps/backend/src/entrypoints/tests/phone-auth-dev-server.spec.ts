@@ -27,8 +27,13 @@ import {
 import { grantCredits, reserveCredits, settleReservationAllocation } from "../../modules/credit-billing/credit-ledger.service.ts";
 import { CumobTextAdapter } from "../../modules/model-gateway/cumob-text.adapter.ts";
 import { OpenAICompatibleTextAdapter } from "../../modules/model-gateway/openai-compatible-text.adapter.ts";
-import { createDevDb, runWithDatabaseContext } from "../../modules/shared/db/dev-db.ts";
+import {
+  createDevDb,
+  markTransientDatabasePersistenceError,
+  runWithDatabaseContext,
+} from "../../modules/shared/db/dev-db.ts";
 import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
+import { createGeoContentService } from "../../modules/geo/geo-content.service.ts";
 import { createHomeRecommendationService } from "../../modules/home-recommendations/home-recommendation.service.ts";
 
 const loginDbByOrigin = new Map<string, Awaited<ReturnType<typeof createDevDb>>>();
@@ -169,12 +174,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     const categoryId = randomUUID();
     const videoId = randomUUID();
-    const storageObjectId = randomUUID();
     const bucket = "home-media-test-1310122982";
     const region = "ap-guangzhou";
     const backgroundSourceUrl = `https://${bucket}.cos.${region}.myqcloud.com/officialAssets/homeBackgroundVideos/test.mp4`;
-    const videoObjectKey = "officialAssets/homeRecommendationVideos/test.mp4";
-    const videoSourceUrl = `/api/storage/objects/${storageObjectId}/content?proxy=1`;
     const signedRequests: Array<{ bucket: string; objectKey: string; expiresAt: Date }> = [];
     const server = createPhoneAuthDevServer({
       db,
@@ -210,13 +212,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       VALUES ($1, 'gateway-test', 'Gateway test', 'active', 1, now(), now())
     `, [categoryId]);
     await db.query(`
-      INSERT INTO storage_objects (id, bucket, object_key, content_type, size_bytes, provider, status)
-      VALUES ($1, $2, $3, 'video/mp4', 8, 'cos', 'available')
-    `, [storageObjectId, bucket, videoObjectKey]);
-    await db.query(`
       INSERT INTO home_recommendation_videos (id, category_id, title, subtitle, cover_url, video_url, duration_label, cover_alt, status, sort_order, created_at, updated_at)
       VALUES ($1, $2, 'Gateway video', '', '', $3, '', '', 'active', 1, now(), now())
-    `, [videoId, categoryId, videoSourceUrl]);
+    `, [videoId, categoryId, backgroundSourceUrl]);
 
     try {
       await server.listen(0);
@@ -236,20 +234,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(videoResponse.status, 200);
       assert.deepEqual(signedRequests.map((request) => ({ bucket: request.bucket, objectKey: request.objectKey })), [
         { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
-        { bucket, objectKey: videoObjectKey },
+        { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
       ]);
       assert.ok(signedRequests[0]?.expiresAt.getTime() >= Date.now() + 59 * 60 * 1000);
       assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
 
-      const recommendations = createHomeRecommendationService({ db });
-      await recommendations.saveBackground({
-        videoUrl: `https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`,
-        posterUrl: "",
-        status: "active",
-        now: new Date("2030-01-01T00:00:00.000Z"),
-      });
+      await db.query(
+        "UPDATE home_background_settings SET video_url = $1, updated_at = updated_at + interval '1 second' WHERE id = 'homepage'",
+        [`https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`],
+      );
+      await db.query(
+        "UPDATE home_recommendation_videos SET updated_at = updated_at + interval '1 second' WHERE id = $1",
+        [videoId],
+      );
       const updatedPayload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
       assert.notEqual(updatedPayload.data.background.videoUrl, payload.data.background.videoUrl);
+      assert.notEqual(updatedPayload.data.categories[0]?.videos[0]?.videoUrl, payload.data.categories[0]?.videos[0]?.videoUrl);
       const blockedResponse = await fetch(`${server.origin}${updatedPayload.data.background.videoUrl}`, { redirect: "manual" });
       assert.equal(blockedResponse.status, 404);
       assert.equal(signedRequests.length, 2);
@@ -615,7 +615,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(state.rows[0]?.provider_status, "failed");
       assert.equal(state.rows[0]?.provider_failure_code, "san_bao_invalid_response");
       assert.equal(state.rows[0]?.snapshot_status, "failed");
-      assert.equal(state.rows[0]?.reservation_status, "released");
+      assert.equal(state.rows[0]?.reservation_status, "manual_review_required");
     } finally {
       await server.close();
     }
@@ -913,7 +913,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         { headers: { cookie } },
       );
       const readOnlyEnvelope = await readOnlyResponse.json();
-      const unchangedSnapshot = await db.query<{ status: string; progress_stage: string }>(
+      const repairedSnapshot = await db.query<{ status: string; progress_stage: string }>(
         "SELECT status, progress_stage FROM ai_generation_task_snapshots WHERE task_id = $1",
         [taskId],
       );
@@ -921,7 +921,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(readOnlyResponse.status, 200);
       assert.equal(readOnlyEnvelope.data.items[0].status, "completed");
       assert.equal(readOnlyEnvelope.data.items[0].failure, null);
-      assert.deepEqual(unchangedSnapshot.rows, [{ status: "queued", progress_stage: "queued" }]);
+      assert.deepEqual(repairedSnapshot.rows, [{ status: "succeeded", progress_stage: "completed" }]);
 
       await db.query(
         `
@@ -941,6 +941,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
                   "lastFailureCode": "provider_output_upload_failed"
                 }
               }'::jsonb,
+              completed_at = NULL,
               failed_at = NULL,
               updated_at = '2026-07-14T08:00:19.000Z'
           WHERE task_id = $1
@@ -1617,6 +1618,12 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(sitemapResponse.status, 200);
       assert.match(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/script<\/loc>/);
       assert.doesNotMatch(sitemap, /http:\/\/www\.lingxiyunai\.com:443/);
+      assert.doesNotMatch(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/(?:guides|cases|reports|answers)<\/loc>/);
+      assert.match(sitemapResponse.headers.get("cache-control") ?? "", /must-revalidate/);
+      const sitemapNotModified = await fetch(`${server.origin}/sitemap.xml`, {
+        headers: { ...proxyHeaders, "if-none-match": sitemapResponse.headers.get("etag") ?? "" },
+      });
+      assert.equal(sitemapNotModified.status, 304);
 
       const publicRoutes = [
         ["/", "AI视频生成工具，串联剧本、分镜、素材与成片 | 灵曦AI", "AI视频生成工具，串联剧本、分镜、素材与成片", "从一个剧本或故事想法开始"],
@@ -1650,6 +1657,92 @@ describe("phone auth dev server", { concurrency: false }, () => {
         assert.match(routeHtml, /data-public-seo-login/);
         assert.doesNotMatch(routeHtml, /<noscript>/);
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves GEO public SSR pages and dynamic sitemap entries without creator shell state", async () => {
+    const db = await createMigratedTestDb();
+    const actorAdminAccountId = "32000000-0000-4000-8000-000000000001";
+    await db.query(
+      `INSERT INTO admin_accounts (id,login_name,password_hash,display_name,status)
+       VALUES ($1,'geo_public_admin','plain:test-password','GEO Public Admin','active')`,
+      [actorAdminAccountId],
+    );
+    const service = createGeoContentService({ db, now: () => new Date("2026-08-13T10:00:00.000Z") });
+    const evidence = await service.saveEvidence({ type: "product_feature", name: "角色素材公开说明", factText: "公开产品页说明角色素材可以复用。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true, actorAdminAccountId });
+    if (!("data" in evidence.body)) throw new Error("fixture evidence failed");
+    const draft = await service.createDraftFromDocument({
+      contentType: "guide", topic: "角色一致性", slug: "ai-short-drama-character-consistency",
+      questionIds: [], evidenceIds: [evidence.body.data.id], generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      document: {
+        title: "AI短剧如何保持角色一致性",
+        summary: "从角色资料、参考素材和分镜约束三个环节减少不同镜头中的角色漂移。",
+        directAnswer: "先固定角色资料，再让每个分镜引用同一组已确认素材。",
+        blocks: [{ type: "paragraph", text: "先建立可复用的角色参考素材，再进入分镜制作。", evidenceIds: [evidence.body.data.id] }],
+        faq: [{ question: "什么时候更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
+        socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+        seo: { title: "AI短剧角色一致性方法 | 灵曦AI", description: "介绍AI短剧角色资料、参考素材和分镜约束的实用方法。" },
+      },
+    });
+    assert.equal(draft.status, 201);
+    if (!("data" in draft.body)) throw new Error("fixture draft failed");
+    assert.equal((await service.submitForReview({ contentItemId: draft.body.data.item.id, expectedLockVersion: draft.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+    assert.equal((await service.publish({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "公开页验证" })).status, 200);
+    const draftOnly = await service.createDraftFromDocument({
+      contentType: "answer", topic: "未发布", slug: "draft-only-answer", questionIds: [], evidenceIds: [],
+      generationRunId: null, configRevisionId: "geo-default-v1", actorAdminAccountId,
+      document: {
+        title: "未发布问答", summary: "这是一条仅用于验证站点地图不会暴露草稿的内容。", directAnswer: "尚未发布。",
+        blocks: [{ type: "paragraph", text: "草稿内容。", evidenceIds: [] }], faq: [],
+        socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+        seo: { title: "未发布问答 | 灵曦AI", description: "未发布内容不会进入公开站点地图。" },
+      },
+    });
+    const server = createPhoneAuthDevServer({ db });
+    const proxyHeaders = { connection: "close", "x-forwarded-host": "www.lingxiyunai.com:443", "x-forwarded-proto": "https" };
+    try {
+      await server.listen(0);
+      for (const cookie of [undefined, "auth_session=existing-session"]) {
+        const response = await fetch(`${server.origin}/guides/ai-short-drama-character-consistency`, {
+          headers: cookie ? { ...proxyHeaders, cookie } : proxyHeaders,
+        });
+        const html = await response.text();
+        assert.equal(response.status, 200);
+        assert.match(html, /<h1>AI短剧如何保持角色一致性<\/h1>/);
+        assert.match(html, /application\/ld\+json/);
+        assert.match(html, /证据来源/);
+        assert.match(html, /href="https:\/\/www\.lingxiyunai\.com\/assets"/);
+        assert.match(html, /<link rel="canonical" href="https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency"/);
+        assert.doesNotMatch(html, /src="\/app\.js/);
+        assert.doesNotMatch(html, /public-seo-session-pending/);
+      }
+      const listing = await fetch(`${server.origin}/guides`, { headers: proxyHeaders });
+      assert.equal(listing.status, 200);
+      const listingHtml = await listing.text();
+      assert.match(listingHtml, /AI短剧如何保持角色一致性/);
+      assert.match(listingHtml, /<meta name="robots" content="index,follow,max-image-preview:large"/);
+      const emptyCases = await fetch(`${server.origin}/cases`, { headers: proxyHeaders });
+      assert.equal(emptyCases.status, 200);
+      assert.match(await emptyCases.text(), /<meta name="robots" content="noindex,follow"/);
+      const sitemap = await fetch(`${server.origin}/sitemap.xml`, { headers: proxyHeaders });
+      const sitemapXml = await sitemap.text();
+      assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides<\/loc>/);
+      assert.doesNotMatch(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/cases<\/loc>/);
+      assert.match(sitemapXml, /<loc>https:\/\/www\.lingxiyunai\.com\/guides\/ai-short-drama-character-consistency<\/loc>/);
+      assert.match(sitemapXml, /<lastmod>2026-08-13T10:00:00\.000Z<\/lastmod>/);
+      assert.doesNotMatch(sitemapXml, /draft-only-answer/);
+      if (!("data" in draftOnly.body)) throw new Error("draft-only fixture failed");
+      assert.equal((await service.submitForReview({ contentItemId: draftOnly.body.data.item.id, expectedLockVersion: draftOnly.body.data.item.lockVersion, actorAdminAccountId })).status, 200);
+      assert.equal((await service.publish({ contentItemId: draftOnly.body.data.item.id, actorAdminAccountId, reason: "重定向归档验证" })).status, 200);
+      assert.equal((await service.archive({ contentItemId: draftOnly.body.data.item.id, actorAdminAccountId, reason: "配置替代内容", redirectPath: "/guides/ai-short-drama-character-consistency" })).status, 200);
+      const moved = await fetch(`${server.origin}/answers/draft-only-answer`, { headers: proxyHeaders, redirect: "manual" });
+      assert.equal(moved.status, 301);
+      assert.equal(moved.headers.get("location"), "/guides/ai-short-drama-character-consistency");
+      assert.equal((await service.archive({ contentItemId: draft.body.data.item.id, actorAdminAccountId, reason: "无替代内容归档" })).status, 200);
+      const gone = await fetch(`${server.origin}/guides/ai-short-drama-character-consistency`, { headers: proxyHeaders, redirect: "manual" });
+      assert.equal(gone.status, 410);
     } finally {
       await server.close();
     }
@@ -1890,9 +1983,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       serverSource.indexOf("async function listEpisodeAssetTypesFromDb"),
       serverSource.indexOf("async function listEpisodeStoryboardsFromDb"),
     );
+    const getAssetsRouteMarker = serverSource.indexOf('pathname.endsWith("/assets")');
     const listEpisodeAssetsRouteBlock = serverSource.slice(
-      serverSource.indexOf('request.method === "GET" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
-      serverSource.indexOf('request.method === "POST" &&\n          pathname.startsWith("/api/episodes/") &&\n          pathname.endsWith("/assets")'),
+      serverSource.lastIndexOf("if (", getAssetsRouteMarker),
+      serverSource.indexOf('request.method === "POST"', getAssetsRouteMarker),
     );
 
     assert.match(listEpisodeAssetsBlock, /await getEpisodeReadContext\(db,/);
@@ -2098,7 +2192,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
   it("rejects disabled users while preserving the account state", async () => {
     const db = await createMigratedTestDb();
-    const server = createPhoneAuthDevServer({ db });
+    const server = createPhoneAuthDevServer({
+      db,
+      env: { AUTH_SESSION_REDIS_CACHE_ENABLED: "false" },
+    });
 
     try {
       await server.listen(0);
@@ -2137,7 +2234,6 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const cookie = await login(server.origin, "13800138991");
       const userId = await readUserIdForPhone(db, normalizeCnPhone("13800138991"));
       const projectId = randomUUID();
-      const scriptId = randomUUID();
       await db.query(
         `
           INSERT INTO projects (
@@ -2154,41 +2250,21 @@ describe("phone auth dev server", { concurrency: false }, () => {
     [projectId,
       userId],
       );
-      await db.query(
-        `
-          INSERT INTO scripts (
-        id,
-        project_id,
-        status,
-        input_text,
-        created_by_user_id
-      )
-          VALUES ($1, $2, 'draft', 'legacy script', $3)
-        `,
-    [scriptId,
-      projectId,
-      userId],
-      );
-
       const stateResponse = await fetch(`${server.origin}/api/creator/state`, {
         headers: { cookie },
       });
       const stateBody = await stateResponse.json();
-      const persisted = await db.query<{ owner_user_id: string; script_project_id: string }>(
+      const persisted = await db.query<{ owner_user_id: string }>(
         `
-          SELECT
-            project.owner_user_id,
-            script.project_id AS script_project_id
-          FROM projects project
-          JOIN scripts script ON script.project_id = project.id
-          WHERE project.id = $1
+          SELECT owner_user_id
+          FROM projects
+          WHERE id = $1
         `,
         [projectId],
       );
 
       assert.equal(stateResponse.status, 200, JSON.stringify(stateBody));
       assert.equal(persisted.rows[0]?.owner_user_id, userId);
-      assert.equal(persisted.rows[0]?.script_project_id, projectId);
     } finally {
       await server.close();
     }
@@ -2755,6 +2831,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
         apiResponse.headers.get("location"),
         "https://www.lingxiyunai.com/api/auth/password/login",
       );
+
+      const poisonedHeaders = {
+        host: "attacker.example:443",
+        "x-forwarded-host": "attacker.example:443",
+        "x-forwarded-proto": "https",
+      };
+      const robotsResponse = await fetch(`${server.origin}/robots.txt`, { headers: poisonedHeaders });
+      const robots = await robotsResponse.text();
+      assert.match(robots, /Sitemap: https:\/\/www\.lingxiyunai\.com\/sitemap\.xml/);
+      assert.doesNotMatch(robots, /attacker\.example/);
+      const sitemapResponse = await fetch(`${server.origin}/sitemap.xml`, { headers: poisonedHeaders });
+      const sitemap = await sitemapResponse.text();
+      assert.match(sitemap, /<loc>https:\/\/www\.lingxiyunai\.com\/script<\/loc>/);
+      assert.doesNotMatch(sitemap, /attacker\.example/);
     } finally {
       await server.close();
     }
@@ -6405,8 +6495,29 @@ describe("phone auth dev server", { concurrency: false }, () => {
         },
       );
       const envelope = await response.json();
+      const replayResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-home-character-intent",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "萧炎在乌坦城修炼。",
+            instruction: "帮我解析出其中的人物提示词",
+            resolveInstructionIntent: true,
+            skills: skillIds,
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const replayEnvelope = await replayResponse.json();
 
       assert.equal(response.status, 200);
+      assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.errorCode, "idempotency_processing");
       assert.equal(textChatGateway.calls.length, 2);
       assert.match(String(textChatGateway.calls[0]?.messages?.[1]?.content ?? ""), /人物提示词/);
       assert.match(textChatGateway.calls[1]?.prompt ?? "", /提取人物提示词/);
@@ -7043,6 +7154,410 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("refunds owner credits and reports a service interruption when AI storyboard preview loses PostgreSQL", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 20);
+    let gatewayCalls = 0;
+    let signalModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      signalModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelRelease = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        signalModelStarted();
+        await modelRelease;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+        );
+      },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138242";
+      const cookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "postgres-refund");
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      const previewResponsePromise = fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      await modelStarted;
+      const concurrentResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      releaseModel();
+      const previewResponse = await previewResponsePromise;
+      const responseText = await previewResponse.text();
+      const concurrentText = await concurrentResponse.text();
+      const replayResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const replayEnvelope = await replayResponse.json();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+      const refundEntries = await db.query<{ amount: number | string }>(
+        `SELECT amount FROM credit_ledger_entries
+         WHERE user_id = $1 AND source_type = 'ai_storyboard_preview_refund'`,
+        [userId],
+      );
+
+      assert.equal(previewResponse.status, 200);
+      assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(concurrentResponse.status, 409, concurrentText);
+      assert.equal(JSON.parse(concurrentText).errorCode, "idempotency_processing");
+      assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.errorCode, "ai_storyboard_preview_already_refunded");
+      assert.equal(gatewayCalls, 1);
+      assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
+      assert.equal(Number(refundEntries.rows[0]?.amount), 20);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("claims a zero-credit AI storyboard preview before a concurrent provider call", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    let gatewayCalls = 0;
+    let signalModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      signalModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelRelease = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        signalModelStarted();
+        await modelRelease;
+        throw new Error("injected zero-credit provider failure");
+      },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138245";
+      const cookie = await login(server.origin, phone);
+      await seedActiveGenerationMembership(db, {
+        userId: await readUserIdForPhone(db, normalizeCnPhone(phone)),
+      });
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "zero-credit-claim");
+      const requestPreview = () => fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-zero-credit-claim",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+
+      const firstResponsePromise = requestPreview();
+      await modelStarted;
+      const concurrentResponse = await requestPreview();
+      const concurrentText = await concurrentResponse.text();
+      releaseModel();
+      const firstResponse = await firstResponsePromise;
+      await firstResponse.text();
+
+      assert.equal(concurrentResponse.status, 409, concurrentText);
+      assert.equal(JSON.parse(concurrentText).errorCode, "idempotency_processing");
+      assert.equal(gatewayCalls, 1);
+    } finally {
+      releaseModel?.();
+      await server.close();
+    }
+  });
+
+  it("returns the service interruption envelope and refunds a non-stream AI storyboard preview", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 20);
+    let gatewayCalls = 0;
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+        );
+      },
+    };
+    let refundConnectionFailures = 0;
+    const serverDb: PhoneAuthTestDb = {
+      async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []) {
+        if (
+          refundConnectionFailures === 0
+          && gatewayCalls > 0
+          && params.some((value) => value === "ai_storyboard_preview_refund")
+        ) {
+          refundConnectionFailures += 1;
+          throw Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" });
+        }
+        return db.query<T>(sql, params);
+      },
+      close: () => db.close(),
+    };
+    const server = createPhoneAuthDevServer({ db: serverDb, textChatGateway });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138243";
+      const cookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const userId = await readUserIdForPhone(db, normalizeCnPhone(phone));
+      const created = await createAiStoryboardPreviewProject(server.origin, cookie, "postgres-non-stream-refund");
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      const previewResponse = await fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-postgres-non-stream-refund",
+            cookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const previewEnvelope = await previewResponse.json();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT credit_balance_cached AS balance FROM users WHERE id = $1",
+        [userId],
+      );
+
+      assert.equal(previewResponse.status, 503, JSON.stringify(previewEnvelope));
+      assert.equal(previewEnvelope.errorCode, "ai_storyboard_preview_service_interrupted");
+      assert.equal(previewEnvelope.message, "服务连接暂时中断，请稍后重试。");
+      assert.equal(refundConnectionFailures, 1);
+      assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refunds a team member preview and blocks a same-key generation replay", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 20);
+    let gatewayCalls = 0;
+    let signalModelStarted!: () => void;
+    const modelStarted = new Promise<void>((resolve) => {
+      signalModelStarted = resolve;
+    });
+    let releaseModel!: () => void;
+    const modelRelease = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    const textChatGateway = {
+      async completeJson() { throw new Error("completeJson should not be called"); },
+      async *streamJson() {
+        gatewayCalls += 1;
+        signalModelStarted();
+        await modelRelease;
+        throw markTransientDatabasePersistenceError(
+          Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }),
+        );
+      },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const phone = "13800138244";
+      const ownerCookie = await login(server.origin, phone);
+      await seedGenerationAccessForPhone(db, phone, 500);
+      const created = await createAiStoryboardPreviewProject(server.origin, ownerCookie, "member-postgres-refund");
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `preview_member_${randomUUID().slice(0, 8)}`,
+          displayName: "分镜预览子账户",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      const teamMemberId = createdMember.member.membershipId;
+      await db.query("UPDATE team_members SET member_credits = 500 WHERE id = $1", [teamMemberId]);
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const requestPreview = (requestCookie = memberCookie) => fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview?stream=1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "text/event-stream",
+            "content-type": "application/json",
+            "idempotency-key": "http-ai-storyboard-preview-member-postgres-refund",
+            cookie: requestCookie,
+          },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+      const balanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+
+      const previewResponsePromise = requestPreview();
+      await modelStarted;
+      const concurrentResponse = await requestPreview();
+      releaseModel();
+      const previewResponse = await previewResponsePromise;
+      const responseText = await previewResponse.text();
+      const concurrentText = await concurrentResponse.text();
+      const replayResponse = await requestPreview();
+      const replayEnvelope = await replayResponse.json();
+      const balanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [teamMemberId],
+      );
+      const refundEntries = await db.query<{ amount: number | string }>(
+        `SELECT amount FROM credit_ledger_entries
+         WHERE team_member_id = $1 AND source_type = 'team_member_generation_refund'`,
+        [teamMemberId],
+      );
+
+      assert.equal(previewResponse.status, 200, responseText);
+      assert.match(responseText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(concurrentResponse.status, 409, concurrentText);
+      assert.equal(JSON.parse(concurrentText).errorCode, "idempotency_processing");
+      assert.equal(replayResponse.status, 409, JSON.stringify(replayEnvelope));
+      assert.equal(replayEnvelope.errorCode, "ai_storyboard_preview_already_refunded");
+      assert.equal(gatewayCalls, 1);
+      assert.equal(Number(balanceAfter.rows[0]?.balance), Number(balanceBefore.rows[0]?.balance));
+      assert.equal(Number(refundEntries.rows[0]?.amount), 20);
+
+      const createSecondMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `preview_member_${randomUUID().slice(0, 8)}`,
+          displayName: "第二个分镜预览子账户",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const secondMember = await createSecondMemberResponse.json();
+      assert.equal(createSecondMemberResponse.status, 200, JSON.stringify(secondMember));
+      const secondMemberId = secondMember.member.membershipId;
+      await db.query("UPDATE team_members SET member_credits = 500 WHERE id = $1", [secondMemberId]);
+      const secondMemberCookie = await loginTeamMemberAccount(
+        server.origin,
+        secondMember.member.memberLoginAccount,
+        secondMember.temporaryPassword,
+      );
+      const secondBalanceBefore = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [secondMemberId],
+      );
+      const secondResponse = await requestPreview(secondMemberCookie);
+      const secondText = await secondResponse.text();
+      const secondBalanceAfter = await db.query<{ balance: number | string }>(
+        "SELECT member_credits AS balance FROM team_members WHERE id = $1",
+        [secondMemberId],
+      );
+
+      assert.equal(secondResponse.status, 200, secondText);
+      assert.match(secondText, /服务连接暂时中断，请稍后重试。/);
+      assert.equal(gatewayCalls, 2);
+      assert.equal(Number(secondBalanceAfter.rows[0]?.balance), Number(secondBalanceBefore.rows[0]?.balance));
+    } finally {
+      await server.close();
+    }
+  });
+
   it("blocks AI storyboard preview when membership or credits are invalid", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
@@ -7052,7 +7567,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await server.listen(0);
       const cookieNoMembership = await login(server.origin, "13800138219");
       const noMembershipProject = await createAiStoryboardPreviewProject(server.origin, cookieNoMembership, "no-membership");
-      const packages = await readStoryboardPromptPackages(server.origin, cookieNoMembership);
+      const packages = { genrePackageId: "auto", emotionPackageId: "auto" };
 
       const noMembershipResponse = await postAiStoryboardPreview(server.origin, {
         cookie: cookieNoMembership,
@@ -7083,7 +7598,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         cookie: cookieExpired,
         projectId: expiredProject.project.id,
         idempotencyKey: "http-ai-storyboard-preview-expired-membership",
-        packages: await readStoryboardPromptPackages(server.origin, cookieExpired),
+        packages,
       });
       const expiredEnvelope = await expiredResponse.json();
 
@@ -7099,7 +7614,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         cookie: cookieNoCredits,
         projectId: noCreditsProject.project.id,
         idempotencyKey: "http-ai-storyboard-preview-no-credits",
-        packages: await readStoryboardPromptPackages(server.origin, cookieNoCredits),
+        packages,
       });
       const noCreditsEnvelope = await noCreditsResponse.json();
 
@@ -7112,6 +7627,75 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(noCreditsResponse.status, 402, JSON.stringify(noCreditsEnvelope));
       assert.equal(noCreditsEnvelope.errorCode, "insufficient_credits");
       assert.equal(noCreditsEnvelope.message, "积分不足，请前往充值积分。");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects viewer and membership-ineligible team-member storyboard generation", async () => {
+    const db = await createMigratedTestDb();
+    await seedPreviewScriptModelConfig(db, 0);
+    let gatewayCalls = 0;
+    const textChatGateway = {
+      async completeJson() { gatewayCalls += 1; return "{}"; },
+      async *streamJson() { gatewayCalls += 1; yield "{}"; },
+    };
+    const server = createPhoneAuthDevServer({ db, textChatGateway, seedTeamEntitlements: true });
+
+    try {
+      await server.listen(0);
+      const ownerCookie = await login(server.origin, "13800138246");
+      const created = await createAiStoryboardPreviewProject(server.origin, ownerCookie, "member-preview-auth");
+      const createMemberResponse = await fetch(`${server.origin}/api/creator/team/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: ownerCookie },
+        body: JSON.stringify({
+          teamAccount: `preview_auth_${randomUUID().slice(0, 8)}`,
+          displayName: "分镜权限子账户",
+          projectIds: [created.project.id],
+          initialCredits: 0,
+        }),
+      });
+      const createdMember = await createMemberResponse.json();
+      assert.equal(createMemberResponse.status, 200, JSON.stringify(createdMember));
+      const teamMemberId = createdMember.member.membershipId;
+      await db.query(
+        "UPDATE team_member_projects SET role = 'viewer' WHERE member_id = $1 AND project_id = $2",
+        [teamMemberId, created.project.id],
+      );
+      const memberCookie = await loginTeamMemberAccount(
+        server.origin,
+        createdMember.member.memberLoginAccount,
+        createdMember.temporaryPassword,
+      );
+      const requestPreview = (idempotencyKey: string) => fetch(
+        `${server.origin}/api/creator/projects/${created.project.id}/ai-storyboard-preview`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", "idempotency-key": idempotencyKey, cookie: memberCookie },
+          body: JSON.stringify({
+            scriptText: "任小野把小草托付给闵婶子。",
+            stages: ["script"],
+            packages: { genrePackageId: "auto", emotionPackageId: "auto" },
+            modelCode: "preview-script-model",
+          }),
+        },
+      );
+
+      const viewerResponse = await requestPreview("http-ai-storyboard-preview-viewer");
+      const viewerEnvelope = await viewerResponse.json();
+      await db.query(
+        "UPDATE team_member_projects SET role = 'creator' WHERE member_id = $1 AND project_id = $2",
+        [teamMemberId, created.project.id],
+      );
+      const membershipResponse = await requestPreview("http-ai-storyboard-preview-member-no-membership");
+      const membershipEnvelope = await membershipResponse.json();
+
+      assert.equal(viewerResponse.status, 403, JSON.stringify(viewerEnvelope));
+      assert.equal(viewerEnvelope.errorCode, "permission_denied");
+      assert.equal(membershipResponse.status, 403, JSON.stringify(membershipEnvelope));
+      assert.equal(membershipEnvelope.errorCode, "membership_required");
+      assert.equal(gatewayCalls, 0);
     } finally {
       await server.close();
     }
@@ -15568,6 +16152,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         updated_by_name: string;
         is_admin_created: boolean;
         created_user_id: string;
+        storage_object_id: string;
         tags_json: string[] | string;
       }>("SELECT * FROM team_assets WHERE id = $1", [body.asset?.id]);
       const renameResponse = await fetch(`${server.origin}/api/creator/team-assets/${body.asset?.id}`, {
@@ -15589,9 +16174,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         asset_name: string;
         asset_prompt: string | null;
         asset_url: string;
+        storage_object_id: string;
         resource_size: number | string;
         tags_json: string[] | string;
-      }>("SELECT asset_name, asset_prompt, asset_url, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
+      }>("SELECT asset_name, asset_prompt, asset_url, storage_object_id, resource_size, tags_json FROM team_assets WHERE id = $1", [body.asset?.id]);
       const afterEdits = await db.query<{
         upload_sessions: number;
         upload_records: number;
@@ -15635,7 +16221,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(stored.rows[0]?.asset_prompt, "红色披风的青年英雄");
       assert.equal(stored.rows[0]?.asset_category, "character");
       assert.deepEqual(stored.rows[0]?.tags_json, []);
-      assert.match(stored.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(
+        stored.rows[0]?.asset_url,
+        `/api/storage/objects/${stored.rows[0]?.storage_object_id}/content?proxy=1`,
+      );
       assert.equal(stored.rows[0]?.resource_type, "image");
       assert.equal(Number(stored.rows[0]?.resource_size), 4);
       assert.equal(stored.rows[0]?.created_by_name.length > 0, true);
@@ -15656,7 +16245,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       ]);
       assert.equal(edited.rows[0]?.asset_name, "编辑后的团队主角");
       assert.equal(edited.rows[0]?.asset_prompt, "编辑后的团队角色描述");
-      assert.match(edited.rows[0]?.asset_url ?? "", /^https:\/\/team-assets\.example\.test\//);
+      assert.equal(
+        edited.rows[0]?.asset_url,
+        `/api/storage/objects/${edited.rows[0]?.storage_object_id}/content?proxy=1`,
+      );
       assert.equal(Number(edited.rows[0]?.resource_size), 5);
       assert.deepEqual(edited.rows[0]?.tags_json, ["主角", "红披风"]);
     } finally {

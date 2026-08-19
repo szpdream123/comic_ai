@@ -7,6 +7,146 @@ import { createMigratedTestDb } from "../../modules/shared/db/test-db.ts";
 import { createPhoneAuthDevServer } from "../phone-auth-dev-server.ts";
 
 describe("admin management platform HTTP routes", { concurrency: false }, () => {
+  it("restricts GEO operations to super admins and publishes an evidence-bound draft", async () => {
+    const db = await createMigratedTestDb();
+    const gatewayModels: string[] = [];
+    const gateway = {
+      async completeJsonWithUsage(input: { prompt?: string; model?: string }) {
+        gatewayModels.push(String(input.model || ""));
+        if (String(input.prompt).includes("独立内容审查员")) {
+          return { content: JSON.stringify({ issues: [] }), usage: { total_tokens: 10 }, providerRequestId: "geo-review-request" };
+        }
+        const evidenceId = String(input.prompt).match(/"evidence":\[\{"id":"([^"]+)"/)?.[1] ?? "";
+        return {
+          content: JSON.stringify({
+            title: "AI短剧角色一致性指南",
+            summary: "从角色资料、参考素材和分镜引用三个环节建立可复核的一致性流程。",
+            directAnswer: "先确认角色资料，再让每个分镜复用同一份已审核参考素材。",
+            blocks: [{ type: "paragraph", text: "灵曦AI支持按角色保存参考素材。", evidenceIds: [evidenceId] }],
+            faq: [{ question: "何时更新参考素材？", answer: "角色造型或制作要求变化时重新审核。" }],
+            socialDrafts: { zhihu: "", xiaohongshu: "", bilibili: "", wechat: "" },
+            seo: { title: "AI短剧角色一致性指南 | 灵曦AI", description: "介绍角色资料、参考素材和分镜引用的可复核操作流程。" },
+          }),
+          usage: { total_tokens: 20 },
+          providerRequestId: "geo-writer-request",
+        };
+      },
+      async completeJson() { throw new Error("unexpected fallback"); },
+    };
+    const { server, cookie } = await createLoggedInAdminServer(db, { serverOptions: { textChatGateway: gateway } });
+    try {
+      const anonymous = await fetch(`${server.origin}/api/admin/geo/questions`);
+      assert.equal(anonymous.status, 401);
+      const anonymousPlatforms = await fetch(`${server.origin}/api/admin/geo/platforms`);
+      assert.equal(anonymousPlatforms.status, 401);
+
+      const opsDb = await createMigratedTestDb();
+      const { server: opsServer, cookie: opsCookie } = await createLoggedInAdminServer(opsDb, { role: "ops_admin" });
+      try {
+        const forbidden = await fetch(`${opsServer.origin}/api/admin/geo/questions`, { headers: { cookie: opsCookie } });
+        assert.equal(forbidden.status, 403);
+        const forbiddenPlatforms = await fetch(`${opsServer.origin}/api/admin/geo/platforms`, { headers: { cookie: opsCookie } });
+        assert.equal(forbiddenPlatforms.status, 403);
+      } finally {
+        await opsServer.close();
+        await opsDb.close();
+      }
+
+      const platformsResponse = await fetch(`${server.origin}/api/admin/geo/platforms`, { headers: { cookie } });
+      const platforms = await platformsResponse.json();
+      assert.equal(platformsResponse.status, 200, JSON.stringify(platforms));
+      assert.deepEqual(platforms.data.map((item: { id: string }) => item.id), [
+        "deepseek", "doubao", "baidu", "yuanbao", "kimi", "tongyi",
+        "zhipu", "xinghuo", "quark", "metaso", "nami",
+      ]);
+      assert.equal(platforms.data.find((item: { id: string }) => item.id === "baidu")?.label, "百度文心助手");
+
+      const questionBody = JSON.stringify({ rawQuestion: "AI短剧怎样保持角色一致？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["deepseek"], priority: 90, productCapabilities: ["角色素材库"], notes: "" });
+      const missingIdempotency = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", cookie }, body: questionBody,
+      });
+      assert.equal(missingIdempotency.status, 400);
+      const questionIdempotencyKey = `geo-question-${randomUUID()}`;
+      const questionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": questionIdempotencyKey, cookie }, body: questionBody,
+      });
+      const question = await questionResponse.json();
+      assert.equal(questionResponse.status, 201, JSON.stringify(question));
+      const replayedQuestionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": questionIdempotencyKey, cookie }, body: questionBody,
+      });
+      const replayedQuestion = await replayedQuestionResponse.json();
+      assert.equal(replayedQuestionResponse.status, 201, JSON.stringify(replayedQuestion));
+      assert.equal(replayedQuestion.data.id, question.data.id);
+
+      const relatedQuestionResponse = await fetch(`${server.origin}/api/admin/geo/questions`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-question-related-${randomUUID()}`, cookie },
+        body: JSON.stringify({ rawQuestion: "多个镜头怎样保持同一张脸？", topic: "角色一致性", intent: "tutorial", targetPlatforms: ["baidu"], priority: 85, productCapabilities: ["角色素材库"], notes: "" }),
+      });
+      const relatedQuestion = await relatedQuestionResponse.json();
+      assert.equal(relatedQuestionResponse.status, 201, JSON.stringify(relatedQuestion));
+
+      const evidenceResponse = await fetch(`${server.origin}/api/admin/geo/evidence`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-evidence-${randomUUID()}`, cookie },
+        body: JSON.stringify({ type: "product_feature", name: "角色素材管理", factText: "灵曦AI支持按角色保存参考素材。", sourceUrl: "https://www.lingxiyunai.com/assets", reviewStatus: "approved", validUntil: null, publicUseAllowed: true }),
+      });
+      const evidence = await evidenceResponse.json();
+      assert.equal(evidenceResponse.status, 201, JSON.stringify(evidence));
+
+      const configuredSettingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, {
+        method: "PATCH", headers: { "content-type": "application/json", "idempotency-key": `geo-settings-valid-${randomUUID()}`, cookie },
+        body: JSON.stringify({ value: { defaultModelCode: "configured-geo-model", brandName: "灵曦AI", brandFacts: ["只使用审核证据"], brandTone: "专业、克制、清晰，不夸大效果", forbiddenPhrases: ["灵曦剧场"], defaultWordRange: { min: 1200, max: 2600 }, similarityThreshold: 0.82, publicAuthorName: "灵曦AI内容团队" }, reason: "HTTP配置验证" }),
+      });
+      assert.equal(configuredSettingsResponse.status, 200, await configuredSettingsResponse.text());
+
+      const generatedResponse = await fetch(`${server.origin}/api/admin/geo/generate`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-generate-${randomUUID()}`, cookie },
+        body: JSON.stringify({ questionIds: [question.data.id, relatedQuestion.data.id], evidenceIds: [evidence.data.id], contentType: "guide", topic: "角色一致性", slug: "http-character-consistency", modelCode: "" }),
+      });
+      const generated = await generatedResponse.json();
+      assert.equal(generatedResponse.status, 201, JSON.stringify(generated));
+      assert.deepEqual(gatewayModels, ["configured-geo-model", "configured-geo-model"]);
+      const linkedQuestions = await db.query<{ question_id: string }>("SELECT question_id FROM geo_content_question_links WHERE content_version_id=$1 ORDER BY question_id", [generated.data.version.id]);
+      assert.deepEqual(linkedQuestions.rows.map((row) => row.question_id).sort(), [question.data.id, relatedQuestion.data.id].sort());
+
+      const previewResponse = await fetch(`${server.origin}/api/admin/geo/preview`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ contentType: "guide", slug: "http-character-consistency", document: generated.data.version.document, evidenceIds: [evidence.data.id] }),
+      });
+      const preview = await previewResponse.json();
+      assert.equal(previewResponse.status, 200, JSON.stringify(preview));
+      assert.match(preview.data.html, /<meta name="robots" content="noindex,nofollow"/);
+      assert.match(preview.data.html, /<h1>AI短剧角色一致性指南<\/h1>/);
+      assert.match(preview.data.html, /证据来源/);
+
+      const reviewResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/submit-review`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-review-${randomUUID()}`, cookie },
+        body: JSON.stringify({ expectedLockVersion: generated.data.item.lockVersion }),
+      });
+      assert.equal(reviewResponse.status, 200, await reviewResponse.text());
+      const publishResponse = await fetch(`${server.origin}/api/admin/geo/content/${generated.data.item.id}/publish`, {
+        method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-publish-${randomUUID()}`, cookie }, body: JSON.stringify({ reason: "HTTP流程验证" }),
+      });
+      assert.equal(publishResponse.status, 200, await publishResponse.text());
+
+      const settingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, { headers: { cookie } });
+      const settings = await settingsResponse.json();
+      assert.equal(settingsResponse.status, 200, JSON.stringify(settings));
+      assert.equal(settings.data.brandName, "灵曦AI");
+      assert.equal(settings.data.publicAuthorName, "灵曦AI内容团队");
+      assert.notEqual(settings.data.configRevisionId, "geo-default-v1");
+      const rejectedBrand = await fetch(`${server.origin}/api/admin/geo/settings`, {
+        method: "PATCH", headers: { "content-type": "application/json", "idempotency-key": `geo-settings-${randomUUID()}`, cookie },
+        body: JSON.stringify({ value: { brandName: "灵曦剧场" }, reason: "错误品牌验证" }),
+      });
+      assert.equal(rejectedBrand.status, 400);
+    } finally {
+      await server.close();
+      await db.close();
+    }
+  });
+
   it("serves the standalone admin shell without using the creator app shell", async () => {
     const server = createPhoneAuthDevServer();
 
@@ -840,7 +980,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(summaryPayload.imageBytes, 12345);
       assert.equal(summaryPayload.videoBytes, 67890);
       assert.deepEqual(payload.data.map((item: { mediaKind: string }) => item.mediaKind).sort(), ["image", "video"]);
-      assert.ok(payload.data.every((item: { previewUrl: string }) => /\/uploads\/storage\/creator-test\//.test(item.previewUrl)));
+      assert.ok(payload.data.every((item: { previewUrl: string }) =>
+        /\/api\/storage\/objects\/60000000-0000-4000-8000-00000000010[12]\/content\?proxy=1$/.test(item.previewUrl),
+      ));
     } finally {
       await server.close();
     }
@@ -6427,6 +6569,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       serverOptions: {
         env: {
           STORAGE_OFFICIAL_ASSET_ROOT_PREFIX: "officialAssets",
+          STORAGE_SIGNED_URL_EXPIRES_SECONDS: "60",
         },
         storageRuntime: {
           mode: "cos",
@@ -6475,7 +6618,10 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(uploadResponse.status, 200);
       assert.equal(uploadPayload.data.bucket, "official-assets-bucket");
       assert.match(uploadPayload.data.storageObjectKey, /^officialAssets\/\d{8}\/[0-9a-f-]+-alchemist\.jpg$/);
-      assert.equal(uploadPayload.data.previewUrl, `https://cdn.example.test/${uploadPayload.data.storageObjectKey}`);
+      assert.equal(
+        uploadPayload.data.previewUrl,
+        `/api/storage/objects/${encodeURIComponent(uploadPayload.data.storageObjectId)}/content?proxy=1`,
+      );
       assert.equal(uploadPayload.data.mimeType, "image/jpeg");
       assert.equal(uploadedObjects.length, 1);
       assert.equal(uploadedObjects[0].bucket, "official-assets-bucket");
@@ -6502,6 +6648,15 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         },
       );
       const settingsAssetPayload = await settingsAssetResponse.json();
+      const geoImageResponse = await fetch(
+        `${server.origin}/api/admin/geo/assets/uploads?fileName=character-proof.png`,
+        {
+          method: "POST",
+          headers: { "content-type": "image/png", cookie },
+          body: transparentPngBytes,
+        },
+      );
+      const geoImagePayload = await geoImageResponse.json();
       const invalidImageResponse = await fetch(
         `${server.origin}/api/admin/prompt-covers/uploads?fileName=broken.png`,
         {
@@ -6538,9 +6693,55 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.match(settingsAssetPayload.data.storageObjectKey, /^officialAssets\/settingsAssets\/\d{8}\/[0-9a-f-]+-support-qr\.jpg$/);
       assert.equal(settingsAssetPayload.data.mimeType, "image/jpeg");
       assert.equal((await sharp(uploadedObjects[2].body).metadata()).format, "jpeg");
+      assert.equal(geoImageResponse.status, 200, JSON.stringify(geoImagePayload));
+      assert.match(geoImagePayload.data.storageObjectKey, /^officialAssets\/geoContent\/\d{8}\/[0-9a-f-]+-character-proof\.png$/);
+      assert.equal(geoImagePayload.data.sourceUrl, `/geo-assets/${geoImagePayload.data.storageObjectId}`);
+      assert.equal(geoImagePayload.data.previewUrl, `/geo-assets/${geoImagePayload.data.storageObjectId}`);
+      assert.equal((await sharp(uploadedObjects[3].body).metadata()).format, "png");
+      const geoDraftImageAnonymousResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { redirect: "manual" });
+      assert.equal(geoDraftImageAnonymousResponse.status, 404);
+      const geoDraftImageAdminResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { headers: { cookie }, redirect: "manual" });
+      assert.equal(geoDraftImageAdminResponse.status, 307);
+      assert.equal(
+        geoDraftImageAdminResponse.headers.get("location"),
+        `https://signed.example.test/official-assets-bucket/${geoImagePayload.data.storageObjectKey}`,
+      );
+      assert.match(geoDraftImageAdminResponse.headers.get("cache-control") ?? "", /private, no-store/);
+      const geoDraftImageHeadResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { method: "HEAD", headers: { cookie }, redirect: "manual" });
+      assert.equal(geoDraftImageHeadResponse.status, 307);
+      assert.equal(await geoDraftImageHeadResponse.text(), "");
+
+      const adminAccount = await db.query<{ id: string }>("SELECT id FROM admin_accounts ORDER BY created_at LIMIT 1");
+      const contentItemId = randomUUID();
+      const contentVersionId = randomUUID();
+      await db.query(
+        `INSERT INTO geo_content_items (id,content_type,topic,slug,status,created_by_admin_id,updated_by_admin_id)
+         VALUES ($1,'guide','公开图片测试',$2,'draft',$3,$3)`,
+        [contentItemId, `published-image-${randomUUID().slice(0, 8)}`, adminAccount.rows[0]!.id],
+      );
+      await db.query(
+        `INSERT INTO geo_content_versions (id,content_item_id,version_number,title,summary,document_json,config_revision_id,created_by_admin_id,published_at)
+         VALUES ($1,$2,1,'公开图片测试','公开图片测试摘要',$3::jsonb,'geo-default-v1',$4,NOW())`,
+        [contentVersionId, contentItemId, JSON.stringify({ blocks: [{ type: "image", src: `https://www.lingxiyunai.com${geoImagePayload.data.sourceUrl}`, alt: "人物设定截图", caption: "人物设定截图", evidenceIds: [] }] }), adminAccount.rows[0]!.id],
+      );
+      await db.query(
+        "UPDATE geo_content_items SET status='published',current_draft_version_id=$2,current_published_version_id=$2 WHERE id=$1",
+        [contentItemId, contentVersionId],
+      );
+      const geoPublishedImageResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { redirect: "manual" });
+      assert.equal(geoPublishedImageResponse.status, 307);
+      const publishedCacheSeconds = Number(/max-age=(\d+)/.exec(geoPublishedImageResponse.headers.get("cache-control") ?? "")?.[1]);
+      assert.ok(Number.isInteger(publishedCacheSeconds) && publishedCacheSeconds <= 30);
+      const geoPublishedImageHeadResponse = await fetch(`${server.origin}${geoImagePayload.data.sourceUrl}`, { method: "HEAD", redirect: "manual" });
+      assert.equal(geoPublishedImageHeadResponse.status, 307);
+      const unrelatedPublicImageResponse = await fetch(
+        `${server.origin}/geo-assets/${uploadPayload.data.storageObjectId}`,
+        { redirect: "manual" },
+      );
+      assert.equal(unrelatedPublicImageResponse.status, 404);
       assert.equal(invalidImageResponse.status, 400, JSON.stringify(invalidImagePayload));
       assert.equal(invalidImagePayload.errorCode, "admin_asset_upload_image_invalid");
-      assert.equal(uploadedObjects.length, 3);
+      assert.equal(uploadedObjects.length, 4);
       assert.deepEqual(
         trackedUploads.rows.map((row) => ({
           sourceAction: row.source_action,
@@ -6549,6 +6750,7 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
           kind: row.admin_upload_kind,
         })),
         [
+          { sourceAction: "admin_geo_content_image_upload", status: "uploaded", objectKey: "officialAssets", kind: "geo_content_image" },
           { sourceAction: "admin_official_asset_upload", status: "uploaded", objectKey: "officialAssets", kind: "official_asset" },
           { sourceAction: "admin_prompt_cover_upload", status: "uploaded", objectKey: "officialAssets", kind: "prompt_cover" },
           { sourceAction: "admin_settings_asset_upload", status: "uploaded", objectKey: "officialAssets", kind: "settings_asset" },
@@ -6586,6 +6788,142 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(createResponse.status, 200);
       assert.equal(createPayload.data.latestVersion.storageObjectKey, uploadPayload.data.storageObjectKey);
       assert.equal(createPayload.data.latestVersion.previewUrl, uploadPayload.data.previewUrl);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps an admin-uploaded home recommendation video playable in admin and on the public homepage", async () => {
+    const db = await createMigratedTestDb();
+    const videoBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
+    const proxiedUrls: string[] = [];
+    const { server, cookie } = await createLoggedInAdminServer(db, {
+      role: "super_admin",
+      serverOptions: {
+        env: {
+          STORAGE_ADAPTER_MODE: "cos",
+          STORAGE_BUCKET: "home-recommendation-test-bucket",
+          STORAGE_REGION: "ap-guangzhou",
+          STORAGE_OFFICIAL_ASSET_ROOT_PREFIX: "officialAssets",
+        },
+        storageRuntime: {
+          mode: "cos",
+          provider: "tencent_cos",
+          bucket: "home-recommendation-test-bucket",
+          region: "ap-guangzhou",
+          publicBaseUrl: "https://cdn.example.test",
+          adapter: {
+            async createSignedReadUrl(input: { bucket: string; objectKey: string; expiresAt: Date }) {
+              return {
+                url: `/signed/${input.bucket}/${input.objectKey}`,
+                expiresAt: input.expiresAt,
+              };
+            },
+            async putObject() {
+              return { eTag: "home-recommendation-video-etag" };
+            },
+          },
+          stsDurationSeconds: 900,
+          localUploadUrlPath: "/api/storage/upload-sessions",
+        },
+        fetchImpl: async (url, init) => {
+          proxiedUrls.push(String(url));
+          const range = new Headers(init?.headers).get("range");
+          if (range === "bytes=99-100") {
+            return new Response(null, { status: 416, headers: { "accept-ranges": "bytes", "content-range": `bytes */${videoBytes.byteLength}` } });
+          }
+          return new Response(range ? videoBytes.slice(0, 4) : videoBytes, {
+            status: range ? 206 : 200,
+            headers: {
+              "accept-ranges": "bytes",
+              "content-length": String(range ? 4 : videoBytes.byteLength),
+              ...(range ? { "content-range": `bytes 0-3/${videoBytes.byteLength}` } : {}),
+              "content-type": "video/mp4",
+            },
+          });
+        },
+      },
+    });
+
+    try {
+      const uploadResponse = await fetch(
+        `${server.origin}/api/admin/home-recommendations/videos/upload?fileName=homepage.mp4`,
+        {
+          method: "POST",
+          headers: { "content-type": "video/mp4", cookie },
+          body: videoBytes,
+        },
+      );
+      const uploadPayload = await uploadResponse.json();
+      assert.equal(uploadResponse.status, 200, JSON.stringify(uploadPayload));
+      assert.match(
+        uploadPayload.data.sourceUrl,
+        /^\/api\/storage\/objects\/[0-9a-f-]+\/content\?proxy=1$/,
+      );
+
+      const anonymousPreviewResponse = await fetch(`${server.origin}${uploadPayload.data.sourceUrl}`);
+      assert.equal(anonymousPreviewResponse.status, 401);
+
+      const adminPreviewResponse = await fetch(`${server.origin}${uploadPayload.data.sourceUrl}`, {
+        headers: { cookie, range: "bytes=0-3", "x-forwarded-host": "attacker.example", "x-forwarded-proto": "https" },
+      });
+      assert.equal(adminPreviewResponse.status, 206);
+      assert.equal(adminPreviewResponse.headers.get("content-range"), `bytes 0-3/${videoBytes.byteLength}`);
+      assert.deepEqual(new Uint8Array(await adminPreviewResponse.arrayBuffer()), videoBytes.slice(0, 4));
+      assert.equal(new URL(proxiedUrls.at(-1)!).origin, server.origin);
+
+      const userCookie = await login(db, server.origin, "13800218888");
+      const combinedCookie = `${cookie.split(";")[0]}; ${userCookie.split(";")[0]}`;
+      const adminPreviewWithUserSession = await fetch(`${server.origin}${uploadPayload.data.sourceUrl}`, {
+        headers: { cookie: combinedCookie, range: "bytes=0-3" },
+      });
+      assert.equal(adminPreviewWithUserSession.status, 206);
+      assert.deepEqual(new Uint8Array(await adminPreviewWithUserSession.arrayBuffer()), videoBytes.slice(0, 4));
+
+      const categoryResponse = await fetch(`${server.origin}/api/admin/home-recommendations/categories`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ code: `upload-${randomUUID().slice(0, 8)}`, name: "上传回归", status: "active", sortOrder: 1 }),
+      });
+      const categoryPayload = await categoryResponse.json();
+      assert.equal(categoryResponse.status, 200, JSON.stringify(categoryPayload));
+
+      const createVideoResponse = await fetch(`${server.origin}/api/admin/home-recommendations/videos`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          categoryId: categoryPayload.category.id,
+          title: "后台上传视频",
+          subtitle: "回归测试",
+          coverUrl: "/assets/library/official/scenes/scene-3d-star-cliff.png",
+          videoUrl: uploadPayload.data.sourceUrl,
+          durationLabel: "00:08",
+          coverAlt: "后台上传视频封面",
+          status: "active",
+          sortOrder: 1,
+        }),
+      });
+      const createdVideoPayload = await createVideoResponse.json();
+      assert.equal(createVideoResponse.status, 200, JSON.stringify(createdVideoPayload));
+
+      const recommendationsResponse = await fetch(`${server.origin}/api/home-recommendations`);
+      const recommendationsPayload = await recommendationsResponse.json();
+      const publicVideo = recommendationsPayload.data.categories
+        .flatMap((category: { videos: Array<{ id: string; videoUrl: string }> }) => category.videos)
+        .find((video: { id: string }) => video.id === createdVideoPayload.video.id);
+      assert.ok(publicVideo);
+
+      const publicPreviewResponse = await fetch(`${server.origin}${publicVideo.videoUrl}`, {
+        headers: { range: "bytes=0-3" },
+      });
+      assert.equal(publicPreviewResponse.status, 206);
+      assert.equal(publicPreviewResponse.headers.get("content-range"), `bytes 0-3/${videoBytes.byteLength}`);
+      assert.deepEqual(new Uint8Array(await publicPreviewResponse.arrayBuffer()), videoBytes.slice(0, 4));
+      const invalidPublicRangeResponse = await fetch(`${server.origin}${publicVideo.videoUrl}`, {
+        headers: { range: "bytes=99-100" },
+      });
+      assert.equal(invalidPublicRangeResponse.status, 416);
+      assert.equal(invalidPublicRangeResponse.headers.get("content-range"), `bytes */${videoBytes.byteLength}`);
     } finally {
       await server.close();
     }
