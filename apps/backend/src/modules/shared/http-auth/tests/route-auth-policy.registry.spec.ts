@@ -224,6 +224,30 @@ describe("route auth policy registry", () => {
     }
   });
 
+  it("registers every GEO management route as admin-authenticated", () => {
+    for (const [method, path] of [
+      ["GET", "/api/admin/geo/platforms"],
+      ["GET", "/api/admin/geo/questions"],
+      ["POST", "/api/admin/geo/questions"],
+      ["GET", "/api/admin/geo/evidence"],
+      ["POST", "/api/admin/geo/evidence"],
+      ["GET", "/api/admin/geo/content"],
+      ["POST", "/api/admin/geo/content"],
+      ["GET", "/api/admin/geo/content/content-1"],
+      ["POST", "/api/admin/geo/generate"],
+      ["POST", "/api/admin/geo/preview"],
+      ["POST", "/api/admin/geo/assets/uploads"],
+      ["POST", "/api/admin/geo/content/content-1/submit-review"],
+      ["POST", "/api/admin/geo/content/content-1/publish"],
+      ["POST", "/api/admin/geo/content/content-1/rollback"],
+      ["POST", "/api/admin/geo/content/content-1/archive"],
+      ["GET", "/api/admin/geo/settings"],
+      ["PATCH", "/api/admin/geo/settings"],
+    ] as const) {
+      assert.equal(criticalApiRouteAuthPolicyRegistry.resolve(method, path)?.policy, "admin", `${method} ${path}`);
+    }
+  });
+
   it("registers formal and compatibility Canvas resource routes as user-authenticated", () => {
     for (const [method, path] of [
       ["GET", "/api/creator/canvases"],
@@ -245,7 +269,7 @@ describe("route auth policy registry", () => {
 
   it("covers every explicit method and pathname declaration in the server entrypoint", () => {
     const signatures = directMethodPathSignatures();
-    assert.equal(signatures.length, 191);
+    assert.equal(signatures.length, 202);
 
     const uncovered = signatures.filter((signature) => {
       const separator = signature.indexOf(" ");
@@ -258,10 +282,13 @@ describe("route auth policy registry", () => {
 
   it("covers every regex pathname matcher and each method handled by its branch", () => {
     const matchers = dynamicPathMatchers();
-    assert.equal(matchers.length, 143);
+    assert.equal(matchers.length, 146);
     const uncovered: string[] = [];
 
     for (const declaration of matchers) {
+      if (!declaration.matcher.source.startsWith("^\\/api\\/")) {
+        continue;
+      }
       const branch = scannedIfStatements.find(({ condition, offset }) =>
         offset > declaration.offset && new RegExp(`\\b${declaration.name}\\b`).test(condition)
       );

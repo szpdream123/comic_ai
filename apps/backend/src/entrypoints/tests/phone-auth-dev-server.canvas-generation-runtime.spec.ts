@@ -286,6 +286,10 @@ it("copies an authorized project asset version into the team global library with
     assert.deepEqual(imported.body.data.asset.tags, ["场景", "夜景"]);
     assert.deepEqual(copiedBodies, [sourceBytes]);
     const targetStorageId = String(imported.body.data.asset.storageObjectId);
+    assert.equal(
+      imported.body.data.asset.sourceUrl,
+      `/api/storage/objects/${targetStorageId}/content?proxy=1`,
+    );
     const copied = await db.query<{
       source_project_id: string | null;
       copied_project_id: string | null;
