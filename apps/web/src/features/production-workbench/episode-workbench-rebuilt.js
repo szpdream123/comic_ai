@@ -4518,7 +4518,7 @@ function normalizePromptDockModeToken(mode) {
   return String(mode ?? "").trim().replaceAll(".", "_").replaceAll("-", "_");
 }
 
-function renderAssetInspectorModal(inspector) {
+export function renderAssetInspectorModal(inspector) {
   const mediaUrl = String(inspector?.url ?? "").trim();
   if (!inspector || !mediaUrl) return "";
   const isVideo = inspector.type === "video";

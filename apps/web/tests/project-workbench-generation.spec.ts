@@ -13271,6 +13271,52 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /character-preview/);
   });
 
+  it("renders a generated image lightbox from the project asset editor", () => {
+    const previewUrl = "/uploads/generated-character-preview.png";
+    const html = renderProductionWorkbench({
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        assetGeneratorModal: "character",
+        assetGeneratorMode: "edit",
+        assetGeneratorName: "生成角色",
+        assetGeneratorEditingAsset: {
+          id: "generated-character",
+          kind: "character",
+          name: "生成角色",
+          source: "generated",
+          previewUrl,
+        },
+        assetInspector: {
+          type: "image",
+          viewerOnly: true,
+          name: "生成角色",
+          url: previewUrl,
+          status: "ready",
+        },
+      }),
+    });
+
+    assert.match(html, /class="asset-generator-backdrop"/);
+    assert.match(html, /class="modal-backdrop storyboard-description-backdrop asset-image-lightbox"/);
+    assert.match(html, /src="\/uploads\/generated-character-preview\.png"/);
+  });
+
+  it("stacks the generated image lightbox above the project asset editor", () => {
+    const css = readFileSync(
+      new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
+      "utf8",
+    );
+    const generatorBackdrop = css.match(/\.asset-generator-backdrop\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const imageLightbox = css.match(/\.asset-image-lightbox\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? "";
+    const generatorZIndex = Number(generatorBackdrop.match(/z-index:\s*(\d+)/)?.[1]);
+    const lightboxZIndex = Number(imageLightbox.match(/z-index:\s*(\d+)/)?.[1]);
+
+    assert.ok(Number.isFinite(generatorZIndex));
+    assert.ok(Number.isFinite(lightboxZIndex));
+    assert.ok(lightboxZIndex > generatorZIndex);
+  });
+
   it("renders scene generator with the shared image composer controls", () => {
     const state = buildModalState();
     const html = renderProductionWorkbench({
