@@ -92,6 +92,22 @@ export type MarketingDirectPublishInput = {
   scheduledAt: string;
 };
 
+export type MarketingCompetitorCollectionJobInput = {
+  projectId: string;
+  campaignId?: string | null;
+  name: string;
+  collectionMode: "keyword" | "creator";
+  queryText: string;
+  crawlerBaseUrl: string;
+  maxItems?: number;
+  includeComments?: boolean;
+  intervalMinutes?: number;
+};
+
+export type MarketingCompetitorCollectionJobUpdateInput = MarketingCompetitorCollectionJobInput & {
+  status: "active" | "paused" | "disabled";
+};
+
 type PublishJobIdempotencyRow = {
   id: string;
   campaign_id: string;
@@ -547,6 +563,110 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
     );
     await audit({ projectId: input.projectId, campaignId: id, actorAdminId, eventType: "campaign.created", detail: {} });
     return { id };
+  }
+
+  async function createCompetitorCollectionJob(input: MarketingCompetitorCollectionJobInput, actorAdminId: string) {
+    requireText(input.projectId, "marketing_competitor_project_required");
+    requireText(input.name, "marketing_competitor_job_name_required");
+    requireText(input.queryText, "marketing_competitor_query_required");
+    if (input.collectionMode !== "keyword" && input.collectionMode !== "creator") {
+      throw new MarketingError(400, "marketing_competitor_collection_mode_invalid", "Collection mode must be keyword or creator");
+    }
+    await requireProject(input.projectId);
+    if (input.campaignId) {
+      const campaign = await deps.db.query<{ id: string }>(
+        "SELECT id FROM marketing_campaigns WHERE id = $1 AND project_id = $2 AND status IN ('draft', 'active')",
+        [input.campaignId, input.projectId],
+      );
+      if (!campaign.rows[0]) throw new MarketingError(409, "marketing_competitor_campaign_scope_invalid", "Campaign is unavailable for this project");
+    }
+    const maxItems = boundedInteger(input.maxItems, 30, 1, 100, "marketing_competitor_max_items_invalid");
+    const intervalMinutes = boundedInteger(input.intervalMinutes, 360, 15, 10_080, "marketing_competitor_interval_invalid");
+    const id = randomUUID();
+    await deps.db.query(
+      `INSERT INTO marketing_competitor_collection_jobs (
+         id, project_id, campaign_id, name, collection_mode, query_text, crawler_base_url,
+         max_items, include_comments, interval_minutes, created_by_admin_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        id, input.projectId, input.campaignId ?? null, input.name.trim(), input.collectionMode,
+        input.queryText.trim(), normalizeCrawlerBaseUrl(input.crawlerBaseUrl), maxItems,
+        input.includeComments !== false, intervalMinutes, actorAdminId,
+      ],
+    );
+    await audit({ projectId: input.projectId, campaignId: input.campaignId ?? undefined, actorAdminId,
+      eventType: "competitor_collection_job.created", detail: { jobId: id, collectionMode: input.collectionMode, maxItems, intervalMinutes } });
+    return { id, status: "active" };
+  }
+
+  async function listCompetitorCollectionJobs(projectId: string) {
+    await requireProject(projectId);
+    const result = await deps.db.query<{
+      id: string; campaign_id: string | null; name: string; collection_mode: string; query_text: string;
+      crawler_base_url: string; max_items: number; include_comments: boolean; interval_minutes: number;
+      status: string; next_run_at: Date; last_run_at: Date | null; latest_run_status: string | null;
+      latest_prompt_package_json: Json | null; latest_failure_code: string | null;
+    }>(
+      `SELECT job.id, job.campaign_id, job.name, job.collection_mode, job.query_text, job.crawler_base_url,
+              job.max_items, job.include_comments, job.interval_minutes, job.status, job.next_run_at, job.last_run_at,
+              run.status AS latest_run_status, run.prompt_package_json AS latest_prompt_package_json,
+              run.failure_code AS latest_failure_code
+       FROM marketing_competitor_collection_jobs AS job
+       LEFT JOIN LATERAL (
+         SELECT status, prompt_package_json, failure_code
+         FROM marketing_competitor_collection_runs
+         WHERE job_id = job.id ORDER BY created_at DESC LIMIT 1
+       ) AS run ON true
+       WHERE job.project_id = $1
+       ORDER BY job.created_at DESC`,
+      [projectId],
+    );
+    return result.rows.map((row) => ({
+      id: row.id, campaignId: row.campaign_id, name: row.name, collectionMode: row.collection_mode,
+      queryText: row.query_text, crawlerBaseUrl: row.crawler_base_url, maxItems: row.max_items,
+      includeComments: row.include_comments, intervalMinutes: row.interval_minutes, status: row.status,
+      nextRunAt: new Date(row.next_run_at).toISOString(), lastRunAt: row.last_run_at ? new Date(row.last_run_at).toISOString() : null,
+      latestRunStatus: row.latest_run_status, promptPackage: row.latest_prompt_package_json ?? {}, failureCode: row.latest_failure_code,
+    }));
+  }
+
+  async function updateCompetitorCollectionJob(jobId: string, input: MarketingCompetitorCollectionJobUpdateInput, actorAdminId: string) {
+    requireText(jobId, "marketing_competitor_job_required");
+    requireText(input.projectId, "marketing_competitor_project_required");
+    requireText(input.name, "marketing_competitor_job_name_required");
+    requireText(input.queryText, "marketing_competitor_query_required");
+    if (input.collectionMode !== "keyword" && input.collectionMode !== "creator") {
+      throw new MarketingError(400, "marketing_competitor_collection_mode_invalid", "Collection mode must be keyword or creator");
+    }
+    if (!["active", "paused", "disabled"].includes(input.status)) {
+      throw new MarketingError(400, "marketing_competitor_collection_status_invalid", "Collection status is invalid");
+    }
+    await requireProject(input.projectId);
+    if (input.campaignId) {
+      const campaign = await deps.db.query<{ id: string }>(
+        "SELECT id FROM marketing_campaigns WHERE id = $1 AND project_id = $2 AND status IN ('draft', 'active')",
+        [input.campaignId, input.projectId],
+      );
+      if (!campaign.rows[0]) throw new MarketingError(409, "marketing_competitor_campaign_scope_invalid", "Campaign is unavailable for this project");
+    }
+    const maxItems = boundedInteger(input.maxItems, 30, 1, 100, "marketing_competitor_max_items_invalid");
+    const intervalMinutes = boundedInteger(input.intervalMinutes, 360, 15, 10_080, "marketing_competitor_interval_invalid");
+    const updated = await deps.db.query<{ project_id: string; campaign_id: string | null }>(
+      `UPDATE marketing_competitor_collection_jobs
+       SET project_id = $2, campaign_id = $3, name = $4, collection_mode = $5, query_text = $6,
+           crawler_base_url = $7, max_items = $8, include_comments = $9, interval_minutes = $10,
+           status = $11, next_run_at = CASE WHEN $11 = 'active' AND status <> 'active' THEN now() ELSE next_run_at END,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING project_id, campaign_id`,
+      [jobId, input.projectId, input.campaignId ?? null, input.name.trim(), input.collectionMode,
+        input.queryText.trim(), normalizeCrawlerBaseUrl(input.crawlerBaseUrl), maxItems,
+        input.includeComments !== false, intervalMinutes, input.status],
+    );
+    if (!updated.rows[0]) throw new MarketingError(404, "marketing_competitor_job_not_found", "Collection job was not found");
+    await audit({ projectId: updated.rows[0].project_id, campaignId: updated.rows[0].campaign_id ?? undefined, actorAdminId,
+      eventType: "competitor_collection_job.updated", detail: { jobId, collectionMode: input.collectionMode, maxItems, intervalMinutes, status: input.status } });
+    return { id: jobId, status: input.status };
   }
 
   async function createResearchBrief(input: {
@@ -1754,7 +1874,7 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
   }
 
   async function listDirectConsole() {
-    const [projects, executors, generationRuns, publishJobs, mediaModels, generationSkills] = await Promise.all([
+    const [projects, executors, generationRuns, publishJobs, mediaModels, generationSkills, competitorCollectionJobs] = await Promise.all([
       deps.db.query(`SELECT id, name FROM marketing_projects WHERE status = 'active' ORDER BY created_at DESC LIMIT 100`),
       deps.db.query(`SELECT worker_id AS "workerId", CASE WHEN status IN ('active', 'degraded')
                       AND last_heartbeat_at < now() - interval '5 minutes' THEN 'offline' ELSE status END AS status,
@@ -1788,6 +1908,24 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
                      FROM marketing_generation_skills
                      WHERE status = 'approved'
                      ORDER BY display_order ASC, name ASC`),
+      deps.db.query(`SELECT job.id, job.project_id AS "projectId", project.name AS "projectName",
+                            job.campaign_id AS "campaignId", job.name, job.collection_mode AS "collectionMode",
+                            job.query_text AS "queryText", job.crawler_base_url AS "crawlerBaseUrl",
+                            job.max_items AS "maxItems", job.include_comments AS "includeComments",
+                            job.interval_minutes AS "intervalMinutes", job.status, job.next_run_at AS "nextRunAt",
+                            job.last_run_at AS "lastRunAt", run.status AS "latestRunStatus",
+                            run.prompt_package_json AS "promptPackage", run.failure_code AS "failureCode"
+                     FROM marketing_competitor_collection_jobs AS job
+                     JOIN marketing_projects AS project ON project.id = job.project_id
+                     LEFT JOIN LATERAL (
+                       SELECT status, prompt_package_json, failure_code
+                       FROM marketing_competitor_collection_runs
+                       WHERE job_id = job.id
+                       ORDER BY created_at DESC
+                       LIMIT 1
+                     ) AS run ON true
+                     ORDER BY job.created_at DESC
+                     LIMIT 30`),
     ]);
     const runsWithPreview = await Promise.all(generationRuns.rows.map(async (run) => {
       const mediaAssets = Array.isArray(run.mediaAssets) ? run.mediaAssets : [];
@@ -1816,6 +1954,7 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
     return {
       projects: projects.rows, executors: executors.rows, mediaModels: mediaModels.rows,
       generationSkills: generationSkills.rows, generationRuns: runsWithPreview, publishJobs: publishJobs.rows,
+      competitorCollectionJobs: competitorCollectionJobs.rows,
     };
   }
 
@@ -3182,7 +3321,7 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
   return {
     createProject, createBrandProfileVersion, activateBrandProfile, revokeBrandProfile, listBrandProfiles,
     addSource, revokeSource, createKnowledgeDocument, approveKnowledgeDocument, searchKnowledge,
-    createCampaign, createResearchBrief, reviewResearchBrief, createContentVariant, approveContentVariant, reviewContentVariant,
+    createCampaign, createCompetitorCollectionJob, updateCompetitorCollectionJob, listCompetitorCollectionJobs, createResearchBrief, reviewResearchBrief, createContentVariant, approveContentVariant, reviewContentVariant,
     savePlatformCapabilityProfile, runComplianceCheck, createPublishJob, createDirectPublish, cancelPublishJob, cancelGenerationRun,
     configureExecutionOwner, ensureDirectPublishPlatformProfile, retryGenerationRun, confirmGenerationPlan, regenerateGenerationRun, confirmGeneratedMedia,
     listConsole, listDirectConsole, saveComponentAdmission, saveResearchSourcePolicy, assignAttentionCase, resolveAttentionCase, createTrendPattern, approveTrendPattern,
@@ -3471,6 +3610,30 @@ function manualReviewResult(contentVariantId: string, reviewId: string, decision
 
 function requireText(value: string | null | undefined, code: string) {
   if (!value?.trim()) throw new MarketingError(400, code, "Required field is missing");
+}
+
+function boundedInteger(value: number | undefined, fallback: number, min: number, max: number, code: string) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new MarketingError(400, code, `Value must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+function normalizeCrawlerBaseUrl(value: string) {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new MarketingError(400, "marketing_competitor_crawler_url_invalid", "Crawler URL must be an absolute HTTP URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new MarketingError(400, "marketing_competitor_crawler_url_invalid", "Crawler URL must be HTTP or HTTPS");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new MarketingError(400, "marketing_competitor_crawler_url_invalid", "Crawler URL must not contain credentials, query, or fragment");
+  }
+  return url.toString().replace(/\/$/, "");
 }
 
 function camelToSnake(value: string) {

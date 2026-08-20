@@ -34669,6 +34669,71 @@ describe("production workbench project tab", () => {
     }
   });
 
+  it("does not load a canvas document while the active surface is outside Canvas", async () => {
+    const documentCalls: string[] = [];
+    const workbench = {
+      api: {
+        async getCanvasProjects() {
+          return { projects: [{ id: "canvas-background", title: "后台画布" }] };
+        },
+        async getStandaloneCanvas(canvasProjectId: string) {
+          documentCalls.push(canvasProjectId);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 1,
+              document: createDefaultCanvasDocument({ projectId: canvasProjectId }),
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "project",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-background",
+        canvasProjects: null,
+      }),
+    };
+
+    await syncCanvasProjectsFromApiForTest(workbench);
+
+    assert.deepEqual(documentCalls, []);
+  });
+
+  it("does not reload a ready canvas document during generation polling", async () => {
+    const documentCalls: string[] = [];
+    const workbench = {
+      api: {
+        async getCanvasProjects() {
+          return { projects: [{ id: "canvas-running", title: "生成中的画布" }] };
+        },
+        async getStandaloneCanvas(canvasProjectId: string) {
+          documentCalls.push(canvasProjectId);
+          return {
+            canvas: {
+              canvasProjectId,
+              serverRevision: 1,
+              document: createDefaultCanvasDocument({ projectId: canvasProjectId }),
+            },
+          };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        canvasProjectView: "detail",
+        selectedCanvasProjectId: "canvas-running",
+        canvasSessionUiStateReady: true,
+        generationPollingActive: true,
+        canvasDocument: createDefaultCanvasDocument({ projectId: "canvas-running" }),
+        canvasProjects: [{ id: "canvas-running", title: "生成中的画布" }],
+      }),
+    };
+
+    await syncCanvasProjectsFromApiForTest(workbench);
+
+    assert.deepEqual(documentCalls, []);
+  });
+
   it("loads backend generation config when opening a canvas project and renders image parameters", async () => {
     const configCalls = [];
     const workbench = {

@@ -19,6 +19,7 @@ const GLOBAL_TOAST_DURATION_MS = 2000;
 const ANONYMOUS_READ_API_METHODS = new Set(["getStoryboardPromptPackages", "getCustomerSupportConfig", "getAnnouncements", "getPromptMarketplace", "getHomeRecommendations"]);
 
 async function bootstrap() {
+  renderInitialWorkbenchShell(root);
   const sessionPromise = creatorApi.getSession();
   const { initProductionWorkbench } = await productionWorkbenchPromise;
   let activeSession = createAnonymousSession();
@@ -67,6 +68,18 @@ async function bootstrap() {
     };
     await workbench?.updateSession?.(activeSession, createRecoverableApi(creatorApi, message));
   });
+}
+
+function renderInitialWorkbenchShell(target) {
+  if (!target || target.querySelector?.(".initial-workbench-shell")) {
+    return;
+  }
+  target.innerHTML = `
+    <section class="initial-workbench-shell" aria-busy="true" aria-live="polite">
+      <strong>灵曦AI</strong>
+      <span>正在加载工作台...</span>
+    </section>
+  `;
 }
 
 function resolvePublicSeoContentForSession(session) {

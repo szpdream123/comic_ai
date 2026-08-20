@@ -255,7 +255,7 @@ async function createProjectAssetGenerationVersion(
   );
   if (!asset) {
     throw Object.assign(new Error("project_asset_generation_target_missing"), {
-      failureCode: "provider_output_persist_failed",
+      failureCode: "project_asset_generation_target_missing",
       storageObjectKey: input.artifact.storageObjectKey,
     });
   }

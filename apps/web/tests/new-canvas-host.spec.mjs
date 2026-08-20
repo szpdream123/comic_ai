@@ -1470,6 +1470,7 @@ test("home creation mode tabs update only the home creation surface", () => {
   assert.match(source, /const HOME_BACKGROUND_VIDEO_CACHE_NAME/);
   assert.match(source, /function syncHomeBackgroundVideoLocalCache[\s\S]*?readCachedHomeBackgroundVideo/);
   assert.match(source, /function playHomeBackgroundVideoFromMediaSource[\s\S]*?addSourceBuffer[\s\S]*?endOfStream/);
+  assert.doesNotMatch(source, /warmHomeBackgroundVideoCacheAfterFirstFrame/);
 });
 
 test("initial home project creation entry is centered with a compact responsive width", () => {

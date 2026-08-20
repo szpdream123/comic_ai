@@ -71,6 +71,30 @@ test("Canvas assets preserve storage references when inserted as source nodes", 
   });
 });
 
+test("Canvas source nodes preserve original and preview media URLs separately", () => {
+  assert.deepEqual(canvasAssetNodeData({
+    id: "artifact-thumbnail-1",
+    artifactId: "artifact-thumbnail-1",
+    storageObjectId: "storage-thumbnail-1",
+    kind: "image",
+    title: "缩略图资源",
+    url: "/api/storage/objects/storage-thumbnail-1/content",
+    previewUrl: "/api/storage/objects/storage-thumbnail-1/content?proxy=1",
+  }), {
+    source: "canvas_artifact",
+    status: "ready",
+    mediaKind: "image",
+    title: "缩略图资源",
+    fileName: "缩略图资源",
+    artifactId: "artifact-thumbnail-1",
+    storageObjectId: "storage-thumbnail-1",
+    assetId: null,
+    assetVersionId: null,
+    url: "/api/storage/objects/storage-thumbnail-1/content",
+    previewUrl: "/api/storage/objects/storage-thumbnail-1/content?proxy=1",
+  });
+});
+
 test("Canvas video outputs keep the playable media URL instead of using the thumbnail as an image", () => {
   const assets = canvasAssetsFromGenerationHistory({
     items: [{

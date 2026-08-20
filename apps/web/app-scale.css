@@ -2,6 +2,26 @@
   --app-ui-scale: 0.75;
 }
 
+.initial-workbench-shell {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  color: #f5f7ff;
+  background: #08091a;
+  text-align: center;
+}
+
+.initial-workbench-shell strong {
+  font-size: 1.25rem;
+}
+
+.initial-workbench-shell span {
+  color: #a9afc6;
+  font-size: 0.875rem;
+}
+
 @media (min-width: 769px) {
   body.workbench-body {
     height: calc(100dvh / var(--app-ui-scale));

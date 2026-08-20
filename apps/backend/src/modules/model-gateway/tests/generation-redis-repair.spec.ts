@@ -58,6 +58,10 @@ describe("generation Redis dispatch repair", () => {
       finalizeCandidateQuery,
       /pr\.attempt_id IS NULL AND t\.attempt_count = 1/,
     );
+    assert.match(
+      finalizeCandidateQuery,
+      /target_asset\.id::text = COALESCE\([\s\S]*projectAssetId[\s\S]*targetId[\s\S]*target_asset\.project_id = t\.project_id/,
+    );
   });
 
   it("does not reopen terminal video or audio storage failures", async () => {

@@ -13,6 +13,7 @@ interface GptImageArtifactRecoveryTaskRow {
   task_id: string;
   workflow_id: string;
   task_status: string;
+  task_failure_code: string | null;
   current_attempt_id: string | null;
   input_snapshot_json: Record<string, unknown> | string;
   provider_request_id: string | null;
@@ -40,6 +41,7 @@ export async function handleGptImageArtifactQueueExhaustion(
           task.id AS task_id,
           task.workflow_id,
           task.status AS task_status,
+          task.failure_code AS task_failure_code,
           task.current_attempt_id,
           task.input_snapshot_json,
           provider_request.id AS provider_request_id,
@@ -77,7 +79,15 @@ export async function handleGptImageArtifactQueueExhaustion(
       `,
       [input.taskId, enforceExpectedAttempt, input.expectedAttemptId ?? null],
     );
-    if (!row || !row.provider_request_id || ["succeeded", "canceled"].includes(row.task_status)) {
+    if (
+      !row
+      || !row.provider_request_id
+      || ["succeeded", "canceled"].includes(row.task_status)
+      || (
+        row.task_status === "failed"
+        && row.task_failure_code === "project_asset_generation_target_missing"
+      )
+    ) {
       await db.query("COMMIT");
       return "skipped";
     }

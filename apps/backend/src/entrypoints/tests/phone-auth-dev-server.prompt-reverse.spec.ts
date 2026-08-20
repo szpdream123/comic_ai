@@ -118,6 +118,33 @@ describe("phone auth prompt reverse video input", { concurrency: false }, () => 
     assert.equal(JSON.stringify(envelope.data).includes(modelCode), false);
   });
 
+  it("does not expose text-only models for prompt reverse", async () => {
+    await db.query(
+      `INSERT INTO ai_model_configs (
+         id, model_code, display_name, provider_name, provider_model,
+         provider_protocol, invocation_mode, media_type, task_modes_json,
+         capabilities_json, parameter_schema_json, default_params_json,
+         provider_config_json, pricing_json, limits_json, ui_config_json,
+         status, sort_order, remark, created_at, updated_at
+       ) VALUES (
+         $1, 'prompt-reverse-text-only', '纯文本反推模型', 'test', 'text-only',
+         'cumob_chat', 'stream', 'text', '["text.chat"]'::jsonb,
+         '{"stream":true}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+         '{}'::jsonb, '{"minimumCredits":1}'::jsonb, '{}'::jsonb,
+         '{"toolboxTools":["prompt-reverse"]}'::jsonb,
+         'active', -999, '', NOW(), NOW()
+       )`,
+      [randomUUID()],
+    );
+    const response = await fetch(`${server.origin}/api/toolbox/prompt-reverse/models`, {
+      headers: { cookie },
+    });
+    const envelope = await response.json();
+
+    assert.equal(response.status, 200, JSON.stringify(envelope));
+    assert.equal(envelope.data.models.some((model: { displayName?: string }) => model.displayName === "纯文本反推模型"), false);
+  });
+
   it("sends ordered 6 FPS frame sheets to a vision model without video URL capability", async () => {
     const frameSheetDataUrls = [
       "data:image/jpeg;base64,AQIDBA==",

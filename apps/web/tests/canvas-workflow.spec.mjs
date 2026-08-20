@@ -1738,7 +1738,7 @@ describe("canvas workflow document", () => {
       type: "ai-image",
       data: { status: "completed", storageObjectId: "storage/result 1" },
     });
-    assert.match(completedWithStorageObject, /src="\/api\/storage\/objects\/storage%2Fresult%201\/content"/);
+    assert.match(completedWithStorageObject, /src="\/api\/storage\/objects\/storage%2Fresult%201\/content\?thumbnail=1"/);
 
     const textRunning = render({
       type: "ai-markdown",
@@ -2535,6 +2535,19 @@ it("recognizes X6 HTML media nodes in the Canvas context menu", () => {
     newCanvasCss,
     /\.canvas-x6-source-media-body\.is-upload \.canvas-x6-source-media-preview video\s*\{[\s\S]*?height:\s*100%;[\s\S]*?max-height:\s*none;[\s\S]*?object-fit:\s*contain;/,
   );
+});
+
+it("uses the compact storage thumbnail for X6 image previews", () => {
+  const render = loadCanvasSourceMediaX6Renderer();
+  const html = render({
+    id: "source-image-cache",
+    type: "source-image",
+    data: { storageObjectId: "storage-image-cache" },
+  });
+
+  assert.match(html, /src="\/api\/storage\/objects\/storage-image-cache\/content\?thumbnail=1"/);
+  assert.match(html, /data-canvas-image-fallback-src="\/api\/storage\/objects\/storage-image-cache\/content\?proxy=1"/);
+  assert.doesNotMatch(html, /src="\/api\/storage\/objects\/storage-image-cache\/content"/);
 });
 
 it("aligns and distributes selected X6 nodes without changing their sizes", () => {

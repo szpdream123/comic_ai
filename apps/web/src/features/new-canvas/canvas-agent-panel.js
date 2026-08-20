@@ -8,6 +8,7 @@ import {
   resolveCanvasMediaNodeSource,
   resolveCanvasMediaStableIdentity,
 } from "../production-workbench/canvas/canvas-media-node.js";
+import { downloadCanvasAsset } from "../production-workbench/canvas/canvas-asset-transfer.js";
 import {
   normalizeHomeAgentGenerationModel,
   renderHomeAgentModelPicker,
@@ -1492,7 +1493,7 @@ export function createCanvasAgentController({
           sizeBytes: Number(file.size ?? 0),
           kind,
           previewUrl: kind === "image" || kind === "video"
-            ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+            ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`
             : "",
         };
       };
@@ -2014,9 +2015,21 @@ export function createCanvasAgentController({
         agent.mediaPreview = {
           kind: media.kind,
           title: String(media.title ?? "生成结果"),
-          url: media.url,
+          url: String(media.sourceUrl ?? media.url),
         };
         if (!syncMediaPreview()) syncPanel();
+        return true;
+      }
+      if (action === "download-agent-media") {
+        const messageId = String(target.dataset.messageId ?? "");
+        const media = (agent.messages ?? []).find((item) => String(item.id ?? "") === messageId)?.media;
+        if (!media?.url || !["image", "video", "audio"].includes(media.kind)) return true;
+        try {
+          await downloadAgentMedia(media);
+        } catch (error) {
+          agent.error = `媒体下载失败：${String(error?.message ?? "请稍后重试")}`;
+          syncPanel();
+        }
         return true;
       }
       if (action === "close-agent-media-preview") {
@@ -2277,7 +2290,9 @@ export function createCanvasAgentController({
             assetVersionId: media.assetVersionId,
             kind: media.kind,
             title: media.title || "Agent 生成产物",
-            url: media.url,
+            url: media.sourceUrl || media.url,
+            previewUrl: media.previewUrl || media.url,
+            sourceUrl: media.sourceUrl || media.url,
           }),
           source: "canvas_agent",
           generationTaskId: media.taskId,
@@ -3377,7 +3392,9 @@ function renderAgentMentionPreview(item = {}) {
   const mediaKind = String(item.mediaKind ?? "").trim().toLowerCase();
   if (mediaKind === "video") {
     return item.previewUrl
-      ? `<video src="${escapeAttr(item.previewUrl)}"${item.posterUrl ? ` poster="${escapeAttr(item.posterUrl)}"` : ""} muted playsinline preload="metadata" aria-hidden="true"></video>`
+      ? isAgentThumbnailUrl(item.previewUrl)
+        ? `<img src="${escapeAttr(item.previewUrl)}" alt="" />`
+        : `<video src="${escapeAttr(item.previewUrl)}"${item.posterUrl ? ` poster="${escapeAttr(item.posterUrl)}"` : ""} muted playsinline preload="metadata" aria-hidden="true"></video>`
       : '<b aria-hidden="true">VID</b>';
   }
   return item.previewUrl ? `<img src="${escapeAttr(item.previewUrl)}" alt="" />` : "@";
@@ -3400,8 +3417,8 @@ function listCanvasAgentFileReferences(ui = {}) {
         nodeId: String(node.id ?? ""),
         mediaKind,
         previewUrl: String(
-          resolveCanvasMediaNodeSource(node, mediaKind, { assets })
-          || `/api/storage/objects/${encodeURIComponent(file.storageObjectId)}/content?proxy=1`,
+          resolveCanvasMediaNodeSource(node, mediaKind, { assets, thumbnail: mediaKind === "image" })
+          || `/api/storage/objects/${encodeURIComponent(file.storageObjectId)}/content?thumbnail=1`,
         ).trim(),
         posterUrl: mediaKind === "video"
           ? String(data.thumbnailUrl ?? data.posterUrl ?? "").trim()
@@ -3432,9 +3449,9 @@ function listCanvasAgentNodeReferences(ui = {}) {
         .flatMap((items) => Array.isArray(items) ? items : []);
       const previewUrl = ["image", "video", "audio"].includes(mediaKind)
         ? String(
-            resolveCanvasMediaNodeSource(node, mediaKind, { assets })
+            resolveCanvasMediaNodeSource(node, mediaKind, { assets, thumbnail: mediaKind === "image" })
             || (file?.storageObjectId
-              ? `/api/storage/objects/${encodeURIComponent(file.storageObjectId)}/content?proxy=1`
+              ? `/api/storage/objects/${encodeURIComponent(file.storageObjectId)}/content?thumbnail=1`
               : ""),
           ).trim()
         : "";
@@ -3788,16 +3805,19 @@ function renderAgentMessageAttachments(attachments, fileGrants = []) {
       );
       const previewUrl = attachment.previewUrl || (
         ["image", "video"].includes(attachment.kind) && storageObjectId
-          ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+          ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`
           : ""
       );
       const isPreviewable = Boolean(previewUrl && ["image", "video"].includes(attachment.kind));
+      const previewKind = attachment.kind === "video" && isAgentThumbnailUrl(previewUrl) ? "image" : attachment.kind;
       const thumbnail = attachment.kind === "image" && previewUrl
         ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" />`
         : attachment.kind === "video" && previewUrl
-          ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata" aria-hidden="true"></video>`
+          ? isAgentThumbnailUrl(previewUrl)
+            ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" />`
+            : `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata" aria-hidden="true"></video>`
           : `<b>${escapeHtml(agentAttachmentKindLabel(attachment.kind))}</b>`;
-      return `<span class="canvas-agent-message-attachment ${escapeAttr(attachment.kind)}"${isPreviewable ? ` data-agent-message-attachment-preview data-preview-url="${escapeAttr(previewUrl)}" data-preview-kind="${escapeAttr(attachment.kind)}" tabindex="0" aria-label="${escapeAttr(`${agentAttachmentKindLabel(attachment.kind)}附件 ${attachment.name}，悬停或聚焦预览`)}"` : ""}>
+      return `<span class="canvas-agent-message-attachment ${escapeAttr(attachment.kind)}"${isPreviewable ? ` data-agent-message-attachment-preview data-preview-url="${escapeAttr(previewUrl)}" data-preview-kind="${escapeAttr(previewKind)}" tabindex="0" aria-label="${escapeAttr(`${agentAttachmentKindLabel(attachment.kind)}附件 ${attachment.name}，悬停或聚焦预览`)}"` : ""}>
         <span class="canvas-agent-message-attachment-thumb">${thumbnail}</span>
         <em>${escapeHtml(attachment.name)}</em>
       </span>`;
@@ -3868,13 +3888,16 @@ function renderAgentMessageNodeReference(reference, canvasDocument) {
     : rawKind.includes("audio")
       ? "audio"
       : rawKind.includes("image") ? "image" : rawKind;
+  const storageObjectId = String(data.storageObjectId ?? data.storage_object_id ?? "").trim();
   const source = ["image", "video", "audio"].includes(mediaKind)
-    ? resolveCanvasMediaNodeSource(node ?? { data }, mediaKind)
+    ? (storageObjectId && ["image", "video"].includes(mediaKind)
+      ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`
+      : resolveCanvasMediaNodeSource(node ?? { data }, mediaKind))
     : "";
   const poster = mediaKind === "video" ? String(data.thumbnailUrl ?? data.posterUrl ?? "").trim() : "";
   const thumb = mediaKind === "video" && source
-    ? (poster
-        ? `<img src="${escapeAttr(poster)}" alt="" draggable="false" />`
+    ? (poster || isAgentThumbnailUrl(source)
+        ? `<img src="${escapeAttr(poster || source)}" alt="" draggable="false" />`
         : `<video src="${escapeAttr(source)}" muted playsinline preload="metadata" aria-hidden="true"></video>`)
     : mediaKind === "image" && source
       ? `<img src="${escapeAttr(source)}" alt="" draggable="false" />`
@@ -3882,6 +3905,10 @@ function renderAgentMessageNodeReference(reference, canvasDocument) {
   return `<span class="episode-prompt-editor-mention canvas-agent-message-node-reference" data-node-id="${escapeAttr(reference.nodeId)}" aria-label="引用节点${escapeAttr(reference.title)}" title="节点：${escapeAttr(reference.title)}">
     ${thumb}<span class="episode-prompt-editor-mention-label">${escapeHtml(reference.title)}</span>
   </span>`;
+}
+
+function isAgentThumbnailUrl(value) {
+  return /(?:[?&])thumbnail=1(?:&|$)/u.test(String(value ?? ""));
 }
 
 export function collapseAgentGenerationMessages(messages = []) {
@@ -3941,18 +3968,30 @@ export function normalizeAgentMediaTask(task = {}) {
   const rawKind = String(task.kind ?? result.mediaKind ?? (audioItem ? "audio" : "image")).toLowerCase();
   const kind = ["video", "audio"].includes(rawKind) ? rawKind : "image";
   const storageObjectId = String(result.storageObjectId ?? "").trim();
-  const url = storageObjectId
-    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`
+  const sourceUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
     : normalizeAgentMediaUrl(
-      result.imageUrl ?? result.videoUrl ?? result.audioUrl ?? result.sourceUrl ?? result.previewUrl ??
-      audioItem?.audioUrl ?? task.url,
+      result.sourceUrl ?? result.downloadUrl ?? result.imageUrl ?? result.videoUrl ?? result.audioUrl ??
+      audioItem?.audioUrl ?? task.url ?? result.previewUrl,
     );
+  const storagePreviewUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`
+    : "";
+  const previewUrl = normalizeAgentMediaUrl(
+    storagePreviewUrl || result.thumbnailUrl || result.previewUrl || sourceUrl,
+  ) || sourceUrl;
+  const posterUrl = kind === "video"
+    ? normalizeAgentMediaUrl(storagePreviewUrl || result.thumbnailUrl || result.posterUrl)
+    : "";
   const status = String(task.status ?? "queued").toLowerCase();
   return {
     taskId: String(task.taskId ?? task.id ?? ""),
     kind,
     status,
-    url,
+    url: previewUrl,
+    previewUrl,
+    sourceUrl,
+    posterUrl,
     prompt: String(task.prompt ?? "").trim().slice(0, 2_000),
     title: String(result.title ?? result.fileName ?? `${kind} 生成结果`).trim().slice(0, 160),
     error: String(task.failure?.displayMessage ?? task.failure?.providerMessage ?? task.failureCode ?? "").trim().slice(0, 500),
@@ -3991,20 +4030,25 @@ function renderAgentMedia(media, messageIndex, canvasNodeId, options = {}) {
     return `<div class="canvas-agent-media-status ${failed ? "is-error" : ""}" role="status">${escapeHtml(failed ? media.error || "媒体生成失败" : "媒体生成中")}</div>`;
   }
   const isExpandable = options.mediaOnly === true && ["image", "video"].includes(media.kind);
+  const previewUrl = String(media.previewUrl ?? media.url ?? "");
+  const sourceUrl = String(media.sourceUrl ?? media.url ?? "");
   const preview = media.kind === "video"
-    ? `<video src="${escapeAttr(media.url)}" ${isExpandable ? "muted playsinline" : "controls"} preload="metadata"></video>`
+    ? media.posterUrl
+      ? `<img src="${escapeAttr(media.posterUrl)}" alt="${escapeAttr(media.title || "Agent 生成视频")}" loading="lazy" />`
+      : `<video src="${escapeAttr(previewUrl)}" ${isExpandable ? "muted playsinline" : "controls"} preload="metadata"></video>`
     : media.kind === "audio"
-      ? `<audio src="${escapeAttr(media.url)}" controls preload="metadata"></audio>`
-      : `<img src="${escapeAttr(media.url)}" alt="${escapeAttr(media.title || "Agent 生成图片")}" loading="lazy" />`;
+      ? `<audio src="${escapeAttr(sourceUrl)}" controls preload="metadata"></audio>`
+      : `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(media.title || "Agent 生成图片")}" loading="lazy" />`;
   const previewContent = isExpandable
     ? `<button type="button" class="canvas-agent-media-preview" data-agent-action="open-agent-media-preview" data-message-id="${escapeAttr(String(messageIndex))}" aria-label="放大查看${escapeAttr(media.kind === "video" ? "视频" : "图片")}" title="放大查看">${preview}<span aria-hidden="true">${renderAgentHeaderIcon("expand")}</span></button>`
     : preview;
   return `<figure class="canvas-agent-media${isExpandable ? " is-expandable" : ""}" data-media-kind="${escapeAttr(media.kind)}">
     ${previewContent}
     ${media.prompt ? `<figcaption>${escapeHtml(media.prompt)}</figcaption>` : ""}
-    ${options.mediaOnly === true ? "" : `<div class="canvas-agent-media-actions">
-      <button type="button" data-agent-action="${canvasNodeId ? "locate-agent-canvas-node" : "add-media-to-canvas"}" data-message-id="${escapeAttr(String(messageIndex))}">${canvasNodeId ? "定位节点" : "添加到画布"}</button>
-    </div>`}
+    <div class="canvas-agent-media-actions">
+      <button type="button" data-agent-action="download-agent-media" data-message-id="${escapeAttr(String(messageIndex))}">下载原始${media.kind === "video" ? "视频" : media.kind === "image" ? "图片" : "音频"}</button>
+      ${options.mediaOnly === true ? "" : `<button type="button" data-agent-action="${canvasNodeId ? "locate-agent-canvas-node" : "add-media-to-canvas"}" data-message-id="${escapeAttr(String(messageIndex))}">${canvasNodeId ? "定位节点" : "添加到画布"}</button>`}
+    </div>
   </figure>`;
 }
 
@@ -4021,6 +4065,34 @@ function renderAgentMediaPreview(agent) {
       ${media}
     </div>
   </section>`;
+}
+
+async function downloadAgentMedia(media = {}) {
+  const fileName = String(media.title ?? `${media.kind === "video" ? "生成视频" : media.kind === "audio" ? "生成音频" : "生成图片"}`).trim() || "生成媒体";
+  if (media.storageObjectId) {
+    await downloadCanvasAsset({ storageObjectId: media.storageObjectId, fileName });
+    return;
+  }
+  const sourceUrl = String(media.sourceUrl ?? media.url ?? "").trim();
+  if (!sourceUrl || typeof globalThis.fetch !== "function") throw new Error("原始媒体地址不可用");
+  const response = await globalThis.fetch(sourceUrl, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw new Error(`读取媒体失败（${response.status}）`);
+  const blob = await response.blob();
+  const documentRef = globalThis.document;
+  const urlApi = globalThis.URL;
+  if (!documentRef?.createElement || typeof urlApi?.createObjectURL !== "function") throw new Error("当前浏览器不支持下载");
+  const objectUrl = urlApi.createObjectURL(blob);
+  try {
+    const anchor = documentRef.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    anchor.hidden = true;
+    documentRef.body?.append?.(anchor);
+    anchor.click?.();
+    anchor.remove?.();
+  } finally {
+    urlApi.revokeObjectURL?.(objectUrl);
+  }
 }
 
 function normalizeAgentMediaUrl(value) {

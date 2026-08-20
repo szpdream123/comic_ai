@@ -850,6 +850,44 @@ test("script workflow keeps pending asset references in the batch before its vid
   assert.deepEqual(nodes[2].payload.referenceAssetVersionIds, []);
 });
 
+test("Canvas keeps thumbnail references for the surface but sends original storage objects to models", () => {
+  const storageObjectId = "10000000-0000-4000-8000-000000000321";
+  const workbench = {
+    state: { project: { aspectRatio: "16:9" } },
+    ui: {
+      canvasDocument: {
+        version: 1,
+        nodes: [
+          {
+            id: "source",
+            type: "source-image",
+            data: {
+              mediaKind: "image",
+              storageObjectId,
+              previewUrl: `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+            },
+          },
+          {
+            id: "target",
+            type: "ai-image",
+            data: { mediaKind: "image", prompt: "使用参考图生成新图", modelCode: "image-model" },
+          },
+        ],
+        edges: [{ id: "source-target", sourceNodeId: "source", targetNodeId: "target" }],
+      },
+      episodeGenerationConfig: { models: [] },
+    },
+  };
+
+  const [batchNode] = buildCanvasGenerationBatchNodes(workbench, ["target"]);
+  const originalUrl = `/api/storage/objects/${storageObjectId}/content`;
+  assert.equal(batchNode.payload.canvasContext.referenceImages[0].url, `/api/storage/objects/${storageObjectId}/content?proxy=1`);
+  assert.equal(batchNode.payload.referenceImages[0].url, originalUrl);
+  assert.equal(batchNode.payload.referenceImages[0].storageObjectId, storageObjectId);
+  assert.equal(batchNode.payload.parameters.quickReferences[0].url, originalUrl);
+  assert.equal(batchNode.payload.parameters.quickReferences[0].storageObjectId, storageObjectId);
+});
+
 test("deleting a workflow asset removes its node binding and semantic mention from dependent shots", () => {
   const deletingNode = { id: "role", type: "ai-image", data: { workflowParentId: "script", workflowKind: "character" } };
   const document = {

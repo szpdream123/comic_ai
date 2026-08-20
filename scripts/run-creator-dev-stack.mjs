@@ -102,6 +102,15 @@ function runDevFoundationSchema({ runtime, cwd, env }) {
 }
 
 supervisor.start("phone-auth", ["scripts/run-phone-auth-dev-server.mjs"]);
+supervisor.start("media-crawler", ["scripts/run-media-crawler-api.mjs"], { restartOnFailure: true });
+supervisor.start("marketing-competitor-collection", [
+  ...resolveTsxRuntimeArgs(runtime),
+  "scripts/run-marketing-competitor-collection-worker.mjs",
+], { restartOnFailure: true });
+supervisor.start("marketing-generation", [
+  ...resolveTsxRuntimeArgs(runtime),
+  "scripts/run-marketing-generation-worker.mjs",
+], { restartOnFailure: true });
 
 if (generationQueueEnabled) {
   supervisor.start("generation-outbox", [

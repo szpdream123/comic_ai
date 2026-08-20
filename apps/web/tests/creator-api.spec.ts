@@ -202,6 +202,29 @@ test("task-center list forwards incremental query parameters", async () => {
   assert.deepEqual(timeoutDelays, [60_000]);
 });
 
+test("task-center timeout covers reading the response body after receiving 200", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options = {}) => ({
+    ok: true,
+    status: 200,
+    text: () => new Promise((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      }, { once: true });
+    }),
+  }) as Response;
+
+  try {
+    const { creatorApi } = await import(`../src/shared/creator-api.js?response-body-timeout=${Date.now()}`);
+    await assert.rejects(
+      () => creatorApi.listTaskCenterTasks({}, { timeoutMs: 10 }),
+      (error) => error instanceof Error && error.message === "request_timeout",
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("storyboard prompt packages request the compact creator payload", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -567,7 +590,7 @@ test("batch generation task reads preserve unrelated read caches", async () => {
   assert.deepEqual(JSON.parse(calls[1].options.body), { taskIds: ["task-1"] });
 });
 
-test("getCreditBalance reads the dedicated uncached balance endpoint", async () => {
+test("getCreditBalance reads the dedicated balance endpoint", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
@@ -582,7 +605,7 @@ test("getCreditBalance reads the dedicated uncached balance endpoint", async () 
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/auth/credit-balance");
-  assert.equal(calls[0].options.cache, "no-store");
+  assert.notEqual(calls[0].options.cache, "no-store");
   assert.equal(payload.availableCredits, 2036);
 });
 

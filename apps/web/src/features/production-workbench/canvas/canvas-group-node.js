@@ -1,4 +1,7 @@
-import { resolveCanvasMediaNodeSource } from "./canvas-media-node.js";
+import {
+  resolveCanvasMediaNodeSource,
+  resolveCanvasMediaStableIdentity,
+} from "./canvas-media-node.js";
 
 export const CANVAS_GROUP_COLORS = Object.freeze([
   "#22c55e",
@@ -97,7 +100,7 @@ export function canvasConnectedVideoNodeIds(document, sourceNodeId) {
     .map((node) => text(node.id));
 }
 
-export function resolveCanvasCurrentVideoDownloadItems(document, nodeIds = []) {
+export function resolveCanvasCurrentMediaDownloadItems(document, nodeIds = []) {
   const nodes = Array.isArray(document?.nodes) ? document.nodes : [];
   const requestedNodeIds = new Set(canvasSelectionContentNodeIds(document, nodeIds));
   return nodes.flatMap((node) => {
@@ -105,17 +108,35 @@ export function resolveCanvasCurrentVideoDownloadItems(document, nodeIds = []) {
     if (!requestedNodeIds.has(nodeId)) return [];
     const nodeType = text(node?.type).toLowerCase();
     const mediaKind = text(node?.data?.mediaKind).toLowerCase();
-    if (!nodeType.includes("video") && mediaKind !== "video") return [];
-    const url = resolveCanvasMediaNodeSource(node, "video");
-    if (!url) return [];
+    const resolvedMediaKind = mediaKind === "video" || nodeType.includes("video")
+      ? "video"
+      : mediaKind === "image" || nodeType.includes("image")
+        ? "image"
+        : "";
+    if (!resolvedMediaKind) return [];
+    const identity = resolveCanvasMediaStableIdentity(node?.data ?? {});
+    const storageObjectId = text(identity.storageObjectId);
+    const data = node?.data ?? {};
+    const url = storageObjectId
+      ? ""
+      : text(resolvedMediaKind === "video"
+        ? data.sourceUrl ?? data.downloadUrl ?? data.videoUrl ?? data.resultVideoUrl ?? data.resultUrl ?? data.url ?? data.src ?? data.previewUrl
+        : data.sourceUrl ?? data.downloadUrl ?? data.imageUrl ?? data.resultImageUrl ?? data.resultUrl ?? data.url ?? data.src ?? data.previewUrl ?? data.thumbnailUrl);
+    if (!url && !storageObjectId) return [];
     return [{
       nodeId,
-      storageObjectId: "",
+      storageObjectId,
       url,
-      fileName: text(node?.data?.fileName ?? node?.data?.name ?? node?.data?.title) || "画布视频",
-      mediaKind: "video",
+      fileName: text(node?.data?.fileName ?? node?.data?.name ?? node?.data?.title)
+        || (resolvedMediaKind === "video" ? "画布视频" : "画布图片"),
+      mediaKind: resolvedMediaKind,
     }];
   });
+}
+
+export function resolveCanvasCurrentVideoDownloadItems(document, nodeIds = []) {
+  return resolveCanvasCurrentMediaDownloadItems(document, nodeIds)
+    .filter((item) => item.mediaKind === "video");
 }
 
 export function resolveCanvasBatchDownloadItems(document, nodeIds = [], options = {}) {

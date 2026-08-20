@@ -128,6 +128,10 @@ const migrations = [
   ["20260922-marketing-generation-skills.sql", "packages/db/migrations/20260922-marketing-generation-skills.sql"],
   ["20260923-marketing-skill-kinds.sql", "packages/db/migrations/20260923-marketing-skill-kinds.sql"],
   ["20260924-add-episode-cover-storage.sql", "packages/db/migrations/20260924-add-episode-cover-storage.sql"],
+  ["20260925-add-marketing-competitor-collection.sql", "packages/db/migrations/20260925-add-marketing-competitor-collection.sql"],
+  ["20260927-require-prompt-reverse-vision-model.sql", "packages/db/migrations/20260927-require-prompt-reverse-vision-model.sql"],
+  ["20260928-fix-prompt-reverse-modelflare-pricing.sql", "packages/db/migrations/20260928-fix-prompt-reverse-modelflare-pricing.sql"],
+  ["20260929-restore-cumob-prompt-reverse-model.sql", "packages/db/migrations/20260929-restore-cumob-prompt-reverse-model.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -167,6 +171,10 @@ const runtimeSafeMigrationNames = new Set([
   "20260922-marketing-generation-skills.sql",
   "20260923-marketing-skill-kinds.sql",
   "20260924-add-episode-cover-storage.sql",
+  "20260925-add-marketing-competitor-collection.sql",
+  "20260927-require-prompt-reverse-vision-model.sql",
+  "20260928-fix-prompt-reverse-modelflare-pricing.sql",
+  "20260929-restore-cumob-prompt-reverse-model.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([
   "20260823-canvas-agent-queue-shards.sql",

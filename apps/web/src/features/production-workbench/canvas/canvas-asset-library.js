@@ -80,7 +80,8 @@ export function canvasAssetsFromGenerationHistory(payload) {
 export function canvasAssetNodeData(asset) {
   const source = asRecord(asset);
   const kind = text(source.kind) || "image";
-  const url = text(source.url ?? source.previewUrl);
+  const url = text(source.url ?? source.sourceUrl ?? source.previewUrl);
+  const previewUrl = text(source.previewUrl ?? source.thumbnailUrl ?? url);
   return {
     source: "canvas_artifact",
     status: "ready",
@@ -91,7 +92,9 @@ export function canvasAssetNodeData(asset) {
     storageObjectId: text(source.storageObjectId) || null,
     assetId: text(source.assetId) || null,
     assetVersionId: text(source.assetVersionId) || null,
-    ...(url ? { url, previewUrl: url } : {}),
+    ...(url ? { url } : {}),
+    ...(previewUrl ? { previewUrl } : {}),
+    ...(text(source.sourceUrl) ? { sourceUrl: text(source.sourceUrl) } : {}),
     ...(text(source.posterUrl) ? { posterUrl: text(source.posterUrl) } : {}),
   };
 }

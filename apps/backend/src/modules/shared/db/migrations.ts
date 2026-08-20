@@ -114,6 +114,11 @@ const MARKETING_GENERATION_CONFIRMATIONS_RELATIVE_PATH = ["packages", "db", "mig
 const MARKETING_GENERATION_SKILLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260922-marketing-generation-skills.sql"];
 const MARKETING_SKILL_KINDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260923-marketing-skill-kinds.sql"];
 const EPISODE_COVER_STORAGE_RELATIVE_PATH = ["packages", "db", "migrations", "20260924-add-episode-cover-storage.sql"];
+const MARKETING_COMPETITOR_COLLECTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260925-add-marketing-competitor-collection.sql"];
+const HOME_RECOMMENDATION_COVER_OPTIMIZATION_RELATIVE_PATH = ["packages", "db", "migrations", "20260926-optimize-home-recommendation-covers.sql"];
+const PROMPT_REVERSE_VISION_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260927-require-prompt-reverse-vision-model.sql"];
+const PROMPT_REVERSE_MODELFLARE_PRICING_RELATIVE_PATH = ["packages", "db", "migrations", "20260928-fix-prompt-reverse-modelflare-pricing.sql"];
+const RESTORE_CUMOB_PROMPT_REVERSE_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260929-restore-cumob-prompt-reverse-model.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -611,6 +616,26 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260924-add-episode-cover-storage.sql",
       sql: await readFile(join(rootDir, ...EPISODE_COVER_STORAGE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260925-add-marketing-competitor-collection.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_COMPETITOR_COLLECTION_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260926-optimize-home-recommendation-covers.sql",
+      sql: await readFile(join(rootDir, ...HOME_RECOMMENDATION_COVER_OPTIMIZATION_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260927-require-prompt-reverse-vision-model.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_REVERSE_VISION_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260928-fix-prompt-reverse-modelflare-pricing.sql",
+      sql: await readFile(join(rootDir, ...PROMPT_REVERSE_MODELFLARE_PRICING_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20260929-restore-cumob-prompt-reverse-model.sql",
+      sql: await readFile(join(rootDir, ...RESTORE_CUMOB_PROMPT_REVERSE_MODEL_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

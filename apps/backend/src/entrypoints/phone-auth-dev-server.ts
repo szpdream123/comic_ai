@@ -541,6 +541,10 @@ const staticAssetTransformCache = new Map<string, {
   file: Buffer;
 }>();
 const staticAssetCompressionCache = new Map<string, Buffer>();
+const storageMediaThumbnailCache = new Map<string, {
+  contentType: string;
+  bytes: Buffer;
+}>();
 const brotliCompress = promisify(brotliCompressCallback);
 const gzip = promisify(gzipCallback);
 const staticAssetPrewarmPromise = prewarmStaticAssets().catch(() => undefined);
@@ -1056,6 +1060,16 @@ function isHomeRecommendationObjectKey(input: {
     `${rootPrefix}/homeBackgroundVideos/`,
     `${rootPrefix}/homeRecommendationVideos/`,
   ].some((prefix) => input.objectKey.startsWith(prefix));
+}
+
+function isHomeRecommendationCoverObjectKey(input: {
+  objectKey: string;
+  officialAssetRootPrefix: string;
+}) {
+  const rootPrefix = input.officialAssetRootPrefix.replace(/^\/+|\/+$/g, "");
+  return Boolean(rootPrefix)
+    && !input.objectKey.includes("\\")
+    && input.objectKey.startsWith(`${rootPrefix}/homeRecommendationCovers/`);
 }
 
 type HomeMediaRateLimitGrant =
@@ -3279,6 +3293,59 @@ async function streamLocalStorageObjectContent(input: {
   }
 }
 
+async function createStorageMediaThumbnail(input: {
+  localPath?: string;
+  signedUrl?: string;
+  relativeUrlOrigin: string;
+  contentType: string;
+  fetchImpl: typeof fetch;
+  timeoutMs: number;
+}) {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "comic-ai-media-thumb-"));
+  const sourcePath = input.localPath ?? join(temporaryDirectory, "source-media");
+  try {
+    if (!input.localPath) {
+      const signedUrl = String(input.signedUrl ?? "").trim();
+      if (!signedUrl) throw new Error("storage_thumbnail_source_missing");
+      const upstreamUrl = new URL(signedUrl, input.relativeUrlOrigin);
+      if (!["http:", "https:"].includes(upstreamUrl.protocol)) throw new Error("storage_thumbnail_source_invalid");
+      const upstream = await input.fetchImpl(upstreamUrl, { redirect: "manual" });
+      if (!upstream.ok || !upstream.body) throw new Error("storage_thumbnail_source_unavailable");
+      await pipeline(Readable.fromWeb(upstream.body as never), createWriteStream(sourcePath));
+    }
+    if (input.contentType.startsWith("image/")) {
+      return {
+        contentType: "image/webp",
+        bytes: await sharp(sourcePath, { failOn: "error" })
+          .rotate()
+          .resize(640, 640, { fit: "inside", withoutEnlargement: true })
+          .webp({ quality: 76, effort: 4 })
+          .toBuffer(),
+      };
+    }
+    const outputPath = join(temporaryDirectory, "thumbnail.jpg");
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const child = spawn(ffmpegInstaller.path, [
+        "-y", "-hide_banner", "-loglevel", "error", "-ss", "0.1", "-i", sourcePath,
+        "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease",
+        "-q:v", "5", outputPath,
+      ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      const timeout = setTimeout(() => child.kill(), input.timeoutMs);
+      child.stderr.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4096); });
+      child.once("error", (error) => { clearTimeout(timeout); rejectPromise(error); });
+      child.once("close", (code) => {
+        clearTimeout(timeout);
+        if (code === 0) resolvePromise();
+        else rejectPromise(new Error(stderr.trim() || `storage_thumbnail_ffmpeg_failed:${code ?? "unknown"}`));
+      });
+    });
+    return { contentType: "image/jpeg", bytes: await readFile(outputPath) };
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true }).catch(() => undefined);
+  }
+}
+
 async function extractTextFromScriptDocumentBytes(bytes: Buffer, extension: string) {
   if (extension === ".txt") {
     return bytes.toString("utf8");
@@ -3937,6 +4004,97 @@ export async function normalizeAdminManagedImageUpload(input: {
   };
 }
 
+export async function normalizeHomeRecommendationCoverUpload(input: {
+  bytes: Uint8Array;
+  fileName: string;
+}) {
+  const originalExtension = extname(input.fileName);
+  const fileNameStem = originalExtension
+    ? input.fileName.slice(0, -originalExtension.length)
+    : input.fileName;
+  return {
+    bytes: await sharp(Buffer.from(input.bytes), { failOn: "error" })
+      .rotate()
+      .resize(640, 360, { fit: "cover", position: "attention", withoutEnlargement: true })
+      .webp({ quality: 76, effort: 4 })
+      .toBuffer(),
+    contentType: "image/webp" as const,
+    fileName: `${fileNameStem || "home-cover"}.webp`,
+  };
+}
+
+export async function normalizeHomeRecommendationVideoUpload(input: {
+  bytes: Uint8Array;
+  fileName: string;
+  stripAudio: boolean;
+}) {
+  const directory = await mkdtemp(join(tmpdir(), "comic-ai-home-video-"));
+  const originalExtension = extname(input.fileName);
+  const fileNameStem = originalExtension
+    ? input.fileName.slice(0, -originalExtension.length)
+    : input.fileName;
+  const inputPath = join(directory, `source${originalExtension || ".mp4"}`);
+  const outputPath = join(directory, "web.mp4");
+  try {
+    await writeFile(inputPath, input.bytes);
+    await transcodeHomeRecommendationVideo(inputPath, outputPath, input.stripAudio);
+    const bytes = await readFile(outputPath);
+    if (!bytes.byteLength) throw new Error("home_video_transcode_empty");
+    return {
+      bytes,
+      contentType: "video/mp4" as const,
+      fileName: `${fileNameStem || "home-video"}-web.mp4`,
+    };
+  } finally {
+    await rm(directory, { force: true, recursive: true }).catch(() => undefined);
+  }
+}
+
+function transcodeHomeRecommendationVideo(inputPath: string, outputPath: string, stripAudio: boolean) {
+  return new Promise<void>((resolvePromise, rejectPromise) => {
+    const args = [
+      "-y",
+      "-hide_banner",
+      "-loglevel", "error",
+      "-i", inputPath,
+      "-map", "0:v:0",
+      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,fps=24",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "28",
+      "-maxrate", "1600k",
+      "-bufsize", "3200k",
+      "-g", "48",
+      "-keyint_min", "48",
+      "-sc_threshold", "0",
+      "-pix_fmt", "yuv420p",
+      ...(stripAudio
+        ? ["-an"]
+        : ["-map", "0:a:0?", "-c:a", "aac", "-b:a", "96k", "-ac", "2"]),
+      "-movflags", "+faststart",
+      outputPath,
+    ];
+    const child = spawn(ffmpegInstaller.path, args, {
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    const timeout = setTimeout(() => child.kill(), 10 * 60_000);
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 16_384) stderr += String(chunk).slice(0, 16_384 - stderr.length);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      rejectPromise(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolvePromise();
+      else rejectPromise(new Error(stderr.trim() || `home_video_transcode_failed:${code ?? "unknown"}`));
+    });
+  });
+}
+
 function buildManagedUploadObjectKey(input: {
   fileName: string;
   rootPrefix: string;
@@ -4004,6 +4162,15 @@ function adminManagedUploadConfig(pathname: string, env: NodeJS.ProcessEnv) {
       subfolder: "homeRecommendationVideos",
       policyPurpose: "home-recommendation-video",
       sourceAction: "admin_home_recommendation_video_upload",
+    };
+  }
+  if (pathname === "/api/admin/home-recommendations/covers/upload") {
+    return {
+      kind: "home_recommendation_cover" as const,
+      rootPrefix,
+      subfolder: "homeRecommendationCovers",
+      policyPurpose: "home-recommendation-cover",
+      sourceAction: "admin_home_recommendation_cover_upload",
     };
   }
   return null;
@@ -5342,8 +5509,16 @@ function isPromptReverseModel(model: AiModelConfigRecord) {
     && model.mediaType === "text"
     && model.invocationMode === "stream"
     && ["cumob_chat", "openai_compatible_chat", "modelflare_responses"].includes(model.providerProtocol)
+    && supportsPromptReverseImages(model)
     && Array.isArray(model.uiConfig.toolboxTools)
     && model.uiConfig.toolboxTools.includes("prompt-reverse");
+}
+
+function supportsPromptReverseImages(model: AiModelConfigRecord) {
+  if (model.capabilities.imageInput === true) return true;
+  const inputs = model.capabilities.input;
+  return Array.isArray(inputs)
+    && inputs.some((input) => ["image", "image_url", "input_image"].includes(String(input).trim().toLowerCase()));
 }
 
 async function listPromptReverseModels(db: SqlDatabase) {
@@ -16351,9 +16526,10 @@ async function serveStatic(
   }
   const etag = staticAssetEtag(encoded.file);
   response.setHeader("etag", etag);
+  const cacheControl = productionWebAssetCacheControl(normalizedPath);
   response.setHeader(
     "cache-control",
-    productionWebAssetCacheControl(normalizedPath),
+    extname(filePath).toLowerCase() === ".png" ? `${cacheControl}, no-transform` : cacheControl,
   );
   if (requestMatchesEtag(request, etag)) {
     response.statusCode = 304;
@@ -18943,6 +19119,7 @@ export function createPhoneAuthDevServer(
       }
 
       const homeRecommendationVideoMediaMatch = pathname.match(/^\/api\/home-recommendations\/videos\/([^/]+)\/media$/);
+      const homeRecommendationCoverMediaMatch = pathname.match(/^\/api\/home-recommendations\/covers\/([^/]+)\/media$/);
       if (
         request.method === "GET" &&
         (pathname === "/api/home-recommendations/background/media" || homeRecommendationVideoMediaMatch)
@@ -18988,26 +19165,55 @@ export function createPhoneAuthDevServer(
         const location = (await storageRuntime.adapter.createSignedReadUrl({
           bucket: storageBucket,
           objectKey,
+          responseContentDisposition: "inline",
           expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
         })).url;
-        let upstream: Response;
-        try {
-          upstream = await (options.fetchImpl ?? fetch)(location);
-        } catch {
-          return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
-        }
-        if (!upstream.ok || !upstream.body) {
-          await upstream.body?.cancel().catch(() => undefined);
-          return writeJson(response, envelopedError(502, "home_recommendation_media_unavailable", "Home recommendation media is unavailable"));
-        }
-        response.statusCode = 200;
-        response.setHeader("content-type", upstream.headers.get("content-type") ?? "video/mp4");
-        response.setHeader("cache-control", "public, max-age=31536000, immutable");
+        response.statusCode = 307;
+        response.setHeader("location", location);
+          response.setHeader("cache-control", "public, max-age=300");
         response.setHeader("referrer-policy", "no-referrer");
-        const contentLength = upstream.headers.get("content-length");
-        if (contentLength) response.setHeader("content-length", contentLength);
-        Readable.fromWeb(upstream.body as never).pipe(response);
+        response.end();
         return;
+        } finally {
+          rateLimit.release();
+        }
+      }
+
+      if (request.method === "GET" && homeRecommendationCoverMediaMatch) {
+        const storageObjectId = decodeURIComponent(homeRecommendationCoverMediaMatch[1] ?? "");
+        if (!isUuid(storageObjectId)) {
+          return writeJson(response, envelopedError(404, "home_recommendation_cover_not_found", "Home recommendation cover was not found"));
+        }
+        const rateLimit = homeMediaRateLimiter.acquire(
+          homeMediaRequestIpAddress(request, trustProxyForHomeMedia),
+        );
+        if (!rateLimit.granted) {
+          response.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+          return writeJson(response, envelopedError(429, "home_recommendation_media_rate_limited", "Too many home media signing requests"));
+        }
+        try {
+          const object = await findStorageObject(db, storageObjectId);
+          if (
+            storageMode !== "cos"
+            || object?.status !== "available"
+            || object.bucket !== storageBucket
+            || !object.contentType.startsWith("image/")
+            || !isHomeRecommendationCoverObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix })
+          ) {
+            return writeJson(response, envelopedError(404, "home_recommendation_cover_not_found", "Home recommendation cover was not found"));
+          }
+          const location = (await storageRuntime.adapter.createSignedReadUrl({
+            bucket: storageBucket,
+            objectKey: object.objectKey,
+            responseContentDisposition: "inline",
+            expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+          })).url;
+          response.statusCode = 307;
+          response.setHeader("location", location);
+          response.setHeader("cache-control", "public, max-age=300");
+          response.setHeader("referrer-policy", "no-referrer");
+          response.end();
+          return;
         } finally {
           rateLimit.release();
         }
@@ -21864,7 +22070,7 @@ export function createPhoneAuthDevServer(
           cookieHeader: request.headers.cookie,
           ...(adminUploadConfig.kind === "prompt_cover"
             ? { requiredRoles: [...adminRouteRoles.storyboardPromptWrite] }
-            : adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video"
+            : adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video" || adminUploadConfig.kind === "home_recommendation_cover"
               ? { requiredRoles: [...adminRouteRoles.homeRecommendationManage] }
             : { requiredPermissions: ["settings.write" as const] }),
         });
@@ -21915,6 +22121,7 @@ export function createPhoneAuthDevServer(
         }
         const isVideoUpload = adminUploadConfig.kind === "home_background_video" || adminUploadConfig.kind === "home_recommendation_video";
         const isBackgroundVideoUpload = adminUploadConfig.kind === "home_background_video";
+        const isHomeRecommendationCoverUpload = adminUploadConfig.kind === "home_recommendation_cover";
         if (uploadPolicy.kind !== (isVideoUpload ? "video" : "image")) {
           return writeJson(
             response,
@@ -21929,9 +22136,24 @@ export function createPhoneAuthDevServer(
         }
 
         let managedFile = { bytes, contentType, fileName };
-        if (!isVideoUpload) {
+        if (isVideoUpload) {
           try {
-            managedFile = await normalizeAdminManagedImageUpload({ bytes, fileName });
+            managedFile = await normalizeHomeRecommendationVideoUpload({
+              bytes,
+              fileName,
+              stripAudio: isBackgroundVideoUpload,
+            });
+          } catch {
+            return writeJson(
+              response,
+              envelopedError(400, "home_video_transcode_failed", "首页视频转码失败，请检查视频文件后重试"),
+            );
+          }
+        } else {
+          try {
+            managedFile = isHomeRecommendationCoverUpload
+              ? await normalizeHomeRecommendationCoverUpload({ bytes, fileName })
+              : await normalizeAdminManagedImageUpload({ bytes, fileName });
           } catch {
             return writeJson(
               response,
@@ -21953,7 +22175,7 @@ export function createPhoneAuthDevServer(
           objectKey,
           bytes: managedFile.bytes,
           contentType: managedFile.contentType,
-          cacheControl: isBackgroundVideoUpload ? "public, max-age=31536000, immutable" : null,
+          cacheControl: isBackgroundVideoUpload || isHomeRecommendationCoverUpload ? "public, max-age=31536000, immutable" : null,
           fileName: managedFile.fileName,
           actorUserId: null,
           actorDisplayName: adminRoute.session.display_name,
@@ -21976,8 +22198,12 @@ export function createPhoneAuthDevServer(
               bucket: storageRuntime.bucket,
               storageObjectId: uploaded.storageObjectId,
               storageObjectKey: objectKey,
-              previewUrl: uploaded.sourceUrl,
-              sourceUrl: uploaded.sourceUrl,
+              previewUrl: isHomeRecommendationCoverUpload
+                ? `/api/home-recommendations/covers/${encodeURIComponent(uploaded.storageObjectId)}/media`
+                : uploaded.sourceUrl,
+              sourceUrl: isHomeRecommendationCoverUpload
+                ? `/api/home-recommendations/covers/${encodeURIComponent(uploaded.storageObjectId)}/media`
+                : uploaded.sourceUrl,
               mimeType: managedFile.contentType,
               byteSize: managedFile.bytes.byteLength,
               originalFileName: fileName,
@@ -24863,8 +25089,56 @@ export function createPhoneAuthDevServer(
             }
             const proxyRequested = url.searchParams.get("proxy") === "1";
             const downloadRequested = url.searchParams.get("download") === "1";
+            const thumbnailRequested = url.searchParams.get("thumbnail") === "1";
             const image = object.contentType.startsWith("image/");
             const video = object.contentType.startsWith("video/");
+            if (thumbnailRequested && (image || video)) {
+              const thumbnailCacheKey = `${object.id}:${object.etag ?? ""}:${object.versionId ?? ""}:${object.contentType}`;
+              let thumbnail = storageMediaThumbnailCache.get(thumbnailCacheKey);
+              if (!thumbnail) {
+                let release: (() => void) | null = null;
+                try {
+                  release = await storageMediaLimiter.acquire({
+                    kind: image ? "image" : "video",
+                    userId: authenticated.user.id,
+                    ipAddress: homeMediaRequestIpAddress(request, trustProxyForStorageMedia),
+                  });
+                  thumbnail = await createStorageMediaThumbnail({
+                    localPath: storageRuntime.mode === "dev"
+                      ? resolveLocalStorageObjectPath(object.bucket, object.objectKey)
+                      : undefined,
+                    signedUrl: storageRuntime.mode === "dev" ? undefined : signed.url,
+                    relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                    contentType: object.contentType,
+                    fetchImpl: options.fetchImpl ?? fetch,
+                    timeoutMs: providerArtifactUploadTimeoutMs,
+                  });
+                  storageMediaThumbnailCache.set(thumbnailCacheKey, thumbnail);
+                  while (storageMediaThumbnailCache.size > 64) {
+                    storageMediaThumbnailCache.delete(storageMediaThumbnailCache.keys().next().value!);
+                  }
+                } catch {
+                  return writeJson(response, envelopedError(502, "storage_thumbnail_failed", "Storage thumbnail could not be generated"));
+                } finally {
+                  release?.();
+                }
+              }
+              const etag = staticAssetEtag(`storage-thumbnail:${thumbnailCacheKey}`);
+              response.setHeader("etag", etag);
+              response.setHeader("cache-control", "private, max-age=3600");
+              response.setHeader("content-type", thumbnail.contentType);
+              response.setHeader("content-disposition", "inline");
+              response.setHeader("x-content-type-options", "nosniff");
+              if (requestMatchesEtag(request, etag)) {
+                response.statusCode = 304;
+                response.end();
+                return;
+              }
+              response.statusCode = 200;
+              response.setHeader("content-length", String(thumbnail.bytes.byteLength));
+              response.end(thumbnail.bytes);
+              return;
+            }
             if (downloadRequested || (proxyRequested && (image || video))) {
               const cacheableProxyRequest = proxyRequested && !downloadRequested && !request.headers.range;
               if (cacheableProxyRequest) {
@@ -25583,6 +25857,14 @@ export function createPhoneAuthDevServer(
               });
             } catch {
               // The model failure remains the actionable response. Release is idempotent for operational retry.
+            }
+            if (error instanceof TextModelGatewayError && error.code === "provider_auth_missing") {
+              return writeJson(response, envelopedError(
+                503,
+                "prompt_reverse_provider_auth_missing",
+                `模型供应商密钥未配置，请在管理员模型配置中设置 ${readString(model.providerConfig.apiKeyEnv) || "API Key"}`,
+                { displayName: model.displayName, providerName: model.providerName },
+              ));
             }
             return writeJson(response, envelopedError(502, "prompt_reverse_failed", message));
           }

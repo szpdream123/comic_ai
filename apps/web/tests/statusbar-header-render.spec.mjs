@@ -53,7 +53,7 @@ test("home renders the configured background video as a looping muted layer", ()
     },
   });
   assert.match(html, /class="home-background-video"/);
-  assert.match(html, /<video autoplay muted loop playsinline preload="auto" src="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2" data-home-background-video-url="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2"/);
+  assert.match(html, /<video autoplay muted loop playsinline preload="none" data-home-background-video-url="https:\/\/example\.com\/home\.mp4\?x=1&amp;y=2"/);
   assert.doesNotMatch(html, /poster=/);
   assert.doesNotMatch(html, /<source src=/);
 });
@@ -1243,7 +1243,8 @@ test("home TV video cards play only as hover previews", () => {
     "utf8",
   );
 
-  assert.match(videoCard, /data-home-tv-preview[^>]*muted loop playsinline preload="metadata"/);
+  assert.match(videoCard, /data-home-tv-preview data-home-tv-preview-url="https:\/\/example\.com\/preview\.mp4" muted loop playsinline preload="none"/);
+  assert.doesNotMatch(videoCard, /<video[^>]*\ssrc=/);
   assert.doesNotMatch(videoCard, /target="_blank"/);
   assert.doesNotMatch(videoCard, /<video[^>]*controls/);
   assert.match(source, /playHomeTvVideoPreview\(homeTvCard\)/);

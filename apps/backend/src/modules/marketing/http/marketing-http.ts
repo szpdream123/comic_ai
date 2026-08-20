@@ -148,6 +148,46 @@ async function adminRoute(input: {
     }, adminAccountId);
     return data(201, { document });
   }
+  if (request.method === "POST" && pathname === "/api/marketing/competitor-collection-jobs") {
+    const body = objectBody(await readJson(request));
+    const collectionMode = stringValue(body.collectionMode);
+    if (collectionMode !== "keyword" && collectionMode !== "creator") {
+      return error(400, "marketing_competitor_collection_mode_invalid", "Collection mode must be keyword or creator");
+    }
+    const job = await service.createCompetitorCollectionJob({
+      projectId: stringValue(body.projectId), campaignId: stringOrNull(body.campaignId), name: stringValue(body.name),
+      collectionMode, queryText: stringValue(body.queryText), crawlerBaseUrl: stringValue(body.crawlerBaseUrl),
+      maxItems: typeof body.maxItems === "number" ? body.maxItems : undefined,
+      includeComments: typeof body.includeComments === "boolean" ? body.includeComments : undefined,
+      intervalMinutes: typeof body.intervalMinutes === "number" ? body.intervalMinutes : undefined,
+    }, adminAccountId);
+    return data(201, { job });
+  }
+  const competitorCollectionJobMatch = pathname.match(/^\/api\/marketing\/competitor-collection-jobs\/([^/]+)$/);
+  if (request.method === "PATCH" && competitorCollectionJobMatch) {
+    const body = objectBody(await readJson(request));
+    const collectionMode = stringValue(body.collectionMode);
+    const status = stringValue(body.status);
+    if (collectionMode !== "keyword" && collectionMode !== "creator") {
+      return error(400, "marketing_competitor_collection_mode_invalid", "Collection mode must be keyword or creator");
+    }
+    if (status !== "active" && status !== "paused" && status !== "disabled") {
+      return error(400, "marketing_competitor_collection_status_invalid", "Collection status is invalid");
+    }
+    const job = await service.updateCompetitorCollectionJob(decodeURIComponent(competitorCollectionJobMatch[1]), {
+      projectId: stringValue(body.projectId), campaignId: stringOrNull(body.campaignId), name: stringValue(body.name),
+      collectionMode, queryText: stringValue(body.queryText), crawlerBaseUrl: stringValue(body.crawlerBaseUrl),
+      maxItems: typeof body.maxItems === "number" ? body.maxItems : undefined,
+      includeComments: typeof body.includeComments === "boolean" ? body.includeComments : undefined,
+      intervalMinutes: typeof body.intervalMinutes === "number" ? body.intervalMinutes : undefined,
+      status,
+    }, adminAccountId);
+    return data(200, { job });
+  }
+  if (request.method === "GET" && pathname === "/api/marketing/competitor-collection-jobs") {
+    const query = new URLSearchParams((request.url ?? "").split("?")[1] ?? "");
+    return data(200, { jobs: await service.listCompetitorCollectionJobs(query.get("projectId") ?? "") });
+  }
   const knowledgeApproveMatch = pathname.match(/^\/api\/marketing\/knowledge-documents\/([^/]+)\/approve$/);
   if (request.method === "POST" && knowledgeApproveMatch) {
     const document = await service.approveKnowledgeDocument(decodeURIComponent(knowledgeApproveMatch[1]), adminAccountId);

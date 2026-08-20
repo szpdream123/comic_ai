@@ -54,7 +54,8 @@
     "worker:membership-maintenance": "node --import tsx scripts/run-membership-maintenance.mjs",
     "worker:marketing-maintenance": "node --import tsx scripts/run-marketing-maintenance.mjs",
     "worker:marketing-agent": "node --import tsx scripts/run-marketing-agent-worker.mjs",
-    "worker:marketing-generation": "node --import tsx scripts/run-marketing-generation-worker.mjs"
+    "worker:marketing-generation": "node --import tsx scripts/run-marketing-generation-worker.mjs",
+    "worker:marketing-competitor-collection": "node --import tsx scripts/run-marketing-competitor-collection-worker.mjs"
   },
   "dependencies": {
     "@antv/x6": "^3.1.7",

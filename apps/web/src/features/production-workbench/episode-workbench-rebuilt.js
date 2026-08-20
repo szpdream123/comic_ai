@@ -804,7 +804,7 @@ function renderEpisodeLibraryCategoryTab(id, label, activeCategory) {
 }
 
 function renderEpisodeLibraryAssetCard(asset, category, selected = false) {
-  const preview = asset.previewUrl || asset.preview || resolveStorageObjectContentUrl(asset) || "";
+  const preview = resolveReferencePreview(asset) || "";
   const assetName = String(asset.name ?? "").trim();
   const assetFolder = String(asset.folder ?? resolveAssetLabel(category)).trim();
   return `
@@ -1066,7 +1066,12 @@ export function renderStoryboardImageColumn(storyboard, storyboardName = "") {
         <span class="preview-title">故事板</span>
       </span>
       <span class="preview episode-replica-storyboard-image-preview">
-        ${renderStoryboardImageThumb(resolveSelectedImageSource(storyboard), resolvedStoryboardName, `storyboard:${storyboard.id}`)}
+        ${renderStoryboardImageThumb(
+          resolveSelectedImagePreview(storyboard),
+          resolvedStoryboardName,
+          `storyboard:${storyboard.id}`,
+          resolveSelectedImageSource(storyboard),
+        )}
         <span class="episode-replica-storyboard-image-actions">
           <button type="button" data-action="pick-local-storyboard-image" data-storyboard-id="${escapeAttr(storyboard.id)}">上传</button>
           <button type="button" data-action="open-storyboard-image-generator" data-storyboard-id="${escapeAttr(storyboard.id)}" data-storyboard-name="${escapeAttr(resolvedStoryboardName)}">生成</button>
@@ -1213,17 +1218,16 @@ function resolveReferenceDedupeKey(item) {
 
 function renderStoryboardVideoThumb(storyboard, previewVideo) {
   if (previewVideo) {
-    const thumbnail =
-      storyboard?.previewThumbnailUrl ??
-      storyboard?.uploadedVideos?.find((item) => item.src === previewVideo)?.thumbnailSrc ??
-      "";
+    const selectedVideo = (storyboard?.uploadedVideos ?? []).find((item) => item.src === previewVideo) ?? storyboard;
+    const thumbnail = resolveMediaPreviewUrl({ ...selectedVideo, type: "video" }, "video");
     return `
       <span class="episode-replica-shot-video-preview active">
         <video
           src="${escapeAttr(previewVideo)}"
           ${thumbnail ? `poster="${escapeAttr(thumbnail)}"` : ""}
-          preload="metadata"
+          preload="none"
           controls
+          playsinline
         ></video>
       </span>
     `;
@@ -1231,9 +1235,9 @@ function renderStoryboardVideoThumb(storyboard, previewVideo) {
   return renderStoryboardMediaPlaceholder();
 }
 
-function renderStoryboardImageThumb(previewImage, imageName = "故事板", imageKey = "") {
+function renderStoryboardImageThumb(previewImage, imageName = "故事板", imageKey = "", sourceImage = previewImage) {
   if (previewImage) {
-    return `<span class="episode-replica-shot-media-thumb has-image-preview active" data-image-preview-url="${escapeAttr(previewImage)}" data-image-preview-name="${escapeAttr(imageName)}" data-image-preview-key="${escapeAttr(imageKey)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(imageName)}" title="双击查看大图"><img src="${escapeAttr(previewImage)}" alt="${escapeAttr(imageName)}" /></span>`;
+    return `<span class="episode-replica-shot-media-thumb has-image-preview active" data-image-preview-url="${escapeAttr(sourceImage || previewImage)}" data-image-preview-name="${escapeAttr(imageName)}" data-image-preview-key="${escapeAttr(imageKey)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(imageName)}" title="双击查看大图"><img src="${escapeAttr(previewImage)}" alt="${escapeAttr(imageName)}" loading="lazy" /></span>`;
   }
   return `
     <span class="episode-replica-shot-media-placeholder storyboard-image-placeholder" aria-label="暂无故事板">
@@ -1965,11 +1969,15 @@ function renderFixedVideoResult(generationResult, selectedStoryboard = null) {
   if (!videoUrl) {
     return "";
   }
-  const posterUrl =
-    generationResult?.thumbnailUrl ??
-    generationResult?.result?.thumbnailUrl ??
-    selectedStoryboard?.previewThumbnailUrl ??
-    "";
+  const posterUrl = resolveMediaPreviewUrl(
+    {
+      ...generationResult,
+      ...generationResult?.result,
+      type: "video",
+      previewThumbnailUrl: generationResult?.thumbnailUrl ?? generationResult?.result?.thumbnailUrl ?? selectedStoryboard?.previewThumbnailUrl,
+    },
+    "video",
+  );
   return `
     <div class="episode-replica-fixed-results video-result">
       <article class="episode-replica-fixed-video-card">
@@ -1978,7 +1986,8 @@ function renderFixedVideoResult(generationResult, selectedStoryboard = null) {
           src="${escapeAttr(videoUrl)}"
           ${posterUrl ? `poster="${escapeAttr(posterUrl)}"` : ""}
           controls
-          preload="metadata"
+          playsinline
+          preload="none"
         ></video>
       </article>
     </div>
@@ -2599,8 +2608,10 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
   return `
     <div class="episode-replica-fixed-results">
       ${images.map((item) => {
-        const imageUrl = readPublicMediaUrl(item.url, item.src, item.previewUrl, item.sourceUrl)
+        const imageUrl = readPublicMediaUrl(item.url, item.src, item.sourceUrl, item.previewUrl)
           || resolveStorageObjectContentUrl(item, generationResult?.result, generationResult);
+        const previewUrl = resolveMediaPreviewUrl({ ...item, type: "image" }, "image") ||
+          resolveMediaPreviewUrl({ ...generationResult, ...generationResult?.result, type: "image" }, "image") || imageUrl;
         return `
         <article class="episode-replica-fixed-image-card">
           <span class="episode-replica-fixed-image-badge">${escapeHtml(item.label ?? "图片")}</span>
@@ -2612,7 +2623,7 @@ function renderFixedImageResults(generationResult, assetKind = "character") {
             data-image-name="${escapeAttr(item.label ?? "生成图片")}"
             aria-label="放大查看${escapeAttr(item.label ?? "生成图片")}"
           >
-            <img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(item.label ?? "generated image")}" />
+            <img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.label ?? "generated image")}" loading="lazy" />
           </button>
         </article>
       `;
@@ -2721,6 +2732,9 @@ function renderStageCanvas(selectedStoryboard, generationResult, video = false) 
   const media = video
     ? resolveSelectedVideoSource(selectedStoryboard)
     : resolveSelectedImageSource(selectedStoryboard);
+  const preview = video
+    ? resolveSelectedVideoPreview(selectedStoryboard)
+    : resolveSelectedImagePreview(selectedStoryboard);
   const waiting = isGenerationWaiting(generationResult, selectedStoryboard, video);
   if (media || waiting) {
     return `
@@ -2729,15 +2743,15 @@ function renderStageCanvas(selectedStoryboard, generationResult, video = false) 
           ${
             media
               ? video
-                ? `<video src="${escapeAttr(media)}" controls preload="metadata"></video>`
-                : `<img src="${escapeAttr(media)}" alt="${escapeAttr(selectedStoryboard?.title ?? "generated image")}" />`
+                ? `<video src="${escapeAttr(media)}"${preview ? ` poster="${escapeAttr(preview)}"` : ""} controls preload="none" playsinline></video>`
+                : `<span data-image-preview-url="${escapeAttr(media)}" data-image-preview-name="${escapeAttr(selectedStoryboard?.title ?? "generated image")}" role="button" tabindex="0"><img src="${escapeAttr(preview || media)}" alt="${escapeAttr(selectedStoryboard?.title ?? "generated image")}" loading="lazy" /></span>`
               : "<span class=\"episode-replica-canvas-status waiting\">生成中，等待后端返回...</span>"
           }
         </div>
         <div class="episode-replica-canvas-tile small ${media ? "filled" : ""}">
           ${
             media && !video
-              ? `<img src="${escapeAttr(media)}" alt="${escapeAttr(selectedStoryboard?.title ?? "thumbnail")}" />`
+              ? `<img src="${escapeAttr(preview || media)}" alt="${escapeAttr(selectedStoryboard?.title ?? "thumbnail")}" loading="lazy" />`
               : video
                 ? ""
                 : waiting
@@ -3105,9 +3119,6 @@ function resolveComposerReferenceKeys(item) {
 }
 
 function renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo) {
-  if (isVideo) {
-    return `<div class="episode-replica-generated-stage"></div>`;
-  }
   const mediaUrl = isVideo
     ? resolveSelectedVideoSource(selectedStoryboard)
     : resolveSelectedImageSource(selectedStoryboard);
@@ -3138,8 +3149,8 @@ function renderCurrentStoryboardMediaStage(selectedStoryboard, isVideo) {
       ${
         mediaUrl
           ? isVideo
-            ? `<video class="episode-replica-current-video" src="${escapeAttr(mediaUrl)}" controls playsinline></video>`
-            : `<img class="episode-replica-current-image" src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(selectedStoryboard?.title ?? "storyboard image")}" />`
+            ? `<video class="episode-replica-current-video" src="${escapeAttr(mediaUrl)}"${resolveSelectedVideoPreview(selectedStoryboard) ? ` poster="${escapeAttr(resolveSelectedVideoPreview(selectedStoryboard))}"` : ""} controls playsinline preload="none"></video>`
+            : `<span class="episode-replica-current-image" data-image-preview-url="${escapeAttr(mediaUrl)}" data-image-preview-name="${escapeAttr(selectedStoryboard?.title ?? "storyboard image")}" role="button" tabindex="0"><img src="${escapeAttr(resolveSelectedImagePreview(selectedStoryboard) || mediaUrl)}" alt="${escapeAttr(selectedStoryboard?.title ?? "storyboard image")}" loading="lazy" /></span>`
           : ""
       }
       ${uploadingItems.map((item) => `
@@ -3395,6 +3406,7 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
     : "";
   const mediaType = resolveComposerReferenceMediaType(item);
   const previewUrl = resolveReferencePreview(item);
+  const mediaSourceUrl = mediaType === "video" ? resolveReferenceMediaSource(item) : previewUrl;
   const imagePreviewUrl = resolvePromptEditorMentionPreview(item, mediaType);
   const tooltipName = resolveReferenceTooltipName(item, mediaType === "audio" ? item.summary : "");
   const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
@@ -3404,8 +3416,8 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
       : mediaType === "video"
         ? imagePreviewUrl
           ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" />`
-          : previewUrl
-            ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+          : mediaSourceUrl
+            ? `<video src="${escapeAttr(mediaSourceUrl)}"${previewUrl && previewUrl !== mediaSourceUrl ? ` poster="${escapeAttr(previewUrl)}"` : ""} muted playsinline preload="none"></video>`
             : renderPromptMediaPlaceholder(mediaType, item.name ?? "视频")
         : previewUrl
           ? `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
@@ -3493,6 +3505,7 @@ function renderQuickReferenceItem(item, index = 0) {
   const previewUrl = resolveReferencePreview(item);
   const previewMarkup = typeof item?.previewMarkup === "string" ? item.previewMarkup.trim() : "";
   const kind = resolveComposerReferenceMediaType(item);
+  const mediaSourceUrl = kind === "video" ? resolveReferenceMediaSource(item) : previewUrl;
   const imagePreviewUrl = resolvePromptEditorMentionPreview(item, kind);
   const storyboardReferences = Array.isArray(item?.references) ? item.references.filter(Boolean) : [];
   const voiceName = String(item?.voiceName ?? "").trim();
@@ -3508,8 +3521,8 @@ function renderQuickReferenceItem(item, index = 0) {
             : kind === "video"
               ? imagePreviewUrl
                 ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" />`
-                : previewUrl
-                  ? `<video src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+                : mediaSourceUrl
+                  ? `<video src="${escapeAttr(mediaSourceUrl)}"${previewUrl && previewUrl !== mediaSourceUrl ? ` poster="${escapeAttr(previewUrl)}"` : ""} muted playsinline preload="none"></video>`
                   : previewMarkup || renderPromptMediaPlaceholder(kind, item.name ?? "视频")
               : previewUrl
                 ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
@@ -4542,7 +4555,7 @@ export function renderAssetInspectorModal(inspector) {
           <button class="modal-close" type="button" data-action="close-asset-inspector">×</button>
         </div>
         <div class="asset-inspector-preview">
-          ${isVideo ? `<video src="${escapeAttr(mediaUrl)}" controls playsinline preload="metadata"></video>` : `<img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "素材")}" />`}
+          ${isVideo ? `<video src="${escapeAttr(mediaUrl)}" controls playsinline preload="none"></video>` : `<img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "素材")}" />`}
         </div>
         <div class="asset-inspector-meta">
           <strong>${escapeHtml(inspector.name ?? "未命名素材")}</strong>
@@ -5265,10 +5278,19 @@ function truncateDisplayText(value, maxLength = 100) {
 }
 
 function resolveReferencePreview(item) {
+  const mediaKind = String(item?.type ?? item?.kind ?? item?.mediaType ?? "").trim().toLowerCase();
+  const preview = resolveMediaPreviewUrl(item, mediaKind);
+  if (preview) {
+    return preview;
+  }
+  if (mediaKind === "video") {
+    return "";
+  }
   const candidates = [
     item?.fixedImageUrl,
     item?.preview,
     item?.previewUrl,
+    item?.previewImageUrl,
     item?.publicUrl,
     item?.coverImageUrl,
     item?.coverUrl,
@@ -5299,7 +5321,83 @@ function resolveReferencePreview(item) {
   return publicUrl || resolveStorageObjectContentUrl(item);
 }
 
-function resolveStorageObjectContentUrl(...items) {
+function resolveReferenceMediaSource(item) {
+  const mediaKind = String(item?.type ?? item?.kind ?? item?.mediaType ?? "").trim().toLowerCase();
+  const candidates = mediaKind === "video"
+    ? [
+        item?.videoUrl,
+        item?.videoSrc,
+        item?.src,
+        item?.url,
+        item?.sourceUrl,
+        item?.publicUrl,
+        item?.previewVideo,
+        item?.latestVersion?.src,
+        item?.latestVersion?.url,
+      ]
+    : [item?.src, item?.url, item?.sourceUrl, item?.publicUrl];
+  const source = candidates.find((candidate) => {
+    const value = String(candidate ?? "").trim();
+    return value && !isProviderDirectContentUrl(value);
+  });
+  return source || resolveStorageObjectContentUrl(item);
+}
+
+function resolveMediaPreviewUrl(item, mediaKind = "") {
+  const kind = String(mediaKind || item?.type || item?.kind || item?.mediaType || "image").trim().toLowerCase();
+  const explicitCandidates = kind === "video"
+    ? [
+        item?.thumbnailSrc,
+        item?.thumbnailUrl,
+        item?.previewThumbnailUrl,
+        item?.posterUrl,
+        item?.poster,
+        item?.coverImageUrl,
+        item?.coverUrl,
+        item?.latestVersion?.thumbnailUrl,
+        item?.latestVersion?.metadata?.thumbnailUrl,
+        item?.latestVersion?.metadata?.coverImageUrl,
+      ]
+    : [item?.thumbnailSrc, item?.thumbnailUrl, item?.previewThumbnailUrl];
+  const explicit = explicitCandidates.find((candidate) => isUsableMediaPreview(candidate, kind));
+  if (explicit) {
+    return explicit;
+  }
+  const thumbnailUrl = resolveStorageObjectThumbnailUrl(item);
+  if (thumbnailUrl) {
+    return thumbnailUrl;
+  }
+  if (kind === "video") {
+    return "";
+  }
+  return [
+    item?.fixedImageUrl,
+    item?.preview,
+    item?.previewUrl,
+    item?.previewImageUrl,
+    item?.coverImageUrl,
+    item?.coverUrl,
+    item?.latestVersion?.previewUrl,
+    item?.latestVersion?.metadata?.previewUrl,
+    item?.imageUrl,
+    item?.publicUrl,
+    item?.src,
+    item?.url,
+  ].find((candidate) => isUsableMediaPreview(candidate, kind)) ?? "";
+}
+
+function isUsableMediaPreview(candidate, kind = "image") {
+  const value = String(candidate ?? "").trim();
+  if (!value || value === "http://www.w3.org/2000/svg" || value === "https://www.w3.org/2000/svg") {
+    return false;
+  }
+  if (kind === "video" && /\.(?:mp4|mov|webm|m4v)(?:$|[?#])/i.test(value)) {
+    return false;
+  }
+  return true;
+}
+
+function resolveStorageObjectId(...items) {
   for (const item of items) {
     const storageObjectId = [
       item?.storageObjectId,
@@ -5311,10 +5409,39 @@ function resolveStorageObjectContentUrl(...items) {
       .map((value) => String(value ?? "").trim())
       .find((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
     if (storageObjectId) {
-      return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+      return storageObjectId;
     }
   }
   return "";
+}
+
+function resolveStorageObjectThumbnailUrl(...items) {
+  const storageObjectId = resolveStorageObjectId(...items);
+  return storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`
+    : "";
+}
+
+function resolveStorageObjectContentUrl(...items) {
+  const storageObjectId = resolveStorageObjectId(...items);
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
+  return "";
+}
+
+function resolveSelectedImagePreview(storyboard) {
+  const selected = (storyboard?.uploadedImages ?? []).find(
+    (item) => item.id === storyboard?.currentImageAssetVersionId,
+  );
+  return resolveMediaPreviewUrl({ ...(selected ?? {}), ...storyboard, type: "image" }, "image");
+}
+
+function resolveSelectedVideoPreview(storyboard) {
+  const selected = (storyboard?.uploadedVideos ?? []).find(
+    (item) => item.id === (storyboard?.selectedUploadedVideoId ?? storyboard?.currentVideoAssetVersionId),
+  );
+  return resolveMediaPreviewUrl({ ...(selected ?? {}), ...storyboard, type: "video" }, "video");
 }
 
 function resolveSelectedImageSource(storyboard) {

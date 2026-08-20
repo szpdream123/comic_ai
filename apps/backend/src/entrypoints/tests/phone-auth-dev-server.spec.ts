@@ -170,7 +170,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
   });
 
-  it("serves active home media through a stable gateway path and a one-hour COS signature", async () => {
+  it("redirects active home media through a stable gateway path and a one-hour COS signature", async () => {
     const db = await createMigratedTestDb();
     const categoryId = randomUUID();
     const videoId = randomUUID();
@@ -194,12 +194,8 @@ describe("phone auth dev server", { concurrency: false }, () => {
           },
         } as never,
       },
-      fetchImpl: async (url) => {
-        assert.equal(String(url), "https://signed.example.test/home-background.mp4");
-        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        });
+      fetchImpl: async () => {
+        throw new Error("home media must redirect instead of proxying through Node");
       },
     });
     await db.query(`
@@ -226,12 +222,13 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(videoMediaUrl.pathname, `/api/home-recommendations/videos/${videoId}/media`);
       assert.ok(videoMediaUrl.searchParams.get("v"));
 
-      const response = await fetch(backgroundMediaUrl);
-      assert.equal(response.status, 200);
-      assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
-      assert.deepEqual(new Uint8Array(await response.arrayBuffer()), new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]));
-      const videoResponse = await fetch(`${server.origin}${payload.data.categories[0]?.videos[0]?.videoUrl}`);
-      assert.equal(videoResponse.status, 200);
+      const response = await fetch(backgroundMediaUrl, { redirect: "manual" });
+      assert.equal(response.status, 307);
+      assert.equal(response.headers.get("location"), "https://signed.example.test/home-background.mp4");
+      assert.equal(response.headers.get("cache-control"), "public, max-age=300");
+      const videoResponse = await fetch(`${server.origin}${payload.data.categories[0]?.videos[0]?.videoUrl}`, { redirect: "manual" });
+      assert.equal(videoResponse.status, 307);
+      assert.equal(videoResponse.headers.get("location"), "https://signed.example.test/home-background.mp4");
       assert.deepEqual(signedRequests.map((request) => ({ bucket: request.bucket, objectKey: request.objectKey })), [
         { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
         { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
@@ -301,7 +298,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     try {
       await server.listen(0);
       const first = await fetch(`${server.origin}/api/home-recommendations/background/media`, { redirect: "manual" });
-      assert.equal(first.status, 200);
+      assert.equal(first.status, 307);
       const limited = await fetch(`${server.origin}/api/home-recommendations/background/media`, { redirect: "manual" });
       assert.equal(limited.status, 429);
       assert.ok(Number(limited.headers.get("retry-after")) > 0);
@@ -1444,6 +1441,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("content-type"), "image/png");
+      assert.match(response.headers.get("cache-control") ?? "", /no-transform/);
       assert.deepEqual(Array.from(bytes.slice(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
     } finally {
       await server.close();
@@ -15452,6 +15450,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
     assert.match(productionLauncherScript, /generation-worker/);
     assert.match(productionRuntimeBuildScript, /run-generation-video-worker\.mjs/);
     assert.match(productionRuntimeBuildScript, /run-canvas-agent-worker\.mjs/);
+    assert.match(productionLauncherScript, /marketing-competitor-collection/);
+    assert.match(productionRuntimeBuildScript, /run-marketing-competitor-collection-worker\.mjs/);
+    assert.match(productionLauncherScript, /media-crawler/);
+    assert.match(productionRuntimeBuildScript, /run-media-crawler-api\.mjs/);
     assert.match(productionRuntimeBuildScript, /bundle:\s*true/);
     assert.match(productionLauncherScript, /restartOnFailure:\s*true/);
     assert.match(productionLauncherScript, /server\.close\(\)/);

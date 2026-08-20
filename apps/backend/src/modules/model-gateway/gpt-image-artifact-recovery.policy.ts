@@ -110,6 +110,7 @@ export function classifyGptImageArtifactRecoveryFailure(
   const failure = normalizeRecoveryFailure(value);
   if ([
     "provider_output_missing",
+    "project_asset_generation_target_missing",
   ].includes(failure.failureCode)) {
     return { kind: "permanent", reason: failure.failureCode };
   }
@@ -124,6 +125,7 @@ export function classifyGptImageArtifactRecoveryFailure(
   }
 
   const permanentMessagePatterns = [
+    "project_asset_generation_target_missing",
     "provider_artifact_too_large",
     "provider_artifact_mime_invalid",
     "provider_artifact_base64_invalid",

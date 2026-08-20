@@ -1172,6 +1172,19 @@ export async function repairRunningSeedancePollJobs(
             )
           LIMIT 1
         )
+        AND (
+          t.task_type <> 'episode_generate_image'
+          OR t.input_snapshot_json->>'targetType' <> 'asset'
+          OR EXISTS (
+            SELECT 1
+            FROM assets target_asset
+            WHERE target_asset.id::text = COALESCE(
+              NULLIF(t.input_snapshot_json->>'projectAssetId', ''),
+              NULLIF(t.input_snapshot_json->>'targetId', '')
+            )
+              AND target_asset.project_id = t.project_id
+          )
+        )
         AND NOT EXISTS (
           SELECT 1
           FROM outbox_events oe

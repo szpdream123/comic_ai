@@ -616,6 +616,14 @@ function createCanvasSpecialMediaX6Node(node = {}) {
     control.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   });
   syncCanvasStoryboardGridAspectRatio(element);
+  element?.querySelectorAll?.("[data-canvas-image-fallback-src]").forEach((image) => {
+    image.addEventListener?.("error", () => {
+      const fallback = String(image.dataset?.canvasImageFallbackSrc ?? "").trim();
+      if (!fallback || image.dataset.canvasImageFallbackUsed === "true") return;
+      image.dataset.canvasImageFallbackUsed = "true";
+      image.src = fallback;
+    });
+  });
   element?.querySelectorAll?.("[data-canvas-video-fallback-src]").forEach((video) => {
     video.addEventListener?.("error", () => {
       const fallback = String(video.dataset?.canvasVideoFallbackSrc ?? "").trim();
@@ -855,10 +863,19 @@ function resolveCanvasUploadMediaKind(node = {}) {
   return "image";
 }
 
+function resolveCanvasImageFallbackUrl(node = {}, mediaUrl = "", mediaKind = "image") {
+  if (mediaKind !== "image" || !/(?:[?&])thumbnail=1(?:&|$)/u.test(String(mediaUrl ?? ""))) return "";
+  const fallback = resolveCanvasMediaNodeSource(node, mediaKind);
+  return fallback && fallback !== mediaUrl ? fallback : "";
+}
+
 function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options = {}) {
   const nodeId = String(node?.id ?? "");
   const data = node?.data ?? {};
-  const mediaUrl = resolveCanvasMediaNodeSource(node, mediaKind, mediaKind === "image" ? { proxy: false } : {});
+  const mediaUrl = resolveCanvasMediaNodeSource(node, mediaKind, {
+    thumbnail: mediaKind === "image",
+  });
+  const imageFallbackUrl = resolveCanvasImageFallbackUrl(node, mediaUrl, mediaKind);
   const directMediaUrl = resolveCanvasMediaUrl(resolveCanvasMediaDirectUrl(node, mediaKind), mediaKind);
   const mediaLabel = mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片";
   const mixedUpload = options.mixed === true;
@@ -896,7 +913,7 @@ function renderCanvasSourceMediaNodeBody(node = {}, mediaKind = "image", options
         : `<video src="${escapeCanvasX6Html(mediaUrl)}"${directMediaUrl && directMediaUrl !== mediaUrl ? ` data-canvas-video-fallback-src="${escapeCanvasX6Html(directMediaUrl)}"` : ""} muted playsinline controls></video>${uploadingMask}${generationMask}`
       : mediaKind === "audio"
         ? `<audio src="${escapeCanvasX6Html(mediaUrl)}" controls></audio>${uploadingMask}${generationMask}`
-        : `<button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看图片" title="放大查看图片"><img src="${escapeCanvasX6Html(mediaUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} /></button>${uploadingMask}${generationMask}`
+        : `<button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(nodeId)}" aria-label="放大查看图片" title="放大查看图片"><img src="${escapeCanvasX6Html(mediaUrl)}"${imageFallbackUrl ? ` data-canvas-image-fallback-src="${escapeCanvasX6Html(imageFallbackUrl)}"` : ""} alt="" loading="lazy" decoding="async" fetchpriority="low"${storyboardCut ? ' draggable="false"' : ""} /></button>${uploadingMask}${generationMask}`
     : `${uploadingMask}${generationMask}<strong>${generating ? generationLabel : emptyUploadLabel}</strong><small>${generating ? "请稍候" : `点击选择${mixedUpload ? "素材" : mediaLabel}文件`}</small>`;
   return `<section class="canvas-x6-source-media-body is-${mediaKind}${mixedUpload ? " is-upload" : ""}${storyboardCut ? " is-storyboard-cut" : ""}${uploading ? " is-uploading" : ""}${generating ? " is-generating" : ""}" aria-label="${storyboardCut ? "分镜剪切图片" : mixedUpload ? "上传资源" : `${mediaLabel}源上传`}"${uploading || generating ? " aria-busy=\"true\"" : ""}>
     <div class="canvas-x6-source-media-preview"${emptyUploadAttrs}>${preview}</div>
@@ -1186,7 +1203,10 @@ function renderCanvasImageGenerationX6Node(node = {}) {
   const data = node?.data ?? {};
   const type = String(node?.type ?? "");
   const status = String(data.status ?? "idle").trim().toLowerCase();
-  const imageUrl = resolveCanvasMediaNodeSource(node, "image", { proxy: false });
+  const imageUrl = resolveCanvasMediaNodeSource(node, "image", { thumbnail: true });
+  const imageFallbackUrl = /(?:[?&])thumbnail=1(?:&|$)/u.test(String(imageUrl ?? ""))
+    ? resolveCanvasMediaNodeSource(node, "image")
+    : "";
   const failed = ["failed", "canceled", "manual_review_required", "result_unknown"].includes(status);
   const taskId = String(data.lastTaskId ?? data.taskId ?? data.generationTaskId ?? "").trim();
   const preparing = !failed && (
@@ -1199,7 +1219,7 @@ function renderCanvasImageGenerationX6Node(node = {}) {
   const body = preparing
     ? `<div class="canvas-video-empty canvas-image-empty is-loading canvas-image-generation-mask" role="status" aria-label="正在生成图片"><span class="canvas-animation-spinner" aria-hidden="true"></span><strong>正在生成图片</strong></div>`
     : imageUrl
-      ? `<div class="canvas-video-preview canvas-image-preview"><button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(node?.id ?? "")}" aria-label="放大查看生成图片" title="放大查看图片"><img src="${escapeCanvasX6Html(imageUrl)}" alt="图片生成结果" loading="lazy" decoding="async" fetchpriority="low" /></button></div>`
+      ? `<div class="canvas-video-preview canvas-image-preview"><button class="canvas-x6-image-preview-trigger" type="button" data-action="toggle-canvas-image-fullscreen" data-canvas-image-preview-trigger data-node-id="${escapeCanvasX6Html(node?.id ?? "")}" aria-label="放大查看生成图片" title="放大查看图片"><img src="${escapeCanvasX6Html(imageUrl)}"${imageFallbackUrl ? ` data-canvas-image-fallback-src="${escapeCanvasX6Html(imageFallbackUrl)}"` : ""} alt="图片生成结果" loading="lazy" decoding="async" fetchpriority="low" /></button></div>`
       : failed
       ? renderCanvasX6GenerationState(node, status)
       : `<div class="canvas-video-empty canvas-image-empty" role="status"><strong>暂无图片</strong></div>`;

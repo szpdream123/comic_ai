@@ -543,55 +543,6 @@ export function createTextModelChatGateway(deps: {
   } satisfies TextChatGatewayLike;
 }
 
-function startCollectedAssetPromptStage(
-  stream: AsyncGenerator<AiStoryboardPreviewStreamEvent, string>,
-) {
-  const collectedEvents: AiStoryboardPreviewStreamEvent[] = [];
-  const waiters = new Set<() => void>();
-  let completed = false;
-  let result = "";
-  let failure: unknown;
-
-  const notifyWaiters = () => {
-    for (const resolve of waiters) resolve();
-    waiters.clear();
-  };
-  void (async () => {
-    try {
-      while (true) {
-        const next = await stream.next();
-        if (next.done) {
-          result = next.value;
-          break;
-        }
-        collectedEvents.push(next.value);
-        notifyWaiters();
-      }
-    } catch (error) {
-      failure = error;
-    } finally {
-      completed = true;
-      notifyWaiters();
-    }
-  })();
-
-  return {
-    async *events(): AsyncGenerator<AiStoryboardPreviewStreamEvent, string> {
-      let index = 0;
-      while (true) {
-        while (index < collectedEvents.length) {
-          yield collectedEvents[index++];
-        }
-        if (completed) {
-          if (failure !== undefined) throw failure;
-          return result;
-        }
-        await new Promise<void>((resolve) => waiters.add(resolve));
-      }
-    },
-  };
-}
-
 function isAiStoryboardOutputTruncatedError(error: unknown) {
   return Boolean(
     error &&

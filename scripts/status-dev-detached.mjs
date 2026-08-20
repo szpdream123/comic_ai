@@ -30,7 +30,11 @@ const listenerPid = findListenerPid(port);
 const listenerProcess = listenerPid ? readWindowsProcess(listenerPid) : null;
 const listening = isProjectProcess(listenerProcess, process.cwd(), "phone-auth-dev-server");
 const children = alive ? listWindowsChildProcesses(pid) : [];
-const expectedServices = ["run-phone-auth-dev-server.mjs"];
+const expectedServices = [
+  "run-phone-auth-dev-server.mjs",
+  "run-media-crawler-api.mjs",
+  "run-marketing-competitor-collection-worker.mjs",
+];
 if (generationQueueEnabled()) {
   expectedServices.push(
     "run-generation-outbox-dispatcher.mjs",

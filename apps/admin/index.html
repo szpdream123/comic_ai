@@ -11843,7 +11843,7 @@
         drawer.innerHTML = `<aside class="drawer-panel" style="width:min(760px,100%);"><div class="drawer-head"><h3>${video ? "编辑视频" : "新增视频"}</h3><button class="icon-btn" onclick="closeDrawer()">×</button></div><form id="home-video-form">
           <div class="form-grid"><label class="field"><span>视频标题</span><input name="title" value="${escapeAttribute(video?.title || "")}" maxlength="120" required /></label><label class="field"><span>所属分类</span><select name="categoryId">${categories.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === video?.categoryId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label></div>
           <label class="field"><span>副标题</span><input name="subtitle" value="${escapeAttribute(video?.subtitle || "")}" maxlength="160" placeholder="例如：都市幻想 · AI 短片" /></label>
-          <label class="field"><span>封面地址</span><input name="coverUrl" value="${escapeAttribute(video?.coverUrl || "")}" placeholder="/assets/... 或 https://..." required /></label>
+          <label class="field"><span>封面</span><div class="actions-row"><input name="coverUrl" value="${escapeAttribute(video?.coverUrl || "")}" placeholder="上传图片或填写已有地址" required style="flex:1;min-width:0;" /><label class="btn ghost">选择并压缩图片<input type="file" accept="image/*" hidden onchange="uploadHomeRecommendationCover(this)" /></label></div><span class="metric-note" id="home-video-cover-upload-state">上传后将自动生成 640 × 360 WebP 首页缩略图</span></label>
           <label class="field"><span>视频播放地址</span><div class="actions-row"><input name="videoUrl" value="${escapeAttribute(video?.videoUrl || "")}" placeholder="/media/... 或 https://...，可暂留空" style="flex:1;min-width:0;" /><label class="btn ghost">选择并上传视频<input type="file" accept="video/*" hidden onchange="uploadHomeRecommendationVideo(this)" /></label></div><span class="metric-note" id="home-video-upload-state">${video?.videoUrl ? "已填写视频地址，可重新上传替换" : "可上传本地视频，或直接填写地址"}</span></label>
           ${video?.videoUrl ? `<video src="${escapeAttribute(video.videoUrl)}" muted loop playsinline controls style="display:block;width:min(720px,100%);max-height:280px;object-fit:cover;border-radius:12px;background:#0d1117;margin:8px 0 16px;"></video>` : ""}
           <div class="form-grid"><label class="field"><span>时长文字</span><input name="durationLabel" value="${escapeAttribute(video?.durationLabel || "")}" maxlength="20" placeholder="00:32" /></label><label class="field"><span>封面替代文字</span><input name="coverAlt" value="${escapeAttribute(video?.coverAlt || "")}" maxlength="160" /></label></div>
@@ -11874,6 +11874,19 @@
           if (preview) preview.src = videoUrl;
           if (stateLabel) stateLabel.textContent = "视频上传完成，保存后生效"; showToast("视频已上传，保存后生效");
         } catch (caught) { if (error) error.textContent = caught.message || "视频上传失败"; if (stateLabel) stateLabel.textContent = "上传失败，请重新选择"; }
+        finally { input.disabled = false; input.value = ""; }
+      }
+
+      async function uploadHomeRecommendationCover(input) {
+        const file = input.files?.[0]; if (!file) return;
+        const form = input.closest("form"); const error = document.getElementById("home-video-error"); const stateLabel = document.getElementById("home-video-cover-upload-state");
+        try {
+          input.disabled = true; if (error) error.textContent = ""; if (stateLabel) stateLabel.textContent = "正在压缩并上传封面…";
+          const uploaded = await uploadAdminImage(file, "/api/admin/home-recommendations/covers/upload");
+          const coverUrl = uploaded.sourceUrl || uploaded.previewUrl || ""; const valueInput = form?.querySelector('input[name="coverUrl"]');
+          if (valueInput) valueInput.value = coverUrl;
+          if (stateLabel) stateLabel.textContent = "封面已压缩为 WebP，保存后生效"; showToast("首页封面已上传，保存后生效");
+        } catch (caught) { if (error) error.textContent = caught.message || "封面上传失败"; if (stateLabel) stateLabel.textContent = "上传失败，请重新选择"; }
         finally { input.disabled = false; input.value = ""; }
       }
 
@@ -14413,7 +14426,7 @@
         function marketingState() {
           if (!state.marketing) {
             state.marketing = {
-              console: { projects: [], brandProfiles: [], campaigns: [], contentVariants: [], publishJobs: [], generationRuns: [], executors: [], mediaModels: [], generationSkills: [], executorKeys: [], executorAlerts: [], researchSourcePolicies: [], attentionCases: [], metrics: [], metricComparisons: [], agentUsage: [], agentProviderApprovals: [], componentAdmissions: [], auditEvents: [], sources: [], knowledgeDocuments: [], knowledgeSegments: [], trendPatterns: [], agentRuns: [], platformProfiles: [], researchBriefs: [] },
+              console: { projects: [], brandProfiles: [], campaigns: [], contentVariants: [], publishJobs: [], generationRuns: [], competitorCollectionJobs: [], executors: [], mediaModels: [], generationSkills: [], executorKeys: [], executorAlerts: [], researchSourcePolicies: [], attentionCases: [], metrics: [], metricComparisons: [], agentUsage: [], agentProviderApprovals: [], componentAdmissions: [], auditEvents: [], sources: [], knowledgeDocuments: [], knowledgeSegments: [], trendPatterns: [], agentRuns: [], platformProfiles: [], researchBriefs: [] },
               knowledgeSearchResults: [],
               recentPlatformProfiles: [],
               recentSources: [],
@@ -14467,6 +14480,7 @@
             contentVariants: marketingRows(source.contentVariants || source.content_variants || source.content),
             publishJobs: marketingRows(source.publishJobs || source.publish_jobs || source.jobs),
             generationRuns: marketingRows(source.generationRuns || source.generation_runs),
+            competitorCollectionJobs: marketingRows(source.competitorCollectionJobs || source.competitor_collection_jobs),
             executors: marketingRows(source.executors),
             mediaModels: marketingRows(source.mediaModels || source.media_models),
             generationSkills: marketingRows(source.generationSkills || source.generation_skills),
@@ -14646,7 +14660,10 @@
           const hasPendingRun = store.console.generationRuns.some((run) =>
             ["queued", "knowledge", "planning", "generating"].includes(String(marketingValue(run, "status", "status", ""))),
           );
-          if ((!store.loadError && !hasPendingRun) || state.page !== "marketing" || location.pathname.includes("/marketing/settings")) return;
+          const hasPendingCollection = store.console.competitorCollectionJobs.some((job) =>
+            ["queued", "collecting", "analyzing"].includes(String(marketingValue(job, "latestRunStatus", "latest_run_status", ""))),
+          );
+          if ((!store.loadError && !hasPendingRun && !hasPendingCollection) || state.page !== "marketing" || location.pathname.includes("/marketing/settings")) return;
           store.refreshTimer = setTimeout(async () => {
             store.refreshTimer = null;
             if (state.page !== "marketing" || location.pathname.includes("/marketing/settings")) return;
@@ -14998,6 +15015,27 @@
               marketingState().workspacePanel = "content";
               await loadMarketingConsole(); renderShell();
             }, "营销活动已创建");
+          });
+          const competitorCollectionForm = document.getElementById("marketing-competitor-collection-form");
+          competitorCollectionForm?.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const form = new FormData(event.currentTarget);
+            const jobId = String(event.currentTarget.dataset.jobId || "");
+            await runAdminMutation(event.currentTarget, document.getElementById("marketing-competitor-collection-error"), async () => {
+              const payload = {
+                projectId: form.get("projectId"), name: form.get("name"), collectionMode: form.get("collectionMode"),
+                queryText: form.get("queryText"), crawlerBaseUrl: form.get("crawlerBaseUrl"),
+                maxItems: Number(form.get("maxItems")), intervalMinutes: Number(form.get("intervalMinutes")),
+                includeComments: form.get("includeComments") === "on",
+              };
+              await api(jobId ? `/api/marketing/competitor-collection-jobs/${encodeURIComponent(jobId)}` : "/api/marketing/competitor-collection-jobs", {
+                method: jobId ? "PATCH" : "POST",
+                headers: { "idempotency-key": adminIdempotencyKey("marketing-competitor-collection") },
+                body: JSON.stringify(jobId ? { ...payload, status: form.get("status") } : payload),
+              });
+              marketingState().editingCompetitorCollectionJobId = "";
+              await loadMarketingConsole(); renderShell();
+            }, jobId ? "自动采集任务已更新" : "自动采集任务已创建");
           });
           const researchForm = document.getElementById("marketing-research-form");
           researchForm?.addEventListener("submit", async (event) => {
@@ -15418,6 +15456,113 @@
             .trim() || "暂无内容";
         }
 
+        function marketingPromptText(value) {
+          if (Array.isArray(value)) return value.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n");
+          if (value && typeof value === "object") return JSON.stringify(value, null, 2);
+          return String(value || "暂无内容");
+        }
+
+        function marketingCompetitorResearchPanel(projects, jobs) {
+          const editingJobId = String(marketingState().editingCompetitorCollectionJobId || "");
+          const editingJob = marketingRows(jobs).find((job) => String(marketingValue(job, "id", "id", "")) === editingJobId) || null;
+          const formValue = (camel, snake, fallback = "") => editingJob ? marketingValue(editingJob, camel, snake, fallback) : fallback;
+          const editMode = Boolean(editingJob);
+          const rows = marketingRows(jobs).map((job) => {
+            const status = String(marketingValue(job, "latestRunStatus", "latest_run_status", "未运行"));
+            const packageValue = marketingValue(job, "promptPackage", "prompt_package", {});
+            const hasPackage = packageValue && typeof packageValue === "object" && Object.keys(packageValue).length > 0;
+            const title = marketingValue(packageValue, "title", "title", "");
+            const id = escapeAttribute(marketingValue(job, "id", "id", ""));
+            const result = hasPackage
+              ? `<button class="btn ghost" type="button" onclick="openMarketingCreativePackage('${id}')">打开创作包</button><button class="btn ghost" type="button" onclick="toggleMarketingResearchPackage('${id}')">查看提示词</button>`
+              : escapeHtml(marketingValue(job, "failureCode", "failure_code", "等待采集"));
+            return `<tr><td><strong>${escapeHtml(marketingValue(job, "name", "name", "未命名采集任务"))}</strong><div class="metric-note">${escapeHtml(marketingValue(job, "projectName", "project_name", "-"))}</div></td><td>${escapeHtml(marketingValue(job, "collectionMode", "collection_mode", "keyword"))} · ${escapeHtml(marketingValue(job, "queryText", "query_text", "-"))}</td><td>${marketingStatusTag(status)}</td><td>${escapeHtml(formatMarketingDateTime(marketingValue(job, "lastRunAt", "last_run_at")))}</td><td><div class="actions-row"><button class="btn ghost" type="button" onclick="editMarketingCompetitorCollectionJob('${id}')">编辑</button>${result}</div></td></tr>${hasPackage ? `<tr id="marketing-research-package-${id}" hidden><td colspan="5"><div class="marketing-research-package"><div><strong>标题</strong><p>${escapeHtml(title || "暂无内容")}</p></div><div><strong>封面提示词</strong><p>${escapeHtml(marketingPromptText(marketingValue(packageValue, "coverPrompt", "cover_prompt", "")))}</p></div><div><strong>配图提示词</strong><pre>${escapeHtml(marketingPromptText(marketingValue(packageValue, "imagePrompts", "image_prompts", [])))}</pre></div><div><strong>分镜</strong><pre>${escapeHtml(marketingPromptText(marketingValue(packageValue, "storyboard", "storyboard", [])))}</pre></div><div><strong>视频提示词</strong><pre>${escapeHtml(marketingPromptText(marketingValue(packageValue, "videoPrompts", "video_prompts", [])))}</pre></div></div></td></tr>` : ""}`;
+          }).join("") || `<tr><td colspan="5">暂无自动采集任务</td></tr>`;
+          return `<section class="card marketing-research-panel"><div class="toolbar"><div><h3>${editMode ? "编辑自动采集任务" : "热点与竞品自动采集"}</h3><span class="marketing-compact-note">通过项目内置的本机 MediaCrawler 定时采集公开内容，只提炼结构规律并生成原创提示词，不复制竞品文案或素材。</span></div><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">刷新</button></div><form id="marketing-competitor-collection-form" data-job-id="${escapeAttribute(editingJobId)}"><div class="form-grid"><label class="field"><span>项目</span><select name="projectId" required ${projects.length ? "" : "disabled"}>${marketingOptions(projects, formValue("projectId", "project_id", ""), (item) => marketingValue(item, "name", "name", "未命名项目"))}</select></label><label class="field"><span>任务名称</span><input name="name" value="${escapeAttribute(formValue("name", "name"))}" placeholder="例如：家居热点每日采集" required /></label><label class="field"><span>采集模式</span><select name="collectionMode"><option value="keyword" ${formValue("collectionMode", "collection_mode", "keyword") === "keyword" ? "selected" : ""}>关键词热点</option><option value="creator" ${formValue("collectionMode", "collection_mode") === "creator" ? "selected" : ""}>竞品账号</option></select></label><label class="field"><span>关键词或账号 ID</span><input name="queryText" value="${escapeAttribute(formValue("queryText", "query_text"))}" placeholder="多个值用逗号分隔" required /></label><label class="field"><span>MediaCrawler 地址</span><input name="crawlerBaseUrl" type="url" value="${escapeAttribute(formValue("crawlerBaseUrl", "crawler_base_url", "http://127.0.0.1:4312"))}" required /></label><label class="field"><span>每次最多采集</span><input name="maxItems" type="number" min="1" max="100" value="${escapeAttribute(formValue("maxItems", "max_items", 30))}" required /></label><label class="field"><span>采集间隔（分钟）</span><input name="intervalMinutes" type="number" min="15" max="10080" value="${escapeAttribute(formValue("intervalMinutes", "interval_minutes", 360))}" required /></label>${editMode ? `<label class="field"><span>任务状态</span><select name="status"><option value="active" ${formValue("status", "status", "active") === "active" ? "selected" : ""}>启用</option><option value="paused" ${formValue("status", "status") === "paused" ? "selected" : ""}>暂停</option><option value="disabled" ${formValue("status", "status") === "disabled" ? "selected" : ""}>停用</option></select></label>` : ""}<label class="field"><span><input name="includeComments" type="checkbox" ${formValue("includeComments", "include_comments", true) !== false ? "checked" : ""} /> 采集评论摘要</span></label></div><div class="error-text" id="marketing-competitor-collection-error"></div><div class="toolbar">${editMode ? `<button class="btn ghost" type="button" onclick="cancelMarketingCompetitorCollectionEdit()">取消编辑</button>` : "<span></span>"}<button class="btn primary" type="submit" ${projects.length ? "" : "disabled"}>${editMode ? "保存任务修改" : "创建自动采集任务"}</button></div></form><div class="table-wrap compact" style="margin-top:14px"><table><thead><tr><th>任务</th><th>范围</th><th>最新运行</th><th>上次运行</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+        }
+
+        function toggleMarketingResearchPackage(id) {
+          const row = document.getElementById(`marketing-research-package-${id}`);
+          if (row) row.hidden = !row.hidden;
+        }
+
+        function openMarketingCreativePackage(jobId) {
+          const job = marketingRows(marketingState().console.competitorCollectionJobs)
+            .find((item) => String(marketingValue(item, "id", "id", "")) === String(jobId));
+          const promptPackage = marketingValue(job, "promptPackage", "prompt_package", {});
+          if (!job || !promptPackage || typeof promptPackage !== "object" || !Object.keys(promptPackage).length) {
+            showToast("该采集任务尚未生成可用提示词");
+            return;
+          }
+          marketingState().researchPackageForDirectPublish = {
+            jobId: String(jobId),
+            jobName: String(marketingValue(job, "name", "name", "自动采集任务")),
+            projectId: String(marketingValue(job, "projectId", "project_id", "")),
+            promptPackage,
+          };
+          renderShell();
+          setTimeout(() => document.querySelector(".marketing-creative-package")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+        }
+
+        function clearMarketingResearchPackage() {
+          marketingState().researchPackageForDirectPublish = null;
+          renderShell();
+        }
+
+        function marketingCreativePackageText(section = "all") {
+          const selection = marketingState().researchPackageForDirectPublish;
+          const promptPackage = selection?.promptPackage && typeof selection.promptPackage === "object" ? selection.promptPackage : {};
+          const values = {
+            title: `标题\n${marketingValue(promptPackage, "title", "title", "")}`,
+            copy: `文案\n${marketingValue(promptPackage, "copy", "copy", "")}`,
+            hook: `开场钩子\n${marketingValue(promptPackage, "hook", "hook", "")}`,
+            cover: `封面提示词\n${marketingPromptText(marketingValue(promptPackage, "coverPrompt", "cover_prompt", ""))}`,
+            images: `配图提示词\n${marketingPromptText(marketingValue(promptPackage, "imagePrompts", "image_prompts", []))}`,
+            storyboard: `分镜\n${marketingPromptText(marketingValue(promptPackage, "storyboard", "storyboard", []))}`,
+            video: `视频提示词\n${marketingPromptText(marketingValue(promptPackage, "videoPrompts", "video_prompts", []))}`,
+          };
+          return section === "all" ? Object.values(values).join("\n\n") : values[section] || "";
+        }
+
+        async function copyMarketingCreativePackage(section) {
+          const content = marketingCreativePackageText(section);
+          if (!content) return showToast("创作包暂无可复制内容");
+          try {
+            await navigator.clipboard.writeText(content);
+            showToast("已复制");
+          } catch {
+            showToast("复制失败，请在创作包中手动复制");
+          }
+        }
+
+        function downloadMarketingCreativePackage() {
+          const selection = marketingState().researchPackageForDirectPublish;
+          if (!selection?.promptPackage) return showToast("创作包暂无可导出内容");
+          const file = new Blob([JSON.stringify(selection.promptPackage, null, 2)], { type: "application/json" });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(file);
+          link.download = "douyin-creative-package.json";
+          link.click();
+          URL.revokeObjectURL(link.href);
+        }
+
+        function marketingCreativePackagePanel(selection) {
+          if (!selection?.promptPackage || typeof selection.promptPackage !== "object") return "";
+          const promptPackage = selection.promptPackage;
+          const section = (title, key) => `<div class="marketing-creative-item"><div class="toolbar"><strong>${title}</strong><button class="btn ghost" type="button" onclick="copyMarketingCreativePackage('${key}')">复制</button></div><pre>${escapeHtml(marketingCreativePackageText(key))}</pre></div>`;
+          return `<section class="card marketing-creative-package"><div class="toolbar"><div><h3>创作包：${escapeHtml(selection.jobName || "自动采集任务")}</h3><span class="marketing-compact-note">${escapeHtml("已根据采集内容和评论信号生成")}</span></div><div class="actions-row"><button class="btn ghost" type="button" onclick="copyMarketingCreativePackage('all')">复制全部</button><button class="btn ghost" type="button" onclick="downloadMarketingCreativePackage()">导出 JSON</button><button class="btn ghost" type="button" onclick="clearMarketingResearchPackage()">关闭</button></div></div><div class="marketing-creative-grid">${section("标题", "title")}${section("开场钩子", "hook")}${section("文案", "copy")}${section("封面提示词", "cover")}${section("配图提示词", "images")}${section("分镜", "storyboard")}${section("视频提示词", "video")}</div></section>`;
+        }
+
+        function editMarketingCompetitorCollectionJob(jobId) {
+          marketingState().editingCompetitorCollectionJobId = jobId;
+          renderShell();
+        }
+
+        function cancelMarketingCompetitorCollectionEdit() {
+          marketingState().editingCompetitorCollectionJobId = "";
+          renderShell();
+        }
+
         function marketingDirectPublishPage() {
           if (!(state.session?.roles || []).includes("super_admin")) {
             return `<section class="state-panel" data-state="forbidden"><strong>无权限访问该页面</strong></section>`;
@@ -15432,6 +15577,8 @@
           const accountLabels = new Map(accounts.map((account) => [account.id, account.label]));
           const publishJobs = store.console.publishJobs.slice(0, 8);
           const generationRuns = store.console.generationRuns.slice(0, 8);
+          const competitorCollectionJobs = store.console.competitorCollectionJobs;
+          const researchPackage = store.researchPackageForDirectPublish;
           const defaultAccountRef = accounts[0]?.id || "";
           const defaultSchedule = marketingChinaDatetimeLocalValue(new Date(Date.now() + 16 * 60 * 1000));
           const reviewRows = generationRuns.map((run) => {
@@ -15487,8 +15634,8 @@
             return `<tr><td>${escapeHtml(marketingValue(job, "platform", "platform", "抖音"))}</td><td>${escapeHtml(accountLabels.get(accountRef) || "账号名称同步中")}</td><td>${marketingStatusTag(status)}</td><td>${escapeHtml(formatMarketingDateTime(marketingValue(job, "scheduledAt", "scheduled_at")))}</td><td>${action}</td></tr>`;
           }).join("") || `<tr><td colspan="5">暂无发布任务</td></tr>`;
           return `<style>
-            .marketing-direct{display:grid;gap:16px;max-width:1120px}.marketing-direct-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.marketing-direct-head h3{margin:0;font-size:20px}.marketing-direct-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.marketing-direct-kpi{padding:14px 16px;border-left:3px solid #17678f;background:#fff}.marketing-direct-kpi strong{display:block;font-size:24px;color:#152c46}.marketing-direct-kpi span{font-size:12px;color:var(--muted)}.marketing-direct-form{padding:20px}.marketing-direct-form textarea{min-height:88px}.marketing-skill-note{display:block;min-height:34px;margin-top:6px;color:var(--muted);font-size:12px;line-height:1.45}.marketing-direct-review{border:1px solid #d7e3eb;background:#fff;padding:18px}.marketing-direct-review .toolbar{align-items:flex-start}.marketing-direct-review .toolbar>div{display:grid;gap:4px}.marketing-direct-review .toolbar span,.marketing-direct-note{font-size:12px;color:var(--muted)}.marketing-direct-plan{display:grid;gap:10px;margin:12px 0}.marketing-direct-plan div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;border-top:1px solid #edf2f5;padding-top:10px}.marketing-direct-plan dt{font-weight:700;color:#31526a}.marketing-direct-plan dd{margin:0;white-space:pre-wrap;line-height:1.6}.marketing-direct-preview{margin:12px 0}.marketing-direct-media{display:block;max-width:min(100%,540px);max-height:420px;border:1px solid #d7e3eb;background:#0e1d2b;object-fit:contain}@media(max-width:640px){.marketing-direct-head{display:grid}.marketing-direct-kpis{grid-template-columns:1fr}.marketing-direct-plan div{grid-template-columns:1fr;gap:4px}}
-          </style><div class="section-stack marketing-direct"><section class="marketing-direct-head"><div><h3>内容制作与发布</h3></div><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">刷新</button></section>${store.loadError ? `<section class="state-panel" data-state="error"><strong>内容数据暂时无法加载</strong><span>${escapeHtml(store.loadError)}</span><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">重新加载</button></section>` : ""}<section class="marketing-direct-kpis"><article class="marketing-direct-kpi"><strong>${projects.length}</strong><span>可用项目</span></article><article class="marketing-direct-kpi"><strong>${accounts.length}</strong><span>可用抖音账号</span></article><article class="marketing-direct-kpi"><strong>${publishJobs.filter((job) => ["scheduled", "leased", "downloading", "queued", "running"].includes(String(marketingValue(job, "status", "status")))).length}</strong><span>进行中</span></article></section><section class="card marketing-direct-form"><form id="marketing-direct-publish-form"><div class="form-grid"><label class="field"><span>项目</span><select name="projectId" required ${projects.length ? "" : "disabled"}>${marketingOptions(projects, "", (project) => marketingValue(project, "name", "name", "未命名项目"))}</select></label><label class="field"><span>内容形式</span><select name="contentType"><option value="video">视频</option><option value="image">图文</option></select></label><label class="field" style="grid-column:1/-1"><span>内容主题</span><textarea name="direction" required placeholder="填写本次想制作的内容主题"></textarea></label><label class="field"><span>发布账号</span><select name="executorAccountRef" required ${accounts.length ? "" : "disabled"}>${accounts.length ? marketingOptions(accounts, defaultAccountRef, (account) => account.label) : '<option value="">暂无可用账号</option>'}</select></label><label class="field"><span>发布时间</span><input name="scheduledAt" type="datetime-local" value="${escapeAttribute(defaultSchedule)}" required /></label></div><div class="error-text" id="marketing-direct-publish-error"></div><div class="toolbar"><span></span><button class="btn primary" type="submit" ${projects.length && accounts.length ? "" : "disabled"}>生成文案与提示词</button></div></form></section>${reviewRows ? `<section class="section-stack"><h3>待你确认</h3>${reviewRows}</section>` : ""}<section class="card"><div class="toolbar"><h3>发布状态</h3></div><div class="table-wrap compact"><table><thead><tr><th>平台</th><th>账号</th><th>状态</th><th>计划时间</th><th>操作</th></tr></thead><tbody>${jobRows}</tbody></table></div></section></div>`;
+            .marketing-direct{display:grid;gap:16px;max-width:1120px}.marketing-direct-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.marketing-direct-head h3{margin:0;font-size:20px}.marketing-direct-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.marketing-direct-kpi{padding:14px 16px;border-left:3px solid #17678f;background:#fff}.marketing-direct-kpi strong{display:block;font-size:24px;color:#152c46}.marketing-direct-kpi span{font-size:12px;color:var(--muted)}.marketing-direct-form{padding:20px}.marketing-direct-form textarea{min-height:88px}.marketing-creative-package{padding:20px}.marketing-creative-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.marketing-creative-item{border:1px solid #d7e3eb;padding:12px;background:#fff}.marketing-creative-item .toolbar{margin-bottom:8px}.marketing-creative-item pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6;max-height:260px;overflow:auto}.marketing-skill-note{display:block;min-height:34px;margin-top:6px;color:var(--muted);font-size:12px;line-height:1.45}.marketing-direct-review{border:1px solid #d7e3eb;background:#fff;padding:18px}.marketing-direct-review .toolbar{align-items:flex-start}.marketing-direct-review .toolbar>div{display:grid;gap:4px}.marketing-direct-review .toolbar span,.marketing-direct-note{font-size:12px;color:var(--muted)}.marketing-direct-plan{display:grid;gap:10px;margin:12px 0}.marketing-direct-plan div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;border-top:1px solid #edf2f5;padding-top:10px}.marketing-direct-plan dt{font-weight:700;color:#31526a}.marketing-direct-plan dd{margin:0;white-space:pre-wrap;line-height:1.6}.marketing-direct-preview{margin:12px 0}.marketing-direct-media{display:block;max-width:min(100%,540px);max-height:420px;border:1px solid #d7e3eb;background:#0e1d2b;object-fit:contain}.marketing-research-package{display:grid;gap:10px;padding:4px 0}.marketing-research-package>div{border-top:1px solid #edf2f5;padding-top:10px}.marketing-research-package p,.marketing-research-package pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6}@media(max-width:640px){.marketing-direct-head{display:grid}.marketing-direct-kpis,.marketing-creative-grid{grid-template-columns:1fr}.marketing-direct-plan div{grid-template-columns:1fr;gap:4px}}
+          </style><div class="section-stack marketing-direct"><section class="marketing-direct-head"><div><h3>内容制作与发布</h3></div><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">刷新</button></section>${store.loadError ? `<section class="state-panel" data-state="error"><strong>内容数据暂时无法加载</strong><span>${escapeHtml(store.loadError)}</span><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">重新加载</button></section>` : ""}<section class="marketing-direct-kpis"><article class="marketing-direct-kpi"><strong>${projects.length}</strong><span>可用项目</span></article><article class="marketing-direct-kpi"><strong>${accounts.length}</strong><span>可用抖音账号</span></article><article class="marketing-direct-kpi"><strong>${publishJobs.filter((job) => ["scheduled", "leased", "downloading", "queued", "running"].includes(String(marketingValue(job, "status", "status")))).length}</strong><span>进行中</span></article></section>${marketingCompetitorResearchPanel(projects, competitorCollectionJobs)}${marketingCreativePackagePanel(researchPackage)}<section class="card marketing-direct-form"><form id="marketing-direct-publish-form"><div class="form-grid"><label class="field"><span>项目</span><select name="projectId" required ${projects.length ? "" : "disabled"}>${marketingOptions(projects, "", (project) => marketingValue(project, "name", "name", "未命名项目"))}</select></label><label class="field"><span>内容形式</span><select name="contentType"><option value="video">视频</option><option value="image">图文</option></select></label><label class="field" style="grid-column:1/-1"><span>内容主题</span><textarea name="direction" required placeholder="填写本次想制作的内容主题"></textarea></label><label class="field"><span>发布账号</span><select name="executorAccountRef" required ${accounts.length ? "" : "disabled"}>${accounts.length ? marketingOptions(accounts, defaultAccountRef, (account) => account.label) : '<option value="">暂无可用账号</option>'}</select></label><label class="field"><span>发布时间</span><input name="scheduledAt" type="datetime-local" value="${escapeAttribute(defaultSchedule)}" required /></label></div><div class="error-text" id="marketing-direct-publish-error"></div><div class="toolbar"><span></span><button class="btn primary" type="submit" ${projects.length && accounts.length ? "" : "disabled"}>生成文案与提示词</button></div></form></section>${reviewRows ? `<section class="section-stack"><h3>待你确认</h3>${reviewRows}</section>` : ""}<section class="card"><div class="toolbar"><h3>发布状态</h3></div><div class="table-wrap compact"><table><thead><tr><th>平台</th><th>账号</th><th>状态</th><th>计划时间</th><th>操作</th></tr></thead><tbody>${jobRows}</tbody></table></div></section></div>`;
         }
 
         function bindMarketingDirectPublishForm() {
@@ -15583,7 +15730,7 @@
               });
               await loadMarketingConsole();
               renderShell();
-            }, "正在生成内容并安排发布");
+            }, "正在生成文案与提示词，等待你确认");
           });
         }
 
@@ -15650,6 +15797,13 @@
         window.openMarketingWorkspace = openMarketingWorkspace;
         window.syncMarketingContentKnowledgeSegments = syncMarketingContentKnowledgeSegments;
         window.syncMarketingPublishAssets = syncMarketingPublishAssets;
+        window.toggleMarketingResearchPackage = toggleMarketingResearchPackage;
+        window.openMarketingCreativePackage = openMarketingCreativePackage;
+        window.clearMarketingResearchPackage = clearMarketingResearchPackage;
+        window.copyMarketingCreativePackage = copyMarketingCreativePackage;
+        window.downloadMarketingCreativePackage = downloadMarketingCreativePackage;
+        window.editMarketingCompetitorCollectionJob = editMarketingCompetitorCollectionJob;
+        window.cancelMarketingCompetitorCollectionEdit = cancelMarketingCompetitorCollectionEdit;
       })();
 
       (function installGeoOperationsPage() {

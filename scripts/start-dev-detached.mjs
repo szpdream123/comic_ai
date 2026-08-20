@@ -173,7 +173,11 @@ function waitForPortRelease(port, timeoutMs) {
 async function waitForStackReady(input) {
   const startedAt = Date.now();
   let lastStatus = "status unavailable";
-  const requiredLogMarkers = ["Phone auth dev server listening on"];
+  const requiredLogMarkers = [
+    "Phone auth dev server listening on",
+    "[media-crawler] API started on http://127.0.0.1:4312",
+    "[marketing-competitor-collection] Worker started.",
+  ];
   if (generationQueueEnabled()) {
     requiredLogMarkers.push(
       "[generation-outbox] Dispatcher started.",

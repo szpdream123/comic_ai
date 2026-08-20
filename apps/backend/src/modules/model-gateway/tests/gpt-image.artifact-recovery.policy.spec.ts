@@ -89,6 +89,8 @@ describe("GPT image artifact recovery policy", () => {
   it("classifies stable client, missing-output, and invalid-media errors as permanent", () => {
     for (const failure of [
       { failureCode: "provider_output_missing" },
+      { failureCode: "project_asset_generation_target_missing" },
+      { failureCode: "provider_output_persist_failed", message: "project_asset_generation_target_missing" },
       { failureCode: "provider_output_download_failed", httpStatus: 404 },
       { failureCode: "provider_output_download_failed", httpStatus: 410 },
       { failureCode: "provider_output_download_failed", message: "provider_artifact_too_large" },

@@ -1529,7 +1529,7 @@ function renderTaskCenterDetail(task) {
       <div class="task-center-result">
         <div class="task-center-section-label">生成内容</div>
         ${resultUrl ? taskCenterMediaKind(task) === "video"
-          ? `<video src="${escapeAttr(resolveApiUrl(resultUrl))}" controls preload="metadata"></video>`
+          ? `<video src="${escapeAttr(resolveApiUrl(resultUrl))}" controls preload="none"></video>`
           : `<img src="${escapeAttr(resolveApiUrl(resultUrl))}" alt="任务生成结果" loading="lazy" />`
         : resultText
           ? `<pre>${escapeHtml(resultText)}</pre>`
@@ -8316,7 +8316,7 @@ function renderPersonalMediaRow(row = {}) {
         ${
           previewUrl
             ? mediaKind === "video"
-              ? `<video src="${escapeAttr(resolveApiUrl(previewUrl))}" muted playsinline preload="metadata"></video><i>▶</i>`
+              ? `<video src="${escapeAttr(resolveApiUrl(previewUrl))}" muted playsinline preload="none"></video><i>▶</i>`
               : `<img src="${escapeAttr(resolveApiUrl(previewUrl))}" alt="${escapeAttr(fileName)}" />`
             : `<span>${mediaKind === "video" ? "视频" : "图片"}</span>`
         }
@@ -10244,7 +10244,7 @@ function renderCanvasMediaPreview(kind, url, { poster = "", alt = "" } = {}) {
   if (!safeUrl) return "";
   if (normalizedKind === "video") {
     const safePoster = String(poster ?? "").trim();
-    return `<video src="${escapeAttr(safeUrl)}"${safePoster && safePoster !== safeUrl ? ` poster="${escapeAttr(safePoster)}"` : ""} muted playsinline preload="metadata" aria-label="${escapeAttr(alt || "视频预览")}"></video>`;
+    return `<video src="${escapeAttr(safeUrl)}"${safePoster && safePoster !== safeUrl ? ` poster="${escapeAttr(safePoster)}"` : ""} muted playsinline preload="none" aria-label="${escapeAttr(alt || "视频预览")}"></video>`;
   }
   if (normalizedKind === "audio") {
     return `<audio src="${escapeAttr(safeUrl)}" controls preload="metadata" aria-label="${escapeAttr(alt || "音频预览")}"></audio>`;
@@ -10586,7 +10586,7 @@ function renderCanvasGenerationReferences(references = []) {
       ${references.map((item) => `
         <span class="canvas-generation-reference-thumb is-${escapeAttr(item.kind ?? "image")}" title="${escapeAttr(`${item.referenceLabel ?? ""}${item.referenceLabel ? "：" : ""}${item.name}`)}" aria-label="${escapeAttr(`${item.referenceLabel ?? ""}${item.referenceLabel ? "：" : ""}${item.name}`)}">
           ${item.kind === "video"
-            ? `<video src="${escapeAttr(item.url)}" muted playsinline preload="metadata"></video>`
+            ? `<video src="${escapeAttr(item.url)}" muted playsinline preload="none"></video>`
             : item.kind === "audio"
               ? `<span class="canvas-generation-reference-media">${renderCanvasIcon("audio")}<small>音频</small></span>`
               : `<img src="${escapeAttr(item.url)}" alt="" loading="lazy" />`}
@@ -12134,7 +12134,7 @@ function resolveActiveHomeBackgroundVideoUrl(ui = {}) {
 function renderHomeBackgroundVideo(ui = {}) {
   const homeBackgroundVideoUrl = resolveActiveHomeBackgroundVideoUrl(ui);
   return homeBackgroundVideoUrl
-    ? `<div class="home-background-video" aria-hidden="true"><video autoplay muted loop playsinline preload="auto" src="${escapeAttr(homeBackgroundVideoUrl)}" data-home-background-video-url="${escapeAttr(homeBackgroundVideoUrl)}"></video></div><div class="home-background-video-overlay" aria-hidden="true"></div>`
+    ? `<div class="home-background-video" aria-hidden="true"><video autoplay muted loop playsinline preload="none" data-home-background-video-url="${escapeAttr(homeBackgroundVideoUrl)}"></video></div><div class="home-background-video-overlay" aria-hidden="true"></div>`
     : "";
 }
 
@@ -12290,7 +12290,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
             ${ui.homeTvLoading === true ? `<p class="home-tv-empty">正在加载推荐视频</p>` : visibleHomeTvItems.length ? visibleHomeTvItems.map((item) => `<article class="home-tv-card${item.videoUrl ? " has-video-preview" : ""}">
               <div class="home-tv-cover">
                 <img src="${escapeAttr(item.coverUrl)}" alt="${escapeAttr(item.coverAlt || item.title)}" loading="lazy" />
-                ${item.videoUrl ? `<video class="home-tv-preview-video" data-home-tv-preview src="${escapeAttr(item.videoUrl)}" muted loop playsinline preload="metadata" aria-hidden="true"></video>` : ""}
+                ${item.videoUrl ? `<video class="home-tv-preview-video" data-home-tv-preview data-home-tv-preview-url="${escapeAttr(item.videoUrl)}" muted loop playsinline preload="none" aria-hidden="true"></video>` : ""}
                 <span class="home-tv-play" aria-hidden="true">${renderCanvasIcon("video")}</span>
                 ${item.durationLabel ? `<small>${escapeHtml(item.durationLabel)}</small>` : ""}
               </div>
@@ -12416,13 +12416,13 @@ function renderHomeAgentComposerSegments(segments, selectedModels, attachments, 
         ${attachmentKind === "image" && previewUrl
           ? `<img class="home-agent-attachment-thumb" src="${escapeAttr(previewUrl)}" alt="" />`
           : attachmentKind === "video" && previewUrl
-            ? `<video class="home-agent-attachment-thumb" src="${escapeAttr(previewUrl)}" muted playsinline preload="metadata"></video>`
+            ? `<video class="home-agent-attachment-thumb" src="${escapeAttr(previewUrl)}" muted playsinline preload="none"></video>`
             : renderCanvasIcon("clipboard")}
       </span>
       <span class="home-agent-attachment-name" title="${escapeAttr(attachmentName)}">${escapeHtml(attachmentName)}</span>
       <button type="button" class="home-agent-attachment-remove" data-action="remove-home-agent-attachment" data-attachment-id="${escapeAttr(attachmentId)}" aria-label="移除附件 ${escapeAttr(attachmentName)}" title="移除附件">×</button>
       ${attachmentKind === "image" && previewUrl ? `<span class="home-agent-attachment-hover-preview" aria-hidden="true"><img src="${escapeAttr(previewUrl)}" alt="" /></span>` : ""}
-      ${attachmentKind === "video" && previewUrl ? `<span class="home-agent-attachment-hover-preview video-preview" aria-hidden="true"><video data-home-agent-video-preview src="${escapeAttr(previewUrl)}" muted loop playsinline preload="metadata"></video></span>` : ""}
+      ${attachmentKind === "video" && previewUrl ? `<span class="home-agent-attachment-hover-preview video-preview" aria-hidden="true"><video data-home-agent-video-preview src="${escapeAttr(previewUrl)}" muted loop playsinline preload="none"></video></span>` : ""}
     </span>&#8203;`;
   }).join("");
 }

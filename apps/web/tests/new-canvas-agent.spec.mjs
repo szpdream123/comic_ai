@@ -2088,7 +2088,7 @@ test("Canvas Agent renders generation media and adds the stable result to the ca
     api: {},
   };
   const initialHtml = renderCanvasAgentPanel(workbench.ui);
-  assert.match(initialHtml, /<img src="\/api\/storage\/objects\/storage-1\/content\?proxy=1"/);
+  assert.match(initialHtml, /<img src="\/api\/storage\/objects\/storage-1\/content\?thumbnail=1"/);
   assert.match(initialHtml, /data-agent-action="add-media-to-canvas"/);
 
   const controller = createCanvasAgentController({ surface: { querySelector: () => null }, workbench });
@@ -2334,9 +2334,27 @@ test("free generation media uses the authorized storage gateway when an object I
 
   assert.equal(
     media.url,
-    `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+    `/api/storage/objects/${storageObjectId}/content?thumbnail=1`,
   );
   assert.doesNotMatch(media.url, /myqcloud\.com/);
+});
+
+test("free generation media keeps a compact thumbnail separate from the original source", () => {
+  const storageObjectId = "22222222-3333-4444-8555-666666666666";
+  const media = normalizeAgentMediaTask({
+    taskId: "task-thumbnail-media",
+    kind: "video",
+    status: "completed",
+    result: {
+      storageObjectId,
+      thumbnailUrl: "https://cdn.example.test/video-poster.jpg",
+    },
+  });
+
+  assert.equal(media.url, `/api/storage/objects/${storageObjectId}/content?thumbnail=1`);
+  assert.equal(media.previewUrl, `/api/storage/objects/${storageObjectId}/content?thumbnail=1`);
+  assert.equal(media.posterUrl, `/api/storage/objects/${storageObjectId}/content?thumbnail=1`);
+  assert.equal(media.sourceUrl, `/api/storage/objects/${storageObjectId}/content`);
 });
 
 test("free generation keeps media compact and opens an enlarged preview", async () => {
@@ -2859,9 +2877,9 @@ test("Canvas Agent sent media attachments expose hover preview data", () => {
 
   assert.match(html, /data-agent-message-attachment-preview/);
   assert.match(html, /data-preview-kind="image"/);
-  assert.match(html, /data-preview-kind="video"/);
-  assert.match(html, /image-object-1\/content\?proxy=1/);
-  assert.match(html, /video-object-1\/content\?proxy=1/);
+  assert.match(html, /data-preview-kind="image"[^>]*tabindex="0" aria-label="VID附件/);
+  assert.match(html, /image-object-1\/content\?thumbnail=1/);
+  assert.match(html, /video-object-1\/content\?thumbnail=1/);
 });
 
 test("Canvas Agent exposes task center, canvas memory, and estimated context usage", () => {

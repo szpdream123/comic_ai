@@ -188,6 +188,7 @@ describe("route auth policy registry", () => {
       ["GET", "/api/home-recommendations", "public"],
       ["GET", "/api/home-recommendations/background/media", "public"],
       ["GET", "/api/home-recommendations/videos/video-1/media", "public"],
+      ["GET", "/api/home-recommendations/covers/cover-1/media", "public"],
       ["GET", "/api/public/style-covers/animation", "public"],
       ["PATCH", "/api/auth/profile", "user"],
       ["POST", "/api/auth/logout", "optional-user"],
@@ -257,7 +258,7 @@ describe("route auth policy registry", () => {
 
   it("covers every regex pathname matcher and each method handled by its branch", () => {
     const matchers = dynamicPathMatchers();
-    assert.equal(matchers.length, 142);
+    assert.equal(matchers.length, 143);
     const uncovered: string[] = [];
 
     for (const declaration of matchers) {

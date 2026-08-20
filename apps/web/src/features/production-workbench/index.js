@@ -187,7 +187,7 @@ import {
 import {
   canvasConnectedVideoNodeIds,
   canvasGroupRunnableNodeIds,
-  resolveCanvasCurrentVideoDownloadItems,
+  resolveCanvasCurrentMediaDownloadItems,
   updateCanvasGroupData,
 } from "./canvas/canvas-group-node.js";
 import {
@@ -2221,6 +2221,8 @@ const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
 const ANNOUNCEMENT_SEEN_STORAGE_PREFIX = "comic-ai:announcements:lastSeen";
 const WORKBENCH_THEME_STORAGE_KEY = "comic-ai:production-workbench-theme";
 const HOME_BACKGROUND_VIDEO_CACHE_NAME = "comic-ai:home-background-video:v1";
+const HOME_TV_PREVIEW_MAX_DURATION_MS = 5000;
+const homeTvPreviewStopTimers = new WeakMap();
 const HOME_BACKGROUND_MEDIA_SOURCE_MIME_TYPE = 'video/mp4; codecs="hvc1.1.6.L150.B0,mp4a.40.2"';
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
 const WORKBENCH_THEME_IDS = new Set(WORKBENCH_THEME_OPTIONS.map((theme) => theme.id));
@@ -2411,6 +2413,13 @@ function showCanvasAgentMessageAttachmentPreview(attachment) {
 function playHomeTvVideoPreview(card) {
   const video = card?.querySelector?.("[data-home-tv-preview]");
   if (!video) return;
+  const existingTimer = homeTvPreviewStopTimers.get(card);
+  if (existingTimer !== undefined) globalThis.clearTimeout?.(existingTimer);
+  const sourceUrl = String(video.dataset?.homeTvPreviewUrl ?? "").trim();
+  if (!video.getAttribute?.("src") && sourceUrl) {
+    video.src = sourceUrl;
+    video.load?.();
+  }
   video.muted = true;
   try {
     video.currentTime = 0;
@@ -2418,12 +2427,20 @@ function playHomeTvVideoPreview(card) {
     // The preview may not be seekable before metadata is ready.
   }
   video.play?.().catch?.(() => undefined);
+  homeTvPreviewStopTimers.set(card, globalThis.setTimeout?.(() => {
+    stopHomeTvVideoPreview(card);
+  }, HOME_TV_PREVIEW_MAX_DURATION_MS));
 }
 
 function stopHomeTvVideoPreview(card) {
   const video = card?.querySelector?.("[data-home-tv-preview]");
   if (!video) return;
+  const timer = homeTvPreviewStopTimers.get(card);
+  if (timer !== undefined) globalThis.clearTimeout?.(timer);
+  homeTvPreviewStopTimers.delete(card);
   video.pause?.();
+  video.removeAttribute?.("src");
+  video.load?.();
   try {
     video.currentTime = 0;
   } catch {
@@ -5694,7 +5711,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     const initialCanvasDetailRoute = ["tools-canvas", "new-canvas-canvas"].includes(initialRouteToken);
     if (!initialCanvasDetailRoute) render(workbench);
     if (!initialCanvasDetailRoute) loadAuthenticatedWorkbenchShellData(workbench);
-    await refresh(workbench);
+    await refresh(workbench, { deferProjectData: true });
     renderAfterCanvasLoad(workbench);
     scheduleLazySurfaceLoad(workbench);
     if (initialCanvasDetailRoute) loadAuthenticatedWorkbenchShellData(workbench);
@@ -5718,10 +5735,11 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       }
     }
     if (deferInitialRender) syncAnnouncementUnreadState(workbench);
+    if (deferInitialRender) render(workbench);
     const deferShellData = isCanvasNavTab(workbench.ui.activeNavTab)
       && workbench.ui.canvasProjectView === "detail";
     if (!deferShellData) loadAuthenticatedWorkbenchShellData(workbench);
-    await refresh(workbench);
+    await refresh(workbench, { deferHomeData: deferInitialRender, deferProjectData: true });
     renderAfterCanvasLoad(workbench);
     scheduleLazySurfaceLoad(workbench);
     if (deferShellData) loadAuthenticatedWorkbenchShellData(workbench);
@@ -5828,7 +5846,9 @@ function loadAuthenticatedWorkbenchShellData(workbench) {
   }
 }
 
-async function refresh(workbench) {
+async function refresh(workbench, options = {}) {
+  const deferHomeData = options.deferHomeData === true;
+  const deferProjectData = options.deferProjectData === true;
   const persistedProjectIdBeforeRefresh = workbench.state?.project?.id ?? null;
   hydratePersistedWorkbenchState(workbench);
   syncWorkbenchRouteState(workbench, readWorkbenchRouteToken(window.location));
@@ -5875,17 +5895,22 @@ async function refresh(workbench) {
         }
       }
     };
-    const results = await Promise.allSettled([
+    const homeRequests = [
       isAnonymousSession || isFreeGenerationSurface
         ? Promise.resolve(false)
         : loadHomeSurfaceData(() => syncHomeProjectLibraryFromApi(workbench)),
       loadHomeSurfaceData(() => syncHomeRecommendationsFromApi(workbench)),
-    ]);
-    results.forEach((result, index) => {
+    ];
+    const reportHomeResults = (results) => results.forEach((result, index) => {
       if (result.status === "rejected") {
         console.warn(`[workbench] ${index === 0 ? "home project library" : "home recommendations"} failed`, result.reason);
       }
     });
+    if (deferHomeData) {
+      void Promise.allSettled(homeRequests).then(reportHomeResults);
+    } else {
+      reportHomeResults(await Promise.allSettled(homeRequests));
+    }
   } else if (!isAnonymousSession && isProjectLibrary) {
     await syncProjectLibraryFromApi(workbench, { includeAssets: false });
   } else if (!isAnonymousSession && isProjectDetail) {
@@ -5896,52 +5921,93 @@ async function refresh(workbench) {
     if (routeProjectId) {
       workbench.ui.selectedProjectCardId = routeProjectId;
     } else {
-      workbench.state = typeof workbench.api?.getCreatorState === "function"
-        ? await workbench.api.getCreatorState()
-        : null;
-      if (
-        workbench.state?.project?.id
-        && workbench.state.project.id !== persistedProjectIdBeforeRefresh
-      ) {
-        hydratePersistedWorkbenchState(workbench);
-      }
-      const stateBalance = resolveCreditBalanceFromPayload(workbench.state);
-      if (stateBalance !== null) {
-        setWorkbenchCreditBalance(workbench, stateBalance, { syncGenerationConfig: false });
+      const applyCreatorState = (nextState) => {
+        workbench.state = nextState;
+        if (
+          workbench.state?.project?.id
+          && workbench.state.project.id !== persistedProjectIdBeforeRefresh
+        ) {
+          hydratePersistedWorkbenchState(workbench);
+        }
+        const stateBalance = resolveCreditBalanceFromPayload(workbench.state);
+        if (stateBalance !== null) {
+          setWorkbenchCreditBalance(workbench, stateBalance, { syncGenerationConfig: false });
+        }
+      };
+      if (deferProjectData && workbench.state?.project?.id) {
+        runLazyWorkbenchTask(workbench, "creator state", async () => {
+          if (typeof workbench.api?.getCreatorState !== "function") return;
+          applyCreatorState(await workbench.api.getCreatorState());
+          render(workbench, { preserveNavigationShell: true });
+        });
+      } else {
+        applyCreatorState(
+          typeof workbench.api?.getCreatorState === "function"
+            ? await workbench.api.getCreatorState()
+            : null,
+        );
       }
     }
     const projectId = routeProjectId ?? workbench.state?.project?.id ?? null;
     if (projectId) {
-      try {
-        const supplementaryTask = shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)
-          ? syncProjectInteriorSupplementary(workbench)
-          : Promise.resolve();
-        await Promise.all([
-          !isEpisodeWorkbenchSurface
-            ? ensureProjectSectionLoaded(workbench, projectId, workbench.ui.projectInteriorSection)
-            : ensureProjectOverviewLoaded(workbench, projectId),
-          supplementaryTask,
-        ]);
-        if (projectId !== persistedProjectIdBeforeRefresh) {
-          hydratePersistedWorkbenchState(workbench);
+      const loadProjectSurface = async () => {
+        try {
+          const supplementaryTask = shouldLoadProjectInteriorSupplementary(workbench.ui.projectInteriorSection)
+            ? syncProjectInteriorSupplementary(workbench)
+            : Promise.resolve();
+          await Promise.all([
+            !isEpisodeWorkbenchSurface
+              ? ensureProjectSectionLoaded(workbench, projectId, workbench.ui.projectInteriorSection)
+              : ensureProjectOverviewLoaded(workbench, projectId),
+            supplementaryTask,
+          ]);
+          if (projectId !== persistedProjectIdBeforeRefresh) {
+            hydratePersistedWorkbenchState(workbench);
+          }
+          render(workbench, { preserveNavigationShell: true });
+        } catch (error) {
+          if (!String(error instanceof Error ? error.message : error).includes("project_not_found")) {
+            throw error;
+          }
         }
-      } catch (error) {
-        if (!String(error instanceof Error ? error.message : error).includes("project_not_found")) {
-          throw error;
-        }
+      };
+      if (deferProjectData) {
+        const projectSurfacePromise = Promise.resolve().then(loadProjectSurface);
+        workbench.projectSurfaceLoadPromise = projectSurfacePromise;
+        runLazyWorkbenchTask(workbench, "project surface", () => projectSurfacePromise);
+      } else {
+        await loadProjectSurface();
       }
     }
     if (isEpisodeWorkbenchSurface) {
-      runLazyWorkbenchTask(workbench, "export history", async () => {
+      const loadProjectExportHistory = async () => {
         workbench.ui.exportHistory = workbench.state.project
           ? await loadExportHistory(workbench)
           : [];
         render(workbench);
-      });
+      };
+      if (deferProjectData) {
+        runLazyWorkbenchTask(workbench, "export history", async () => {
+          await workbench.projectSurfaceLoadPromise;
+          await loadProjectExportHistory();
+        });
+      } else {
+        await loadProjectExportHistory();
+      }
     } else {
-      workbench.ui.exportHistory = workbench.state.project
-        ? await loadExportHistory(workbench)
-        : [];
+      if (deferProjectData) {
+        runLazyWorkbenchTask(workbench, "export history", async () => {
+          await workbench.projectSurfaceLoadPromise;
+          workbench.ui.exportHistory = workbench.state.project
+            ? await loadExportHistory(workbench)
+            : [];
+          render(workbench, { preserveNavigationShell: true });
+        });
+      } else {
+        workbench.ui.exportHistory = workbench.state.project
+          ? await loadExportHistory(workbench)
+          : [];
+      }
     }
   }
 
@@ -5970,7 +6036,13 @@ async function refresh(workbench) {
       }
     };
     if (workbench.ui.canvasProjectView === "detail") {
-      await loadCanvasSurface();
+      if (deferProjectData) {
+        // The initial render already contains the canvas loading shell. The
+        // regular lazy-surface scheduler loads the document and its settings
+        // after the shell is visible.
+      } else {
+        await loadCanvasSurface();
+      }
     } else {
       runLazyWorkbenchTask(workbench, "canvas projects", loadCanvasSurface);
     }
@@ -6024,19 +6096,27 @@ async function refresh(workbench) {
     }
   }
   if (!isAnonymousSession) {
-    const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
-    if (!restoredEpisodeRoute) {
-      const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
-      if (
-        !restoredProjectRoute &&
-        workbench.ui.projectPanelMode === "episode-workbench" &&
-        workbench.ui.selectedEpisodeId
-      ) {
-        await enterEpisodeWorkbench(workbench, workbench.ui.selectedEpisodeId, {
-          preserveRoute: true,
-          shouldRender: false,
-        });
+    const restoreRoutes = async () => {
+      const restoredEpisodeRoute = await restoreEpisodeRouteState(workbench, window.location);
+      if (!restoredEpisodeRoute) {
+        const restoredProjectRoute = await restoreProjectRouteState(workbench, window.location);
+        if (
+          !restoredProjectRoute &&
+          workbench.ui.projectPanelMode === "episode-workbench" &&
+          workbench.ui.selectedEpisodeId
+        ) {
+          await enterEpisodeWorkbench(workbench, workbench.ui.selectedEpisodeId, {
+            preserveRoute: true,
+            shouldRender: false,
+          });
+        }
       }
+      render(workbench, { preserveNavigationShell: true });
+    };
+    if (deferProjectData) {
+      runLazyWorkbenchTask(workbench, "route restore", restoreRoutes);
+    } else {
+      await restoreRoutes();
     }
   }
   syncSelectedStoryboardId(workbench, getActiveStoryboards(workbench, nextStoryboards));
@@ -6118,11 +6198,15 @@ function scheduleLazySurfaceLoad(workbench, options = {}) {
   }
   if (isCanvasNavTab(visibleTab)) {
     runLazyWorkbenchTask(workbench, "canvas projects", async () => {
+      const canvasGenerationActive = workbench.ui.generationPollingActive === true
+        || resolveCanvasGenerationPollTargets(workbench).length > 0;
       if (
         workbench.ui.canvasProjectView !== "detail"
         || !isSelectedStandaloneCanvasDocumentLoaded(workbench)
       ) {
-        await syncCanvasProjectsFromApi(workbench);
+        if (!canvasGenerationActive) {
+          await syncCanvasProjectsFromApi(workbench);
+        }
       }
       const canvasDetailLoads = [ensureCanvasGenerationConfig(workbench)];
       if (workbench.ui.canvasProjectView === "detail") {
@@ -6131,7 +6215,10 @@ function scheduleLazySurfaceLoad(workbench, options = {}) {
           loadAppliedCanvasToolbar(workbench),
         );
       }
-      await Promise.all(canvasDetailLoads);
+      // Optional settings/config endpoints must not prevent the loaded
+      // document from being rendered. Some existing canvases legitimately
+      // return 404 for settings while their document remains available.
+      await Promise.allSettled(canvasDetailLoads);
       renderAfterCanvasLoad(workbench, renderOptions);
     });
   }
@@ -9012,9 +9099,7 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
   const token = Symbol("home-background-video-cache");
   workbench.homeBackgroundVideoCacheToken = token;
   workbench.homeBackgroundVideoSourceUrl = sourceUrl;
-  video.src = sourceUrl;
-  video.dataset.homeBackgroundVideoCacheState = "streaming";
-  playHomeBackgroundVideo(video);
+  video.dataset.homeBackgroundVideoCacheState = "loading";
 
   void readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss: false })
     .then((blob) => {
@@ -9029,22 +9114,7 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
       video.src = sourceUrl;
       video.dataset.homeBackgroundVideoCacheState = "fallback";
       playHomeBackgroundVideo(video);
-      warmHomeBackgroundVideoCacheAfterFirstFrame(workbench, video, sourceUrl, token);
     });
-}
-
-function warmHomeBackgroundVideoCacheAfterFirstFrame(workbench, video, sourceUrl, token) {
-  const warmCache = () => {
-    if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
-    void readCachedHomeBackgroundVideo(sourceUrl).catch(() => {
-      // Cache warming is best effort; direct video playback remains the fallback.
-    });
-  };
-  if (video.readyState > 0) {
-    warmCache();
-    return;
-  }
-  video.addEventListener?.("loadeddata", warmCache, { once: true });
 }
 
 function replaceNavigationSurface(workbench, nextMarkup) {
@@ -14958,9 +15028,9 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     target.disabled = true;
     target.setAttribute?.("aria-busy", "true");
     try {
-      const items = resolveCanvasCurrentVideoDownloadItems(document, requestedIds);
+      const items = resolveCanvasCurrentMediaDownloadItems(document, requestedIds);
       if (!items.length) {
-        showWorkbenchToast(workbench, "所选节点中没有当前显示的视频。", { tone: "error" });
+        showWorkbenchToast(workbench, "所选节点中没有当前显示的图片或视频。", { tone: "error" });
         renderWorkbenchChrome(workbench);
         return;
       }
@@ -14989,8 +15059,8 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       showWorkbenchToast(
         workbench,
         failed
-          ? `已下载 ${downloaded} 个当前视频，另有 ${failed} 个下载失败。`
-          : `已下载 ${downloaded} 个当前视频。`,
+          ? `已下载 ${downloaded} 个当前图片或视频，另有 ${failed} 个下载失败。`
+          : `已下载 ${downloaded} 个当前图片或视频。`,
         { tone: failed ? "error" : "success" },
       );
     } catch (error) {
@@ -21048,6 +21118,22 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-generation-video-preview") {
+    const videoUrl = String(target.dataset.videoUrl ?? "").trim();
+    if (!videoUrl) {
+      return;
+    }
+    openAssetInspector(workbench, {
+      type: "video",
+      name: target.dataset.videoName ?? "视频预览",
+      url: videoUrl,
+      status: "ready",
+    });
+    render(workbench);
+    queueMicrotask(() => workbench.root?.querySelector?.(".asset-inspector-preview video")?.focus?.());
+    return;
+  }
+
   if (action === "close-asset-inspector") {
     const previewFocus = workbench.storyboardImagePreviewFocus;
     workbench.storyboardImagePreviewClickHistory = null;
@@ -21776,7 +21862,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
           mediaKind,
           selectedStoryboardId,
         ) ?? matchingCurrentResult;
-        if (downloadStoryboardConversationResult(workbench, selectedStoryboard, selectedResult, mediaKind)) {
+        if (await downloadStoryboardConversationResult(workbench, selectedStoryboard, selectedResult, mediaKind)) {
           syncWorkbenchToastOnly(workbench);
           return;
         }
@@ -21785,13 +21871,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         return;
       }
       if (mediaKind === "video") {
-        downloadStoryboardVideo(
+        await downloadStoryboardVideo(
           workbench,
           selectedStoryboard?.id ?? "",
           selectedStoryboard?.selectedUploadedVideoId ?? selectedStoryboard?.uploadedVideos?.[0]?.id ?? "",
         );
       } else {
-        downloadStoryboardImage(
+        await downloadStoryboardImage(
           workbench,
           selectedStoryboard?.id ?? "",
           selectedStoryboard?.currentImageAssetVersionId ?? selectedStoryboard?.uploadedImages?.[0]?.id ?? "",
@@ -26362,7 +26448,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "download-storyboard-video") {
-    downloadStoryboardVideo(
+    await downloadStoryboardVideo(
       workbench,
       target.dataset.storyboardId ?? "",
       target.dataset.videoId ?? "",
@@ -26392,7 +26478,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "download-storyboard-image") {
-    downloadStoryboardImage(workbench, target.dataset.storyboardId ?? "", target.dataset.imageId ?? "");
+    await downloadStoryboardImage(workbench, target.dataset.storyboardId ?? "", target.dataset.imageId ?? "");
     render(workbench);
     return;
   }
@@ -30358,7 +30444,11 @@ function syncActiveCanvasDocument(workbench) {
     .slice(0, 5);
   if (!projects.length) {
     if (workbench.ui.canvasProjectView === "detail" && !isTeamMemberSession(workbench.session)) {
-      const selectedProjectId = DEFAULT_CANVAS_PROJECT_ID;
+      const selectedProjectId = String(
+        workbench.ui.selectedCanvasProjectId
+          ?? workbench.ui.canvasDocument?.canvasProjectId
+          ?? DEFAULT_CANVAS_PROJECT_ID,
+      ).trim() || DEFAULT_CANVAS_PROJECT_ID;
       const documentsByProject = {
         ...(workbench.ui.canvasDocumentsByProject && typeof workbench.ui.canvasDocumentsByProject === "object"
           ? workbench.ui.canvasDocumentsByProject
@@ -30809,6 +30899,7 @@ function isSelectedStandaloneCanvasDocumentLoaded(workbench) {
   const selectedProjectId = String(workbench?.ui?.selectedCanvasProjectId ?? "").trim();
   return Boolean(
     selectedProjectId
+    && workbench?.ui?.canvasSessionUiStateReady === true
     && String(workbench?.ui?.canvasDocument?.canvasProjectId ?? "").trim() === selectedProjectId
   );
 }
@@ -32395,7 +32486,10 @@ async function refreshSessionCreditBalance(workbench, options = {}) {
   workbench.creditRefreshInFlight = (async () => {
     try {
       const creditPayload = typeof workbench.api.getCreditBalance === "function"
-        ? await workbench.api.getCreditBalance()
+        ? await workbench.api.getCreditBalance({
+            fresh: options.fresh === true,
+            cacheTtlMs: options.fresh === true ? 0 : 15 * 1000,
+          })
         : options.fresh === true
           ? await workbench.api.getSession({ fresh: true })
           : await workbench.api.getSession();
@@ -33134,10 +33228,13 @@ function formatCanvasAspectRatioValue(value) {
 }
 
 function applyCanvasReferenceImagesToPayload(payload, references) {
-  const referenceImages = references
-    .map((item) => item.url)
-    .filter(Boolean)
-    .map((url) => ({ url }));
+  const modelReferences = references
+    .map(canvasModelReferenceFromItem)
+    .filter((item) => item.url || item.storageObjectId);
+  const referenceImages = modelReferences.map((item) => ({
+    url: item.url,
+    ...(item.storageObjectId ? { storageObjectId: item.storageObjectId } : {}),
+  }));
   const referenceAssetVersionIds = references
     .map((item) => item.assetVersionId)
     .filter(Boolean);
@@ -33146,7 +33243,7 @@ function applyCanvasReferenceImagesToPayload(payload, references) {
   payload.parameters = {
     ...(payload.parameters ?? {}),
     ...(referenceImages.length ? { referenceImages } : {}),
-    ...(references.length ? { quickReferences: references } : {}),
+    ...(modelReferences.length ? { quickReferences: modelReferences } : {}),
     ...(referenceImages.length ? { filePaths: referenceImages.map((item) => item.url) } : {}),
     ...(referenceAssetVersionIds.length ? { referenceAssetVersionIds } : {}),
   };
@@ -33187,32 +33284,38 @@ function applyCanvasVideoReferencesToPayload(payload, references, preview) {
 function applyCanvasVideoMediaReferencesToPayload(payload, references) {
   const videos = references.filter((item) => item.kind === "video");
   const audios = references.filter((item) => item.kind === "audio");
+  const modelVideos = videos.map(canvasModelReferenceFromItem);
+  const modelAudios = audios.map(canvasModelReferenceFromItem);
   payload.parameters = {
     ...(payload.parameters ?? {}),
-    ...(videos.length ? { referenceVideos: videos, videos, videoFilePaths: videos.map((item) => item.url).filter(Boolean) } : {}),
-    ...(audios.length ? { referenceAudio: audios[0], referenceAudios: audios, audios, audioFilePaths: audios.map((item) => item.url).filter(Boolean) } : {}),
+    ...(modelVideos.length ? { referenceVideos: modelVideos, videos: modelVideos, videoFilePaths: modelVideos.map((item) => item.url).filter(Boolean) } : {}),
+    ...(modelAudios.length ? { referenceAudio: modelAudios[0], referenceAudios: modelAudios, audios: modelAudios, audioFilePaths: modelAudios.map((item) => item.url).filter(Boolean) } : {}),
   };
 }
 
 function applyCanvasAudioReferencesToPayload(payload, references) {
   if (!references.length) return;
+  const modelReferences = references.map(canvasModelReferenceFromItem);
   payload.parameters = {
     ...(payload.parameters ?? {}),
-    referenceAudio: references[0],
-    referenceAudios: references,
-    audios: references,
-    audioFilePaths: references.map((item) => item.url).filter(Boolean),
+    referenceAudio: modelReferences[0],
+    referenceAudios: modelReferences,
+    audios: modelReferences,
+    audioFilePaths: modelReferences.map((item) => item.url).filter(Boolean),
   };
 }
 
 function canvasFrameReferenceFromImageReference(reference) {
-  const url = String(reference?.url ?? "").trim();
+  const modelReference = canvasModelReferenceFromItem(reference);
+  const url = String(modelReference.url ?? "").trim();
   const assetVersionId = String(reference?.assetVersionId ?? "").trim();
-  if (!url && !assetVersionId) {
+  const storageObjectId = String(modelReference.storageObjectId ?? "").trim();
+  if (!url && !assetVersionId && !storageObjectId) {
     return null;
   }
   return {
     ...(url ? { url, preview: url, src: url } : {}),
+    ...(storageObjectId ? { storageObjectId } : {}),
     ...(assetVersionId ? { assetVersionId } : {}),
     ...(Number.isFinite(Number(reference?.width)) ? { width: Number(reference.width) } : {}),
     ...(Number.isFinite(Number(reference?.height)) ? { height: Number(reference.height) } : {}),
@@ -33230,8 +33333,8 @@ function collectCanvasImageReferences(document, targetNodeId) {
     .filter((edge) => edge.targetNodeId === targetNodeId)
     .flatMap((edge) => collectCanvasImageReferencesForNode(nodeMap.get(edge.sourceNodeId), document))
     .filter((item, index, items) => {
-      const key = item.assetVersionId || item.url;
-      return key && items.findIndex((candidate) => (candidate.assetVersionId || candidate.url) === key) === index;
+      const key = item.assetVersionId || item.storageObjectId || item.url;
+      return key && items.findIndex((candidate) => (candidate.assetVersionId || candidate.storageObjectId || candidate.url) === key) === index;
     });
 }
 
@@ -33614,7 +33717,13 @@ function formatCanvasFrameAnalysisSegment(segment = {}, index = 0) {
 function canvasMediaReferenceFromNode(node, edgeKind = "") {
   const data = node?.data ?? {};
   const kind = String(edgeKind || data.mediaKind || (node?.type === "audio" ? "audio" : node?.type === "video" ? "video" : ""));
-  const storageObjectId = String(data.storageObjectId ?? data.storage_object_id ?? "");
+  const storageObjectId = String(
+    data.storageObjectId
+      ?? data.storage_object_id
+      ?? data.asset?.storageObjectId
+      ?? data.asset?.latestVersion?.storageObjectId
+      ?? "",
+  );
   const assetVersionId = String(data.assetVersionId ?? data.asset_version_id ?? data.versionId ?? "");
   const url = String(
     data.previewUrl
@@ -33626,11 +33735,16 @@ function canvasMediaReferenceFromNode(node, edgeKind = "") {
       ?? data.assetUrl
       ?? (storageObjectId ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content` : ""),
   );
+  const sourceUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+    : String(data.sourceUrl ?? data.downloadUrl ?? data.publicUrl ?? data.url ?? data.src ?? data.resultUrl ?? data.assetUrl ?? "");
   return {
     kind,
     type: kind,
     name: String(data.fileName ?? data.name ?? data.title ?? (kind === "audio" ? "参考音频" : "参考视频")),
     url,
+    previewUrl: url,
+    sourceUrl,
     preview: url,
     src: url,
     nodeId: String(node?.id ?? ""),
@@ -33641,7 +33755,7 @@ function canvasMediaReferenceFromNode(node, edgeKind = "") {
 
 function collectCanvasImageReferencesForNode(node, document = {}) {
   const direct = canvasImageReferenceFromNode(node);
-  if (direct.url || direct.assetVersionId) {
+  if (direct.url || direct.storageObjectId || direct.assetVersionId) {
     return [direct];
   }
   return [];
@@ -33649,28 +33763,52 @@ function collectCanvasImageReferencesForNode(node, document = {}) {
 
 function canvasImageReferenceFromNode(node) {
   if (!node) {
-    return { nodeId: "", name: "", url: "", assetVersionId: "" };
+    return { nodeId: "", name: "", url: "", assetVersionId: "", storageObjectId: "" };
   }
   const data = node.data ?? {};
   const isImage = node.type === "upload"
     ? (data.mediaKind ?? "image") !== "video"
     : node.type === "image" || data.mediaKind === "image";
   if (!isImage) {
-    return { nodeId: "", name: "", url: "", assetVersionId: "" };
+    return { nodeId: "", name: "", url: "", assetVersionId: "", storageObjectId: "" };
   }
-  return {
-    nodeId: String(node.id ?? ""),
-    name: String(data.fileName ?? data.name ?? data.title ?? "参考图"),
-    url: String(
-      data.previewUrl ??
+  const storageObjectId = String(
+    data.storageObjectId
+      ?? data.storage_object_id
+      ?? data.asset?.storageObjectId
+      ?? data.asset?.latestVersion?.storageObjectId
+      ?? "",
+  );
+  const previewUrl = String(
+    data.previewUrl ??
+    data.thumbnailUrl ??
+    data.url ??
+    data.src ??
+    data.imageUrl ??
+    data.resultUrl ??
+    data.assetUrl ??
+    "",
+  );
+  const sourceUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+    : String(
+      data.sourceUrl ??
+      data.downloadUrl ??
+      data.publicUrl ??
       data.url ??
       data.src ??
       data.imageUrl ??
       data.resultUrl ??
       data.assetUrl ??
-      data.thumbnailUrl ??
       "",
-    ),
+    );
+  return {
+    nodeId: String(node.id ?? ""),
+    name: String(data.fileName ?? data.name ?? data.title ?? "参考图"),
+    url: previewUrl,
+    previewUrl,
+    sourceUrl,
+    ...(storageObjectId ? { storageObjectId } : {}),
     assetVersionId: String(
       data.assetVersionId ??
       data.asset_version_id ??
@@ -33695,6 +33833,18 @@ function canvasImageReferenceFromNode(node) {
       data.asset?.height,
       data.asset?.metadata?.height,
     ),
+  };
+}
+
+function canvasModelReferenceFromItem(item = {}) {
+  const storageObjectId = String(item?.storageObjectId ?? "").trim();
+  const sourceUrl = storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+    : String(item?.sourceUrl ?? item?.downloadUrl ?? item?.publicUrl ?? item?.url ?? "").trim();
+  return {
+    ...item,
+    ...(sourceUrl ? { url: sourceUrl, preview: sourceUrl, src: sourceUrl, sourceUrl } : {}),
+    ...(storageObjectId ? { storageObjectId } : {}),
   };
 }
 
@@ -42467,7 +42617,7 @@ function renderCanvasPromptMentionMenu(mention) {
           const label = String(item?.label ?? item?.referenceId ?? "引用");
           const groupLabel = groupLabels[item?.group] ?? String(item?.meta ?? "引用");
           return `<button class="canvas-prompt-mention-option" type="button" role="option" data-action="select-canvas-prompt-mention" data-prompt-reference-id="${escapeHtmlAttribute(item?.id ?? "")}">
-            <span class="canvas-prompt-mention-thumb">${previewUrl ? `<img src="${escapeHtmlAttribute(previewUrl)}" alt="" />` : mediaKind === "video" && source ? `<video src="${escapeHtmlAttribute(source)}" muted playsinline preload="metadata"></video>` : `<b>${escapeHtmlText(label.slice(0, 2) || "@")}</b>`}</span>
+            <span class="canvas-prompt-mention-thumb">${previewUrl ? `<img src="${escapeHtmlAttribute(previewUrl)}" alt="" />` : mediaKind === "video" && source ? `<video src="${escapeHtmlAttribute(source)}" muted playsinline preload="none"></video>` : `<b>${escapeHtmlText(label.slice(0, 2) || "@")}</b>`}</span>
             <span class="canvas-prompt-mention-copy"><strong>${escapeHtmlText(label)}</strong><small>${escapeHtmlText(groupLabel)}</small></span>
           </button>`;
         }).join("")
@@ -56719,6 +56869,38 @@ function triggerAssetDownload(url, fileName, extension) {
   link.remove();
 }
 
+async function downloadOriginalMedia(item, url, fileName, extension) {
+  const storageObjectId = firstUuidLikeValue(
+    item?.storageObjectId,
+    item?.fixedImageStorageObjectId,
+    item?.latestVersion?.storageObjectId,
+  );
+  const safeName = stripFileExtension(fileName || "asset");
+  if (storageObjectId) {
+    await downloadCanvasAsset({
+      storageObjectId,
+      fileName: `${safeName}.${extension}`,
+    });
+    return;
+  }
+  if (url) {
+    triggerAssetDownload(url, safeName, extension);
+  }
+}
+
+function resolveStorageObjectDownloadUrl(...items) {
+  const storageObjectId = firstUuidLikeValue(
+    ...items.flatMap((item) => [
+      item?.storageObjectId,
+      item?.fixedImageStorageObjectId,
+      item?.latestVersion?.storageObjectId,
+    ]),
+  );
+  return storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content`
+    : "";
+}
+
 function matchesAssetRecordId(record, assetId) {
   const normalizedAssetId = String(assetId ?? "").trim();
   if (!normalizedAssetId) {
@@ -57489,7 +57671,7 @@ function resolveStoryboardImageAssetVersionId(workbench, storyboard, image, imag
   return null;
 }
 
-function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
+async function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const image = findStoryboardImage(storyboard, imageId);
   if (!image?.src || !image?.id) {
@@ -57497,7 +57679,8 @@ function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
     return;
   }
 
-  triggerAssetDownload(
+  await downloadOriginalMedia(
+    image,
     image.src,
     stripFileExtension(image.fileName || storyboard?.title || "storyboard-image"),
     inferFileExtension(image.fileName || image.src, "png"),
@@ -57505,10 +57688,10 @@ function downloadStoryboardImage(workbench, storyboardId, imageId = "") {
   workbench.ui.toast = `已开始下载 ${image.fileName || storyboard.uploadedImageName || "分镜图片"}。`;
 }
 
-function downloadStoryboardConversationResult(workbench, storyboard, result, mediaKind = "image") {
+async function downloadStoryboardConversationResult(workbench, storyboard, result, mediaKind = "image") {
   const isVideo = mediaKind === "video";
   const fixedMedia = (isVideo ? result?.fixedVideos : result?.fixedImages)?.find((item) =>
-    readPublicGenerationMediaUrl(item?.src, item?.url, item?.previewUrl));
+    readPublicGenerationMediaUrl(item?.src, item?.url, item?.previewUrl) || firstUuidLikeValue(item?.storageObjectId));
   const mediaUrl = isVideo
     ? readPublicGenerationMediaUrl(
         fixedMedia?.src,
@@ -57525,15 +57708,17 @@ function downloadStoryboardConversationResult(workbench, storyboard, result, med
         result?.result?.downloadUrl,
         result?.imageUrl,
       );
-  if (!mediaUrl) {
+  const originalMediaUrl = mediaUrl || resolveStorageObjectDownloadUrl(fixedMedia, result?.result, result);
+  if (!originalMediaUrl) {
     return false;
   }
   const fallbackName = isVideo ? "storyboard-video" : "storyboard-image";
   const fileName = fixedMedia?.fileName || fixedMedia?.name || storyboard?.title || fallbackName;
-  triggerAssetDownload(
-    mediaUrl,
+  await downloadOriginalMedia(
+    fixedMedia ?? result?.result ?? result,
+    originalMediaUrl,
     stripFileExtension(fileName),
-    inferFileExtension(fileName || mediaUrl, isVideo ? "mp4" : "png"),
+    inferFileExtension(fileName || originalMediaUrl, isVideo ? "mp4" : "png"),
   );
   workbench.ui.toast = `已开始下载 ${fixedMedia?.fileName || (isVideo ? "分镜视频" : "分镜图片")}。`;
   return true;
@@ -57567,7 +57752,7 @@ function legacyDeleteStoryboardImage(workbench, storyboardId, imageId = "") {
   workbench.ui.toast = "已移除当前分镜图片。";
 }
 
-function downloadStoryboardVideo(workbench, storyboardId, videoId) {
+async function downloadStoryboardVideo(workbench, storyboardId, videoId) {
   const storyboard = getActiveStoryboards(workbench).find((item) => item.id === storyboardId);
   const video = (storyboard?.uploadedVideos ?? []).find((item) => item.id === videoId && item.src);
   if (!video?.src) {
@@ -57575,7 +57760,8 @@ function downloadStoryboardVideo(workbench, storyboardId, videoId) {
     return;
   }
 
-  triggerAssetDownload(
+  await downloadOriginalMedia(
+    video,
     video.src,
     stripFileExtension(video.fileName || `${storyboard?.title || "storyboard-video"}`),
     inferFileExtension(video.fileName || video.src, "mp4"),
@@ -59983,7 +60169,14 @@ async function syncCanvasProjectsFromApi(workbench) {
   }
   const selectedProjectIdBeforeLoad = workbench.ui.selectedCanvasProjectId;
   let remoteProjectsLoaded = false;
-  const directProjectId = workbench.ui.canvasProjectView === "detail"
+  // Background refreshes (including task-center polling) may sync project metadata;
+  // only the visible Canvas detail surface should fetch its full document.
+  const shouldLoadCanvasDocument = isCanvasNavTab(workbench.ui.activeNavTab)
+    && workbench.ui.canvasProjectView === "detail"
+    && workbench.ui.canvasSessionUiStateReady !== true
+    && workbench.ui.generationPollingActive !== true
+    && resolveCanvasGenerationPollTargets(workbench).length === 0;
+  const directProjectId = shouldLoadCanvasDocument
     ? readCanvasProjectIdFromLocation()
     : null;
   const directDocumentRequest = directProjectId && typeof workbench.api?.getStandaloneCanvas === "function"
@@ -60024,7 +60217,7 @@ async function syncCanvasProjectsFromApi(workbench) {
     workbench.ui.toast = `画布项目同步失败：${friendlyError(error)}`;
     workbench.ui.canvasProjects = normalizeCanvasProjects(workbench.ui);
   }
-  const preferredProjectId = workbench.ui.canvasProjectView === "detail"
+  const preferredProjectId = shouldLoadCanvasDocument
     ? readCanvasProjectIdFromLocation() ?? selectedProjectIdBeforeLoad
     : selectedProjectIdBeforeLoad;
   if (
@@ -60033,7 +60226,7 @@ async function syncCanvasProjectsFromApi(workbench) {
   ) {
     workbench.ui.selectedCanvasProjectId = preferredProjectId;
   }
-  if (workbench.ui.canvasProjectView === "detail") {
+  if (shouldLoadCanvasDocument) {
     const projects = normalizeCanvasProjects(workbench.ui);
     const selectedProjectId = projects.some((project) => project.id === workbench.ui.selectedCanvasProjectId)
       ? workbench.ui.selectedCanvasProjectId
@@ -60057,7 +60250,7 @@ async function syncCanvasProjectsFromApi(workbench) {
   syncActiveCanvasDocument(workbench);
   if (
     remoteProjectsLoaded
-    && workbench.ui.canvasProjectView === "detail"
+    && shouldLoadCanvasDocument
     && !normalizeCanvasProjects(workbench.ui).length
     && !isTeamMemberSession(workbench.session)
   ) {

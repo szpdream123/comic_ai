@@ -369,6 +369,28 @@ describe("generation artifact recovery", () => {
     assert.equal(queries.some(({ sql }) => /UPDATE tasks task/.test(sql)), false);
   });
 
+  it("does not reopen a failed task whose project asset target is gone", async () => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = createArtifactRecoveryDb({
+      taskStatus: "failed",
+      taskFailureCode: "project_asset_generation_target_missing",
+      providerStatus: {},
+      queries,
+    });
+
+    const outcome = await handleGptImageArtifactQueueExhaustion(db as never, {
+      taskId: "task-image-missing-target",
+      error: Object.assign(new Error("project_asset_generation_target_missing"), {
+        failureCode: "project_asset_generation_target_missing",
+      }),
+      now: new Date("2026-08-03T16:01:00.000Z"),
+    });
+
+    assert.equal(outcome, "skipped");
+    assert.equal(queries.some(({ sql }) => sql.includes("UPDATE ai_generation_task_snapshots")), false);
+    assert.equal(queries.some(({ sql }) => /UPDATE tasks task/.test(sql)), false);
+  });
+
   it("does not consume another recovery round before the durable retry time", async () => {
     const queries: Array<{ sql: string; params: unknown[] }> = [];
     const db = createArtifactRecoveryDb({
@@ -920,6 +942,7 @@ describe("generation artifact recovery", () => {
 
 function createArtifactRecoveryDb(input: {
   taskStatus: string;
+  taskFailureCode?: string | null;
   providerStatus: Record<string, unknown>;
   queries: Array<{ sql: string; params: unknown[] }>;
 }) {
@@ -933,6 +956,7 @@ function createArtifactRecoveryDb(input: {
             task_id: "task-image",
             workflow_id: "workflow-image",
             task_status: input.taskStatus,
+            task_failure_code: input.taskFailureCode ?? null,
             current_attempt_id: "attempt-image",
             input_snapshot_json: {},
             provider_request_id: "provider-image",

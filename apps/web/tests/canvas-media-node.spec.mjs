@@ -211,6 +211,9 @@ test("Canvas media sources prefer stable storage identity and resolve asset vers
   assert.equal(resolveCanvasMediaNodeSource({
     data: { storageObjectId: "storage/image-1" },
   }, "image", { proxy: false }), "/api/storage/objects/storage%2Fimage-1/content");
+  assert.equal(resolveCanvasMediaNodeSource({
+    data: { storageObjectId: "storage/image-1" },
+  }, "image", { thumbnail: true }), "/api/storage/objects/storage%2Fimage-1/content?thumbnail=1");
 
   const assets = [{
     assetVersionId: "version-audio-1",
@@ -228,6 +231,15 @@ test("Canvas media sources prefer stable storage identity and resolve asset vers
   assert.equal(reconciled.changed, true);
   assert.equal(reconciled.document.nodes[0].data.storageObjectId, "storage-audio-1");
   assert.equal(document.nodes[0].data.storageObjectId, undefined);
+});
+
+test("Canvas image surfaces prefer an explicit thumbnail over the original direct URL", () => {
+  assert.equal(resolveCanvasMediaNodeSource({
+    data: {
+      imageUrl: "https://cdn.example/full.png",
+      previewUrl: "https://cdn.example/thumb.png",
+    },
+  }, "image"), "https://cdn.example/thumb.png");
 });
 
 

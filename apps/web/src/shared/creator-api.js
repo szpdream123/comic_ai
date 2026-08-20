@@ -98,6 +98,21 @@ async function fetchJson(url, options = {}) {
         signal: controller.signal,
       });
     } catch (error) {
+      clearTimeout(timeoutId);
+      externalSignal?.removeEventListener?.("abort", abortFromExternalSignal);
+      if (error instanceof DOMException && error.name === "AbortError") {
+        if (externalSignal?.aborted) {
+          throw error;
+        }
+        throw new Error("request_timeout");
+      }
+      throw error;
+    }
+
+    let text;
+    try {
+      text = await response.text();
+    } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         if (externalSignal?.aborted) {
           throw error;
@@ -110,7 +125,6 @@ async function fetchJson(url, options = {}) {
       externalSignal?.removeEventListener?.("abort", abortFromExternalSignal);
     }
 
-    const text = await response.text();
     let payload = {};
     if (text) {
       try {
@@ -1070,10 +1084,28 @@ export const creatorApi = {
     );
   },
 
-  getCreditBalance() {
-    return fetchJson("/api/auth/credit-balance", {
-      cache: "no-store",
-      dedupeKey: "GET /api/auth/credit-balance",
+  getCreditBalance(options = {}) {
+    const cacheKey = "GET /api/auth/credit-balance";
+    const fresh = options?.fresh === true;
+    const cacheTtlMs = Number.isFinite(options?.cacheTtlMs)
+      ? Number(options.cacheTtlMs)
+      : 15 * 1000;
+    if (fresh || cacheTtlMs <= 0) {
+      if (fresh) {
+        clearFetchJsonCache(cacheKey);
+        invalidateReadJsonCacheKey(cacheKey);
+      }
+      return fetchJson("/api/auth/credit-balance", {
+        cache: "no-store",
+        dedupeKey: cacheKey,
+        dedupeTtlMs: 1500,
+      });
+    }
+    return fetchJsonWithTtl("/api/auth/credit-balance", {
+      cacheKey,
+      cacheTtlMs,
+      silentRefreshOnHit: false,
+      dedupeKey: cacheKey,
       dedupeTtlMs: 1500,
     });
   },

@@ -9,6 +9,7 @@ import {
   normalizeCanvasGroupColor,
   renderCanvasGroupNodeBody,
   resolveCanvasBatchDownloadItems,
+  resolveCanvasCurrentMediaDownloadItems,
   resolveCanvasCurrentVideoDownloadItems,
   updateCanvasGroupData,
 } from "../src/features/production-workbench/canvas/canvas-group-node.js";
@@ -84,7 +85,7 @@ test("batch download packages only currently displayed node videos", () => {
   assert.doesNotMatch(handler, /loadCanvasBatchDownloadHistory/);
   assert.match(handler, /await downloadCanvasAssetArchive\(/);
   assert.match(handler, /canvasConnectedVideoNodeIds\(document, fallbackId\)/);
-  assert.match(handler, /const items = resolveCanvasCurrentVideoDownloadItems\(document, requestedIds\)/);
+  assert.match(handler, /const items = resolveCanvasCurrentMediaDownloadItems\(document, requestedIds\)/);
   assert.match(handler, /renderWorkbenchChrome\(workbench\)/);
   assert.doesNotMatch(handler, /\brender\(workbench\)/);
 });
@@ -390,6 +391,37 @@ test("resolves only the video currently displayed by a node", () => {
     fileName: "当前镜头",
     mediaKind: "video",
   }]);
+});
+
+test("Canvas downloads use original storage media instead of preview proxy URLs", () => {
+  const storageObjectId = "10000000-0000-4000-8000-000000000654";
+  const document = {
+    nodes: [
+      {
+        id: "image-1",
+        type: "ai-image",
+        data: {
+          mediaKind: "image",
+          storageObjectId,
+          previewUrl: `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+        },
+      },
+      {
+        id: "video-1",
+        type: "ai-video",
+        data: {
+          mediaKind: "video",
+          storageObjectId: "10000000-0000-4000-8000-000000000655",
+          previewUrl: "/api/storage/objects/video/content?proxy=1",
+        },
+      },
+    ],
+  };
+
+  assert.deepEqual(resolveCanvasCurrentMediaDownloadItems(document, ["image-1", "video-1"]), [
+    { nodeId: "image-1", storageObjectId, url: "", fileName: "画布图片", mediaKind: "image" },
+    { nodeId: "video-1", storageObjectId: "10000000-0000-4000-8000-000000000655", url: "", fileName: "画布视频", mediaKind: "video" },
+  ]);
 });
 
 test("routes group and Director nodes through the X6 HTML shape", () => {

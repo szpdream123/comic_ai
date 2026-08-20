@@ -283,6 +283,7 @@ export function resolveCanvasMediaNodeSource(node = {}, mediaKind = "", options 
   const identity = resolveCanvasMediaStableIdentity(data, assets);
   if (identity.storageObjectId) {
     const contentUrl = `/api/storage/objects/${encodeURIComponent(identity.storageObjectId)}/content`;
+    if (options.thumbnail === true && mediaKind !== "audio") return `${contentUrl}?thumbnail=1`;
     return options.proxy === false ? contentUrl : `${contentUrl}?proxy=1`;
   }
   const directUrl = resolveCanvasMediaDirectUrl(node, mediaKind, options);
@@ -295,7 +296,7 @@ export function resolveCanvasMediaDirectUrl(node = {}, mediaKind = "", options =
     ? firstText(options.url, data.audioUrl, data.resultAudioUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl)
     : mediaKind === "video"
       ? firstText(options.url, data.videoUrl, data.resultVideoUrl, data.resultUrl, data.url, data.assetUrl, data.downloadUrl, data.sourceUrl, data.previewUrl)
-      : firstText(options.url, data.imageUrl, data.resultUrl, data.url, data.assetUrl, data.thumbnailUrl, data.previewUrl);
+      : firstText(options.url, data.thumbnailUrl, data.previewUrl, data.imageUrl, data.resultUrl, data.url, data.assetUrl, data.sourceUrl, data.downloadUrl);
 }
 
 export function resolveCanvasMediaStableIdentity(data = {}, assets = []) {

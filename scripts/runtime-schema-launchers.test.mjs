@@ -152,6 +152,8 @@ describe("runtime schema migration launchers", () => {
 
     const productionSource = await readFile(new URL("run-phone-auth-production.mjs", import.meta.url), "utf8");
     assert.match(productionSource, /CREATOR_DEV_STACK_MANAGED:\s*"true"/);
+    assert.match(productionSource, /MEDIA_CRAWLER_MANAGED/);
+    assert.match(productionSource, /MediaCrawler must run outside this server/);
   });
 
   it("does not auto-start the HTTP entrypoint from a supervised worker bundle", async () => {
@@ -183,6 +185,8 @@ describe("runtime schema migration launchers", () => {
     assert.match(buildSource, /run-generation-queue-maintenance\.mjs/);
     assert.match(buildSource, /run-generation-video-worker\.mjs/);
     assert.match(buildSource, /run-canvas-agent-worker\.mjs/);
+    assert.match(buildSource, /run-media-crawler-api\.mjs/);
+    assert.match(buildSource, /run-marketing-competitor-collection-worker\.mjs/);
     assert.match(buildSource, /production-foundation-schema\.ts/);
   });
 

@@ -114,6 +114,14 @@ function runProductionFoundationSchema({ runtime, cwd, env, entrypoint }) {
 }
 
 supervisor.start("phone-auth", productionApiArgs(productionRuntime.phoneAuth), { restartOnFailure: true });
+const mediaCrawlerManaged = isEnabled(process.env.MEDIA_CRAWLER_MANAGED ?? "true");
+if (mediaCrawlerManaged) {
+  supervisor.start("media-crawler", [
+    productionRuntime.mediaCrawler,
+  ], { restartOnFailure: true });
+} else {
+  console.info("[production] MEDIA_CRAWLER_MANAGED=false; MediaCrawler must run outside this server.");
+}
 supervisor.start("generation-outbox", [
   productionRuntime.generationOutbox,
 ], { restartOnFailure: true });
@@ -126,8 +134,11 @@ supervisor.start("generation-worker", [
 supervisor.start("canvas-agent", [
   productionRuntime.canvasAgent,
 ], { restartOnFailure: true });
+supervisor.start("marketing-competitor-collection", [
+  productionRuntime.marketingCompetitorCollection,
+], { restartOnFailure: true });
 console.info(
-  "[production] API, generation-outbox, generation-repair, generation-worker, and canvas-agent are supervised.",
+  `[production] API, ${mediaCrawlerManaged ? "media-crawler, " : ""}generation-outbox, generation-repair, generation-worker, canvas-agent, and marketing-competitor-collection are supervised.`,
 );
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

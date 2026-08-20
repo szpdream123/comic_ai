@@ -893,6 +893,7 @@ test("admin shell exposes homepage recommendation category and video management"
   assert.match(html, /\/api\/admin\/home-recommendations\/background/);
   assert.match(html, /\/api\/admin\/home-recommendations\/background\/upload/);
   assert.match(html, /\/api\/admin\/home-recommendations\/videos\/upload/);
+  assert.match(html, /\/api\/admin\/home-recommendations\/covers\/upload/);
   assert.match(html, /uploadHomeRecommendationVideo/);
   assert.match(html, /accept="video\/\*"/);
   assert.match(html, /name="videoUrl"/);
@@ -3243,6 +3244,12 @@ test("admin exposes a super-admin marketing console with the frozen marketing wo
     "retryMarketingAgentRun",
     "人工录入指标",
     "/api/marketing/metrics",
+    "/api/marketing/competitor-collection-jobs",
+    "热点与竞品自动采集",
+    "编辑自动采集任务",
+    "保存任务修改",
+    "封面提示词",
+    "视频提示词",
     "效果指标",
     "adminDatetimeLocalToIso",
     "assignMarketingAttentionCaseToCurrentAdmin",
@@ -3301,8 +3308,16 @@ test("admin exposes a super-admin marketing console with the frozen marketing wo
   assert.match(marketing, /知识摘要/);
   assert.doesNotMatch(marketing, /常用主题/);
   assert.doesNotMatch(marketing, /sourceFacts/);
+  assert.match(marketing, /openMarketingCreativePackage/);
+  assert.match(marketing, /打开创作包/);
+  assert.match(marketing, /copyMarketingCreativePackage/);
+  assert.match(marketing, /导出 JSON/);
   assert.match(marketing, /\["queued", "knowledge", "planning", "generating"\]/);
   assert.match(marketing, /scheduleMarketingConsoleRefresh\(\);/);
+  assert.match(marketing, /marketing-competitor-collection-form/);
+  assert.match(marketing, /toggleMarketingResearchPackage/);
+  assert.match(marketing, /editMarketingCompetitorCollectionJob/);
+  assert.match(marketing, /method: jobId \? "PATCH" : "POST"/);
   assert.match(marketing, /!store\.loadError && !hasPendingRun/);
   assert.match(marketing, /\}, 2_500\);/);
   assert.match(marketing, /function openMarketingSettings\(\)/);
