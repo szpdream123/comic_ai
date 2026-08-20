@@ -431,7 +431,7 @@ function resolvePoseModelUrl() {
 }
 
 function resolveVersionedDecoderResourceUrl(path) {
-  const url = new URL(path, import.meta.url);
+  const url = new URL(path, new URL("/src/features/toolbox/", globalThis.location?.origin ?? "http://localhost"));
   url.searchParams.set("v", INSTALL_VERSION);
   return url.href;
 }
