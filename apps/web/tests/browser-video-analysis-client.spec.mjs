@@ -228,9 +228,26 @@ test("browser video analysis decoder uses Mediabunny capability probing and orde
   assert.match(source, /videoTrack\.computePacketStats\(120\)/);
 });
 
+test("browser video analysis plugin resources keep their public toolbox paths after production bundling", () => {
+  const decoderUrl = new URL(__browserVideoAnalysisTestUtils.resolveDecoderBundleUrl());
+  const poseRuntimeUrl = new URL(__browserVideoAnalysisTestUtils.resolvePoseRuntimeBundleUrl());
+
+  assert.equal(decoderUrl.pathname, "/src/features/toolbox/browser-video-analysis-decoder.bundle.js");
+  assert.equal(poseRuntimeUrl.pathname, "/src/features/toolbox/browser-video-pose-runtime.bundle.js");
+});
+
 test("browser video analysis installs its decoder bundle into browser storage and uninstalls cleanly", async (context) => {
   const originals = captureBrowserGlobals();
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   context.after(() => restoreBrowserGlobals(originals));
+  context.after(() => {
+    if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
+    else delete globalThis.location;
+  });
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { origin: "https://acceptance.example:8443" },
+  });
   const entries = new Map();
   const requests = [];
   installSupportedBrowserMocks();
@@ -266,6 +283,18 @@ test("browser video analysis installs its decoder bundle into browser storage an
   await installBrowserVideoAnalysis({ verifyRuntime: false, onProgress: (value) => progress.push(value) });
   assert.equal(await isBrowserVideoAnalysisInstalled(), true);
   assert.equal(requests.length, 9);
+  const toolboxRequests = requests
+    .map((request) => new URL(request))
+    .filter((request) => request.pathname.startsWith("/src/features/toolbox/"));
+  assert.deepEqual(toolboxRequests.map((request) => request.pathname), [
+    "/src/features/toolbox/browser-video-analysis-decoder.bundle.js",
+    "/src/features/toolbox/browser-video-analysis-wasm.bundle.js",
+    "/src/features/toolbox/browser-video-analysis-ffmpeg-worker.js",
+    "/src/features/toolbox/browser-video-analysis-ffmpeg-core.js",
+    "/src/features/toolbox/browser-video-analysis-ffmpeg-core.wasm",
+    "/src/features/toolbox/browser-video-pose-runtime.bundle.js",
+  ]);
+  assert.equal(toolboxRequests.every((request) => request.origin === "https://acceptance.example:8443"), true);
   assert.ok(requests.includes(__browserVideoAnalysisTestUtils.resolveDecoderBundleUrl()));
   assert.ok(requests.includes(__browserVideoAnalysisTestUtils.resolvePoseRuntimeBundleUrl()));
   assert.ok(requests.includes(__browserVideoAnalysisTestUtils.resolvePoseModelUrl()));

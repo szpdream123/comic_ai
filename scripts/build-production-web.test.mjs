@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { buildProductionWeb } from "./build-production-web.mjs";
@@ -70,4 +71,32 @@ test("buildProductionWeb keeps the previous hashed entry for already-open pages"
   assert.notEqual(first.entryUrl, second.entryUrl);
   await stat(join(sourceRoot, first.entryUrl.replace(/^\//, "")));
   await stat(join(sourceRoot, second.entryUrl.replace(/^\//, "")));
+});
+
+test("buildProductionWeb keeps browser video plugin resources on the public toolbox path", async (context) => {
+  const cwd = await mkdtemp(join(tmpdir(), "comic-ai-production-video-plugin-"));
+  context.after(() => rm(cwd, { recursive: true, force: true }));
+  const sourceRoot = join(cwd, "apps", "web");
+  const outputDir = join(sourceRoot, ".production");
+  const threeModulePath = join(cwd, "fixture-three.module.js");
+  const clientPath = fileURLToPath(
+    new URL("../apps/web/src/features/toolbox/browser-video-analysis-client.js", import.meta.url),
+  ).replaceAll("\\", "/");
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(
+    join(sourceRoot, "app.js"),
+    `import { __browserVideoAnalysisTestUtils } from ${JSON.stringify(clientPath)};\n`
+      + "globalThis.browserVideoPluginUrl = __browserVideoAnalysisTestUtils.resolveDecoderBundleUrl();\n",
+  );
+  await writeFile(threeModulePath, "export const revision = 1;\n");
+
+  const result = await buildProductionWeb({ cwd, sourceRoot, outputDir, threeModulePath });
+  const emittedJavaScript = (await Promise.all(
+    result.outputFiles.filter((file) => file.endsWith(".js")).map((file) => readFile(join(outputDir, file), "utf8")),
+  )).join("\n");
+
+  assert.match(
+    emittedJavaScript,
+    /new URL\("\/src\/features\/toolbox\/",globalThis\.location\?\.origin\?\?"http:\/\/localhost"\)/,
+  );
 });
