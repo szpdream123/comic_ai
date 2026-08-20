@@ -29,6 +29,7 @@ export function renderPricingModal({
   }
 
   const plans = mapMembershipPlansToPricingPlans(membershipPlans);
+  const membershipPlansLoading = membershipPlans === null;
   const directRechargePackages = mapDirectRechargePackagesToPlans(packages);
   const activeStatus =
     membershipStatus?.status ??
@@ -65,11 +66,15 @@ export function renderPricingModal({
             ${renderPricingTabButton("membership", "会员订阅", activeTab)}
             ${renderPricingTabButton("credits", "积分直充", activeTab)}
           </div>
-          <section class="library-team-subscription-plans" aria-label="会员套餐">
+          <section class="library-team-subscription-plans" aria-label="会员套餐" aria-busy="${membershipPlansLoading ? "true" : "false"}">
             ${activeTab === "credits"
               ? renderDirectRechargeSection(directRechargePackages, { hasActiveMembership })
               : `<div class="library-team-plan-grid">
-                  ${plans.length ? plans.map((plan) => renderPricingPlan(plan, { selectedPlan, recommendedPlan })).join("") : renderMembershipPlanEmptyState()}
+                  ${plans.length
+                    ? plans.map((plan) => renderPricingPlan(plan, { selectedPlan, recommendedPlan })).join("")
+                    : membershipPlansLoading
+                      ? renderMembershipPlanLoadingState()
+                      : renderMembershipPlanEmptyState()}
                 </div>`}
           </section>
         </div>
@@ -251,6 +256,15 @@ function renderMembershipPlanEmptyState() {
     <div class="library-team-empty-state compact" data-membership-empty-state>
       <div class="library-team-empty-icon" aria-hidden="true">PRO</div>
       <p>暂无可订阅会员套餐，请联系管理员配置会员套餐。</p>
+    </div>
+  `;
+}
+
+function renderMembershipPlanLoadingState() {
+  return `
+    <div class="library-team-empty-state compact" data-membership-loading-state role="status" aria-live="polite">
+      <div class="library-team-empty-icon" aria-hidden="true">PRO</div>
+      <p>正在加载会员套餐，请稍候...</p>
     </div>
   `;
 }

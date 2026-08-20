@@ -33316,12 +33316,30 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.isLibraryPricingModalOpen, undefined);
   });
 
-  it("blocks canvas creation when membership is expired despite stale entitlement payload", async () => {
+  it("loads membership plans when expired membership opens pricing from canvas creation", async () => {
     const apiCalls = [];
+    const pendingBillingPackages = new Promise(() => {});
+    const pendingMembershipStatus = new Promise(() => {});
+    let resolveMembershipPlans;
+    const pendingMembershipPlans = new Promise((resolve) => {
+      resolveMembershipPlans = resolve;
+    });
     const workbench = {
       state: buildProjectState(),
       session: { authenticated: true, user: { id: "user-1", phone: "+86 13800138000" } },
       api: {
+        async getBillingPackages() {
+          apiCalls.push("getBillingPackages");
+          return pendingBillingPackages;
+        },
+        async getMembershipPlans() {
+          apiCalls.push("getMembershipPlans");
+          return pendingMembershipPlans;
+        },
+        async getMembershipStatus() {
+          apiCalls.push("getMembershipStatus");
+          return pendingMembershipStatus;
+        },
         async createCanvasProject(input) {
           apiCalls.push(["create", input]);
           return { project: { id: "expired-canvas", title: input.title, status: "草稿" } };
@@ -33351,10 +33369,35 @@ describe("production workbench project tab", () => {
         action: "create-canvas-project",
       },
     });
+    assert.match(workbench.root.innerHTML, /data-membership-loading-state/);
+    assert.doesNotMatch(workbench.root.innerHTML, /data-membership-empty-state/);
+    resolveMembershipPlans({
+      data: {
+        plans: [{
+          id: "plan-professional-monthly",
+          code: "professional_monthly",
+          displayName: "月度套餐（专业版）",
+          tier: "professional",
+          periodUnit: "month",
+          periodCount: 1,
+          amountMinor: 9990,
+          currency: "CNY",
+          giftCredits: 81900,
+        }],
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.deepEqual(apiCalls, []);
+    assert.deepEqual(apiCalls, [
+      "getBillingPackages",
+      "getMembershipPlans",
+      "getMembershipStatus",
+    ]);
     assert.equal(workbench.ui.canvasProjectView, "list");
     assert.equal(workbench.ui.isLibraryPricingModalOpen, true);
+    assert.equal(workbench.ui.membershipPlans.length, 1);
+    assert.match(workbench.root.innerHTML, /月度套餐（专业版）/);
+    assert.doesNotMatch(workbench.root.innerHTML, /data-membership-loading-state/);
   });
 
   it("opens canvas project card menu and renders rename, archive, and delete actions", () => {
