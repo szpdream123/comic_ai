@@ -7525,6 +7525,7 @@ function resolveAssetGeneratorModelCredits(model = {}, resolution = "") {
 function renderAssetGeneratorModal(ui) {
   const assetKind = ui.assetGeneratorModal ?? "character";
   const isStoryboardGenerator = assetKind === "storyboard";
+  const showImageStyleControl = isStoryboardGenerator || ui.assetGeneratorTarget === "project";
   const tab = ASSET_TABS.find((item) => item.id === assetKind) ?? ASSET_TABS[0];
   const label = isStoryboardGenerator ? "故事板" : tab.label;
   const isEditing = ui.assetGeneratorMode === "edit";
@@ -7656,10 +7657,10 @@ function renderAssetGeneratorModal(ui) {
               styleCode: isStoryboardGenerator ? selectedGeneratorStyle?.code ?? "" : "",
               styleLabel: isStoryboardGenerator ? selectedGeneratorStyle?.name ?? "" : "",
               styleOptions: isStoryboardGenerator ? generatorStyleOptions : [],
-              imageStyleSkillId: isStoryboardGenerator ? selectedImageStyleSkillId : "",
-              imageStyleSkillLabel: isStoryboardGenerator ? selectedImageStyleLabel : "",
-              imageStyleSkillPreview: isStoryboardGenerator ? selectedImageStylePreview : "",
-               imageStyleSkillModalOpen: isStoryboardGenerator && ui.assetImageStyleSkillModalOpen === true,
+              imageStyleSkillId: showImageStyleControl ? selectedImageStyleSkillId : "",
+              imageStyleSkillLabel: showImageStyleControl ? selectedImageStyleLabel : "",
+              imageStyleSkillPreview: showImageStyleControl ? selectedImageStylePreview : "",
+               imageStyleSkillModalOpen: showImageStyleControl && ui.assetImageStyleSkillModalOpen === true,
                promptSkillLabel: isStoryboardGenerator ? storyboardPromptSkillLabel : "",
                promptSkillPreview: isStoryboardGenerator ? storyboardPromptSkillPreview : "",
                promptSkillModalOpen: isStoryboardGenerator && ui.storyboardPromptSkillModalOpen === true,
@@ -7899,7 +7900,7 @@ function renderAssetGeneratorComposer({
               settings: generatorSettings,
               scope: "asset-generator",
             })}
-            ${isStoryboardGenerator
+            ${imageStyleSkillLabel
               ? `
                 <span class="episode-replica-control-wrap episode-image-style-skill-wrap">
                   <button
@@ -7915,7 +7916,10 @@ function renderAssetGeneratorComposer({
                       : `<span class="episode-image-style-skill-thumb fallback" aria-hidden="true">${escapeHtml([...(imageStyleSkillLabel || "生图风格")][0] ?? "风")}</span>`}
                     <span class="episode-image-style-skill-name">${escapeHtml(imageStyleSkillLabel || "生图风格")}</span>
                   </button>
-                </span>
+                </span>`
+              : ""}
+            ${isStoryboardGenerator
+              ? `
                 <span class="episode-replica-control-wrap episode-image-style-skill-wrap">
                   <button
                     class="episode-replica-control episode-image-style-skill-trigger"

@@ -4427,6 +4427,11 @@ function teamAssetResourceKind(contentType: string) {
   return contentType.toLowerCase().startsWith("audio/") ? "audio" : "image";
 }
 
+function isTeamAssetStorageUrl(assetUrl: string, storageObjectId: string) {
+  return assetUrl.startsWith("https://")
+    || assetUrl === `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+}
+
 function teamAssetGeneratedFileName(assetName: string, artifact: MediaGenerationArtifact) {
   const extension = String(artifact.fileExtension ?? "").trim().replace(/^\./, "")
     || String(artifact.mimeType ?? "").split("/").at(-1)?.replace("jpeg", "jpg")
@@ -17379,10 +17384,6 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
   return `${protocol}://${host}`;
 }
 
-function publicSiteOrigin(request: Parameters<typeof createServer>[0], env: NodeJS.ProcessEnv) {
-  return env.NODE_ENV === "production" ? productionHttpsOrigin(env) : serverOriginFromRequest(request);
-}
-
 function storageProxyRelativeUrlOrigin(request: Parameters<typeof createServer>[0]) {
   const port = request.socket.localPort;
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -17430,6 +17431,10 @@ function productionHttpsOrigin(env: NodeJS.ProcessEnv) {
   }
   origin.port = "";
   return origin.origin;
+}
+
+function publicSiteOrigin(request: Parameters<typeof createServer>[0], env: NodeJS.ProcessEnv) {
+  return env.NODE_ENV === "production" ? productionHttpsOrigin(env) : serverOriginFromRequest(request);
 }
 
 function firstRequestHeader(value: string | string[] | undefined) {
@@ -25477,6 +25482,7 @@ export function createPhoneAuthDevServer(
       }
 
       if (pathname.startsWith("/api/storage/")) {
+        const storageObjectContentMatch = pathname.match(/^\/api\/storage\/objects\/([^/]+)\/content$/);
         const authenticated = await findAuthenticatedUser(
           db,
           request.headers.cookie,
@@ -25484,6 +25490,53 @@ export function createPhoneAuthDevServer(
           authSessionCache,
           { includeCredit: false },
         );
+        if (request.method === "GET" && storageObjectContentMatch) {
+          const adminRoute = await requireAdminRouteSession({
+            db,
+            cookieHeader: request.headers.cookie,
+            requiredRoles: [...adminRouteRoles.homeRecommendationManage],
+          });
+          if (adminRoute.ok) {
+            const storageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
+            const object = isUuid(storageObjectId) ? await findStorageObject(db, storageObjectId) : null;
+            if (
+              !object
+              || object.status !== "available"
+              || object.bucket !== storageBucket
+              || !object.contentType.startsWith("video/")
+              || !isHomeRecommendationObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix })
+            ) {
+              return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
+            }
+            const signed = await storageRuntime.adapter.createSignedReadUrl({
+              bucket: object.bucket,
+              objectKey: object.objectKey,
+              expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+              responseContentDisposition: "inline",
+            });
+            if (url.searchParams.get("proxy") === "1") {
+              const streamed = await streamStorageObjectContent({
+                response,
+                signedUrl: signed.url,
+                relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                range: typeof request.headers.range === "string" ? request.headers.range : null,
+                contentType: object.contentType,
+                download: false,
+                fetchImpl: options.fetchImpl ?? fetch,
+              });
+              if (!streamed) {
+                return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+              }
+              return;
+            }
+            response.statusCode = 307;
+            response.setHeader("location", signed.url);
+            response.setHeader("cache-control", "private, no-store");
+            response.setHeader("referrer-policy", "no-referrer");
+            response.end();
+            return;
+          }
+        }
         if (!authenticated) {
           return writeJson(response, {
             status: 401,
@@ -25611,7 +25664,6 @@ export function createPhoneAuthDevServer(
           });
         }
 
-        const storageObjectContentMatch = pathname.match(/^\/api\/storage\/objects\/([^/]+)\/content$/);
         if (request.method === "GET" && storageObjectContentMatch) {
           const storageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
           if (!isUuid(storageObjectId)) {
@@ -32962,7 +33014,8 @@ export function createPhoneAuthDevServer(
             signedUrlExpiresInSeconds,
             now,
           });
-          if (!uploaded.publicUrl?.startsWith("https://")) {
+          const assetUrl = uploaded.sourceUrl;
+          if (!isTeamAssetStorageUrl(assetUrl, uploaded.storageObjectId)) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const metadata = source.metadata_json && typeof source.metadata_json === "object"
@@ -32981,7 +33034,7 @@ export function createPhoneAuthDevServer(
             assetName,
             readString(metadata.description) || null,
             category,
-            uploaded.publicUrl,
+            assetUrl,
             sourceBytes.byteLength,
             now,
             operatorName,
@@ -33135,8 +33188,8 @@ export function createPhoneAuthDevServer(
             signedUrlExpiresInSeconds,
             now,
           });
-          const assetUrl = uploaded.publicUrl;
-          if (!assetUrl.startsWith("https://")) {
+          const assetUrl = uploaded.sourceUrl;
+          if (!isTeamAssetStorageUrl(assetUrl, uploaded.storageObjectId)) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const createdUserId = actor.teamMember?.id ?? actor.userId;
@@ -33311,8 +33364,8 @@ export function createPhoneAuthDevServer(
             signedUrlExpiresInSeconds,
             now,
           });
-          const assetUrl = uploaded.publicUrl;
-          if (!assetUrl.startsWith("https://")) {
+          const assetUrl = uploaded.sourceUrl;
+          if (!isTeamAssetStorageUrl(assetUrl, uploaded.storageObjectId)) {
             return writeJson(response, envelopedError(500, "team_asset_https_url_required", "Team asset storage URL must use HTTPS"));
           }
           const updated = await queryOne<Record<string, unknown>>(db, `

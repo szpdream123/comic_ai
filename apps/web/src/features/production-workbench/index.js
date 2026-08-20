@@ -25312,6 +25312,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
     workbench.ui.openGenerationSelectMenu = null;
+    if (
+      (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) &&
+      typeof workbench.api?.getProjectStyles === "function"
+    ) {
+      await syncProjectStyles(workbench);
+    }
+    const projectStyle = resolveEpisodeGenerationStyle(workbench);
+    workbench.ui.assetGeneratorStyleCode = String(projectStyle?.code ?? projectStyle?.id ?? "").trim();
     try {
       await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
     } catch {
@@ -41126,7 +41134,14 @@ async function submitProjectAssetGenerator(workbench, assetKind, nextName, promp
       replayTask,
     })
     : null;
+  const taskPayload = buildAssetGeneratorImageTaskPayload(workbench, {
+    assetId: temporaryAssetId,
+    assetKind: generatedAssetKind,
+    prompt,
+    selectionContext: null,
+  });
   const generated = await workbench.api.createImageGenerationTask({
+    ...taskPayload,
     target: {
       kind: "project_asset",
       projectId,
@@ -41134,19 +41149,9 @@ async function submitProjectAssetGenerator(workbench, assetKind, nextName, promp
       name: nextName,
       ...(replayAssetId ? { assetId: replayAssetId } : {}),
     },
-    prompt,
-    model:
-      replayPayload?.model ??
-      workbench.ui.assetGeneratorModelCode ??
-      workbench.ui.assetGeneratorModel,
-    parameters:
-      replayPayload?.parameters ??
-      buildAssetGeneratorImageTaskPayload(workbench, {
-        assetId: temporaryAssetId,
-        assetKind: generatedAssetKind,
-        prompt,
-        selectionContext: null,
-      }).parameters,
+    prompt: taskPayload.promptOverride ?? prompt,
+    model: replayPayload?.model ?? taskPayload.model,
+    parameters: replayPayload?.parameters ?? taskPayload.parameters,
   });
   const generatedStatus = resolveWorkflowStatus(
     generated?.generationStatus ??

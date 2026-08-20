@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import sharp from "sharp";
 
@@ -6795,7 +6796,9 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
   it("keeps an admin-uploaded home recommendation video playable in admin and on the public homepage", async () => {
     const db = await createMigratedTestDb();
-    const videoBytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
+    const videoBytes = new Uint8Array(
+      await readFile(new URL("../../../../../artifacts/promo/douyin-promo-video.mp4", import.meta.url)),
+    );
     const proxiedUrls: string[] = [];
     const { server, cookie } = await createLoggedInAdminServer(db, {
       role: "super_admin",
@@ -6915,15 +6918,23 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
 
       const publicPreviewResponse = await fetch(`${server.origin}${publicVideo.videoUrl}`, {
         headers: { range: "bytes=0-3" },
+        redirect: "manual",
       });
-      assert.equal(publicPreviewResponse.status, 206);
-      assert.equal(publicPreviewResponse.headers.get("content-range"), `bytes 0-3/${videoBytes.byteLength}`);
-      assert.deepEqual(new Uint8Array(await publicPreviewResponse.arrayBuffer()), videoBytes.slice(0, 4));
+      assert.equal(publicPreviewResponse.status, 307);
+      assert.equal(
+        publicPreviewResponse.headers.get("location"),
+        `/signed/home-recommendation-test-bucket/${uploadPayload.data.storageObjectKey}`,
+      );
+      assert.equal(publicPreviewResponse.headers.get("cache-control"), "public, max-age=300");
       const invalidPublicRangeResponse = await fetch(`${server.origin}${publicVideo.videoUrl}`, {
         headers: { range: "bytes=99-100" },
+        redirect: "manual",
       });
-      assert.equal(invalidPublicRangeResponse.status, 416);
-      assert.equal(invalidPublicRangeResponse.headers.get("content-range"), `bytes */${videoBytes.byteLength}`);
+      assert.equal(invalidPublicRangeResponse.status, 307);
+      assert.equal(
+        invalidPublicRangeResponse.headers.get("location"),
+        `/signed/home-recommendation-test-bucket/${uploadPayload.data.storageObjectKey}`,
+      );
     } finally {
       await server.close();
     }
