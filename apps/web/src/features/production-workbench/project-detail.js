@@ -1,5 +1,5 @@
 import { renderAssetExtractModal } from "./asset-extract-modal.js";
-import { renderEpisodeBatchModal, renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
+import { renderAssetInspectorModal, renderEpisodeBatchModal, renderEpisodeWorkbench } from "./episode-workbench-rebuilt.js?video-category=1&storyboard-style-picker=1";
 import {
   CANVAS_IMAGE_GENERATION_SKILL_CATEGORIES,
   normalizeCanvasTextSkills,
@@ -3349,6 +3349,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
         ${renderInlineStatusToast(ui, "interior-toast")}
       </main>
       ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+      ${renderAssetInspectorModal(ui.assetInspector)}
       ${ui.assetGeneratorUploading ? renderAssetGeneratorUploadModal() : ""}
       ${ui.assetImportModal ? renderAssetImportModal(ui) : ""}
       ${ui.isSingleEpisodeModalOpen ? renderSingleEpisodeModal(ui, state) : ""}

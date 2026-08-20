@@ -32138,6 +32138,7 @@ body.is-episode-layout-resizing {
 }
 
 .asset-image-lightbox {
+  z-index: 40;
   align-items: center;
   padding: 1.5rem;
 }
