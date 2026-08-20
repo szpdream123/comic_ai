@@ -149,10 +149,10 @@ function resolveSelectedEpisodeProjectStyleCode(state = {}, ui = {}) {
 
 function resolveSelectedAssetImageStyleSkillId(state = {}, ui = {}) {
   const activeProjectId = String(
-    state.project?.id ??
-    state.projectDetail?.project?.id ??
-    ui.projectDetail?.project?.id ??
     ui.selectedProjectCardId ??
+    state.project?.id ??
+    ui.projectDetail?.project?.id ??
+    ui.projectDetail?.id ??
     "",
   ).trim();
   const selectedProjectId = String(ui.assetImageStyleSkillProjectId ?? "").trim();
@@ -1185,7 +1185,7 @@ export function renderProjectDetail(context = {}) {
         isProjectStyleMenuOpen: ui.isProjectStyleMenuOpen,
         notice: ui.createProjectNotice ?? "",
       })}
-      ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+      ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui, state) : ""}
       ${ui.assetGeneratorUploading ? renderAssetGeneratorUploadModal() : ""}
       ${renderSingleEpisodeAiPreview(ui)}
       ${renderGlobalOverlays(ui, session)}
@@ -1272,7 +1272,7 @@ export function renderProjectDetail(context = {}) {
         ui.canvasProjects?.find?.((project) => project.id === ui.deleteCanvasProjectId)?.title ?? "",
     })}
     ${renderGenerationQueueJobConfirmModal(ui)}
-    ${activeNavTab === "library" && ui.assetGeneratorTarget === "team" && ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+    ${activeNavTab === "library" && ui.assetGeneratorTarget === "team" && ui.assetGeneratorModal ? renderAssetGeneratorModal(ui, state) : ""}
     ${activeNavTab === "library" && ui.assetImportModalSource === "team" && ui.assetImportModal ? renderAssetImportModal(ui) : ""}
     ${activeNavTab === "library" ? renderImportedAssetRenameModal(ui) : ""}
     ${activeNavTab === "library" ? renderImportedAssetDeleteModal(ui) : ""}
@@ -3348,7 +3348,7 @@ function renderProjectInteriorShell({ state, ui, detailState }) {
         }
         ${renderInlineStatusToast(ui, "interior-toast")}
       </main>
-      ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui) : ""}
+      ${ui.assetGeneratorModal ? renderAssetGeneratorModal(ui, state) : ""}
       ${renderAssetInspectorModal(ui.assetInspector)}
       ${ui.assetGeneratorUploading ? renderAssetGeneratorUploadModal() : ""}
       ${ui.assetImportModal ? renderAssetImportModal(ui) : ""}
@@ -5533,8 +5533,8 @@ function renderAssetImageStyleSkillModal(ui = {}, state = {}) {
       {
         id: "project-style",
         group: "official",
-        label: projectStyle?.name ?? "",
-        description: "项目默认风格",
+        label: projectStyle?.name ?? "未使用风格",
+        description: projectStyle ? "项目默认风格" : "项目风格暂不可用",
         previewUrl: String(projectStyle?.coverImageUrl ?? projectStyle?.cover_image_url ?? ""),
         meta: "免费",
       },
@@ -7522,7 +7522,7 @@ function resolveAssetGeneratorModelCredits(model = {}, resolution = "") {
   return null;
 }
 
-function renderAssetGeneratorModal(ui) {
+function renderAssetGeneratorModal(ui, state = {}) {
   const assetKind = ui.assetGeneratorModal ?? "character";
   const isStoryboardGenerator = assetKind === "storyboard";
   const showImageStyleControl = isStoryboardGenerator || ui.assetGeneratorTarget === "project";
@@ -7579,14 +7579,14 @@ function renderAssetGeneratorModal(ui) {
     ...(Array.isArray(ui.episodeBatchOfficialImageStyleSkills) ? ui.episodeBatchOfficialImageStyleSkills : []),
     ...(Array.isArray(ui.episodeBatchPrivateImageStyleSkills) ? ui.episodeBatchPrivateImageStyleSkills : []),
   ];
-  const selectedImageStyleSkillId = String(ui.assetImageStyleSkillId ?? "project-style");
+  const selectedImageStyleSkillId = resolveSelectedAssetImageStyleSkillId(state, ui);
   const selectedImageStyleSkill = imageStyleSkills.find(
     (skill) => String(skill?.id ?? "") === selectedImageStyleSkillId,
   ) ?? null;
   const selectedImageStyleLabel = selectedImageStyleSkill?.label
     ?? selectedImageStyleSkill?.title
     ?? selectedGeneratorStyle?.name
-    ?? "动画";
+    ?? "未使用风格";
   const selectedImageStylePreview = String(
     selectedImageStyleSkill?.preview
       ?? selectedImageStyleSkill?.coverImageUrl
@@ -7669,6 +7669,7 @@ function renderAssetGeneratorModal(ui) {
               costLabel: generatorCostLabel,
               isSubmitting: ui.assetGeneratorSubmitting === true
                 || (ui.busy === true && !isStoryboardGenerator),
+              isDisabled: ui.assetGeneratorConfigLoading === true,
               referenceInputId: isStoryboardGenerator
                 ? "asset-generator-storyboard-reference-input"
                 : "asset-generator-reference-input",
@@ -7862,6 +7863,7 @@ function renderAssetGeneratorComposer({
   credits = 90,
   costLabel = null,
   isSubmitting = false,
+  isDisabled = false,
   promptInputId = "asset-generator-prompt-input",
   referenceInputId = "asset-generator-reference-input",
 } = {}) {
@@ -7883,6 +7885,7 @@ function renderAssetGeneratorComposer({
             </div>`
           : `<textarea id="${escapeAttr(promptInputId)}" data-asset-generator-prompt-input data-max-length="5000" placeholder="请输入您的生图要求">${escapeHtml(description)}</textarea>`}
         <small class="asset-generator-prompt-count">${[...description].length}/5000</small>
+        ${isDisabled ? '<div class="asset-generator-config-status" role="status" aria-live="polite">正在加载生成配置...</div>' : ""}
         <footer class="asset-generator-composer-footer episode-replica-prompt-footer">
           <div class="asset-generator-composer-controls episode-replica-prompt-selects">
             ${renderGenerationControlMenu({
@@ -7893,12 +7896,14 @@ function renderAssetGeneratorComposer({
               action: "select-asset-generator-model",
               selectedValue: modelCode,
               scope: "asset-generator",
+              disabled: isDisabled,
             })}
             ${renderGenerationSettingsControl({
               kind: "image",
               openMenu: openGenerationSelectMenu,
               settings: generatorSettings,
               scope: "asset-generator",
+              disabled: isDisabled,
             })}
             ${imageStyleSkillLabel
               ? `
@@ -7910,6 +7915,7 @@ function renderAssetGeneratorComposer({
                     aria-haspopup="dialog"
                     aria-expanded="${imageStyleSkillModalOpen ? "true" : "false"}"
                     aria-label="生图风格：${escapeAttr(imageStyleSkillLabel || "生图风格")}"
+                    ${isDisabled ? "disabled" : ""}
                   >
                     ${imageStyleSkillPreview
                       ? `<img class="episode-image-style-skill-thumb" src="${escapeAttr(resolveApiUrl(imageStyleSkillPreview))}" alt="" />`
@@ -7937,7 +7943,7 @@ function renderAssetGeneratorComposer({
                 </span>`
               : ""}
           </div>
-          ${renderGenerationSubmitButton({ action, cost: credits, costLabel, busy: isSubmitting })}
+          ${renderGenerationSubmitButton({ action, cost: credits, costLabel, busy: isSubmitting, disabled: isDisabled })}
         </footer>
       </div>
     </div>

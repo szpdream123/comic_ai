@@ -3065,6 +3065,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       assetGeneratorCreditCost: null,
       assetGeneratorOpenMenu: "",
       assetGeneratorSubmitting: false,
+      assetGeneratorConfigLoading: false,
+      assetGeneratorConfigRequestId: 0,
       renameImportedAsset: null,
       renameImportedAssetName: "",
       renameImportedAssetNotice: "",
@@ -6632,7 +6634,7 @@ async function syncMembershipSurface(workbench, options = {}) {
 function syncOpenedMembershipPricingSurface(workbench, rerender = () => render(workbench)) {
   workbench.ui.membershipPlansLoading = !Array.isArray(workbench.ui.membershipPlans) || workbench.ui.membershipPlans.length === 0;
   rerender();
-  runLazyWorkbenchTask(workbench, "pricing surface", async () => {
+  return runLazyWorkbenchTask(workbench, "pricing surface", async () => {
     await Promise.all([
       syncBillingPackages(workbench),
       syncMembershipSurface(workbench, {
@@ -17714,7 +17716,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.isLibraryPricingModalOpen = true;
     workbench.ui.isEnterpriseContactModalOpen = false;
     workbench.ui.pricingModalTab = workbench.ui.pricingModalTab || "membership";
-    syncOpenedMembershipPricingSurface(workbench, () => renderWorkbenchChrome(workbench));
+    await syncOpenedMembershipPricingSurface(workbench, () => renderWorkbenchChrome(workbench));
     return;
   }
 
@@ -22913,6 +22915,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.activeNavTab = "project";
     workbench.ui.projectPanelMode = "detail";
     workbench.ui.projectInteriorSection = "overview";
+    invalidateAssetGeneratorConfigRequest(workbench);
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.toast = "";
     syncProjectDetailHash(workbench, projectId);
@@ -23128,6 +23131,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "set-project-interior-section") {
     const nextSection = normalizeProjectInteriorSection(target.dataset.section);
     workbench.ui.projectInteriorSection = nextSection;
+    invalidateAssetGeneratorConfigRequest(workbench);
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.toast = "";
     syncProjectDetailHash(workbench);
@@ -24260,6 +24264,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     clearAssetLibraryReturnState(workbench);
     workbench.ui.projectInteriorSection = "assets";
     workbench.ui.projectAssetTab = target.dataset.assetKind ?? "character";
+    invalidateAssetGeneratorConfigRequest(workbench);
     workbench.ui.assetGeneratorModal = null;
     render(workbench);
     await ensureProjectAssetsLoaded(workbench);
@@ -25298,6 +25303,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
   if (action === "open-asset-generator-modal") {
     const nextAssetKind = target.dataset.assetKind ?? workbench.ui.projectAssetTab ?? "character";
+    const configRequestId = Number(workbench.ui.assetGeneratorConfigRequestId ?? 0) + 1;
     workbench.ui.assetGeneratorTarget = "project";
     workbench.ui.assetGeneratorModal = nextAssetKind;
     workbench.ui.assetGeneratorMode = "generate";
@@ -25311,20 +25317,35 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.assetGeneratorConfigLoading = true;
+    workbench.ui.assetGeneratorConfigRequestId = configRequestId;
     workbench.ui.openGenerationSelectMenu = null;
+    render(workbench);
+    const stagedWorkbench = createAssetGeneratorConfigStagingWorkbench(workbench);
+    await Promise.all([
+      (!Array.isArray(stagedWorkbench.ui.projectStyles) || stagedWorkbench.ui.projectStyles.length === 0) &&
+        typeof stagedWorkbench.api?.getProjectStyles === "function"
+        ? syncProjectStyles(stagedWorkbench)
+        : Promise.resolve(),
+      (async () => {
+        try {
+          await loadAssetGeneratorGenerationConfig(stagedWorkbench, { fresh: true });
+        } catch {
+          syncAssetGeneratorModelDefaults(stagedWorkbench);
+        }
+      })(),
+    ]);
     if (
-      (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) &&
-      typeof workbench.api?.getProjectStyles === "function"
+      workbench.ui.assetGeneratorConfigRequestId !== configRequestId
+      || workbench.ui.assetGeneratorTarget !== "project"
+      || workbench.ui.assetGeneratorModal !== nextAssetKind
     ) {
-      await syncProjectStyles(workbench);
+      return;
     }
+    applyAssetGeneratorStagedConfig(workbench, stagedWorkbench);
     const projectStyle = resolveEpisodeGenerationStyle(workbench);
     workbench.ui.assetGeneratorStyleCode = String(projectStyle?.code ?? projectStyle?.id ?? "").trim();
-    try {
-      await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
-    } catch {
-      syncAssetGeneratorModelDefaults(workbench);
-    }
+    workbench.ui.assetGeneratorConfigLoading = false;
     render(workbench);
     return;
   }
@@ -25476,6 +25497,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    invalidateAssetGeneratorConfigRequest(workbench);
     workbench.ui.openGenerationSelectMenu = null;
     render(workbench);
     return;
@@ -25579,6 +25601,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "submit-asset-generator") {
+    if (workbench.ui.assetGeneratorConfigLoading === true) {
+      workbench.ui.toast = "生成配置加载中，请稍候。";
+      render(workbench);
+      return;
+    }
     const assetKind = workbench.ui.assetGeneratorModal ?? workbench.ui.projectAssetTab ?? "character";
     const assetGeneratorTarget = workbench.ui.assetGeneratorTarget;
     const nextName = String(workbench.ui.assetGeneratorName ?? "").trim();
@@ -40485,6 +40512,47 @@ async function loadAssetGeneratorGenerationConfig(workbench, options = {}) {
   syncAssetGeneratorModelDefaults(workbench);
 }
 
+function createAssetGeneratorConfigStagingWorkbench(workbench) {
+  return {
+    ...workbench,
+    assetGeneratorConfigCreditSnapshot: workbench.ui.creditBalance,
+    session: workbench.session
+      ? { ...workbench.session, user: workbench.session.user ? { ...workbench.session.user } : workbench.session.user }
+      : workbench.session,
+    ui: { ...workbench.ui },
+  };
+}
+
+function applyAssetGeneratorStagedConfig(workbench, stagedWorkbench) {
+  const liveSessionBalance = resolveCurrentSessionCreditBalance(workbench.session);
+  const liveUiBalance = Number(workbench.ui.creditBalance);
+  const snapshotUiBalance = Number(stagedWorkbench.assetGeneratorConfigCreditSnapshot);
+  const didUiBalanceChange = Number.isFinite(liveUiBalance)
+    && Number.isFinite(snapshotUiBalance)
+    && liveUiBalance !== snapshotUiBalance;
+  for (const key of [
+    "projectStyles",
+    "createProjectType",
+    "episodeGenerationConfig",
+    "assetGeneratorModelCode",
+    "assetGeneratorModel",
+    "assetGeneratorResolution",
+    "assetGeneratorAspectRatio",
+    "assetGeneratorCount",
+    "assetGeneratorParameterValues",
+    "assetGeneratorCreditCost",
+  ]) {
+    workbench.ui[key] = stagedWorkbench.ui[key];
+  }
+  if (liveSessionBalance !== null) {
+    setWorkbenchCreditBalance(workbench, liveSessionBalance, { syncGenerationConfig: true });
+  } else if (didUiBalanceChange) {
+    setWorkbenchCreditBalance(workbench, liveUiBalance, { syncGenerationConfig: true });
+  } else if (Number.isFinite(Number(stagedWorkbench.ui.creditBalance))) {
+    setWorkbenchCreditBalance(workbench, stagedWorkbench.ui.creditBalance, { syncGenerationConfig: true });
+  }
+}
+
 async function prepareAssetGeneratorEditorModel(workbench, asset) {
   const clearSelection = () => {
     workbench.ui.assetGeneratorModelCode = "";
@@ -40815,7 +40883,13 @@ function upsertProjectGeneratedAsset(workbench, assetKind, asset, name, prompt, 
   return nextRecord;
 }
 
+function invalidateAssetGeneratorConfigRequest(workbench) {
+  workbench.ui.assetGeneratorConfigLoading = false;
+  workbench.ui.assetGeneratorConfigRequestId = Number(workbench.ui.assetGeneratorConfigRequestId ?? 0) + 1;
+}
+
 function closeAssetGeneratorModal(workbench) {
+  invalidateAssetGeneratorConfigRequest(workbench);
   workbench.ui.assetGeneratorModal = null;
   workbench.ui.assetGeneratorTarget = null;
   workbench.ui.assetGeneratorMode = "generate";
@@ -56727,6 +56801,7 @@ function openImportedAssetEditor(workbench, asset, { assetId, assetKind, mediaTy
     workbench.ui.assetImportModal = "other";
     workbench.ui.assetImportModalSource = scope;
     workbench.ui.assetImportModalTab = "local";
+    invalidateAssetGeneratorConfigRequest(workbench);
     workbench.ui.assetGeneratorModal = null;
     workbench.ui.assetCardMenuId = null;
     workbench.ui.audioAssetImportDraft = {
@@ -60089,7 +60164,7 @@ function normalizeProjectLibraryPageSize(value) {
 }
 
 function runLazyWorkbenchTask(workbench, label, task) {
-  void Promise.resolve()
+  return Promise.resolve()
     .then(task)
     .catch((error) => {
       console.warn(`[workbench] ${label} failed`, error);

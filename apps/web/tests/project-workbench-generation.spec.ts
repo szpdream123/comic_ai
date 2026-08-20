@@ -13303,6 +13303,42 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /aria-label="生图风格：动画"/);
   });
 
+  it("shows that no style is active when project styles are unavailable", () => {
+    const html = renderProductionWorkbench({
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        assetGeneratorTarget: "project",
+        assetGeneratorModal: "character",
+        assetImageStyleSkillId: "project-style",
+        projectStyles: [],
+      }),
+    });
+
+    assert.match(html, /aria-label="生图风格：未使用风格"/);
+    assert.doesNotMatch(html, /aria-label="生图风格：动画"/);
+  });
+
+  it("shows the active project style when a saved image style belongs to another project", () => {
+    const html = renderProductionWorkbench({
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        selectedProjectCardId: "project-2",
+        assetGeneratorTarget: "project",
+        assetGeneratorModal: "character",
+        assetGeneratorStyleCode: "animation",
+        assetImageStyleSkillId: "project-1-custom-style",
+        assetImageStyleSkillProjectId: "project-1",
+        projectStyles: [{ id: "animation", code: "animation", name: "动画" }],
+        episodeBatchPrivateImageStyleSkills: [{ id: "project-1-custom-style", label: "旧项目水墨" }],
+      }),
+    });
+
+    assert.match(html, /aria-label="生图风格：动画"/);
+    assert.doesNotMatch(html, /aria-label="生图风格：旧项目水墨"/);
+  });
+
   it("renders a generated image lightbox from the project asset editor", () => {
     const previewUrl = "/uploads/generated-character-preview.png";
     const html = renderProductionWorkbench({
@@ -13727,6 +13763,193 @@ describe("asset generator and imported asset modals", () => {
     assert.deepEqual(calls, ["getProjectStyles"]);
     assert.equal(workbench.ui.assetGeneratorStyleCode, "animation");
     assert.equal(workbench.ui.projectStyles[0].prompt_content, "二维动画风格，统一线条和赛璐璐上色。");
+  });
+
+  it("opens the character generator immediately and loads style and model config concurrently", async () => {
+    const calls = [];
+    let resolveProjectStyles;
+    let resolveGenerationConfig;
+    const projectStyles = new Promise((resolve) => {
+      resolveProjectStyles = resolve;
+    });
+    const generationConfig = new Promise((resolve) => {
+      resolveGenerationConfig = resolve;
+    });
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({ projectAssetTab: "character", projectStyles: [] }),
+      api: {
+        async getProjectStyles() {
+          calls.push("getProjectStyles");
+          return projectStyles;
+        },
+        async listGlobalGenerationConfig() {
+          calls.push("listGlobalGenerationConfig");
+          return generationConfig;
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    const opening = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.match(workbench.root.innerHTML, /asset-generator-modal/);
+    assert.match(workbench.root.innerHTML, /data-action="submit-asset-generator"[^>]*disabled/);
+    assert.match(workbench.root.innerHTML, /role="status"[^>]*>正在加载生成配置/);
+    assert.deepEqual(calls, ["getProjectStyles", "listGlobalGenerationConfig"]);
+
+    workbench.ui.assetGeneratorName = "加载中的角色";
+    workbench.ui.assetGeneratorPrompt = "不要使用旧配置提交";
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+    assert.equal(workbench.ui.assetGeneratorSubmitting, false);
+    assert.match(workbench.ui.toast, /生成配置加载中/);
+
+    resolveProjectStyles({
+      styles: [{ id: "animation", code: "animation", name: "动画" }],
+    });
+    resolveGenerationConfig({
+      creditBalance: 512,
+      defaultImageModelCode: "gpt-image-2-cn",
+      models: [],
+    });
+    await opening;
+  });
+
+  it("keeps the latest project asset generator config when requests finish out of order", async () => {
+    const styleResolvers = [];
+    const configResolvers = [];
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({ projectAssetTab: "character", projectStyles: [] }),
+      api: {
+        getProjectStyles() {
+          return new Promise((resolve) => styleResolvers.push(resolve));
+        },
+        listGlobalGenerationConfig() {
+          return new Promise((resolve) => configResolvers.push(resolve));
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    const firstOpening = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const secondOpening = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    styleResolvers[1]({ styles: [{ id: "style-b", code: "style-b", name: "风格 B" }] });
+    configResolvers[1]({
+      creditBalance: 512,
+      defaultImageModelCode: "model-b",
+      models: [{ modelCode: "model-b", modelLabel: "模型 B", mediaType: "image" }],
+    });
+    await secondOpening;
+    assert.equal(workbench.ui.projectStyles[0]?.name, "风格 B");
+    assert.equal(workbench.ui.assetGeneratorModelCode, "model-b");
+
+    styleResolvers[0]({ styles: [{ id: "style-a", code: "style-a", name: "风格 A" }] });
+    configResolvers[0]({
+      creditBalance: 512,
+      defaultImageModelCode: "model-a",
+      models: [{ modelCode: "model-a", modelLabel: "模型 A", mediaType: "image" }],
+    });
+    await firstOpening;
+
+    assert.equal(workbench.ui.projectStyles[0]?.name, "风格 B");
+    assert.equal(workbench.ui.assetGeneratorModelCode, "model-b");
+  });
+
+  it("does not roll back a newer credit balance when generator config finishes loading", async () => {
+    let resolveProjectStyles;
+    let resolveGenerationConfig;
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000", creditBalance: 100, availableCredits: 100 } },
+      ui: buildModalUi({ projectAssetTab: "character", projectStyles: [], creditBalance: 100 }),
+      api: {
+        getProjectStyles() {
+          return new Promise((resolve) => { resolveProjectStyles = resolve; });
+        },
+        listGlobalGenerationConfig() {
+          return new Promise((resolve) => { resolveGenerationConfig = resolve; });
+        },
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    const opening = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    workbench.ui.creditBalance = 80;
+    workbench.session.user.creditBalance = 80;
+    workbench.session.user.availableCredits = 80;
+
+    resolveProjectStyles({ styles: [{ id: "animation", code: "animation", name: "动画" }] });
+    resolveGenerationConfig({ creditBalance: 100, defaultImageModelCode: "model-a", models: [] });
+    await opening;
+
+    assert.equal(workbench.ui.creditBalance, 80);
+    assert.equal(workbench.session.user.creditBalance, 80);
+    assert.equal(workbench.session.user.availableCredits, 80);
+  });
+
+  it("keeps a pending generator config request invalid after the modal closes", async () => {
+    let resolveProjectStyles;
+    let resolveGenerationConfig;
+    const workbench = {
+      state: buildModalState(),
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({ projectAssetTab: "character", projectStyles: [] }),
+      api: {
+        getProjectStyles() {
+          return new Promise((resolve) => { resolveProjectStyles = resolve; });
+        },
+        listGlobalGenerationConfig() {
+          return new Promise((resolve) => { resolveGenerationConfig = resolve; });
+        },
+      },
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    const opening = handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "close-asset-generator-modal" },
+    });
+
+    assert.equal(workbench.ui.assetGeneratorModal, null);
+    assert.equal(workbench.ui.assetGeneratorConfigLoading, false);
+    resolveProjectStyles({ styles: [{ id: "stale", code: "stale", name: "过期风格" }] });
+    resolveGenerationConfig({ creditBalance: 512, defaultImageModelCode: "stale-model", models: [] });
+    await opening;
+
+    assert.equal(workbench.ui.assetGeneratorModal, null);
+    assert.deepEqual(workbench.ui.projectStyles, []);
+    assert.notEqual(workbench.ui.assetGeneratorModelCode, "stale-model");
   });
 
   it("submits asset generator prompt through real episode image task", async () => {

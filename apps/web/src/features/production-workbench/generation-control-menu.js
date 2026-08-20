@@ -80,11 +80,12 @@ export function renderGenerationControlMenu({
   keepMenuOpen = "",
   keepMenuOpenMenu = "",
   actionAttribute = "data-action",
+  disabled = false,
 } = {}) {
   const actionAttr = actionAttribute === "data-agent-action" ? "data-agent-action" : "data-action";
   const normalizedField = String(field ?? "");
   const scopedField = scope ? `${scope}:${normalizedField}` : normalizedField;
-  const open = openMenu === scopedField || (!scope && openMenu === normalizedField);
+  const open = !disabled && (openMenu === scopedField || (!scope && openMenu === normalizedField));
   const buttonTitle = title || label;
   const titleAttr = buttonTitle ? ` title="${escapeAttr(buttonTitle)}" aria-label="${escapeAttr(buttonTitle)}"` : "";
   const scopeAttrs = scope ? ` data-scope="${escapeAttr(scope)}"` : "";
@@ -96,7 +97,7 @@ export function renderGenerationControlMenu({
 
   return `
     <span class="episode-replica-control-wrap">
-      <button class="episode-replica-control ${open ? "active" : ""}" type="button" ${actionAttr}="${escapeAttr(toggleAction)}" data-field="${escapeAttr(normalizedField)}"${scopeAttrs}${nodeAttrs}${titleAttr}>${escapeHtml(label)}</button>
+      <button class="episode-replica-control ${open ? "active" : ""}" type="button" ${actionAttr}="${escapeAttr(toggleAction)}" data-field="${escapeAttr(normalizedField)}"${scopeAttrs}${nodeAttrs}${titleAttr}${disabled ? " disabled" : ""}>${escapeHtml(label)}</button>
       ${open ? `<span class="episode-replica-float-menu compact" data-field="${escapeAttr(normalizedField)}">${options.map((option) => {
         const [value, text, meta = "", preview = ""] = Array.isArray(option) ? option : ["", "", "", ""];
         const selected = selectedValue !== "" && String(value) === String(selectedValue);
@@ -118,6 +119,7 @@ export function renderGenerationSettingsControl({
   toggleAction = "toggle-generation-select-menu",
   optionAction = "select-generation-field-option",
   actionAttribute = "data-action",
+  disabled = false,
 } = {}) {
   const isImage = kind === "image";
   const isAudio = kind === "audio";
@@ -126,7 +128,7 @@ export function renderGenerationSettingsControl({
     : [];
   const field = isImage ? "image-settings-panel" : isAudio ? "audio-settings-panel" : "video-settings-panel";
   const scopedField = scope ? `${scope}:${field}` : field;
-  const isOpen = openMenu === scopedField || (!scope && openMenu === field);
+  const isOpen = !disabled && (openMenu === scopedField || (!scope && openMenu === field));
   const configuredFormatter = isImage ? formatImageSettingsOptionLabel : formatVideoSettingsOptionLabel;
   const triggerLabel = configuredSections.length
     ? configuredSections
@@ -164,6 +166,7 @@ export function renderGenerationSettingsControl({
         aria-haspopup="dialog"
         aria-expanded="${isOpen ? "true" : "false"}"
         aria-label="${escapeAttr(ariaLabel)}"
+        ${disabled ? "disabled" : ""}
       >
         <span class="episode-replica-video-settings-trigger-icon" aria-hidden="true">
           <span></span><span></span><span></span>
