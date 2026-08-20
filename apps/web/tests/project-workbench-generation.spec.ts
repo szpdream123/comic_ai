@@ -13271,6 +13271,38 @@ describe("asset generator and imported asset modals", () => {
     assert.match(html, /character-preview/);
   });
 
+  it("shows the current project style in the dedicated character generator", () => {
+    const state = {
+      ...buildModalState(),
+      project: {
+        ...buildModalState().project,
+        projectType: "animation",
+      },
+    };
+    const html = renderProductionWorkbench({
+      state,
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        assetGeneratorTarget: "project",
+        assetGeneratorModal: "character",
+        assetGeneratorStyleCode: "animation",
+        assetImageStyleSkillId: "project-style",
+        projectStyles: [
+          {
+            id: "animation",
+            code: "animation",
+            name: "动画",
+            coverImageUrl: "/admin/assets/prompt-covers/animation.webp",
+            prompt_content: "二维动画风格，统一线条和赛璐璐上色",
+          },
+        ],
+      }),
+    });
+
+    assert.match(html, /data-action="open-asset-image-style-skill-modal"/);
+    assert.match(html, /aria-label="生图风格：动画"/);
+  });
+
   it("renders a generated image lightbox from the project asset editor", () => {
     const previewUrl = "/uploads/generated-character-preview.png";
     const html = renderProductionWorkbench({
@@ -13643,6 +13675,60 @@ describe("asset generator and imported asset modals", () => {
     assert.equal(workbench.ui.assetGeneratorPrompt, "");
   });
 
+  it("loads the current project style when opening the dedicated character generator", async () => {
+    const calls = [];
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        project: {
+          ...buildModalState().project,
+          projectType: "animation",
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      ui: buildModalUi({
+        projectAssetTab: "character",
+        projectStyles: [],
+      }),
+      api: {
+        async getProjectStyles() {
+          calls.push("getProjectStyles");
+          return {
+            styles: [
+              {
+                id: "animation",
+                code: "animation",
+                name: "动画",
+                prompt_content: "二维动画风格，统一线条和赛璐璐上色。",
+              },
+            ],
+          };
+        },
+        async listGenerationConfig() {
+          return {
+            creditBalance: 512,
+            defaultImageModelCode: "gpt-image-2-cn",
+            models: [],
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "open-asset-generator-modal", assetKind: "character" },
+    });
+
+    assert.deepEqual(calls, ["getProjectStyles"]);
+    assert.equal(workbench.ui.assetGeneratorStyleCode, "animation");
+    assert.equal(workbench.ui.projectStyles[0].prompt_content, "二维动画风格，统一线条和赛璐璐上色。");
+  });
+
   it("submits asset generator prompt through real episode image task", async () => {
     const calls = [];
     const workbench = {
@@ -13969,6 +14055,88 @@ describe("asset generator and imported asset modals", () => {
     assert.equal(generatedAsset?.name, "废土场景(1)");
     assert.equal(generatedAsset?.generationStatus, "completed");
     assert.equal(generatedAsset?.fixedImageUrl, "https://example.com/project-generated-scene.png");
+  });
+
+  it("keeps the project style in the character task after switching image models", async () => {
+    const calls = [];
+    const stylePrompt = "二维动画风格，统一线条和赛璐璐上色。";
+    const workbench = {
+      state: {
+        ...buildModalState(),
+        project: {
+          ...buildModalState().project,
+          id: "project-style-1",
+          projectId: "project-style-1",
+          projectType: "animation",
+        },
+      },
+      session: { user: { phone: "+86 13800138000", creditBalance: 512 } },
+      ui: buildModalUi({
+        assetGeneratorTarget: "project",
+        assetGeneratorModal: "character",
+        assetGeneratorName: "角色B",
+        assetGeneratorPrompt: "蓝发少女，校园制服，全身像。",
+        assetGeneratorModelCode: "image-model-a",
+        assetImageStyleSkillId: "project-style",
+        projectStyles: [
+          {
+            id: "animation",
+            code: "animation",
+            name: "动画",
+            prompt_content: stylePrompt,
+          },
+        ],
+        episodeGenerationConfig: {
+          defaultImageModelCode: "image-model-a",
+          models: [
+            {
+              modelCode: "image-model-a",
+              modelLabel: "图片模型 A",
+              mediaType: "image",
+              parameterSchema: {},
+            },
+            {
+              modelCode: "image-model-b",
+              modelLabel: "图片模型 B",
+              mediaType: "image",
+              parameterSchema: {},
+            },
+          ],
+        },
+      }),
+      api: {
+        async createImageGenerationTask(payload) {
+          calls.push(payload);
+          return {
+            asset: { id: "project-character-generated-1" },
+            version: {
+              id: "project-character-version-1",
+              previewUrl: "https://example.com/project-generated-character.png",
+              metadata: { source: "generated", label: "角色B" },
+            },
+          };
+        },
+      },
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+      },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "select-asset-generator-model", value: "image-model-b" },
+    });
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "submit-asset-generator" },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].model, "image-model-b");
+    assert.equal(calls[0].imageStyleCode, "animation");
+    assert.equal(calls[0].prompt, `蓝发少女，校园制服，全身像。\n图片风格：${stylePrompt}`);
+    assert.equal(calls[0].promptOverride, `蓝发少女，校园制服，全身像。\n图片风格：${stylePrompt}`);
   });
 
   it("uses project asset generation in panel mode even if a stale episode id is present", async () => {
