@@ -1,6 +1,7 @@
 export const routeAuthPolicyNames = [
   "public",
   "user",
+  "user-or-admin",
   "optional-user",
   "admin",
   "optional-admin",
@@ -449,7 +450,6 @@ const userApiRouteAuthRegistrations = inventoryRegistrations("user", [
   ["GET", "/api/billing/payment-intents/{paymentIntentId}"],
   ["GET", "/api/billing/orders/{orderId}"],
   ["POST", "/api/billing/enterprise-contact-requests"],
-  ["GET", "/api/storage/objects/{storageObjectId}/content"],
   ["GET", "/api/storage/upload-sessions/{uploadSessionId}"],
   ["GET", "/api/storage/upload-sessions/{uploadSessionId}/content"],
   ["PUT", "/api/storage/upload-sessions/{uploadSessionId}/blob"],
@@ -716,6 +716,11 @@ const conditionalApiRouteAuthRegistrations = inventoryRegistrations("optional-us
   ["GET", "/api/creator/library/assets"],
 ]);
 
+// Storage content accepts an eligible admin session or the owning user session.
+const compoundApiRouteAuthRegistrations = inventoryRegistrations("user-or-admin", [
+  ["GET", "/api/storage/objects/{storageObjectId}/content"],
+]);
+
 // These declarations currently sit inside a user-guard branch whose outer
 // pathname predicate cannot be reached for either path. Deny records the
 // effective behavior rather than making the dead handlers reachable.
@@ -729,6 +734,7 @@ export const apiRouteAuthRegistrations = [
   ...adminApiRouteAuthRegistrations,
   ...userApiRouteAuthRegistrations,
   ...conditionalApiRouteAuthRegistrations,
+  ...compoundApiRouteAuthRegistrations,
   ...unreachableApiRouteAuthRegistrations,
 ] as const satisfies readonly RouteAuthRegistration[];
 
@@ -738,7 +744,7 @@ export const apiRouteAuthRegistrations = [
  * partial until the registry can represent their exact runtime semantics.
  */
 export const apiRouteAuthInventoryCoverage = {
-  explicitMethodPath: { discovered: 191, uncovered: 0 },
+  explicitMethodPath: { discovered: 202, uncovered: 0 },
   regexDynamicMatchers: { discovered: 141, uncovered: 0 },
   wideCompositePredicates: { unresolved: 55 },
   conditionalQueryPolicies: { unresolved: 1 },

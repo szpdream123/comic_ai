@@ -133,6 +133,7 @@ describe("route auth policy registry", () => {
     assert.deepEqual(routeAuthPolicyNames, [
       "public",
       "user",
+      "user-or-admin",
       "optional-user",
       "admin",
       "optional-admin",
@@ -248,6 +249,16 @@ describe("route auth policy registry", () => {
     }
   });
 
+  it("keeps storage object content authentication route-owned for admin and user sessions", () => {
+    assert.equal(
+      criticalApiRouteAuthPolicyRegistry.resolve(
+        "GET",
+        "/api/storage/objects/00000000-0000-4000-8000-000000000001/content",
+      )?.policy,
+      "user-or-admin",
+    );
+  });
+
   it("registers formal and compatibility Canvas resource routes as user-authenticated", () => {
     for (const [method, path] of [
       ["GET", "/api/creator/canvases"],
@@ -331,7 +342,7 @@ describe("route auth policy registry", () => {
 
     assert.equal(wideCompositePredicates.length, 57);
     assert.deepEqual(apiRouteAuthInventoryCoverage, {
-      explicitMethodPath: { discovered: 191, uncovered: 0 },
+      explicitMethodPath: { discovered: 202, uncovered: 0 },
       regexDynamicMatchers: { discovered: 141, uncovered: 0 },
       wideCompositePredicates: { unresolved: 55 },
       conditionalQueryPolicies: { unresolved: 1 },

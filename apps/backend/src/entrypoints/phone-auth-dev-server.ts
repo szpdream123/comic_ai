@@ -25499,42 +25499,45 @@ export function createPhoneAuthDevServer(
           if (adminRoute.ok) {
             const storageObjectId = decodeURIComponent(storageObjectContentMatch[1] ?? "");
             const object = isUuid(storageObjectId) ? await findStorageObject(db, storageObjectId) : null;
-            if (
-              !object
-              || object.status !== "available"
-              || object.bucket !== storageBucket
-              || !object.contentType.startsWith("video/")
-              || !isHomeRecommendationObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix })
-            ) {
+            const isAdminReadableHomeVideo = Boolean(
+              object
+              && object.status === "available"
+              && object.bucket === storageBucket
+              && object.contentType.startsWith("video/")
+              && isHomeRecommendationObjectKey({ objectKey: object.objectKey, officialAssetRootPrefix }),
+            );
+            if (!isAdminReadableHomeVideo && !authenticated) {
               return writeJson(response, envelopedError(404, "storage_object_not_found", "Storage object was not found"));
             }
-            const signed = await storageRuntime.adapter.createSignedReadUrl({
-              bucket: object.bucket,
-              objectKey: object.objectKey,
-              expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
-              responseContentDisposition: "inline",
-            });
-            if (url.searchParams.get("proxy") === "1") {
-              const streamed = await streamStorageObjectContent({
-                response,
-                signedUrl: signed.url,
-                relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
-                range: typeof request.headers.range === "string" ? request.headers.range : null,
-                contentType: object.contentType,
-                download: false,
-                fetchImpl: options.fetchImpl ?? fetch,
+            if (isAdminReadableHomeVideo && object) {
+              const signed = await storageRuntime.adapter.createSignedReadUrl({
+                bucket: object.bucket,
+                objectKey: object.objectKey,
+                expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+                responseContentDisposition: "inline",
               });
-              if (!streamed) {
-                return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+              if (url.searchParams.get("proxy") === "1") {
+                const streamed = await streamStorageObjectContent({
+                  response,
+                  signedUrl: signed.url,
+                  relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                  range: typeof request.headers.range === "string" ? request.headers.range : null,
+                  contentType: object.contentType,
+                  download: false,
+                  fetchImpl: options.fetchImpl ?? fetch,
+                });
+                if (!streamed) {
+                  return writeJson(response, envelopedError(502, "storage_object_read_failed", "Storage object could not be read"));
+                }
+                return;
               }
+              response.statusCode = 307;
+              response.setHeader("location", signed.url);
+              response.setHeader("cache-control", "private, no-store");
+              response.setHeader("referrer-policy", "no-referrer");
+              response.end();
               return;
             }
-            response.statusCode = 307;
-            response.setHeader("location", signed.url);
-            response.setHeader("cache-control", "private, no-store");
-            response.setHeader("referrer-policy", "no-referrer");
-            response.end();
-            return;
           }
         }
         if (!authenticated) {

@@ -6883,6 +6883,37 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(adminPreviewWithUserSession.status, 206);
       assert.deepEqual(new Uint8Array(await adminPreviewWithUserSession.arrayBuffer()), videoBytes.slice(0, 4));
 
+      const creatorStorageObjectId = randomUUID();
+      const creatorUser = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = $1 LIMIT 1",
+        ["13800218888"],
+      );
+      assert.ok(creatorUser.rows[0]?.id);
+      await db.query(
+        `
+          INSERT INTO storage_objects
+            (id, bucket, object_key, content_type, size_bytes, created_by_user_id, provider, status)
+          VALUES ($1, $2, $3, 'image/png', $4, $5, 'cos', 'available')
+        `,
+        [
+          creatorStorageObjectId,
+          "home-recommendation-test-bucket",
+          `creator-assets/${creatorStorageObjectId}.png`,
+          videoBytes.byteLength,
+          creatorUser.rows[0].id,
+        ],
+      );
+      const creatorPreviewWithCombinedSession = await fetch(
+        `${server.origin}/api/storage/objects/${creatorStorageObjectId}/content?proxy=1`,
+        { headers: { cookie: combinedCookie } },
+      );
+      assert.equal(creatorPreviewWithCombinedSession.status, 200);
+      const creatorPreviewWithAdminSession = await fetch(
+        `${server.origin}/api/storage/objects/${creatorStorageObjectId}/content?proxy=1`,
+        { headers: { cookie } },
+      );
+      assert.equal(creatorPreviewWithAdminSession.status, 404);
+
       const categoryResponse = await fetch(`${server.origin}/api/admin/home-recommendations/categories`, {
         method: "POST",
         headers: { "content-type": "application/json", cookie },
