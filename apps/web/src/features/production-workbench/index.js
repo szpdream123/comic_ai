@@ -2975,6 +2975,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       selectedDashboardMemberId: null,
       billingPackages: [],
       membershipPlans: [],
+      membershipPlansLoading: false,
       membershipStatus: null,
       pricingModalTab: "membership",
       pendingBillingPackageId: "",
@@ -6604,21 +6605,46 @@ async function syncBillingPackages(workbench) {
   }
 }
 
-async function syncMembershipSurface(workbench) {
-  const [plansResult, statusResult] = await Promise.allSettled([
-    typeof workbench.api?.getMembershipPlans === "function"
-      ? workbench.api.getMembershipPlans()
-      : Promise.resolve({ data: { plans: [] } }),
+async function syncMembershipPlans(workbench) {
+  try {
+    const payload = typeof workbench.api?.getMembershipPlans === "function"
+      ? await workbench.api.getMembershipPlans()
+      : { data: { plans: [] } };
+    workbench.ui.membershipPlans = Array.isArray(payload?.data?.plans) ? payload.data.plans : [];
+  } catch {
+    workbench.ui.membershipPlans = [];
+  }
+}
+
+async function syncMembershipSurface(workbench, options = {}) {
+  const plansPromise = syncMembershipPlans(workbench).finally(() => options.onPlansSettled?.());
+  const [, statusResult] = await Promise.allSettled([
+    plansPromise,
     typeof workbench.api?.getMembershipStatus === "function"
       ? workbench.api.getMembershipStatus({ fresh: true })
       : Promise.resolve({ data: null }),
   ]);
-  workbench.ui.membershipPlans = plansResult.status === "fulfilled" && Array.isArray(plansResult.value?.data?.plans)
-    ? plansResult.value.data.plans
-    : [];
   workbench.ui.membershipStatus = statusResult.status === "fulfilled"
     ? normalizeMembershipStatus(statusResult.value)
     : null;
+}
+
+function syncOpenedMembershipPricingSurface(workbench, rerender = () => render(workbench)) {
+  workbench.ui.membershipPlansLoading = !Array.isArray(workbench.ui.membershipPlans) || workbench.ui.membershipPlans.length === 0;
+  rerender();
+  runLazyWorkbenchTask(workbench, "pricing surface", async () => {
+    await Promise.all([
+      syncBillingPackages(workbench),
+      syncMembershipSurface(workbench, {
+        onPlansSettled: () => {
+          workbench.ui.membershipPlansLoading = false;
+          rerender();
+        },
+      }),
+    ]);
+    workbench.ui.membershipPlansLoading = false;
+    rerender();
+  });
 }
 
 async function syncMembershipStatusOnly(workbench, options = {}) {
@@ -6750,11 +6776,7 @@ export async function ensureDirectorDeskCreationAllowed(workbench, options = {})
   workbench.ui.isLibraryPricingModalOpen = true;
   workbench.ui.isEnterpriseContactModalOpen = false;
   workbench.ui.pricingModalTab = "membership";
-  render(workbench);
-  runLazyWorkbenchTask(workbench, "pricing surface", async () => {
-    await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
-    render(workbench);
-  });
+  syncOpenedMembershipPricingSurface(workbench);
   return false;
 }
 
@@ -17692,11 +17714,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.isLibraryPricingModalOpen = true;
     workbench.ui.isEnterpriseContactModalOpen = false;
     workbench.ui.pricingModalTab = workbench.ui.pricingModalTab || "membership";
-    renderWorkbenchChrome(workbench);
-    runLazyWorkbenchTask(workbench, "pricing surface", async () => {
-      await Promise.all([syncBillingPackages(workbench), syncMembershipSurface(workbench)]);
-      renderWorkbenchChrome(workbench);
-    });
+    syncOpenedMembershipPricingSurface(workbench, () => renderWorkbenchChrome(workbench));
     return;
   }
 
@@ -18221,6 +18239,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "团队资产库为会员权益，开通后才能上传素材。";
       render(workbench, { preserveLibraryScroll: true });
+      syncOpenedMembershipPricingSurface(workbench, () => render(workbench, { preserveLibraryScroll: true }));
       return;
     }
     workbench.ui.libraryTeamAssetScope = "team";
@@ -18965,6 +18984,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
+      syncOpenedMembershipPricingSurface(workbench);
       return;
     }
     workbench.ui.activeNavTab = "team";
@@ -19518,6 +19538,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
+      syncOpenedMembershipPricingSurface(workbench);
       return;
     }
     await runAction(workbench, "正在创建画布...", async () => {
@@ -19862,6 +19883,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
+      syncOpenedMembershipPricingSurface(workbench);
       return;
     }
     if (creationMode === "workflow") {
@@ -24672,6 +24694,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
+      syncOpenedMembershipPricingSurface(workbench);
       return;
     }
     const assetKind = normalizeEpisodeWorkbenchAssetKind(
@@ -24714,6 +24737,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
+      syncOpenedMembershipPricingSurface(workbench);
       return;
     }
     const nextAssetKind = normalizeEpisodeWorkbenchAssetKind(
@@ -24742,6 +24766,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.isLibraryPricingModalOpen = true;
       workbench.ui.toast = "有效会员已过期或未开通，请先开通会员。";
       render(workbench);
+      syncOpenedMembershipPricingSurface(workbench);
       return;
     }
     workbench.ui.episodeAssetLibraryModal = requestedScope;
@@ -42090,6 +42115,7 @@ export async function handleTeamAssetLocalUploadFiles(workbench, category, files
     workbench.ui.isLibraryPricingModalOpen = true;
     workbench.ui.toast = "团队资产库为会员权益，开通后才能上传素材。";
     render(workbench, { preserveLibraryScroll: true });
+    syncOpenedMembershipPricingSurface(workbench, () => render(workbench, { preserveLibraryScroll: true }));
     return;
   }
 

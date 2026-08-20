@@ -40,6 +40,18 @@ test("does not render credit packages as membership plans when no membership pla
   assert.match(html, /data-membership-empty-state/);
 });
 
+test("shows loading feedback while membership plans are unresolved", () => {
+  const html = renderPricingModal({
+    open: true,
+    membershipPlans: null,
+  });
+
+  assert.match(html, /data-membership-loading-state/);
+  assert.match(html, /正在加载会员套餐/);
+  assert.doesNotMatch(html, /data-membership-empty-state/);
+  assert.doesNotMatch(html, /暂无可订阅会员套餐/);
+});
+
 test("renders provider payment links instead of a mock qr when the pay action has a real url", () => {
   const html = renderPricingModal({
     open: true,
