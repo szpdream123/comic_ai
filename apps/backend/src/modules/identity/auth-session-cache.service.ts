@@ -96,7 +96,7 @@ export function createAuthSessionCache(
 ): AuthSessionCache {
   const configuredTtlSeconds = Math.max(1, Math.floor(options.ttlSeconds ?? defaultTtlSeconds));
 
-  return {
+  return coalesceConcurrentSessionReads({
     async get(token, now) {
       const tokenHash = hashSecret(token);
       try {
@@ -242,6 +242,117 @@ export function createAuthSessionCache(
         await redis.quit?.();
       } catch {
         // Ignore shutdown errors.
+      }
+    },
+  });
+}
+
+function coalesceConcurrentSessionReads(cache: AuthSessionCache): AuthSessionCache {
+  const pendingReads = new Map<string, {
+    promise: ReturnType<AuthSessionCache["get"]>;
+    valid: boolean;
+  }>();
+
+  const clearPendingSessionRead = (token: string) => {
+    const tokenHash = hashSecret(token);
+    const pending = pendingReads.get(tokenHash);
+    if (pending) {
+      pending.valid = false;
+      pendingReads.delete(tokenHash);
+    }
+  };
+
+  const clearAllPendingSessionReads = () => {
+    for (const pending of pendingReads.values()) {
+      pending.valid = false;
+    }
+    pendingReads.clear();
+  };
+
+  return {
+    ...cache,
+    async get(token, now) {
+      const tokenHash = hashSecret(token);
+      while (true) {
+        let pending = pendingReads.get(tokenHash);
+        if (!pending) {
+          pending = {
+            promise: cache.get(token, now),
+            valid: true,
+          };
+          pendingReads.set(tokenHash, pending);
+        }
+
+        try {
+          const identity = await pending.promise;
+          if (!pending.valid) {
+            continue;
+          }
+          if (identity && new Date(identity.session.expiresAt).getTime() <= now.getTime()) {
+            return undefined;
+          }
+          return identity;
+        } finally {
+          if (pendingReads.get(tokenHash) === pending) {
+            pendingReads.delete(tokenHash);
+          }
+        }
+      }
+    },
+    async set(token, identity, now) {
+      clearPendingSessionRead(token);
+      try {
+        await cache.set(token, identity, now);
+      } finally {
+        clearPendingSessionRead(token);
+      }
+    },
+    async denySession(token, expiresAt, now) {
+      clearPendingSessionRead(token);
+      try {
+        await cache.denySession(token, expiresAt, now);
+      } finally {
+        clearPendingSessionRead(token);
+      }
+    },
+    async invalidateSession(token) {
+      clearPendingSessionRead(token);
+      try {
+        await cache.invalidateSession(token);
+      } finally {
+        clearPendingSessionRead(token);
+      }
+    },
+    async blockUser(userId, blocked) {
+      clearAllPendingSessionReads();
+      try {
+        await cache.blockUser(userId, blocked);
+      } finally {
+        clearAllPendingSessionReads();
+      }
+    },
+    async blockMember(memberId, blocked) {
+      clearAllPendingSessionReads();
+      try {
+        await cache.blockMember(memberId, blocked);
+      } finally {
+        clearAllPendingSessionReads();
+      }
+    },
+    async invalidateUser(userId) {
+      clearAllPendingSessionReads();
+      try {
+        await cache.invalidateUser(userId);
+      } finally {
+        clearAllPendingSessionReads();
+      }
+    },
+    async invalidateMember(memberId) {
+      clearAllPendingSessionReads();
+      try {
+        await cache.invalidateMember(memberId);
+      } finally {
+        clearAllPendingSessionReads();
       }
     },
   };

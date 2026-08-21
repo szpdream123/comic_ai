@@ -633,6 +633,24 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
+  it("reports JSON request duration through Server-Timing", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const response = await fetch(`${server.origin}/api/task-center/tasks`);
+
+      assert.equal(response.status, 401);
+      assert.match(
+        response.headers.get("server-timing") ?? "",
+        /^total;dur=\d+(?:\.\d+)?$/,
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
   it("requires authentication and returns the unified task-center list", async () => {
     const db = await createMigratedTestDb();
     let taskCenterQueryPayloadBytes: number | null = null;
@@ -3231,10 +3249,22 @@ describe("phone auth dev server", { concurrency: false }, () => {
         }),
       });
       const created = await createResponse.json();
-      const initialListResponse = await fetch(`${server.origin}/api/creator/projects`, {
-        headers: { cookie },
-      });
+      const originalQuery = db.query.bind(db);
+      let projectListCountQueries = 0;
+      db.query = async (sql, params) => {
+        if (sql.includes("SELECT COUNT(*) AS total") && sql.includes("FROM projects")) {
+          projectListCountQueries += 1;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return originalQuery(sql, params);
+      };
+      const [initialListResponse] = await Promise.all(
+        Array.from({ length: 3 }, () => fetch(`${server.origin}/api/creator/projects`, {
+          headers: { cookie },
+        })),
+      );
       const initialList = await initialListResponse.json();
+      assert.equal(projectListCountQueries, 1);
 
       await db.query(
         "UPDATE projects SET name = $1 WHERE id = $2",
@@ -3259,15 +3289,29 @@ describe("phone auth dev server", { concurrency: false }, () => {
         headers: { cookie },
       });
       const refreshedList = await refreshedListResponse.json();
+      const parseResponse = await fetch(`${server.origin}/api/creator/parse`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": "project-list-cache-parse",
+          cookie,
+        },
+      });
+      const parsedListResponse = await fetch(`${server.origin}/api/creator/projects`, {
+        headers: { cookie },
+      });
+      const parsedList = await parsedListResponse.json();
 
       assert.equal(createResponse.status, 200);
       assert.equal(initialListResponse.status, 200);
       assert.equal(cachedListResponse.status, 200);
       assert.equal(updateResponse.status, 200);
       assert.equal(refreshedListResponse.status, 200);
+      assert.equal(parseResponse.status, 202);
+      assert.equal(parsedListResponse.status, 200);
       assert.equal(initialList.projects[0].name, "Cached project name");
       assert.equal(cachedList.projects[0].name, "Cached project name");
       assert.equal(refreshedList.projects[0].name, "Updated through the API");
+      assert.equal(parsedList.projects[0].phase, "asset_review");
     } finally {
       await server.close();
     }

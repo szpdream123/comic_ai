@@ -295,6 +295,96 @@ test("read API calls coalesce duplicate in-flight requests", async () => {
   assert.deepEqual(secondPayload, { projects: [] });
 });
 
+test("slow surface reads forward an already-aborted caller signal", async () => {
+  const observedSignals = [];
+  globalThis.fetch = async (_url, options = {}) => {
+    observedSignals.push(options.signal);
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ projects: [], members: [], categories: [], assets: [] }),
+    };
+  };
+
+  const controller = new AbortController();
+  controller.abort();
+  const { creatorApi } = await import(`../src/shared/creator-api.js?surface-abort=${Date.now()}`);
+
+  assert.equal(creatorApi.getHomeRecommendations.length, 0);
+  assert.equal(creatorApi.getTeamOverview.length, 0);
+  assert.equal(creatorApi.getTeamMembers.length, 0);
+
+  await creatorApi.getProjects({ signal: controller.signal });
+  await creatorApi.getHomeRecommendations({ signal: controller.signal });
+  await creatorApi.getTeamOverview({ signal: controller.signal });
+  await creatorApi.getTeamMembers({ signal: controller.signal });
+  await creatorApi.getLibraryAssets({ signal: controller.signal });
+
+  assert.equal(observedSignals.length, 5);
+  assert.deepEqual(observedSignals.map((signal) => signal?.aborted), [true, true, true, true, true]);
+});
+
+test("an aborted cached read does not cancel the next request for the same surface", async () => {
+  const calls = [];
+  globalThis.fetch = async (_url, options = {}) => {
+    calls.push(options);
+    if (calls.length === 1) {
+      await new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        }, { once: true });
+      });
+    }
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ projects: [] }),
+    };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?surface-reentry=${Date.now()}`);
+  const firstController = new AbortController();
+  const first = creatorApi.getProjects({ signal: firstController.signal });
+  firstController.abort();
+
+  const secondController = new AbortController();
+  const second = creatorApi.getProjects({ signal: secondController.signal });
+  const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+
+  assert.equal(firstResult.status, "rejected");
+  assert.equal(firstResult.reason?.name, "AbortError");
+  assert.equal(secondResult.status, "fulfilled");
+  assert.equal(calls.length, 2);
+});
+
+test("aborting one surface read does not cancel a concurrent consumer of the same resource", async () => {
+  const calls = [];
+  const releases = [];
+  globalThis.fetch = async (_url, options = {}) => {
+    calls.push(options);
+    return new Promise((resolve, reject) => {
+      releases.push(() => resolve({
+        ok: true,
+        text: async () => JSON.stringify({ projects: [] }),
+      }));
+      options.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      }, { once: true });
+    });
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?surface-consumers=${Date.now()}`);
+  const firstController = new AbortController();
+  const first = creatorApi.getProjects({ signal: firstController.signal });
+  const second = creatorApi.getProjects();
+  firstController.abort();
+  releases[1]?.();
+  const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+
+  assert.equal(firstResult.status, "rejected");
+  assert.equal(firstResult.reason?.name, "AbortError");
+  assert.equal(secondResult.status, "fulfilled");
+  assert.equal(calls.length, 2);
+});
+
 test("getInviteSummary targets the authenticated invite summary route", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {

@@ -2098,9 +2098,16 @@ async function resolveCanvasAgentTaskActor(
   return { scope, actor, task };
 }
 
+const jsonResponseStartedAt = new WeakMap<ServerResponse, bigint>();
+
 function writeJson(response: ServerResponse, payload: AuthHttpResponse<unknown>) {
   response.statusCode = payload.status;
   response.setHeader("content-type", "application/json; charset=utf-8");
+  const startedAt = jsonResponseStartedAt.get(response);
+  if (startedAt && !response.hasHeader("server-timing")) {
+    const totalMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    response.setHeader("server-timing", `total;dur=${totalMs.toFixed(1)}`);
+  }
 
   if (payload.cookies?.length) {
     response.setHeader("set-cookie", payload.cookies);
@@ -19126,6 +19133,7 @@ export function createPhoneAuthDevServer(
     expiresAt: number;
     response: AuthHttpResponse<unknown>;
   }>();
+  const creatorProjectListPending = new Map<string, Promise<AuthHttpResponse<unknown>>>();
   const clearCreatorProjectListCache = (ownerUserId: string) => {
     const cacheKeyPrefix = `${ownerUserId}:`;
     for (const cacheKey of creatorProjectListCache.keys()) {
@@ -19133,6 +19141,20 @@ export function createPhoneAuthDevServer(
         creatorProjectListCache.delete(cacheKey);
       }
     }
+    for (const cacheKey of creatorProjectListPending.keys()) {
+      if (cacheKey.startsWith(cacheKeyPrefix)) {
+        creatorProjectListPending.delete(cacheKey);
+      }
+    }
+  };
+  const invalidateCreatorProjectListCacheOnSuccess = <T extends AuthHttpResponse<unknown>>(
+    ownerUserId: string,
+    mutationResponse: T,
+  ) => {
+    if (mutationResponse.status < 400) {
+      clearCreatorProjectListCache(ownerUserId);
+    }
+    return mutationResponse;
   };
   const canvasLiveHub = createCanvasLiveCollaborationHub({
     revisionTransport: createCanvasLiveRevisionTransportFromEnv(runtimeEnv),
@@ -19217,6 +19239,7 @@ export function createPhoneAuthDevServer(
     };
   };
   const httpServer = createServer((request, response) => {
+    jsonResponseStartedAt.set(response, process.hrtime.bigint());
     void runWithUserAuthRequestContext(() => runWithDatabaseContext(async () => {
       try {
         if (redirectInsecureProductionRequest(request, response, secureProductionOrigin)) {
@@ -26728,7 +26751,7 @@ export function createPhoneAuthDevServer(
           ) {
             return writeJson(response, envelopedError(503, "new_canvas_disabled", "new canvas writes are temporarily disabled"));
           }
-          return writeJson(response, await createUnifiedImageGenerationTask({
+          const generationResponse = await createUnifiedImageGenerationTask({
             db,
             authenticated,
             creatorApplication,
@@ -26739,7 +26762,13 @@ export function createPhoneAuthDevServer(
             fetchImpl: options.fetchImpl,
             signedUrlExpiresInSeconds,
             now: new Date(),
-          }));
+          });
+          return writeJson(
+            response,
+            target.kind === "project_shot_batch"
+              ? invalidateCreatorProjectListCacheOnSuccess(authenticated.user.id, generationResponse)
+              : generationResponse,
+          );
         }
 
         const canvasUserConfigRoute = matchCanvasUserConfigRoute(pathname);
@@ -30787,17 +30816,40 @@ export function createPhoneAuthDevServer(
           if (cached && cacheKey) {
             creatorProjectListCache.delete(cacheKey);
           }
-          const projectListResponse = await creatorApplication.listProjects({
-            user: {
-              id: authenticated.user.id,
-              sessionToken: authenticated.sessionToken,
-            },
-            now: new Date(),
-            page: Number(url.searchParams.get("page") ?? 1),
-            pageSize: url.searchParams.get("pageSize"),
-            keyword: url.searchParams.get("keyword"),
-          });
-          if (cacheKey && projectListResponse.status === 200) {
+          let projectListPromise = cacheKey
+            ? creatorProjectListPending.get(cacheKey)
+            : undefined;
+          if (!projectListPromise) {
+            projectListPromise = creatorApplication.listProjects({
+              user: {
+                id: authenticated.user.id,
+                sessionToken: authenticated.sessionToken,
+              },
+              now: new Date(),
+              page: Number(url.searchParams.get("page") ?? 1),
+              pageSize: url.searchParams.get("pageSize"),
+              keyword: url.searchParams.get("keyword"),
+            });
+            if (cacheKey) {
+              creatorProjectListPending.set(cacheKey, projectListPromise);
+            }
+          }
+          let projectListResponse: AuthHttpResponse<unknown>;
+          try {
+            projectListResponse = await projectListPromise;
+          } catch (error) {
+            if (cacheKey && creatorProjectListPending.get(cacheKey) === projectListPromise) {
+              creatorProjectListPending.delete(cacheKey);
+            }
+            throw error;
+          }
+          const canPublish = Boolean(
+            cacheKey && creatorProjectListPending.get(cacheKey) === projectListPromise,
+          );
+          if (canPublish && cacheKey) {
+            creatorProjectListPending.delete(cacheKey);
+          }
+          if (canPublish && cacheKey && projectListResponse.status === 200) {
             if (creatorProjectListCache.size >= 100) {
               creatorProjectListCache.delete(creatorProjectListCache.keys().next().value!);
             }
@@ -31441,7 +31493,9 @@ export function createPhoneAuthDevServer(
           };
           return writeJson(
             response,
-            await creatorApplication.commitAiStoryboardPreview({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.commitAiStoryboardPreview({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -31449,7 +31503,8 @@ export function createPhoneAuthDevServer(
               projectId,
               body,
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 
@@ -32408,14 +32463,17 @@ export function createPhoneAuthDevServer(
           }
           return writeJson(
             response,
-            await creatorApplication.parseScript({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.parseScript({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
               idempotencyKey,
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 
@@ -33927,12 +33985,15 @@ export function createPhoneAuthDevServer(
         if (request.method === "POST" && pathname === "/api/creator/assets/confirm-all") {
           return writeJson(
             response,
-            await creatorApplication.confirmAllAssets({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.confirmAllAssets({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
-            }),
+              }),
+            ),
           );
         }
 
@@ -33943,13 +34004,16 @@ export function createPhoneAuthDevServer(
           };
           return writeJson(
             response,
-            await creatorApplication.confirmAsset({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.confirmAsset({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
               body,
-            }),
+              }),
+            ),
           );
         }
 
@@ -34128,14 +34192,17 @@ export function createPhoneAuthDevServer(
           };
           return writeJson(
             response,
-            await creatorApplication.importShotMedia({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.importShotMedia({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
               body: { ...body, shotId },
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 
@@ -34220,14 +34287,17 @@ export function createPhoneAuthDevServer(
           const shotId = pathname.split("/").at(-3) ?? "";
           return writeJson(
             response,
-            await creatorApplication.retryShotImage({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.retryShotImage({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
               body: { shotId },
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 
@@ -34247,7 +34317,9 @@ export function createPhoneAuthDevServer(
           };
           return writeJson(
             response,
-            await creatorApplication.generateVideos({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.generateVideos({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
@@ -34255,7 +34327,8 @@ export function createPhoneAuthDevServer(
               body,
               idempotencyKey,
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 
@@ -34267,14 +34340,17 @@ export function createPhoneAuthDevServer(
           const shotId = pathname.split("/").at(-3) ?? "";
           return writeJson(
             response,
-            await creatorApplication.retryShotVideo({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.retryShotVideo({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
               body: { shotId },
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 
@@ -34285,14 +34361,17 @@ export function createPhoneAuthDevServer(
           }
           return writeJson(
             response,
-            await creatorApplication.previewExport({
+            invalidateCreatorProjectListCacheOnSuccess(
+              authenticated.user.id,
+              await creatorApplication.previewExport({
               user: {
                 id: authenticated.user.id,
                 sessionToken: authenticated.sessionToken,
               },
               idempotencyKey,
               now: new Date(),
-            }),
+              }),
+            ),
           );
         }
 

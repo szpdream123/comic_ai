@@ -66,7 +66,7 @@ async function fetchJson(url, options = {}) {
   const dedupeKey = options.dedupeKey ?? null;
   const dedupeTtlMs = Number.isFinite(options.dedupeTtlMs) ? options.dedupeTtlMs : 1500;
   if (dedupeKey) {
-    const cached = getCachedFetchJson(dedupeKey, dedupeTtlMs);
+    const cached = getCachedFetchJson(dedupeKey, dedupeTtlMs, options.signal);
     if (cached) {
       return cached;
     }
@@ -184,7 +184,7 @@ async function fetchJson(url, options = {}) {
     return payload;
   })();
   if (dedupeKey) {
-    cacheFetchJson(dedupeKey, request);
+    cacheFetchJson(dedupeKey, request, externalSignal);
   }
   return request;
 }
@@ -193,9 +193,16 @@ const fetchJsonCache = new Map();
 const readJsonCache = new Map();
 const readJsonCacheVersions = new Map();
 
-function getCachedFetchJson(key, ttlMs) {
+function getCachedFetchJson(key, ttlMs, signal = null) {
   const cached = fetchJsonCache.get(key);
   if (!cached) {
+    return null;
+  }
+  if (cached.signal?.aborted) {
+    fetchJsonCache.delete(key);
+    return null;
+  }
+  if (!cached.settled && cached.signal !== signal) {
     return null;
   }
   if (Date.now() - cached.createdAt > ttlMs) {
@@ -205,13 +212,21 @@ function getCachedFetchJson(key, ttlMs) {
   return cached.promise;
 }
 
-function cacheFetchJson(key, promise) {
-  fetchJsonCache.set(key, {
+function cacheFetchJson(key, promise, signal = null) {
+  const cached = {
     createdAt: Date.now(),
     promise,
-  });
-  promise.catch(() => {
-    if (fetchJsonCache.get(key)?.promise === promise) {
+    settled: false,
+    signal,
+  };
+  fetchJsonCache.set(key, cached);
+  promise.then(() => {
+    if (fetchJsonCache.get(key) === cached) {
+      cached.settled = true;
+      cached.signal = null;
+    }
+  }, () => {
+    if (fetchJsonCache.get(key) === cached) {
       fetchJsonCache.delete(key);
     }
   });
@@ -225,9 +240,16 @@ function clearFetchJsonCache(key) {
   fetchJsonCache.clear();
 }
 
-function getCachedReadJson(key, ttlMs) {
+function getCachedReadJson(key, ttlMs, signal = null) {
   const cached = readJsonCache.get(key);
   if (!cached) {
+    return null;
+  }
+  if (cached.signal?.aborted) {
+    readJsonCache.delete(key);
+    return null;
+  }
+  if (!cached.settled && cached.signal !== signal) {
     return null;
   }
   if (Date.now() - cached.createdAt > ttlMs) {
@@ -237,14 +259,22 @@ function getCachedReadJson(key, ttlMs) {
   return cached;
 }
 
-function cacheReadJson(key, promise) {
-  readJsonCache.set(key, {
+function cacheReadJson(key, promise, signal = null) {
+  const cached = {
     createdAt: Date.now(),
     promise,
     refreshing: false,
-  });
-  promise.catch(() => {
-    if (readJsonCache.get(key)?.promise === promise) {
+    settled: false,
+    signal,
+  };
+  readJsonCache.set(key, cached);
+  promise.then(() => {
+    if (readJsonCache.get(key) === cached) {
+      cached.settled = true;
+      cached.signal = null;
+    }
+  }, () => {
+    if (readJsonCache.get(key) === cached) {
       readJsonCache.delete(key);
     }
   });
@@ -300,7 +330,7 @@ function fetchJsonWithTtl(url, options = {}) {
   if (!Number.isFinite(cacheTtlMs) || cacheTtlMs <= 0 || fetchOptions.cache === "no-store") {
     return fetchJson(url, fetchOptions);
   }
-  const cached = getCachedReadJson(cacheKey, cacheTtlMs);
+  const cached = getCachedReadJson(cacheKey, cacheTtlMs, fetchOptions.signal);
   if (cached) {
     const shouldRefreshSilently =
       silentRefreshOnHit &&
@@ -328,7 +358,7 @@ function fetchJsonWithTtl(url, options = {}) {
     ...fetchOptions,
     dedupeKey: fetchOptions.dedupeKey ?? cacheKey,
   });
-  cacheReadJson(cacheKey, request);
+  cacheReadJson(cacheKey, request, fetchOptions.signal);
   return request;
 }
 
@@ -1175,9 +1205,11 @@ export const creatorApi = {
   },
 
   getHomeRecommendations() {
+    const options = arguments[0] ?? {};
     return fetchJsonWithTtl("/api/home-recommendations", {
       cacheKey: "GET /api/home-recommendations",
       cacheTtlMs: 300000,
+      signal: options.signal,
     });
   },
 
@@ -1258,16 +1290,20 @@ export const creatorApi = {
   },
 
   getTeamOverview() {
+    const options = arguments[0] ?? {};
     return fetchJsonWithTtl("/api/creator/team/overview", {
       cacheKey: "GET /api/creator/team/overview",
       cacheTtlMs: 30000,
+      signal: options.signal,
     });
   },
 
   getTeamMembers() {
+    const options = arguments[0] ?? {};
     return fetchJsonWithTtl("/api/creator/team/members", {
       cacheKey: "GET /api/creator/team/members",
       cacheTtlMs: 30000,
+      signal: options.signal,
     });
   },
 
@@ -1319,6 +1355,7 @@ export const creatorApi = {
     return fetchJsonWithTtl(path, {
       cacheKey: `GET ${path}`,
       cacheTtlMs: 30000,
+      signal: input.signal,
     });
   },
 
@@ -2210,6 +2247,7 @@ export const creatorApi = {
     return fetchJsonWithTtl(path, {
       cacheKey: `GET ${path}`,
       cacheTtlMs: 60000,
+      signal: input.signal,
     });
   },
 

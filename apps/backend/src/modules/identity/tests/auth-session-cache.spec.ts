@@ -69,6 +69,87 @@ describe("auth session Redis cache", () => {
     assert.equal(await cache.get(created.token, now), null);
   });
 
+  it("does not share a session read started before the token was denied", async () => {
+    const redis = new MemoryRedis();
+    let evalCalls = 0;
+    let markFirstReadStarted!: () => void;
+    let releaseFirstRead!: () => void;
+    const firstReadStarted = new Promise<void>((resolve) => {
+      markFirstReadStarted = resolve;
+    });
+    const firstReadGate = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    redis.eval = async (_script: string, _numberOfKeys: number, ...keys: string[]) => {
+      evalCalls += 1;
+      const denied = await redis.get(keys[0]!);
+      const raw = await redis.get(keys[1]!);
+      if (evalCalls === 1) {
+        markFirstReadStarted();
+        await firstReadGate;
+      }
+      if (denied) return [1];
+      return raw ? [2, raw] : [0];
+    };
+    const cache = createAuthSessionCache(redis);
+    const now = new Date("2026-07-11T10:00:00.000Z");
+    const created = await createAuthSession({ userId: "user-1", now, token: "token-1" });
+    await cache.set(created.token, { session: created.session, user: { id: "user-1", phone: null } }, now);
+
+    const readBeforeDeny = cache.get(created.token, now);
+    await firstReadStarted;
+    await cache.denySession(created.token, created.session.expiresAt, now);
+    const readAfterDeny = cache.get(created.token, now);
+    releaseFirstRead();
+
+    await readBeforeDeny;
+    assert.equal(await readAfterDeny, null);
+    assert.equal(evalCalls, 2);
+  });
+
+  it("does not retain a session read started while the token is being denied", async () => {
+    const redis = new MemoryRedis();
+    const cache = createAuthSessionCache(redis);
+    const now = new Date("2026-07-11T10:00:00.000Z");
+    const created = await createAuthSession({ userId: "user-1", now, token: "token-1" });
+    await cache.set(created.token, { session: created.session, user: { id: "user-1", phone: null } }, now);
+
+    let markDenyWriteStarted!: () => void;
+    let releaseDenyWrite!: () => void;
+    let markReadStarted!: () => void;
+    let releaseRead!: () => void;
+    const denyWriteStarted = new Promise<void>((resolve) => { markDenyWriteStarted = resolve; });
+    const denyWriteGate = new Promise<void>((resolve) => { releaseDenyWrite = resolve; });
+    const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const rawSet = redis.set.bind(redis);
+    redis.set = async (key: string, value: string) => {
+      markDenyWriteStarted();
+      await denyWriteGate;
+      return rawSet(key, value);
+    };
+    redis.eval = async (_script: string, _numberOfKeys: number, ...keys: string[]) => {
+      const denied = await redis.get(keys[0]!);
+      const raw = await redis.get(keys[1]!);
+      markReadStarted();
+      await readGate;
+      if (denied) return [1];
+      return raw ? [2, raw] : [0];
+    };
+
+    const deny = cache.denySession(created.token, created.session.expiresAt, now);
+    await denyWriteStarted;
+    const readDuringDeny = cache.get(created.token, now);
+    await readStarted;
+    releaseDenyWrite();
+    await deny;
+    const readAfterDeny = cache.get(created.token, now);
+    releaseRead();
+
+    assert.equal(await readDuringDeny, null);
+    assert.equal(await readAfterDeny, null);
+  });
+
   it("checks independent session cache keys concurrently", async () => {
     const redis = new MemoryRedis();
     let activeReads = 0;
@@ -109,5 +190,40 @@ describe("auth session Redis cache", () => {
 
     assert.equal((await cache.get(created.token, now))?.user.id, "user-1");
     assert.equal(evalCalls, 1);
+  });
+
+  it("shares only concurrent reads for the same session token", async () => {
+    const redis = new MemoryRedis();
+    let evalCalls = 0;
+    redis.eval = async (_script: string, _numberOfKeys: number, ...keys: string[]) => {
+      evalCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const raw = await redis.get(keys[1]!);
+      return raw ? [2, raw] : [0];
+    };
+    const cache = createAuthSessionCache(redis);
+    const now = new Date("2026-07-11T10:00:00.000Z");
+    const created = await createAuthSession({ userId: "user-1", now, token: "token-1" });
+
+    await cache.set(created.token, { session: created.session, user: { id: "user-1", phone: null } }, now);
+
+    const identities = await Promise.all([
+      cache.get(created.token, now),
+      cache.get(created.token, now),
+      cache.get(created.token, now),
+    ]);
+    assert.deepEqual(identities.map((identity) => identity?.user.id), ["user-1", "user-1", "user-1"]);
+    assert.equal(evalCalls, 1);
+
+    assert.equal((await cache.get(created.token, now))?.user.id, "user-1");
+    assert.equal(evalCalls, 2);
+
+    const [validIdentity, expiredIdentity] = await Promise.all([
+      cache.get(created.token, now),
+      cache.get(created.token, new Date(created.session.expiresAt.getTime() + 1)),
+    ]);
+    assert.equal(validIdentity?.user.id, "user-1");
+    assert.equal(expiredIdentity, undefined);
+    assert.equal(evalCalls, 3);
   });
 });
