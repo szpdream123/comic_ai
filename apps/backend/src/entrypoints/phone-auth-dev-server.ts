@@ -13469,13 +13469,18 @@ async function listEpisodeStoryboardsFromDb(
         s.current_image_asset_version_id,
         s.current_video_asset_version_id,
         COUNT(*) OVER() AS total_count,
-        image_version.storage_object_id AS image_storage_object_id,
+        image_storage.id AS image_storage_object_id,
         image_version.metadata_json AS image_metadata_json,
         video_version.storage_object_id AS video_storage_object_id,
         video_version.metadata_json AS video_metadata_json
       FROM shots s
       LEFT JOIN asset_versions image_version
         ON image_version.id = s.current_image_asset_version_id
+      LEFT JOIN storage_objects image_storage
+        ON image_storage.id = image_version.storage_object_id
+       AND image_storage.project_id = s.project_id
+       AND image_storage.status = 'available'
+       AND image_storage.deleted_at IS NULL
       LEFT JOIN asset_versions video_version
         ON video_version.id = s.current_video_asset_version_id
       WHERE s.episode_id = $1
@@ -13535,7 +13540,11 @@ async function listEpisodeStoryboardsFromDb(
       imageMetadata.previewUrl,
       imageMetadata.sourceUrl,
     ) ?? null;
+    const stableImageProxyUrl = shot.image_storage_object_id
+      ? `/api/storage/objects/${encodeURIComponent(shot.image_storage_object_id)}/content?proxy=1`
+      : null;
     const imageUrls =
+      !stableImageProxyUrl &&
       (!currentImageUrlFromMetadata || isMockEpisodeImageUrl(currentImageUrlFromMetadata)) &&
       input.runtime &&
       shot.image_storage_object_id
@@ -13563,6 +13572,7 @@ async function listEpisodeStoryboardsFromDb(
       : null;
     const currentImageUrl =
       resolvePreferredEpisodeImageUrl(
+        stableImageProxyUrl,
         currentImageUrlFromMetadata,
         imageUrls?.previewUrl,
         imageUrls?.downloadUrl,
