@@ -2223,6 +2223,7 @@ const WORKBENCH_THEME_STORAGE_KEY = "comic-ai:production-workbench-theme";
 const HOME_BACKGROUND_VIDEO_CACHE_NAME = "comic-ai:home-background-video:v1";
 const HOME_TV_PREVIEW_MAX_DURATION_MS = 5000;
 const homeTvPreviewStopTimers = new WeakMap();
+const homeTvActivePlaybackCards = new WeakMap();
 const HOME_BACKGROUND_MEDIA_SOURCE_MIME_TYPE = 'video/mp4; codecs="hvc1.1.6.L150.B0,mp4a.40.2"';
 const DEFAULT_WORKBENCH_THEME_ID = "starlit";
 const WORKBENCH_THEME_IDS = new Set(WORKBENCH_THEME_OPTIONS.map((theme) => theme.id));
@@ -2462,17 +2463,30 @@ function stopHomeTvVideoPlaybacks(root, exceptCard = null) {
   }
 }
 
-function toggleHomeTvVideoPlayback(card) {
+function stopActiveHomeTvVideoPlayback(root) {
+  const activeCard = root ? homeTvActivePlaybackCards.get(root) : null;
+  if (activeCard) {
+    stopHomeTvVideoPreview(activeCard, { force: true });
+    homeTvActivePlaybackCards.delete(root);
+  }
+  stopHomeTvVideoPlaybacks(root);
+}
+
+function toggleHomeTvVideoPlayback(card, root = null) {
   const video = card?.querySelector?.("[data-home-tv-preview]");
   if (!video) return false;
   if (card?.classList?.contains?.("is-playing")) {
     stopHomeTvVideoPreview(card, { force: true });
+    if (root && homeTvActivePlaybackCards.get(root) === card) {
+      homeTvActivePlaybackCards.delete(root);
+    }
     return false;
   }
-  stopHomeTvVideoPlaybacks(card?.closest?.(".home-tv-grid") ?? card?.parentElement, card);
   const timer = homeTvPreviewStopTimers.get(card);
   if (timer !== undefined) globalThis.clearTimeout?.(timer);
   homeTvPreviewStopTimers.delete(card);
+  stopActiveHomeTvVideoPlayback(root);
+  stopHomeTvVideoPlaybacks(card?.closest?.(".home-tv-grid") ?? card?.parentElement, card);
   const sourceUrl = String(video.dataset?.homeTvPreviewUrl ?? "").trim();
   if (!video.getAttribute?.("src") && sourceUrl) {
     video.setAttribute?.("src", sourceUrl);
@@ -2481,8 +2495,14 @@ function toggleHomeTvVideoPlayback(card) {
   card?.classList?.add?.("is-playing");
   video.muted = false;
   video.loop = false;
-  video.onended = () => stopHomeTvVideoPreview(card, { force: true });
-  video.onerror = () => stopHomeTvVideoPreview(card, { force: true });
+  const stopPlayback = () => {
+    stopHomeTvVideoPreview(card, { force: true });
+    if (root && homeTvActivePlaybackCards.get(root) === card) {
+      homeTvActivePlaybackCards.delete(root);
+    }
+  };
+  video.onended = stopPlayback;
+  video.onerror = stopPlayback;
   if (video.style) video.style.opacity = "1";
   try {
     video.currentTime = 0;
@@ -2491,9 +2511,10 @@ function toggleHomeTvVideoPlayback(card) {
   }
   video.play?.().catch?.(() => {
     if (card?.classList?.contains?.("is-playing")) {
-      stopHomeTvVideoPreview(card, { force: true });
+      stopPlayback();
     }
   });
+  if (root) homeTvActivePlaybackCards.set(root, card);
   return true;
 }
 
@@ -3530,6 +3551,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
   root.addEventListener("pointerover", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    const directorTab = eventTarget?.closest?.('[data-action="set-nav-tab"][data-tab="director"]');
+    if (directorTab && !directorTab.contains?.(event.relatedTarget)) preloadDirectorDeskModule();
     const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
     if (messageAttachment && !messageAttachment.contains?.(event.relatedTarget)) showCanvasAgentMessageAttachmentPreview(messageAttachment);
     const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
@@ -3548,6 +3571,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   });
   root.addEventListener("focusin", (event) => {
     const eventTarget = resolveEventElement(event.composedPath?.()[0] ?? event.target);
+    if (eventTarget?.closest?.('[data-action="set-nav-tab"][data-tab="director"]')) {
+      preloadDirectorDeskModule();
+    }
     const messageAttachment = eventTarget?.closest?.("[data-agent-message-attachment-preview]");
     if (messageAttachment) showCanvasAgentMessageAttachmentPreview(messageAttachment);
     const videoAttachment = eventTarget?.closest?.(".home-agent-attachment.video");
@@ -6177,6 +6203,7 @@ async function refresh(workbench, options = {}) {
 function syncWorkbenchHashRoute(workbench, hash) {
   syncWorkbenchRouteState(workbench, hash);
   syncCanvasRouteState(workbench, hash);
+  abortInactiveSurfaceRequests(workbench, workbench.ui.activeNavTab);
   workbench.ui.toast = "";
   const navigationRenderOptions = { preserveNavigationShell: true };
   render(workbench, navigationRenderOptions);
@@ -8679,18 +8706,24 @@ async function loadTeamSurface(workbench) {
     return;
   }
 
+  const controller = beginSurfaceRequest(workbench, "team-surface");
   try {
     const [overviewPayload, membersPayload] = await Promise.all([
-      workbench.api.getTeamOverview(),
-      workbench.api.getTeamMembers(),
+      workbench.api.getTeamOverview(withSurfaceRequestSignal({}, controller.signal)),
+      workbench.api.getTeamMembers(withSurfaceRequestSignal({}, controller.signal)),
     ]);
     workbench.ui.teamOverview = normalizeTeamOverviewPayload(overviewPayload);
     workbench.ui.teamMembers = Array.isArray(membersPayload?.members) ? membersPayload.members : [];
     workbench.ui.teamError = "";
   } catch (error) {
+    if (isSurfaceRequestAbort(error)) {
+      return;
+    }
     workbench.ui.teamOverview = null;
     workbench.ui.teamMembers = [];
     workbench.ui.teamError = friendlyError(error);
+  } finally {
+    finishSurfaceRequest(workbench, "team-surface", controller);
   }
 }
 
@@ -9057,6 +9090,13 @@ function preserveHomeBackgroundVideo(currentMain, nextMain) {
 
 function clearHomeBackgroundVideoObjectUrl(workbench) {
   workbench.homeBackgroundVideoCacheToken = Symbol("home-background-video-disposed");
+  const video = workbench.homeBackgroundVideoElement;
+  if (video) {
+    video.pause?.();
+    video.removeAttribute?.("src");
+    video.load?.();
+  }
+  workbench.homeBackgroundVideoElement = null;
   const objectUrl = String(workbench.homeBackgroundVideoObjectUrl ?? "");
   if (objectUrl.startsWith("blob:") && typeof globalThis.URL?.revokeObjectURL === "function") {
     globalThis.URL.revokeObjectURL(objectUrl);
@@ -9152,11 +9192,39 @@ function playHomeBackgroundVideoFromMediaSource(workbench, video, blob, token) {
 }
 
 function syncHomeBackgroundVideoLocalCache(workbench) {
-  const video = workbench?.root?.querySelector?.(".home-background-video video");
+  let video = workbench?.root?.querySelector?.(".home-background-video video");
   const sourceUrl = String(video?.dataset?.homeBackgroundVideoUrl ?? "").trim();
   if (!video || !sourceUrl) {
+    if (
+      workbench?.ui?.activeNavTab !== "home" &&
+      workbench.homeBackgroundVideoElement &&
+      workbench.homeBackgroundVideoSourceUrl
+    ) {
+      workbench.homeBackgroundVideoElement.pause?.();
+      return;
+    }
     clearHomeBackgroundVideoObjectUrl(workbench);
     return;
+  }
+  const retainedVideo = workbench.homeBackgroundVideoElement;
+  if (
+    retainedVideo &&
+    retainedVideo !== video &&
+    workbench.homeBackgroundVideoSourceUrl === sourceUrl &&
+    typeof video.replaceWith === "function"
+  ) {
+    video.replaceWith(retainedVideo);
+    const retainedHasSource = [
+      retainedVideo.currentSrc,
+      retainedVideo.getAttribute?.("src"),
+      retainedVideo.src,
+    ].some((value) => String(value ?? "").trim()) || Number(retainedVideo.readyState ?? 0) > 0;
+    if (retainedHasSource) {
+      playHomeBackgroundVideo(retainedVideo, false);
+      return;
+    }
+    video = retainedVideo;
+    delete video.dataset.homeBackgroundVideoCacheState;
   }
   if (
     workbench.homeBackgroundVideoSourceUrl === sourceUrl &&
@@ -9171,6 +9239,7 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
   clearHomeBackgroundVideoObjectUrl(workbench);
   const token = Symbol("home-background-video-cache");
   workbench.homeBackgroundVideoCacheToken = token;
+  workbench.homeBackgroundVideoElement = video;
   workbench.homeBackgroundVideoSourceUrl = sourceUrl;
   video.dataset.homeBackgroundVideoCacheState = "loading";
 
@@ -9867,7 +9936,7 @@ export function reconcileFirstLoginGuideTargets(workbench) {
 
 function render(workbench, options = {}) {
   if (updateNewCanvasSurfaceForHostAction(workbench)) return;
-  stopHomeTvVideoPlaybacks(workbench.root);
+  stopActiveHomeTvVideoPlayback(workbench.root);
   workbench.disposeHomeTvIncrementalLoading?.();
   workbench.disposeHomeTvIncrementalLoading = null;
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
@@ -10011,6 +10080,22 @@ function syncHomeTvIncrementalLoading(workbench) {
 
 let directorDeskModulePromise = null;
 let promptEditorModulePromise = null;
+
+function preloadDirectorDeskModule() {
+  const documentRef = globalThis.document;
+  if (!documentRef?.head || typeof documentRef.createElement !== "function") {
+    return;
+  }
+  const selector = `link[rel="modulepreload"][href="${DIRECTOR_DESK_MODULE_URL}"]`;
+  if (documentRef.querySelector?.(selector)) {
+    return;
+  }
+  const link = documentRef.createElement("link");
+  link.rel = "modulepreload";
+  link.href = DIRECTOR_DESK_MODULE_URL;
+  link.fetchPriority = "low";
+  documentRef.head.append(link);
+}
 
 function loadDirectorDeskModule() {
   if (!directorDeskModulePromise) {
@@ -19387,6 +19472,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     if (nextTab === "community") {
       workbench.ui.activeNavTab = "community";
+      abortInactiveSurfaceRequests(workbench, workbench.ui.activeNavTab);
       if (globalThis.window?.location?.hash !== "#community") {
         globalThis.window.location.hash = "community";
       }
@@ -19414,6 +19500,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
         if (globalThis.window?.location) {
           globalThis.window.location.hash = fallbackHash;
         }
+        abortInactiveSurfaceRequests(workbench, workbench.ui.activeNavTab);
         render(workbench, navigationRenderOptions);
         return;
       }
@@ -19421,6 +19508,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.teamDashboardTab = "member-consumption";
       workbench.ui.teamDashboardDateRange = "today";
     }
+    abortInactiveSurfaceRequests(workbench, workbench.ui.activeNavTab);
     if (isCanvasNavTab(workbench.ui.activeNavTab)) {
       workbench.ui.canvasProjectView = "list";
       workbench.ui.selectedCanvasNodeId = null;
@@ -19903,7 +19991,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   }
 
   if (action === "toggle-home-tv-preview") {
-    toggleHomeTvVideoPlayback(target.closest?.(".home-tv-card.has-video-preview"));
+    toggleHomeTvVideoPlayback(
+      target.closest?.(".home-tv-card.has-video-preview"),
+      workbench.root,
+    );
     return;
   }
 
@@ -26790,14 +26881,17 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       return;
     }
     await runAction(workbench, "正在重命名项目...", async () => {
-      await workbench.api.updateProject({
+      const result = await workbench.api.updateProject({
         projectId,
         name: nextName,
       });
-      await refreshProjectLibraryIfAvailable(workbench);
+      applyProjectCardPatch(workbench, projectId, {
+        name: result?.project?.name ?? nextName,
+      });
       workbench.ui.renameProjectId = null;
       workbench.ui.renameProjectName = "";
       workbench.ui.renameProjectNotice = "";
+      refreshProjectLibraryInBackground(workbench);
     });
     return;
   }
@@ -43758,8 +43852,8 @@ export async function uploadProjectCoverFile(workbench, file, projectId) {
     uploadSessionId: upload.uploadSessionId,
     storageObjectId: upload.storageObjectId,
   });
-  await refreshProjectLibraryIfAvailable(workbench);
   mergeProjectCoverUpdate(workbench, result?.project);
+  refreshProjectLibraryInBackground(workbench);
   return result;
 }
 
@@ -43792,6 +43886,11 @@ function mergeProjectCoverUpdate(workbench, project) {
           index === existingIndex ? { ...candidate, ...nextCard } : candidate,
         )
       : [nextCard, ...projects];
+  workbench.ui.homeRecentProjects = Array.isArray(workbench.ui?.homeRecentProjects)
+    ? workbench.ui.homeRecentProjects.map((candidate) =>
+        candidate.id === nextCard.id ? { ...candidate, ...nextCard } : candidate,
+      )
+    : [];
 
   if (workbench.state?.project?.id === project.id) {
     workbench.state.project = {
@@ -60093,33 +60192,43 @@ async function buildOfficialAssetImportPayload(workbench, record, assetKind) {
 async function syncProjectLibraryFromApi(workbench, options = {}) {
   const requestId = (workbench.projectLibraryRequestId ?? 0) + 1;
   workbench.projectLibraryRequestId = requestId;
+  const controller = beginSurfaceRequest(workbench, "project-library");
   const requestedPage = Math.max(1, Math.floor(Number(options.page ?? workbench.ui.projectLibraryPage ?? 1)));
   const keyword = String(options.keyword ?? workbench.ui.projectSearchQuery ?? "").trim();
   const pageSize = normalizeProjectLibraryPageSize(options.pageSize ?? workbench.ui.projectLibraryPagination?.pageSize);
-  const payload = await workbench.api.getProjects({
-    page: requestedPage,
-    pageSize,
-    keyword,
-  });
-  if (workbench.projectLibraryRequestId !== requestId) {
-    return false;
+  try {
+    const payload = await workbench.api.getProjects(withSurfaceRequestSignal({
+      page: requestedPage,
+      pageSize,
+      keyword,
+    }, controller.signal));
+    if (workbench.projectLibraryRequestId !== requestId) {
+      return false;
+    }
+    const projects = Array.isArray(payload.projects)
+      ? payload.projects.map((project) => mapProjectRecordToCard(project))
+      : [];
+    const pagination = normalizeProjectLibraryPagination(payload.pagination, {
+      page: requestedPage,
+      pageSize,
+      total: projects.length,
+    });
+    workbench.ui.projectLibrary = projects;
+    workbench.ui.projectLibraryPagination = pagination;
+    workbench.ui.projectLibraryPage = pagination.page;
+    syncSelectedProjectCard(workbench, projects);
+    if (options.includeAssets !== false) {
+      await syncProjectLibraryAssets(workbench);
+    }
+    return true;
+  } catch (error) {
+    if (isSurfaceRequestAbort(error)) {
+      return false;
+    }
+    throw error;
+  } finally {
+    finishSurfaceRequest(workbench, "project-library", controller);
   }
-  const projects = Array.isArray(payload.projects)
-    ? payload.projects.map((project) => mapProjectRecordToCard(project))
-    : [];
-  const pagination = normalizeProjectLibraryPagination(payload.pagination, {
-    page: requestedPage,
-    pageSize,
-    total: projects.length,
-  });
-  workbench.ui.projectLibrary = projects;
-  workbench.ui.projectLibraryPagination = pagination;
-  workbench.ui.projectLibraryPage = pagination.page;
-  syncSelectedProjectCard(workbench, projects);
-  if (options.includeAssets !== false) {
-    await syncProjectLibraryAssets(workbench);
-  }
-  return true;
 }
 
 async function syncHomeProjectLibraryFromApi(workbench) {
@@ -60129,13 +60238,14 @@ async function syncHomeProjectLibraryFromApi(workbench) {
   }
   const requestId = (workbench.homeProjectRequestId ?? 0) + 1;
   workbench.homeProjectRequestId = requestId;
+  const controller = beginSurfaceRequest(workbench, "home-projects");
   workbench.ui.homeProjectsLoading = true;
   try {
-    const payload = await workbench.api.getProjects({
+    const payload = await workbench.api.getProjects(withSurfaceRequestSignal({
       page: 1,
       pageSize: 8,
       keyword: "",
-    });
+    }, controller.signal));
     if (workbench.homeProjectRequestId !== requestId) {
       return false;
     }
@@ -60150,7 +60260,13 @@ async function syncHomeProjectLibraryFromApi(workbench) {
     workbench.ui.homeRecentProjects = projects;
     workbench.ui.homeProjectTotal = pagination.total;
     return true;
+  } catch (error) {
+    if (isSurfaceRequestAbort(error)) {
+      return false;
+    }
+    throw error;
   } finally {
+    finishSurfaceRequest(workbench, "home-projects", controller);
     if (workbench.homeProjectRequestId === requestId) {
       workbench.ui.homeProjectsLoading = false;
     }
@@ -60164,9 +60280,12 @@ async function syncHomeRecommendationsFromApi(workbench) {
   }
   const requestId = (workbench.homeRecommendationRequestId ?? 0) + 1;
   workbench.homeRecommendationRequestId = requestId;
+  const controller = beginSurfaceRequest(workbench, "home-recommendations");
   workbench.ui.homeTvLoading = true;
   try {
-    const payload = await workbench.api.getHomeRecommendations();
+    const payload = await workbench.api.getHomeRecommendations(
+      withSurfaceRequestSignal({}, controller.signal),
+    );
     if (workbench.homeRecommendationRequestId !== requestId) {
       return false;
     }
@@ -60179,7 +60298,13 @@ async function syncHomeRecommendationsFromApi(workbench) {
       workbench.ui.homeTvCategory = categories[0]?.code ?? "";
     }
     return true;
+  } catch (error) {
+    if (isSurfaceRequestAbort(error)) {
+      return false;
+    }
+    throw error;
   } finally {
+    finishSurfaceRequest(workbench, "home-recommendations", controller);
     if (workbench.homeRecommendationRequestId === requestId) {
       workbench.ui.homeTvLoading = false;
     }
@@ -60235,11 +60360,94 @@ function runLazyWorkbenchTask(workbench, label, task) {
     });
 }
 
+function beginSurfaceRequest(workbench, key) {
+  if (!workbench.surfaceRequestControllers) {
+    workbench.surfaceRequestControllers = new Map();
+  }
+  workbench.surfaceRequestControllers.get(key)?.abort();
+  const controller = new AbortController();
+  workbench.surfaceRequestControllers.set(key, controller);
+  return controller;
+}
+
+function withSurfaceRequestSignal(input, signal) {
+  Object.defineProperty(input, "signal", {
+    value: signal,
+    enumerable: false,
+  });
+  return input;
+}
+
+function finishSurfaceRequest(workbench, key, controller) {
+  if (workbench.surfaceRequestControllers?.get(key) === controller) {
+    workbench.surfaceRequestControllers.delete(key);
+  }
+}
+
+function applyProjectCardPatch(workbench, projectId, patch) {
+  const normalizedProjectId = String(projectId ?? "").trim();
+  if (!normalizedProjectId) {
+    return;
+  }
+  const patchCards = (projects) => Array.isArray(projects)
+    ? projects.map((project) => String(project?.id ?? "") === normalizedProjectId
+      ? { ...project, ...patch }
+      : project)
+    : projects;
+  workbench.ui.projectLibrary = patchCards(workbench.ui.projectLibrary) ?? [];
+  workbench.ui.homeRecentProjects = patchCards(workbench.ui.homeRecentProjects) ?? [];
+  if (String(workbench.state?.project?.id ?? "") === normalizedProjectId) {
+    workbench.state.project = { ...workbench.state.project, ...patch };
+  }
+  if (String(workbench.state?.projectDetail?.project?.id ?? "") === normalizedProjectId) {
+    workbench.state.projectDetail.project = { ...workbench.state.projectDetail.project, ...patch };
+  }
+}
+
+function isSurfaceRequestAbort(error) {
+  return error?.name === "AbortError";
+}
+
+function abortInactiveSurfaceRequests(workbench, activeNavTab) {
+  const activeKeys = new Set();
+  if (activeNavTab === "home" || activeNavTab === "free-generation") {
+    activeKeys.add("home-projects");
+    activeKeys.add("home-recommendations");
+  }
+  if (activeNavTab === "project" && workbench.ui.projectPanelMode === "library") {
+    activeKeys.add("project-library");
+  }
+  if (activeNavTab === "team") {
+    activeKeys.add("team-surface");
+  }
+  if (activeNavTab === "library") {
+    activeKeys.add("asset-library");
+  }
+  for (const [key, controller] of workbench.surfaceRequestControllers ?? []) {
+    if (!activeKeys.has(key)) {
+      controller.abort();
+      workbench.surfaceRequestControllers.delete(key);
+    }
+  }
+}
+
 async function refreshProjectLibraryIfAvailable(workbench) {
   if (typeof workbench.api?.getProjects !== "function") {
     return;
   }
   await syncProjectLibraryFromApi(workbench);
+}
+
+function refreshProjectLibraryInBackground(workbench) {
+  if (typeof workbench.api?.getProjects !== "function") {
+    return;
+  }
+  runLazyWorkbenchTask(workbench, "project library after update", async () => {
+    await syncProjectLibraryFromApi(workbench, { includeAssets: false });
+    if (workbench.ui.activeNavTab === "project" && workbench.ui.projectPanelMode === "library") {
+      render(workbench, { preserveNavigationShell: true });
+    }
+  });
 }
 
 function removeDeletedProjectsFromLibrary(workbench, projectIds) {
@@ -60669,12 +60877,13 @@ async function syncAssetLibraryFromApi(workbench, options = {}) {
 
   workbench.ui.libraryLoading = true;
   workbench.ui.libraryError = "";
-  const requestInput = {
+  const controller = beginSurfaceRequest(workbench, "asset-library");
+  const requestInput = withSurfaceRequestSignal({
     scope,
     category: workbench.ui.libraryCategory,
     folder: workbench.ui.libraryFolder,
     query: workbench.ui.libraryQuery,
-  };
+  }, controller.signal);
   const cacheKey = assetLibraryCacheKey(requestInput);
   try {
     const payload = await loadAssetLibraryPayload(workbench, cacheKey, requestInput);
@@ -60699,13 +60908,18 @@ async function syncAssetLibraryFromApi(workbench, options = {}) {
       workbench.ui.libraryFolder = folders[0];
     }
   } catch (error) {
+    if (isSurfaceRequestAbort(error)) {
+      return;
+    }
     if (options.requestId && workbench.librarySearchRequestId !== options.requestId) {
       return;
     }
     workbench.ui.libraryAssets = [];
     workbench.ui.libraryError = friendlyError(error);
   } finally {
-    if (!options.requestId || workbench.librarySearchRequestId === options.requestId) {
+    const isCurrentRequest = workbench.surfaceRequestControllers?.get("asset-library") === controller;
+    finishSurfaceRequest(workbench, "asset-library", controller);
+    if (isCurrentRequest && (!options.requestId || workbench.librarySearchRequestId === options.requestId)) {
       workbench.ui.libraryLoading = false;
     }
   }
@@ -60762,9 +60976,13 @@ async function loadAssetLibraryPayload(workbench, cacheKey, requestInput) {
     workbench.assetLibraryInFlight = new Map();
   }
   const pending = workbench.assetLibraryInFlight.get(cacheKey);
-  if (pending) {
-    return pending;
+  if (pending && !pending.signal?.aborted) {
+    return pending.promise;
   }
+  if (pending) {
+    workbench.assetLibraryInFlight.delete(cacheKey);
+  }
+  const pendingEntry = { signal: requestInput.signal, promise: null };
   const request = workbench.api.getLibraryAssets(requestInput)
     .then((payload) => {
       if (!workbench.assetLibraryCache) {
@@ -60777,9 +60995,12 @@ async function loadAssetLibraryPayload(workbench, cacheKey, requestInput) {
       return payload;
     })
     .finally(() => {
-      workbench.assetLibraryInFlight?.delete?.(cacheKey);
+      if (workbench.assetLibraryInFlight?.get?.(cacheKey) === pendingEntry) {
+        workbench.assetLibraryInFlight.delete(cacheKey);
+      }
     });
-  workbench.assetLibraryInFlight.set(cacheKey, request);
+  pendingEntry.promise = request;
+  workbench.assetLibraryInFlight.set(cacheKey, pendingEntry);
   return request;
 }
 

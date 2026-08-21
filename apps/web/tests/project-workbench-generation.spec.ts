@@ -22303,6 +22303,7 @@ describe("production workbench project tab", () => {
             },
           };
         },
+        getProjects: async () => new Promise(() => {}),
       },
       ui: {
         episodeGenerationConfig: {
@@ -22327,8 +22328,13 @@ describe("production workbench project tab", () => {
       },
     };
 
-    await uploadProjectCoverFile(workbench, { name: "cover.png", size: 10, type: "image/png" }, "project-1");
+    const outcome = await Promise.race([
+      uploadProjectCoverFile(workbench, { name: "cover.png", size: 10, type: "image/png" }, "project-1")
+        .then(() => "returned"),
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 30)),
+    ]);
 
+    assert.equal(outcome, "returned");
     assert.deepEqual(calls, [
       "uploadFile",
       [

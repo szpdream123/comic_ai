@@ -1251,7 +1251,7 @@ test("home TV video cards lazy-load previews and expose a click playback action"
   assert.doesNotMatch(videoCard, /<video[^>]*controls/);
   assert.match(source, /playHomeTvVideoPreview\(homeTvCard\)/);
   assert.match(source, /stopHomeTvVideoPreview\(homeTvCard\)/);
-  assert.match(source, /function render\(workbench, options = \{\}\) \{[\s\S]*?stopHomeTvVideoPlaybacks\(workbench\.root\)/);
+  assert.match(source, /function render\(workbench, options = \{\}\) \{[\s\S]*?stopActiveHomeTvVideoPlayback\(workbench\.root\)/);
   assert.match(css, /\.home-tv-card\.has-video-preview:hover \.home-tv-preview-video\s*\{[\s\S]*?opacity:\s*1/);
 });
 
@@ -1380,4 +1380,69 @@ test("starting a home TV video stops any other persistent playback", async () =>
   assert.equal(first.video.pauseCalls, 1);
   assert.equal(second.card.classList.contains("is-playing"), true);
   assert.equal(second.src, "/api/home-recommendations/videos/video-2/media");
+});
+
+test("starting a home TV video stops the previously audible card after it is detached", async () => {
+  const createVideoCard = (id) => {
+    const classes = new Set(["home-tv-card", "has-video-preview"]);
+    const video = {
+      dataset: { homeTvPreviewUrl: `/api/home-recommendations/videos/${id}/media` },
+      style: { opacity: "" },
+      muted: true,
+      loop: true,
+      currentTime: 0,
+      src: "",
+      pauseCalls: 0,
+      getAttribute(name) { return name === "src" ? this.src || null : null; },
+      setAttribute(name, value) { if (name === "src") this.src = String(value); },
+      removeAttribute(name) { if (name === "src") this.src = ""; },
+      load() {},
+      play() { return Promise.resolve(); },
+      pause() { this.pauseCalls += 1; },
+    };
+    const card = {
+      classList: {
+        add(name) { classes.add(name); },
+        remove(name) { classes.delete(name); },
+        contains(name) { return classes.has(name); },
+      },
+      querySelector(selector) { return selector === "[data-home-tv-preview]" ? video : null; },
+    };
+    return {
+      card,
+      classes,
+      video,
+      target: {
+        dataset: { action: "toggle-home-tv-preview" },
+        closest() { return card; },
+      },
+    };
+  };
+  const first = createVideoCard("video-1");
+  const second = createVideoCard("video-2");
+  const cards = [first.card, second.card];
+  const workbench = {
+    root: {
+      querySelector() { return null; },
+      querySelectorAll(selector) {
+        return selector === ".home-tv-card.has-video-preview.is-playing"
+          ? cards.filter((card) => card.classList.contains("is-playing"))
+          : [];
+      },
+    },
+    state: {},
+    session: {},
+    api: {},
+    ui: {},
+  };
+
+  await handleWorkbenchActionForTest(workbench, first.target);
+  cards.splice(0, 1);
+  await handleWorkbenchActionForTest(workbench, second.target);
+
+  assert.equal(first.classes.has("is-playing"), false);
+  assert.equal(first.video.muted, true);
+  assert.equal(first.video.pauseCalls, 1);
+  assert.equal(second.classes.has("is-playing"), true);
+  assert.equal(second.video.muted, false);
 });

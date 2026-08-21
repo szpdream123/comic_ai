@@ -13,11 +13,83 @@ import {
   deriveInitialNavTabForTest,
   prepareDirectorDeskMountForRender,
   ensureDirectorDeskCreationAllowed,
+  initProductionWorkbench,
   resolveDirectorPanoramaUploadUrl,
   restoreDirectorDeskMountAfterRender,
   syncDirectorDeskMountTheme,
   syncWorkbenchRouteStateForTest,
 } from "../src/features/production-workbench/index.js";
+
+test("director navigation intent preloads its module only once", async () => {
+  let pointerOverHandler;
+  const appendedLinks = [];
+  class TestElement {
+    closest(selector) {
+      return selector.includes('data-tab="director"') ? this : null;
+    }
+  }
+  class TestNode {}
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalElement = globalThis.Element;
+  const originalNode = globalThis.Node;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/" },
+    addEventListener() {},
+    removeEventListener() {},
+    setTimeout,
+    clearTimeout,
+  };
+  globalThis.document = {
+    head: { append(link) { appendedLinks.push(link); } },
+    body: { setAttribute() {} },
+    createElement() { return {}; },
+    querySelector(selector) {
+      return selector.includes('link[rel="modulepreload"]')
+        ? appendedLinks.find((link) => link.rel === "modulepreload") ?? null
+        : null;
+    },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.Element = TestElement;
+  globalThis.Node = TestNode;
+  globalThis.localStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  globalThis.sessionStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  const root = {
+    querySelector() { return null; },
+    addEventListener(type, handler) {
+      if (type === "pointerover") pointerOverHandler = handler;
+    },
+  };
+
+  try {
+    await initProductionWorkbench({ root, session: {}, api: {}, deferInitialRender: true });
+    const target = new TestElement();
+    pointerOverHandler?.({ target, relatedTarget: null, composedPath: () => [target] });
+    pointerOverHandler?.({ target, relatedTarget: null, composedPath: () => [target] });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (originalElement === undefined) delete globalThis.Element;
+    else globalThis.Element = originalElement;
+    if (originalNode === undefined) delete globalThis.Node;
+    else globalThis.Node = originalNode;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+
+  assert.equal(appendedLinks.length, 1);
+  assert.equal(appendedLinks[0].rel, "modulepreload");
+  assert.equal(appendedLinks[0].href, "/director-desk/director-desk.js");
+});
 
 test("director panorama uploads use fresh sessions and persist stable object content URLs", () => {
   const firstUploadId = createDirectorPanoramaUploadId();

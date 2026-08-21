@@ -57,6 +57,368 @@ function createDeferred() {
   return { promise, resolve, reject };
 }
 
+test("leaving home aborts its in-flight project request", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  let homeRequestSignal;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/" },
+    history: { pushState() {} },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.api.getProjects = async (input = {}) => {
+    if (input.pageSize === 8) {
+      homeRequestSignal = input.signal;
+      return new Promise(() => {});
+    }
+    return { projects: [], pagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 } };
+  };
+
+  try {
+    void syncHomeProjectLibraryFromApiForTest(workbench);
+    await Promise.resolve();
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "project" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(homeRequestSignal?.aborted, true);
+});
+
+test("leaving the asset library aborts its in-flight asset request", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  let assetRequestSignal;
+  globalThis.window = {
+    location: { hash: "#library", pathname: "/assets" },
+    history: { pushState() {} },
+  };
+  Object.assign(workbench.ui, {
+    activeNavTab: "library",
+    libraryTeamRoute: "assets",
+    libraryTeamAssetScope: "official",
+    libraryCategory: "character",
+    libraryFolder: "",
+  });
+  workbench.api.getLibraryAssets = async (input = {}) => {
+    assetRequestSignal = input.signal;
+    return new Promise(() => {});
+  };
+  workbench.api.getProjects = async () => ({
+    projects: [],
+    pagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
+  });
+
+  try {
+    syncWorkbenchHashRouteForTest(workbench, "#library");
+    await Promise.resolve();
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "project" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(assetRequestSignal?.aborted, true);
+});
+
+test("returning to the asset library starts a fresh request after the previous one was aborted", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  let libraryCalls = 0;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/" },
+    history: { pushState() {} },
+  };
+  Object.assign(workbench.ui, {
+    activeNavTab: "home",
+    libraryTeamRoute: "assets",
+    libraryTeamAssetScope: "official",
+    libraryCategory: "character",
+    libraryFolder: "",
+    libraryQuery: "",
+  });
+  workbench.api.getLibraryAssets = (input = {}) => {
+    libraryCalls += 1;
+    if (libraryCalls === 1) {
+      return new Promise((_resolve, reject) => {
+        input.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted", "AbortError"));
+        }, { once: true });
+      });
+    }
+    return Promise.resolve({
+      categories: [],
+      folders: [],
+      assets: [{ id: "fresh-asset", name: "新素材" }],
+      entitlement: null,
+    });
+  };
+
+  try {
+    syncWorkbenchHashRouteForTest(workbench, "#library");
+    await Promise.resolve();
+    await Promise.resolve();
+    syncWorkbenchHashRouteForTest(workbench, "#home");
+    syncWorkbenchHashRouteForTest(workbench, "#library");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+
+  assert.equal(libraryCalls, 2);
+  assert.deepEqual(workbench.ui.libraryAssets?.map((asset) => asset.id), ["fresh-asset"]);
+  assert.equal(workbench.ui.libraryLoading, false);
+});
+
+test("an aborted asset request cannot clear the replacement request loading state", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  let libraryCalls = 0;
+  let rejectFirstRequest;
+  let resolveSecondRequest;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/" },
+    history: { pushState() {} },
+  };
+  Object.assign(workbench.ui, {
+    activeNavTab: "home",
+    libraryTeamRoute: "assets",
+    libraryTeamAssetScope: "official",
+    libraryCategory: "character",
+    libraryFolder: "",
+    libraryQuery: "",
+  });
+  workbench.api.getLibraryAssets = (input = {}) => {
+    libraryCalls += 1;
+    if (libraryCalls === 1) {
+      return new Promise((_resolve, reject) => {
+        input.signal?.addEventListener("abort", () => {
+          rejectFirstRequest = () => reject(new DOMException("The operation was aborted", "AbortError"));
+        }, { once: true });
+      });
+    }
+    return new Promise((resolve) => { resolveSecondRequest = resolve; });
+  };
+
+  try {
+    syncWorkbenchHashRouteForTest(workbench, "#library");
+    await Promise.resolve();
+    await Promise.resolve();
+    syncWorkbenchHashRouteForTest(workbench, "#home");
+    syncWorkbenchHashRouteForTest(workbench, "#library");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(libraryCalls, 2);
+    assert.equal(workbench.ui.libraryLoading, true);
+    rejectFirstRequest();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(workbench.ui.libraryLoading, true);
+
+    resolveSecondRequest({
+      categories: [],
+      folders: [],
+      assets: [{ id: "fresh-asset", name: "新素材" }],
+      entitlement: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(workbench.ui.libraryLoading, false);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});
+
+test("leaving home pauses and reuses the buffered background video on return", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const originalCaches = globalThis.caches;
+  let videoSourceRemoved = false;
+  let pauseCalls = 0;
+  let playCalls = 0;
+  let loadCalls = 0;
+  let reusedVideo = null;
+  const video = {
+    dataset: { homeBackgroundVideoUrl: "https://cdn.example.test/home.mp4" },
+    isConnected: true,
+    readyState: 0,
+    src: "",
+    load() { loadCalls += 1; },
+    play: async () => { playCalls += 1; },
+    pause() { pauseCalls += 1; },
+    removeAttribute(name) {
+      if (name === "src") {
+        videoSourceRemoved = true;
+        this.src = "";
+      }
+    },
+  };
+  const replacementVideo = {
+    dataset: { homeBackgroundVideoUrl: "https://cdn.example.test/home.mp4" },
+    isConnected: true,
+    readyState: 0,
+    src: "",
+    replaceWith(nextVideo) {
+      reusedVideo = nextVideo;
+      renderedHomeVideo = nextVideo;
+    },
+    load() {},
+    play: async () => {},
+    pause() {},
+    removeAttribute() {},
+  };
+  let renderedHomeVideo = video;
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeBackground = {
+    status: "active",
+    videoUrl: "https://cdn.example.test/home.mp4",
+  };
+  workbench.api.getProjects = async () => ({
+    projects: [],
+    pagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
+  });
+  workbench.root.querySelector = (selector) =>
+    selector === ".home-background-video video" && workbench.ui.activeNavTab === "home"
+      ? renderedHomeVideo
+      : null;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/" },
+    history: { pushState() {} },
+  };
+  globalThis.caches = {
+    async open() {
+      return {
+        async match() { return null; },
+        async keys() { return []; },
+        async delete() { return true; },
+      };
+    },
+  };
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "home" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    playCalls = 0;
+    loadCalls = 0;
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "project" },
+    });
+    renderedHomeVideo = replacementVideo;
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "home" },
+    });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+  }
+
+  assert.equal(videoSourceRemoved, false);
+  assert.equal(pauseCalls > 0, true);
+  assert.equal(reusedVideo, video);
+  assert.equal(playCalls, 1);
+  assert.equal(loadCalls, 0);
+  assert.equal(workbench.homeBackgroundVideoElement, video);
+});
+
+test("returning home restarts a background video whose cache lookup finished while detached", async () => {
+  const workbench = createWorkbench();
+  const originalWindow = globalThis.window;
+  const originalCaches = globalThis.caches;
+  let resolveCacheMatch;
+  const cacheMatchGate = new Promise((resolve) => {
+    resolveCacheMatch = resolve;
+  });
+  const sourceUrl = "https://cdn.example.test/home.mp4";
+  const video = {
+    dataset: { homeBackgroundVideoUrl: sourceUrl },
+    isConnected: true,
+    readyState: 0,
+    src: "",
+    load() {},
+    play: async () => {},
+    pause() {},
+    removeAttribute(name) { if (name === "src") this.src = ""; },
+  };
+  const replacementVideo = {
+    dataset: { homeBackgroundVideoUrl: sourceUrl },
+    isConnected: true,
+    readyState: 0,
+    src: "",
+    replaceWith(nextVideo) {
+      renderedHomeVideo = nextVideo;
+      nextVideo.isConnected = true;
+    },
+    load() {},
+    play: async () => {},
+    pause() {},
+    removeAttribute() {},
+  };
+  let renderedHomeVideo = video;
+  workbench.ui.activeNavTab = "project";
+  workbench.ui.homeBackground = { status: "active", videoUrl: sourceUrl };
+  workbench.api.getProjects = async () => ({
+    projects: [],
+    pagination: { page: 1, pageSize: 18, total: 0, totalPages: 1 },
+  });
+  workbench.root.querySelector = (selector) =>
+    selector === ".home-background-video video" && workbench.ui.activeNavTab === "home"
+      ? renderedHomeVideo
+      : null;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/" },
+    history: { pushState() {} },
+  };
+  globalThis.caches = {
+    async open() {
+      return {
+        async match() {
+          await cacheMatchGate;
+          return null;
+        },
+        async keys() { return []; },
+        async delete() { return true; },
+      };
+    },
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "home" },
+    });
+    await Promise.resolve();
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "project" },
+    });
+    video.isConnected = false;
+    renderedHomeVideo = replacementVideo;
+    resolveCacheMatch(null);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "home" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+  }
+
+  assert.equal(renderedHomeVideo, video);
+  assert.equal(video.src, sourceUrl);
+  assert.equal(video.dataset.homeBackgroundVideoCacheState, "fallback");
+});
+
 test("project gallery pagination does not show a success toast", async () => {
   const workbench = createWorkbench();
   workbench.ui.projectLibrary = createProjectLibrary(18);
@@ -94,6 +456,29 @@ test("project card edit menu toggle does not show a success toast", async () => 
   assert.equal(workbench.ui.assetCardMenuId, null);
   assert.equal(workbench.ui.toast, "");
   assert.doesNotMatch(workbench.root.innerHTML, /global-workbench-toast/);
+});
+
+test("project rename updates visible cards without waiting for a list refetch", async () => {
+  const workbench = createWorkbench();
+  workbench.ui.renameProjectId = "project-1";
+  workbench.ui.renameProjectName = "即时新名称";
+  workbench.ui.homeRecentProjects = [{ ...workbench.ui.projectLibrary[0] }];
+  workbench.api.updateProject = async () => ({
+    project: { id: "project-1", name: "即时新名称" },
+  });
+  workbench.api.getProjects = async () => new Promise(() => {});
+
+  const outcome = await Promise.race([
+    handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "confirm-rename-project-card" },
+    }).then(() => "returned"),
+    new Promise((resolve) => setTimeout(() => resolve("blocked"), 30)),
+  ]);
+
+  assert.equal(outcome, "returned");
+  assert.equal(workbench.ui.projectLibrary[0].name, "即时新名称");
+  assert.equal(workbench.ui.homeRecentProjects[0].name, "即时新名称");
+  assert.equal(workbench.ui.renameProjectId, null);
 });
 
 test("canvas gallery deletes all selected projects from the current page", async () => {
