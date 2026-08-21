@@ -9131,11 +9131,52 @@ async function readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss = true } =
     }
     await cache.put(sourceUrl, response.clone());
   }
+  await pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl);
+  return response.blob();
+}
+
+function homeBackgroundVideoCacheIdentity(input) {
+  try {
+    const base = globalThis.window?.location?.origin || "https://lingxiyunai.com";
+    const url = new URL(String(input ?? ""), base);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return String(input ?? "");
+  }
+}
+
+async function pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl) {
+  const currentIdentity = homeBackgroundVideoCacheIdentity(sourceUrl);
   const requests = await cache.keys();
   await Promise.all(requests
-    .filter((request) => request.url !== sourceUrl)
+    .filter((request) => homeBackgroundVideoCacheIdentity(request.url) !== currentIdentity)
     .map((request) => cache.delete(request)));
-  return response.blob();
+}
+
+async function promoteHomeBackgroundVideoFromHttpCache(workbench, video, sourceUrl, token) {
+  if (!globalThis.caches?.open || typeof globalThis.fetch !== "function") return false;
+  try {
+    const response = await globalThis.fetch(sourceUrl, {
+      cache: "only-if-cached",
+      mode: "same-origin",
+      credentials: "same-origin",
+    });
+    if (
+      !response.ok ||
+      response.type === "opaque" ||
+      workbench.homeBackgroundVideoCacheToken !== token ||
+      workbench.homeBackgroundVideoSourceUrl !== sourceUrl ||
+      !video.isConnected
+    ) {
+      return false;
+    }
+    const cache = await globalThis.caches.open(HOME_BACKGROUND_VIDEO_CACHE_NAME);
+    await cache.put(sourceUrl, response.clone());
+    await pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function playHomeBackgroundVideo(video, shouldLoad = true) {
@@ -9263,6 +9304,9 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
     })
     .catch(() => {
       if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
+      video.addEventListener?.("canplaythrough", () => {
+        void promoteHomeBackgroundVideoFromHttpCache(workbench, video, sourceUrl, token);
+      }, { once: true });
       video.src = sourceUrl;
       video.dataset.homeBackgroundVideoCacheState = "fallback";
       playHomeBackgroundVideo(video);

@@ -236,6 +236,145 @@ test("an aborted asset request cannot clear the replacement request loading stat
   }
 });
 
+test("background video cache hit plays without a network fetch", async () => {
+  const workbench = createWorkbench();
+  const sourceUrl = "/api/home-recommendations/background/media?v=cached";
+  const originalWindow = globalThis.window;
+  const originalCaches = globalThis.caches;
+  const originalFetch = globalThis.fetch;
+  const originalCreateObjectURL = globalThis.URL.createObjectURL;
+  let fetchCalls = 0;
+  const video = {
+    dataset: { homeBackgroundVideoUrl: sourceUrl },
+    isConnected: true,
+    readyState: 0,
+    src: "",
+    load() {},
+    play: async () => {},
+    pause() {},
+    removeAttribute(name) { if (name === "src") this.src = ""; },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeBackground = { videoUrl: sourceUrl, status: "active" };
+  workbench.root.querySelector = (selector) => selector === ".home-background-video video" ? video : null;
+  workbench.api.getProjects = async () => ({ projects: [], pagination: { total: 0 } });
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    history: { pushState() {} },
+  };
+  globalThis.caches = {
+    async open() {
+      return {
+        async match() { return { async blob() { return new Blob(["cached-video"]); } }; },
+        async keys() { return [{ url: sourceUrl }]; },
+        async delete() { return true; },
+      };
+    },
+  };
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("cache hit must not fetch");
+  };
+  globalThis.URL.createObjectURL = () => "blob:cached-home-video";
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "home" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+    globalThis.URL.createObjectURL = originalCreateObjectURL;
+  }
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(video.src, "blob:cached-home-video");
+  assert.equal(video.dataset.homeBackgroundVideoCacheState, "ready");
+});
+
+test("promotes the buffered background video from HTTP cache without a COS request", async () => {
+  const workbench = createWorkbench();
+  const sourceUrl = "/api/home-recommendations/background/media?v=current";
+  const oldUrl = "https://lingxiyunai.com/api/home-recommendations/background/media?v=old";
+  const originalWindow = globalThis.window;
+  const originalCaches = globalThis.caches;
+  const originalFetch = globalThis.fetch;
+  let canPlayThrough = null;
+  const fetchCalls = [];
+  const putCalls = [];
+  const deletedUrls = [];
+  const cachedResponse = {
+    ok: true,
+    type: "basic",
+    clone() { return this; },
+  };
+  const video = {
+    dataset: { homeBackgroundVideoUrl: sourceUrl },
+    isConnected: true,
+    readyState: 0,
+    src: "",
+    load() {},
+    play: async () => {},
+    pause() {},
+    removeAttribute(name) { if (name === "src") this.src = ""; },
+    addEventListener(type, listener) {
+      if (type === "canplaythrough") canPlayThrough = listener;
+    },
+  };
+  workbench.ui.activeNavTab = "home";
+  workbench.ui.homeBackground = { videoUrl: sourceUrl, status: "active" };
+  workbench.root.querySelector = (selector) => selector === ".home-background-video video" ? video : null;
+  workbench.api.getProjects = async () => ({ projects: [], pagination: { total: 0 } });
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    history: { pushState() {} },
+  };
+  globalThis.caches = {
+    async open() {
+      return {
+        async match() { return null; },
+        async put(requestUrl, response) { putCalls.push({ requestUrl, response }); },
+        async keys() { return [{ url: oldUrl }, { url: `https://lingxiyunai.com${sourceUrl}` }]; },
+        async delete(request) { deletedUrls.push(request.url); return true; },
+      };
+    },
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    fetchCalls.push({ url: String(url), options });
+    return cachedResponse;
+  };
+
+  try {
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-nav-tab", tab: "home" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    canPlayThrough?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].url, sourceUrl);
+  assert.equal(fetchCalls[0].options.cache, "only-if-cached");
+  assert.equal(fetchCalls[0].options.mode, "same-origin");
+  assert.equal(putCalls.length, 1);
+  assert.equal(putCalls[0].requestUrl, sourceUrl);
+  assert.equal(putCalls[0].response, cachedResponse);
+  assert.deepEqual(deletedUrls, [oldUrl]);
+});
+
 test("leaving home pauses and reuses the buffered background video on return", async () => {
   const workbench = createWorkbench();
   const originalWindow = globalThis.window;
