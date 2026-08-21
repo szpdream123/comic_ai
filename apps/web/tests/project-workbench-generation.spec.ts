@@ -43386,6 +43386,167 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.toast, "已删除 谭杰。");
   });
 
+  it("keeps newly created episode character scene and prop assets visible when the immediate refresh is stale", async () => {
+    const episodeId = "f1b0c6f2-7e84-48f0-9c2d-961d3f53e202";
+    const cases = [
+      { kind: "character", assetType: "role", assetId: "833d88fb-e6d0-4482-a830-1d24e37f0dab", name: "新角色" },
+      { kind: "scene", assetType: "scene", assetId: "833d88fb-e6d0-4482-a830-1d24e37f0dac", name: "新场景" },
+      { kind: "prop", assetType: "prop", assetId: "833d88fb-e6d0-4482-a830-1d24e37f0dad", name: "新道具" },
+      { kind: "scene", assetType: "scene", assetId: "833d88fb-e6d0-4482-a830-1d24e37f0daf", name: "Mock episode image" },
+    ];
+
+    for (const testCase of cases) {
+      const workbench = {
+        root: {
+          innerHTML: "",
+          querySelector() {
+            return null;
+          },
+          querySelectorAll() {
+            return [];
+          },
+        },
+        state: {
+          ...buildProjectState(),
+          projectDetail: {
+            project: { id: "project-1", projectId: "project-1", name: "try" },
+            episodes: [{ id: episodeId, title: "第1章", status: "draft" }],
+            assetsByType: {
+              character: [],
+              scene: [],
+              prop: [],
+              other: { image: [], video: [] },
+            },
+            shots: [],
+          },
+        },
+        session: { user: { phone: "+86 13800138000" } },
+        api: {
+          async createEpisodeAsset(requestedEpisodeId, payload) {
+            assert.equal(requestedEpisodeId, episodeId);
+            assert.deepEqual(payload, { assetType: testCase.assetType, name: testCase.name });
+            return {
+              asset: {
+                assetId: testCase.assetId,
+                assetType: testCase.assetType,
+                name: testCase.name,
+                description: "",
+              },
+            };
+          },
+          async listEpisodeAssets() {
+            return { items: [] };
+          },
+        },
+        ui: buildProjectUi({
+          projectPanelMode: "episode-workbench",
+          projectInteriorSection: "episodes",
+          museScopeMode: "assets",
+          projectAssetTab: testCase.kind,
+          selectedEpisodeId: episodeId,
+          importedAssets: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          episodeAssetCreateModal: {
+            show: true,
+            type: testCase.kind,
+            name: testCase.name,
+          },
+        }),
+      };
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "save-episode-asset-create" },
+      });
+
+      assert.deepEqual(
+        workbench.ui.importedAssets[testCase.kind].map((asset) => ({ id: asset.id, name: asset.name })),
+        [{ id: testCase.assetId, name: testCase.name }],
+      );
+      assert.equal(workbench.ui.selectedEpisodeAssetId, testCase.assetId);
+      assert.equal(workbench.ui.selectedEpisodeCardId, testCase.assetId);
+      assert.equal(workbench.ui.episodeAssetCreateModal, null);
+    }
+  });
+
+  it("keeps a newly created episode asset visible when the immediate refresh fails", async () => {
+    const episodeId = "f1b0c6f2-7e84-48f0-9c2d-961d3f53e203";
+    const assetId = "833d88fb-e6d0-4482-a830-1d24e37f0dae";
+    const workbench = {
+      root: {
+        innerHTML: "",
+        querySelector() {
+          return null;
+        },
+        querySelectorAll() {
+          return [];
+        },
+      },
+      state: {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: episodeId, title: "第1章", status: "draft" }],
+          assetsByType: {
+            character: [],
+            scene: [],
+            prop: [],
+            other: { image: [], video: [] },
+          },
+          shots: [],
+        },
+      },
+      session: { user: { phone: "+86 13800138000" } },
+      api: {
+        async createEpisodeAsset() {
+          return {
+            asset: {
+              assetId,
+              assetType: "role",
+              name: "刷新失败角色",
+              description: "",
+            },
+          };
+        },
+        async listEpisodeAssets() {
+          throw new Error("episode asset refresh failed");
+        },
+      },
+      ui: buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        projectInteriorSection: "episodes",
+        museScopeMode: "assets",
+        projectAssetTab: "character",
+        selectedEpisodeId: episodeId,
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+        episodeAssetCreateModal: {
+          show: true,
+          type: "character",
+          name: "刷新失败角色",
+        },
+      }),
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "save-episode-asset-create" },
+    });
+
+    assert.deepEqual(
+      workbench.ui.importedAssets.character.map((asset) => ({ id: asset.id, name: asset.name })),
+      [{ id: assetId, name: "刷新失败角色" }],
+    );
+    assert.equal(workbench.ui.selectedEpisodeAssetId, assetId);
+    assert.equal(workbench.ui.episodeAssetCreateModal, null);
+  });
+
   it("renders episode asset save-to-library quick action in asset mode", () => {
     const state = buildProjectState();
     const storyboards = addStoryboard([]);
@@ -49839,10 +50000,22 @@ describe("production workbench project tab", () => {
           return {
             assets: [
               {
-                id: "project-scene-1",
+                assetId: "project-character-1",
+                assetType: "character_sheet",
+                label: "项目角色",
+                previewUrl: "https://example.com/project-character.png",
+              },
+              {
+                assetId: "project-scene-1",
                 assetType: "scene_reference",
                 label: "项目场景",
                 previewUrl: "https://example.com/project-scene.png",
+              },
+              {
+                assetId: "project-prop-1",
+                assetType: "prop_reference",
+                label: "项目道具",
+                previewUrl: "https://example.com/project-prop.png",
               },
             ],
           };
@@ -49854,7 +50027,7 @@ describe("production workbench project tab", () => {
           return {
             assets: [
               {
-                id: `${input.scope}-${input.category}-1`,
+                assetId: `${input.scope}-${input.category}-1`,
                 name: `${scopeLabel}${kindLabel}`,
                 description: `${scopeLabel}${kindLabel}提示词`,
                 previewUrl: `https://example.com/${input.scope}-${input.category}.png`,
@@ -49881,8 +50054,28 @@ describe("production workbench project tab", () => {
 
     assert.equal(projectLibraryCalls, 1);
     assert.equal(workbench.ui.assetImportModalSource, "project");
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "project-scene-1");
     assert.equal(workbench.ui.assetImportOfficialAssets[0]?.name, "项目场景");
     assert.match(workbench.root.innerHTML, /项目场景/);
+    assert.match(workbench.root.innerHTML, /data-asset-id="project-scene-1"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-kind", assetKind: "character" },
+    });
+
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "project-character-1");
+    assert.match(workbench.root.innerHTML, /data-asset-id="project-character-1"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-kind", assetKind: "prop" },
+    });
+
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "project-prop-1");
+    assert.match(workbench.root.innerHTML, /data-asset-id="project-prop-1"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-kind", assetKind: "scene" },
+    });
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "set-asset-import-scope", assetScope: "team" },
@@ -49891,9 +50084,11 @@ describe("production workbench project tab", () => {
     assert.deepEqual(calls[0], { scope: "team", category: "scene" });
     assert.notEqual(workbench.ui.isLibraryPricingModalOpen, true);
     assert.equal(workbench.ui.assetImportModalSource, "team");
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "team-scene-1");
     assert.equal(workbench.ui.assetImportOfficialAssets[0]?.source, "team");
     assert.equal(workbench.ui.assetImportOfficialAssets[0]?.description, "团队场景提示词");
     assert.match(workbench.root.innerHTML, /团队场景/);
+    assert.match(workbench.root.innerHTML, /data-asset-id="team-scene-1"/);
     assert.match(workbench.root.innerHTML, /data-asset-scope="team"/);
 
     await handleWorkbenchActionForTest(workbench, {
@@ -49902,25 +50097,53 @@ describe("production workbench project tab", () => {
 
     assert.deepEqual(calls[1], { scope: "team", category: "prop" });
     assert.equal(workbench.ui.assetImportModal, "prop");
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "team-prop-1");
     assert.match(workbench.root.innerHTML, /团队道具/);
+    assert.match(workbench.root.innerHTML, /data-asset-id="team-prop-1"/);
     assert.match(workbench.root.innerHTML, /data-asset-kind="prop"/);
-
-    await handleWorkbenchActionForTest(workbench, {
-      dataset: { action: "set-asset-import-scope", assetScope: "official" },
-    });
-
-    assert.deepEqual(calls[2], { scope: "official", category: "prop" });
-    assert.equal(workbench.ui.assetImportModalSource, "official");
-    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.source, "official");
-    assert.match(workbench.root.innerHTML, /官方道具/);
 
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "set-asset-import-kind", assetKind: "character" },
     });
 
-    assert.deepEqual(calls[3], { scope: "official", category: "character" });
+    assert.deepEqual(calls[2], { scope: "team", category: "character" });
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "team-character-1");
+    assert.match(workbench.root.innerHTML, /data-asset-id="team-character-1"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-kind", assetKind: "scene" },
+    });
+
+    assert.deepEqual(calls[3], { scope: "team", category: "scene" });
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-scope", assetScope: "official" },
+    });
+
+    assert.deepEqual(calls[4], { scope: "official", category: "scene" });
+    assert.equal(workbench.ui.assetImportModalSource, "official");
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "official-scene-1");
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.source, "official");
+    assert.match(workbench.root.innerHTML, /data-asset-id="official-scene-1"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-kind", assetKind: "prop" },
+    });
+
+    assert.deepEqual(calls[5], { scope: "official", category: "prop" });
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "official-prop-1");
+    assert.match(workbench.root.innerHTML, /官方道具/);
+    assert.match(workbench.root.innerHTML, /data-asset-id="official-prop-1"/);
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "set-asset-import-kind", assetKind: "character" },
+    });
+
+    assert.deepEqual(calls[6], { scope: "official", category: "character" });
     assert.equal(workbench.ui.assetImportModal, "character");
+    assert.equal(workbench.ui.assetImportOfficialAssets[0]?.id, "official-character-1");
     assert.match(workbench.root.innerHTML, /官方角色/);
+    assert.match(workbench.root.innerHTML, /data-asset-id="official-character-1"/);
   });
 
   it("shows project assets inside the episode workbench import modal", () => {
@@ -50192,6 +50415,99 @@ describe("production workbench project tab", () => {
     assert.equal(workbench.ui.episodeWorkbenchContext, null);
     assert.equal(workbench.ui.episodeWorkbenchContextLoadedEpisodeId, null);
     assert.equal(workbench.ui.toast, "已导入 1 项场景到当前剧集。");
+  });
+
+  it("imports assetId-only library records for characters, scenes, and props", async () => {
+    const cases = [
+      { kind: "character", source: "project", assetType: "role", libraryAssetId: "project-character-1", importedAssetId: "episode-character-1" },
+      { kind: "scene", source: "team", assetType: "scene", libraryAssetId: "team-scene-1", importedAssetId: "episode-scene-1" },
+      { kind: "prop", source: "official", assetType: "prop", libraryAssetId: "official-prop-1", importedAssetId: "episode-prop-1" },
+    ];
+
+    for (const testCase of cases) {
+      const calls = [];
+      const storyboards = createStoryboardList(buildProjectState());
+      const record = {
+        assetId: testCase.libraryAssetId,
+        name: `${testCase.kind}-library-asset`,
+        preview: `https://example.com/${testCase.libraryAssetId}.png`,
+        sourceUrl: `https://example.com/${testCase.libraryAssetId}.png`,
+        mimeType: "image/png",
+        source: testCase.source === "project" ? "library" : testCase.source,
+      };
+      const ui = buildProjectUi({
+        projectPanelMode: "episode-workbench",
+        selectedEpisodeId: "episode-2",
+        selectedProjectCardId: "project-1",
+        projectAssetTab: testCase.kind,
+        storyboards,
+        selectedStoryboard: storyboards[0],
+        assetImportModal: testCase.kind,
+        assetImportModalTab: "official",
+        assetImportModalSource: testCase.source,
+        assetImportSelection: [],
+        assetImportOfficialAssets: [record],
+        importedAssets: {
+          character: [],
+          scene: [],
+          prop: [],
+          other: { image: [], video: [] },
+        },
+      });
+      const state = {
+        ...buildProjectState(),
+        projectDetail: {
+          project: { id: "project-1", projectId: "project-1", name: "try" },
+          episodes: [{ id: "episode-2", title: "真实剧集", status: "draft", storyboardCount: 1 }],
+          shots: [],
+        },
+      };
+      const initialHtml = renderProductionWorkbench({
+        state,
+        session: { user: { phone: "+86 13800138000" } },
+        ui,
+      });
+      const workbench = {
+        ui,
+        state,
+        api: {
+          async importEpisodeAsset(episodeId, payload) {
+            calls.push({ episodeId, payload });
+            return {
+              asset: {
+                assetId: testCase.importedAssetId,
+                assetType: testCase.assetType,
+                name: record.name,
+                fixedImageUrl: record.preview,
+              },
+            };
+          },
+        },
+        root: {
+          innerHTML: "",
+          querySelector() {
+            return null;
+          },
+        },
+      };
+
+      assert.match(initialHtml, new RegExp(`data-asset-id="${testCase.libraryAssetId}"`));
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "toggle-official-asset-import", assetId: testCase.libraryAssetId },
+      });
+      assert.deepEqual(workbench.ui.assetImportSelection, [testCase.libraryAssetId]);
+
+      await handleWorkbenchActionForTest(workbench, {
+        dataset: { action: "confirm-asset-import" },
+      });
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].episodeId, "episode-2");
+      assert.equal(calls[0].payload.assetType, testCase.assetType);
+      assert.equal(workbench.ui.importedAssets[testCase.kind][0]?.id, testCase.importedAssetId);
+      assert.equal(workbench.ui.assetImportModal, null);
+    }
   });
 
   it("blocks episode asset import when an asset with the same name already exists", async () => {

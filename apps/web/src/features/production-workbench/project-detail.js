@@ -6716,7 +6716,7 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
 
 function normalizeEpisodeWorkbenchImportAssets(assets = []) {
   return assets.map((asset) => ({
-    id: asset.id,
+    id: asset.id ?? asset.assetId,
     name: asset.name ?? asset.label ?? "未命名资产",
     preview: resolveApiUrl(asset.preview ?? asset.previewUrl ?? asset.previewDataUrl ?? ""),
   }));

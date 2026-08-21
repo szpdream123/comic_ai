@@ -21178,13 +21178,63 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       Object.prototype.hasOwnProperty.call(episodeAssetTypeMap, nextType)
     ) {
       let createdAssetId = null;
+      let createdAssetRecord = null;
       await runAction(workbench, "正在创建剧集素材...", async () => {
         const created = await workbench.api.createEpisodeAsset(workbench.ui.selectedEpisodeId, {
           assetType: episodeAssetTypeMap[nextType],
           name: nextName,
         });
-        createdAssetId = created?.asset?.assetId ?? null;
-        await ensureEpisodeWorkbenchAssetsHydrated(workbench, { force: true });
+        createdAssetRecord = created?.asset ?? null;
+        createdAssetId = createdAssetRecord?.assetId ?? createdAssetRecord?.id ?? created?.assetId ?? null;
+        let createdEntry = null;
+        if (createdAssetId) {
+          const createdContract = {
+            ...(createdAssetRecord ?? {}),
+            assetId: createdAssetId,
+            name: createdAssetRecord?.name ?? nextName,
+          };
+          [createdEntry] = mapEpisodeAssetContracts([createdContract], nextType);
+          if (!createdEntry) {
+            const createdPreview = resolvePreferredFixedImageUrl(
+              createdContract.fixedImageUrl,
+              createdContract.previewUrl,
+              createdContract.sourceUrl,
+            );
+            createdEntry = {
+              id: createdAssetId,
+              assetId: createdAssetId,
+              conversationAssetId: resolveEpisodeAssetConversationSourceId(createdContract),
+              name: createdContract.name,
+              preview: createdPreview,
+              previewUrl: createdPreview,
+              description: resolveEpisodeAssetDescription(createdContract),
+              kind: nextType,
+              source: "episode",
+              assetSource: "episode",
+              voiceId: createdContract.voiceId ?? null,
+              voiceName: createdContract.voiceName ?? "",
+              voiceSource: createdContract.voiceSource ?? inferEpisodeVoiceSource(createdContract),
+              dubbingConfig: createdContract.dubbingConfig ?? null,
+              updatedAt: createdContract.updatedAt ?? null,
+              fixedImageFileId: createdContract.fixedImageFileId ?? null,
+              fixedImageUrl: createdPreview,
+              fixedImageStorageObjectId: createdContract.fixedImageStorageObjectId ?? null,
+            };
+          }
+        }
+        if (createdEntry) {
+          seedImportedEpisodeAssets(workbench, nextType, [createdEntry]);
+        }
+        try {
+          await ensureEpisodeWorkbenchAssetsHydrated(workbench, { force: true });
+        } catch (error) {
+          if (!createdEntry) {
+            throw error;
+          }
+        }
+        if (createdEntry) {
+          seedImportedEpisodeAssets(workbench, nextType, [createdEntry]);
+        }
         applyManualAssetDraftDefaults(workbench, nextType, createdAssetId, nextName);
       }, { successToast: "" });
       workbench.ui.projectAssetTab = nextType;
@@ -25288,7 +25338,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
 
     if (workbench.ui.assetImportModalTab === "official") {
       importRecords.push(...(workbench.ui.assetImportOfficialAssets ?? [])
-        .filter((asset) => selectedIds.has(asset.id))
+        .filter((asset) => selectedIds.has(asset.id ?? asset.assetId))
         .map((asset) => ({
           ...asset,
           source: ["team", "official", "library"].includes(asset.source) ? asset.source : "official",
@@ -60025,7 +60075,7 @@ async function loadEpisodeAssetImportScopeRecords(workbench, scope, assetKind) {
   return (Array.isArray(payload?.assets) ? payload.assets : []).map((asset) => {
     const preview = asset.previewUrl ?? asset.preview ?? asset.sourceUrl ?? "";
     return {
-      id: asset.id,
+      id: asset.id ?? asset.assetId,
       name: asset.name ?? asset.label ?? "未命名资产",
       description: asset.description ?? "",
       preview,
@@ -60049,7 +60099,7 @@ function mapProjectAssetImportRecords(assets = []) {
       asset.latestVersion?.metadata?.previewUrl,
     );
     return {
-      id: asset.id,
+      id: asset.id ?? asset.assetId,
       name: asset.label ?? asset.name ?? asset.assetKey ?? "未命名资产",
       description: asset.description ?? asset.latestVersion?.metadata?.description ?? "",
       preview,
