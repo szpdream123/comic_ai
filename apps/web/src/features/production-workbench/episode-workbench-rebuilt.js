@@ -5434,7 +5434,17 @@ function resolveSelectedImagePreview(storyboard) {
   const selected = (storyboard?.uploadedImages ?? []).find(
     (item) => item.id === storyboard?.currentImageAssetVersionId,
   );
-  return resolveMediaPreviewUrl({ ...(selected ?? {}), ...storyboard, type: "image" }, "image");
+  const previewUrl = selected?.preview ?? selected?.previewUrl ?? selected?.previewImageUrl ?? selected?.src ?? storyboard?.previewImageUrl;
+  return resolveMediaPreviewUrl({
+    ...(selected ?? {}),
+    ...storyboard,
+    thumbnailSrc: previewUrl,
+    thumbnailUrl: previewUrl,
+    previewThumbnailUrl: previewUrl,
+    preview: previewUrl,
+    previewUrl,
+    type: "image",
+  }, "image");
 }
 
 function resolveSelectedVideoPreview(storyboard) {

@@ -5572,6 +5572,160 @@ describe("phone auth dev server", { concurrency: false }, () => {
       }
   });
 
+  it("returns a stable storage content URL for historical storyboard images", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const createProjectResponse = await fetch(`${server.origin}/api/creator/project/create`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": "historical-storyboard-image-project",
+          cookie,
+        },
+        body: JSON.stringify({
+          name: "Historical storyboard image",
+          scriptInput: "Episode 1: An old storyboard image remains visible after a release.",
+          aspectRatio: "16:9",
+          resolution: "1080p",
+        }),
+      });
+      const createdProject = await createProjectResponse.json();
+      const projectId = createdProject.project.id;
+      const createEpisodeResponse = await fetch(
+        `${server.origin}/api/projects/${projectId}/episodes`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie },
+          body: JSON.stringify({ title: "Episode 1" }),
+        },
+      );
+      const createdEpisode = await createEpisodeResponse.json();
+      const episodeId = createdEpisode.data.episode.id;
+      const createStoryboardResponse = await fetch(`${server.origin}/api/creator/shots`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({
+          title: "Storyboard 1",
+          description: "historical storyboard",
+          episodeId,
+        }),
+      });
+      const createdStoryboard = await createStoryboardResponse.json();
+      const storyboardId = createdStoryboard.shot.id;
+      const project = await db.query<{ created_by_user_id: string }>(
+        "SELECT created_by_user_id FROM projects WHERE id = $1",
+        [projectId],
+      );
+      const userId = project.rows[0].created_by_user_id;
+      const otherProjectId = randomUUID();
+      await db.query(
+        `
+          INSERT INTO projects (
+            id, name, aspect_ratio, resolution, phase, owner_user_id, created_by_user_id
+          ) VALUES ($1, 'Other historical storyboard image project', '16:9', '1080p', 'script_input', $2, $2)
+        `,
+        [otherProjectId, userId],
+      );
+      const storageObjectId = randomUUID();
+      const assetId = randomUUID();
+      const assetVersionId = randomUUID();
+      const objectKey = `storyboards/${storyboardId}/historical.png`;
+      const expiredPreviewUrl =
+        "https://storage.example.test/historical.png?X-Amz-Date=20260817T000000Z&X-Amz-Expires=3599&X-Amz-Signature=expired";
+
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, project_id, bucket, object_key, content_type, size_bytes,
+            created_by_user_id, provider, status
+          ) VALUES ($1, $2, 'creator-test', $3, 'image/png', 128, $4, 'tencent_cos', 'available')
+        `,
+        [storageObjectId, projectId, objectKey, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO assets (
+            id, project_id, asset_type, asset_key, created_by_user_id, created_at, updated_at
+          ) VALUES ($1, $2, 'shot_image', $3, $4, now(), now())
+        `,
+        [assetId, projectId, `historical-storyboard-image-${assetId}`, userId],
+      );
+      await db.query(
+        `
+          INSERT INTO asset_versions (
+            id, asset_id, version_number, storage_object_key, storage_object_id,
+            metadata_json, created_by_user_id, created_at
+          ) VALUES ($1, $2, 1, $3, $4, $5::jsonb, $6, now())
+        `,
+        [
+          assetVersionId,
+          assetId,
+          objectKey,
+          storageObjectId,
+          JSON.stringify({ previewUrl: expiredPreviewUrl, sourceUrl: expiredPreviewUrl }),
+          userId,
+        ],
+      );
+      await db.query(
+        "UPDATE shots SET current_image_asset_version_id = $2, image_status = 'ready' WHERE id = $1",
+        [storyboardId, assetVersionId],
+      );
+
+      const storyboardsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=5`,
+        { headers: { cookie } },
+      );
+      const storyboards = await storyboardsResponse.json();
+      const storyboard = storyboards.data.items.find(
+        (item: { storyboardId: string }) => item.storyboardId === storyboardId,
+      );
+
+      assert.equal(createProjectResponse.status, 200);
+      assert.equal(createEpisodeResponse.status, 200);
+      assert.equal(createStoryboardResponse.status, 200);
+      assert.equal(storyboardsResponse.status, 200);
+      assert.equal(
+        storyboard.currentImageUrl,
+        `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`,
+      );
+
+      await db.query("UPDATE storage_objects SET status = 'failed' WHERE id = $1", [storageObjectId]);
+      const unavailableStoryboardsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=5`,
+        { headers: { cookie } },
+      );
+      const unavailableStoryboards = await unavailableStoryboardsResponse.json();
+      const unavailableStoryboard = unavailableStoryboards.data.items.find(
+        (item: { storyboardId: string }) => item.storyboardId === storyboardId,
+      );
+
+      assert.equal(unavailableStoryboardsResponse.status, 200);
+      assert.equal(unavailableStoryboard.currentImageUrl, expiredPreviewUrl);
+
+      await db.query(
+        "UPDATE storage_objects SET status = 'available', project_id = $2 WHERE id = $1",
+        [storageObjectId, otherProjectId],
+      );
+      const crossProjectStoryboardsResponse = await fetch(
+        `${server.origin}/api/episodes/${episodeId}/storyboards?page=1&pageSize=5`,
+        { headers: { cookie } },
+      );
+      const crossProjectStoryboards = await crossProjectStoryboardsResponse.json();
+      const crossProjectStoryboard = crossProjectStoryboards.data.items.find(
+        (item: { storyboardId: string }) => item.storyboardId === storyboardId,
+      );
+
+      assert.equal(crossProjectStoryboardsResponse.status, 200);
+      assert.equal(crossProjectStoryboard.currentImageUrl, expiredPreviewUrl);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("exposes narrow batch image model options without unrelated generation config fields", async () => {
     const server = await createPhoneAuthDevServerWithTestDb();
 

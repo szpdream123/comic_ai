@@ -3005,6 +3005,28 @@ describe("workbench generation payloads and inspectors", () => {
     assert.match(lightboxImageBlock, /pointer-events:\s*auto/);
   });
 
+  it("keeps the storyboard image visible after the storyboard also has a video", () => {
+    const storyboard = {
+      ...addStoryboard([])[0],
+      displayTitle: "雨夜焦土",
+      currentImageAssetVersionId: "historical-image-version",
+      uploadedImages: [{
+        id: "historical-image-version",
+        preview: "/uploads/storyboards/rainy-battlefield.png",
+      }],
+      previewImageUrl: "/uploads/storyboards/rainy-battlefield.png",
+      previewVideo: "/uploads/storyboards/rainy-battlefield.mp4",
+      previewUrl: "/uploads/storyboards/rainy-battlefield.mp4",
+      previewThumbnailUrl: "/uploads/storyboards/rainy-battlefield-video-cover.png",
+    };
+
+    const cardHtml = renderStoryboardCard(storyboard, true, false, {}, "storyboard");
+
+    assert.match(cardHtml, /<img src="\/uploads\/storyboards\/rainy-battlefield\.png"/);
+    assert.doesNotMatch(cardHtml, /<img src="\/uploads\/storyboards\/rainy-battlefield\.mp4"/);
+    assert.doesNotMatch(cardHtml, /<img src="\/uploads\/storyboards\/rainy-battlefield-video-cover\.png"/);
+  });
+
   it("opens storyboard image previews through the delegated double-click action", async () => {
     const source = readFileSync(
       new URL("../src/features/production-workbench/index.js", import.meta.url),
