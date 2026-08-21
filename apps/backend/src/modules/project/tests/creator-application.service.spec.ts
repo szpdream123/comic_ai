@@ -539,7 +539,7 @@ describe("creator application user ownership", { concurrency: false }, () => {
     }
   });
 
-  it("filters episode assets in SQL before project detail rows cross the database boundary", async () => {
+  it("filters episode assets from project detail while listing them in the project asset library", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -554,6 +554,7 @@ describe("creator application user ownership", { concurrency: false }, () => {
         body: {
           name: "Project detail asset filter",
           scriptInput: "Episode 1",
+          projectType: "animation",
           aspectRatio: "9:16",
           resolution: "1080p",
         },
@@ -645,7 +646,7 @@ describe("creator application user ownership", { concurrency: false }, () => {
       captureLibraryQueries = false;
       assert.deepEqual(
         (library.body as { assets: Array<{ assetKey: string }> }).assets.map((asset) => asset.assetKey).sort(),
-        ["empty-episode-character", "global-character"],
+        ["empty-episode-character", "episode-character", "global-character"],
       );
       assert.equal(
         libraryQueries.some((sql) => /FROM (?:shots|episodes|export_records|shot_reference_assets)/.test(sql)),

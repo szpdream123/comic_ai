@@ -1535,7 +1535,7 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
           return { status: 404, body: { error: "project_not_found" } };
         }
       }
-      const assets = await listAssetsForProject(deps.db, { projectId });
+      const assets = await listAssetsForProject(deps.db, { projectId, includeEpisodeAssets: true });
       const hydratedAssets = deps.storageRuntime
         ? await Promise.all(assets.map(async (asset) => {
             const previewUrl = await resolveStorageBackedPreviewUrl(deps.db, {
@@ -6391,7 +6391,7 @@ async function buildProjectDetail(
 
 async function listAssetsForProject(
   db: SqlDatabase,
-  input: { projectId: string },
+  input: { projectId: string; includeEpisodeAssets?: boolean },
 ) {
   const result = await db.query<{
     id: string;
@@ -6442,15 +6442,15 @@ async function listAssetsForProject(
         LIMIT 1
       ) generation_task ON true
       WHERE a.project_id = $1
-        AND NOT COALESCE(
+        AND ($2::boolean OR NOT COALESCE(
           jsonb_typeof(v.metadata_json) = 'object'
           AND jsonb_typeof(v.metadata_json -> 'episodeId') = 'string'
           AND (v.metadata_json ->> 'episodeId') <> '',
           false
-        )
+        ))
       ORDER BY a.updated_at DESC, a.id DESC
     `,
-    [input.projectId],
+    [input.projectId, input.includeEpisodeAssets === true],
   );
 
   return result.rows
@@ -6496,7 +6496,7 @@ async function listAssetsForProject(
     })
     .filter((asset) => {
       const metadata = asset.latestVersion?.metadata;
-      return !(metadata && typeof metadata === "object" && typeof metadata.episodeId === "string" && metadata.episodeId);
+      return input.includeEpisodeAssets === true || !(metadata && typeof metadata === "object" && typeof metadata.episodeId === "string" && metadata.episodeId);
     });
 }
 
