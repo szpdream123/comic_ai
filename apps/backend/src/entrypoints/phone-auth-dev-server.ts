@@ -19688,12 +19688,20 @@ export function createPhoneAuthDevServer(
 
       if (request.method === "GET" && pathname === "/api/home-recommendations") {
         const recommendations = createHomeRecommendationService({ db });
+        const payload = homeRecommendationMediaGatewayPayload(
+          (await recommendations.listPublicRecommendations()).data,
+        );
+        const etag = staticAssetEtag(JSON.stringify(payload));
+        response.setHeader("cache-control", "public, max-age=0, must-revalidate");
+        response.setHeader("etag", etag);
+        if (requestMatchesEtag(request, etag)) {
+          response.statusCode = 304;
+          response.end();
+          return;
+        }
         return writeJson(
           response,
-          enveloped(
-            200,
-            homeRecommendationMediaGatewayPayload((await recommendations.listPublicRecommendations()).data),
-          ),
+          enveloped(200, payload),
         );
       }
 

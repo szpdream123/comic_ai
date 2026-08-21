@@ -214,7 +214,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
 
     try {
       await server.listen(0);
-      const payload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
+      const recommendationsResponse = await fetch(`${server.origin}/api/home-recommendations`);
+      const recommendationsEtag = recommendationsResponse.headers.get("etag");
+      assert.equal(recommendationsResponse.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+      assert.ok(recommendationsEtag);
+      const payload = await recommendationsResponse.json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
+      const notModifiedResponse = await fetch(`${server.origin}/api/home-recommendations`, {
+        headers: { "if-none-match": recommendationsEtag ?? "" },
+      });
+      assert.equal(notModifiedResponse.status, 304);
       const backgroundMediaUrl = new URL(payload.data.background.videoUrl, server.origin);
       const videoMediaUrl = new URL(payload.data.categories[0]?.videos[0]?.videoUrl ?? "", server.origin);
       assert.equal(backgroundMediaUrl.pathname, "/api/home-recommendations/background/media");
@@ -237,13 +245,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
 
       await db.query(
-        "UPDATE home_background_settings SET video_url = $1, updated_at = updated_at + interval '1 second' WHERE id = 'homepage'",
-        [`https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`],
-      );
-      await db.query(
         "UPDATE home_recommendation_videos SET updated_at = updated_at + interval '1 second' WHERE id = $1",
         [videoId],
       );
+      await createHomeRecommendationService({ db }).saveBackground({
+        videoUrl: `https://${bucket}.cos.${region}.myqcloud.com/private/not-home-media.mp4`,
+        posterUrl: "",
+        status: "active",
+        now: new Date(Date.now() + 1_000),
+      });
       const updatedPayload = await (await fetch(`${server.origin}/api/home-recommendations`)).json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
       assert.notEqual(updatedPayload.data.background.videoUrl, payload.data.background.videoUrl);
       assert.notEqual(updatedPayload.data.categories[0]?.videos[0]?.videoUrl, payload.data.categories[0]?.videos[0]?.videoUrl);
