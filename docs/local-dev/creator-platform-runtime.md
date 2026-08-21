@@ -51,7 +51,7 @@ Copy `.env.example` to `.env` and change the values you need.
 - Frontend upload flow is `prepare -> COS SDK upload -> complete -> import`.
 - The browser only receives temporary STS credentials scoped to a single object key.
 - Local development without COS still works through the dev fallback uploader at `/api/storage/upload-sessions/:id/blob`.
-- Query responses now return absolute signed URLs for assets, storyboard media, and export records; the frontend should not reconstruct `/uploads/...` paths on its own.
+- Query responses return backend-controlled media URLs (short-lived signed URLs or authenticated proxy URLs) for assets, storyboard media, and export records; the frontend should not reconstruct `/uploads/...` paths on its own.
 - Delete flows clear business records first and tombstone orphaned storage objects after remote delete attempts.
 
 ### Creator task/runtime metadata
