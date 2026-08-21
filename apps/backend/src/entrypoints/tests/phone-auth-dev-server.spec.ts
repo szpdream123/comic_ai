@@ -170,7 +170,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     );
   });
 
-  it("redirects active home media through a stable gateway path and a one-hour COS signature", async () => {
+  it("caches the active background media redirect for its signed-url lifetime", async () => {
     const db = await createMigratedTestDb();
     const categoryId = randomUUID();
     const videoId = randomUUID();
@@ -185,6 +185,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
         STORAGE_BUCKET: bucket,
         STORAGE_REGION: region,
         STORAGE_SIGNED_URL_EXPIRES_SECONDS: "3600",
+        HOME_BACKGROUND_MEDIA_SIGNED_URL_EXPIRES_SECONDS: "604800",
       },
       storageRuntime: {
         adapter: {
@@ -218,6 +219,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const recommendationsEtag = recommendationsResponse.headers.get("etag");
       assert.equal(recommendationsResponse.headers.get("cache-control"), "public, max-age=0, must-revalidate");
       assert.ok(recommendationsEtag);
+      assert.equal(recommendationsEtag?.startsWith("W/"), true);
       const payload = await recommendationsResponse.json() as { data: { background: { videoUrl: string }; categories: Array<{ videos: Array<{ videoUrl: string }> }> } };
       const notModifiedResponse = await fetch(`${server.origin}/api/home-recommendations`, {
         headers: { "if-none-match": recommendationsEtag ?? "" },
@@ -233,7 +235,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const response = await fetch(backgroundMediaUrl, { redirect: "manual" });
       assert.equal(response.status, 307);
       assert.equal(response.headers.get("location"), "https://signed.example.test/home-background.mp4");
-      assert.equal(response.headers.get("cache-control"), "public, max-age=300");
+      assert.equal(response.headers.get("cache-control"), "public, max-age=604770, immutable");
       const videoResponse = await fetch(`${server.origin}${payload.data.categories[0]?.videos[0]?.videoUrl}`, { redirect: "manual" });
       assert.equal(videoResponse.status, 307);
       assert.equal(videoResponse.headers.get("location"), "https://signed.example.test/home-background.mp4");
@@ -241,8 +243,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
         { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
         { bucket, objectKey: "officialAssets/homeBackgroundVideos/test.mp4" },
       ]);
-      assert.ok(signedRequests[0]?.expiresAt.getTime() >= Date.now() + 59 * 60 * 1000);
-      assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
+      assert.ok(signedRequests[0]?.expiresAt.getTime() >= Date.now() + 7 * 24 * 60 * 60 * 1000 - 5_000);
+      assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 7 * 24 * 60 * 60 * 1000 + 5_000);
+      assert.ok(signedRequests[1]?.expiresAt.getTime() >= Date.now() + 59 * 60 * 1000);
+      assert.ok(signedRequests[1]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
 
       await db.query(
         "UPDATE home_recommendation_videos SET updated_at = updated_at + interval '1 second' WHERE id = $1",
@@ -309,6 +313,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
       await server.listen(0);
       const first = await fetch(`${server.origin}/api/home-recommendations/background/media`, { redirect: "manual" });
       assert.equal(first.status, 307);
+      assert.equal(first.headers.get("cache-control"), "public, max-age=3570, immutable");
+      assert.ok(signedRequests[0]?.expiresAt.getTime() >= Date.now() + 59 * 60 * 1000);
+      assert.ok(signedRequests[0]?.expiresAt.getTime() <= Date.now() + 61 * 60 * 1000);
       const limited = await fetch(`${server.origin}/api/home-recommendations/background/media`, { redirect: "manual" });
       assert.equal(limited.status, 429);
       assert.ok(Number(limited.headers.get("retry-after")) > 0);

@@ -297,24 +297,21 @@ test("background video cache hit plays without a network fetch", async () => {
   assert.equal(video.dataset.homeBackgroundVideoCacheState, "ready");
 });
 
-test("promotes the buffered background video from HTTP cache without a COS request", async () => {
+test("does not prune a newer background video cache after an older cache read", async () => {
   const workbench = createWorkbench();
-  const sourceUrl = "/api/home-recommendations/background/media?v=current";
-  const oldUrl = "https://lingxiyunai.com/api/home-recommendations/background/media?v=old";
+  const oldSourceUrl = "/api/home-recommendations/background/media?v=old-read";
+  const newSourceUrl = "/api/home-recommendations/background/media?v=new-read";
   const originalWindow = globalThis.window;
   const originalCaches = globalThis.caches;
   const originalFetch = globalThis.fetch;
-  let canPlayThrough = null;
-  const fetchCalls = [];
-  const putCalls = [];
+  const originalCreateObjectURL = globalThis.URL.createObjectURL;
+  let releaseKeys;
+  let keysStarted;
+  const keysStartedPromise = new Promise((resolve) => { keysStarted = resolve; });
+  const keysReleasePromise = new Promise((resolve) => { releaseKeys = resolve; });
   const deletedUrls = [];
-  const cachedResponse = {
-    ok: true,
-    type: "basic",
-    clone() { return this; },
-  };
   const video = {
-    dataset: { homeBackgroundVideoUrl: sourceUrl },
+    dataset: { homeBackgroundVideoUrl: oldSourceUrl },
     isConnected: true,
     readyState: 0,
     src: "",
@@ -322,12 +319,9 @@ test("promotes the buffered background video from HTTP cache without a COS reque
     play: async () => {},
     pause() {},
     removeAttribute(name) { if (name === "src") this.src = ""; },
-    addEventListener(type, listener) {
-      if (type === "canplaythrough") canPlayThrough = listener;
-    },
   };
   workbench.ui.activeNavTab = "home";
-  workbench.ui.homeBackground = { videoUrl: sourceUrl, status: "active" };
+  workbench.ui.homeBackground = { videoUrl: oldSourceUrl, status: "active" };
   workbench.root.querySelector = (selector) => selector === ".home-background-video video" ? video : null;
   workbench.api.getProjects = async () => ({ projects: [], pagination: { total: 0 } });
   globalThis.window = {
@@ -337,24 +331,30 @@ test("promotes the buffered background video from HTTP cache without a COS reque
   globalThis.caches = {
     async open() {
       return {
-        async match() { return null; },
-        async put(requestUrl, response) { putCalls.push({ requestUrl, response }); },
-        async keys() { return [{ url: oldUrl }, { url: `https://lingxiyunai.com${sourceUrl}` }]; },
-        async delete(request) { deletedUrls.push(request.url); return true; },
+        async match() { return { async blob() { return new Blob(["old-video"]); } }; },
+        async keys() {
+          keysStarted();
+          await keysReleasePromise;
+          return [
+            { url: `https://lingxiyunai.com${oldSourceUrl}` },
+            { url: `https://lingxiyunai.com${newSourceUrl}` },
+          ];
+        },
+        async delete(request) { deletedUrls.push(request.url ?? String(request)); return true; },
       };
     },
   };
-  globalThis.fetch = async (url, options = {}) => {
-    fetchCalls.push({ url: String(url), options });
-    return cachedResponse;
-  };
+  globalThis.fetch = async () => { throw new Error("cache read must not fetch"); };
+  globalThis.URL.createObjectURL = () => "blob:old-home-video";
 
   try {
     await handleWorkbenchActionForTest(workbench, {
       dataset: { action: "set-nav-tab", tab: "home" },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    canPlayThrough?.();
+    await keysStartedPromise;
+    workbench.homeBackgroundVideoCacheToken = Symbol("new-home-background-video-cache");
+    workbench.homeBackgroundVideoSourceUrl = newSourceUrl;
+    releaseKeys();
     await new Promise((resolve) => setTimeout(resolve, 0));
   } finally {
     if (originalWindow === undefined) delete globalThis.window;
@@ -363,16 +363,10 @@ test("promotes the buffered background video from HTTP cache without a COS reque
     else globalThis.caches = originalCaches;
     if (originalFetch === undefined) delete globalThis.fetch;
     else globalThis.fetch = originalFetch;
+    globalThis.URL.createObjectURL = originalCreateObjectURL;
   }
 
-  assert.equal(fetchCalls.length, 1);
-  assert.equal(fetchCalls[0].url, sourceUrl);
-  assert.equal(fetchCalls[0].options.cache, "only-if-cached");
-  assert.equal(fetchCalls[0].options.mode, "same-origin");
-  assert.equal(putCalls.length, 1);
-  assert.equal(putCalls[0].requestUrl, sourceUrl);
-  assert.equal(putCalls[0].response, cachedResponse);
-  assert.deepEqual(deletedUrls, [oldUrl]);
+  assert.equal(deletedUrls.includes(`https://lingxiyunai.com${newSourceUrl}`), false);
 });
 
 test("leaving home pauses and reuses the buffered background video on return", async () => {
@@ -1590,9 +1584,67 @@ test("cached home recommendations hydrate the first render before the network re
   }
 });
 
+test("ignores a corrupted cached home recommendation category", async () => {
+  const root = { innerHTML: "", querySelector() { return null; }, addEventListener() {} };
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.document = {
+    visibilityState: "visible",
+    addEventListener() {},
+    removeEventListener() {},
+    createElement() { return { innerHTML: "", querySelector() { return null; } }; },
+  };
+  globalThis.localStorage = {
+    getItem(key) {
+      return key === "comic-ai:home-recommendations:v1"
+        ? JSON.stringify({ payload: { background: { status: "active" }, categories: [null] } })
+        : null;
+    },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+
+  try {
+    const workbench = await initProductionWorkbench({
+      root,
+      session: null,
+      api: {},
+      onLogout() {},
+      deferInitialRender: true,
+    });
+
+    assert.equal(workbench.ui.homeTvLoading, true);
+    assert.deepEqual(workbench.ui.homeTvCategories, []);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+});
+
 test("fresh home recommendations replace and persist the cached homepage payload", async () => {
   const workbench = createWorkbench();
   const stored = new Map();
+  let storageWrites = 0;
   const originalLocalStorage = globalThis.localStorage;
   const freshPayload = {
     background: { videoUrl: "/api/home-recommendations/background/media?v=fresh", status: "active" },
@@ -1608,12 +1660,13 @@ test("fresh home recommendations replace and persist the cached homepage payload
   };
   globalThis.localStorage = {
     getItem(key) { return stored.get(key) ?? null; },
-    setItem(key, value) { stored.set(key, value); },
+    setItem(key, value) { storageWrites += 1; stored.set(key, value); },
     removeItem(key) { stored.delete(key); },
   };
 
   try {
     assert.equal(await syncHomeRecommendationsFromApiForTest(workbench), true);
+    assert.equal(await syncHomeRecommendationsFromApiForTest(workbench), false);
   } finally {
     if (originalLocalStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = originalLocalStorage;
@@ -1621,6 +1674,7 @@ test("fresh home recommendations replace and persist the cached homepage payload
 
   const persisted = JSON.parse(stored.get("comic-ai:home-recommendations:v1"));
   assert.deepEqual(persisted.payload, freshPayload);
+  assert.equal(storageWrites, 1);
   assert.equal(workbench.ui.homeBackground.videoUrl, freshPayload.background.videoUrl);
 });
 
@@ -1628,6 +1682,13 @@ test("visible home recommendations revalidate every fifteen seconds and stop off
   let intervalCallback = null;
   let intervalMs = 0;
   let recommendationCalls = 0;
+  let pendingRecommendation = null;
+  const homePayload = {
+    background: null,
+    categories: [{ id: "recommended", code: "recommended", name: "推荐", videos: [] }],
+  };
+  const pagehideListeners = [];
+  let clearedIntervals = 0;
   const root = { innerHTML: "", querySelector() { return null; }, addEventListener() {} };
   const originalWindow = globalThis.window;
   const originalDocument = globalThis.document;
@@ -1642,10 +1703,12 @@ test("visible home recommendations revalidate every fifteen seconds and stop off
       intervalMs = delay;
       return 41;
     },
-    clearInterval() {},
+    clearInterval() { clearedIntervals += 1; },
     requestAnimationFrame: (callback) => setTimeout(callback, 0),
     cancelAnimationFrame: clearTimeout,
-    addEventListener() {},
+    addEventListener(type, listener) {
+      if (type === "pagehide") pagehideListeners.push(listener);
+    },
     removeEventListener() {},
   };
   globalThis.document = {
@@ -1665,28 +1728,45 @@ test("visible home recommendations revalidate every fifteen seconds and stop off
         async getHomeRecommendations(input) {
           assert.equal(input.fresh, true);
           recommendationCalls += 1;
-          return { background: null, categories: [] };
+          return pendingRecommendation?.promise ?? homePayload;
         },
       },
       onLogout() {},
       deferInitialRender: true,
     });
+    workbench.ui.homeBackground = { videoUrl: "", posterUrl: "", status: "inactive" };
+    workbench.ui.homeTvCategories = homePayload.categories;
+    workbench.ui.homeTvCategory = "recommended";
+    workbench.ui.homeTvLoading = false;
 
     assert.equal(intervalMs, 15_000);
     intervalCallback();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(recommendationCalls, 1);
 
+    pendingRecommendation = createDeferred();
+    intervalCallback();
+    await Promise.resolve();
+    assert.equal(workbench.ui.homeTvLoading, false);
+    pendingRecommendation.resolve(homePayload);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    pendingRecommendation = null;
+
     workbench.ui.activeNavTab = "project";
     intervalCallback();
     await Promise.resolve();
-    assert.equal(recommendationCalls, 1);
+    assert.equal(recommendationCalls, 2);
 
     workbench.ui.activeNavTab = "home";
     globalThis.document.visibilityState = "hidden";
     intervalCallback();
     await Promise.resolve();
-    assert.equal(recommendationCalls, 1);
+    assert.equal(recommendationCalls, 2);
+
+    globalThis.document.visibilityState = "visible";
+    pagehideListeners.forEach((listener) => listener({ persisted: true }));
+    assert.equal(clearedIntervals, 0);
+    assert.equal(workbench.homeRecommendationRefreshTimer, 41);
   } finally {
     if (originalWindow === undefined) delete globalThis.window;
     else globalThis.window = originalWindow;
@@ -2749,6 +2829,22 @@ test("hash route changes re-render the active surface", async () => {
   assert.equal(workbench.ui.activeNavTab, "script");
   assert.match(workbench.root.innerHTML, /data-scroll-surface="script"/);
   assert.match(workbench.root.innerHTML, /data-tab="script"[\s\S]*aria-selected="true"|aria-selected="true"[\s\S]*data-tab="script"/);
+});
+
+test("history navigation back to home immediately revalidates recommendations", async () => {
+  const workbench = createWorkbench();
+  let recommendationCalls = 0;
+  workbench.api.getHomeRecommendations = async (input) => {
+    assert.equal(input.fresh, true);
+    recommendationCalls += 1;
+    return { background: null, categories: [] };
+  };
+
+  await restoreWorkbenchRouteFromLocationForTest(workbench, { pathname: "/", hash: "#home" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(workbench.ui.activeNavTab, "home");
+  assert.equal(recommendationCalls, 1);
 });
 
 test("community hash route renders the shared community surface instead of the project gallery", async () => {

@@ -2903,6 +2903,9 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     projectSearchTimer: null,
     homeRecommendationRefreshTimer: null,
     homeRecommendationRefreshInFlight: null,
+    homeRecommendationsPersistedSignature: cachedHomeRecommendations
+      ? homeRecommendationsPayloadSignature(cachedHomeRecommendations)
+      : "",
     homeProjectRequestId: 0,
     projectLibraryRequestId: 0,
     scriptLibraryRequestId: 0,
@@ -6225,6 +6228,9 @@ async function restoreWorkbenchRouteFromLocation(workbench, locationLike) {
   workbench.historyRouteRestoreRequestId = requestId;
   const routeToken = readWorkbenchRouteToken(locationLike);
   syncWorkbenchHashRoute(workbench, routeToken);
+  if (workbench.ui.activeNavTab === "home") {
+    void refreshVisibleHomeRecommendations(workbench);
+  }
   if (!hasActiveSessionUser(workbench.session)) {
     return false;
   }
@@ -9115,7 +9121,7 @@ function clearHomeBackgroundVideoObjectUrl(workbench) {
   workbench.homeBackgroundVideoSourceUrl = "";
 }
 
-async function readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss = true } = {}) {
+async function readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss = true, isCurrent = () => true } = {}) {
   if (!globalThis.caches?.open || typeof globalThis.fetch !== "function") {
     throw new Error("浏览器不支持背景视频本地缓存");
   }
@@ -9131,7 +9137,7 @@ async function readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss = true } =
     }
     await cache.put(sourceUrl, response.clone());
   }
-  await pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl);
+  await pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl, isCurrent);
   return response.blob();
 }
 
@@ -9145,38 +9151,18 @@ function homeBackgroundVideoCacheIdentity(input) {
   }
 }
 
-async function pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl) {
+async function pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl, isCurrent = () => true) {
+  if (!isCurrent()) return false;
   const currentIdentity = homeBackgroundVideoCacheIdentity(sourceUrl);
   const requests = await cache.keys();
-  await Promise.all(requests
-    .filter((request) => homeBackgroundVideoCacheIdentity(request.url) !== currentIdentity)
-    .map((request) => cache.delete(request)));
-}
-
-async function promoteHomeBackgroundVideoFromHttpCache(workbench, video, sourceUrl, token) {
-  if (!globalThis.caches?.open || typeof globalThis.fetch !== "function") return false;
-  try {
-    const response = await globalThis.fetch(sourceUrl, {
-      cache: "only-if-cached",
-      mode: "same-origin",
-      credentials: "same-origin",
-    });
-    if (
-      !response.ok ||
-      response.type === "opaque" ||
-      workbench.homeBackgroundVideoCacheToken !== token ||
-      workbench.homeBackgroundVideoSourceUrl !== sourceUrl ||
-      !video.isConnected
-    ) {
-      return false;
+  if (!isCurrent()) return false;
+  for (const request of requests) {
+    if (!isCurrent()) return false;
+    if (homeBackgroundVideoCacheIdentity(request.url) !== currentIdentity) {
+      await cache.delete(request);
     }
-    const cache = await globalThis.caches.open(HOME_BACKGROUND_VIDEO_CACHE_NAME);
-    await cache.put(sourceUrl, response.clone());
-    await pruneOldHomeBackgroundVideoCacheEntries(cache, sourceUrl);
-    return true;
-  } catch {
-    return false;
   }
+  return isCurrent();
 }
 
 function playHomeBackgroundVideo(video, shouldLoad = true) {
@@ -9294,7 +9280,14 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
   workbench.homeBackgroundVideoSourceUrl = sourceUrl;
   video.dataset.homeBackgroundVideoCacheState = "loading";
 
-  void readCachedHomeBackgroundVideo(sourceUrl, { fetchOnMiss: false })
+  void readCachedHomeBackgroundVideo(sourceUrl, {
+    fetchOnMiss: false,
+    isCurrent: () => (
+      workbench.homeBackgroundVideoCacheToken === token &&
+      workbench.homeBackgroundVideoSourceUrl === sourceUrl &&
+      video.isConnected
+    ),
+  })
     .then((blob) => {
       if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
       if (video.readyState > 0) return;
@@ -9304,9 +9297,6 @@ function syncHomeBackgroundVideoLocalCache(workbench) {
     })
     .catch(() => {
       if (workbench.homeBackgroundVideoCacheToken !== token || !video.isConnected) return;
-      video.addEventListener?.("canplaythrough", () => {
-        void promoteHomeBackgroundVideoFromHttpCache(workbench, video, sourceUrl, token);
-      }, { once: true });
       video.src = sourceUrl;
       video.dataset.homeBackgroundVideoCacheState = "fallback";
       playHomeBackgroundVideo(video);
@@ -19604,7 +19594,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       });
       runLazyWorkbenchTask(workbench, "home recommendations", async () => {
         try {
-          await syncHomeRecommendationsFromApi(workbench);
+          await refreshVisibleHomeRecommendations(workbench);
         } finally {
           if (workbench.ui.activeNavTab === "home") {
             render(workbench, navigationRenderOptions);
@@ -60385,7 +60375,9 @@ async function syncHomeRecommendationsFromApi(workbench) {
   const requestId = (workbench.homeRecommendationRequestId ?? 0) + 1;
   workbench.homeRecommendationRequestId = requestId;
   const controller = beginSurfaceRequest(workbench, "home-recommendations");
-  workbench.ui.homeTvLoading = true;
+  if (workbench.ui.homeTvLoading !== false) {
+    workbench.ui.homeTvLoading = true;
+  }
   try {
     const payload = await workbench.api.getHomeRecommendations(
       withSurfaceRequestSignal({ fresh: true }, controller.signal),
@@ -60464,7 +60456,9 @@ function installHomeRecommendationRefresh(workbench) {
   globalThis.document?.addEventListener?.("visibilitychange", () => {
     if (globalThis.document?.visibilityState !== "hidden") revalidate();
   });
-  globalThis.window?.addEventListener?.("pagehide", workbench.disposeHomeRecommendationRefresh, { once: true });
+  globalThis.window?.addEventListener?.("pagehide", (event) => {
+    if (event?.persisted !== true) workbench.disposeHomeRecommendationRefresh();
+  }, { once: true });
 }
 
 function normalizeHomeRecommendationsPayload(payload) {
@@ -60472,7 +60466,17 @@ function normalizeHomeRecommendationsPayload(payload) {
   const background = payload.background && typeof payload.background === "object" && !Array.isArray(payload.background)
     ? payload.background
     : { videoUrl: "", posterUrl: "", status: "inactive" };
-  const categories = Array.isArray(payload.categories) ? payload.categories : [];
+  if (!Array.isArray(payload.categories) || !payload.categories.every((category) => (
+    category &&
+    typeof category === "object" &&
+    !Array.isArray(category) &&
+    typeof category.code === "string" &&
+    Array.isArray(category.videos) &&
+    category.videos.every((video) => video && typeof video === "object" && !Array.isArray(video))
+  ))) {
+    return null;
+  }
+  const categories = payload.categories;
   return { background, categories };
 }
 
@@ -60518,7 +60522,10 @@ function applyHomeRecommendationsPayload(workbench, payload, { persist = false }
   if (!normalized.categories.some((item) => item.code === workbench.ui.homeTvCategory)) {
     workbench.ui.homeTvCategory = normalized.categories[0]?.code ?? "";
   }
-  if (persist) writeCachedHomeRecommendations(normalized);
+  if (persist && workbench.homeRecommendationsPersistedSignature !== nextSignature) {
+    writeCachedHomeRecommendations(normalized);
+    workbench.homeRecommendationsPersistedSignature = nextSignature;
+  }
   return previousSignature !== nextSignature;
 }
 

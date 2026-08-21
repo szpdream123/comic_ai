@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让首页优先显示持久缓存、后台内容在 15 秒内更新，并让同版本背景视频刷新时不重复请求 COS。
+**Goal:** 让首页优先显示持久缓存、后台内容在 15 秒内更新，并让同版本背景视频热刷新复用浏览器缓存。
 
-**Architecture:** 推荐 JSON 使用 localStorage 快照加浏览器 ETag 条件校验；首页可见时每 15 秒校验一次。背景视频使用版本 URL，Cache Storage 命中直接播放，未命中时直接流式播放，并且只从 HTTP 缓存无网络地提升到 Cache Storage。
+**Architecture:** 推荐 JSON 使用 localStorage 快照加浏览器 ETag 条件校验；首页可见时每 15 秒校验一次。背景视频使用版本 URL并继续由 COS 直出；公开背景的签名与 307 缓存窗口可通过独立环境键延长至最多 7 天，复用已带一年 immutable 元数据的 COS 对象缓存。
 
 **Tech Stack:** Vanilla JavaScript、Node.js HTTP、Cache Storage、localStorage、Node test runner。
 
@@ -15,7 +15,7 @@
 - 只修改首页推荐与首页背景视频缓存路径。
 - 保持现有方法签名、API payload 和媒体版本 URL 结构。
 - 所有生产代码必须先有失败测试。
-- Cache Storage 提升不得产生网络请求。
+- 背景视频冷流量不得经过 Node 应用进程。
 - 后台更新最大可见延迟为 15 秒。
 
 ---
@@ -36,7 +36,7 @@
 
 - [ ] **Step 2: 验证测试因缺少 ETag 失败**
 
-Run: `node --import tsx --test --test-name-pattern="redirects active home media" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
+Run: `node --import tsx --test --test-name-pattern="caches the active background media redirect" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
 
 Expected: FAIL，首页推荐响应没有 ETag 或条件请求返回 200。
 
@@ -46,7 +46,7 @@ Expected: FAIL，首页推荐响应没有 ETag 或条件请求返回 200。
 
 - [ ] **Step 4: 验证通过**
 
-Run: `node --import tsx --test --test-name-pattern="redirects active home media" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
+Run: `node --import tsx --test --test-name-pattern="caches the active background media redirect" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
 
 Expected: PASS。
 
@@ -98,7 +98,7 @@ Run: `node --test --test-name-pattern="cached home recommendations|visible home 
 
 Expected: PASS。
 
-### Task 3: 背景视频无网络持久缓存提升
+### Task 3: 背景视频版本化 HTTP 缓存
 
 **Files:**
 - Modify: `apps/web/src/features/production-workbench/index.js`
@@ -106,25 +106,27 @@ Expected: PASS。
 
 **Interfaces:**
 - Consumes: `readCachedHomeBackgroundVideo(sourceUrl)`、`syncHomeBackgroundVideoLocalCache(workbench)`。
-- Produces: Cache Storage 命中播放；`only-if-cached` HTTP 缓存提升；版本切换时清理旧 Cache Storage 条目。
+- Produces: Cache Storage 旧条目命中播放；背景网关 7 天签名与 307 缓存；版本切换使用新缓存键。
 
 - [ ] **Step 1: 写失败测试**
 
-增加两个行为测试：Cache Storage 命中时不调用 fetch；首次直接播放后缓存提升的 fetch 必须使用 `cache: "only-if-cached"` 和 `mode: "same-origin"`，并写入当前版本、删除旧版本。
+增加行为测试：Cache Storage 命中时不调用 fetch；背景网关保持 307 COS 直出，签名与重定向缓存约 7 天，推荐视频签名时长保持不变。
 
 - [ ] **Step 2: 验证测试失败**
 
-Run: `node --test --test-name-pattern="background video cache hit|promotes the buffered background video" apps/web/tests/project-gallery-actions.spec.mjs`
+Run: `node --import tsx --test --test-name-pattern="caches the active background media redirect" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
 
-Expected: FAIL，当前未命中后只设置 `src`，不会提升缓存。
+Expected: FAIL，当前背景网关重定向只缓存 5 分钟且签名仅 1 小时。
 
 - [ ] **Step 3: 写最小实现**
 
-保持 Cache Storage 只读命中路径；fallback 视频进入可播放状态后调用独立提升函数。提升函数只允许 `only-if-cached`，失败静默降级，成功后清理旧版本。
+保持 Cache Storage 只读命中路径和 COS 直出 Range 行为；仅对公开首页背景延长签名与版本化 307 缓存，推荐视频等其他媒体路径不变。
 
 - [ ] **Step 4: 验证通过**
 
-Run: `node --test --test-name-pattern="background video cache hit|promotes the buffered background video|leaving home pauses|returning home restarts" apps/web/tests/project-gallery-actions.spec.mjs`
+Run: `node --test --test-name-pattern="background video cache hit|does not prune a newer background video cache after an older cache read|leaving home pauses|returning home restarts" apps/web/tests/project-gallery-actions.spec.mjs`
+
+Run: `node --import tsx --test --test-name-pattern="caches the active background media redirect" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
 
 Expected: PASS。
 
@@ -139,7 +141,7 @@ Expected: PASS。
 
 - [ ] **Step 1: 更新 CHANGELOG**
 
-在 `[Unreleased]` 记录首页推荐 ETag 校验、15 秒可见轮询、持久快照和背景视频无网络缓存提升。
+在 `[Unreleased]` 记录首页推荐 ETag 校验、15 秒可见轮询、持久快照和背景视频 7 天版本化 HTTP 缓存。
 
 - [ ] **Step 2: 运行相关测试**
 
@@ -147,7 +149,7 @@ Run: `node --import tsx --test apps/web/tests/creator-api.spec.ts`
 
 Run: `node --test --test-name-pattern="leaving home|returning home|home recommendations|cached home recommendations|visible home recommendations|background video" apps/web/tests/project-gallery-actions.spec.mjs`
 
-Run: `node --import tsx --test --test-name-pattern="redirects active home media|limits repeated anonymous home media" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
+Run: `node --import tsx --test --test-name-pattern="caches the active background media redirect|limits repeated anonymous home media" apps/backend/src/entrypoints/tests/phone-auth-dev-server.spec.ts`
 
 Expected: 全部 PASS。
 

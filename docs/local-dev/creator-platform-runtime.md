@@ -39,6 +39,7 @@ Copy `.env.example` to `.env` and change the values you need.
   - Uses Tencent Cloud COS with browser direct upload via STS plus backend-signed read URLs.
   - Requires `STORAGE_PROVIDER=cos`, `STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_COS_SECRET_ID`, and `STORAGE_COS_SECRET_KEY`.
   - Supports optional `STORAGE_COS_STS_DURATION_SECONDS` and `STORAGE_SIGNED_URL_EXPIRES_SECONDS`.
+  - `HOME_BACKGROUND_MEDIA_SIGNED_URL_EXPIRES_SECONDS` may extend the public versioned homepage background redirect cache up to 604800 seconds; when omitted it inherits `STORAGE_SIGNED_URL_EXPIRES_SECONDS`.
   - `STORAGE_UPLOAD_PROXY_CONCURRENT_REQUESTS` limits the local or fallback proxy upload path; it defaults to 4.
   - Production should keep the bucket private and rely on backend short-lived signed URLs for preview, playback, and download.
 - `STORAGE_ADAPTER_MODE=s3_compatible`
@@ -66,6 +67,8 @@ Copy `.env.example` to `.env` and change the values you need.
   - Signed read URL TTL in seconds for export preview
 - `STORAGE_SIGNED_URL_EXPIRES_SECONDS`
   - Preferred signed read URL TTL in seconds for all storage-backed media and exports
+- `HOME_BACKGROUND_MEDIA_SIGNED_URL_EXPIRES_SECONDS`
+  - Optional signed read URL and redirect-cache TTL for the public versioned homepage background, capped at 604800 seconds
 
 ## Example: HTTP provider + public CDN URLs
 
@@ -97,6 +100,7 @@ STORAGE_COS_SECRET_ID=AKIDxxxxxxxxxxxxxxxxxxxxxxxx
 STORAGE_COS_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 STORAGE_COS_STS_DURATION_SECONDS=1800
 STORAGE_SIGNED_URL_EXPIRES_SECONDS=900
+HOME_BACKGROUND_MEDIA_SIGNED_URL_EXPIRES_SECONDS=604800
 STORAGE_OBJECT_ROOT_PREFIX=AIManhuaDrama
 STORAGE_OBJECT_DATE_TIMEZONE=Asia/Shanghai
 CREATOR_PAYLOAD_SCHEME=creator

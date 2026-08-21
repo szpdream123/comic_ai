@@ -1286,6 +1286,8 @@ function homeMediaRequestIpAddress(
   return request.socket?.remoteAddress ?? "unknown";
 }
 
+const HOME_BACKGROUND_MEDIA_SIGNED_URL_MAX_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
+
 function requestIpAddress(request: {
   headers: Record<string, string | string[] | undefined>;
   socket?: { remoteAddress?: string };
@@ -19170,6 +19172,13 @@ export function createPhoneAuthDevServer(
     runtimeEnv.CREATOR_SIGNED_URL_EXPIRES_SECONDS ??
     3600,
   );
+  const homeBackgroundMediaSignedUrlExpiresSeconds = positiveIntegerEnvValue(
+    runtimeEnv.HOME_BACKGROUND_MEDIA_SIGNED_URL_EXPIRES_SECONDS,
+    Number.isFinite(signedUrlExpiresInSeconds) && signedUrlExpiresInSeconds > 0
+      ? Math.min(Math.floor(signedUrlExpiresInSeconds), HOME_BACKGROUND_MEDIA_SIGNED_URL_MAX_EXPIRES_SECONDS)
+      : 3600,
+    HOME_BACKGROUND_MEDIA_SIGNED_URL_MAX_EXPIRES_SECONDS,
+  );
   const homeMediaRateLimiter = createHomeMediaRateLimiter(runtimeEnv);
   const watermarkModelRateLimiter = createHomeMediaRateLimiter({
     HOME_MEDIA_SIGNING_PER_IP_PER_MINUTE: runtimeEnv.WATERMARK_MODEL_PER_IP_PER_MINUTE ?? "6",
@@ -19691,7 +19700,7 @@ export function createPhoneAuthDevServer(
         const payload = homeRecommendationMediaGatewayPayload(
           (await recommendations.listPublicRecommendations()).data,
         );
-        const etag = staticAssetEtag(JSON.stringify(payload));
+        const etag = `W/${staticAssetEtag(JSON.stringify(payload))}`;
         response.setHeader("cache-control", "public, max-age=0, must-revalidate");
         response.setHeader("etag", etag);
         if (requestMatchesEtag(request, etag)) {
@@ -19749,15 +19758,25 @@ export function createPhoneAuthDevServer(
         if (!objectKey || !isHomeRecommendationObjectKey({ objectKey, officialAssetRootPrefix })) {
           return writeJson(response, envelopedError(404, "home_recommendation_media_not_found", "Home recommendation media was not found"));
         }
+        const isBackgroundVideo = pathname === "/api/home-recommendations/background/media";
         const location = (await storageRuntime.adapter.createSignedReadUrl({
           bucket: storageBucket,
           objectKey,
           responseContentDisposition: "inline",
-          expiresAt: new Date(Date.now() + signedUrlExpiresInSeconds * 1000),
+          expiresAt: new Date(Date.now() + (
+            isBackgroundVideo
+              ? homeBackgroundMediaSignedUrlExpiresSeconds
+              : signedUrlExpiresInSeconds
+          ) * 1000),
         })).url;
         response.statusCode = 307;
         response.setHeader("location", location);
-          response.setHeader("cache-control", "public, max-age=300");
+        response.setHeader(
+          "cache-control",
+          isBackgroundVideo
+            ? `public, max-age=${Math.max(0, homeBackgroundMediaSignedUrlExpiresSeconds - 30)}, immutable`
+            : "public, max-age=300",
+        );
         response.setHeader("referrer-policy", "no-referrer");
         response.end();
         return;
