@@ -12297,7 +12297,7 @@ function renderHomeHero({ detailState, session, state = {}, ui = {} }) {
             </nav>
           </header>
           <div class="home-tv-grid">
-            ${ui.homeTvLoading === true ? `<p class="home-tv-empty">正在加载推荐视频</p>` : visibleHomeTvItems.length ? visibleHomeTvItems.map((item) => `<article class="home-tv-card${item.videoUrl ? " has-video-preview" : ""}">
+            ${ui.homeTvLoading === true ? `<p class="home-tv-empty">正在加载推荐视频</p>` : visibleHomeTvItems.length ? visibleHomeTvItems.map((item) => `<article class="home-tv-card${item.videoUrl ? " has-video-preview" : ""}"${item.videoUrl ? ` data-action="toggle-home-tv-preview"` : ""}>
               <div class="home-tv-cover">
                 <img src="${escapeAttr(item.coverUrl)}" alt="${escapeAttr(item.coverAlt || item.title)}" loading="lazy" />
                 ${item.videoUrl ? `<video class="home-tv-preview-video" data-home-tv-preview data-home-tv-preview-url="${escapeAttr(item.videoUrl)}" muted loop playsinline preload="none" aria-hidden="true"></video>` : ""}
