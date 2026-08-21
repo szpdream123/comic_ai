@@ -2432,20 +2432,69 @@ function playHomeTvVideoPreview(card) {
   }, HOME_TV_PREVIEW_MAX_DURATION_MS));
 }
 
-function stopHomeTvVideoPreview(card) {
+function stopHomeTvVideoPreview(card, options = {}) {
   const video = card?.querySelector?.("[data-home-tv-preview]");
   if (!video) return;
+  if (options.force !== true && card?.classList?.contains?.("is-playing")) return;
   const timer = homeTvPreviewStopTimers.get(card);
   if (timer !== undefined) globalThis.clearTimeout?.(timer);
   homeTvPreviewStopTimers.delete(card);
+  video.onended = null;
+  video.onerror = null;
   video.pause?.();
   video.removeAttribute?.("src");
   video.load?.();
+  video.muted = true;
+  video.loop = true;
+  if (video.style) video.style.opacity = "";
+  card?.classList?.remove?.("is-playing");
   try {
     video.currentTime = 0;
   } catch {
     // The preview may not be seekable before metadata is ready.
   }
+}
+
+function stopHomeTvVideoPlaybacks(root, exceptCard = null) {
+  const playingCards = root?.querySelectorAll?.(".home-tv-card.has-video-preview.is-playing") ?? [];
+  for (const playingCard of playingCards) {
+    if (playingCard !== exceptCard) stopHomeTvVideoPreview(playingCard, { force: true });
+  }
+}
+
+function toggleHomeTvVideoPlayback(card) {
+  const video = card?.querySelector?.("[data-home-tv-preview]");
+  if (!video) return false;
+  if (card?.classList?.contains?.("is-playing")) {
+    stopHomeTvVideoPreview(card, { force: true });
+    return false;
+  }
+  stopHomeTvVideoPlaybacks(card?.closest?.(".home-tv-grid") ?? card?.parentElement, card);
+  const timer = homeTvPreviewStopTimers.get(card);
+  if (timer !== undefined) globalThis.clearTimeout?.(timer);
+  homeTvPreviewStopTimers.delete(card);
+  const sourceUrl = String(video.dataset?.homeTvPreviewUrl ?? "").trim();
+  if (!video.getAttribute?.("src") && sourceUrl) {
+    video.setAttribute?.("src", sourceUrl);
+    video.load?.();
+  }
+  card?.classList?.add?.("is-playing");
+  video.muted = false;
+  video.loop = false;
+  video.onended = () => stopHomeTvVideoPreview(card, { force: true });
+  video.onerror = () => stopHomeTvVideoPreview(card, { force: true });
+  if (video.style) video.style.opacity = "1";
+  try {
+    video.currentTime = 0;
+  } catch {
+    // The preview may not be seekable before metadata is ready.
+  }
+  video.play?.().catch?.(() => {
+    if (card?.classList?.contains?.("is-playing")) {
+      stopHomeTvVideoPreview(card, { force: true });
+    }
+  });
+  return true;
 }
 
 function removeHomeAgentAttachmentById(workbench, attachmentId) {
@@ -9818,6 +9867,7 @@ export function reconcileFirstLoginGuideTargets(workbench) {
 
 function render(workbench, options = {}) {
   if (updateNewCanvasSurfaceForHostAction(workbench)) return;
+  stopHomeTvVideoPlaybacks(workbench.root);
   workbench.disposeHomeTvIncrementalLoading?.();
   workbench.disposeHomeTvIncrementalLoading = null;
   const isDetachedSurface = workbench.ui?.activeNavTab === "community" || workbench.ui?.activeNavTab === "media-library";
@@ -19849,6 +19899,11 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       workbench.ui.homeTvVisibleCounts = { ...(workbench.ui.homeTvVisibleCounts ?? {}), [category]: 6 };
     }
     render(workbench);
+    return;
+  }
+
+  if (action === "toggle-home-tv-preview") {
+    toggleHomeTvVideoPlayback(target.closest?.(".home-tv-card.has-video-preview"));
     return;
   }
 

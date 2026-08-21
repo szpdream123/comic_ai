@@ -942,6 +942,239 @@ test("admin shell exposes homepage recommendation category and video management"
   assert.doesNotMatch(html, /name="posterUrl"/);
 });
 
+test("admin homepage video upload reports browser upload and server processing phases", async () => {
+  const start = script.indexOf("async function uploadAdminFile");
+  const end = script.indexOf("async function uploadAdminImage", start);
+  const progressEvents = [];
+  class FakeXMLHttpRequest {
+    constructor() {
+      this.upload = {};
+      this.status = 200;
+      this.responseText = JSON.stringify({ data: { sourceUrl: "/video.mp4" } });
+    }
+    open() {}
+    setRequestHeader() {}
+    send() {
+      this.upload.onprogress?.({ lengthComputable: true, loaded: 25, total: 100 });
+      this.upload.onload?.();
+      this.onload?.();
+    }
+  }
+  const context = {
+    XMLHttpRequest: FakeXMLHttpRequest,
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ data: { sourceUrl: "/video.mp4" } }),
+    }),
+    resolveAdminApiUrl: (path) => path,
+    adminApiErrorMessage: () => "upload failed",
+    result: {},
+  };
+  vm.runInNewContext(`${script.slice(start, end)}\nresult.upload = uploadAdminFile;`, context);
+
+  const uploaded = await context.result.upload(
+    { name: "homepage.mp4", type: "video/mp4" },
+    "/api/admin/home-recommendations/videos/upload",
+    (event) => progressEvents.push({ phase: event.phase, percent: event.percent }),
+  );
+
+  assert.deepEqual(progressEvents, [
+    { phase: "uploading", percent: 25 },
+    { phase: "processing", percent: 100 },
+  ]);
+  assert.equal(uploaded.sourceUrl, "/video.mp4");
+});
+
+test("admin homepage video upload rejects files above the server limit before sending", async () => {
+  const start = script.indexOf("async function uploadAdminFile");
+  const end = script.indexOf("async function uploadAdminImage", start);
+  let requestCreated = false;
+  class FakeXMLHttpRequest {
+    constructor() { requestCreated = true; }
+  }
+  const context = {
+    XMLHttpRequest: FakeXMLHttpRequest,
+    resolveAdminApiUrl: (path) => path,
+    adminApiErrorMessage: () => "upload failed",
+    result: {},
+  };
+  vm.runInNewContext(`${script.slice(start, end)}\nresult.upload = uploadAdminFile;`, context);
+
+  await assert.rejects(
+    context.result.upload(
+      { name: "too-large.mp4", type: "video/mp4", size: 50 * 1024 * 1024 + 1 },
+      "/api/admin/home-recommendations/videos/upload",
+      () => undefined,
+    ),
+    /50 MB/,
+  );
+  assert.equal(requestCreated, false);
+});
+
+test("admin homepage video upload surfaces server, network, and processing timeout errors", async () => {
+  const start = script.indexOf("async function uploadAdminFile");
+  const end = script.indexOf("async function uploadAdminImage", start);
+
+  async function uploadWithFailure(mode) {
+    class FakeXMLHttpRequest {
+      constructor() {
+        this.upload = {};
+        this.status = 500;
+        this.responseText = JSON.stringify({ message: "server rejected video" });
+      }
+      open() {}
+      setRequestHeader() {}
+      send() {
+        if (mode === "network") this.onerror?.();
+        else if (mode === "timeout") this.ontimeout?.();
+        else this.onload?.();
+      }
+    }
+    const context = {
+      XMLHttpRequest: FakeXMLHttpRequest,
+      resolveAdminApiUrl: (path) => path,
+      adminApiErrorMessage: (payload) => payload.message || "upload failed",
+      result: {},
+    };
+    vm.runInNewContext(`${script.slice(start, end)}\nresult.upload = uploadAdminFile;`, context);
+    return context.result.upload(
+      { name: "homepage.mp4", type: "video/mp4" },
+      "/api/admin/home-recommendations/videos/upload",
+      () => undefined,
+    );
+  }
+
+  await assert.rejects(uploadWithFailure("server"), /server rejected video/);
+  await assert.rejects(uploadWithFailure("network"), /网络连接失败/);
+  await assert.rejects(uploadWithFailure("timeout"), /处理超时/);
+});
+
+test("admin homepage video upload tolerates indeterminate progress and callback failures", async () => {
+  const start = script.indexOf("async function uploadAdminFile");
+  const end = script.indexOf("async function uploadAdminImage", start);
+  class FakeXMLHttpRequest {
+    constructor() {
+      this.upload = {};
+      this.status = 200;
+      this.responseText = JSON.stringify({ data: { sourceUrl: "/video.mp4" } });
+    }
+    open() {}
+    setRequestHeader() {}
+    send() {
+      this.upload.onprogress?.({ lengthComputable: false, loaded: 1, total: 0 });
+      this.upload.onload?.();
+      this.onload?.();
+    }
+  }
+  const context = {
+    XMLHttpRequest: FakeXMLHttpRequest,
+    resolveAdminApiUrl: (path) => path,
+    adminApiErrorMessage: () => "upload failed",
+    result: {},
+  };
+  vm.runInNewContext(`${script.slice(start, end)}\nresult.upload = uploadAdminFile;`, context);
+
+  const uploaded = await context.result.upload(
+    { name: "homepage.mp4", type: "video/mp4" },
+    "/api/admin/home-recommendations/videos/upload",
+    () => { throw new Error("observer failed"); },
+  );
+
+  assert.equal(uploaded.sourceUrl, "/video.mp4");
+});
+
+test("admin homepage video upload wrappers show progress, processing, completion, and failure feedback", async () => {
+  async function exerciseWrapper({ functionName, nextFunctionName, errorId, stateId, inputName, uploadPath }) {
+    const start = script.indexOf(`async function ${functionName}`);
+    let end = script.indexOf(`function ${nextFunctionName}`, start);
+    if (script.slice(end - 6, end) === "async ") end -= 6;
+
+    async function runUpload(shouldFail) {
+      const states = [];
+      const stateLabel = {};
+      Object.defineProperty(stateLabel, "textContent", {
+        set(value) { states.push(value); },
+        get() { return states.at(-1) || ""; },
+      });
+      const error = { textContent: "stale error" };
+      const valueInput = { value: "" };
+      const preview = { src: "" };
+      const form = {
+        querySelector(selector) {
+          if (selector === `input[name="${inputName}"]`) return valueInput;
+          if (selector === "video") return preview;
+          return null;
+        },
+      };
+      const input = {
+        files: [{ name: "homepage.mp4", type: "video/mp4" }],
+        disabled: false,
+        value: "selected",
+        closest(selector) { return selector === "form" ? form : null; },
+      };
+      const context = {
+        document: {
+          getElementById(id) {
+            if (id === errorId) return error;
+            if (id === stateId) return stateLabel;
+            return null;
+          },
+        },
+        uploadAdminFile: async (file, path, onProgress) => {
+          assert.equal(file, input.files[0]);
+          assert.equal(path, uploadPath);
+          onProgress({ phase: "uploading", percent: 42 });
+          onProgress({ phase: "processing", percent: 100 });
+          if (shouldFail) throw new Error("transcode failed");
+          return { sourceUrl: "/video.mp4" };
+        },
+        showToast() {},
+        result: {},
+      };
+      vm.runInNewContext(`${script.slice(start, end)}\nresult.upload = ${functionName};`, context);
+
+      await context.result.upload(input);
+      return { states, error, valueInput, preview, input };
+    }
+
+    const success = await runUpload(false);
+    assert.deepEqual(success.states, [
+      "正在上传视频…",
+      "正在上传视频…42%",
+      "视频已上传，服务器正在转码…",
+      "视频上传完成，保存后生效",
+    ]);
+    assert.equal(success.valueInput.value, "/video.mp4");
+    assert.equal(success.preview.src, "/video.mp4");
+    assert.equal(success.input.disabled, false);
+    assert.equal(success.input.value, "");
+
+    const failure = await runUpload(true);
+    assert.equal(failure.states.at(-1), "上传失败，请重新选择");
+    assert.equal(failure.error.textContent, "transcode failed");
+    assert.equal(failure.input.disabled, false);
+    assert.equal(failure.input.value, "");
+  }
+
+  await exerciseWrapper({
+    functionName: "uploadHomeBackgroundVideo",
+    nextFunctionName: "openHomeCategoryDrawer",
+    errorId: "home-background-error",
+    stateId: "home-background-upload-state",
+    inputName: "videoUrl",
+    uploadPath: "/api/admin/home-recommendations/background/upload",
+  });
+  await exerciseWrapper({
+    functionName: "uploadHomeRecommendationVideo",
+    nextFunctionName: "uploadHomeRecommendationCover",
+    errorId: "home-video-error",
+    stateId: "home-video-upload-state",
+    inputName: "videoUrl",
+    uploadPath: "/api/admin/home-recommendations/videos/upload",
+  });
+});
+
 test("admin shell resolves backend-owned requests to the dev admin API from alternate localhost ports", () => {
   for (const contract of [
     "function resolveAdminApiUrl",

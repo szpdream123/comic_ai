@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { renderProjectDetail } from "../src/features/production-workbench/project-detail.js";
+import { handleWorkbenchActionForTest } from "../src/features/production-workbench/index.js";
 
 function createBaseState() {
   return {
@@ -1209,7 +1210,7 @@ test("home tv uses a six-column responsive grid and scroll sentinel for incremen
   assert.match(css, /@media \(max-width: 1100px\)[\s\S]*?repeat\(3, minmax\(0, 1fr\)\)/);
 });
 
-test("home TV video cards play only as hover previews", () => {
+test("home TV video cards lazy-load previews and expose a click playback action", () => {
   const html = renderProjectDetail({
     state: createBaseState(),
     session: { user: { phone: "+86 13800138000" } },
@@ -1237,17 +1238,146 @@ test("home TV video cards play only as hover previews", () => {
     new URL("../src/features/production-workbench/index.js", import.meta.url),
     "utf8",
   );
-  const videoCard = html.match(/<article class="home-tv-card has-video-preview">[\s\S]*?<\/article>/)?.[0] ?? "";
+  const videoCard = html.match(/<article class="home-tv-card has-video-preview"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
   const css = readFileSync(
     new URL("../src/features/production-workbench/production-workbench.css", import.meta.url),
     "utf8",
   );
 
   assert.match(videoCard, /data-home-tv-preview data-home-tv-preview-url="https:\/\/example\.com\/preview\.mp4" muted loop playsinline preload="none"/);
+  assert.match(videoCard, /data-action="toggle-home-tv-preview"/);
   assert.doesNotMatch(videoCard, /<video[^>]*\ssrc=/);
   assert.doesNotMatch(videoCard, /target="_blank"/);
   assert.doesNotMatch(videoCard, /<video[^>]*controls/);
   assert.match(source, /playHomeTvVideoPreview\(homeTvCard\)/);
   assert.match(source, /stopHomeTvVideoPreview\(homeTvCard\)/);
+  assert.match(source, /function render\(workbench, options = \{\}\) \{[\s\S]*?stopHomeTvVideoPlaybacks\(workbench\.root\)/);
   assert.match(css, /\.home-tv-card\.has-video-preview:hover \.home-tv-preview-video\s*\{[\s\S]*?opacity:\s*1/);
+});
+
+test("clicking a home TV video card starts and stops persistent playback", async () => {
+  const classes = new Set(["home-tv-card", "has-video-preview"]);
+  let src = "";
+  let playCalls = 0;
+  let pauseCalls = 0;
+  const video = {
+    dataset: { homeTvPreviewUrl: "/api/home-recommendations/videos/video-1/media" },
+    style: { opacity: "" },
+    muted: true,
+    loop: true,
+    currentTime: 0,
+    getAttribute(name) { return name === "src" ? src || null : null; },
+    setAttribute(name, value) { if (name === "src") src = String(value); },
+    removeAttribute(name) { if (name === "src") src = ""; },
+    load() {},
+    play() { playCalls += 1; return Promise.resolve(); },
+    pause() { pauseCalls += 1; },
+  };
+  const card = {
+    dataset: {},
+    classList: {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+      contains(name) { return classes.has(name); },
+    },
+    querySelector(selector) { return selector === "[data-home-tv-preview]" ? video : null; },
+  };
+  const target = {
+    dataset: { action: "toggle-home-tv-preview" },
+    closest(selector) { return selector === ".home-tv-card.has-video-preview" ? card : null; },
+  };
+  const workbench = { root: { querySelector() { return null; } }, state: {}, session: {}, api: {}, ui: {} };
+
+  await handleWorkbenchActionForTest(workbench, target);
+  assert.equal(src, "/api/home-recommendations/videos/video-1/media");
+  assert.equal(video.muted, false);
+  assert.equal(video.loop, false);
+  assert.equal(video.style.opacity, "1");
+  assert.equal(classes.has("is-playing"), true);
+  assert.equal(playCalls, 1);
+  assert.equal(typeof video.onended, "function");
+  assert.equal(typeof video.onerror, "function");
+
+  await handleWorkbenchActionForTest(workbench, target);
+  assert.equal(src, "");
+  assert.equal(video.muted, true);
+  assert.equal(video.loop, true);
+  assert.equal(video.style.opacity, "");
+  assert.equal(classes.has("is-playing"), false);
+  assert.equal(pauseCalls, 1);
+  assert.equal(video.onended, null);
+  assert.equal(video.onerror, null);
+
+  await handleWorkbenchActionForTest(workbench, target);
+  video.onended();
+  assert.equal(src, "");
+  assert.equal(classes.has("is-playing"), false);
+
+  await handleWorkbenchActionForTest(workbench, target);
+  video.onerror();
+  assert.equal(src, "");
+  assert.equal(classes.has("is-playing"), false);
+
+  video.play = () => Promise.reject(new Error("media unavailable"));
+  await handleWorkbenchActionForTest(workbench, target);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(src, "");
+  assert.equal(classes.has("is-playing"), false);
+  assert.equal(video.muted, true);
+});
+
+test("starting a home TV video stops any other persistent playback", async () => {
+  const grid = {
+    cards: [],
+    querySelectorAll(selector) {
+      assert.equal(selector, ".home-tv-card.has-video-preview.is-playing");
+      return this.cards.filter((card) => card.classList.contains("is-playing"));
+    },
+  };
+  function createCard(id) {
+    const classes = new Set(["home-tv-card", "has-video-preview"]);
+    let src = "";
+    const video = {
+      dataset: { homeTvPreviewUrl: `/api/home-recommendations/videos/${id}/media` },
+      style: { opacity: "" },
+      muted: true,
+      loop: true,
+      currentTime: 0,
+      pauseCalls: 0,
+      getAttribute(name) { return name === "src" ? src || null : null; },
+      setAttribute(name, value) { if (name === "src") src = String(value); },
+      removeAttribute(name) { if (name === "src") src = ""; },
+      load() {},
+      play() { return Promise.resolve(); },
+      pause() { this.pauseCalls += 1; },
+    };
+    const card = {
+      classList: {
+        add(name) { classes.add(name); },
+        remove(name) { classes.delete(name); },
+        contains(name) { return classes.has(name); },
+      },
+      querySelector(selector) { return selector === "[data-home-tv-preview]" ? video : null; },
+      closest(selector) { return selector === ".home-tv-grid" ? grid : null; },
+    };
+    return { card, video, get src() { return src; } };
+  }
+  const first = createCard("video-1");
+  const second = createCard("video-2");
+  grid.cards = [first.card, second.card];
+  const targetFor = (card) => ({
+    dataset: { action: "toggle-home-tv-preview" },
+    closest(selector) { return selector === ".home-tv-card.has-video-preview" ? card : null; },
+  });
+  const workbench = { root: { querySelector() { return null; } }, state: {}, session: {}, api: {}, ui: {} };
+
+  await handleWorkbenchActionForTest(workbench, targetFor(first.card));
+  await handleWorkbenchActionForTest(workbench, targetFor(second.card));
+
+  assert.equal(first.card.classList.contains("is-playing"), false);
+  assert.equal(first.src, "");
+  assert.equal(first.video.pauseCalls, 1);
+  assert.equal(second.card.classList.contains("is-playing"), true);
+  assert.equal(second.src, "/api/home-recommendations/videos/video-2/media");
 });
