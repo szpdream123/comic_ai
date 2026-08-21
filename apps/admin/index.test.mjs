@@ -288,6 +288,13 @@ test("admin GEO draft editor creates a new structured version without discarding
 
   const markup = context.result.markup({ id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide" }, { document: sourceDocument });
   assert.match(markup, /结构化正文编辑器/);
+  assert.match(markup, /class="geo-article-edit-surface"/);
+  assert.match(markup, /class="geo-article-edit-header"/);
+  assert.match(markup, /class="geo-inline-edit-control geo-inline-edit-title"[^>]*name="title"/);
+  assert.match(markup, /class="geo-inline-edit-control geo-inline-edit-summary"[^>]*name="summary"/);
+  assert.match(markup, /class="geo-inline-edit-control geo-inline-edit-answer"[^>]*name="directAnswer"/);
+  assert.match(markup, /class="geo-article-edit-body"/);
+  assert.match(markup, /class="geo-article-settings"/);
   assert.match(markup, /name="title"/);
   assert.match(markup, /正文区块 1/);
   assert.match(markup, /FAQ 1/);
@@ -302,6 +309,24 @@ test("admin GEO draft editor creates a new structured version without discarding
   assert.match(script.slice(editorStart, editorEnd), /function geoMoveDraftBlock/);
   assert.match(script.slice(editorStart, editorEnd), /function geoDuplicateDraftBlock/);
   assert.match(script.slice(editorStart, editorEnd), /function geoDeleteDraftBlock/);
+
+  const blockVariantMarkup = context.result.markup(
+    { id: "content-1", topic: "角色一致性", slug: "ai-character-consistency", contentType: "guide" },
+    { document: { ...sourceDocument, blocks: [
+      { type: "heading", level: 2, text: "章节标题" },
+      { type: "list", ordered: false, items: ["列表项"] },
+      { type: "steps", items: [{ title: "第一步", body: "步骤说明" }] },
+      { type: "quote", text: "引用内容", sourceLabel: "来源", sourceUrl: "https://example.com" },
+      { type: "table", headers: ["字段"], rows: [["内容"]] },
+      { type: "note", tone: "warning", text: "提示内容" },
+      { type: "cta", title: "行动标题", body: "行动说明", label: "立即查看", href: "/start" },
+      { type: "legacy" },
+    ] } },
+  );
+  for (const className of ["geo-edit-heading", "geo-edit-list", "geo-edit-steps", "geo-edit-quote", "geo-edit-table", "geo-edit-note-warning", "geo-edit-cta"]) {
+    assert.match(blockVariantMarkup, new RegExp(`class="[^"]*${className}`));
+  }
+  assert.match(blockVariantMarkup, /暂不支持编辑此区块/);
 
   assert.equal(typeof context.result.insert, "function", "GEO editor can insert a block after the selected body block");
   const insertedBlocks = [
@@ -326,6 +351,23 @@ test("admin GEO draft editor creates a new structured version without discarding
   });
   assert.equal(pastePrevented, true);
   assert.deepEqual(Array.from(context.store.activeDraftEditor.version.document.blocks, (block) => block.type), ["paragraph", "image", "paragraph"]);
+
+  context.store.activeDraftEditor = {
+    item: { id: "content-text", topic: "文字粘贴" },
+    version: { document: { blocks: [{ type: "paragraph", text: "第一段" }, { type: "paragraph", text: "第二段" }] } },
+  };
+  let textPastePrevented = false;
+  await context.result.paste({
+    preventDefault: () => { textPastePrevented = true; },
+    target: { closest: (selector) => selector.includes(".geo-article-paste-hint") ? {} : selector === "[data-geo-block-index]" ? { dataset: { geoBlockIndex: "0" } } : null },
+    clipboardData: { items: [], getData: () => "## 插入标题\n插入正文" },
+  });
+  assert.equal(textPastePrevented, true);
+  assert.deepEqual(
+    Array.from(context.store.activeDraftEditor.version.document.blocks, (block) => block.type),
+    ["paragraph", "heading", "paragraph", "paragraph"],
+  );
+  assert.equal(context.store.activeDraftEditor.version.document.blocks[1].text, "插入标题");
 
   let finishUpload;
   context.uploadAdminImage = () => new Promise((resolve) => { finishUpload = resolve; });
