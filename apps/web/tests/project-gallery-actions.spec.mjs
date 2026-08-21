@@ -1389,6 +1389,177 @@ test("home recommendations render without waiting for recent projects", async ()
   }
 });
 
+test("cached home recommendations hydrate the first render before the network request", async () => {
+  const cachedPayload = {
+    background: { videoUrl: "/api/home-recommendations/background/media?v=cached", status: "active" },
+    categories: [{ id: "cached-category", code: "recommended", name: "推荐", videos: [] }],
+  };
+  const root = { innerHTML: "", querySelector() { return null; }, addEventListener() {} };
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.document = {
+    visibilityState: "visible",
+    addEventListener() {},
+    removeEventListener() {},
+    createElement() { return { innerHTML: "", querySelector() { return null; } }; },
+  };
+  globalThis.localStorage = {
+    getItem(key) {
+      return key === "comic-ai:home-recommendations:v1"
+        ? JSON.stringify({ savedAt: "2026-08-21T00:00:00.000Z", payload: cachedPayload })
+        : null;
+    },
+    setItem() {},
+    removeItem() {},
+  };
+  globalThis.sessionStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+
+  try {
+    const workbench = await initProductionWorkbench({
+      root,
+      session: null,
+      api: {},
+      onLogout() {},
+      deferInitialRender: true,
+    });
+
+    assert.equal(workbench.ui.homeTvLoading, false);
+    assert.equal(workbench.ui.homeBackground.videoUrl, cachedPayload.background.videoUrl);
+    assert.deepEqual(workbench.ui.homeTvCategories, cachedPayload.categories);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+});
+
+test("fresh home recommendations replace and persist the cached homepage payload", async () => {
+  const workbench = createWorkbench();
+  const stored = new Map();
+  const originalLocalStorage = globalThis.localStorage;
+  const freshPayload = {
+    background: { videoUrl: "/api/home-recommendations/background/media?v=fresh", status: "active" },
+    categories: [{ id: "fresh-category", code: "recommended", name: "推荐", videos: [] }],
+  };
+  workbench.ui.homeTvLoading = true;
+  workbench.ui.homeTvCategory = "recommended";
+  workbench.ui.homeTvCategories = [];
+  workbench.ui.homeBackground = { videoUrl: "", posterUrl: "", status: "inactive" };
+  workbench.api.getHomeRecommendations = async (input) => {
+    assert.equal(input.fresh, true);
+    return freshPayload;
+  };
+  globalThis.localStorage = {
+    getItem(key) { return stored.get(key) ?? null; },
+    setItem(key, value) { stored.set(key, value); },
+    removeItem(key) { stored.delete(key); },
+  };
+
+  try {
+    assert.equal(await syncHomeRecommendationsFromApiForTest(workbench), true);
+  } finally {
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+  }
+
+  const persisted = JSON.parse(stored.get("comic-ai:home-recommendations:v1"));
+  assert.deepEqual(persisted.payload, freshPayload);
+  assert.equal(workbench.ui.homeBackground.videoUrl, freshPayload.background.videoUrl);
+});
+
+test("visible home recommendations revalidate every fifteen seconds and stop off homepage", async () => {
+  let intervalCallback = null;
+  let intervalMs = 0;
+  let recommendationCalls = 0;
+  const root = { innerHTML: "", querySelector() { return null; }, addEventListener() {} };
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalLocalStorage = globalThis.localStorage;
+  const originalSessionStorage = globalThis.sessionStorage;
+  globalThis.window = {
+    location: { hash: "#home", pathname: "/home" },
+    setTimeout,
+    clearTimeout,
+    setInterval(callback, delay) {
+      intervalCallback = callback;
+      intervalMs = delay;
+      return 41;
+    },
+    clearInterval() {},
+    requestAnimationFrame: (callback) => setTimeout(callback, 0),
+    cancelAnimationFrame: clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  globalThis.document = {
+    visibilityState: "visible",
+    addEventListener() {},
+    removeEventListener() {},
+    createElement() { return { innerHTML: "", querySelector() { return null; } }; },
+  };
+  globalThis.localStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  globalThis.sessionStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+
+  try {
+    const workbench = await initProductionWorkbench({
+      root,
+      session: null,
+      api: {
+        async getHomeRecommendations(input) {
+          assert.equal(input.fresh, true);
+          recommendationCalls += 1;
+          return { background: null, categories: [] };
+        },
+      },
+      onLogout() {},
+      deferInitialRender: true,
+    });
+
+    assert.equal(intervalMs, 15_000);
+    intervalCallback();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(recommendationCalls, 1);
+
+    workbench.ui.activeNavTab = "project";
+    intervalCallback();
+    await Promise.resolve();
+    assert.equal(recommendationCalls, 1);
+
+    workbench.ui.activeNavTab = "home";
+    globalThis.document.visibilityState = "hidden";
+    intervalCallback();
+    await Promise.resolve();
+    assert.equal(recommendationCalls, 1);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+    if (originalLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalLocalStorage;
+    if (originalSessionStorage === undefined) delete globalThis.sessionStorage;
+    else globalThis.sessionStorage = originalSessionStorage;
+  }
+});
+
 test("opening home requests recommendations and ignores an older response", async () => {
   const workbench = createWorkbench();
   const olderRequest = createDeferred();

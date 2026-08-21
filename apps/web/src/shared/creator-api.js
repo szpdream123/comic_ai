@@ -1208,7 +1208,8 @@ export const creatorApi = {
     const options = arguments[0] ?? {};
     return fetchJsonWithTtl("/api/home-recommendations", {
       cacheKey: "GET /api/home-recommendations",
-      cacheTtlMs: 300000,
+      cacheTtlMs: options.fresh === true ? 0 : 300000,
+      cache: options.fresh === true ? "no-cache" : undefined,
       signal: options.signal,
     });
   },

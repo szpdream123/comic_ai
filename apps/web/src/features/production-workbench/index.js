@@ -2221,6 +2221,8 @@ const WORKBENCH_STORAGE_PREFIX = "comic-ai:production-workbench";
 const ANNOUNCEMENT_SEEN_STORAGE_PREFIX = "comic-ai:announcements:lastSeen";
 const WORKBENCH_THEME_STORAGE_KEY = "comic-ai:production-workbench-theme";
 const HOME_BACKGROUND_VIDEO_CACHE_NAME = "comic-ai:home-background-video:v1";
+const HOME_RECOMMENDATIONS_CACHE_KEY = "comic-ai:home-recommendations:v1";
+const HOME_RECOMMENDATIONS_REFRESH_INTERVAL_MS = 15_000;
 const HOME_TV_PREVIEW_MAX_DURATION_MS = 5000;
 const homeTvPreviewStopTimers = new WeakMap();
 const homeTvActivePlaybackCards = new WeakMap();
@@ -2887,6 +2889,8 @@ function refreshFirstLoginOnboardingConfig(workbench) {
 
 export async function initProductionWorkbench({ root, session, api, onLogout, onRequireLogin, deferInitialRender = false }) {
   const initialCommunityData = readLingxiCommunityData();
+  const cachedHomeRecommendations = readCachedHomeRecommendations();
+  const cachedHomeCategories = cachedHomeRecommendations?.categories ?? [];
   const workbench = {
     root,
     session,
@@ -2897,6 +2901,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
     librarySearchTimer: null,
     promptPlazaSearchTimer: null,
     projectSearchTimer: null,
+    homeRecommendationRefreshTimer: null,
+    homeRecommendationRefreshInFlight: null,
     homeProjectRequestId: 0,
     projectLibraryRequestId: 0,
     scriptLibraryRequestId: 0,
@@ -2974,11 +2980,14 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       homeAgentAttachmentCount: 0,
       homeAgentAttachments: [],
       homeAgentComposerSegments: [],
-      homeTvCategory: "recommended",
+      homeTvCategory: cachedHomeCategories.some((category) => category.code === "recommended")
+        ? "recommended"
+        : cachedHomeCategories[0]?.code ?? "recommended",
       homeTvVisibleCounts: {},
-      homeTvCategories: [],
-      homeBackground: { videoUrl: "", posterUrl: "", status: "inactive" },
-      homeTvLoading: true,
+      homeTvCategories: cachedHomeCategories,
+      homeBackground: cachedHomeRecommendations?.background
+        ?? { videoUrl: "", posterUrl: "", status: "inactive" },
+      homeTvLoading: !cachedHomeRecommendations,
       episodeGenerationStyleCode: "",
       episodeGenerationStyleProjectId: null,
       batchImageStyles: [],
@@ -3471,6 +3480,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
   setWorkbenchCreditBalance(workbench, resolveCurrentSessionCreditBalance(session) ?? 0, { syncGenerationConfig: false });
   syncWorkbenchDisplayCreditBalance(workbench, session);
   installCreditBalanceRefresh(workbench);
+  installHomeRecommendationRefresh(workbench);
   workbench.onCanvasNodeSelected = () => {
     workbench.ui.canvasEditorOpen = true;
     workbench.ui.canvasRunPreview = null;
@@ -60334,20 +60344,12 @@ async function syncHomeRecommendationsFromApi(workbench) {
   workbench.ui.homeTvLoading = true;
   try {
     const payload = await workbench.api.getHomeRecommendations(
-      withSurfaceRequestSignal({}, controller.signal),
+      withSurfaceRequestSignal({ fresh: true }, controller.signal),
     );
     if (workbench.homeRecommendationRequestId !== requestId) {
       return false;
     }
-    const categories = Array.isArray(payload?.categories) ? payload.categories : [];
-    workbench.ui.homeBackground = payload?.background && typeof payload.background === "object"
-      ? payload.background
-      : { videoUrl: "", posterUrl: "", status: "inactive" };
-    workbench.ui.homeTvCategories = categories;
-    if (!categories.some((item) => item.code === workbench.ui.homeTvCategory)) {
-      workbench.ui.homeTvCategory = categories[0]?.code ?? "";
-    }
-    return true;
+    return applyHomeRecommendationsPayload(workbench, payload, { persist: true });
   } catch (error) {
     if (isSurfaceRequestAbort(error)) {
       return false;
@@ -60359,6 +60361,121 @@ async function syncHomeRecommendationsFromApi(workbench) {
       workbench.ui.homeTvLoading = false;
     }
   }
+}
+
+function refreshVisibleHomeRecommendations(workbench) {
+  if (
+    workbench?.ui?.activeNavTab !== "home" ||
+    globalThis.document?.visibilityState === "hidden" ||
+    typeof workbench?.api?.getHomeRecommendations !== "function"
+  ) {
+    return null;
+  }
+  if (workbench.homeRecommendationRefreshInFlight) {
+    return workbench.homeRecommendationRefreshInFlight;
+  }
+  const request = syncHomeRecommendationsFromApi(workbench)
+    .then((changed) => {
+      if (changed && workbench.ui.activeNavTab === "home") {
+        render(workbench, { preserveNavigationShell: true });
+      }
+      return changed;
+    })
+    .catch((error) => {
+      if (!isSurfaceRequestAbort(error)) {
+        console.warn("[workbench] home recommendations refresh failed", error);
+      }
+      return false;
+    })
+    .finally(() => {
+      if (workbench.homeRecommendationRefreshInFlight === request) {
+        workbench.homeRecommendationRefreshInFlight = null;
+      }
+    });
+  workbench.homeRecommendationRefreshInFlight = request;
+  return request;
+}
+
+function installHomeRecommendationRefresh(workbench) {
+  if (
+    typeof globalThis.window?.setInterval !== "function" ||
+    typeof workbench?.api?.getHomeRecommendations !== "function"
+  ) {
+    return;
+  }
+  const revalidate = () => {
+    void refreshVisibleHomeRecommendations(workbench);
+  };
+  workbench.homeRecommendationRefreshTimer = globalThis.window.setInterval(
+    revalidate,
+    HOME_RECOMMENDATIONS_REFRESH_INTERVAL_MS,
+  );
+  workbench.disposeHomeRecommendationRefresh = () => {
+    if (workbench.homeRecommendationRefreshTimer !== null) {
+      globalThis.window?.clearInterval?.(workbench.homeRecommendationRefreshTimer);
+      workbench.homeRecommendationRefreshTimer = null;
+    }
+  };
+  globalThis.window?.addEventListener?.("focus", revalidate);
+  globalThis.document?.addEventListener?.("visibilitychange", () => {
+    if (globalThis.document?.visibilityState !== "hidden") revalidate();
+  });
+  globalThis.window?.addEventListener?.("pagehide", workbench.disposeHomeRecommendationRefresh, { once: true });
+}
+
+function normalizeHomeRecommendationsPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const background = payload.background && typeof payload.background === "object" && !Array.isArray(payload.background)
+    ? payload.background
+    : { videoUrl: "", posterUrl: "", status: "inactive" };
+  const categories = Array.isArray(payload.categories) ? payload.categories : [];
+  return { background, categories };
+}
+
+function homeRecommendationsPayloadSignature(payload) {
+  return JSON.stringify({
+    background: payload?.background ?? null,
+    categories: payload?.categories ?? [],
+  });
+}
+
+function readCachedHomeRecommendations() {
+  try {
+    const stored = globalThis.localStorage?.getItem?.(HOME_RECOMMENDATIONS_CACHE_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    return normalizeHomeRecommendationsPayload(parsed?.payload);
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedHomeRecommendations(payload) {
+  try {
+    globalThis.localStorage?.setItem?.(HOME_RECOMMENDATIONS_CACHE_KEY, JSON.stringify({
+      savedAt: new Date().toISOString(),
+      payload,
+    }));
+  } catch {
+    // A full or disabled browser storage must not block the homepage.
+  }
+}
+
+function applyHomeRecommendationsPayload(workbench, payload, { persist = false } = {}) {
+  const normalized = normalizeHomeRecommendationsPayload(payload);
+  if (!normalized) return false;
+  const previousSignature = homeRecommendationsPayloadSignature({
+    background: workbench.ui.homeBackground,
+    categories: workbench.ui.homeTvCategories,
+  });
+  const nextSignature = homeRecommendationsPayloadSignature(normalized);
+  workbench.ui.homeBackground = normalized.background;
+  workbench.ui.homeTvCategories = normalized.categories;
+  if (!normalized.categories.some((item) => item.code === workbench.ui.homeTvCategory)) {
+    workbench.ui.homeTvCategory = normalized.categories[0]?.code ?? "";
+  }
+  if (persist) writeCachedHomeRecommendations(normalized);
+  return previousSignature !== nextSignature;
 }
 
 function normalizeProjectLibraryPagination(value, fallback = {}) {

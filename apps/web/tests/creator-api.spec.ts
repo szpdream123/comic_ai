@@ -430,6 +430,28 @@ test("getAnnouncements reads the public announcement route", async () => {
   assert.equal(payload.version, "2026-07-17T05:56:48.039Z");
 });
 
+test("fresh home recommendations always use browser conditional revalidation", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return {
+      ok: true,
+      text: async () => JSON.stringify({ categories: [], background: null }),
+    };
+  };
+
+  const { creatorApi } = await import(`../src/shared/creator-api.js?fresh-home=${Date.now()}`);
+  await creatorApi.getHomeRecommendations({ fresh: true });
+  await creatorApi.getHomeRecommendations({ fresh: true });
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.url), [
+    "/api/home-recommendations",
+    "/api/home-recommendations",
+  ]);
+  assert.deepEqual(calls.map((call) => call.options.cache), ["no-cache", "no-cache"]);
+});
+
 test("catalog reads reuse the TTL cache until a write invalidates it", async () => {
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
