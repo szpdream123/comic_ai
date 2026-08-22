@@ -3328,6 +3328,7 @@ async function createStorageMediaThumbnail(input: {
   relativeUrlOrigin: string;
   contentType: string;
   fetchImpl: typeof fetch;
+  safeFetchImpl?: typeof fetch;
   timeoutMs: number;
 }) {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "comic-ai-media-thumb-"));
@@ -3338,7 +3339,9 @@ async function createStorageMediaThumbnail(input: {
       if (!signedUrl) throw new Error("storage_thumbnail_source_missing");
       const upstreamUrl = new URL(signedUrl, input.relativeUrlOrigin);
       if (!["http:", "https:"].includes(upstreamUrl.protocol)) throw new Error("storage_thumbnail_source_invalid");
-      const upstream = await input.fetchImpl(upstreamUrl, { redirect: "manual" });
+      // Object storage providers may redirect signed reads to their data plane.
+      // Follow that redirect here so thumbnail generation receives the actual media bytes.
+      const upstream = await (input.safeFetchImpl ?? input.fetchImpl)(upstreamUrl, { redirect: "follow" });
       if (!upstream.ok || !upstream.body) throw new Error("storage_thumbnail_source_unavailable");
       await pipeline(Readable.fromWeb(upstream.body as never), createWriteStream(sourcePath));
     }
@@ -3548,6 +3551,9 @@ function isEnabled(value: unknown) {
 
 function requestModelCode(value: unknown) {
   const modelCode = String(value ?? "").trim();
+  if (modelCode === "global-ai-opc-nano-banana-2" || modelCode === "nano_banana_2" || modelCode === "nano-banana-2-image") {
+    return "seedream-5.0";
+  }
   if (modelCode === "seedance-2-0-vip" || modelCode === "seedance-2.0") {
     return "seedance-i2v-pro";
   }
@@ -3596,9 +3602,80 @@ function storageObjectIdFromContentUrl(value: string) {
   }
 }
 
+async function resolveStorageProxyUrlFromSourceUrl(
+  db: SqlDatabase,
+  sourceUrl: string,
+) {
+  const normalizedSourceUrl = String(sourceUrl ?? "").trim();
+  if (!normalizedSourceUrl) {
+    return "";
+  }
+
+  const contentStorageObjectId = storageObjectIdFromContentUrl(normalizedSourceUrl);
+  let storageObjectId = "";
+  if (contentStorageObjectId) {
+    storageObjectId = contentStorageObjectId;
+  } else {
+    const providerContentMatch = normalizedSourceUrl.match(/\/v1\/(?:images|videos)\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+    if (providerContentMatch?.[1]) {
+      storageObjectId = providerContentMatch[1];
+    } else {
+      const identity = resolveStorageIdentityFromCosUrl(normalizedSourceUrl);
+      if (!identity) {
+        return "";
+      }
+      const row = await queryOne<{ id: string }>(
+        db,
+        `
+          SELECT id
+          FROM storage_objects
+          WHERE bucket = $1
+            AND object_key = $2
+            AND status = 'available'
+            AND deleted_at IS NULL
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [identity.bucket, identity.objectKey],
+      );
+      storageObjectId = String(row?.id ?? "").trim();
+    }
+  }
+
+  if (!storageObjectId) {
+    return "";
+  }
+
+  return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+}
+
+function resolveStorageIdentityFromCosUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const match = url.hostname.match(/^(.+)\.cos\.([a-z0-9-]+)\.myqcloud\.com$/i);
+    if (!match) {
+      return null;
+    }
+    const bucket = String(match[1] ?? "").trim();
+    const region = String(match[2] ?? "").trim();
+    const objectKey = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+    if (!bucket || !region || !objectKey) {
+      return null;
+    }
+    return { bucket, region, objectKey };
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveGenerationStorageObjectReferences(
   value: unknown,
   resolveStorageObjectUrl: (storageObjectId: string) => Promise<string>,
+  resolveSourceUrl?: (sourceUrl: string) => Promise<string | null>,
 ): Promise<unknown> {
   const resolvedById = new Map<string, Promise<string>>();
   const resolveId = (storageObjectId: string) => {
@@ -3610,26 +3687,63 @@ export async function resolveGenerationStorageObjectReferences(
     }
     return pending;
   };
-  const visit = async (candidate: unknown): Promise<unknown> => {
+  const visit = async (candidate: unknown, allowMissingStorageObject = false): Promise<unknown> => {
     if (typeof candidate === "string") {
       const storageObjectId = storageObjectIdFromContentUrl(candidate);
-      return storageObjectId ? resolveId(storageObjectId) : candidate;
+      if (storageObjectId) {
+        try {
+          return await resolveId(storageObjectId);
+        } catch (error) {
+          if (allowMissingStorageObject) return undefined;
+          throw error;
+        }
+      }
+      return resolveSourceUrl && /^https?:\/\//i.test(candidate.trim())
+        ? (await resolveSourceUrl(candidate)) ?? candidate
+        : candidate;
     }
-    if (Array.isArray(candidate)) return Promise.all(candidate.map(visit));
+    if (Array.isArray(candidate)) return Promise.all(candidate.map((item) => visit(item, allowMissingStorageObject)));
     if (!candidate || typeof candidate !== "object") return candidate;
 
     const record = candidate as Record<string, unknown>;
     const storageObjectId = typeof record.storageObjectId === "string"
       ? record.storageObjectId.trim()
       : "";
-    const signedUrl = storageObjectId ? await resolveId(storageObjectId) : "";
+    const assetVersionId = typeof record.assetVersionId === "string"
+      ? record.assetVersionId.trim()
+      : "";
+    let signedUrl = "";
+    if (storageObjectId) {
+      try {
+        signedUrl = await resolveId(storageObjectId);
+      } catch (error) {
+        if (!assetVersionId) {
+          // Historical drafts can retain a stale proxy id alongside a valid COS URL.
+          // Resolve the URL before rejecting the whole generation request.
+          const sourceUrl = Object.entries(record)
+            .filter(([key, item]) => generationMediaUrlKeys.has(key) && typeof item === "string")
+            .map(([, item]) => String(item).trim())
+            .find((item) => item && !storageObjectIdFromContentUrl(item));
+          const sourceResolved = sourceUrl && resolveSourceUrl
+            ? await resolveSourceUrl(sourceUrl)
+            : null;
+          if (sourceResolved) {
+            signedUrl = sourceResolved;
+          } else {
+            throw error;
+          }
+        }
+      }
+    }
     const entries = await Promise.all(Object.entries(record).map(async ([key, item]) => [
       key,
       signedUrl && generationMediaUrlKeys.has(key) && typeof item === "string"
         ? signedUrl
-        : await visit(item),
+        : !signedUrl && assetVersionId && generationMediaUrlKeys.has(key) && typeof item === "string" && storageObjectIdFromContentUrl(item) === storageObjectId
+          ? undefined
+          : await visit(item, Boolean(assetVersionId)),
     ] as const));
-    const resolved = Object.fromEntries(entries);
+    const resolved = Object.fromEntries(entries.filter(([, item]) => item !== undefined));
     if (signedUrl && !Object.keys(resolved).some((key) => generationMediaUrlKeys.has(key))) {
       resolved.url = signedUrl;
     }
@@ -6938,7 +7052,7 @@ async function listTaskCenterTasks(
                 END
               ),
               'displayMessage', CASE request.status
-                WHEN 'result_unknown' THEN '团队资产供应商结果暂不明确，正在等待后台复核。'
+                WHEN 'result_unknown' THEN '团队资产生成结果暂不明确，正在等待后台复核。'
                 WHEN 'manual_review_required' THEN '团队资产生成需要后台复核。'
                 WHEN 'canceled' THEN '团队资产生成已取消。'
                 ELSE '团队资产生成失败，请稍后重试。'
@@ -7270,7 +7384,7 @@ async function readGenerationTaskResponseForSession(
   if (!taskContext) {
     return null;
   }
-  const terminal = ["succeeded", "failed", "canceled", "result_unknown", "manual_review_required"].includes(taskContext.task.status);
+  const terminal = ["succeeded", "failed", "canceled", "manual_review_required"].includes(taskContext.task.status);
   if (!terminal) {
     await settleTimedOutEpisodeGenerationTask(db, {
       taskId: input.taskId,
@@ -8052,6 +8166,13 @@ export function generationFailureDisplayMessage(input: {
   requestSnapshot?: Record<string, unknown>;
 }): string {
   const failureCode = String(input.failureCode ?? "").trim();
+  const mediaType = readString(input.requestSnapshot?.mediaType) === "video" || readString(input.requestSnapshot?.kind) === "video"
+    ? "video"
+    : undefined;
+  const videoFallbackMessage = "生成失败，请修改素材或提示词后重新生成";
+  const normalizeVideoFailureMessage = (message: string) => mediaType === "video" && message.includes("没有拿到生成结果")
+    ? videoFallbackMessage
+    : message;
   if (
     failureCode === "provider_submission_ambiguous" ||
     failureCode === "provider_poll_timeout" ||
@@ -8082,11 +8203,12 @@ export function generationFailureDisplayMessage(input: {
       readString(providerDiagnostics.responseBodyPreview);
     if (diagnosticMessage) {
       const translatedDiagnosticMessage = generationProviderFailureDisplayMessage(diagnosticMessage);
+      const normalizedDiagnosticMessage = normalizeVideoFailureMessage(translatedDiagnosticMessage);
       if (
-        translatedDiagnosticMessage &&
-        translatedDiagnosticMessage !== "模型服务返回错误，任务没有拿到生成结果，请稍后重试。"
+        normalizedDiagnosticMessage &&
+        normalizedDiagnosticMessage !== "生成失败，请修改素材或提示词后重新生成"
       ) {
-        return translatedDiagnosticMessage;
+        return normalizedDiagnosticMessage;
       }
     }
     return translateProviderErrorMessage({
@@ -8096,6 +8218,7 @@ export function generationFailureDisplayMessage(input: {
       providerErrorCode: input.providerErrorCode,
     }, {
       failureCode,
+      mediaType,
     });
   }
   const explicit = readString(input.snapshotFailure?.displayMessage);
@@ -8105,20 +8228,23 @@ export function generationFailureDisplayMessage(input: {
   }
   const translatedExplicitProviderFailure = explicit ? generationProviderFailureDisplayMessage(explicit) : "";
   if (translatedExplicitProviderFailure) {
-    return translatedExplicitProviderFailure;
+    return normalizeVideoFailureMessage(translatedExplicitProviderFailure);
   }
   if (explicit && explicit !== failureCode && !/^[a-z0-9_:-]+$/i.test(explicit)) {
-    return translateProviderErrorMessage(explicit);
+    return translateProviderErrorMessage(explicit, { mediaType });
   }
   const providerMessage = String(input.providerMessage ?? "").trim();
   if (failureCode === "provider_failed" && providerMessage) {
     const translatedProviderMessage = generationProviderFailureDisplayMessage(providerMessage);
-    return translatedProviderMessage || translateProviderErrorMessage(providerMessage);
+    return normalizeVideoFailureMessage(translatedProviderMessage) || translateProviderErrorMessage(providerMessage, { mediaType });
   }
   const providerErrorCode = String(input.providerErrorCode ?? "").trim();
   if (failureCode === "provider_failed" && providerErrorCode) {
     const translatedProviderErrorCode = generationProviderFailureDisplayMessage(providerErrorCode);
-    return translatedProviderErrorCode || translateProviderErrorMessage(providerErrorCode);
+    return normalizeVideoFailureMessage(translatedProviderErrorCode) || translateProviderErrorMessage(providerErrorCode, { mediaType });
+  }
+  if (failureCode === "provider_failed" && mediaType === "video") {
+    return videoFallbackMessage;
   }
   return generationFailureDisplayMessageByCode(failureCode);
 }
@@ -8270,22 +8396,22 @@ function isLingdongVideoGenerationSnapshot(snapshot: Record<string, unknown> | u
 
 function generationFailureDisplayMessageByCode(failureCode: string): string {
   const messages: Record<string, string> = {
-    task_timeout: "生成任务超过平台等待时间（图片和音频 1 小时，视频 3 小时），已按超时策略处理。积分结果请以任务账务状态和积分账本为准。",
-    provider_failed: "\u4f9b\u5e94\u5546\u8fd4\u56de\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u62ff\u5230\u751f\u6210\u7ed3\u679c\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+    task_timeout: "生成超时，请重新处理生成。",
+    provider_failed: "生成失败，请修改素材或提示词后重新生成",
     cumob_image_failed: "酷模返回生成失败，任务没有拿到可用图片，积分已返还。请稍后重试；如果连续出现，请更换比例/尺寸或检查酷模侧任务状态。",
     cumob_image_invalid_response: "酷模响应中没有可用图片地址，任务没有保存图片，积分已返还。请稍后重试。",
     cumob_image_empty_response: "酷模响应为空，后端没有拿到生成结果，积分已返还。请稍后重试。",
     cumob_image_invalid_json: "酷模响应格式异常，后端无法解析生成结果，积分已返还。请稍后重试。",
     cumob_image_timeout: "酷模响应超时，后端没有拿到生成结果，积分已返还。请稍后重试。",
     cumob_image_network_error: "无法连接酷模接口，后端没有拿到生成结果，积分已返还。请检查网络或酷模服务状态后重试。",
-    global_ai_opc_image_failed: "GlobalAiOpc 返回生成失败，任务没有拿到可用图片，积分已返还。请稍后重试；如果连续出现，请更换比例、分辨率或检查供应商任务状态。",
+    global_ai_opc_image_failed: "GlobalAiOpc 返回生成失败，任务没有拿到可用图片，积分已返还。请稍后重试；如果连续出现，请更换比例或分辨率。",
     global_ai_opc_image_invalid_response: "GlobalAiOpc 响应中没有可用图片地址，任务没有保存图片，积分已返还。请稍后重试。",
     global_ai_opc_image_empty_response: "GlobalAiOpc 响应为空，后端没有拿到生成结果，积分已返还。请稍后重试。",
     global_ai_opc_image_invalid_json: "GlobalAiOpc 响应格式异常，后端无法解析生成结果，积分已返还。请稍后重试。",
     global_ai_opc_image_timeout: "GlobalAiOpc 响应超时，后端没有拿到生成结果，积分已返还。请稍后重试。",
-    global_ai_opc_image_network_error: "无法连接 GlobalAiOpc 接口，后端没有拿到生成结果，积分已返还。请检查网络或供应商服务状态后重试。",
-    provider_submission_prepare_failed: "\u751f\u6210\u8bf7\u6c42\u53d1\u9001\u524d\u51c6\u5907\u5931\u8d25\uff0c\u4efb\u52a1\u6ca1\u6709\u53d1\u7ed9\u4f9b\u5e94\u5546\uff0c\u79ef\u5206\u5df2\u8fd4\u8fd8\u3002\u8bf7\u7a0d\u540e\u91cd\u8bd5\uff1b\u5982\u679c\u53cd\u590d\u51fa\u73b0\uff0c\u8bf7\u8054\u7cfb\u540e\u53f0\u68c0\u67e5\u4efb\u52a1\u914d\u7f6e\u3002",
-    provider_submission_ambiguous: "模型请求已发出，但供应商没有返回明确提交结果。任务与积分状态已转后台复核，请勿重复提交；最终结果以任务状态和积分账本为准。",
+    global_ai_opc_image_network_error: "无法连接 GlobalAiOpc 接口，后端没有拿到生成结果，积分已返还。请检查服务状态后重试。",
+    provider_submission_prepare_failed: "生成请求发送前准备失败，任务未开始处理，积分已返还。请稍后重试；如果反复出现，请联系后台检查任务配置。",
+    provider_submission_ambiguous: "模型请求已发出，但处理状态暂不明确。任务与积分状态已转后台复核，请勿重复提交；最终结果以任务状态和积分账本为准。",
     image_provider_timeout: "图片模型服务响应超时，后端没有拿到生成结果。积分已返还，请稍后重试或检查中转站耗时。",
     image_provider_empty_response: "图片模型服务响应为空或被截断，后端没有拿到图片数据。积分已返还，请检查中转站是否完整返回 JSON。",
     image_provider_invalid_json: "图片模型服务响应格式异常，后端无法解析图片数据。积分已返还，请检查中转站是否返回标准 JSON。",
@@ -8296,12 +8422,12 @@ function generationFailureDisplayMessageByCode(failureCode: string): string {
     openai_images_invalid_json: "图片模型服务响应格式异常，后端无法解析图片数据。积分已返还，请检查中转站是否返回标准 JSON。",
     openai_images_invalid_response: "图片模型服务响应中没有可用图片数据。积分已返还，请稍后重试或检查中转站返回字段。",
     openai_images_504: "图片模型服务或中转站响应超时（HTTP 504），任务没有拿到生成结果，积分已返还。请稍后重试或检查中转站稳定性。",
-    provider_poll_timeout: "供应商结果轮询超过平台等待时间。只有供应商取消确认后才会按失败退款；取消未确认时任务与积分状态等待后台复核。",
-    provider_result_unknown: "\u4f9b\u5e94\u5546\u7ed3\u679c\u72b6\u6001\u4e0d\u660e\u786e\uff0c\u8bf7\u5237\u65b0\u540e\u518d\u770b\uff1b\u5982\u4f9b\u5e94\u5546\u4fa7\u5df2\u751f\u6210\uff0c\u9700\u8981\u540e\u53f0\u590d\u6838\u3002",
+    provider_poll_timeout: "生成超时，请重新处理生成。",
+    provider_result_unknown: "生成结果状态不明确，请刷新后再看；如已生成，需要后台复核。",
     provider_output_download_failed: "存储超时，正在重试。",
     provider_output_upload_failed: "存储超时，正在重试。",
     provider_output_storage_failed: "存储失败，等待人工处理。",
-    provider_output_persist_failed: "\u4f9b\u5e94\u5546\u4ea7\u7269\u5df2\u4e0a\u4f20\uff0c\u4f46\u5e73\u53f0\u8d44\u4ea7\u8bb0\u5f55\u4fdd\u5b58\u5931\u8d25\uff0c\u9700\u8981\u540e\u53f0\u4fee\u590d\u3002",
+    provider_output_persist_failed: "生成结果已上传，但平台资产记录保存失败，需要后台修复。",
     provider_api_key_env_required: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u73af\u5883\u53d8\u91cf\u672a\u914d\u7f6e\u3002",
     provider_api_key_missing: "\u4f9b\u5e94\u5546 API \u5bc6\u94a5\u7f3a\u5931\u3002",
     provider_adapter_missing: "\u4f9b\u5e94\u5546\u9002\u914d\u5668\u4e0d\u53ef\u7528\u3002",
@@ -8705,11 +8831,6 @@ async function settleTimedOutEpisodeGenerationTask(
       await db.query("COMMIT");
       return false;
     }
-    if (!input.failureCode && row.status === "result_unknown" && row.failure_code === "provider_poll_timeout") {
-      await db.query("COMMIT");
-      return false;
-    }
-
     const providerRequest = await queryOne<{
       id: string;
       status: string;
@@ -8811,15 +8932,12 @@ async function settleTimedOutEpisodeGenerationTask(
       await db.query("COMMIT");
       return false;
     }
-    const providerResultIsUnclear = !input.failureCode && Boolean(
-      providerRequest && !["succeeded", "failed", "canceled"].includes(providerRequest.status),
-    );
     if (!input.failureCode && providerRequest?.status === "succeeded") {
       await db.query("COMMIT");
       return false;
     }
-    const failureCode = input.failureCode ?? (providerResultIsUnclear ? "provider_poll_timeout" : "task_timeout");
-    const nextStatus = providerResultIsUnclear ? "result_unknown" : "failed";
+    const failureCode = input.failureCode ?? "provider_poll_timeout";
+    const nextStatus = "failed";
     const claimed = await queryOne<{ id: string }>(
       db,
       `
@@ -8924,84 +9042,50 @@ async function settleTimedOutEpisodeGenerationTask(
     );
 
     const amount = resolveGenerationBillingAmount(row.amount_reserved, snapshot);
-    if (providerResultIsUnclear) {
-      if (row.reservation_id && amount > 0) {
-        await settleReservationAllocationInTransaction(db, {
-          reservationId: row.reservation_id,
-          allocationKey: "task-timeout-manual-review",
-          amount,
-          outcome: "manual_review_required",
-          taskId: row.task_id,
-          attemptId: row.current_attempt_id,
-          providerRequestId: providerRequest?.id ?? null,
-          metadata: {
-            failureCode,
-            episodeId: snapshot.episodeId ?? null,
-            kind: snapshot.kind ?? null,
-          },
-          now: input.now,
-        });
-      }
-      await markGenerationTaskSnapshotResultUnknown(db, {
+    if (row.reservation_id && amount > 0) {
+      await settleReservationAllocationInTransaction(db, {
+        reservationId: row.reservation_id,
+        allocationKey: "task-timeout",
+        amount,
+        outcome: "released",
         taskId: row.task_id,
         attemptId: row.current_attempt_id,
-        providerRequestId: providerRequest?.id ?? null,
-        failure: {
+        metadata: {
           failureCode,
-          displayMessage: "供应商请求已经开始，但超时后结果仍不明确，积分暂不返还，需后台复核。",
-        },
-        creditSummary: {
-          reserved: amount,
-          reviewRequiredAt: input.now.toISOString(),
-        },
-        now: input.now,
-      });
-    } else {
-      if (row.reservation_id && amount > 0) {
-        await settleReservationAllocationInTransaction(db, {
-          reservationId: row.reservation_id,
-          allocationKey: "task-timeout",
-          amount,
-          outcome: "released",
-          taskId: row.task_id,
-          attemptId: row.current_attempt_id,
-          metadata: {
-            failureCode,
-            episodeId: snapshot.episodeId ?? null,
-            kind: snapshot.kind ?? null,
-          },
-          now: input.now,
-        });
-      }
-      const teamMemberId = readString(snapshot.teamMemberId) ?? readString(snapshot.memberId);
-      if (!row.reservation_id && teamMemberId && amount > 0) {
-        await refundTeamMemberGenerationCreditsInTransaction(db, {
-          teamMemberId,
-          amount,
-          sourceId: row.task_id,
-          reason: "生成超时返还积分",
-          metadata: {
-            failureCode,
-            episodeId: snapshot.episodeId ?? null,
-            kind: snapshot.kind ?? null,
-          },
-          now: input.now,
-        });
-      }
-      await markGenerationTaskSnapshotFailed(db, {
-        taskId: row.task_id,
-        attemptId: row.current_attempt_id,
-        failure: {
-          failureCode,
-          displayMessage: generationFailureDisplayMessageByCode(failureCode),
-        },
-        creditSummary: {
-          released: amount,
-          settledAt: input.now.toISOString(),
+          episodeId: snapshot.episodeId ?? null,
+          kind: snapshot.kind ?? null,
         },
         now: input.now,
       });
     }
+    const teamMemberId = readString(snapshot.teamMemberId) ?? readString(snapshot.memberId);
+    if (!row.reservation_id && teamMemberId && amount > 0) {
+      await refundTeamMemberGenerationCreditsInTransaction(db, {
+        teamMemberId,
+        amount,
+        sourceId: row.task_id,
+        reason: "生成超时返还积分",
+        metadata: {
+          failureCode,
+          episodeId: snapshot.episodeId ?? null,
+          kind: snapshot.kind ?? null,
+        },
+        now: input.now,
+      });
+    }
+    await markGenerationTaskSnapshotFailed(db, {
+      taskId: row.task_id,
+      attemptId: row.current_attempt_id,
+      failure: {
+        failureCode,
+        displayMessage: generationFailureDisplayMessageByCode(failureCode),
+      },
+      creditSummary: {
+        released: amount,
+        settledAt: input.now.toISOString(),
+      },
+      now: input.now,
+    });
     await aggregateWorkflowStatus(db, row.workflow_id);
     await db.query("COMMIT");
     return true;
@@ -10435,16 +10519,61 @@ async function createGenerationTask(
         expiresInSeconds: modelSignedUrlExpiresInSeconds,
       })).url;
     } catch (error) {
-      if (error instanceof AuthorizationError || error instanceof StorageAccessError) {
+      if (error instanceof AuthorizationError) {
+        throw new GenerationRequestValidationError("model_reference_forbidden", "Canvas storage reference is not accessible");
+      }
+      if (error instanceof StorageAccessError) {
         throw new GenerationRequestValidationError("model_reference_not_found", "Canvas storage reference was not found");
       }
       throw error;
     }
   };
-  const resolvedBody = await resolveGenerationStorageObjectReferences(input.body, resolveStorageObjectUrl) as Record<string, unknown>;
+  const resolveGenerationSourceUrl = async (sourceUrl: string) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(sourceUrl);
+    } catch {
+      return null;
+    }
+    const expectedSuffix = `.cos.${input.runtime.region}.myqcloud.com`;
+    if (parsed.protocol !== "https:" || !parsed.hostname.toLowerCase().endsWith(expectedSuffix)) {
+      return null;
+    }
+    const sourceBucket = parsed.hostname.slice(0, -expectedSuffix.length);
+    const objectKey = parsed.pathname.replace(/^\/+/, "").split("/").map((part) => decodeURIComponent(part)).join("/");
+    if (!objectKey) return null;
+    const officialRootPrefix = (input.env.STORAGE_OFFICIAL_ASSET_ROOT_PREFIX || "officialAssets")
+      .trim()
+      .replace(/^\/+|\/+$/g, "");
+    if (officialRootPrefix && (objectKey === officialRootPrefix || objectKey.startsWith(`${officialRootPrefix}/`))) {
+      return (await input.runtime.adapter.createSignedReadUrl({
+        bucket: sourceBucket,
+        objectKey,
+        expiresAt: new Date(input.now.getTime() + modelSignedUrlExpiresInSeconds * 1000),
+      })).url;
+    }
+    const object = await queryOne<{ id: string }>(db, `
+      SELECT id
+      FROM storage_objects
+      WHERE bucket=$1 AND object_key=$2 AND status='available' AND deleted_at IS NULL
+      LIMIT 1
+    `, [sourceBucket, objectKey]);
+    if (object) return resolveStorageObjectUrl(object.id);
+    // Legacy/official COS assets may not have a storage_objects row. They are
+    // still valid references when the URL belongs to the configured COS region;
+    // sign the parsed identity directly so private objects remain readable by
+    // the external model provider.
+    return (await input.runtime.adapter.createSignedReadUrl({
+      bucket: sourceBucket,
+      objectKey,
+      expiresAt: new Date(input.now.getTime() + modelSignedUrlExpiresInSeconds * 1000),
+    })).url;
+  };
+  const resolvedBody = await resolveGenerationStorageObjectReferences(input.body, resolveStorageObjectUrl, resolveGenerationSourceUrl) as Record<string, unknown>;
   const resolvedModelParameters = await resolveGenerationStorageObjectReferences(
     executionParameters,
     resolveStorageObjectUrl,
+    resolveGenerationSourceUrl,
   ) as Record<string, unknown>;
   const parameters = resolvedReferenceImages.length
     ? {
@@ -11199,7 +11328,7 @@ async function createGenerationTask(
           failure: {
             failureCode,
             historicalProviderRequestId: submitted.request.id,
-            displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+            displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
           },
           creditSummary: {
             reserved: estimatedCost,
@@ -11540,6 +11669,7 @@ async function createGenerationTask(
   if (modelExecution.providerExecutor === "seedance" && !shouldUseBullMQDispatch) {
     const submitted = await processSeedanceVideoSubmitJob(db, {
       taskId: task.id,
+      runtime: input.runtime,
       env: input.env,
       fetchImpl: input.fetchImpl,
       now: input.now,
@@ -12764,10 +12894,32 @@ function readGenerationReferenceAssetVersionIds(
   body: Record<string, unknown>,
   parameters: Record<string, unknown>,
 ) {
-  return Array.from(new Set([
+  const assetVersionIds = [
     ...readStringArray(body.referenceAssetVersionIds),
     ...readStringArray(parameters.referenceAssetVersionIds),
-  ])).filter(isUuid);
+  ];
+  const collectNestedReferenceIds = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) collectNestedReferenceIds(item);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const assetVersionId = readString(record.assetVersionId);
+    if (assetVersionId) assetVersionIds.push(assetVersionId);
+    for (const item of Object.values(record)) collectNestedReferenceIds(item);
+  };
+  for (const source of [
+    body.referenceImages,
+    body.quickReferences,
+    parameters.referenceImages,
+    parameters.quickReferences,
+    parameters.filePaths,
+    parameters.references,
+  ]) {
+    collectNestedReferenceIds(source);
+  }
+  return Array.from(new Set(assetVersionIds)).filter(isUuid);
 }
 
 function validateGenerationReferenceLimit(
@@ -12895,9 +13047,24 @@ async function resolveGenerationReferenceImages(
     }
     const objectKey = readString(row.storage_object_key_from_object) || row.storage_object_key;
     const bucket = readString(row.storage_bucket) || input.runtime.bucket;
+    const metadataReferenceUrl = [
+      metadata.sourceUrl,
+      metadata.previewUrl,
+      metadata.fixedImageUrl,
+      metadata.url,
+    ].map(readString).find((candidate) => {
+      if (!candidate) return false;
+      try {
+        const parsed = new URL(candidate);
+        return parsed.protocol === "https:" &&
+          parsed.hostname.toLowerCase().endsWith(`.cos.${input.runtime.region}.myqcloud.com`);
+      } catch {
+        return false;
+      }
+    });
     return [{
       assetVersionId,
-      url: await buildGenerationReferenceObjectUrl({
+      url: metadataReferenceUrl ?? await buildGenerationReferenceObjectUrl({
         runtime: input.runtime,
         bucket,
         objectKey,
@@ -13104,7 +13271,9 @@ async function signedAssetVersionFragment(
     thumbnailUrl:
       input.version.metadata.thumbnailUrl ??
       input.version.metadata.coverImageUrl ??
-      null,
+      (input.version.versionId && (metadataPreviewUrl || input.version.metadata.imageUrl || input.version.metadata.fixedImageUrl)
+        ? `/api/creator/assets/versions/${encodeURIComponent(input.version.versionId)}/thumbnail`
+        : null),
   };
 }
 
@@ -13608,8 +13777,10 @@ async function listEpisodeStoryboardsFromDb(
       description: shot.description || "",
       currentImageFileId: shot.current_image_asset_version_id,
       currentImageUrl,
+      currentImageStorageObjectId: shot.image_storage_object_id,
       currentVideoFileId: shot.current_video_asset_version_id,
       currentVideoUrl,
+      currentVideoStorageObjectId: shot.video_storage_object_id,
       currentVideoThumbnailUrl,
       imageStatus: shot.image_status === "completed" || shot.image_status === "ready"
         ? "succeeded"
@@ -25600,6 +25771,36 @@ export function createPhoneAuthDevServer(
             }
           }
         }
+        if (request.method === "GET" && pathname === "/api/storage/resolve") {
+          if (!authenticated) {
+            return writeJson(response, {
+              status: 401,
+              body: { error: "unauthenticated" },
+            });
+          }
+          const sourceUrl = String(url.searchParams.get("sourceUrl") ?? "").trim();
+          if (!sourceUrl) {
+            return writeJson(response, {
+              status: 400,
+              body: { error: "storage_source_url_required" },
+            });
+          }
+          const proxyUrl = await resolveStorageProxyUrlFromSourceUrl(db, sourceUrl);
+          if (!proxyUrl) {
+            return writeJson(response, {
+              status: 404,
+              body: { error: "storage_object_not_found" },
+            });
+          }
+          return writeJson(response, {
+            status: 200,
+            body: {
+              data: {
+                proxyUrl,
+              },
+            },
+          });
+        }
         if (!authenticated) {
           return writeJson(response, {
             status: 401,
@@ -26523,7 +26724,7 @@ export function createPhoneAuthDevServer(
               return writeJson(response, envelopedError(
                 503,
                 "prompt_reverse_provider_auth_missing",
-                `模型供应商密钥未配置，请在管理员模型配置中设置 ${readString(model.providerConfig.apiKeyEnv) || "API Key"}`,
+                `模型服务密钥未配置，请在管理员模型配置中设置 ${readString(model.providerConfig.apiKeyEnv) || "API Key"}`,
                 { displayName: model.displayName, providerName: model.providerName },
               ));
             }
@@ -33994,6 +34195,98 @@ export function createPhoneAuthDevServer(
           );
         }
 
+        const assetVersionThumbnailMatch = pathname.match(/^\/api\/creator\/assets\/versions\/([^/]+)\/thumbnail$/);
+        if (request.method === "GET" && assetVersionThumbnailMatch) {
+          const assetVersionId = decodeURIComponent(assetVersionThumbnailMatch[1] ?? "");
+          if (!isUuid(assetVersionId)) {
+            return writeJson(response, envelopedError(404, "asset_version_not_found", "Asset version was not found"));
+          }
+          const version = await queryOne<{
+            version_id: string;
+            project_id: string;
+            project_owner_user_id: string;
+            metadata_json: Record<string, unknown> | string | null;
+            content_type: string | null;
+          }>(
+            db,
+            `
+              SELECT version.id AS version_id,
+                     asset.project_id,
+                     project.created_by_user_id AS project_owner_user_id,
+                     version.metadata_json,
+                     COALESCE(NULLIF(version.metadata_json ->> 'mimeType', ''), 'image/png') AS content_type
+                FROM asset_versions version
+                JOIN assets asset ON asset.id = version.asset_id
+                JOIN projects project ON project.id = asset.project_id
+               WHERE version.id = $1
+               LIMIT 1
+            `,
+            [assetVersionId],
+          );
+          if (!version) {
+            return writeJson(response, envelopedError(404, "asset_version_not_found", "Asset version was not found"));
+          }
+          const actor = await resolveActorContext(db, {
+            sessionToken: authenticated.sessionToken,
+            projectId: version.project_id,
+            now: new Date(),
+          });
+          if (actor.userId !== version.project_owner_user_id) {
+            return writeJson(response, envelopedError(404, "asset_version_not_found", "Asset version was not found"));
+          }
+          const metadata = parseMetadataJson(version.metadata_json) ?? {};
+          const previewUrl = [metadata.previewUrl, metadata.imageUrl, metadata.fixedImageUrl]
+            .map((value) => typeof value === "string" ? value.trim() : "")
+            .find(Boolean) ?? "";
+          if (!previewUrl || !isSafePublicHttpsUrlLiteral(previewUrl)) {
+            return writeJson(response, envelopedError(404, "asset_thumbnail_source_missing", "Asset thumbnail source was not found"));
+          }
+          const cacheKey = `asset-version:${assetVersionId}:${previewUrl}`;
+          let thumbnail = storageMediaThumbnailCache.get(cacheKey);
+          if (!thumbnail) {
+            let release: (() => void) | null = null;
+            try {
+              release = await storageMediaLimiter.acquire({
+                kind: "image",
+                userId: authenticated.user.id,
+                ipAddress: homeMediaRequestIpAddress(request, trustProxyForStorageMedia),
+              });
+              const fetchImpl = options.fetchImpl ?? fetch;
+              thumbnail = await createStorageMediaThumbnail({
+                signedUrl: previewUrl,
+                relativeUrlOrigin: storageProxyRelativeUrlOrigin(request),
+                contentType: version.content_type ?? "image/png",
+                fetchImpl,
+                safeFetchImpl: (url, init) => fetchProviderArtifactSafely(String(url), init, fetchImpl),
+                timeoutMs: providerArtifactUploadTimeoutMs,
+              });
+              storageMediaThumbnailCache.set(cacheKey, thumbnail);
+              while (storageMediaThumbnailCache.size > 64) {
+                storageMediaThumbnailCache.delete(storageMediaThumbnailCache.keys().next().value!);
+              }
+            } catch {
+              return writeJson(response, envelopedError(502, "storage_thumbnail_failed", "Storage thumbnail could not be generated"));
+            } finally {
+              release?.();
+            }
+          }
+          const etag = staticAssetEtag(`asset-version-thumbnail:${cacheKey}`);
+          response.setHeader("etag", etag);
+          response.setHeader("cache-control", "private, max-age=3600");
+          response.setHeader("content-type", thumbnail.contentType);
+          response.setHeader("content-disposition", "inline");
+          response.setHeader("x-content-type-options", "nosniff");
+          if (requestMatchesEtag(request, etag)) {
+            response.statusCode = 304;
+            response.end();
+            return;
+          }
+          response.statusCode = 200;
+          response.setHeader("content-length", String(thumbnail.bytes.byteLength));
+          response.end(thumbnail.bytes);
+          return;
+        }
+
         if (request.method === "GET" && pathname.startsWith("/api/creator/assets/versions/")) {
           const assetId = pathname.split("/").at(-1) ?? "";
           return writeJson(
@@ -34872,8 +35165,9 @@ export function createPhoneAuthDevServer(
           }
           const body = (await readJsonBody(request)) as {
             taskId: string;
-            action: "redispatch" | "resume_provider_poll" | "rebuild_finalize";
+            action: "redispatch" | "resume_provider_poll" | "rebuild_finalize" | "resubmit_provider";
             reason: string;
+            providerPayload?: Record<string, unknown>;
           };
           return writeJson(
             response,

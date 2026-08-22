@@ -19,12 +19,16 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
         paymentIntentId: "92000000-0000-4000-8000-000000040001",
         providerEventId: "93000000-0000-4000-8000-000000040001",
         outboxEventId: "94000000-0000-4000-8000-000000040001",
+        paidAmountMinor: 9800,
+        discountAmountMinor: 100,
       });
       await seedPaidMembershipOrder(db, {
         orderId: "96000000-0000-4000-8000-000000040001",
         paymentIntentId: "97000000-0000-4000-8000-000000040001",
         providerEventId: "98000000-0000-4000-8000-000000040001",
         outboxEventId: "99000000-0000-4000-8000-000000040001",
+        paidAmountMinor: 29700,
+        discountAmountMinor: 200,
       });
 
       const result = await dispatchPaymentOutboxBatch(db, {
@@ -71,6 +75,20 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
         "2026-07-08T08:00:00.000Z",
       );
       assert.equal(user.rows[0]?.credit_balance_cached, 3120);
+      const payloads = await db.query<{ payload_json: Record<string, unknown> }>(
+        "SELECT payload_json FROM outbox_events WHERE event_type = 'payment.succeeded' ORDER BY id ASC",
+      );
+      assert.deepEqual(
+        payloads.rows.map((row) => ({
+          amount: row.payload_json.amount_minor,
+          paid: row.payload_json.paid_amount_minor,
+          discount: row.payload_json.discount_amount_minor,
+        })),
+        [
+          { amount: 9900, paid: 9800, discount: 100 },
+          { amount: 29900, paid: 29700, discount: 200 },
+        ],
+      );
     } finally {
       await db.close();
     }
@@ -124,6 +142,71 @@ describe("payment outbox dispatcher", { concurrency: false }, () => {
       await db.close();
     }
   });
+
+  it("skips every payment benefit when the provider event has duplicate trade risk", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedUser(db);
+      const orderId = "91000000-0000-4000-8000-000000040010";
+      const paymentIntentId = "92000000-0000-4000-8000-000000040010";
+      const providerEventId = "93000000-0000-4000-8000-000000040010";
+      const outboxEventId = "94000000-0000-4000-8000-000000040010";
+      await seedPaidCreditOrder(db, {
+        orderId,
+        paymentIntentId,
+        providerEventId,
+        outboxEventId,
+      });
+      await db.query(
+        `
+          INSERT INTO payment_risk_events (
+            id, user_id, order_id, payment_intent_id, provider_event_id,
+            risk_type, severity, decision, status, metadata_json, created_at, updated_at
+          )
+          VALUES (
+            '95000000-0000-4000-8000-000000040010', $1, $2, $3, $4,
+            'duplicate_trade', 'critical', 'manual_review', 'open', '{}'::jsonb,
+            '2026-06-08T08:02:00.000Z', '2026-06-08T08:02:00.000Z'
+          )
+        `,
+        [userId, orderId, paymentIntentId, providerEventId],
+      );
+
+      const result = await dispatchPaymentOutboxBatch(db, {
+        now: new Date("2026-06-08T08:05:00.000Z"),
+        limit: 10,
+      });
+      const outbox = await db.query<{ status: string }>(
+        "SELECT status FROM outbox_events WHERE id = $1",
+        [outboxEventId],
+      );
+      const ledger = await db.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM credit_ledger_entries WHERE source_id = $1",
+        [orderId],
+      );
+      const inbox = await db.query<{ count: number }>(
+        `
+          SELECT count(*)::int AS count
+          FROM inbox_events
+          WHERE outbox_event_id = $1
+            AND consumer_name IN (
+              'membership.payment-succeeded',
+              'credit.payment-succeeded',
+              'invite-reward.payment-succeeded'
+            )
+        `,
+        [outboxEventId],
+      );
+
+      assert.deepEqual(result, { processedEventIds: [outboxEventId], failedEventIds: [] });
+      assert.equal(outbox.rows[0]?.status, "processed");
+      assert.equal(ledger.rows[0]?.count, 0);
+      assert.equal(inbox.rows[0]?.count, 0);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 async function seedUser(db: Awaited<ReturnType<typeof createMigratedTestDb>>) {
@@ -146,6 +229,8 @@ async function seedPaidCreditOrder(
     paymentIntentId: string;
     providerEventId: string;
     outboxEventId: string;
+    paidAmountMinor?: number;
+    discountAmountMinor?: number;
   },
 ) {
   await db.query(
@@ -191,6 +276,8 @@ async function seedPaidMembershipOrder(
     paymentIntentId: string;
     providerEventId: string;
     outboxEventId: string;
+    paidAmountMinor?: number;
+    discountAmountMinor?: number;
   },
 ) {
   const planSnapshot = {
@@ -261,6 +348,8 @@ async function seedPaidOrderFacts(
     productValues: string;
     amountMinor: number;
     credits: number;
+    paidAmountMinor?: number;
+    discountAmountMinor?: number;
   },
 ) {
   await db.query(
@@ -369,6 +458,12 @@ async function seedPaidOrderFacts(
         payment_intent_id: input.paymentIntentId,
         payment_provider_event_id: input.providerEventId,
         amount_minor: input.amountMinor,
+        ...(input.paidAmountMinor !== undefined
+          ? { paid_amount_minor: input.paidAmountMinor }
+          : {}),
+        ...(input.discountAmountMinor !== undefined
+          ? { discount_amount_minor: input.discountAmountMinor }
+          : {}),
         currency: "CNY",
       }),
       ],

@@ -1327,6 +1327,20 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       ]) {
         assert.ok(templateIds.includes(expectedId), `missing template ${expectedId}`);
       }
+      const seedreamTemplate = templatesPayload.data.find(
+        (template: { id: string }) => template.id === "global-ai-opc-nano-banana-2",
+      );
+      const seedreamProTemplate = templatesPayload.data.find(
+        (template: { id: string }) => template.id === "global-ai-opc-nano-banana-pro",
+      );
+      assert.equal(seedreamTemplate?.name, "GlobalAiOpc · Seedream 5.0");
+      assert.equal(seedreamTemplate?.providerModelHint, "seedream-5.0");
+      assert.equal(seedreamTemplate?.invocationMode, "async_polling");
+      assert.equal(seedreamTemplate?.providerConfig?.createTaskEndpoint, "/v2/model-center/tasks");
+      assert.equal(seedreamTemplate?.dispatchPolicy?.pollQueueName, "generation-poll-image");
+      assert.equal(seedreamProTemplate?.name, "GlobalAiOpc · Seedream 5.0 Pro");
+      assert.equal(seedreamProTemplate?.providerModelHint, "seedream_5.0Pro");
+      assert.deepEqual(seedreamProTemplate?.parameterSchema?.resolution?.options, ["1K", "2K"]);
       assert.equal(mismatchResponse.status, 200);
       assert.equal(mismatchPayload.data.ok, false);
       assert.ok(

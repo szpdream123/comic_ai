@@ -40,12 +40,13 @@ export async function registerGeneratedImageWithGlobalAiOpc(
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     now: Date;
+    acceptPendingAssetIds?: boolean;
   },
 ): Promise<void> {
   if (!input.storageObjectId.trim() || !isHttpUrl(input.sourceUrl)) return;
 
   const modelConfig = await findActiveAiModelConfigByCode(db, "seedance-2.5-c1")
-    ?? await findActiveAiModelConfigByCode(db, "MiniMax-H3-c4");
+    ?? await findActiveAiModelConfigByCode(db, "MiniMax-H3-768p");
   if (
     modelConfig?.providerProtocol !== "globalaiopc_video"
     || readString(modelConfig.providerConfig.requestFormat) !== "globalaiopc_model_center_video"
@@ -110,6 +111,7 @@ export async function prepareGlobalAiOpcVideoMaterials(
         baseUrl,
         fetchImpl,
         now: input.now,
+        acceptPendingAssetIds: input.acceptPendingAssetIds,
       });
       if (assetId) slot.replace(`assetId://${assetId}`);
     } catch {
@@ -128,6 +130,7 @@ async function resolveGlobalAiOpcAssetId(
     baseUrl: string;
     fetchImpl: typeof fetch;
     now: Date;
+    acceptPendingAssetIds?: boolean;
   },
 ) {
   let mapping = await findProviderMaterial(db, input);
@@ -140,7 +143,7 @@ async function resolveGlobalAiOpcAssetId(
       assetId: mapping.provider_asset_id,
     });
     await updateProviderMaterial(db, mapping.id, detail, input.now);
-    return detail.status === "ACTIVE" && detail.assetId
+    return (input.acceptPendingAssetIds || detail.status === "ACTIVE") && detail.assetId
       ? detail.assetId
       : null;
   }
@@ -159,7 +162,7 @@ async function resolveGlobalAiOpcAssetId(
       name: `comic-ai-${input.assetType.toLowerCase()}-${input.sourceKey.slice(-12)}`,
     });
     await updateProviderMaterial(db, mapping.id, uploaded, input.now);
-    return uploaded.status === "ACTIVE" && uploaded.assetId
+    return (input.acceptPendingAssetIds || uploaded.status === "ACTIVE") && uploaded.assetId
       ? uploaded.assetId
       : null;
   } catch (error) {

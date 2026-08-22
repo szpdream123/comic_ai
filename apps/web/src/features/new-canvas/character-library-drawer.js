@@ -1,3 +1,5 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
+
 const IMAGE_NODE_TYPES = new Set(["image", "source-image", "ai-image", "ai-panorama"]);
 const LIBRARY_CHARACTER_SCOPES = new Set(["official", "team"]);
 const LIBRARY_CATEGORIES = [
@@ -984,4 +986,4 @@ function cropField(label, key, value, min = 0) { return `<label><span>${label}</
 function number(value, fallback) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; }
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
-function escapeAttr(value) { return escapeHtml(value).replaceAll("`", "&#96;"); }
+function escapeAttr(value) { return escapeHtml(resolveStaticAssetUrl(value)).replaceAll("`", "&#96;"); }

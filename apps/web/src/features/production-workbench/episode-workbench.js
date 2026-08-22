@@ -807,7 +807,7 @@ function renderGenerationDiagnostics({ imageGenerationResult, videoGenerationRes
     <section class="generation-diagnostics" aria-label="Generation diagnostics">
       <header class="generation-diagnostics-head">
         <strong>工作流详情</strong>
-        <span>任务、供应商和存储追踪</span>
+        <span>任务、生成和存储追踪</span>
       </header>
       <div class="generation-diagnostics-grid">${panels.join("")}</div>
     </section>

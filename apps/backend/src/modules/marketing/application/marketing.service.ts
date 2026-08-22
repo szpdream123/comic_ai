@@ -92,6 +92,25 @@ export type MarketingDirectPublishInput = {
   scheduledAt: string;
 };
 
+export type MarketingGenerationSkillInput = {
+  code?: string;
+  name: string;
+  description?: string;
+  version?: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  sourceVersion?: string;
+  planningInstruction: string;
+  mediaInstruction?: string;
+  applicablePlatforms?: string[];
+  applicableContentTypes?: string[];
+  skillKind: "marketing" | "video";
+  status?: "draft" | "approved" | "disabled";
+  displayOrder?: number;
+  uploadedFileName?: string;
+  contentSha256?: string;
+};
+
 export type MarketingCompetitorCollectionJobInput = {
   projectId: string;
   campaignId?: string | null;
@@ -1958,6 +1977,59 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
     };
   }
 
+  async function listGenerationSkillsForAdmin() {
+    const result = await deps.db.query(`
+      SELECT id, code, name, description, version, skill_kind AS "skillKind",
+             source_name AS "sourceName", source_url AS "sourceUrl", source_version AS "sourceVersion",
+             planning_instruction AS "planningInstruction", media_instruction AS "mediaInstruction",
+             applicable_platforms_json AS "applicablePlatforms", applicable_content_types_json AS "applicableContentTypes",
+             status, display_order AS "displayOrder", created_at AS "createdAt", updated_at AS "updatedAt"
+      FROM marketing_generation_skills ORDER BY skill_kind, display_order, name`);
+    return result.rows;
+  }
+
+  async function saveGenerationSkill(input: MarketingGenerationSkillInput, actorAdminId: string, skillId?: string) {
+    requireText(input.name, "marketing_generation_skill_name_required");
+    requireText(input.planningInstruction, "marketing_generation_skill_content_required");
+    if (input.skillKind !== "marketing" && input.skillKind !== "video") {
+      throw new MarketingError(400, "marketing_generation_skill_kind_invalid", "Skill kind is invalid");
+    }
+    const status = input.status ?? "approved";
+    if (!["draft", "approved", "disabled"].includes(status)) {
+      throw new MarketingError(400, "marketing_generation_skill_status_invalid", "Skill status is invalid");
+    }
+    const code = (input.code?.trim() || `${input.skillKind}-${input.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || randomUUID().slice(0, 8)}`).slice(0, 120);
+    const version = (input.version?.trim() || "1.0.0").slice(0, 64);
+    const platforms = [...new Set((input.applicablePlatforms ?? []).map((value) => value.trim()).filter(Boolean))];
+    const contentTypes = [...new Set((input.applicableContentTypes ?? []).map((value) => value.trim()).filter((value) => value === "image" || value === "video"))];
+    const id = skillId?.trim() || randomUUID();
+    const result = await deps.db.query(`
+      INSERT INTO marketing_generation_skills (
+        id, code, name, description, version, source_name, source_url, source_version,
+        planning_instruction, media_instruction, applicable_platforms_json, applicable_content_types_json,
+        skill_kind, status, display_order, uploaded_file_name, content_sha256, created_by_admin_id, approved_by_admin_id, approved_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17, $18, $19, $20)
+      ON CONFLICT (id) DO UPDATE SET
+        code = EXCLUDED.code, name = EXCLUDED.name, description = EXCLUDED.description, version = EXCLUDED.version,
+        source_name = EXCLUDED.source_name, source_url = EXCLUDED.source_url, source_version = EXCLUDED.source_version,
+        planning_instruction = EXCLUDED.planning_instruction, media_instruction = EXCLUDED.media_instruction,
+        applicable_platforms_json = EXCLUDED.applicable_platforms_json, applicable_content_types_json = EXCLUDED.applicable_content_types_json,
+        skill_kind = EXCLUDED.skill_kind, status = EXCLUDED.status, display_order = EXCLUDED.display_order,
+        uploaded_file_name = EXCLUDED.uploaded_file_name, content_sha256 = EXCLUDED.content_sha256,
+        approved_by_admin_id = EXCLUDED.approved_by_admin_id, approved_at = EXCLUDED.approved_at, updated_at = now()
+      RETURNING id, code, name, description, version, skill_kind AS "skillKind", source_name AS "sourceName", source_url AS "sourceUrl",
+        source_version AS "sourceVersion", planning_instruction AS "planningInstruction", media_instruction AS "mediaInstruction",
+        applicable_platforms_json AS "applicablePlatforms", applicable_content_types_json AS "applicableContentTypes", status, display_order AS "displayOrder"`,
+      [id, code, input.name.trim().slice(0, 200), (input.description ?? "").trim().slice(0, 1000), version,
+        (input.sourceName?.trim() || "admin-upload").slice(0, 200), (input.sourceUrl?.trim() || "local-skill://admin-upload").slice(0, 500),
+        (input.sourceVersion?.trim() || version).slice(0, 100), input.planningInstruction.trim().slice(0, 100000), (input.mediaInstruction ?? "").trim().slice(0, 100000),
+        JSON.stringify(platforms), JSON.stringify(contentTypes), input.skillKind, status, Number.isSafeInteger(input.displayOrder) ? input.displayOrder : 100,
+        input.uploadedFileName?.trim() || null, input.contentSha256?.trim() || null,
+        skillId ? null : actorAdminId, status === "approved" ? actorAdminId : null, status === "approved" ? new Date() : null],
+    );
+    return result.rows[0];
+  }
+
   async function listConsole() {
     const [projects, campaigns, contentVariants, publishJobs, executors, researchSourcePolicies, attentionCases, metrics, auditEvents,
       sources, knowledgeDocuments, trendPatterns, agentRuns, platformProfiles, researchBriefs, brandProfiles, executorAlerts, metricComparisonRows,
@@ -3324,7 +3396,7 @@ export function createMarketingService(deps: { db: SqlDatabase; storageAdapter?:
     createCampaign, createCompetitorCollectionJob, updateCompetitorCollectionJob, listCompetitorCollectionJobs, createResearchBrief, reviewResearchBrief, createContentVariant, approveContentVariant, reviewContentVariant,
     savePlatformCapabilityProfile, runComplianceCheck, createPublishJob, createDirectPublish, cancelPublishJob, cancelGenerationRun,
     configureExecutionOwner, ensureDirectPublishPlatformProfile, retryGenerationRun, confirmGenerationPlan, regenerateGenerationRun, confirmGeneratedMedia,
-    listConsole, listDirectConsole, saveComponentAdmission, saveResearchSourcePolicy, assignAttentionCase, resolveAttentionCase, createTrendPattern, approveTrendPattern,
+    listConsole, listDirectConsole, listGenerationSkillsForAdmin, saveGenerationSkill, saveComponentAdmission, saveResearchSourcePolicy, assignAttentionCase, resolveAttentionCase, createTrendPattern, approveTrendPattern,
     startAgentRun, retryAgentRun, recordMetric, saveAgentProviderApproval,
     registerExecutor, scheduleExecutorKeyRetirement, claimNext, acknowledge, heartbeat, reportEvent, cancelState, cleanupExpiredDeliveryAssets, refreshExecutorHealth,
   };

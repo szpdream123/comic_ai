@@ -62,6 +62,21 @@ describe("provider error message", () => {
     assert.doesNotMatch(JSON.stringify(failure), /image_url must be/i);
   });
 
+  it("unifies oversized reference material provider errors", () => {
+    assert.equal(
+      translateProviderErrorMessage(
+        'global_ai_opc_video_400:{"error":{"message":"File size exceeds maximum allowed size of 20971520 bytes"}}',
+      ),
+      "参考素材不可大于20M",
+    );
+    assert.equal(
+      translateProviderErrorMessage(new Error("san_bao_payload_too_large"), {
+        failureCode: "san_bao_payload_too_large",
+      }),
+      "参考素材不可大于20M",
+    );
+  });
+
   it("extracts nested provider messages from persisted diagnostics-only failures", () => {
     assert.equal(
       translateProviderErrorMessage({
@@ -80,6 +95,10 @@ describe("provider error message", () => {
       translateProviderErrorMessage("opaque upstream failure text"),
       "模型服务返回错误，任务没有拿到生成结果，请稍后重试。",
     );
+    assert.equal(
+      translateProviderErrorMessage("opaque upstream failure text", { mediaType: "video" }),
+      "生成失败，请修改素材或提示词后重新生成",
+    );
   });
 
   it("does not classify prompts or unrelated response metadata as provider errors", () => {
@@ -91,6 +110,13 @@ describe("provider error message", () => {
         metadata: { description: "内容安全场景" },
       }),
       "模型服务返回错误，任务没有拿到生成结果，请稍后重试。",
+    );
+  });
+
+  it("uses the video retry guidance for generic provider failures", () => {
+    assert.equal(
+      translateProviderErrorMessage("generation failed", { mediaType: "video" }),
+      "生成失败，请修改素材或提示词后重新生成",
     );
   });
 

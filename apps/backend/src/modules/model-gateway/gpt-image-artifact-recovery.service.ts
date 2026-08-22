@@ -179,7 +179,7 @@ export async function handleGptImageArtifactQueueExhaustion(
     const failure = JSON.stringify({
       failureCode: "provider_output_storage_failed",
       lastFailureCode: decision.lastFailureCode,
-      displayMessage: "供应商已完成图片生成，但平台未能在自动恢复窗口内保存结果，正在等待后台处理。",
+      displayMessage: "图片已完成生成，但平台未能在自动恢复窗口内保存结果，正在等待后台处理。",
       recoveryReason: decision.reason,
       noticeType: "admin_action_required",
     });

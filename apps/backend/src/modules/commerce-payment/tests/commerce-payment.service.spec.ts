@@ -107,7 +107,8 @@ describe("commerce payment service", { concurrency: false }, () => {
         merchantOrderNo: intentResponse.body.paymentIntent.merchantOrderNo,
         providerTradeId: "wx-trade-1",
         eventType: "payment_succeeded" as const,
-        amountMinor: 9900,
+        amountMinor: 9800,
+        discountAmountMinor: 100,
         currency: "CNY",
         merchantId,
       };
@@ -154,6 +155,9 @@ describe("commerce payment service", { concurrency: false }, () => {
       assert.equal(duplicateCallback.body.duplicate, true);
       assert.equal(ledgerCountBeforeConsumer.rows[0]?.count, 0);
       assert.equal(outbox.rows.length, 1);
+      assert.equal(outbox.rows[0]?.payload_json.amount_minor, 9900);
+      assert.equal(outbox.rows[0]?.payload_json.paid_amount_minor, 9800);
+      assert.equal(outbox.rows[0]?.payload_json.discount_amount_minor, 100);
       assert.equal(providerEvents.rows[0]?.count, 1);
 
       const consumed = await consumePaymentSucceededCreditGrant(db, {

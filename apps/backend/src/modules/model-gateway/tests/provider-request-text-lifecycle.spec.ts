@@ -96,6 +96,31 @@ describe("provider request text lifecycle", () => {
     }
   });
 
+  it("records a failure for a prepared request that never reached the provider", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      const prepared = await createOrReuseProviderRequest(db, providerInput("pre-submit-failed"));
+      const failed = await markProviderRequestFailed(db, {
+        providerRequestId: prepared.request.id,
+        failureCode: "provider_api_key_missing",
+        redactedResponse: {
+          failureCode: "provider_api_key_missing",
+          phase: "submit",
+          errorMessage: "provider credential is not configured",
+        },
+        now: new Date("2026-06-01T10:02:00.000Z"),
+      });
+
+      assert.equal(failed.status, "failed");
+      assert.equal(failed.externalSubmissionStartedAt, null);
+      assert.equal(failed.failureCode, "provider_api_key_missing");
+      assert.equal(failed.redactedResponse?.["phase"], "submit");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not overwrite a provider request with a different terminal status", async () => {
     const db = await createMigratedTestDb();
 

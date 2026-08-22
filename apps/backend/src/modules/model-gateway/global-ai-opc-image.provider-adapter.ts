@@ -19,6 +19,8 @@ const defaultBaseURL = "https://zcbservice.aizfw.cn/kyyReactApiServer";
 const defaultGptImage2Path = "/v1/image2/images";
 const defaultBananaPath = "/v1/banana/images";
 const defaultQueryPath = "/v1/result/{taskId}";
+const defaultModelCenterPath = "/v2/model-center/tasks";
+const defaultModelCenterQueryPath = "/v2/model-center/tasks/{taskId}";
 const defaultModel = "gpt-image-2";
 const defaultRequestTimeoutMs = generationProviderHttpTimeoutMsFor("image");
 
@@ -126,7 +128,8 @@ export class GlobalAiOpcImageProviderAdapter implements ProviderAdapter {
 
   async poll(input: { externalRequestId: string }) {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const queryTaskEndpoint = this.config.queryTaskEndpoint ?? joinUrl(defaultBaseURL, defaultQueryPath);
+    const model = this.config.model?.trim() || defaultModel;
+    const queryTaskEndpoint = this.config.queryTaskEndpoint ?? defaultQueryTaskEndpoint(model, this.config.requestFormat);
     const result = await fetchJsonWithTimeout(
       fetchImpl,
       queryTaskEndpoint
@@ -189,6 +192,45 @@ export function buildGlobalAiOpcImagePayload(
     readString(payload.title) ??
     "";
   const imageUrls = collectImageUrls(payload);
+  if (isSeedreamRequest(model, config.requestFormat)) {
+    const seedreamDefaults = omitKeys(defaults, [
+      "quality",
+      "ratio",
+      "aspectRatio",
+      "aspect_ratio",
+      "resolution",
+      "size",
+      "image_urls",
+      "reference_images",
+      "watermark",
+    ]);
+    const isPro = isSeedreamProModel(model);
+    const resolution =
+      readSeedreamResolution(parameters.resolution, isPro) ??
+      readSeedreamResolution(parameters.quality, isPro) ??
+      readSeedreamResolution(defaults.resolution, isPro) ??
+      readSeedreamResolution(defaults.quality, isPro) ??
+      (isPro ? "1K" : "2K");
+    return stripUndefined({
+      ...seedreamDefaults,
+      model,
+      prompt,
+      reference_images: imageUrls.length ? imageUrls : undefined,
+      aspect_ratio:
+        readAspectRatio(parameters.aspect_ratio) ??
+        readAspectRatio(parameters.aspectRatio) ??
+        readAspectRatio(parameters.imageAspectRatio) ??
+        readAspectRatio(parameters.ratio) ??
+        readAspectRatio(parameters.size) ??
+        readAspectRatio(defaults.aspect_ratio) ??
+        readAspectRatio(defaults.aspectRatio) ??
+        readAspectRatio(defaults.ratio) ??
+        "1:1",
+      resolution,
+      size: isPro ? undefined : readGptImage2Size(parameters) ?? readGptImage2Size(defaults),
+      watermark: readBoolean(parameters.watermark) ?? readBoolean(defaults.watermark) ?? false,
+    });
+  }
   if (isBananaRequest(model, config.requestFormat)) {
     const bananaDefaults = omitKeys(defaults, ["quality", "ratio"]);
     const bananaResolution =
@@ -249,7 +291,25 @@ export function buildGlobalAiOpcImagePayload(
 }
 
 function defaultCreateTaskEndpoint(model: string, requestFormat: string | undefined) {
-  return joinUrl(defaultBaseURL, isBananaRequest(model, requestFormat) ? defaultBananaPath : defaultGptImage2Path);
+  const path = isSeedreamRequest(model, requestFormat)
+    ? defaultModelCenterPath
+    : isBananaRequest(model, requestFormat) ? defaultBananaPath : defaultGptImage2Path;
+  return joinUrl(defaultBaseURL, path);
+}
+
+function defaultQueryTaskEndpoint(model: string, requestFormat: string | undefined) {
+  return joinUrl(
+    defaultBaseURL,
+    isSeedreamRequest(model, requestFormat) ? defaultModelCenterQueryPath : defaultQueryPath,
+  );
+}
+
+function isSeedreamRequest(model: string, requestFormat: string | undefined) {
+  return model.toLowerCase().startsWith("seedream") || requestFormat === "global_ai_opc_model_center_seedream_image";
+}
+
+function isSeedreamProModel(model: string) {
+  return model.toLowerCase() === "seedream_5.0pro";
 }
 
 function isBananaRequest(model: string, requestFormat: string | undefined) {
@@ -464,6 +524,12 @@ function readGptImage2Resolution(value: unknown) {
   return resolution && /^[124]k$/i.test(resolution) ? resolution.toLowerCase() : undefined;
 }
 
+function readSeedreamResolution(value: unknown, isPro: boolean) {
+  const resolution = readString(value)?.toUpperCase();
+  const supported = isPro ? ["1K", "2K"] : ["2K", "3K", "4K"];
+  return resolution && supported.includes(resolution) ? resolution : undefined;
+}
+
 function readAspectRatio(value: unknown) {
   const raw = readString(value);
   if (!raw) {
@@ -549,6 +615,16 @@ function readString(value: unknown) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return undefined;
 }
 
 function readPositiveInteger(value: unknown) {

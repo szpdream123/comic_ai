@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
 
 import { MarketingError, createMarketingService } from "../application/marketing.service.ts";
 import { ComicMarketingSourceAdapter, SqlComicMarketingSourceReader } from "../adapters/comic-marketing-source.adapter.ts";
@@ -56,6 +57,18 @@ async function adminRoute(input: {
   }
   if (request.method === "GET" && pathname === "/api/marketing/direct-console") {
     return data(200, await service.listDirectConsole());
+  }
+  if (request.method === "GET" && pathname === "/api/marketing/generation-skills") {
+    return data(200, { skills: await service.listGenerationSkillsForAdmin() });
+  }
+  if (request.method === "POST" && pathname === "/api/marketing/generation-skills") {
+    const skill = await readGenerationSkillInput(request);
+    return data(201, { skill: await service.saveGenerationSkill(skill, adminAccountId) });
+  }
+  const generationSkillMatch = pathname.match(/^\/api\/marketing\/generation-skills\/([^/]+)$/);
+  if (request.method === "PATCH" && generationSkillMatch) {
+    const skill = await readGenerationSkillInput(request);
+    return data(200, { skill: await service.saveGenerationSkill(skill, adminAccountId, decodeURIComponent(generationSkillMatch[1])) });
   }
   if (request.method === "POST" && pathname === "/api/marketing/research-source-policies") {
     const body = objectBody(await readJson(request));
@@ -581,6 +594,41 @@ async function readRawBody(request: IncomingMessage) {
 async function readJson(request: IncomingMessage) {
   const raw = await readRawBody(request);
   return raw.length ? JSON.parse(raw.toString("utf8")) : {};
+}
+
+async function readGenerationSkillInput(request: IncomingMessage): Promise<any> {
+  const contentType = String(request.headers["content-type"] ?? "");
+  const raw = await readRawBody(request);
+  if (!contentType.toLowerCase().includes("multipart/form-data")) return objectBody(raw.length ? JSON.parse(raw.toString("utf8")) : {});
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)?.[1] ?? /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)?.[2];
+  if (!boundary) throw new MarketingError(400, "marketing_skill_upload_invalid", "Multipart boundary is missing");
+  const fields: Record<string, string> = {};
+  for (const part of raw.toString("binary").split(`--${boundary}`)) {
+    const separator = part.indexOf("\r\n\r\n");
+    if (separator < 0) continue;
+    const headers = part.slice(0, separator);
+    const body = part.slice(separator + 4).replace(/\r\n--?$/, "");
+    const name = /name="([^"]+)"/i.exec(headers)?.[1];
+    if (!name) continue;
+    const fileName = /filename="([^"]*)"/i.exec(headers)?.[1];
+    fields[name] = fileName ? Buffer.from(body, "binary").toString("utf8") : body;
+    if (fileName) {
+      fields.sourceName ||= fileName;
+      fields.uploadedFileName = fileName;
+      fields.contentSha256 = createHash("sha256").update(Buffer.from(body, "binary")).digest("hex");
+    }
+  }
+  if (!fields.planningInstruction && fields.file) fields.planningInstruction = fields.file;
+  return {
+    ...fields,
+    applicablePlatforms: parseList(fields.applicablePlatforms),
+    applicableContentTypes: parseList(fields.applicableContentTypes),
+    displayOrder: fields.displayOrder ? Number(fields.displayOrder) : undefined,
+  };
+}
+
+function parseList(value: string | undefined) {
+  return String(value ?? "").split(/[\n,，]/).map((item) => item.trim()).filter(Boolean);
 }
 
 function objectBody(value: unknown) {

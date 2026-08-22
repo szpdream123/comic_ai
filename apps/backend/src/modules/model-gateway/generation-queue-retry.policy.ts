@@ -43,6 +43,15 @@ export function isUnrecoverableGenerationQueueError(error: unknown): boolean {
   return error instanceof TypeError && !isTransientNetworkError(error);
 }
 
+export function shouldKeepGenerationDeadLetter(
+  taskStatus: unknown,
+  providerStatus: unknown,
+): boolean {
+  const terminalStatuses = new Set(["failed", "canceled"]);
+  return !terminalStatuses.has(String(taskStatus ?? "").trim().toLowerCase())
+    && !terminalStatuses.has(String(providerStatus ?? "").trim().toLowerCase());
+}
+
 export async function runGenerationQueueJobWithRetryPolicy<T>(
   operation: () => Promise<T>,
 ): Promise<T> {

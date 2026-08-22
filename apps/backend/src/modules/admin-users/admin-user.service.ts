@@ -77,6 +77,7 @@ export interface AdminUserModelRequestLogItem {
   requestBody: Record<string, unknown>;
   businessRequestBody: Record<string, unknown>;
   providerRequestBody: Record<string, unknown> | null;
+  preparedProviderRequestBody: Record<string, unknown> | null;
   providerRequestUrl: string | null;
   providerResponseBody: unknown;
   providerRequestStatus: string | null;
@@ -142,6 +143,7 @@ interface AdminUserModelRequestLogRow {
   request_format: string | null;
   request_body_json: Record<string, unknown> | null;
   business_request_body_json: Record<string, unknown> | null;
+  prepared_provider_request_body_json: Record<string, unknown> | null;
   provider_request_body_json: Record<string, unknown> | null;
   provider_request_url_config_json: Record<string, unknown> | null;
   provider_response_redacted_json: Record<string, unknown> | null;
@@ -1366,6 +1368,15 @@ export function createAdminUserService(deps: { db: SqlDatabase }) {
             ELSE requests.payload_redacted_json
           END AS business_request_body_json,
           CASE
+            WHEN octet_length(COALESCE(requests.payload_redacted_json, '{}'::jsonb)::text) > 262144
+              THEN jsonb_build_object(
+                'omitted', true,
+                'reason', 'oversized_prepared_provider_request',
+                'originalCharacters', octet_length(requests.payload_redacted_json::text)
+              )
+            ELSE requests.payload_redacted_json
+          END AS prepared_provider_request_body_json,
+          CASE
             WHEN requests.external_submission_started_at IS NULL THEN NULL
             WHEN octet_length(COALESCE(
               requests.response_redacted_json->'redactedRequest',
@@ -2336,6 +2347,9 @@ function modelRequestLogFromRow(
     )),
     providerRequestBody: row.provider_request_body_json
       ? compactAdminModelRequestRecord(row.provider_request_body_json)
+      : null,
+    preparedProviderRequestBody: row.prepared_provider_request_body_json
+      ? compactAdminModelRequestRecord(row.prepared_provider_request_body_json)
       : null,
     providerRequestUrl: resolveProviderRequestUrl(row.provider_request_url_config_json),
     providerResponseBody: readProviderResponseBody(

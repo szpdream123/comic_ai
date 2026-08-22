@@ -257,6 +257,17 @@ function normalizeEnumParameters(
       normalized[key] = value;
       continue;
     }
+    const schemaType = schema && typeof schema === "object" && !Array.isArray(schema)
+      ? readString((schema as Record<string, unknown>).type)
+      : "";
+    if (schemaType === "integer") {
+      const numericRequested = Number(requested);
+      const numericCanonical = allowed.find((candidate) => Number(candidate) === numericRequested);
+      if (Number.isInteger(numericRequested) && numericCanonical !== undefined) {
+        normalized[key] = numericCanonical;
+        continue;
+      }
+    }
     const canonical = allowed.find((candidate) => candidate.toLowerCase() === requested.toLowerCase());
     normalized[key] = canonical ?? allowed[0];
   }

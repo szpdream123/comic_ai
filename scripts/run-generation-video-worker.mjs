@@ -34,7 +34,7 @@ const [
   { processAudioGenerationSubmitJob, processAudioGenerationPollJob, fetchAudioGenerationArtifactJob, finalizeAudioGenerationArtifactJob, persistAudioGenerationArtifactJob, expireAudioGenerationPollJob },
   { scheduleGenerationProviderPoll },
   { generationTimeoutMsFor },
-  { runGenerationQueueJobWithRetryPolicy, shouldSettleGenerationTaskAfterQueueError },
+  { runGenerationQueueJobWithRetryPolicy, shouldKeepGenerationDeadLetter, shouldSettleGenerationTaskAfterQueueError },
   { resolveGenerationArtifactQueueExhaustionFailureCode },
   { recordGenerationSkippedSuccessor },
 ] = await Promise.all([
@@ -212,6 +212,7 @@ const processors = {
   async submitSeedanceVideo({ taskId, userConcurrencyLimit, now }) {
     return processSeedanceVideoSubmitJob(db, {
       taskId,
+      runtime: storageRuntime,
       env: process.env,
       rateLimiter,
       userConcurrencyLimit,
@@ -647,7 +648,49 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
     ? job.data.attemptId.trim()
     : null;
   const failedAt = new Date();
+  const artifactStage = job?.data?.artifactStage;
+  const artifactQueueFailure = queueName === config.queues.finalizeArtifact
+    || artifactStage === "fetch"
+    || artifactStage === "persist"
+    || /^generation-(image|video|audio)-(fetch|persist)-/.test(queueName);
+  const sourceAssignmentKey = typeof job?.data?.queueAssignmentKey === "string"
+    ? job.data.queueAssignmentKey.trim()
+    : "";
   try {
+    let handled = false;
+    if (artifactQueueFailure && job?.data?.mediaType === "image") {
+      const imageRecoveryOutcome = await runWithDatabaseContext(() =>
+        handleGptImageArtifactQueueExhaustion(db, {
+          taskId,
+          expectedAttemptId: attemptId ?? null,
+          error,
+          now: failedAt,
+        }));
+      handled = imageRecoveryOutcome !== "skipped";
+    }
+    if (!handled) {
+      await runWithDatabaseContext(() => failGenerationTaskAfterQueueError(db, {
+        taskId,
+        expectedAttemptId: attemptId ?? null,
+        ...(sourceAssignmentKey ? { sourceAssignmentKey } : {}),
+        failureCode: artifactQueueFailure
+          ? resolveGenerationArtifactQueueExhaustionFailureCode(
+              typeof error?.failureCode === "string" ? error.failureCode : error.message,
+            )
+          : "generation_queue_error",
+        displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
+        creditOutcome: "manual_review_required",
+        ...(!artifactQueueFailure ? { requireProviderSubmissionNotStarted: true } : {}),
+        now: failedAt,
+      }));
+    }
+
+  } catch (settleError) {
+    console.error(`[generation-video] failed to settle queue error task=${taskId} ${settleError.message}`);
+  }
+
+  try {
+    if (!await shouldKeepGenerationDeadLetterForTask(taskId)) return;
     await publishGenerationDeadLetter({
       sourceQueueName: queueName,
       sourceJobId: String(job?.id ?? taskId),
@@ -661,42 +704,36 @@ async function handleExhaustedGenerationJob(queueName, job, error, taskId) {
   } catch (deadLetterError) {
     console.error(`[generation-video] failed to write dead letter queue=${queueName} task=${taskId} ${deadLetterError.message}`);
   }
+}
 
+async function shouldKeepGenerationDeadLetterForTask(taskId) {
   try {
-    const artifactStage = job?.data?.artifactStage;
-    const artifactQueueFailure = queueName === config.queues.finalizeArtifact
-      || artifactStage === "fetch"
-      || artifactStage === "persist"
-      || /^generation-(image|video|audio)-(fetch|persist)-/.test(queueName);
-    const sourceAssignmentKey = typeof job?.data?.queueAssignmentKey === "string"
-      ? job.data.queueAssignmentKey.trim()
-      : "";
-    if (artifactQueueFailure && job?.data?.mediaType === "image") {
-      const imageRecoveryOutcome = await runWithDatabaseContext(() =>
-        handleGptImageArtifactQueueExhaustion(db, {
-          taskId,
-          expectedAttemptId: attemptId ?? null,
-          error,
-          now: failedAt,
-        }));
-      if (imageRecoveryOutcome !== "skipped") return;
-    }
-    await runWithDatabaseContext(() => failGenerationTaskAfterQueueError(db, {
-      taskId,
-      expectedAttemptId: attemptId ?? null,
-      ...(sourceAssignmentKey ? { sourceAssignmentKey } : {}),
-      failureCode: artifactQueueFailure
-        ? resolveGenerationArtifactQueueExhaustionFailureCode(
-            typeof error?.failureCode === "string" ? error.failureCode : error.message,
-          )
-        : "generation_queue_error",
-      displayMessage: "生成队列自动重试已耗尽，任务结果仍可能存在，已保留积分并转人工核对。",
-      creditOutcome: "manual_review_required",
-      ...(!artifactQueueFailure ? { requireProviderSubmissionNotStarted: true } : {}),
-      now: failedAt,
-    }));
-  } catch (settleError) {
-    console.error(`[generation-video] failed to settle queue error task=${taskId} ${settleError.message}`);
+    const result = await db.query(
+      `
+        SELECT task.status AS task_status, provider.status AS provider_status
+        FROM tasks task
+        LEFT JOIN LATERAL (
+          SELECT status
+          FROM provider_requests provider
+          WHERE provider.task_id = task.id
+            AND (
+              provider.attempt_id = task.current_attempt_id
+              OR (provider.attempt_id IS NULL AND task.attempt_count = 1)
+            )
+          ORDER BY provider.updated_at DESC, provider.id DESC
+          LIMIT 1
+        ) provider ON true
+        WHERE task.id = $1
+        LIMIT 1
+      `,
+      [taskId],
+    );
+    const row = result.rows[0];
+    if (!row) return true;
+    return shouldKeepGenerationDeadLetter(row.task_status, row.provider_status);
+  } catch (error) {
+    console.error(`[generation-video] failed to inspect dead letter task=${taskId} ${error.message}`);
+    return true;
   }
 }
 

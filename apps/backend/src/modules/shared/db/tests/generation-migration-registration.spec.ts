@@ -1057,14 +1057,14 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
                policy.submit_queue_name, policy.poll_queue_name
         FROM ai_model_configs model
         JOIN ai_model_dispatch_policies policy ON policy.model_config_id=model.id
-        WHERE model.model_code IN ('seedance-2.5-c1','MiniMax-H3-c4','soundclone')
+        WHERE model.model_code IN ('seedance-2.5-c1','MiniMax-H3-768p','soundclone')
         ORDER BY model.model_code
       `);
 
       assert.deepEqual(models.rows, [
         {
-          model_code: "MiniMax-H3-c4",
-          provider_model: "MiniMax-H3-c4",
+          model_code: "MiniMax-H3-768p",
+          provider_model: "MiniMax-H3-768p",
           provider_protocol: "globalaiopc_video",
           media_type: "video",
           create_endpoint: "/v2/model-center/tasks",
@@ -1076,7 +1076,7 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
         },
         {
           model_code: "seedance-2.5-c1",
-          provider_model: "seedance-2.5-c1",
+          provider_model: "sd_2.5_special",
           provider_protocol: "globalaiopc_video",
           media_type: "video",
           create_endpoint: "/v2/model-center/tasks",
@@ -1114,6 +1114,267 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     }
   });
 
+  it("replaces MiniMax H3 C4 with the documented 768p model contract", async () => {
+    const migrationNames = (await loadSqlMigrations()).map((migration) => migration.name);
+    assert.ok(migrationNames.includes("20261001-replace-minimax-h3-c4-with-768p.sql"));
+
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(`
+        UPDATE ai_model_configs
+        SET model_code = 'MiniMax-H3-c4',
+            display_name = 'MiniMax H3 C4',
+            provider_model = 'MiniMax-H3-c4'
+        WHERE model_code = 'MiniMax-H3-768p'
+      `);
+      await applySqlMigration(db, process.cwd(), "20261001-replace-minimax-h3-c4-with-768p.sql");
+
+      const models = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_model: string;
+        task_modes_json: string[];
+        parameter_schema_json: Record<string, { options?: string[]; minimum?: number; maximum?: number }>;
+        default_params_json: Record<string, unknown>;
+        limits_json: Record<string, unknown>;
+        provider_doc_url: string;
+      }>(`
+        SELECT model_code, display_name, provider_model, task_modes_json,
+               parameter_schema_json, default_params_json, limits_json,
+               ui_config_json->>'providerDocUrl' AS provider_doc_url
+        FROM ai_model_configs
+        WHERE model_code IN ('MiniMax-H3-c4', 'MiniMax-H3-768p')
+      `);
+
+      assert.equal(models.rows.length, 1);
+      assert.deepEqual(models.rows[0], {
+        model_code: "MiniMax-H3-768p",
+        display_name: "MiniMax H3 768p",
+        provider_model: "MiniMax-H3-768p",
+        task_modes_json: [
+          "video.text_to_video",
+          "video.image_to_video",
+          "video.reference_guided_video",
+          "video.video_to_video",
+        ],
+        parameter_schema_json: {
+          prompt: { type: "string", required: true },
+          aspectRatio: { type: "enum", options: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "3:2", "2:3"] },
+          resolution: { type: "enum", options: ["768p"] },
+          durationSec: { type: "integer", minimum: 10, maximum: 15 },
+          referenceImages: { type: "file[]", maximum: 9 },
+          referenceVideos: { type: "file[]", maximum: 3 },
+          referenceAudio: { type: "file[]", maximum: 3 },
+        },
+        default_params_json: { aspectRatio: "16:9", resolution: "768p", durationSec: 10 },
+        limits_json: {
+          maxReferences: 9,
+          maxReferenceVideos: 3,
+          maxReferenceAudios: 3,
+          minDurationSec: 10,
+          maxDurationSec: 15,
+          supportedRatios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "3:2", "2:3"],
+          supportedResolutions: ["768p"],
+        },
+        provider_doc_url: "https://docs.globalaiopc.com/api-reference/model-center/video-gen/minimax-h3-768p",
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("aligns only the Seedance 2.5 real model and resolution configuration", async () => {
+    const migrationNames = (await loadSqlMigrations()).map((migration) => migration.name);
+    assert.ok(migrationNames.includes("20261001-align-seedance25-special-resolution.sql"));
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    assert.match(productionMigrationScript, /20261001-align-seedance25-special-resolution\.sql/);
+
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(`
+        UPDATE ai_model_configs
+        SET provider_model = 'seedance-2.5-c1',
+            parameter_schema_json = jsonb_set(
+              parameter_schema_json,
+              '{resolution,options}',
+              '["720p","480p"]'::jsonb,
+              false
+            ),
+            default_params_json = jsonb_set(default_params_json, '{resolution}', '"480p"'::jsonb, true),
+            limits_json = limits_json - 'supportedResolutions',
+            provider_config_json = '{"createTaskEndpoint":"/keep/path","requestFormat":"keep_format"}'::jsonb,
+            display_name = 'Keep display name'
+        WHERE model_code = 'seedance-2.5-c1'
+      `);
+
+      await applySqlMigration(
+        db,
+        process.cwd(),
+        "20261001-align-seedance25-special-resolution.sql",
+      );
+
+      const result = await db.query<{
+        provider_model: string;
+        resolution_options: string[];
+        default_resolution: string;
+        supported_resolutions: string[];
+        provider_config_json: Record<string, unknown>;
+        display_name: string;
+      }>(`
+        SELECT provider_model,
+               parameter_schema_json->'resolution'->'options' AS resolution_options,
+               default_params_json->>'resolution' AS default_resolution,
+               limits_json->'supportedResolutions' AS supported_resolutions,
+               provider_config_json,
+               display_name
+        FROM ai_model_configs
+        WHERE model_code = 'seedance-2.5-c1'
+      `);
+
+      assert.deepEqual(result.rows, [{
+        provider_model: "sd_2.5_special",
+        resolution_options: ["720p", "1080p"],
+        default_resolution: "720p",
+        supported_resolutions: ["720p", "1080p"],
+        provider_config_json: {
+          createTaskEndpoint: "/keep/path",
+          requestFormat: "keep_format",
+        },
+        display_name: "Keep display name",
+      }]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("replaces the two GlobalAiOpc Banana models with Seedream 5 while preserving operator settings", async () => {
+    const migrationName = "20261002-replace-globalaiopc-banana-with-seedream5.sql";
+    const migrationNames = (await loadSqlMigrations()).map((migration) => migration.name);
+    assert.ok(migrationNames.includes(migrationName));
+    const productionMigrationScript = await readFile(
+      join(process.cwd(), "scripts", "migrate-user-scope.mjs"),
+      "utf8",
+    );
+    assert.match(productionMigrationScript, /20261002-replace-globalaiopc-banana-with-seedream5\.sql/);
+
+    const db = await createMigratedTestDb();
+    try {
+      await db.query(`
+        UPDATE ai_model_configs
+        SET display_name = CASE model_code
+              WHEN 'global-ai-opc-nano-banana-2' THEN 'Nano Banana 2'
+              ELSE 'Nano Banana Pro'
+            END,
+            provider_model = CASE model_code
+              WHEN 'global-ai-opc-nano-banana-2' THEN 'nano-banana-2'
+              ELSE 'nano-banana-pro'
+            END,
+            invocation_mode = 'sync',
+            provider_config_json = '{"baseURL":"https://keep.example.test","createTaskEndpoint":"/v1/banana/images","queryTaskEndpoint":"/v1/result/{taskId}","apiKeyEnv":"CUSTOM_GLOBAL_KEY","requestFormat":"global_ai_opc_banana_image","operatorNote":"keep"}'::jsonb,
+            pricing_json = '{"unit":"image","baseCredits":300,"operatorNote":"keep"}'::jsonb,
+            status = 'disabled',
+            sort_order = CASE model_code
+              WHEN 'global-ai-opc-nano-banana-2' THEN 91
+              ELSE 92
+            END
+        WHERE model_code IN ('global-ai-opc-nano-banana-2', 'global-ai-opc-nano-banana-pro');
+
+        UPDATE ai_model_dispatch_policies AS policy
+        SET poll_queue_name = NULL,
+            provider_rpm_limit = 17
+        FROM ai_model_configs AS model
+        WHERE policy.model_config_id = model.id
+          AND model.model_code IN ('global-ai-opc-nano-banana-2', 'global-ai-opc-nano-banana-pro')
+      `);
+
+      await applySqlMigration(db, process.cwd(), migrationName);
+
+      const models = await db.query<{
+        model_code: string;
+        display_name: string;
+        provider_model: string;
+        invocation_mode: string;
+        create_endpoint: string;
+        query_endpoint: string;
+        api_key_env: string;
+        request_format: string;
+        operator_note: string;
+        base_credits: number;
+        status: string;
+        sort_order: number;
+        resolution_options: string[];
+        max_references: number;
+        poll_queue_name: string;
+        provider_rpm_limit: number;
+      }>(`
+        SELECT model.model_code,
+               model.display_name,
+               model.provider_model,
+               model.invocation_mode,
+               model.provider_config_json->>'createTaskEndpoint' AS create_endpoint,
+               model.provider_config_json->>'queryTaskEndpoint' AS query_endpoint,
+               model.provider_config_json->>'apiKeyEnv' AS api_key_env,
+               model.provider_config_json->>'requestFormat' AS request_format,
+               model.provider_config_json->>'operatorNote' AS operator_note,
+               (model.pricing_json->>'baseCredits')::int AS base_credits,
+               model.status,
+               model.sort_order,
+               model.parameter_schema_json->'resolution'->'options' AS resolution_options,
+               (model.limits_json->>'maxReferences')::int AS max_references,
+               policy.poll_queue_name,
+               policy.provider_rpm_limit
+        FROM ai_model_configs AS model
+        JOIN ai_model_dispatch_policies AS policy ON policy.model_config_id = model.id
+        WHERE model.model_code IN ('global-ai-opc-nano-banana-2', 'global-ai-opc-nano-banana-pro')
+        ORDER BY model.model_code
+      `);
+
+      assert.deepEqual(models.rows, [
+        {
+          model_code: "global-ai-opc-nano-banana-2",
+          display_name: "Seedream 5.0（GlobalAiOpc）",
+          provider_model: "seedream-5.0",
+          invocation_mode: "async_polling",
+          create_endpoint: "/v2/model-center/tasks",
+          query_endpoint: "/v2/model-center/tasks/{taskId}",
+          api_key_env: "GLOBAL_AI_OPC_API_KEY",
+          request_format: "global_ai_opc_model_center_seedream_image",
+          operator_note: "keep",
+          base_credits: 300,
+          status: "disabled",
+          sort_order: 91,
+          resolution_options: ["2K", "3K", "4K"],
+          max_references: 10,
+          poll_queue_name: "generation-poll-image",
+          provider_rpm_limit: 17,
+        },
+        {
+          model_code: "global-ai-opc-nano-banana-pro",
+          display_name: "Seedream 5.0 Pro（GlobalAiOpc）",
+          provider_model: "seedream_5.0Pro",
+          invocation_mode: "async_polling",
+          create_endpoint: "/v2/model-center/tasks",
+          query_endpoint: "/v2/model-center/tasks/{taskId}",
+          api_key_env: "GLOBAL_AI_OPC_API_KEY",
+          request_format: "global_ai_opc_model_center_seedream_image",
+          operator_note: "keep",
+          base_credits: 300,
+          status: "disabled",
+          sort_order: 92,
+          resolution_options: ["1K", "2K"],
+          max_references: 10,
+          poll_queue_name: "generation-poll-image",
+          provider_rpm_limit: 17,
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("repairs GlobalAiOpc Model Center videos overwritten as image models", async () => {
     const migrationNames = (await loadSqlMigrations()).map((migration) => migration.name);
     assert.ok(migrationNames.includes("20260911-repair-globalaiopc-model-center-video-classification.sql"));
@@ -1137,6 +1398,11 @@ describe("20260722 generation migrations", { concurrency: false }, () => {
     const db = await createMigratedTestDb();
     try {
       await db.query(`
+        UPDATE ai_model_configs
+        SET model_code = 'MiniMax-H3-c4',
+            provider_model = 'MiniMax-H3-c4'
+        WHERE model_code = 'MiniMax-H3-768p';
+
         UPDATE ai_model_configs
         SET provider_protocol = 'global_ai_opc_image',
             invocation_mode = 'sync',

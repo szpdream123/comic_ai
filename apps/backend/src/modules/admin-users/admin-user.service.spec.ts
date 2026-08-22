@@ -1557,6 +1557,10 @@ test("admin user service marks queued generation logs as not submitted to the pr
       prompt: "角色立绘",
       parameters: { aspectRatio: "1:1" },
     });
+    assert.deepEqual(result.data[0]?.preparedProviderRequestBody, {
+      prompt: "角色立绘",
+      parameters: { aspectRatio: "1:1" },
+    });
     assert.equal(result.data[0]?.providerRequestBody, null);
     assert.equal(result.data[0]?.providerRequestStatus, "created");
     assert.equal(result.data[0]?.externalSubmissionStartedAt, null);

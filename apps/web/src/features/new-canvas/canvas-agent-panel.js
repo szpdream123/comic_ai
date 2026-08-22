@@ -1,3 +1,4 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
 import { canvasAssetNodeData } from "../production-workbench/canvas/canvas-asset-library.js";
 import {
   addCanvasNode,
@@ -4511,5 +4512,5 @@ function escapeHtml(value) {
 }
 
 function escapeAttr(value) {
-  return escapeHtml(value).replaceAll("`", "&#96;");
+  return escapeHtml(resolveStaticAssetUrl(value)).replaceAll("`", "&#96;");
 }

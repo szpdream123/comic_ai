@@ -23,7 +23,7 @@ const defaultModel = "gpt-image-2";
 const defaultSize = "1024x1536";
 const defaultRequestTimeoutMs = generationProviderHttpTimeoutMsFor("image");
 const maximumImageReferences = 16;
-const maximumImageReferenceBytes = 30 * 1024 * 1024;
+const maximumImageReferenceBytes = 20 * 1024 * 1024;
 const maximumImageReferenceTotalBytes = 100 * 1024 * 1024;
 
 export class OpenAIImagesProviderAdapter implements ProviderAdapter {

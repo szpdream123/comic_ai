@@ -77,6 +77,41 @@ describe("payment succeeded credit consumer", { concurrency: false }, () => {
     }
   });
 
+  it("grants credits when verified paid amount plus card discount matches the order", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedPaidOrderWithOutbox(db);
+      const result = await consumePaymentSucceededCreditGrant(db, {
+        event: {
+          id: outboxEventId,
+          userId,
+          eventType: "payment.succeeded",
+          payload: {
+            order_id: orderId,
+            payment_intent_id: paymentIntentId,
+            payment_provider_event_id: providerEventId,
+            amount_minor: 9900,
+            paid_amount_minor: 9800,
+            discount_amount_minor: 100,
+            currency: "CNY",
+          },
+          status: "pending",
+          availableAt: new Date("2026-05-21T08:01:00.000Z"),
+          processedAt: null,
+          errorMessage: null,
+          createdAt: new Date("2026-05-21T08:01:00.000Z"),
+          updatedAt: new Date("2026-05-21T08:01:00.000Z"),
+        },
+        now: new Date("2026-05-21T08:02:00.000Z"),
+      });
+
+      assert.equal(result.kind, "applied");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("keeps the credit grant idempotent when duplicate events race before inbox mark", async () => {
     const db = await createMigratedTestDb();
 

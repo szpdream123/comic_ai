@@ -5,6 +5,55 @@ import { createProviderAdapterFromModelConfig } from "../provider-adapter.factor
 import { GlobalAiOpcVideoProviderAdapter } from "../globalaiopc-video.provider-adapter.ts";
 
 describe("globalaiopc video provider adapter", () => {
+  it("sends Seedance 2.5 Special as reference_images without frame fields", async () => {
+    let capturedBody = "";
+    const adapter = new GlobalAiOpcVideoProviderAdapter({
+      apiKey: "global-key",
+      model: "sd_2.5_special_v1",
+      createTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks",
+      queryTaskEndpoint: "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks/{taskId}",
+      requestFormat: "globalaiopc_model_center_video",
+      fetchImpl: (async (_url, init) => {
+        capturedBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({ id: "special-reference-task", status: "queued" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+    });
+
+    await adapter.submit({
+      providerRequestId: "provider-request-special-reference",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global:task-special-reference",
+      payloadRef: "creator://payload-global-special-reference",
+      payloadHash: "hash-global-special-reference",
+      redactedPayload: {
+        prompt: "use all reference images",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        parameters: {
+          durationSec: 5,
+          resolution: "720p",
+          filePaths: ["https://cdn.example.com/reference-a.png", "https://cdn.example.com/reference-b.png"],
+          firstFrame: { url: "https://cdn.example.com/first.png" },
+        },
+      },
+    });
+
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "sd_2.5_special_v1",
+      prompt: "use all reference images",
+      reference_images: [
+        "https://cdn.example.com/first.png",
+        "https://cdn.example.com/reference-a.png",
+        "https://cdn.example.com/reference-b.png",
+      ],
+      duration: 5,
+      resolution: "720p",
+    });
+  });
+
   it("submits sd2_manxue frame tasks without mixing mutually exclusive reference fields", async () => {
     let capturedUrl = "";
     let capturedHeaders: HeadersInit | undefined;

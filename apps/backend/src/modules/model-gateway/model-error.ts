@@ -65,7 +65,7 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
   },
   model_provider_unsupported: {
     code: "model_provider_unsupported",
-    displayMessage: "当前模型供应商暂未接入生成执行器，请切换已支持的模型。",
+    displayMessage: "当前模型暂未接入生成执行器，请切换已支持的模型。",
     retryable: false,
   },
   model_task_mode_unsupported: {
@@ -91,6 +91,11 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
   model_reference_mime_not_allowed: {
     code: "model_reference_mime_not_allowed",
     displayMessage: "当前模型不支持该参考素材格式。",
+    retryable: false,
+  },
+  model_reference_too_large: {
+    code: "model_reference_too_large",
+    displayMessage: "参考素材不可大于20M",
     retryable: false,
   },
   model_prompt_too_long: {
@@ -140,7 +145,7 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
   },
   san_bao_payload_too_large: {
     code: "san_bao_payload_too_large",
-    displayMessage: "参考素材文件过大，请压缩后重试。",
+    displayMessage: "参考素材不可大于20M",
     retryable: false,
   },
   san_bao_rate_limited: {
@@ -185,17 +190,17 @@ const stableModelErrors: Readonly<Record<string, Omit<ModelErrorRule, "pattern">
   },
   provider_submission_ambiguous: {
     code: "provider_submission_ambiguous",
-    displayMessage: "模型请求已发出，但供应商没有返回明确提交结果，请等待后台复核。",
+    displayMessage: "模型请求已发出，但处理状态暂不明确，请等待后台复核。",
     retryable: false,
   },
   provider_poll_timeout: {
     code: "provider_poll_timeout",
-    displayMessage: "供应商结果轮询超过平台等待时间，请稍后查看任务状态。",
+    displayMessage: "生成超时，请重新处理生成。",
     retryable: false,
   },
   provider_result_unknown: {
     code: "provider_result_unknown",
-    displayMessage: "供应商结果状态不明确，请稍后查看任务状态。",
+    displayMessage: "生成结果状态不明确，请稍后查看任务状态。",
     retryable: false,
   },
   provider_output_download_failed: {
@@ -226,6 +231,12 @@ const modelErrorRules: readonly ModelErrorRule[] = [
     displayMessage: "本地图片无法解析，请上传公网图片。",
     retryable: false,
     pattern: /(?:image[_\s-]?url|image url).*(?:publicly reachable|public (?:http|https)|https? url)|publicly reachable.*https?\s*(?:or|\/)\s*https?\s*url/i,
+  },
+  {
+    code: "model_reference_too_large",
+    displayMessage: "参考素材不可大于20M",
+    retryable: false,
+    pattern: /image_provider_reference_too_large|file\s+size\s+exceeds?\s+(?:the\s+)?maximum\s+allowed\s+size|maximum\s+allowed\s+size\s+of\s+\d+\s*bytes|file\s+too\s+large|文件大小.*(?:超过|超出)|参考素材.*(?:过大|超限)/i,
   },
   {
     code: "model_content_policy_rejected",
@@ -391,20 +402,26 @@ export class ModelError extends Error {
       readObjectString(value, "failureCode"),
     ) || null;
     const stableError = failureCode ? stableModelErrors[failureCode] ?? null : null;
+    const fallbackDisplayMessage = context.mediaType === "video"
+      ? "生成失败，请修改素材或提示词后重新生成"
+      : "模型服务返回错误，任务没有拿到生成结果，请稍后重试。";
     const displayMessage =
       stableError?.displayMessage ??
       rule?.displayMessage ??
       resolveHttpStatusDisplayMessage(httpStatus) ??
       readFirstPublicChineseMessage(candidates) ??
       String(context.fallbackMessage ?? "").trim() ??
-      "模型服务返回错误，任务没有拿到生成结果，请稍后重试。";
+      fallbackDisplayMessage;
+    const normalizedDisplayMessage = context.mediaType === "video" && displayMessage.includes("没有拿到生成结果")
+      ? fallbackDisplayMessage
+      : displayMessage;
     const providerMessage = readProviderMessage(candidates, value);
     const providerErrorCode = readProviderErrorCode(value, providerDiagnostics);
     const code = stableError?.code ?? rule?.code ?? failureCode ?? (readObjectString(value, "code") || "model_provider_error");
     const sourceMessage = readSourceMessage(value) || failureCode || code;
     return new ModelError({
       code,
-      displayMessage: displayMessage || "模型服务返回错误，任务没有拿到生成结果，请稍后重试。",
+      displayMessage: normalizedDisplayMessage || fallbackDisplayMessage,
       failureCode,
       httpStatus,
       mediaType: context.mediaType ?? null,

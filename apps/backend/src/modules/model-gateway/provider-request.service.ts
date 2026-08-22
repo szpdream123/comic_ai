@@ -413,6 +413,28 @@ export async function submitProviderRequest(
   };
 }
 
+export async function refreshPreparedProviderRequestPayload(
+  db: SqlDatabase,
+  input: {
+    providerRequestId: string;
+    redactedPayload: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<ProviderRequestRecord> {
+  const row = await queryOne<ProviderRequestRow>(db, `
+    UPDATE provider_requests
+    SET payload_redacted_json=$2::jsonb, updated_at=$3
+    WHERE id=$1
+      AND status='created'
+      AND external_submission_started_at IS NULL
+      AND external_request_id IS NULL
+    RETURNING *
+  `, [input.providerRequestId, JSON.stringify(input.redactedPayload), input.now]);
+  return row
+    ? providerRequestFromRow(row)
+    : (await findProviderRequestById(db, input.providerRequestId))!;
+}
+
 async function markProviderSubmissionRecoveryFailed(
   db: SqlDatabase,
   input: {
@@ -972,6 +994,12 @@ async function updateProviderRequestTerminalStatus(
           external_submission_started_at IS NOT NULL
           OR external_request_id IS NOT NULL
           OR status IN ('submitted', 'accepted', 'running', 'result_unknown')
+          OR (
+            status = 'created'
+            AND external_submission_started_at IS NULL
+            AND external_request_id IS NULL
+          )
+          OR status = $2
         )
         AND (
           status NOT IN ('succeeded', 'failed', 'canceled')

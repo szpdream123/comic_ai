@@ -310,16 +310,16 @@ export const ADMIN_MODEL_TEMPLATES: AdminModelTemplateView[] = [
   }),
   globalAiOpcImageTemplate({
     id: "global-ai-opc-nano-banana-2",
-    name: "GlobalAiOpc · Nano Banana 2",
+    name: "GlobalAiOpc · Seedream 5.0",
     modelCodeHint: "global-ai-opc-nano-banana-2",
-    providerModelHint: "nano-banana-2",
+    providerModelHint: "seedream-5.0",
     baseCredits: 100,
   }),
   globalAiOpcImageTemplate({
     id: "global-ai-opc-nano-banana-pro",
-    name: "GlobalAiOpc · Nano Banana Pro",
+    name: "GlobalAiOpc · Seedream 5.0 Pro",
     modelCodeHint: "global-ai-opc-nano-banana-pro",
-    providerModelHint: "nano-banana-pro",
+    providerModelHint: "seedream_5.0Pro",
     baseCredits: 130,
   }),
   imageTemplate({
@@ -1895,6 +1895,8 @@ function globalAiOpcImageTemplate(input: {
   baseCredits: number;
 }): AdminModelTemplateView {
   const isBanana = input.providerModelHint.startsWith("nano-banana");
+  const isSeedream = input.providerModelHint.toLowerCase().startsWith("seedream");
+  const isSeedreamPro = input.providerModelHint.toLowerCase() === "seedream_5.0pro";
   const template = imageTemplate({
     ...input,
     providerName: "GlobalAiOpc",
@@ -1902,31 +1904,50 @@ function globalAiOpcImageTemplate(input: {
     promptLimit: PROMPT_LIMITS.imageDefault,
     group: "GlobalAiOpc",
   });
-  const ratioOptions = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"];
+  const ratioOptions = ["1:1", "3:4", "4:3", "16:9", "9:16", "3:2", "2:3", "21:9"];
   const gptSizeOptions = ["1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "3840x2160", "2160x3840"];
-  const endpoint = isBanana ? "/v1/banana/images" : "/v1/image2/images";
-  const requestFormat = isBanana ? "global_ai_opc_banana_image" : "global_ai_opc_gpt_image2";
+  const endpoint = isSeedream ? "/v2/model-center/tasks" : isBanana ? "/v1/banana/images" : "/v1/image2/images";
+  const queryEndpoint = isSeedream ? "/v2/model-center/tasks/{taskId}" : "/v1/result/{taskId}";
+  const requestFormat = isSeedream
+    ? "global_ai_opc_model_center_seedream_image"
+    : isBanana ? "global_ai_opc_banana_image" : "global_ai_opc_gpt_image2";
+  const docUrl = isSeedreamPro
+    ? "https://docs.globalaiopc.com/api-reference/model-center/image-gen/seedream_5.0pro"
+    : isSeedream
+      ? "https://docs.globalaiopc.com/api-reference/model-center/image-gen/seedream-5.0"
+      : isBanana
+        ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-create"
+        : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-create";
   return {
     ...template,
     providerProtocol: "global_ai_opc_image",
+    invocationMode: isSeedream ? "async_polling" : template.invocationMode,
     adapterMode: "native",
     providerConfig: {
       baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
       requestPath: endpoint,
       endpoint,
       createTaskEndpoint: endpoint,
-      queryTaskEndpoint: "/v1/result/{taskId}",
+      queryTaskEndpoint: queryEndpoint,
       apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
       requestFormat,
       inputSchema: {
         source: {
           provider: "GlobalAiOpc image generation",
-          docUrl: isBanana
-            ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-create"
-            : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-create",
+          docUrl,
           endpoint,
         },
-        request: isBanana
+        request: isSeedream
+          ? {
+              model: { type: "string", required: true },
+              prompt: { type: "string", required: true },
+              reference_images: { type: "array", required: false, items: { type: "string" }, maximum: 10 },
+              aspect_ratio: { type: "string", required: false, enum: ratioOptions },
+              resolution: { type: "string", required: false, enum: isSeedreamPro ? ["1K", "2K"] : ["2K", "3K", "4K"] },
+              ...(isSeedreamPro ? {} : { size: { type: "string", required: false } }),
+              watermark: { type: "boolean", required: false },
+            }
+          : isBanana
           ? {
               model: { type: "string", required: true },
               prompt: { type: "string", required: true },
@@ -1947,7 +1968,7 @@ function globalAiOpcImageTemplate(input: {
       outputSchema: {
         source: {
           provider: "GlobalAiOpc image generation",
-          docUrl: isBanana
+          docUrl: isSeedream ? docUrl : isBanana
             ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-query"
             : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-query",
         },
@@ -1960,7 +1981,16 @@ function globalAiOpcImageTemplate(input: {
         },
       },
     },
-    parameterSchema: isBanana
+    parameterSchema: isSeedream
+      ? {
+          prompt: { label: "提示词", type: "string", required: true, maxLength: 4000 },
+          referenceImages: { label: "参考图", type: "file[]", required: false, maximum: 10 },
+          aspectRatio: { label: "图片比例", type: "enum", required: false, options: ratioOptions, adminEditableOptions: true },
+          resolution: { label: "分辨率", type: "enum", required: false, options: isSeedreamPro ? ["1K", "2K"] : ["2K", "3K", "4K"], adminEditableOptions: true },
+          ...(isSeedreamPro ? {} : { size: { label: "精确尺寸", type: "string", required: false } }),
+          watermark: { label: "添加水印", type: "boolean", required: false },
+        }
+      : isBanana
       ? {
           prompt: { label: "提示词", type: "string", required: true, maxLength: 4000 },
           referenceImages: { label: "参考图", type: "file[]", required: false, maximum: 6 },
@@ -1975,20 +2005,26 @@ function globalAiOpcImageTemplate(input: {
           resolution: { label: "分辨率", type: "enum", required: false, options: ["1k", "2k", "4k"], adminEditableOptions: true },
           size: { label: "精确尺寸", type: "enum", required: false, options: gptSizeOptions, adminEditableOptions: true },
         },
-    defaultParams: isBanana
+    defaultParams: isSeedream
+      ? { aspectRatio: "1:1", resolution: isSeedreamPro ? "1K" : "2K", watermark: false }
+      : isBanana
       ? { resolution: input.providerModelHint === "nano-banana-pro" ? "2k" : "1k", size: "1:1" }
       : { quality: "low", resolution: "1k", ratio: "1:1" },
     pricing: {
       unit: "image",
       baseCredits: input.baseCredits,
-      resolutionCredits: input.providerModelHint === "nano-banana-pro"
+      resolutionCredits: isSeedreamPro
+        ? { "1K": input.baseCredits, "2K": Math.round(input.baseCredits * 1.4) }
+        : isSeedream
+          ? { "2K": input.baseCredits, "3K": Math.round(input.baseCredits * 1.5), "4K": Math.round(input.baseCredits * 2) }
+          : input.providerModelHint === "nano-banana-pro"
         ? { "1k": input.baseCredits, "2k": Math.round(input.baseCredits * 1.4), "4k": Math.round(input.baseCredits * 2) }
         : { "1k": input.baseCredits, "2k": Math.round(input.baseCredits * 1.5), "4k": Math.round(input.baseCredits * 2) },
     },
     limits: {
       maxPromptLength: 4000,
       promptLengthUnit: "characters",
-      maxReferences: 6,
+      maxReferences: isSeedream ? 10 : 6,
       allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "image/avif"],
     },
     uiConfig: {
@@ -1997,11 +2033,16 @@ function globalAiOpcImageTemplate(input: {
       visible: true,
       pipeline: "image",
       supportedModes: IMAGE_MARKET_TASK_MODES,
-      providerDocUrl: isBanana
-        ? "https://docs.globalaiopc.com/api-reference/image/nano-banana-create"
-        : "https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-create",
+      providerDocUrl: docUrl,
       parameterDisplayLanguage: "zh-CN",
     },
+    dispatchPolicy: isSeedream
+      ? {
+          ...template.dispatchPolicy,
+          pollQueueName: "generation-poll-image",
+          finalizeQueueName: "generation-finalize-artifact",
+        }
+      : template.dispatchPolicy,
   };
 }
 

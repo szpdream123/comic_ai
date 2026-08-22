@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   adminRecoverTaskCommand,
@@ -141,7 +141,8 @@ export interface AdminTaskView {
 type AdminTaskRecoveryAction =
   | "redispatch"
   | "resume_provider_poll"
-  | "rebuild_finalize";
+  | "rebuild_finalize"
+  | "resubmit_provider";
 
 interface ProviderRequestOpsRow {
   id: string;
@@ -839,6 +840,7 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
         taskId: string;
         action: AdminTaskRecoveryAction;
         reason: string;
+        providerPayload?: Record<string, unknown>;
       };
       now: Date;
     }): Promise<
@@ -887,7 +889,52 @@ export function createAdminOpsService(deps: AdminOpsServiceDeps) {
               taskId: task.id,
             });
 
-            if (input.body.action === "redispatch") {
+            if (input.body.action === "resubmit_provider") {
+              const providerPayload = input.body.providerPayload;
+              if (!providerPayload || typeof providerPayload !== "object" || Array.isArray(providerPayload)) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              if (!task.taskType.includes("video") || !["running", "queued", "failed", "canceled", "result_unknown", "manual_review_required"].includes(task.status)) {
+                throw new AdminOpsBusinessError("task_recovery_not_allowed");
+              }
+              const resubmitNonce = randomUUID();
+              await deps.db.query(
+                `
+                  UPDATE task_attempts
+                  SET status = CASE WHEN status IN ('running', 'result_unknown') THEN 'canceled' ELSE status END,
+                      finished_at = COALESCE(finished_at, $2),
+                      updated_at = $2
+                  WHERE task_id = $1 AND status IN ('running', 'result_unknown')
+                `,
+                [task.id, input.now],
+              );
+              await deps.db.query(
+                `
+                  UPDATE tasks
+                  SET status = 'queued', failure_code = NULL, current_attempt_id = NULL,
+                      input_snapshot_json = jsonb_set(
+                        jsonb_set(
+                          jsonb_set(COALESCE(input_snapshot_json, '{}'::jsonb), '{requestedAt}', to_jsonb($2::timestamptz), true),
+                          '{resubmitNonce}', to_jsonb($3::text), true
+                        ),
+                        '{providerPayloadOverride}', $4::jsonb, true
+                      ),
+                      locked_by = NULL, locked_until = NULL, heartbeat_at = NULL,
+                      scheduled_at = $2, updated_at = $2
+                  WHERE id = $1
+                `,
+                [task.id, input.now, resubmitNonce, JSON.stringify(providerPayload)],
+              );
+              await deps.db.query(
+                `UPDATE workflows SET status = 'queued', failure_code = NULL, finished_at = NULL, updated_at = $2 WHERE id = $1`,
+                [task.workflowId, input.now],
+              );
+              await appendRetryGenerationOutboxIfNeeded(deps.db, {
+                taskId: task.id,
+                availableAt: input.now,
+                dispatchToken: input.idempotencyKey,
+              });
+            } else if (input.body.action === "redispatch") {
               if (!canRedispatchTask(task, providerRequest)) {
                 throw new AdminOpsBusinessError("task_recovery_not_allowed");
               }
@@ -1770,7 +1817,8 @@ function optionalIsoDate(value: Date | string | null) {
 function isAdminTaskRecoveryAction(value: string): value is AdminTaskRecoveryAction {
   return value === "redispatch"
     || value === "resume_provider_poll"
-    || value === "rebuild_finalize";
+    || value === "rebuild_finalize"
+    || value === "resubmit_provider";
 }
 
 function canRedispatchTask(

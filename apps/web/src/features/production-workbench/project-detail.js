@@ -106,7 +106,9 @@ const CANVAS_ASSET_SOURCE_OPTIONS = [
   { id: "global", label: "全局资产" },
   { id: "drama", label: "短剧资产" },
 ];
-const CANVAS_ASSET_RENDER_PAGE_SIZE = 48;
+// Keep the initial Canvas sidebar light: official previews are multi-megabyte
+// raster assets and should be fetched in small batches as the user browses.
+const CANVAS_ASSET_RENDER_PAGE_SIZE = 12;
 
 export function resolveEpisodeProjectStyleCode(state = {}, ui = {}) {
   const projects = [
@@ -301,6 +303,38 @@ function resolvePreferredPreviewUrl(...candidates) {
     .filter(Boolean);
   const realCandidate = normalized.find((value) => !isMockPreviewUrl(value));
   return realCandidate ?? normalized[0] ?? "";
+}
+
+function resolveStorageObjectThumbnailUrl(asset, fallback = "") {
+  let storageObjectId = [
+    asset?.storageObjectId,
+    asset?.fixedImageStorageObjectId,
+    asset?.previewImageStorageObjectId,
+    asset?.latestVersion?.storageObjectId,
+    asset?.latestVersion?.fixedImageStorageObjectId,
+    asset?.latestVersion?.metadata?.storageObjectId,
+    asset?.latestVersion?.metadata?.fixedImageStorageObjectId,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+  if (!storageObjectId) {
+    const urlCandidates = [
+      asset?.previewUrl,
+      asset?.preview,
+      asset?.sourceUrl,
+      fallback,
+    ];
+    for (const candidate of urlCandidates) {
+      const match = String(candidate ?? "").match(/\/api\/storage\/objects\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+      if (match?.[1]) {
+        storageObjectId = match[1];
+        break;
+      }
+    }
+  }
+  return storageObjectId
+    ? `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`
+    : String(fallback ?? "").trim();
 }
 
 function resolveLatestConversationPreview(historyMap = {}, assetId) {
@@ -688,6 +722,9 @@ function resolveAssetGeneratorTaskFailureMessage(asset) {
   if (isAssetStorageManualReview(task)) {
     return "存储失败，等待人工处理";
   }
+  if (failureCode === "task_timeout" || failureCode === "provider_poll_timeout") {
+    return "生成超时，请重新处理生成。";
+  }
   if (
     ["manual_review_required", "result_unknown"].includes(status) ||
     ["provider_submission_ambiguous", "provider_result_unknown", "provider_output_persist_failed", "worker_crashed_after_external_start"].includes(failureCode)
@@ -695,7 +732,7 @@ function resolveAssetGeneratorTaskFailureMessage(asset) {
     if (failureCode === "provider_output_persist_failed") {
       return "已保存到平台存储，资产记录与积分状态等待后台复核";
     }
-    return "供应商结果与积分状态尚未确认，等待后台复核，请勿重复提交";
+    return "生成结果与积分状态尚未确认，等待后台复核，请勿重复提交";
   }
   const apiKeyEnv = String(task?.failure?.apiKeyEnv ?? task?.details?.apiKeyEnv ?? "").trim();
   const displayMessage = String(task?.failure?.displayMessage ?? "").trim();
@@ -1514,8 +1551,8 @@ function renderTaskCenterDetail(task) {
   const recoveryRound = Math.max(0, Number(task.recoveryRound ?? 0));
   const showArtifactRecovery = task.providerSucceeded === true && ["retry_pending", "manual_review"].includes(recoveryState);
   const recoveryMessage = recoveryState === "manual_review"
-    ? `供应商已完成生成；图片保存仍未完成，已转人工处理${recoveryRound ? `（第 ${recoveryRound} 轮）` : ""}。`
-    : `供应商已完成生成；正在恢复图片保存${recoveryRound ? `（第 ${recoveryRound} 轮）` : ""}。`;
+    ? `生成已完成；图片保存仍未完成，已转人工处理${recoveryRound ? `（第 ${recoveryRound} 轮）` : ""}。`
+    : `生成已完成；正在恢复图片保存${recoveryRound ? `（第 ${recoveryRound} 轮）` : ""}。`;
   return `
     <section class="task-center-detail" aria-label="任务详情">
       <header class="task-center-detail-header">
@@ -1616,6 +1653,9 @@ function taskCenterFailureMessage(task = {}) {
   const timeoutHours = mediaKind === "video" ? 3 : 1;
   const creditStatus = String(task.creditStatus ?? task.credit?.status ?? task.snapshot?.creditStatus ?? "").toLowerCase();
   const creditsReleased = creditStatus === "released" || Number(task.credit?.released ?? 0) > 0;
+  if (failureCode === "provider_poll_timeout") {
+    return "生成超时，请重新处理生成。";
+  }
   if (
     ["manual_review_required", "result_unknown"].includes(status) ||
     ["provider_submission_ambiguous", "provider_result_unknown", "provider_output_persist_failed", "worker_crashed_after_external_start"].includes(failureCode)
@@ -1623,13 +1663,10 @@ function taskCenterFailureMessage(task = {}) {
     if (failureCode === "provider_output_persist_failed") {
       return "生成结果已保存到平台存储，但资产记录尚未写入，任务与积分状态等待后台复核。";
     }
-    return "供应商结果暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
+    return "生成结果暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
   }
   if (failureCode === "task_timeout") {
-    return `${mediaKind === "video" ? "视频" : "图片或音频"}生成超过 ${timeoutHours} 小时未完成，${creditsReleased ? "积分已返还" : "积分状态请以账本记录为准"}。`;
-  }
-  if (failureCode === "provider_poll_timeout" && !creditsReleased) {
-    return `供应商处理超过 ${timeoutHours} 小时仍未确认结果，任务与积分状态等待后台复核。`;
+    return "生成超时，请重新处理生成。";
   }
   return String(task.failure?.displayMessage ?? task.failure?.message ?? failureCode).trim();
 }
@@ -2978,6 +3015,8 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         storyboardPage: ui.storyboardPage ?? 1,
         storyboardPageSize: ui.storyboardPageSize ?? 10,
         episodeWorkbenchSelectedAttachmentIds: ui.episodeWorkbenchSelectedAttachmentIds ?? [],
+        episodeWorkbenchAnnotationSelectedAttachmentId: ui.episodeWorkbenchAnnotationSelectedAttachmentId ?? "",
+        episodeWorkbenchAnnotationSelectedAttachmentUrl: ui.episodeWorkbenchAnnotationSelectedAttachmentUrl ?? "",
         isStoryboardDescriptionModalOpen: Boolean(ui.isStoryboardDescriptionModalOpen),
         storyboardDescriptionDraft: ui.storyboardDescriptionDraft ?? "",
         selectedModelId: ui.selectedModelId,
@@ -3088,6 +3127,7 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
         projectOtherAssetMediaType: normalizeProjectOtherAssetMediaType(ui.projectOtherAssetMediaType, "audio"),
         projectDetail: ui.projectDetail ?? null,
         firstLoginGuideTargetKey: resolveFirstLoginGuideTargetKey(ui.firstLoginGuide),
+        resultImageAnnotation: ui.resultImageAnnotation ?? null,
       })}
       ${renderInlineStatusToast(ui, "interior-toast")}
     </section>
@@ -3096,7 +3136,20 @@ function renderEpisodeWorkbenchScreen({ state, ui, session }) {
 
 function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
   const importedAssets = ui.importedAssets ?? {};
+  const importedAssetsByKind = {
+    character: importedAssets.character ?? [],
+    scene: importedAssets.scene ?? [],
+    prop: importedAssets.prop ?? [],
+  };
+  const isRealEpisodeWorkbench =
+    ui.projectPanelMode === "episode-workbench" &&
+    ui.selectedEpisodeId &&
+    ui.selectedEpisodeId !== "episode-primary";
   const resolveFallbackAssets = (kind) => {
+    const imported = filterTemporaryEpisodeUploadAssets(importedAssetsByKind[kind] ?? []);
+    if (isRealEpisodeWorkbench || imported.length > 0) {
+      return applyConversationPreviewFallback(imported, ui.assetConversationHistory ?? {});
+    }
     const projectAssets =
       ui.projectLibraryAssetsByType?.[kind] ??
       ui.projectDetail?.assetsByType?.[kind] ??
@@ -3105,7 +3158,11 @@ function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
     if (Array.isArray(projectAssets) && projectAssets.length > 0) {
       return mapDetailAssets(filterTemporaryEpisodeUploadAssets(projectAssets), kind, ui);
     }
-    return applyConversationPreviewFallback(importedAssets[kind] ?? [], ui.assetConversationHistory ?? {});
+    return applyConversationPreviewFallback(imported, ui.assetConversationHistory ?? {});
+  };
+  const resolveImportedAssets = (kind) => {
+    const imported = filterTemporaryEpisodeUploadAssets(importedAssetsByKind[kind] ?? []);
+    return imported.length ? applyConversationPreviewFallback(imported, ui.assetConversationHistory ?? {}) : null;
   };
   const resolvedContext = resolveEpisodeWorkbenchContextPayload(ui.episodeWorkbenchContext);
   const contextAssets =
@@ -3136,13 +3193,13 @@ function resolveEpisodeWorkbenchAssetLibrary(ui, state = {}) {
       ui,
       state,
       character: contextCharacterAssets.length
-        ? contextCharacterAssets
+        ? (resolveImportedAssets("character") ?? contextCharacterAssets)
         : resolveFallbackAssets("character"),
       scene: contextSceneAssets.length
-        ? contextSceneAssets
+        ? (resolveImportedAssets("scene") ?? contextSceneAssets)
         : resolveFallbackAssets("scene"),
       prop: contextPropAssets.length
-        ? contextPropAssets
+        ? (resolveImportedAssets("prop") ?? contextPropAssets)
         : resolveFallbackAssets("prop"),
     });
   }
@@ -3197,6 +3254,8 @@ function mapEpisodeWorkbenchContextAssets(assets = [], kind) {
   return filterTemporaryEpisodeUploadAssets(assets).map((asset) => ({
     id: asset?.assetId ?? asset?.id ?? "",
     assetId: asset?.assetId ?? asset?.id ?? null,
+    storageObjectId: asset?.storageObjectId ?? asset?.latestVersion?.storageObjectId ?? asset?.metadata?.storageObjectId ?? null,
+    fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? asset?.latestVersion?.fixedImageStorageObjectId ?? null,
     name: asset?.name ?? asset?.label ?? "未命名资产",
     preview: resolveEpisodeAssetPreviewUrl(asset),
     previewUrl: resolveEpisodeAssetPreviewUrl(asset),
@@ -3302,6 +3361,18 @@ function normalizeEpisodeAssetNameForMatch(value) {
 }
 
 function resolveEpisodeAssetPreviewUrl(asset) {
+  const storageObjectId = String(
+    asset?.fixedImageStorageObjectId ??
+    asset?.storageObjectId ??
+    asset?.latestVersion?.fixedImageStorageObjectId ??
+    asset?.latestVersion?.storageObjectId ??
+    asset?.metadata?.storageObjectId ??
+    asset?.latestVersion?.metadata?.storageObjectId ??
+    "",
+  ).trim();
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?thumbnail=1`;
+  }
   return resolvePreferredPreviewUrl(
     asset?.fixedImageUrl,
     asset?.preview,
@@ -6644,7 +6715,7 @@ function renderEpisodeWorkbenchAssetImportModal(ui, assetKind) {
                         >
                           <span class="episode-asset-library-check ${selection.includes(asset.id) ? "selected" : ""}" aria-hidden="true"></span>
                           <span class="episode-asset-library-thumb" aria-hidden="true">
-                            ${asset.preview ? `<img src="${escapeHtml(resolveApiUrl(asset.preview))}" alt="${escapeHtml(asset.name)}" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
+                            ${asset.preview ? `<img src="${escapeHtml(resolveApiUrl(resolveStorageObjectThumbnailUrl(asset, asset.preview)))}" alt="${escapeHtml(asset.name)}" loading="lazy" decoding="async" fetchpriority="low" />` : '<span class="asset-preview-placeholder" aria-hidden="true">✦</span>'}
                           </span>
                           <strong>${escapeHtml(asset.name)}</strong>
                         </button>
@@ -6888,7 +6959,7 @@ function renderAssetImportBody(ui, activeTab, assetKind) {
                     (asset) => `
                       <button type="button" class="asset-import-card-item ${selection.includes(asset.id) ? "selected" : ""}" data-action="toggle-official-asset-import" data-asset-id="${asset.id}">
                         <span class="asset-import-check ${selection.includes(asset.id) ? "selected" : ""}" aria-hidden="true">${selection.includes(asset.id) ? "✓" : ""}</span>
-                        <span class="asset-import-thumb" aria-hidden="true"><img src="${escapeHtml(asset.preview)}" alt="${escapeHtml(asset.name)}" /></span>
+                        <span class="asset-import-thumb" aria-hidden="true"><img src="${escapeHtml(resolveApiUrl(resolveStorageObjectThumbnailUrl(asset, asset.preview)))}" alt="${escapeHtml(asset.name)}" loading="lazy" decoding="async" fetchpriority="low" /></span>
                         <strong>${escapeHtml(asset.name)}</strong>
                       </button>
                     `,
@@ -7103,6 +7174,8 @@ function mapDetailAssets(assets, kind, ui = {}, mediaType = "image") {
       updatedAt: asset.updatedAt ?? asset.latestVersion?.createdAt ?? localAsset?.updatedAt ?? asset.createdAt ?? null,
       mimeType: asset.latestVersion?.metadata?.mimeType ?? asset.latestVersion?.mimeType ?? localAsset?.mimeType ?? "",
       sourceUrl: asset.latestVersion?.metadata?.sourceUrl ?? asset.previewUrl ?? localAsset?.sourceUrl ?? "",
+      storageObjectId: asset.storageObjectId ?? asset.latestVersion?.storageObjectId ?? asset.latestVersion?.metadata?.storageObjectId ?? localAsset?.storageObjectId ?? null,
+      fixedImageStorageObjectId: asset.fixedImageStorageObjectId ?? asset.latestVersion?.fixedImageStorageObjectId ?? asset.latestVersion?.metadata?.fixedImageStorageObjectId ?? localAsset?.fixedImageStorageObjectId ?? null,
       audioUrl: resolveImportedAssetAudioUrl(asset) || localAsset?.audioUrl || "",
       latestVersion: asset.latestVersion ?? localAsset?.latestVersion ?? null,
       generationStatus,
@@ -7999,7 +8072,7 @@ function renderAssetGeneratorPreviewCard(asset) {
   return `
     <article class="asset-generator-preview-card">
       <div class="asset-generator-preview-media">
-        <img src="${escapeHtml(resolveApiUrl(asset.preview || asset.previewUrl || ""))}" alt="${escapeHtml(asset.name || "素材预览")}" />
+        <img src="${escapeHtml(resolveApiUrl(resolveStorageObjectThumbnailUrl(asset, asset.preview || asset.previewUrl || "")))}" alt="${escapeHtml(asset.name || "素材预览")}" loading="lazy" decoding="async" fetchpriority="low" />
       </div>
     </article>
   `;
@@ -8313,7 +8386,10 @@ function renderPersonalMediaFilterButton(value, label, currentValue, action, fie
 }
 
 function renderPersonalMediaRow(row = {}) {
-  const previewUrl = resolvePreferredPreviewUrl(row.previewUrl, row.sourceUrl, row.downloadUrl);
+  const previewUrl = resolveStorageObjectThumbnailUrl(
+    row,
+    resolvePreferredPreviewUrl(row.previewUrl, row.sourceUrl, row.downloadUrl),
+  );
   const mediaKind = String(row.mediaKind ?? "").trim() === "video" ? "video" : "image";
   const fileName = String(row.fileName ?? row.objectKey ?? "未命名素材").trim() || "未命名素材";
   const projectName = String(row.projectName ?? "").trim();
@@ -9313,6 +9389,8 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
       calibrationOverrideReason: ui.calibrationOverrideReason ?? "",
       imageGenerationResult: ui.imageGenerationResult ?? null,
       videoGenerationResult: ui.videoGenerationResult ?? null,
+      episodeWorkbenchAnnotationSelectedAttachmentId: ui.episodeWorkbenchAnnotationSelectedAttachmentId ?? "",
+      episodeWorkbenchAnnotationSelectedAttachmentUrl: ui.episodeWorkbenchAnnotationSelectedAttachmentUrl ?? "",
         assetImportModal: ui.assetImportModal ?? null,
         assetImportModalTab: ui.assetImportModalTab ?? "local",
         assetImportModalSource: ui.assetImportModalSource ?? null,
@@ -9375,6 +9453,7 @@ function renderHomeProjectWorkflowModal({ state, ui, session }) {
         episodeVoiceTeamAssets: ui.episodeVoiceTeamAssets ?? [],
         episodeVoiceTeamLoading: Boolean(ui.episodeVoiceTeamLoading),
         episodeVoiceTeamError: ui.episodeVoiceTeamError ?? "",
+        resultImageAnnotation: ui.resultImageAnnotation ?? null,
       })}
     ${renderExportPanel({
       exportPreview: state.exportPreview,
@@ -10259,7 +10338,7 @@ function renderCanvasMediaPreview(kind, url, { poster = "", alt = "" } = {}) {
   if (normalizedKind === "audio") {
     return `<audio src="${escapeAttr(safeUrl)}" controls preload="metadata" aria-label="${escapeAttr(alt || "音频预览")}"></audio>`;
   }
-  return `<img src="${escapeAttr(safeUrl)}" alt="${escapeAttr(alt)}" loading="lazy" />`;
+  return `<img src="${escapeAttr(safeUrl)}" alt="${escapeAttr(alt)}" loading="lazy" decoding="async" fetchpriority="low" />`;
 }
 
   function renderCanvasLibraryAssetItem(asset, { canDelete = false, deleteAction = "delete-canvas-global-asset", canEditDetails = false, canReplaceMedia = false, detailDraft = null, canEditTags = false, canMoveToFolder = false, canSaveToGlobal = false, canUseAsStyleReference = false, styleReferenceBusy = false, tagEditAction = "edit-canvas-library-asset-tags", tagSource = "", tagEditorKey = "", activeTagEditorKey = "" } = {}) {

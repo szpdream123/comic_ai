@@ -3620,41 +3620,44 @@ WITH global_ai_opc_configs AS (
     ),
     (
       'global-ai-opc-nano-banana-2',
-      'Nano Banana 2（GlobalAiOpc）',
-      'nano-banana-2',
-      '/v1/banana/images',
-      'global_ai_opc_banana_image',
+      'Seedream 5.0（GlobalAiOpc）',
+      'seedream-5.0',
+      '/v2/model-center/tasks',
+      'global_ai_opc_model_center_seedream_image',
       '{
         "prompt":{"label":"提示词","type":"string","required":true,"maxLength":4000},
-        "referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":6},
-        "resolution":{"label":"分辨率","type":"enum","required":false,"options":["1k","2k","4k"],"enum":["1k","2k","4k"],"adminEditableOptions":true},
-        "size":{"label":"图片比例","type":"enum","required":false,"options":["1:1","16:9","9:16","4:3","3:4","3:2","2:3","5:4","4:5","21:9"],"enum":["1:1","16:9","9:16","4:3","3:4","3:2","2:3","5:4","4:5","21:9"],"adminEditableOptions":true}
+        "referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":10},
+        "aspectRatio":{"label":"图片比例","type":"enum","required":false,"options":["1:1","3:4","4:3","16:9","9:16","3:2","2:3","21:9"],"enum":["1:1","3:4","4:3","16:9","9:16","3:2","2:3","21:9"],"adminEditableOptions":true},
+        "resolution":{"label":"分辨率","type":"enum","required":false,"options":["2K","3K","4K"],"enum":["2K","3K","4K"],"adminEditableOptions":true},
+        "size":{"label":"精确尺寸","type":"string","required":false},
+        "watermark":{"label":"添加水印","type":"boolean","required":false}
       }'::jsonb,
-      '{"resolution":"1k","size":"1:1"}'::jsonb,
+      '{"aspectRatio":"1:1","resolution":"2K","watermark":false}'::jsonb,
       100,
       8,
       true,
-      'https://docs.globalaiopc.com/api-reference/image/nano-banana-create',
-      'GlobalAiOpc Nano Banana 2 图片模型。创建任务使用 /v1/banana/images；文档中的 size 表示宽高比。'
+      'https://docs.globalaiopc.com/api-reference/model-center/image-gen/seedream-5.0',
+      'GlobalAiOpc Seedream 5.0 图片模型。创建和查询任务使用 Model Center v2 异步接口。'
     ),
     (
       'global-ai-opc-nano-banana-pro',
-      'Nano Banana Pro（GlobalAiOpc）',
-      'nano-banana-pro',
-      '/v1/banana/images',
-      'global_ai_opc_banana_image',
+      'Seedream 5.0 Pro（GlobalAiOpc）',
+      'seedream_5.0Pro',
+      '/v2/model-center/tasks',
+      'global_ai_opc_model_center_seedream_image',
       '{
         "prompt":{"label":"提示词","type":"string","required":true,"maxLength":4000},
-        "referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":6},
-        "resolution":{"label":"分辨率","type":"enum","required":false,"options":["1k","2k","4k"],"enum":["1k","2k","4k"],"adminEditableOptions":true},
-        "size":{"label":"图片比例","type":"enum","required":false,"options":["1:1","16:9","9:16","4:3","3:4","3:2","2:3","5:4","4:5","21:9"],"enum":["1:1","16:9","9:16","4:3","3:4","3:2","2:3","5:4","4:5","21:9"],"adminEditableOptions":true}
+        "referenceImages":{"label":"参考图","type":"file[]","required":false,"maximum":10},
+        "aspectRatio":{"label":"图片比例","type":"enum","required":false,"options":["1:1","3:4","4:3","16:9","9:16","3:2","2:3","21:9"],"enum":["1:1","3:4","4:3","16:9","9:16","3:2","2:3","21:9"],"adminEditableOptions":true},
+        "resolution":{"label":"分辨率","type":"enum","required":false,"options":["1K","2K"],"enum":["1K","2K"],"adminEditableOptions":true},
+        "watermark":{"label":"添加水印","type":"boolean","required":false}
       }'::jsonb,
-      '{"resolution":"2k","size":"1:1"}'::jsonb,
+      '{"aspectRatio":"1:1","resolution":"1K","watermark":false}'::jsonb,
       130,
       9,
       false,
-      'https://docs.globalaiopc.com/api-reference/image/nano-banana-create',
-      'GlobalAiOpc Nano Banana Pro 图片模型。创建任务使用 /v1/banana/images；支持 resolution 与 size（宽高比）参数。'
+      'https://docs.globalaiopc.com/api-reference/model-center/image-gen/seedream_5.0pro',
+      'GlobalAiOpc Seedream 5.0 Pro 图片模型。创建和查询任务使用 Model Center v2 异步接口。'
     )
   ) AS v(model_code, display_name, provider_model, endpoint, request_format, parameter_schema, default_params, base_credits, sort_order, recommended, doc_url, remark)
 )
@@ -3686,10 +3689,16 @@ SELECT
   'GlobalAiOpc（壹嘉云）',
   provider_model,
   'global_ai_opc_image',
-  'sync',
+  CASE WHEN request_format = 'global_ai_opc_model_center_seedream_image' THEN 'async_polling' ELSE 'sync' END,
   'image',
   '["image.generate","image.image_to_image","image.edit","image.reference_generate"]'::jsonb,
-  '{"prompt":true,"referenceImages":true,"imageEdit":true,"batch":true}'::jsonb,
+  jsonb_build_object(
+    'prompt', true,
+    'referenceImages', true,
+    'imageEdit', true,
+    'batch', true,
+    'asyncPolling', request_format = 'global_ai_opc_model_center_seedream_image'
+  ),
   parameter_schema,
   default_params,
   jsonb_build_object(
@@ -3697,7 +3706,10 @@ SELECT
     'requestPath', endpoint,
     'endpoint', endpoint,
     'createTaskEndpoint', endpoint,
-    'queryTaskEndpoint', '/v1/result/{taskId}',
+    'queryTaskEndpoint', CASE
+      WHEN request_format = 'global_ai_opc_model_center_seedream_image' THEN '/v2/model-center/tasks/{taskId}'
+      ELSE '/v1/result/{taskId}'
+    END,
     'apiKeyEnv', 'GLOBAL_AI_OPC_API_KEY',
     'requestFormat', request_format,
     'inputSchema', jsonb_build_object(
@@ -3705,7 +3717,9 @@ SELECT
     ),
     'outputSchema', jsonb_build_object(
       'source', jsonb_build_object('provider', 'GlobalAiOpc image generation', 'docUrl',
-        CASE WHEN request_format = 'global_ai_opc_banana_image'
+        CASE WHEN request_format = 'global_ai_opc_model_center_seedream_image'
+          THEN doc_url
+          WHEN request_format = 'global_ai_opc_banana_image'
           THEN 'https://docs.globalaiopc.com/api-reference/image/nano-banana-query'
           ELSE 'https://docs.globalaiopc.com/api-reference/image/gpt-image2/gpt-image2-query'
         END),
@@ -3715,13 +3729,29 @@ SELECT
   jsonb_build_object(
     'unit', 'image',
     'baseCredits', base_credits,
-    'resolutionCredits', jsonb_build_object(
-      '1k', base_credits,
-      '2k', ROUND(base_credits * 1.5),
-      '4k', ROUND(base_credits * 2)
-    )
+    'resolutionCredits', CASE
+      WHEN provider_model = 'seedream_5.0Pro' THEN jsonb_build_object(
+        '1K', base_credits,
+        '2K', ROUND(base_credits * 1.4)
+      )
+      WHEN provider_model = 'seedream-5.0' THEN jsonb_build_object(
+        '2K', base_credits,
+        '3K', ROUND(base_credits * 1.5),
+        '4K', ROUND(base_credits * 2)
+      )
+      ELSE jsonb_build_object(
+        '1k', base_credits,
+        '2k', ROUND(base_credits * 1.5),
+        '4k', ROUND(base_credits * 2)
+      )
+    END
   ),
-  '{"maxPromptLength":4000,"promptLengthUnit":"characters","maxReferences":6,"allowedMimeTypes":["image/jpeg","image/png","image/webp","image/avif"]}'::jsonb,
+  jsonb_build_object(
+    'maxPromptLength', 4000,
+    'promptLengthUnit', 'characters',
+    'maxReferences', CASE WHEN request_format = 'global_ai_opc_model_center_seedream_image' THEN 10 ELSE 6 END,
+    'allowedMimeTypes', '["image/jpeg","image/png","image/webp","image/avif"]'::jsonb
+  ),
   jsonb_build_object(
     'label', display_name,
     'group', 'GlobalAiOpc',
@@ -3783,7 +3813,7 @@ SELECT
   model.id,
   'bullmq',
   'generation-submit-image',
-  NULL,
+  CASE WHEN model.provider_model LIKE 'seedream%' THEN 'generation-poll-image' ELSE NULL END,
   'generation-finalize-artifact',
   'generation-dead-letter',
   'generation:image:submit:{taskId}',
@@ -3793,8 +3823,14 @@ SELECT
   5,
   15000,
   10,
-  '{}'::jsonb,
-  '{"submitAttempts":3,"finalizeAttempts":3}'::jsonb,
+  CASE WHEN model.provider_model LIKE 'seedream%'
+    THEN '{"strategy":"fixed","intervalMs":10000,"maxAttempts":360}'::jsonb
+    ELSE '{}'::jsonb
+  END,
+  CASE WHEN model.provider_model LIKE 'seedream%'
+    THEN '{"submitAttempts":3,"pollAttempts":360,"finalizeAttempts":3}'::jsonb
+    ELSE '{"submitAttempts":3,"finalizeAttempts":3}'::jsonb
+  END,
   '{"failureRateWindowSeconds":60,"openAfterFailures":10,"openForSeconds":60}'::jsonb,
   'active'
 FROM ai_model_configs AS model

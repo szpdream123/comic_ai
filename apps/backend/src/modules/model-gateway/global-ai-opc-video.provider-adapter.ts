@@ -31,14 +31,21 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const requestPayload = await recordProviderAdapterRequest(
-      input,
-      buildGlobalAiOpcVideoPayload(input, {
-        model: this.config.model,
-        defaultRequestParams: this.config.defaultRequestParams,
-        requestFormat: this.config.requestFormat,
-      }),
-    );
+    const requestPayload = buildGlobalAiOpcVideoPayload(input, {
+      model: this.config.model,
+      defaultRequestParams: this.config.defaultRequestParams,
+      requestFormat: this.config.requestFormat,
+    });
+    // The provider model is authoritative. This final guard prevents any
+    // alias/override path from sending incompatible frame fields.
+    if (isSeedance25SpecialModel(this.config.model) || requestPayload.model === "sd_2.5_special_v1") {
+      delete requestPayload.first_image;
+      delete requestPayload.last_image;
+    }
+    if (this.config.requestFormat === "globalaiopc_model_center_video") {
+      delete requestPayload.first_image;
+    }
+    await input.recordRedactedRequest?.(requestPayload);
     const response = await fetchWithTimeout(
       fetchImpl,
       this.config.createTaskEndpoint,
@@ -166,6 +173,26 @@ export function buildGlobalAiOpcVideoPayload(
     requestFormat?: string;
   } = {},
 ): Record<string, unknown> {
+  const override = readObject(input.redactedPayload.providerPayloadOverride);
+  if (Object.keys(override).length > 0) {
+    if (isSeedance25SpecialModel(config.model) || override.model === "sd_2.5_special_v1") {
+      const sanitizedOverride = { ...override };
+      delete sanitizedOverride.first_image;
+      delete sanitizedOverride.last_image;
+      return sanitizedOverride;
+    }
+    if (config.requestFormat === "globalaiopc_model_center_video" && isKlingO3Model(config.model)) {
+      return stripUndefined({
+        ...override,
+        first_image: undefined,
+        last_image: undefined,
+        reference_videos: undefined,
+        reference_audios: undefined,
+        reference_mode: override.reference_mode === "frame" ? "image" : override.reference_mode,
+      });
+    }
+    return override;
+  }
   const payload = input.redactedPayload;
   const parameters = readObject(payload.parameters);
   const defaults = config.defaultRequestParams ?? {};
@@ -219,34 +246,59 @@ export function buildGlobalAiOpcVideoPayload(
       readString(payload.firstFrameUrl),
       readMediaUrl(parameters.firstFrame),
     ]);
-    const isMiniMaxH3 = config.model === "MiniMax-H3-c4";
-    if (isMiniMaxH3 && videoUrls.length > 0) {
-      throw Object.assign(new Error("该模型不支持视频参考"), {
-        failureCode: "model_reference_videos_unsupported",
-        providerModel: config.model,
-      });
-    }
-    if (isMiniMaxH3 && !firstImage && audioUrls.length > 0 && referenceImageUrls.length === 0) {
-      throw Object.assign(new Error("参考音频必须搭配参考图片使用"), {
-        failureCode: "model_reference_visual_required",
-        providerModel: config.model,
-      });
-    }
-    return stripUndefined({
-      model: config.model ?? defaultModel,
-      prompt,
-      reference_images: !isMiniMaxH3 || !firstImage
-        ? (referenceImageUrls.length ? referenceImageUrls : undefined)
-        : undefined,
-      reference_videos: videoUrls.length ? videoUrls : undefined,
-      reference_audios: !isMiniMaxH3 || !firstImage
-        ? (audioUrls.length ? audioUrls : undefined)
-        : undefined,
-      duration,
-      aspect_ratio: ratio,
+    const isMiniMaxH3768p = config.model === "MiniMax-H3-768p";
+    const isHappyHorse11 = /^happyhorse-1\.1-r2v$/i.test(config.model?.trim() ?? "");
+    const isWan27R2v = /^wan2\.7-r2v$/i.test(config.model?.trim() ?? "");
+    const isKlingO3 = isKlingO3Model(config.model);
+    const resolvedModel = resolveGlobalAiOpcVideoModel(config.model, {
       resolution,
-      first_image: firstImage,
-      last_image: firstImage ? lastImageUrl : undefined,
+      hasReferenceVideos: videoUrls.length > 0,
+    });
+    const modelCenterResolution = isSeedance25SpecialModel(config.model)
+      ? normalizeSeedance25SpecialResolution(resolution) ?? "720p"
+      : resolution;
+    const modelCenterDuration = isSeedance25SpecialModel(config.model) ? 5 : duration;
+    const modelCenterReferenceImages = isMiniMaxH3768p || isHappyHorse11 || isWan27R2v
+      ? dedupeHttpUrls([firstImage, ...referenceImageUrls]).slice(0, isWan27R2v ? 3 : 9)
+      : (isKlingO3 ? referenceImageUrls.slice(0, 3) : referenceImageUrls);
+    const omitFrameImages = isMiniMaxH3768p
+      || isHappyHorse11
+      || isWan27R2v
+      || isKlingO3
+      || isSeedance25SpecialModel(config.model)
+      // Model Center identifies every Seedance 2.5 Special alias as this
+      // provider model; never let frame fields leak back in through aliases.
+      || resolvedModel === "sd_2.5_special_v1";
+    const klingReferenceMode = isKlingO3 && modelCenterReferenceImages.length > 0
+      ? "image"
+      : undefined;
+    return stripUndefined({
+      model: resolvedModel,
+      prompt: isMiniMaxH3768p ? normalizeMiniMaxReferencePrompt(prompt) : prompt,
+      reference_images: modelCenterReferenceImages.length ? modelCenterReferenceImages : undefined,
+      reference_videos: !isKlingO3 && videoUrls.length ? videoUrls : undefined,
+      reference_audios: !isKlingO3 && audioUrls.length ? audioUrls : undefined,
+      duration: modelCenterDuration,
+      aspect_ratio: ratio,
+      resolution: modelCenterResolution,
+      first_image: omitFrameImages
+        ? undefined
+        : firstImage,
+      last_image: omitFrameImages
+        ? undefined
+        : (firstImage ? lastImageUrl : undefined),
+      seed: readInteger(parameters.seed) ?? readInteger(defaults.seed),
+      watermark: isHappyHorse11
+        ? readString(parameters.watermark) ?? readString(defaults.watermark) ?? (
+          readBoolean(parameters.watermark) ?? readBoolean(defaults.watermark)
+        )?.toString()
+        : readBoolean(parameters.watermark) ?? readBoolean(defaults.watermark),
+      generate_audio: isKlingO3
+        ? readBoolean(parameters.generateAudio) ?? readBoolean(defaults.generate_audio) ?? readBoolean(defaults.generateAudio)
+        : undefined,
+      reference_mode: isKlingO3
+        ? klingReferenceMode
+        : undefined,
     });
   }
   const referenceMode = isReferenceMediaMode(parameters) || videoUrls.length > 0 || audioUrls.length > 0;
@@ -361,6 +413,12 @@ export function buildGlobalAiOpcVideoPayload(
   });
 }
 
+function normalizeMiniMaxReferencePrompt(prompt: string) {
+  return prompt
+    .replace(/【@图(\d+)】/g, "@图片$1")
+    .replace(/@图(\d+)/g, "@图片$1");
+}
+
 function resolveGlobalAiOpcVideoModel(
   model: string | undefined,
   input: {
@@ -387,6 +445,9 @@ function resolveGlobalAiOpcVideoModel(
   const resolution = manxueFamily
     ? normalizeSd2ManxueResolution(input.resolution) ?? "720p"
     : normalizeGlobalAiOpcResolution(input.resolution) ?? "720p";
+  if (isSeedance25SpecialModel(configured)) {
+    return "sd_2.5_special_v1";
+  }
   if (/^sd_2\.0_(?:discount|special)_(?:480p|720p|1080p|2k|4k)(?:_with_video_ref)?$/i.test(configured)) {
     return configured;
   }
@@ -428,6 +489,19 @@ function normalizeGlobalAiOpcResolution(value: string | undefined) {
 function normalizeSd2ManxueResolution(value: string | undefined) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["720p", "1080p"].includes(normalized) ? normalized : undefined;
+}
+
+function normalizeSeedance25SpecialResolution(value: string | undefined) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["720p", "1080p"].includes(normalized) ? normalized : undefined;
+}
+
+function isSeedance25SpecialModel(model: string | undefined) {
+  return /^sd_2\.5_special(?:_v1)?(?:_(?:720p|1080p))?$/i.test(model?.trim() ?? "");
+}
+
+function isKlingO3Model(model: string | undefined) {
+  return /^kling(?:-)?o3$/i.test(model?.trim() ?? "");
 }
 
 function isSd2ManxueModel(model: string) {

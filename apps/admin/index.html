@@ -6314,7 +6314,7 @@
       }
 
       function riskTypeLabel(value) {
-        return ({ merchant_mismatch: "商户订单信息不一致", amount_mismatch: "支付金额不一致", currency_mismatch: "支付币种不一致", duplicate_callback: "重复支付回调", payment_replay: "疑似支付事件重放", provider_event_conflict: "供应商事件冲突" })[value] || "未分类支付风险";
+        return ({ merchant_mismatch: "商户订单信息不一致", amount_mismatch: "支付金额不一致", currency_mismatch: "支付币种不一致", duplicate_trade: "重复支付交易", duplicate_callback: "重复支付回调", payment_replay: "疑似支付事件重放", provider_event_conflict: "供应商事件冲突" })[value] || "未分类支付风险";
       }
 
       function riskSeverityLabel(value) {
@@ -6371,6 +6371,9 @@
         }
         if (isGenerationTask && providerInFlight && externalStarted && hasExternalId && ["running", "failed", "result_unknown", "manual_review_required"].includes(task.status)) {
           actions.push({ value: "resume_provider_poll", label: "重新拉取供应商状态", badge: "供应商同步", summary: "沿用原外部请求 ID 恢复轮询；成功后自动进入产物归档。", prerequisite: "外部请求已受理，状态仍为执行中或结果未知", effects: "任务/工作流 → 执行中；新增轮询 Outbox；不会再次提交生成" });
+        }
+        if (isGenerationTask && task.taskType === "episode_generate_video" && ["running", "queued", "failed", "canceled", "result_unknown", "manual_review_required"].includes(task.status)) {
+          actions.push({ value: "resubmit_provider", label: "按指定 Body 重发", badge: "无积分重发", summary: "使用新的供应商请求 Body 重新提交，保留当前业务任务 ID 和原积分预占。", prerequisite: "确认供应商需要更换请求参数，且允许保留当前任务账务", effects: "生成新的供应商任务并轮询；不新增或扣减积分" });
         }
         const redispatchableStatus = task.status === "queued" || (["failed", "canceled"].includes(task.status) && Number(task.attemptCount || 0) < Number(task.maxAttempts || 0));
         if (isGenerationTask && redispatchableStatus && (!externalStarted || providerTerminalFailure)) {
@@ -7009,6 +7012,7 @@
           ${actions.length ? `<form id="task-ops-form" data-requires-operation-reason="true" style="margin-top:16px;">
             <div class="field"><span>可执行策略</span><div class="task-recovery-action-list">${actionOptions}</div></div>
             <label class="field ${initialAction === "manual_settle" ? "" : "hidden"}" id="task-settlement-field"><span>积分结算决策</span><select name="decision"><option value="release">释放预占积分，视为未产出</option><option value="consume">消耗预占积分，确认已有有效产出</option><option value="mark_abnormal_cost">保留人工复核状态，标记异常成本</option></select></label>
+            <label class="field ${initialAction === "resubmit_provider" ? "" : "hidden"}" id="task-resubmit-payload-field"><span>供应商 Body（JSON）</span><textarea name="providerPayload" rows="10" placeholder='{"model":"sd_2.0_special_720p","ratio":"16:9","content":[],"duration":15}'></textarea></label>
             <label class="field"><span>操作原因</span><textarea name="reason" rows="4" placeholder="说明判断依据、供应商结果和预期处置结果" required></textarea></label>
             <div class="error-text" id="task-ops-error"></div>
             <button class="btn primary full" type="submit">执行处置</button>
@@ -7017,7 +7021,11 @@
         </aside>`;
         if (!actions.length) return;
         const settlementField = document.getElementById("task-settlement-field");
-        document.querySelectorAll('#task-ops-form input[name="action"]').forEach((input) => input.addEventListener("change", () => settlementField.classList.toggle("hidden", input.value !== "manual_settle" || !input.checked)));
+        const resubmitPayloadField = document.getElementById("task-resubmit-payload-field");
+        document.querySelectorAll('#task-ops-form input[name="action"]').forEach((input) => input.addEventListener("change", () => {
+          settlementField.classList.toggle("hidden", input.value !== "manual_settle" || !input.checked);
+          resubmitPayloadField?.classList.toggle("hidden", input.value !== "resubmit_provider" || !input.checked);
+        }));
         document.getElementById("task-ops-form").addEventListener("submit", async (event) => {
           event.preventDefault();
           const form = new FormData(event.currentTarget);
@@ -7031,14 +7039,21 @@
                 ? "/api/admin/ops/tasks/retry-persist-asset"
                 : action === "manual_settle"
                   ? "/api/admin/ops/tasks/manual-settle"
-                  : ["redispatch", "resume_provider_poll", "rebuild_finalize"].includes(action)
+                  : ["redispatch", "resume_provider_poll", "rebuild_finalize", "resubmit_provider"].includes(action)
                     ? "/api/admin/ops/tasks/recover"
                     : "/api/admin/ops/tasks/retry";
-            const body = action === "manual_settle"
+            let body = action === "manual_settle"
               ? { taskId, decision: String(form.get("decision") || "release"), reason }
               : path === "/api/admin/ops/tasks/recover"
                 ? { taskId, action, reason }
                 : { taskId, reason };
+            if (action === "resubmit_provider") {
+              try {
+                body = { taskId, action, reason, providerPayload: JSON.parse(String(form.get("providerPayload") || "{}")) };
+              } catch {
+                throw new Error("供应商 Body 必须是合法 JSON");
+              }
+            }
             await api(path, {
               method: "POST",
               headers: { "idempotency-key": adminIdempotencyKey(`task-${action}-${taskId}`) },
@@ -7505,12 +7520,15 @@
       }
 
       function renderModelProviderRequestContent(item) {
-        const requestBody = item?.providerRequestBody;
+        const sent = Boolean(item?.externalSubmissionStartedAt);
+        const requestBody = item?.providerRequestBody || (!sent ? item?.preparedProviderRequestBody : null);
         const requestUrl = String(item?.providerRequestUrl || "").trim();
         const sections = requestUrl ? [`请求 URL：\n${requestUrl}`] : [];
         if (requestBody && typeof requestBody === "object" && Object.keys(requestBody).length > 0) {
           try {
-            sections.push(`请求 Body：\n${JSON.stringify(requestBody, null, 2)}`);
+            sections.push(sent
+              ? `请求 Body：\n${JSON.stringify(requestBody, null, 2)}`
+              : `准备 Body（未发送）：\n${JSON.stringify(requestBody, null, 2)}`);
             return sections.join("\n\n");
           } catch {
             return "供应商请求参数无法解析";
@@ -7546,7 +7564,8 @@
       function renderModelProviderSubmissionStatus(item) {
         const sent = Boolean(item?.externalSubmissionStartedAt);
         const hasProviderBody = Boolean(item?.providerRequestBody && Object.keys(item.providerRequestBody).length > 0);
-        const label = !sent ? "未发送" : hasProviderBody ? "已发送" : "发送已开始";
+        const hasPreparedBody = Boolean(item?.preparedProviderRequestBody && Object.keys(item.preparedProviderRequestBody).length > 0);
+        const label = !sent ? hasPreparedBody ? "未发送（参数已准备）" : "未发送" : hasProviderBody ? "已发送" : "发送已开始";
         const tagClass = !sent ? "warn" : hasProviderBody ? "green" : "blue";
         const failureCode = item?.taskFailureCode || item?.providerFailureCode || item?.failureCode || "";
         const details = [
@@ -8492,6 +8511,9 @@
       }
 
       function modelEditorRequestPathFromProviderConfig(providerConfig = {}) {
+        if (providerConfig.requestFormat === "globalaiopc_model_center_video") {
+          return providerConfig.createTaskEndpoint || "/v2/model-center/tasks";
+        }
         return providerConfig.requestPath || providerConfig.createTaskEndpoint || providerConfig.endpoint || "";
       }
 
@@ -12349,7 +12371,7 @@
                 : protocol === "saier_video"
                 ? { baseURL: "https://saierapi.cn", requestPath: "/v1/video/generations", createTaskEndpoint: "/v1/video/generations", queryTaskEndpoint: "/v1/video/generations/{taskId}", apiKeyEnv: "SAI_ER_API_KEY", requestFormat: "saier_openai_video" }
                 : protocol === "globalaiopc_video"
-                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v1/sd2_manxue/videos", createTaskEndpoint: "/v1/sd2_manxue/videos", queryTaskEndpoint: "/v1/result/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_sd2_manxue" }
+                ? { baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer", requestPath: "/v2/model-center/tasks", createTaskEndpoint: "/v2/model-center/tasks", queryTaskEndpoint: "/v2/model-center/tasks/{taskId}", apiKeyEnv: "GLOBAL_AI_OPC_API_KEY", requestFormat: "globalaiopc_model_center_video" }
                 : protocol === "extra_token_video"
                 ? { baseURL: "https://www.extratoken.cn", requestPath: "/api/v1/video-generation", createTaskEndpoint: "/api/v1/video-generation", queryTaskEndpoint: "/api/v1/video-generation/tasks/{taskId}?model={model}", apiKeyEnv: "", requestFormat: "volcengine_ark_contents_generation" }
                 : protocol === "aliyun_bailian_video"
@@ -12895,7 +12917,7 @@
         };
         const selectedModelKind = inferModelKind(base);
         const selectedModelAdapter = inferModelAdapter(base);
-        const selectedRequestPath = base.providerConfig?.requestPath || base.providerConfig?.createTaskEndpoint || base.providerConfig?.endpoint || "";
+        const selectedRequestPath = modelEditorRequestPathFromProviderConfig(base.providerConfig || {});
         const selectedApiKeyEnv = base.providerConfig?.apiKeyEnv || "";
         const drawer = document.getElementById("drawer");
         drawer.classList.remove("hidden");
@@ -12959,14 +12981,14 @@
           form.elements.canvasAgentTokenCreditsPerMillion.required = kind.mediaType === "text";
           form.elements.providerAdapter.innerHTML = modelAdapterOptionsMarkup(kind.mediaType, form.elements.providerAdapter.value, form.elements.providerName.value);
           const template = fixedModelTemplate(kind.mediaType, form.elements.providerName.value, form.elements.providerAdapter.value);
-          form.elements.requestPath.value = template.providerConfig.requestPath || template.providerConfig.createTaskEndpoint || template.providerConfig.endpoint || "";
+          form.elements.requestPath.value = modelEditorRequestPathFromProviderConfig(template.providerConfig || {});
           document.querySelector("#model-parameter-template-list tbody").innerHTML = parameterTemplateSelectionRows(kind.mediaType, base.parameterSchema || {}, base.defaultParams || {}, !isEdit, base.pricing || {});
           updateModelFrontendParameterPreview(base.parameterSchema || {}, !isEdit);
         });
         form.elements.providerAdapter.addEventListener("change", () => {
           const kind = modelKindOption(form.elements.modelKind.value);
           const template = fixedModelTemplate(kind.mediaType, form.elements.providerName.value, form.elements.providerAdapter.value);
-          form.elements.requestPath.value = template.providerConfig.requestPath || template.providerConfig.createTaskEndpoint || template.providerConfig.endpoint || "";
+          form.elements.requestPath.value = modelEditorRequestPathFromProviderConfig(template.providerConfig || {});
         });
         form.addEventListener("change", (event) => {
           const name = event.target?.name || "";
@@ -14512,6 +14534,7 @@
 
       (function installMarketingAdminPage() {
         pages.marketing = "营销中台";
+        pages.marketingSkills = "Skill管理";
 
         function marketingState() {
           if (!state.marketing) {
@@ -14523,6 +14546,8 @@
               recentKnowledgeDocuments: [],
               recentTrendPatterns: [],
               recentAgentRuns: [],
+              skillManager: { open: false, editing: null },
+              activeTab: "content",
               refreshTimer: null,
               loadError: "",
             };
@@ -14592,6 +14617,43 @@
             platformProfiles: marketingRows(source.platformProfiles || source.platform_profiles),
             researchBriefs: marketingRows(source.researchBriefs || source.research_briefs),
           };
+        }
+
+        async function loadMarketingSkills() {
+          const response = await api("/api/marketing/generation-skills");
+          marketingState().console.generationSkills = marketingRows(response.skills || response.data?.skills);
+        }
+
+        async function openMarketingSkillManager(skillId = "") {
+          const store = marketingState();
+          await loadMarketingSkills().catch(() => undefined);
+          store.skillManager = { open: true, editing: store.console.generationSkills.find((item) => String(marketingValue(item, "id", "id")) === String(skillId)) || null };
+          document.getElementById("marketing-skill-overlay")?.remove();
+          const overlay = document.createElement("div");
+          overlay.id = "marketing-skill-overlay";
+          overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,35,55,.38);z-index:9999;overflow:auto;padding:6vh 6vw";
+          overlay.innerHTML = marketingSkillManagerPanel();
+          overlay.querySelector(".marketing-skill-manager")?.setAttribute("style", "max-width:900px;margin:auto;background:#fff;padding:24px");
+          document.body.appendChild(overlay);
+        }
+
+        async function saveMarketingSkill(event) {
+          event.preventDefault();
+          const form = event.currentTarget;
+          const values = new FormData(form);
+          const payload = new FormData();
+          for (const key of ["code", "name", "description", "version", "sourceName", "sourceUrl", "sourceVersion", "planningInstruction", "mediaInstruction", "skillKind", "status", "displayOrder"]) payload.append(key, String(values.get(key) || ""));
+          payload.append("applicablePlatforms", String(values.get("applicablePlatforms") || ""));
+          payload.append("applicableContentTypes", String(values.get("applicableContentTypes") || ""));
+          const file = values.get("file");
+          if (file instanceof File && file.size) payload.append("file", file, file.name);
+          const id = String(form.dataset.skillId || "");
+          await api(id ? `/api/marketing/generation-skills/${encodeURIComponent(id)}` : "/api/marketing/generation-skills", { method: id ? "PATCH" : "POST", body: payload });
+          await loadMarketingSkills();
+          marketingState().skillManager = { open: false, editing: null };
+          document.getElementById("marketing-skill-overlay")?.remove();
+          renderShell();
+          showToast("Skill 已保存");
         }
 
         function marketingValue(record, camel, snake, fallback = "") {
@@ -14729,7 +14791,10 @@
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 12_000);
           try {
-            store.console = marketingConsoleData(await api("/api/marketing/direct-console", { signal: controller.signal }));
+            const consolePayload = await api("/api/marketing/direct-console", { signal: controller.signal });
+            const skillsPayload = await api("/api/marketing/generation-skills", { signal: controller.signal }).catch(() => null);
+            store.console = marketingConsoleData(consolePayload);
+            store.console.generationSkills = marketingRows(skillsPayload?.skills || skillsPayload?.data?.skills || store.console.generationSkills);
             store.loadError = "";
             clearPageForbidden("marketing");
           } catch (error) {
@@ -15653,6 +15718,46 @@
           renderShell();
         }
 
+        function marketingSkillManagerPanel() {
+          const manager = marketingState().skillManager;
+          if (!manager?.open) return "";
+          const item = manager.editing || {};
+          const val = (key, fallback = "") => marketingValue(item, key, key, fallback);
+          const list = marketingRows(marketingState().console.generationSkills).map((skill) => `<div class="toolbar"><span>${escapeHtml(marketingValue(skill, "name", "name", "未命名"))} · ${escapeHtml(marketingValue(skill, "skillKind", "skill_kind", "video"))}</span><button class="btn ghost" type="button" onclick="openMarketingSkillManager('${escapeAttribute(marketingValue(skill, "id", "id", ""))}')">编辑</button></div>`).join("");
+          return `<section class="card marketing-skill-manager"><div class="toolbar"><h3>${item.id ? "编辑 Skill" : "上传 Skill"}</h3><button class="btn ghost" type="button" onclick="document.getElementById('marketing-skill-overlay')?.remove()">关闭</button></div>${!item.id ? `<div class="skill-list">${list || "暂无 Skill"}</div>` : ""}<form data-skill-id="${escapeAttribute(val("id"))}" onsubmit="saveMarketingSkill(event)"><div class="form-grid"><label class="field"><span>名称</span><input name="name" required value="${escapeAttribute(val("name"))}" /></label><label class="field"><span>类型</span><select name="skillKind"><option value="marketing">营销</option><option value="video">视频</option></select></label><label class="field"><span>版本</span><input name="version" value="${escapeAttribute(val("version", "1.0.0"))}" /></label><label class="field"><span>适用平台</span><input name="applicablePlatforms" value="${escapeAttribute(marketingRows(val("applicablePlatforms", [])).join(","))}" placeholder="douyin" /></label><label class="field"><span>适用内容</span><input name="applicableContentTypes" value="${escapeAttribute(marketingRows(val("applicableContentTypes", [])).join(","))}" placeholder="image,video" /></label><label class="field" style="grid-column:1/-1"><span>上传文件（可选）</span><input type="file" name="file" accept=".md,.txt,.json,text/plain,text/markdown,application/json" /></label><label class="field" style="grid-column:1/-1"><span>描述</span><input name="description" value="${escapeAttribute(val("description"))}" /></label><label class="field" style="grid-column:1/-1"><span>规划指令</span><textarea name="planningInstruction" required>${escapeHtml(val("planningInstruction"))}</textarea></label><label class="field" style="grid-column:1/-1"><span>素材指令</span><textarea name="mediaInstruction">${escapeHtml(val("mediaInstruction"))}</textarea></label></div><button class="btn primary" type="submit">保存 Skill</button></form></section>`;
+        }
+
+        function marketingSkillsPage() {
+          if (!(state.session?.roles || []).includes("super_admin")) {
+            return `<section class="state-panel" data-state="forbidden"><strong>无权限访问该页面</strong></section>`;
+          }
+          const skills = marketingRows(marketingState().console.generationSkills);
+          const rows = skills.map((skill) => {
+            const id = escapeAttribute(marketingValue(skill, "id", "id", ""));
+            const platforms = marketingRows(marketingValue(skill, "applicablePlatforms", "applicable_platforms", [])).join(", ") || "全部平台";
+            const contentTypes = marketingRows(marketingValue(skill, "applicableContentTypes", "applicable_content_types", [])).join(", ") || "全部形式";
+            return `<tr><td><strong>${escapeHtml(marketingValue(skill, "name", "name", "未命名 Skill"))}</strong><div class="metric-note">${escapeHtml(marketingValue(skill, "code", "code", ""))}</div></td><td>${escapeHtml(marketingValue(skill, "skillKind", "skill_kind", "video"))}</td><td>${escapeHtml(marketingValue(skill, "version", "version", "-"))}</td><td>${escapeHtml(platforms)} / ${escapeHtml(contentTypes)}</td><td>${marketingStatusTag(marketingValue(skill, "status", "status", "approved"))}</td><td class="actions"><button class="btn ghost" type="button" onclick="openMarketingSkillManager('${id}')">编辑</button></td></tr>`;
+          }).join("") || `<tr><td colspan="6">暂无 Skill，请先上传。</td></tr>`;
+          return `<style>.marketing-skills-page{display:grid;gap:16px;max-width:1180px}.marketing-skills-page .card{padding:20px}.marketing-skills-page table{min-width:900px}</style><div class="section-stack marketing-skills-page"><section class="toolbar"><div><h2>Skill管理</h2><p class="metric-note">上传、命名和编辑营销中台使用的 Skill。</p></div><div class="toolbar"><button class="btn ghost" type="button" onclick="openMarketingSkillManager()">上传 Skill</button><button class="btn ghost" type="button" onclick="ensureAdminPageData('marketingSkills').then(() => renderShell())">刷新</button></div></section><section class="card"><div class="table-wrap compact"><table><thead><tr><th>名称</th><th>类型</th><th>版本号</th><th>适用范围</th><th>状态</th><th class="actions">操作</th></tr></thead><tbody>${rows}</tbody></table></div></section></div>`;
+        }
+
+        function selectMarketingTab(tab) {
+          const store = marketingState();
+          store.activeTab = tab === "skills" ? "skills" : "content";
+          if (store.activeTab === "skills") loadMarketingSkills().catch(() => undefined);
+          renderShell();
+        }
+
+        function marketingConsoleTabs() {
+          const active = marketingState().activeTab === "skills" ? "skills" : "content";
+          return `<nav class="marketing-console-tabs" aria-label="营销中台功能"><button type="button" class="${active === "content" ? "active" : ""}" onclick="selectMarketingTab('content')">内容制作与发布</button><button type="button" class="${active === "skills" ? "active" : ""}" onclick="selectMarketingTab('skills')">Skill管理</button></nav>`;
+        }
+
+        function marketingConsoleTabbedPage() {
+          const content = marketingState().activeTab === "skills" ? marketingSkillsPage() : marketingDirectPublishPage();
+          return `<style>.marketing-console-tabs{display:flex;gap:2px;border-bottom:1px solid #d7e3eb;margin:0 0 18px;padding:0 2px}.marketing-console-tabs button{border:0;border-bottom:3px solid transparent;background:transparent;color:#587085;padding:12px 22px;font:inherit;cursor:pointer}.marketing-console-tabs button.active{border-bottom-color:#17678f;color:#173b58;font-weight:700;background:#fff}</style>${marketingConsoleTabs()}${content}`;
+        }
+
         function marketingDirectPublishPage() {
           if (!(state.session?.roles || []).includes("super_admin")) {
             return `<section class="state-panel" data-state="forbidden"><strong>无权限访问该页面</strong></section>`;
@@ -15724,7 +15829,7 @@
             return `<tr><td>${escapeHtml(marketingValue(job, "platform", "platform", "抖音"))}</td><td>${escapeHtml(accountLabels.get(accountRef) || "账号名称同步中")}</td><td>${marketingStatusTag(status)}</td><td>${escapeHtml(formatMarketingDateTime(marketingValue(job, "scheduledAt", "scheduled_at")))}</td><td>${action}</td></tr>`;
           }).join("") || `<tr><td colspan="5">暂无发布任务</td></tr>`;
           return `<style>
-            .marketing-direct{display:grid;gap:16px;max-width:1120px}.marketing-direct-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.marketing-direct-head h3{margin:0;font-size:20px}.marketing-direct-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.marketing-direct-kpi{padding:14px 16px;border-left:3px solid #17678f;background:#fff}.marketing-direct-kpi strong{display:block;font-size:24px;color:#152c46}.marketing-direct-kpi span{font-size:12px;color:var(--muted)}.marketing-direct-form{padding:20px}.marketing-direct-form textarea{min-height:88px}.marketing-creative-package{padding:20px}.marketing-creative-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.marketing-creative-item{border:1px solid #d7e3eb;padding:12px;background:#fff}.marketing-creative-item .toolbar{margin-bottom:8px}.marketing-creative-item pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6;max-height:260px;overflow:auto}.marketing-skill-note{display:block;min-height:34px;margin-top:6px;color:var(--muted);font-size:12px;line-height:1.45}.marketing-direct-review{border:1px solid #d7e3eb;background:#fff;padding:18px}.marketing-direct-review .toolbar{align-items:flex-start}.marketing-direct-review .toolbar>div{display:grid;gap:4px}.marketing-direct-review .toolbar span,.marketing-direct-note{font-size:12px;color:var(--muted)}.marketing-direct-plan{display:grid;gap:10px;margin:12px 0}.marketing-direct-plan div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;border-top:1px solid #edf2f5;padding-top:10px}.marketing-direct-plan dt{font-weight:700;color:#31526a}.marketing-direct-plan dd{margin:0;white-space:pre-wrap;line-height:1.6}.marketing-direct-preview{margin:12px 0}.marketing-direct-media{display:block;max-width:min(100%,540px);max-height:420px;border:1px solid #d7e3eb;background:#0e1d2b;object-fit:contain}.marketing-research-package{display:grid;gap:10px;padding:4px 0}.marketing-research-package>div{border-top:1px solid #edf2f5;padding-top:10px}.marketing-research-package p,.marketing-research-package pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6}@media(max-width:640px){.marketing-direct-head{display:grid}.marketing-direct-kpis,.marketing-creative-grid{grid-template-columns:1fr}.marketing-direct-plan div{grid-template-columns:1fr;gap:4px}}
+            .marketing-direct{display:grid;gap:16px;max-width:1120px}.marketing-direct-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.marketing-direct-head h3{margin:0;font-size:20px}.marketing-direct-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.marketing-direct-kpi{padding:14px 16px;border-left:3px solid #17678f;background:#fff}.marketing-direct-kpi strong{display:block;font-size:24px;color:#152c46}.marketing-direct-kpi span{font-size:12px;color:var(--muted)}.marketing-direct-form{padding:20px}.marketing-direct-form textarea{min-height:88px}.marketing-creative-package{padding:20px}.marketing-creative-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.marketing-creative-item{border:1px solid #d7e3eb;padding:12px;background:#fff}.marketing-creative-item .toolbar{margin-bottom:8px}.marketing-creative-item pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6;max-height:260px;overflow:auto}.marketing-skill-note{display:block;min-height:34px;margin-top:6px;color:var(--muted);font-size:12px;line-height:1.45}.marketing-direct-review{border:1px solid #d7e3eb;background:#fff;padding:18px}.marketing-direct-review .toolbar{align-items:flex-start}.marketing-direct-review .toolbar>div{display:grid;gap:4px}.marketing-direct-review .toolbar span,.marketing-direct-note{font-size:12px;color:var(--muted)}.marketing-direct-plan{display:grid;gap:10px;margin:12px 0}.marketing-direct-plan div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;border-top:1px solid #edf2f5;padding-top:10px}.marketing-direct-plan dt{font-weight:700;color:#31526a}.marketing-direct-plan dd{margin:0;white-space:pre-wrap;line-height:1.6}.marketing-direct-preview{margin:12px 0}.marketing-direct-media{display:block;max-width:min(100%,540px);max-height:420px;border:1px solid #d7e3eb;background:#0e1d2b;object-fit:contain}.marketing-research-package{display:grid;gap:10px;padding:4px 0}.marketing-research-package>div{border-top:1px solid #edf2f5;padding-top:10px}.marketing-research-package p,.marketing-research-package pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.6}@media(max-width:640px){.marketing-direct-head{display:grid}.marketing-direct-kpis,.marketing-creative-grid{grid-template-columns:1fr}.marketing-direct-plan div{grid-template-columns:1fr;gap:4px}}.marketing-skill-manager{padding:20px}.marketing-skill-manager textarea{min-height:120px}
           </style><div class="section-stack marketing-direct"><section class="marketing-direct-head"><div><h3>内容制作与发布</h3></div><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">刷新</button></section>${store.loadError ? `<section class="state-panel" data-state="error"><strong>内容数据暂时无法加载</strong><span>${escapeHtml(store.loadError)}</span><button class="btn ghost" type="button" onclick="refreshMarketingConsole()">重新加载</button></section>` : ""}<section class="marketing-direct-kpis"><article class="marketing-direct-kpi"><strong>${projects.length}</strong><span>可用项目</span></article><article class="marketing-direct-kpi"><strong>${accounts.length}</strong><span>可用抖音账号</span></article><article class="marketing-direct-kpi"><strong>${publishJobs.filter((job) => ["scheduled", "leased", "downloading", "queued", "running"].includes(String(marketingValue(job, "status", "status")))).length}</strong><span>进行中</span></article></section>${marketingCompetitorResearchPanel(projects, competitorCollectionJobs)}${marketingCreativePackagePanel(researchPackage)}<section class="card marketing-direct-form"><form id="marketing-direct-publish-form"><div class="form-grid"><label class="field"><span>项目</span><select name="projectId" required ${projects.length ? "" : "disabled"}>${marketingOptions(projects, "", (project) => marketingValue(project, "name", "name", "未命名项目"))}</select></label><label class="field"><span>内容形式</span><select name="contentType"><option value="video">视频</option><option value="image">图文</option></select></label><label class="field" style="grid-column:1/-1"><span>内容主题</span><textarea name="direction" required placeholder="填写本次想制作的内容主题"></textarea></label><label class="field"><span>发布账号</span><select name="executorAccountRef" required ${accounts.length ? "" : "disabled"}>${accounts.length ? marketingOptions(accounts, defaultAccountRef, (account) => account.label) : '<option value="">暂无可用账号</option>'}</select></label><label class="field"><span>发布时间</span><input name="scheduledAt" type="datetime-local" value="${escapeAttribute(defaultSchedule)}" required /></label></div><div class="error-text" id="marketing-direct-publish-error"></div><div class="toolbar"><span></span><button class="btn primary" type="submit" ${projects.length && accounts.length ? "" : "disabled"}>生成文案与提示词</button></div></form></section>${reviewRows ? `<section class="section-stack"><h3>待你确认</h3>${reviewRows}</section>` : ""}<section class="card"><div class="toolbar"><h3>发布状态</h3></div><div class="table-wrap compact"><table><thead><tr><th>平台</th><th>账号</th><th>状态</th><th>计划时间</th><th>操作</th></tr></thead><tbody>${jobRows}</tbody></table></div></section></div>`;
         }
 
@@ -15732,6 +15837,12 @@
           const form = document.getElementById("marketing-direct-publish-form");
           if (!form || form.dataset.bound === "true") return;
           form.dataset.bound = "true";
+          const skillButton = document.createElement("button");
+          skillButton.type = "button";
+          skillButton.className = "btn ghost";
+          skillButton.textContent = "上传/管理 Skill";
+          skillButton.addEventListener("click", () => openMarketingSkillManager());
+          form.parentElement?.insertBefore(skillButton, form);
           const contentTypeField = form.elements.namedItem("contentType");
           if (contentTypeField instanceof HTMLSelectElement && !form.elements.namedItem("modelCode")) {
             const modelField = document.createElement("label");
@@ -15830,16 +15941,24 @@
           bindMarketingDirectPublishForm();
         };
         marketingPage = function marketingPage() {
-          return marketingDirectPublishPage();
+          return marketingConsoleTabbedPage();
         };
 
         const previousRouteFromPath = routeFromPath;
         routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/marketing/skills")) return "marketingSkills";
           if (location.pathname.includes("/marketing")) return "marketing";
           return previousRouteFromPath();
         };
         const previousNavigate = navigate;
         navigate = function navigate(page) {
+          if (page === "marketingSkills") {
+            state.page = page;
+            history.pushState(null, "", "/admin/marketing/skills");
+            renderShell();
+            ensureAdminPageData(page).catch(() => undefined);
+            return;
+          }
           if (page !== "marketing") return previousNavigate(page);
           state.page = "marketing";
           history.pushState(null, "", "/admin/marketing");
@@ -15848,6 +15967,7 @@
         };
         const previousRenderPage = renderPage;
         renderPage = function renderPage() {
+          if (state.page === "marketingSkills") return marketingSkillsPage();
           if (state.page === "marketing") return marketingPage();
           return previousRenderPage();
         };
@@ -15855,7 +15975,7 @@
         renderShell = function renderShell() {
           previousRenderShell();
           const nav = document.querySelector(".nav");
-          if (!nav || !(state.session?.roles || []).includes("super_admin") || nav.querySelector('[data-page="marketing"]')) return;
+          if (!nav || !(state.session?.roles || []).includes("super_admin") || (nav.querySelector('[data-page="marketing"]') && nav.querySelector('[data-page="marketingSkills"]'))) return;
           const settingsButton = nav.querySelector('[data-page="settings"]');
           const button = document.createElement("button");
           button.dataset.page = "marketing";
@@ -15863,9 +15983,19 @@
           if (state.page === "marketing") button.classList.add("active");
           button.addEventListener("click", () => navigate("marketing"));
           nav.insertBefore(button, settingsButton);
+          const skillButton = document.createElement("button");
+          skillButton.dataset.page = "marketingSkills";
+          skillButton.innerHTML = "<span>Skill管理</span>";
+          if (state.page === "marketingSkills") skillButton.classList.add("active");
+          skillButton.addEventListener("click", () => navigate("marketingSkills"));
+          nav.insertBefore(skillButton, settingsButton);
           marketingBindForms();
         };
         ADMIN_PAGE_LOADERS.marketing = loadMarketingConsole;
+        ADMIN_PAGE_LOADERS.marketingSkills = async () => {
+          await loadMarketingSkills();
+          state.loadedPages.marketingSkills = true;
+        };
         window.approveMarketingKnowledgeDocument = approveMarketingKnowledgeDocument;
         window.approveMarketingTrendPattern = approveMarketingTrendPattern;
         window.approveMarketingContent = approveMarketingContent;
@@ -15885,6 +16015,10 @@
         window.selectMarketingWorkspacePanel = selectMarketingWorkspacePanel;
         window.openMarketingSettings = openMarketingSettings;
         window.openMarketingWorkspace = openMarketingWorkspace;
+        window.openMarketingSkillManager = openMarketingSkillManager;
+        window.saveMarketingSkill = saveMarketingSkill;
+        window.selectMarketingTab = selectMarketingTab;
+        window.marketingSkillsPage = marketingSkillsPage;
         window.syncMarketingContentKnowledgeSegments = syncMarketingContentKnowledgeSegments;
         window.syncMarketingPublishAssets = syncMarketingPublishAssets;
         window.toggleMarketingResearchPackage = toggleMarketingResearchPackage;
@@ -15951,6 +16085,47 @@
       window.geoSubmitReview = geoSubmitReview;
       window.geoPublishContent = geoPublishContent;
       window.geoSaveSettings = geoSaveSettings;
+
+      // Keep the Skill manager as a standalone admin route after all optional page modules load.
+      (function installStandaloneMarketingSkillsRoute() {
+        pages.marketingSkills = "Skill管理";
+        const previousRouteFromPath = routeFromPath;
+        routeFromPath = function routeFromPath() {
+          if (location.pathname.includes("/marketing/skills")) return "marketingSkills";
+          return previousRouteFromPath();
+        };
+        const previousNavigate = navigate;
+        navigate = function navigate(page) {
+          if (page !== "marketingSkills") return previousNavigate(page);
+          state.page = "marketingSkills";
+          history.pushState(null, "", "/admin/marketing/skills");
+          renderShell();
+          ensureAdminPageData("marketingSkills").catch(() => undefined);
+        };
+        const previousRenderPage = renderPage;
+        renderPage = function renderPage() {
+          if (state.page === "marketingSkills" && typeof window.marketingSkillsPage === "function") return window.marketingSkillsPage();
+          return previousRenderPage();
+        };
+        const previousRenderShell = renderShell;
+        renderShell = function renderShell() {
+          previousRenderShell();
+          const nav = document.querySelector(".nav");
+          if (!nav || !(state.session?.roles || []).includes("super_admin")) return;
+          nav.querySelector('[data-page="marketingSkills"]')?.remove();
+          const settingsButton = nav.querySelector('[data-page="settings"]');
+          if (!nav.querySelector('[data-page="marketing"]')) {
+            const marketingButton = document.createElement("button");
+            marketingButton.dataset.page = "marketing";
+            marketingButton.innerHTML = "<span>营销中台</span>";
+            marketingButton.addEventListener("click", () => { marketingState().activeTab = "content"; navigate("marketing"); });
+            nav.insertBefore(marketingButton, settingsButton);
+          }
+          nav.querySelectorAll('[data-page="marketing"]').forEach((button) => {
+            button.classList.toggle("active", button.dataset.page === state.page);
+          });
+        };
+      })();
 
       function stripAdminReasonFields(root = document) {
         const forms = new Set();

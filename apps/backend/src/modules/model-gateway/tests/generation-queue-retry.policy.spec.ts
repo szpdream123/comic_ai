@@ -7,6 +7,7 @@ import {
   isUnrecoverableGenerationQueueError,
   isGenerationQueueTerminalStateNoopError,
   runGenerationQueueJobWithRetryPolicy,
+  shouldKeepGenerationDeadLetter,
   shouldSettleGenerationTaskAfterQueueError,
 } from "../generation-queue-retry.policy.ts";
 
@@ -43,6 +44,14 @@ describe("generation queue retry policy", () => {
     assert.equal(shouldSettleGenerationTaskAfterQueueError(new Error("task_finalization_state_conflict"), 1, 3), true);
     assert.equal(shouldSettleGenerationTaskAfterQueueError(new Error("provider temporarily unavailable"), 1, 3), false);
     assert.equal(shouldSettleGenerationTaskAfterQueueError(new Error("provider temporarily unavailable"), 3, 3), true);
+  });
+
+  it("does not retain a dead letter when task or provider is terminal", () => {
+    assert.equal(shouldKeepGenerationDeadLetter("failed", "failed"), false);
+    assert.equal(shouldKeepGenerationDeadLetter("canceled", "running"), false);
+    assert.equal(shouldKeepGenerationDeadLetter("manual_review_required", "failed"), false);
+    assert.equal(shouldKeepGenerationDeadLetter("manual_review_required", "running"), true);
+    assert.equal(shouldKeepGenerationDeadLetter("running", null), true);
   });
 
   it("treats late terminal-state jobs as successful no-ops", async () => {

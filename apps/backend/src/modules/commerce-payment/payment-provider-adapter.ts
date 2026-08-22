@@ -115,6 +115,8 @@ export interface NormalizedPaymentEvent {
   providerTradeId: string;
   eventType: PaymentEventType;
   amountMinor: number;
+  /** Provider-reported discount applied to the order (for example, card/bank promotion). */
+  discountAmountMinor?: number;
   currency: "CNY";
   providerEventDedupKey: string;
   rawPayloadHash: string;
@@ -128,6 +130,7 @@ export interface NormalizedPaymentStatus {
   status: "pending" | "succeeded" | "failed" | "closed" | "expired" | "unknown" | "not_found";
   providerTradeId?: string;
   amountMinor?: number;
+  discountAmountMinor?: number;
   currency?: "CNY";
   providerPayloadHash: string;
   providerSafeMetadata: Record<string, unknown>;
@@ -679,7 +682,12 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
       const tradeState = stringField(transaction, "trade_state");
       const transactionId = stringField(transaction, "transaction_id") ?? merchantOrderNo;
       const amount = recordField(transaction, "amount");
-      const payerTotal = numberField(amount ?? {}, "payer_total") ?? numberField(amount ?? {}, "total");
+      const totalAmount = numberField(amount ?? {}, "total");
+      const payerTotal = numberField(amount ?? {}, "payer_total") ?? totalAmount;
+      const discountAmountMinor =
+        totalAmount !== undefined && payerTotal !== undefined && totalAmount > payerTotal
+          ? totalAmount - payerTotal
+          : undefined;
       const currency = stringField(amount ?? {}, "currency") ?? "CNY";
       if (!merchantOrderNo || !transactionId || !payerTotal || currency !== "CNY") {
         return null;
@@ -691,6 +699,7 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
         providerTradeId: transactionId,
         eventType: wechatTradeStateEventType(tradeState),
         amountMinor: payerTotal,
+        ...(discountAmountMinor !== undefined ? { discountAmountMinor } : {}),
         currency: "CNY",
         providerEventDedupKey:
           stringField(body, "id") ??
@@ -703,6 +712,8 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
           wechatEventType: stringField(body, "event_type"),
           tradeState,
           tradeType: stringField(transaction, "trade_type"),
+          providerTotalAmountMinor: totalAmount,
+          providerDiscountAmountMinor: discountAmountMinor,
         },
       };
     },
@@ -740,10 +751,17 @@ export function createWechatPayAdapter(config: WechatPayAdapterConfig): PaymentP
       }
 
       const amount = recordField(response.body, "amount");
+      const totalAmount = numberField(amount ?? {}, "total");
+      const payerTotal = numberField(amount ?? {}, "payer_total") ?? totalAmount;
+      const discountAmountMinor =
+        totalAmount !== undefined && payerTotal !== undefined && totalAmount > payerTotal
+          ? totalAmount - payerTotal
+          : undefined;
       return {
         status: wechatPaymentStatus(stringField(response.body, "trade_state")),
         providerTradeId: stringField(response.body, "transaction_id"),
-        amountMinor: numberField(amount ?? {}, "payer_total") ?? numberField(amount ?? {}, "total"),
+        amountMinor: payerTotal,
+        ...(discountAmountMinor !== undefined ? { discountAmountMinor } : {}),
         currency: stringField(amount ?? {}, "currency") === "CNY" ? "CNY" : undefined,
         providerPayloadHash: hashJson(response.body),
         providerSafeMetadata: {
@@ -888,10 +906,16 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
       if (!merchantOrderNo || !tradeNo || !totalAmount) {
         return null;
       }
-      const amountMinor = Math.round(Number(totalAmount) * 100);
-      if (!Number.isFinite(amountMinor)) {
+      const totalAmountMinor = Math.round(Number(totalAmount) * 100);
+      const payerAmountMinor = params.buyer_pay_amount
+        ? Math.round(Number(params.buyer_pay_amount) * 100)
+        : totalAmountMinor;
+      if (payerAmountMinor === undefined || !Number.isFinite(payerAmountMinor)) {
         return null;
       }
+      const amountMinor = payerAmountMinor;
+      const discountAmountMinor =
+        totalAmountMinor > payerAmountMinor ? totalAmountMinor - payerAmountMinor : undefined;
 
       return {
         provider: "alipay",
@@ -899,6 +923,7 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
         providerTradeId: tradeNo,
         eventType: alipayTradeStatusEventType(params.trade_status),
         amountMinor,
+        ...(discountAmountMinor !== undefined ? { discountAmountMinor } : {}),
         currency: "CNY",
         providerEventDedupKey: params.notify_id ?? `${merchantOrderNo}:${tradeNo}:${params.trade_status ?? "unknown"}`,
         rawPayloadHash: createHash("sha256").update(rawBodyToString(rawBody)).digest("hex"),
@@ -909,6 +934,8 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
           tradeStatus: params.trade_status,
           buyerId: params.buyer_id,
           appId: params.app_id,
+          providerTotalAmountMinor: totalAmountMinor,
+          providerDiscountAmountMinor: discountAmountMinor,
         },
       };
     },
@@ -946,10 +973,17 @@ export function createAlipayAdapter(config: AlipayAdapterConfig): PaymentProvide
         };
       }
       const payload = recordField(response.body, "alipay_trade_query_response") ?? response.body;
+      const totalAmountMinor = amountStringToMinor(stringField(payload, "total_amount"));
+      const payerAmountMinor = amountStringToMinor(stringField(payload, "buyer_pay_amount")) ?? totalAmountMinor;
+      const discountAmountMinor =
+        totalAmountMinor !== undefined && payerAmountMinor !== undefined && totalAmountMinor > payerAmountMinor
+          ? totalAmountMinor - payerAmountMinor
+          : undefined;
       return {
         status: alipayPaymentStatus(stringField(payload, "trade_status")),
         providerTradeId: stringField(payload, "trade_no"),
-        amountMinor: amountStringToMinor(stringField(payload, "total_amount")),
+        amountMinor: payerAmountMinor,
+        ...(discountAmountMinor !== undefined ? { discountAmountMinor } : {}),
         currency: "CNY",
         providerPayloadHash: hashJson(response.body),
         providerSafeMetadata: {

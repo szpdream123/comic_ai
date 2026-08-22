@@ -252,6 +252,7 @@ export function createStoryboardList(state) {
     episodeId: shot.episodeId ?? null,
     description: shot.description || shot.title,
     previewImageUrl: shot.previewImageUrl ? resolveApiUrl(shot.previewImageUrl) : null,
+    previewImageStorageObjectId: shot.previewImageStorageObjectId ?? shot.currentImageStorageObjectId ?? null,
     previewVideo:
       (shot.previewVideoUrl ? resolveApiUrl(shot.previewVideoUrl) : null) ||
       resolveVideoVersionSource(
@@ -271,6 +272,7 @@ export function createStoryboardList(state) {
     uploadedImages: (shot.imageVersions ?? []).map((version) => ({
       id: version.id,
       deleteAssetId: version.id,
+      storageObjectId: version.storageObjectId ?? version.metadata?.storageObjectId ?? null,
       fileName: version.metadata?.label ?? "image",
       src: resolveImageVersionSource(version),
       status: "ready",
@@ -288,7 +290,9 @@ export function createStoryboardList(state) {
       createdAt: Date.parse(version.createdAt ?? "") || Date.now(),
     })),
     currentImageAssetVersionId: shot.currentImageAssetVersionId ?? null,
+    currentImageStorageObjectId: shot.currentImageStorageObjectId ?? null,
     currentVideoAssetVersionId: shot.currentVideoAssetVersionId ?? null,
+    currentVideoStorageObjectId: shot.currentVideoStorageObjectId ?? null,
     selectedUploadedVideoId: shot.currentVideoAssetVersionId ?? null,
     previewThumbnailUrl:
       resolveVideoVersionThumbnail(

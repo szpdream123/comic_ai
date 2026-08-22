@@ -278,7 +278,7 @@ describe("production workbench task center", () => {
 
     assert.match(html, /存储超时，正在重试/);
     assert.match(html, /存储失败，等待人工处理/);
-    assert.match(html, /供应商已完成生成/);
+    assert.match(html, /生成已完成/);
     assert.match(html, /第 3 轮/);
     assert.match(html, /下次恢复/);
     assert.doesNotMatch(html, /task-storage-retry[^]*生成中/);

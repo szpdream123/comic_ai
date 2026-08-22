@@ -392,6 +392,13 @@ export async function repairQueuedGenerationTaskOutbox(
             AND oe.status IN ('pending', 'processing', 'failed')
           LIMIT 1
         )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM generation_queue_stage_assignments active_assignment
+          WHERE active_assignment.task_id = t.id
+            AND active_assignment.stage = 'submit'
+            AND active_assignment.status IN ('publishing', 'admitted')
+        )
       ORDER BY t.scheduled_at ASC, t.id ASC
       LIMIT $3
     `,
@@ -681,7 +688,7 @@ async function markExpiredGenerationSubmitLeaseResultUnknown(
       providerRequestId: input.providerRequestId,
       failure: {
         failureCode: "lease_expired_after_external_start",
-        displayMessage: "供应商请求已经开始，但当前缺少可恢复的轮询信息，需要后台复核。",
+        displayMessage: "生成请求已经开始，但当前缺少可恢复的处理信息，需要后台复核。",
       },
       now: input.now,
     });

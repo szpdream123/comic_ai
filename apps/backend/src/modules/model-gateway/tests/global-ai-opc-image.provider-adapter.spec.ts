@@ -166,6 +166,114 @@ describe("GlobalAiOpc image provider adapter", () => {
     );
   });
 
+  it("builds Seedream 5.0 requests with the documented Model Center fields", () => {
+    assert.deepEqual(
+      buildGlobalAiOpcImagePayload({
+        providerRequestId: "provider-request-seedream-5",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-seedream-5:task-seedream-5",
+        payloadRef: "creator://payload-seedream-5",
+        payloadHash: "hash-seedream-5",
+        redactedPayload: {
+          prompt: "A cinematic comic panel",
+          parameters: {
+            quality: "4k",
+            aspectRatio: "16:9",
+            size: "3840x2160",
+            watermark: true,
+            referenceImages: [{ url: "https://example.com/seedream-reference.png" }],
+          },
+        },
+      }, {
+        model: "seedream-5.0",
+        requestFormat: "global_ai_opc_model_center_seedream_image",
+      }),
+      {
+        model: "seedream-5.0",
+        prompt: "A cinematic comic panel",
+        reference_images: ["https://example.com/seedream-reference.png"],
+        aspect_ratio: "16:9",
+        resolution: "4K",
+        size: "3840x2160",
+        watermark: true,
+      },
+    );
+  });
+
+  it("limits Seedream 5.0 Pro to its documented resolution fields", () => {
+    assert.deepEqual(
+      buildGlobalAiOpcImagePayload({
+        providerRequestId: "provider-request-seedream-5-pro",
+        providerName: "GlobalAiOpc",
+        providerOperation: "shot.image.generate",
+        requestKey: "workflow-seedream-5-pro:task-seedream-5-pro",
+        payloadRef: "creator://payload-seedream-5-pro",
+        payloadHash: "hash-seedream-5-pro",
+        redactedPayload: {
+          prompt: "A character key visual",
+          parameters: {
+            resolution: "4K",
+            aspectRatio: "3:4",
+            size: "2048x2048",
+          },
+        },
+      }, {
+        model: "seedream_5.0Pro",
+        requestFormat: "global_ai_opc_model_center_seedream_image",
+        defaultRequestParams: { resolution: "2K", watermark: false },
+      }),
+      {
+        model: "seedream_5.0Pro",
+        prompt: "A character key visual",
+        aspect_ratio: "3:4",
+        resolution: "2K",
+        watermark: false,
+      },
+    );
+  });
+
+  it("uses the Model Center v2 endpoints for Seedream tasks", async () => {
+    const capturedUrls: string[] = [];
+    const adapter = new GlobalAiOpcImageProviderAdapter({
+      apiKey: "global-ai-opc-key",
+      model: "seedream_5.0Pro",
+      requestFormat: "global_ai_opc_model_center_seedream_image",
+      fetchImpl: (async (url, init) => {
+        capturedUrls.push(String(url));
+        if (String(init?.method ?? "GET").toUpperCase() === "POST") {
+          return new Response(JSON.stringify({ id: "seedream_task_1", status: "queued" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({
+          id: "seedream_task_1",
+          status: "completed",
+          result_url: "https://cdn.global-ai-opc.example/seedream.png",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+    });
+
+    const submitted = await adapter.submit({
+      providerRequestId: "provider-request-seedream-endpoints",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.image.generate",
+      requestKey: "workflow-seedream-endpoints:task-seedream-endpoints",
+      payloadRef: "creator://payload-seedream-endpoints",
+      payloadHash: "hash-seedream-endpoints",
+      redactedPayload: { prompt: "A moonlit city" },
+    });
+    const polled = await adapter.poll!({ externalRequestId: submitted.externalRequestId });
+
+    assert.deepEqual(capturedUrls, [
+      "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks",
+      "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks/seedream_task_1",
+    ]);
+    assert.equal(polled.status, "succeeded");
+    assert.equal(polled.artifacts?.[0]?.url, "https://cdn.global-ai-opc.example/seedream.png");
+  });
+
   it("submits and polls GlobalAiOpc image tasks until completion", async () => {
     const capturedUrls: string[] = [];
     let capturedCreateBody = "";

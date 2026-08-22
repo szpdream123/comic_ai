@@ -196,6 +196,7 @@ export interface PaymentCallbackSignatureInput {
   providerTradeId: string;
   eventType: PaymentEventType;
   amountMinor: number;
+  discountAmountMinor?: number;
   currency: string;
   merchantId: string;
 }
@@ -912,6 +913,8 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           order: paidOrder,
           paymentIntentId: joined.payment_intent_id,
           providerEventId: providerEvent.id,
+          paidAmountMinor: body.amountMinor,
+          discountAmountMinor: body.discountAmountMinor,
           now: input.now,
         });
 
@@ -982,6 +985,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           providerTradeId: event.providerTradeId,
           eventType: event.eventType,
           amountMinor: event.amountMinor,
+          discountAmountMinor: event.discountAmountMinor,
           currency: event.currency,
           providerEventDedupKey: event.providerEventDedupKey,
           orderNo: joined?.order_no ?? null,
@@ -993,6 +997,7 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
           providerTradeId: event.providerTradeId,
           eventType: event.eventType,
           amountMinor: event.amountMinor,
+          discountAmountMinor: event.discountAmountMinor,
           currency: event.currency,
           providerEventDedupKey: event.providerEventDedupKey,
           providerAccountRef: event.providerAccountRef ?? null,
@@ -1025,6 +1030,9 @@ export function createCommercePaymentService(deps: CommercePaymentServiceDeps) {
         providerTradeId: event.providerTradeId,
         eventType: event.eventType,
         amountMinor: event.amountMinor,
+        ...(event.discountAmountMinor !== undefined
+          ? { discountAmountMinor: event.discountAmountMinor }
+          : {}),
         currency: event.currency,
         merchantId: event.providerAccountRef ?? merchantId,
       };
@@ -1758,8 +1766,7 @@ function reconciliationIssueType(
 ): PaymentReconciliationItemRow["issue_type"] {
   if (
     providerStatus.status === "succeeded" &&
-    ((providerStatus.amountMinor !== undefined &&
-      providerStatus.amountMinor !== intent.amount_minor) ||
+    (!providerStatusAmountMatchesIntent(intent, providerStatus) ||
       (providerStatus.currency !== undefined &&
         providerStatus.currency !== intent.currency))
   ) {
@@ -1797,10 +1804,7 @@ function providerStatusMatchesIntentFacts(
   intent: PaymentIntentRow,
   providerStatus: NormalizedPaymentStatus,
 ) {
-  if (
-    providerStatus.amountMinor !== undefined &&
-    providerStatus.amountMinor !== intent.amount_minor
-  ) {
+  if (!providerStatusAmountMatchesIntent(intent, providerStatus)) {
     return false;
   }
   if (
@@ -1817,6 +1821,23 @@ function providerStatusMatchesIntentFacts(
     return false;
   }
   return true;
+}
+
+function providerStatusAmountMatchesIntent(
+  intent: PaymentIntentRow,
+  providerStatus: NormalizedPaymentStatus,
+) {
+  if (providerStatus.amountMinor === undefined) {
+    return true;
+  }
+  if (providerStatus.amountMinor === intent.amount_minor) {
+    return true;
+  }
+  return (
+    providerStatus.discountAmountMinor !== undefined &&
+    providerStatus.discountAmountMinor > 0 &&
+    providerStatus.amountMinor + providerStatus.discountAmountMinor === intent.amount_minor
+  );
 }
 
 function paymentCallbackBodyForReconciliation(input: {
@@ -1846,6 +1867,9 @@ function paymentCallbackBodyForReconciliation(input: {
     providerTradeId,
     eventType,
     amountMinor,
+    ...(input.providerStatus.discountAmountMinor !== undefined
+      ? { discountAmountMinor: input.providerStatus.discountAmountMinor }
+      : {}),
     currency,
     merchantId: input.merchantId,
   };
@@ -1914,6 +1938,8 @@ function parsePaymentCallbackBody(payload: unknown): PaymentCallbackBody | null 
     !isNonEmptyString(value.providerTradeId) ||
     !Number.isInteger(value.amountMinor) ||
     value.amountMinor <= 0 ||
+    (value.discountAmountMinor !== undefined &&
+      (!Number.isInteger(value.discountAmountMinor) || value.discountAmountMinor < 0)) ||
     value.currency !== "CNY" ||
     !isNonEmptyString(value.merchantId) ||
     !isNonEmptyString(value.signature)
@@ -1928,6 +1954,9 @@ function parsePaymentCallbackBody(payload: unknown): PaymentCallbackBody | null 
     providerTradeId: value.providerTradeId,
     eventType: value.eventType,
     amountMinor: value.amountMinor,
+    ...(value.discountAmountMinor !== undefined
+      ? { discountAmountMinor: value.discountAmountMinor }
+      : {}),
     currency: value.currency,
     merchantId: value.merchantId,
     signature: value.signature,
@@ -2074,6 +2103,7 @@ async function createCallbackRiskResponse(
           input.originalProviderEventDedupKey ?? input.body.providerEventDedupKey,
         merchantOrderNo: input.body.merchantOrderNo,
         callbackAmountMinor: input.body.amountMinor,
+        callbackDiscountAmountMinor: input.body.discountAmountMinor,
         callbackCurrency: input.body.currency,
       },
       now: input.now,
@@ -2153,13 +2183,27 @@ function callbackMismatch(
   if (body.merchantId !== expectedMerchantId) {
     return "merchant_mismatch";
   }
-  if (body.amountMinor !== joined.amount_minor) {
+  if (!callbackAmountMatchesOrder(body, joined.amount_minor)) {
     return "amount_mismatch";
   }
   if (body.currency !== joined.currency) {
     return "currency_mismatch";
   }
   return null;
+}
+
+function callbackAmountMatchesOrder(
+  body: PaymentCallbackSignatureInput,
+  expectedAmountMinor: number,
+) {
+  if (body.amountMinor === expectedAmountMinor) {
+    return true;
+  }
+  return (
+    body.discountAmountMinor !== undefined &&
+    body.discountAmountMinor > 0 &&
+    body.amountMinor + body.discountAmountMinor === expectedAmountMinor
+  );
 }
 
 function paymentIntentStatusForCallbackEvent(
@@ -2652,6 +2696,7 @@ async function insertProviderEventOnce(
         merchantOrderNo: input.body.merchantOrderNo,
         providerTradeId: input.body.providerTradeId,
         amountMinor: input.body.amountMinor,
+        discountAmountMinor: input.body.discountAmountMinor,
         currency: input.body.currency,
         merchantId: input.body.merchantId,
       }),
@@ -2804,6 +2849,8 @@ async function appendPaymentSucceededOutboxEvent(
     order: BillingOrderRow;
     paymentIntentId: string;
     providerEventId: string;
+    paidAmountMinor: number;
+    discountAmountMinor?: number;
     now: Date;
   },
 ) {
@@ -2830,6 +2877,10 @@ async function appendPaymentSucceededOutboxEvent(
         payment_intent_id: input.paymentIntentId,
         payment_provider_event_id: input.providerEventId,
         amount_minor: input.order.amount_minor,
+        paid_amount_minor: input.paidAmountMinor,
+        ...(input.discountAmountMinor !== undefined
+          ? { discount_amount_minor: input.discountAmountMinor }
+          : {}),
         currency: input.order.currency,
       }),
       input.now,
@@ -2983,7 +3034,7 @@ function hashJson(value: unknown) {
 }
 
 function callbackSignatureBase(input: PaymentCallbackSignatureInput) {
-  return [
+  const fields = [
     input.provider,
     input.providerEventDedupKey,
     input.merchantOrderNo,
@@ -2992,7 +3043,11 @@ function callbackSignatureBase(input: PaymentCallbackSignatureInput) {
     input.amountMinor,
     input.currency,
     input.merchantId,
-  ].join("|");
+  ];
+  if (input.discountAmountMinor !== undefined) {
+    fields.splice(6, 0, input.discountAmountMinor);
+  }
+  return fields.join("|");
 }
 
 function createOrderNo(now: Date) {

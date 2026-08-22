@@ -143,7 +143,7 @@ export async function processAudioGenerationSubmitJob(
         taskId: row.task_id,
         expectedAttemptId: claim.attempt.id,
         failureCode,
-        displayMessage: "检测到历史供应商请求仍在执行，当前任务已停止自动处理并等待后台复核。",
+        displayMessage: "检测到历史生成请求仍在执行，当前任务已停止自动处理并等待后台复核。",
         creditOutcome: "manual_review_required",
         now: input.now,
       });
@@ -155,7 +155,7 @@ export async function processAudioGenerationSubmitJob(
           failure: {
             failureCode,
             historicalProviderRequestId: submitted.request.id,
-            displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+            displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
           },
           creditSummary: {
             reserved: Number(row.amount_reserved ?? 0),
@@ -838,31 +838,6 @@ export async function expireAudioGenerationPollJob(
       redactedResponse: timeoutResponse,
       now: input.now,
     });
-    if (provider.status === "result_unknown") {
-      await markAudioTaskResultUnknown(db, {
-        row,
-        failureCode,
-        providerRequestId: row.provider_request_id,
-        metadata: timeoutResponse,
-        now: input.now,
-      });
-      await markGenerationTaskSnapshotResultUnknown(db, {
-        taskId: row.task_id,
-        attemptId: row.attempt_id,
-        providerRequestId: row.provider_request_id,
-        providerStatus: timeoutResponse,
-        failure: {
-          failureCode,
-          displayMessage: "音频生成已超过自动轮询窗口，但供应商终态尚未确认。系统将继续后台复核，积分保持预留。",
-        },
-        creditSummary: {
-          reserved: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
-          settledAt: input.now.toISOString(),
-        },
-        now: input.now,
-      });
-      return { status: "failed" as const, failureCode: "audio_provider_poll_timeout" as const };
-    }
     if (provider.status === "succeeded") {
       return { status: "failed" as const, failureCode: "audio_provider_poll_timeout" as const };
     }
@@ -890,7 +865,7 @@ export async function expireAudioGenerationPollJob(
     taskId: row.task_id,
     expectedAttemptId: row.attempt_id,
     failureCode,
-    displayMessage: "音频生成超过 1 小时仍未返回结果，已按失败处理并返还积分。请重新发起生成。",
+    displayMessage: "生成超时，请重新处理生成。",
     now: input.now,
   });
   return { status: "failed" as const, failureCode: "audio_provider_poll_timeout" as const };

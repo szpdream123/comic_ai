@@ -1,3 +1,4 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
 import { upsertCanvasPromptReference } from "../production-workbench/canvas/canvas-prompt-reference.js";
 import { resolveCanvasModelOptions } from "../production-workbench/canvas/canvas-state.js";
 
@@ -570,4 +571,4 @@ function formatBytes(value) {
 }
 
 function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;"); }
-function escapeAttr(value) { return escapeHtml(value).replaceAll("`", "&#96;"); }
+function escapeAttr(value) { return escapeHtml(resolveStaticAssetUrl(value)).replaceAll("`", "&#96;"); }

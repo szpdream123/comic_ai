@@ -1,3 +1,5 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
+
 const TOOLBOX_TOOLS = [
   {
     id: "prompt-reverse",
@@ -1255,5 +1257,5 @@ function escapeHtml(value) {
 }
 
 function escapeAttr(value) {
-  return escapeHtml(value);
+  return escapeHtml(resolveStaticAssetUrl(value));
 }

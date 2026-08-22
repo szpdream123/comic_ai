@@ -6,8 +6,22 @@ import {
   GlobalAiOpcVideoProviderAdapter,
 } from "../global-ai-opc-video.provider-adapter.ts";
 import { createProviderAdapterFromModelConfig } from "../provider-adapter.factory.ts";
+import { shouldPrepareGlobalAiOpcVideoMaterials } from "../seedance-video.worker.ts";
 
 describe("GlobalAiOpc video provider adapter", () => {
+  it("prepares MiniMax materials without waiting for ACTIVE status", () => {
+    assert.equal(shouldPrepareGlobalAiOpcVideoMaterials({
+      providerProtocol: "globalaiopc_video",
+      providerModel: "MiniMax-H3-768p",
+      providerConfig: { requestFormat: "globalaiopc_model_center_video" },
+    }), true);
+    assert.equal(shouldPrepareGlobalAiOpcVideoMaterials({
+      providerProtocol: "globalaiopc_video",
+      providerModel: "KlingO3",
+      providerConfig: { requestFormat: "globalaiopc_model_center_video" },
+    }), true);
+  });
+
   it("ignores requestTimeoutMs and uses the fixed video timeout", async () => {
     const timeoutCalls: number[] = [];
     const originalSetTimeout = globalThis.setTimeout;
@@ -248,6 +262,100 @@ describe("GlobalAiOpc video provider adapter", () => {
     }
   });
 
+  it("uses the Seedance 2.5 special model id and sends resolution separately", () => {
+    for (const resolution of ["720p", "1080p"] as const) {
+      for (const model of ["sd_2.5_special", "sd_2.5_special_v1"] as const) {
+        const request = buildGlobalAiOpcVideoPayload({
+          providerRequestId: `provider-request-seedance-25-special-${model}-${resolution}`,
+          providerName: "GlobalAiOpc",
+          providerOperation: "shot.video.generate",
+          requestKey: `workflow-global-video:seedance-25-special-${model}-${resolution}`,
+          payloadRef: `creator://seedance-25-special-${model}-${resolution}`,
+          payloadHash: `hash-seedance-25-special-${model}-${resolution}`,
+          redactedPayload: {
+            prompt: "A cinematic shot",
+            parameters: { resolution },
+          },
+        }, { model, requestFormat: "globalaiopc_model_center_video" });
+
+        assert.equal(request.model, "sd_2.5_special_v1");
+        assert.equal(request.resolution, resolution);
+      }
+    }
+
+    const defaulted = buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-seedance-25-special-default",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:seedance-25-special-default",
+      payloadRef: "creator://seedance-25-special-default",
+      payloadHash: "hash-seedance-25-special-default",
+      redactedPayload: { prompt: "A cinematic shot" },
+    }, { model: "sd_2.5_special_v1", requestFormat: "globalaiopc_model_center_video" });
+
+    assert.equal(defaulted.model, "sd_2.5_special_v1");
+    assert.equal(defaulted.resolution, "720p");
+  });
+
+  it("sends Seedance 2.5 special reference mode without conflicting frame fields", () => {
+    const request = buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-seedance-25-reference-mode",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:seedance-25-reference-mode",
+      payloadRef: "creator://seedance-25-reference-mode",
+      payloadHash: "hash-seedance-25-reference-mode",
+      redactedPayload: {
+        prompt: "A short reference-guided shot",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        parameters: {
+          mode: "reference-video",
+          durationSec: 4,
+          resolution: "720p",
+          aspectRatio: "16:9",
+          filePaths: [
+            "https://cdn.example.com/first.png",
+            "https://cdn.example.com/character.png",
+          ],
+          firstFrame: { url: "https://cdn.example.com/first.png" },
+          imageReference: { url: "https://cdn.example.com/first.png" },
+        },
+      },
+    }, { model: "sd_2.5_special_v1", requestFormat: "globalaiopc_model_center_video" });
+
+    assert.equal(request.model, "sd_2.5_special_v1");
+    assert.equal(request.duration, 5);
+    assert.deepEqual(request.reference_images, [
+      "https://cdn.example.com/first.png",
+      "https://cdn.example.com/character.png",
+    ]);
+    assert.equal(request.first_image, undefined);
+    assert.equal(request.last_image, undefined);
+  });
+
+  it("never emits frame fields for Seedance 2.5 special Model Center requests", () => {
+    const request = buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-seedance-25-frame-compat",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:seedance-25-frame-compat",
+      payloadRef: "creator://seedance-25-frame-compat",
+      payloadHash: "hash-seedance-25-frame-compat",
+      redactedPayload: {
+        prompt: "A reference-guided shot",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        lastFrameUrl: "https://cdn.example.com/last.png",
+        parameters: {
+          filePaths: ["https://cdn.example.com/character.png"],
+        },
+      },
+    }, { model: "sd_2.5_special_v1", requestFormat: "globalaiopc_model_center_video" });
+
+    assert.deepEqual(request.reference_images, ["https://cdn.example.com/character.png"]);
+    assert.equal(request.first_image, undefined);
+    assert.equal(request.last_image, undefined);
+  });
+
   it("requires reference video content for Seedance 2.0 video-reference groups", () => {
     assert.throws(
       () => buildGlobalAiOpcVideoPayload({
@@ -309,6 +417,72 @@ describe("GlobalAiOpc video provider adapter", () => {
     );
   });
 
+  it("builds Wan2.7 R2V Model Center requests with reference_images only", () => {
+    const request = buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-wan27-r2v",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:wan27-r2v",
+      payloadRef: "creator://wan27-r2v",
+      payloadHash: "hash-wan27-r2v",
+      redactedPayload: {
+        prompt: "A cinematic shot",
+        firstFrameUrl: "https://cdn.example.com/reference.png",
+        parameters: {
+          durationSec: 5,
+          aspectRatio: "16:9",
+          resolution: "1080P",
+          referenceImages: [{ url: "https://cdn.example.com/character.png" }],
+        },
+      },
+    }, { model: "wan2.7-r2v", requestFormat: "globalaiopc_model_center_video" });
+
+    assert.equal(request.model, "wan2.7-r2v");
+    assert.deepEqual(request.reference_images, [
+      "https://cdn.example.com/reference.png",
+      "https://cdn.example.com/character.png",
+    ]);
+    assert.equal(request.duration, 5);
+    assert.equal(request.resolution, "1080P");
+    assert.equal(request.first_image, undefined);
+    assert.equal(request.last_image, undefined);
+  });
+
+  it("builds Kling O3 Model Center requests without first or last frame fields", () => {
+    const request = buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-kling-o3",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:kling-o3",
+      payloadRef: "creator://kling-o3",
+      payloadHash: "hash-kling-o3",
+      redactedPayload: {
+        prompt: "A cinematic shot",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        lastFrameUrl: "https://cdn.example.com/last.png",
+        parameters: {
+          durationSec: 6,
+          aspectRatio: "16:9",
+          resolution: "720p",
+          referenceImages: [{ url: "https://cdn.example.com/reference.png" }],
+          referenceVideos: [{ url: "https://cdn.example.com/reference.mp4" }],
+          referenceAudio: { url: "https://cdn.example.com/reference.mp3" },
+          generateAudio: false,
+          referenceMode: "frame",
+        },
+      },
+    }, { model: "KlingO3", requestFormat: "globalaiopc_model_center_video" });
+
+    assert.equal(request.model, "KlingO3");
+    assert.equal(request.first_image, undefined);
+    assert.equal(request.last_image, undefined);
+    assert.deepEqual(request.reference_images, ["https://cdn.example.com/reference.png"]);
+    assert.equal(request.reference_videos, undefined);
+    assert.equal(request.reference_audios, undefined);
+    assert.equal(request.reference_mode, "image");
+    assert.equal(request.generate_audio, false);
+  });
+
   it("accepts documented GlobalAiOpc assetId references", () => {
     assert.deepEqual(buildGlobalAiOpcVideoPayload({
       providerRequestId: "provider-request-seedance-asset",
@@ -331,7 +505,7 @@ describe("GlobalAiOpc video provider adapter", () => {
     });
   });
 
-  it("keeps MiniMax references separate from explicit frame mode", () => {
+  it("builds MiniMax H3 768p requests with documented reference fields", () => {
     const input = {
       providerRequestId: "provider-request-minimax-h3",
       providerName: "GlobalAiOpc",
@@ -340,7 +514,7 @@ describe("GlobalAiOpc video provider adapter", () => {
       payloadRef: "creator://minimax-h3",
       payloadHash: "hash-minimax-h3",
     };
-    const config = { model: "MiniMax-H3-c4", requestFormat: "globalaiopc_model_center_video" };
+    const config = { model: "MiniMax-H3-768p", requestFormat: "globalaiopc_model_center_video" };
 
     assert.deepEqual(buildGlobalAiOpcVideoPayload({
       ...input,
@@ -351,17 +525,17 @@ describe("GlobalAiOpc video provider adapter", () => {
           referenceAudio: { url: "https://cdn.example.com/voice.mp3" },
           durationSec: 10,
           aspectRatio: "9:16",
-          resolution: "1440P",
+          resolution: "768p",
         },
       },
     }, config), {
-      model: "MiniMax-H3-c4",
+      model: "MiniMax-H3-768p",
       prompt: "Reference performance",
       reference_images: ["https://cdn.example.com/actor.png"],
       reference_audios: ["https://cdn.example.com/voice.mp3"],
       duration: 10,
       aspect_ratio: "9:16",
-      resolution: "1440P",
+      resolution: "768p",
     });
 
     assert.deepEqual(buildGlobalAiOpcVideoPayload({
@@ -371,48 +545,35 @@ describe("GlobalAiOpc video provider adapter", () => {
         firstFrameUrl: "https://cdn.example.com/first.png",
         lastFrameUrl: "https://cdn.example.com/last.png",
         parameters: {
-          referenceImages: [{ url: "https://cdn.example.com/ignored.png" }],
-          referenceAudio: { url: "https://cdn.example.com/ignored.mp3" },
+          referenceImages: [{ url: "https://cdn.example.com/reference.png" }],
+          referenceVideos: [{ url: "https://cdn.example.com/reference.mp4" }],
+          referenceAudio: { url: "https://cdn.example.com/reference.mp3" },
         },
       },
     }, config), {
-      model: "MiniMax-H3-c4",
+      model: "MiniMax-H3-768p",
       prompt: "Frame performance",
-      first_image: "https://cdn.example.com/first.png",
-      last_image: "https://cdn.example.com/last.png",
+      reference_images: [
+        "https://cdn.example.com/first.png",
+        "https://cdn.example.com/reference.png",
+      ],
+      reference_videos: ["https://cdn.example.com/reference.mp4"],
+      reference_audios: ["https://cdn.example.com/reference.mp3"],
     });
-  });
 
-  it("rejects MiniMax audio-only and video references", () => {
-    const baseInput = {
-      providerRequestId: "provider-request-minimax-invalid",
-      providerName: "GlobalAiOpc",
-      providerOperation: "shot.video.generate",
-      requestKey: "workflow-global-video:minimax-invalid",
-      payloadRef: "creator://minimax-invalid",
-      payloadHash: "hash-minimax-invalid",
-    };
-    const config = { model: "MiniMax-H3-c4", requestFormat: "globalaiopc_model_center_video" };
-    assert.throws(
-      () => buildGlobalAiOpcVideoPayload({
-        ...baseInput,
-        redactedPayload: {
-          prompt: "Audio only",
-          parameters: { referenceAudio: { url: "https://cdn.example.com/voice.mp3" } },
+    const normalizedPrompt = buildGlobalAiOpcVideoPayload({
+      ...input,
+      redactedPayload: {
+        prompt: "请让【@图1】和@图2同时入画",
+        parameters: {
+          referenceImages: [{ url: "https://cdn.example.com/actor.png" }],
+          durationSec: 10,
+          aspectRatio: "16:9",
+          resolution: "768p",
         },
-      }, config),
-      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_reference_visual_required",
-    );
-    assert.throws(
-      () => buildGlobalAiOpcVideoPayload({
-        ...baseInput,
-        redactedPayload: {
-          prompt: "Video reference",
-          parameters: { referenceVideos: [{ url: "https://cdn.example.com/reference.mp4" }] },
-        },
-      }, config),
-      (error: unknown) => (error as { failureCode?: string }).failureCode === "model_reference_videos_unsupported",
-    );
+      },
+    }, config);
+    assert.equal(normalizedPrompt.prompt, "请让@图片1和@图片2同时入画");
   });
 
   it("submits and polls GlobalAiOpc video tasks", async () => {
@@ -595,6 +756,7 @@ describe("GlobalAiOpc video provider adapter", () => {
       providerModel: "seedance-2.5-c1",
       providerConfig: {
         baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+        requestPath: "/v1/sd2_manxue/videos",
         createTaskEndpoint: "/v2/model-center/tasks",
         queryTaskEndpoint: "/v2/model-center/tasks/{taskId}",
         apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
@@ -618,6 +780,7 @@ describe("GlobalAiOpc video provider adapter", () => {
       payloadHash: "hash-model-center",
       redactedPayload: {
         prompt: "Camera orbit",
+        firstFrameUrl: "https://cdn.example.com/first.png",
         parameters: { aspectRatio: "1:1", resolution: "480p", durationSec: 6 },
       },
     });
@@ -629,6 +792,45 @@ describe("GlobalAiOpc video provider adapter", () => {
       duration: 6,
       aspect_ratio: "1:1",
       resolution: "480p",
+    });
+    assert.equal(JSON.parse(capturedBody).first_image, undefined);
+  });
+
+  it("builds the HappyHorse 1.1 Model Center payload", () => {
+    assert.deepEqual(buildGlobalAiOpcVideoPayload({
+      providerRequestId: "provider-request-happyhorse11",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:happyhorse11",
+      payloadRef: "creator://happyhorse11",
+      payloadHash: "hash-happyhorse11",
+      redactedPayload: {
+        prompt: "Use the reference characters",
+        firstFrameUrl: "https://cdn.example.com/first.png",
+        parameters: {
+          aspectRatio: "9:16",
+          resolution: "1080P",
+          durationSec: 5,
+          seed: 0,
+          watermark: false,
+          referenceImages: [{ url: "https://cdn.example.com/character.png" }],
+        },
+      },
+    }, {
+      model: "happyhorse-1.1-r2v",
+      requestFormat: "globalaiopc_model_center_video",
+    }), {
+      model: "happyhorse-1.1-r2v",
+      prompt: "Use the reference characters",
+      reference_images: [
+        "https://cdn.example.com/first.png",
+        "https://cdn.example.com/character.png",
+      ],
+      duration: 5,
+      aspect_ratio: "9:16",
+      resolution: "1080P",
+      seed: 0,
+      watermark: "false",
     });
   });
 

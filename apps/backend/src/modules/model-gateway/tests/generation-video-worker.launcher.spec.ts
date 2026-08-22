@@ -43,7 +43,8 @@ describe("generation video worker launcher", () => {
     assert.match(launcherScript, /failGenerationTaskAfterQueueError\(db, \{[\s\S]*expectedAttemptId: attemptId \?\? null/);
     assert.match(launcherScript, /scheduleGenerationProviderPoll\(db, \{[\s\S]*expectedAttemptId: attemptId \?\? null/);
     assert.match(launcherScript, /handleGptImageArtifactQueueExhaustion\(db, \{[\s\S]*taskId,[\s\S]*error,[\s\S]*now: failedAt/);
-    assert.match(launcherScript, /if \(imageRecoveryOutcome !== "skipped"\) return/);
+    assert.match(launcherScript, /handled = imageRecoveryOutcome !== "skipped"/);
+    assert.match(launcherScript, /shouldKeepGenerationDeadLetterForTask/);
     assert.match(launcherScript, /job\.attemptsMade/);
     assert.match(launcherScript, /job\?\.opts\?\.attempts/);
     assert.doesNotMatch(launcherScript, /SUBMIT_IMAGE_WORKER_CAPACITY/);

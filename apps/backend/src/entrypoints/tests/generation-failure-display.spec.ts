@@ -63,6 +63,20 @@ describe("generation failure display messages", () => {
     assert.equal(message, "渠道暂不可用");
   });
 
+  it("uses the generic video retry guidance for unknown provider failures", () => {
+    const message = generationFailureDisplayMessage({
+      failureCode: "provider_failed",
+      snapshotFailure: {
+        displayMessage: "模型服务返回错误，任务没有拿到生成结果，请稍后重试。",
+      },
+      requestSnapshot: {
+        kind: "video",
+      },
+    });
+
+    assert.equal(message, "生成失败，请修改素材或提示词后重新生成");
+  });
+
   it("prefers a concrete provider response over a persisted generic image failure", () => {
     const message = generationFailureDisplayMessage({
       failureCode: "provider_failed",

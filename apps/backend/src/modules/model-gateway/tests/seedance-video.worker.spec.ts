@@ -23,6 +23,7 @@ import {
   processSeedanceVideoSubmitJob,
   readGenerationArtifactUploadConfig,
   recoverSeedanceVideoAfterPollTimeout,
+  sanitizeSeedanceUserModelRequestLogBody,
 } from "../seedance-video.worker.ts";
 
 describe("Seedance video worker user ownership", () => {
@@ -61,6 +62,43 @@ describe("Seedance video worker user ownership", () => {
       audios: ["https://cdn.example.com/reference.mp3"],
     });
     assert.doesNotMatch(request.requestText, /targetType|parameters/);
+  });
+
+  it("removes first_image from the Model Center request log preview", () => {
+    const request = sanitizeSeedanceUserModelRequestLogBody({
+      requestFormat: "globalaiopc_video",
+      requestBody: {
+        model: "seedance-2.5-c1",
+        prompt: "use the reference",
+        first_image: "https://cdn.example.com/first.png",
+        last_image: "https://cdn.example.com/last.png",
+      },
+      requestText: "legacy preview",
+    }, "globalaiopc_model_center_video");
+
+    assert.equal(request.requestFormat, "globalaiopc_model_center_video");
+    assert.equal(request.requestBody.first_image, undefined);
+    assert.equal(request.requestBody.last_image, "https://cdn.example.com/last.png");
+    assert.doesNotMatch(request.requestText, /first_image/);
+  });
+
+  it("keeps the Model Center request format in GlobalAiOpc request logs", () => {
+    const request = buildSeedanceUserModelRequestLogBody({
+      prompt: "use the reference",
+      motionPrompt: "use the reference",
+      parameters: { resolution: "768p", aspectRatio: "16:9", durationSec: 10 },
+      firstFrameUrl: "https://cdn.example.com/first.png",
+      targetType: "episode",
+    }, {
+      providerName: "GlobalAiOpc",
+      providerProtocol: "globalaiopc_video",
+      providerModel: "MiniMax-H3-768p",
+      providerConfig: { requestFormat: "globalaiopc_model_center_video" },
+    });
+
+    assert.equal(request.requestFormat, "globalaiopc_model_center_video");
+    assert.equal(request.requestBody.model, "MiniMax-H3-768p");
+    assert.deepEqual(request.requestBody.reference_images, ["https://cdn.example.com/first.png"]);
   });
 
   it("uses a thirty-minute video download timeout and independent upload timeout", () => {

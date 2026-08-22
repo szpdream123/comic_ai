@@ -99,6 +99,7 @@ const HIDE_SOUNDCLONE_PROVIDER_PARAMETERS_RELATIVE_PATH = ["packages", "db", "mi
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_RELATIVE_PATH = ["packages", "db", "migrations", "20260909-backfill-project-cover-storage-objects.sql"];
 const TEAM_ASSET_PROXY_URLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-allow-bound-team-asset-proxy-urls.sql"];
 const GLOBALAIOPC_MODEL_CENTER_VIDEO_CLASSIFICATION_REPAIR_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-repair-globalaiopc-model-center-video-classification.sql"];
+const MINIMAX_H3_768P_REPLACEMENT_RELATIVE_PATH = ["packages", "db", "migrations", "20261001-replace-minimax-h3-c4-with-768p.sql"];
 const MARKETING_MODULE_RELATIVE_PATH = ["packages", "db", "migrations", "20260910-create-marketing-module.sql"];
 const PROJECT_UPLOAD_STORAGE_OBJECT_INDEX_RELATIVE_PATH = ["packages", "db", "migrations", "20260911-project-upload-storage-object-index.sql"];
 const MARKETING_BRAND_PROFILES_RELATIVE_PATH = ["packages", "db", "migrations", "20260912-create-marketing-brand-profiles.sql"];
@@ -113,12 +114,31 @@ const MARKETING_EXECUTION_OWNER_BINDINGS_RELATIVE_PATH = ["packages", "db", "mig
 const MARKETING_GENERATION_CONFIRMATIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20260921-marketing-generation-confirmations.sql"];
 const MARKETING_GENERATION_SKILLS_RELATIVE_PATH = ["packages", "db", "migrations", "20260922-marketing-generation-skills.sql"];
 const MARKETING_SKILL_KINDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260923-marketing-skill-kinds.sql"];
+const MARKETING_SKILL_ADMIN_FIELDS_RELATIVE_PATH = ["packages", "db", "migrations", "20260930-marketing-skill-admin-fields.sql"];
 const EPISODE_COVER_STORAGE_RELATIVE_PATH = ["packages", "db", "migrations", "20260924-add-episode-cover-storage.sql"];
 const MARKETING_COMPETITOR_COLLECTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260925-add-marketing-competitor-collection.sql"];
 const HOME_RECOMMENDATION_COVER_OPTIMIZATION_RELATIVE_PATH = ["packages", "db", "migrations", "20260926-optimize-home-recommendation-covers.sql"];
 const PROMPT_REVERSE_VISION_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260927-require-prompt-reverse-vision-model.sql"];
 const PROMPT_REVERSE_MODELFLARE_PRICING_RELATIVE_PATH = ["packages", "db", "migrations", "20260928-fix-prompt-reverse-modelflare-pricing.sql"];
 const RESTORE_CUMOB_PROMPT_REVERSE_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20260929-restore-cumob-prompt-reverse-model.sql"];
+const SEEDANCE25_SPECIAL_RESOLUTION_RELATIVE_PATH = ["packages", "db", "migrations", "20261001-align-seedance25-special-resolution.sql"];
+const GLOBALAIOPC_SEEDREAM5_REPLACEMENT_RELATIVE_PATH = ["packages", "db", "migrations", "20261002-replace-globalaiopc-banana-with-seedream5.sql"];
+const MINIMAX_H3_MODEL_CENTER_ENDPOINTS_RELATIVE_PATH = ["packages", "db", "migrations", "20261003-fix-minimax-h3-model-center-endpoints.sql"];
+const GLOBALAIOPC_SD25_DISCOUNT_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20261004-align-globalaiopc-sd25-discount-model.sql"];
+const GLOBALAIOPC_SD25_SPECIAL_MODEL_RELATIVE_PATH = ["packages", "db", "migrations", "20261005-correct-globalaiopc-sd25-special-model.sql"];
+const GLOBALAIOPC_HAPPYHORSE11_MODEL_CENTER_RELATIVE_PATH = ["packages", "db", "migrations", "20261006-fix-globalaiopc-happyhorse11-model-center.sql"];
+const GLOBALAIOPC_SD25_SPECIAL_ENABLE_RELATIVE_PATH = ["packages", "db", "migrations", "20261007-enable-globalaiopc-sd25-special.sql"];
+const GLOBALAIOPC_SEEDREAM5_ENABLE_RELATIVE_PATH = ["packages", "db", "migrations", "20261008-enable-globalaiopc-seedream5.sql"];
+const GLOBALAIOPC_SD25_DISCOUNT_CORRECTION_RELATIVE_PATH = ["packages", "db", "migrations", "20261009-correct-globalaiopc-sd25-discount-model.sql"];
+const GLOBALAIOPC_SD25_DISCOUNT_DURATION_RELATIVE_PATH = ["packages", "db", "migrations", "20261010-fix-globalaiopc-sd25-discount-duration.sql"];
+const GLOBALAIOPC_SD25_DURATION_OPTIONS_RELATIVE_PATH = ["packages", "db", "migrations", "20261011-normalize-globalaiopc-sd25-duration-options.sql"];
+const GLOBALAIOPC_SD25_SPECIAL_RESTORE_RELATIVE_PATH = ["packages", "db", "migrations", "20261012-restore-globalaiopc-sd25-special-model.sql"];
+const GLOBALAIOPC_KLINGO3_WAN27_RELATIVE_PATH = ["packages", "db", "migrations", "20261013-add-globalaiopc-klingo3-wan27-r2v.sql"];
+const GLOBALAIOPC_KLINGO3_WAN27_PARAMETER_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261014-fix-globalaiopc-klingo3-wan27-parameters.sql"];
+const GLOBALAIOPC_KLINGO3_WAN27_SCHEMA_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql"];
+const GLOBALAIOPC_WAN27_DURATION_OPTIONS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261016-correct-globalaiopc-wan27-duration-options.sql"];
+const GLOBALAIOPC_KLINGO3_FRAME_PARAMETERS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261017-disable-klingo3-frame-parameters.sql"];
+const GLOBALAIOPC_SD25_SPECIAL_FRAME_PARAMETERS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -614,6 +634,10 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
       sql: await readFile(join(rootDir, ...MARKETING_SKILL_KINDS_RELATIVE_PATH), "utf8"),
     },
     {
+      name: "20260930-marketing-skill-admin-fields.sql",
+      sql: await readFile(join(rootDir, ...MARKETING_SKILL_ADMIN_FIELDS_RELATIVE_PATH), "utf8"),
+    },
+    {
       name: "20260924-add-episode-cover-storage.sql",
       sql: await readFile(join(rootDir, ...EPISODE_COVER_STORAGE_RELATIVE_PATH), "utf8"),
     },
@@ -636,6 +660,82 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20260929-restore-cumob-prompt-reverse-model.sql",
       sql: await readFile(join(rootDir, ...RESTORE_CUMOB_PROMPT_REVERSE_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261001-align-seedance25-special-resolution.sql",
+      sql: await readFile(join(rootDir, ...SEEDANCE25_SPECIAL_RESOLUTION_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261001-replace-minimax-h3-c4-with-768p.sql",
+      sql: await readFile(join(rootDir, ...MINIMAX_H3_768P_REPLACEMENT_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261002-replace-globalaiopc-banana-with-seedream5.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SEEDREAM5_REPLACEMENT_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261003-fix-minimax-h3-model-center-endpoints.sql",
+      sql: await readFile(join(rootDir, ...MINIMAX_H3_MODEL_CENTER_ENDPOINTS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261004-align-globalaiopc-sd25-discount-model.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_DISCOUNT_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261005-correct-globalaiopc-sd25-special-model.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_SPECIAL_MODEL_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261006-fix-globalaiopc-happyhorse11-model-center.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_HAPPYHORSE11_MODEL_CENTER_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261007-enable-globalaiopc-sd25-special.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_SPECIAL_ENABLE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261008-enable-globalaiopc-seedream5.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SEEDREAM5_ENABLE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261009-correct-globalaiopc-sd25-discount-model.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_DISCOUNT_CORRECTION_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261010-fix-globalaiopc-sd25-discount-duration.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_DISCOUNT_DURATION_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261011-normalize-globalaiopc-sd25-duration-options.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_DURATION_OPTIONS_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261012-restore-globalaiopc-sd25-special-model.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_SPECIAL_RESTORE_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261013-add-globalaiopc-klingo3-wan27-r2v.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_KLINGO3_WAN27_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261014-fix-globalaiopc-klingo3-wan27-parameters.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_KLINGO3_WAN27_PARAMETER_FIX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_KLINGO3_WAN27_SCHEMA_FIX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261016-correct-globalaiopc-wan27-duration-options.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_WAN27_DURATION_OPTIONS_FIX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261017-disable-klingo3-frame-parameters.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_KLINGO3_FRAME_PARAMETERS_FIX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql",
+      sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_SPECIAL_FRAME_PARAMETERS_FIX_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

@@ -1226,7 +1226,7 @@ describe("production workbench home shell", () => {
         requestId: "request-reference-missing",
         message: "参考素材不存在或无权访问",
       }),
-      /参考素材不存在或无权访问.*request-reference-missing/,
+      /参考素材不存在(?!或无权访问).*request-reference-missing/,
     );
     assert.match(
       friendlyError({
@@ -1236,6 +1236,15 @@ describe("production workbench home shell", () => {
         message: "参考素材尚未可用或已失效",
       }),
       /参考素材尚未准备好.*request-reference-unavailable/,
+    );
+    assert.match(
+      friendlyError({
+        status: 400,
+        errorCode: "model_reference_forbidden",
+        requestId: "request-reference-forbidden",
+        message: "参考素材无权访问",
+      }),
+      /参考素材无权访问.*request-reference-forbidden/,
     );
     assert.match(
       friendlyError({
@@ -4285,6 +4294,42 @@ describe("workbench generation payloads and inspectors", () => {
     });
   });
 
+  it("keeps storage identity when quick-importing a storyboard reference", () => {
+    const [storyboard] = addStoryboard([]);
+    const storageObjectId = "0838ea12-0a77-4bd4-9879-bcc000000001";
+    const storyboards = [{
+      ...storyboard,
+      id: "storyboard-quick-storage-reference",
+      description: "快捷引入存储图片",
+      references: [{
+        id: "storyboard-reference-1",
+        type: "image",
+        fileId: storageObjectId,
+        url: `https://api.example.com/v1/images/${storageObjectId}/content`,
+      }],
+    }];
+    const workbench = {
+      ui: {
+        projectPanelMode: "episode-workbench",
+        museScopeMode: "storyboard",
+        episodeMediaMode: "image",
+        selectedEpisodeId: "episode-new",
+        selectedStoryboardId: storyboards[0].id,
+        storyboards,
+        episodeStoryboardMap: { "episode-new": storyboards },
+        prompt: "",
+        importedAssets: { character: [], scene: [], prop: [] },
+      },
+    };
+
+    const result = appendSelectedEpisodeAssetToPrompt(workbench);
+    const reference = workbench.ui.episodeStoryboardMap["episode-new"][0].generationState.quickReferenceItems[0];
+
+    assert.equal(result.ok, true);
+    assert.equal(reference.url, `/api/storage/objects/${storageObjectId}/content?proxy=1`);
+    assert.equal(reference.preview, `/api/storage/objects/${storageObjectId}/content?proxy=1`);
+  });
+
   it("quick references all active storyboard tab images in image mode", () => {
     const [storyboard] = addStoryboard([]);
     const storyboards = [
@@ -7299,6 +7344,8 @@ describe("workbench generation payloads and inspectors", () => {
     assert.equal(payload.parameters.quickReferences?.length, 1);
     assert.equal(payload.parameters.quickReferences?.[0]?.name, "引入 我的水墨");
     assert.equal(payload.parameters.filePaths?.length, 1);
+    assert.equal(payload.referenceImages?.length, 1);
+    assert.equal(payload.parameters.referenceImages?.length, 1);
     assert.equal(Object.hasOwn(payload, "priceCredits"), false);
     assert.match(JSON.stringify(payload), /选中的技能正文/);
   });
@@ -8507,7 +8554,7 @@ describe("workbench generation payloads and inspectors", () => {
       [],
     );
 
-    assert.match(html, /错误原因:生成失败，请重新编辑后再试。/);
+    assert.match(html, /错误原因:生成失败，请修改素材或提示词后重新生成/);
     assert.doesNotMatch(html, /The model seedance-2-0-i2v does not exist\./);
   });
 
@@ -11385,7 +11432,7 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.deepEqual(workbench.ui.assetPromptDraft.mentionReferences, []);
     assert.deepEqual(workbench.ui.episodeWorkbenchAttachments, []);
     assert.deepEqual(workbench.ui.episodeWorkbenchSelectedAttachmentIds, []);
-    assert.equal(workbench.ui.imageGenerationResult, null);
+    assert.equal(workbench.ui.imageGenerationResult?.taskId, "asset-image-task");
 
     resolveStoryboards({
       items: [{
@@ -12549,6 +12596,19 @@ it("does not duplicate image mention suffixes when adding another prompt mention
     assert.match(html, /<span class="preview-title">故事板<\/span>/);
     assert.match(html, /data-action="pick-local-storyboard-image"/);
     assert.match(html, /data-action="open-storyboard-image-generator"/);
+  });
+
+  it("uses the storage thumbnail for storyboard images even when the API also exposes a signed source URL", () => {
+    const storageObjectId = "126423ad-b286-456c-ae5b-fe40e1018c63";
+    const storyboard = {
+      ...addStoryboard([])[0],
+      displayTitle: "分镜 1",
+      previewImageUrl: "https://signed.example.test/original.png",
+      previewImageStorageObjectId: storageObjectId,
+    };
+    const html = renderStoryboardPanel([storyboard], storyboard, "storyboard");
+
+    assert.match(html, new RegExp(`<img src="/api/storage/objects/${storageObjectId}/content\\?thumbnail=1"`));
   });
 
   it("clears only storyboard quick mentions while preserving the operation composer", async () => {
@@ -15528,7 +15588,7 @@ describe("asset generator and imported asset modals", () => {
     }
   });
 
-  it("renders result-unknown tasks as pending review without claiming a refund", () => {
+  it("renders image poll timeouts as retryable failures with a refund", () => {
     const taskId = "video-result-unknown-copy";
     const html = renderProductionWorkbench({
       state: buildProjectState(),
@@ -15542,13 +15602,13 @@ describe("asset generator and imported asset modals", () => {
         taskCenterTasksById: {
           [taskId]: {
             taskId,
-            kind: "video",
-            status: "result_unknown",
+            kind: "image",
+            status: "failed",
             failureCode: "provider_poll_timeout",
-            credit: { released: 0 },
+            credit: { released: 20 },
             failure: {
               failureCode: "provider_poll_timeout",
-              noticeType: "manual_review",
+              noticeType: "failure",
               displayMessage: "模型处理超时，积分已返还",
             },
           },
@@ -15556,10 +15616,10 @@ describe("asset generator and imported asset modals", () => {
       }),
     });
 
-    assert.match(html, /待复核/);
-    assert.match(html, /复核说明/);
-    assert.match(html, /任务与积分状态等待后台复核/);
+    assert.doesNotMatch(html, /待复核/);
+    assert.doesNotMatch(html, /任务与积分状态等待后台复核/);
     assert.doesNotMatch(html, /模型处理超时，积分已返还/);
+    assert.match(html, /生成超时，请重新处理生成。/);
   });
 
   it("polls generated project assets through the task center after leaving the asset page", async () => {
@@ -25635,9 +25695,21 @@ describe("production workbench project tab", () => {
         museScopeMode: "assets",
         selectedEpisodeCardId: "character-2",
         selectedEpisodeAssetId: "character-2",
+        selectedModelId: "global-ai-opc-nano-banana-pro",
+        imageGenerationMode: "single-image",
         prompt: "",
-        imageGenerationResult: null,
+        imageGenerationResult: { modelLabel: "Nano Banana 2" },
         episodeBatchResults: {},
+        episodeGenerationConfig: {
+          defaultImageModelCode: "global-ai-opc-nano-banana-pro",
+          models: [{
+            modelCode: "global-ai-opc-nano-banana-pro",
+            modelLabel: "Seedream 5.0 Pro",
+            mediaType: "image",
+            supportedModes: ["single-image", "image.generate"],
+            parameterSchema: {},
+          }],
+        },
         importedAssets: {
           character: [
             {
@@ -25753,6 +25825,8 @@ describe("production workbench project tab", () => {
     assert.equal(calls[0].payload.mediaMode, "image");
     assert.equal(calls[0].payload.messages[1]?.status, "running");
     assert.equal(calls[0].payload.messages[1]?.taskId, null);
+    assert.equal(calls[0].payload.messages[1]?.payload.selectedModelId, "global-ai-opc-nano-banana-pro");
+    assert.equal(calls[0].payload.messages[1]?.payload.modelLabel, "Seedream 5.0 Pro");
     assert.equal(calls[1].payload.messages[1]?.taskId, "asset-image-task-persist-1");
     assert.equal(calls[1].payload.messages[1]?.turnId, calls[0].payload.messages[1]?.turnId);
     assert.deepEqual(
@@ -25761,6 +25835,7 @@ describe("production workbench project tab", () => {
     );
     assert.equal(workbench.ui.assetConversationHistory["image:character-2"][0]?.taskId, calls[1].payload.messages[1].taskId);
     assert.equal(workbench.ui.assetConversationHistory["image:character-2"][0]?.status, "queued");
+    assert.equal(workbench.ui.assetConversationHistory["image:character-2"][0]?.modelLabel, "Seedream 5.0 Pro");
   });
 
   it("does not regress an earlier running asset task when persisting a second task", async () => {
@@ -28875,7 +28950,7 @@ describe("production workbench project tab", () => {
     });
 
     assert.match(html, /data-result-action="set-storyboard-image"/);
-    assert.match(html, /图片生成超过 1 小时未完成/);
+    assert.match(html, /生成超时，请重新处理生成。/);
     assert.match(html, /episode-replica-task-status failed/);
   });
 
@@ -29710,7 +29785,11 @@ describe("production workbench project tab", () => {
     );
     assert.match(css, /\.episode-replica-asset-toolbar-head\s*\{[\s\S]*?height:\s*4\.35rem[\s\S]*?padding:\s*0\.55rem 0[\s\S]*?overflow:\s*visible/);
     assert.match(css, /\.episode-replica-layout\.storyboard-mode \.episode-replica-storyboard-toolbar\s*\{[\s\S]*?height:\s*4\.35rem[\s\S]*?padding:\s*0\.55rem 0[\s\S]*?overflow:\s*visible/);
-    assert.match(css, /\.workbench-body \.statusbar-episode-center\s*\{[^}]*position:\s*absolute[^}]*top:\s*50%[^}]*left:\s*50%[^}]*transform:\s*translate\(-50%, -50%\)/);
+    assert.match(css, /\.workbench-body \.statusbar-episode-center\s*\{[^}]*position:\s*static[^}]*min-width:\s*0[^}]*transform:\s*none/);
+    assert.match(
+      css,
+      /@media \(min-width:\s*641px\)[\s\S]*?\.workbench-body \.episode-workbench-main > \.global-statusbar:has\(> \.statusbar-episode-center\)\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0, 1fr\) max-content minmax\(0, 1fr\)/,
+    );
     assert.match(
       css,
       /\.episode-replica-asset-toolbar-main\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) max-content minmax\(0, 1fr\)[^}]*height:\s*100%/,
@@ -42127,6 +42206,163 @@ describe("production workbench project tab", () => {
     assert.equal(createImageGenerationTaskCalls[0].payload.canvasContext.referenceImages[0].nodeId, "upload-a");
   });
 
+  it("retries a canvas image run without a stale reference asset version", async () => {
+    const createImageGenerationTaskCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createImageGenerationTask(payload) {
+          createImageGenerationTaskCalls.push(payload);
+          if (createImageGenerationTaskCalls.length === 1) {
+            const error = new Error("参考素材不存在或无权访问");
+            error.errorCode = "model_reference_not_found";
+            throw error;
+          }
+          return { platform: { tasks: [{ taskId: "task-canvas-stale-reference-retry" }] } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000013",
+        selectedCanvasNodeId: "send-flow",
+        selectedCanvasProjectId: "canvas-project-main",
+        creditBalance: 500,
+        episodeGenerationConfig: {
+          creditBalance: 500,
+          models: [
+            { modelCode: "image-live", modelLabel: "项目生图模型", mediaType: "image", supportedModes: ["single-image"] },
+          ],
+        },
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "10000000-0000-4000-8000-000000000013",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            {
+              id: "upload-a",
+              type: "upload",
+              data: {
+                mediaKind: "image",
+                fileName: "ref.png",
+                previewUrl: "https://example.test/ref.png",
+                assetVersionId: "10000000-0000-4000-8000-000000000099",
+                ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
+              },
+            },
+            {
+              id: "send-flow",
+              type: "send",
+              data: {
+                mediaKind: "image",
+                modelCode: "image-live",
+                prompt: "生成一张图",
+                ports: {
+                  inputs: [{ id: "in_asset", kind: "image", accepts: ["image"] }],
+                  outputs: [{ id: "out_image", kind: "image" }],
+                },
+              },
+            },
+          ],
+          edges: [
+            { id: "edge-upload-send", sourceNodeId: "upload-a", targetNodeId: "send-flow", data: { kind: "image" } },
+          ],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "run-canvas-node", nodeId: "send-flow" },
+    });
+
+    assert.equal(createImageGenerationTaskCalls.length, 2);
+    assert.deepEqual(createImageGenerationTaskCalls[0].referenceAssetVersionIds, [
+      "10000000-0000-4000-8000-000000000099",
+    ]);
+    assert.equal(createImageGenerationTaskCalls[1].referenceAssetVersionIds, undefined);
+    assert.equal(createImageGenerationTaskCalls[1].parameters.referenceAssetVersionIds, undefined);
+    assert.deepEqual(createImageGenerationTaskCalls[1].referenceImages, [{ url: "https://example.test/ref.png" }]);
+    assert.deepEqual(createImageGenerationTaskCalls[1].parameters.referenceImages, [{ url: "https://example.test/ref.png" }]);
+    assert.deepEqual(createImageGenerationTaskCalls[1].parameters.filePaths, ["https://example.test/ref.png"]);
+  });
+
+  it("retries without references when a stale asset version has no usable replacement", async () => {
+    const createImageGenerationTaskCalls = [];
+    const workbench = {
+      state: buildProjectState(),
+      api: {
+        async createImageGenerationTask(payload) {
+          createImageGenerationTaskCalls.push(payload);
+          if (createImageGenerationTaskCalls.length === 1) {
+            const error = new Error("参考素材不存在或无权访问");
+            error.errorCode = "model_reference_not_found";
+            throw error;
+          }
+          return { platform: { tasks: [{ taskId: "task-canvas-stale-reference-without-replacement" }] } };
+        },
+      },
+      ui: buildProjectUi({
+        activeNavTab: "tools",
+        selectedEpisodeId: "10000000-0000-4000-8000-000000000013",
+        selectedCanvasNodeId: "send-flow",
+        selectedCanvasProjectId: "canvas-project-main",
+        creditBalance: 500,
+        episodeGenerationConfig: {
+          creditBalance: 500,
+          models: [
+            { modelCode: "image-live", modelLabel: "项目生图模型", mediaType: "image", supportedModes: ["single-image"] },
+          ],
+        },
+        canvasDocument: {
+          version: 1,
+          projectId: "canvas-project-main",
+          episodeId: "10000000-0000-4000-8000-000000000013",
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            {
+              id: "upload-stale",
+              type: "upload",
+              data: {
+                mediaKind: "image",
+                fileName: "stale-reference.png",
+                assetVersionId: "10000000-0000-4000-8000-000000000199",
+                ports: { inputs: [], outputs: [{ id: "out_image", kind: "image" }] },
+              },
+            },
+            {
+              id: "send-flow",
+              type: "send",
+              data: {
+                mediaKind: "image",
+                modelCode: "image-live",
+                prompt: "生成一张图",
+                ports: {
+                  inputs: [{ id: "in_asset", kind: "image", accepts: ["image"] }],
+                  outputs: [{ id: "out_image", kind: "image" }],
+                },
+              },
+            },
+          ],
+          edges: [
+            { id: "edge-stale-send", sourceNodeId: "upload-stale", targetNodeId: "send-flow", data: { kind: "image" } },
+          ],
+        },
+      }),
+      root: { innerHTML: "", querySelector() { return null; } },
+    };
+
+    await handleWorkbenchActionForTest(workbench, {
+      dataset: { action: "run-canvas-node", nodeId: "send-flow" },
+    });
+
+    assert.equal(createImageGenerationTaskCalls.length, 2);
+    assert.deepEqual(createImageGenerationTaskCalls[0].referenceAssetVersionIds, [
+      "10000000-0000-4000-8000-000000000199",
+    ]);
+    assert.equal(createImageGenerationTaskCalls[1].referenceAssetVersionIds, undefined);
+  });
+
   it("submits canvas runs from the tools tab using the standalone canvas context", async () => {
     const createImageGenerationTaskCalls = [];
     const workbench = {
@@ -48463,7 +48699,8 @@ describe("production workbench project tab", () => {
                   id: "quick-image-1",
                   kind: "image",
                   name: "图片 1",
-                  previewUrl: "https://example.com/ref-1.png",
+                  storageObjectId: "00000000-0000-4000-8000-000000000901",
+                  previewUrl: "https://example.com/ref-1.png?X-Amz-Signature=expired",
                   composerOrder: 10,
                 },
                 {
@@ -48495,6 +48732,7 @@ describe("production workbench project tab", () => {
                   type: "image",
                   kind: "image",
                   name: "不应出现的图片 3",
+                  storageObjectId: "00000000-0000-4000-8000-000000000901",
                   previewUrl: "https://example.com/ref-1.png?signature=expired",
                   composerOrder: 70,
                 },
@@ -48579,7 +48817,14 @@ describe("production workbench project tab", () => {
     const updatedStoryboard = workbench.ui.storyboards[0];
     assert.equal(updatedStoryboard.generationState.prompt, "上一轮视频文案，需要继续编辑。");
     assert.equal(updatedStoryboard.generationState.quickReferenceItems.length, 3);
-    assert.equal(updatedStoryboard.generationState.quickReferenceItems[0].previewUrl, "https://example.com/ref-1.png");
+    assert.equal(
+      updatedStoryboard.generationState.quickReferenceItems[0].previewUrl,
+      "/api/storage/objects/00000000-0000-4000-8000-000000000901/content?proxy=1",
+    );
+    assert.equal(
+      updatedStoryboard.generationState.quickReferenceItems[0].storageObjectId,
+      "00000000-0000-4000-8000-000000000901",
+    );
     assert.equal(updatedStoryboard.generationState.quickReferenceItems[1].previewUrl, "https://example.com/ref-2.png");
     assert.equal(updatedStoryboard.generationState.quickReferenceItems[2].kind, "video");
     assert.equal(updatedStoryboard.generationState.mentionReferences[0].name, "音频1");
@@ -48590,8 +48835,9 @@ describe("production workbench project tab", () => {
       ui: workbench.ui,
     });
     const strip = html.match(/<div class="episode-replica-ref-strip inline-upload-tray[^>]*>([\s\S]*?)<input class="episode-workbench-attachment-input"/)?.[1] ?? "";
-    assert.equal((strip.match(/ref-1\.png/g) ?? []).length, 1);
-    assert.equal((strip.match(/ref-2\.png/g) ?? []).length, 1);
+    assert.match(strip, /00000000-0000-4000-8000-000000000901/);
+    assert.doesNotMatch(strip, /X-Amz-Signature/);
+    assert.match(strip, /ref-2\.png/);
     assert.match(strip, /ref-3\.png/);
     assert.match(strip, /episode-replica-ref-index">图1</);
     assert.match(strip, /episode-replica-ref-index">图2</);

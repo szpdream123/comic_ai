@@ -146,7 +146,7 @@ describe("generation poll expiration", { concurrency: false }, () => {
     }
   });
 
-  it("keeps a legacy accepted image request in result_unknown when timeout does not prove a terminal result", async () => {
+  it("fails an accepted image request on poll timeout and releases credits", async () => {
     const db = await createMigratedTestDb();
     const now = new Date("2026-07-22T12:00:00.000Z");
 
@@ -186,12 +186,14 @@ describe("generation poll expiration", { concurrency: false }, () => {
         attempt_status: string;
         provider_status: string;
         snapshot_status: string;
+        credit_status: string;
       }>(
         `
           SELECT task.status AS task_status,
                  attempt.status AS attempt_status,
                  provider.status AS provider_status,
-                 snapshot.status AS snapshot_status
+                 snapshot.status AS snapshot_status,
+                 snapshot.credit_status AS credit_status
           FROM tasks task
           JOIN task_attempts attempt ON attempt.id = task.current_attempt_id
           JOIN provider_requests provider ON provider.id = $2
@@ -202,10 +204,11 @@ describe("generation poll expiration", { concurrency: false }, () => {
       );
 
       assert.deepEqual(state.rows[0], {
-        task_status: "result_unknown",
-        attempt_status: "result_unknown",
-        provider_status: "result_unknown",
-        snapshot_status: "result_unknown",
+        task_status: "failed",
+        attempt_status: "failed",
+        provider_status: "failed",
+        snapshot_status: "failed",
+        credit_status: "released",
       });
     } finally {
       await db.close();

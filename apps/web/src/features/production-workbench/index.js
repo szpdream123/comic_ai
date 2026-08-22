@@ -42,6 +42,7 @@ import {
   renderEpisodeExportPreview,
   renderBatchSelectionActions,
   renderPromptDock,
+  resolveResultAnnotationTarget,
   renderStoryboardCard,
   renderStoryboardImageColumn,
   renderStoryboardPanel,
@@ -58,6 +59,16 @@ import { getLibraryAssetById, getLibraryAssetsForImport, getLibraryTypeByCategor
 import { defaultUploadLimits, resolveApiUrl, validateUploadFile } from "../../shared/creator-api.js";
 import { PUBLIC_SEO_PAGE_BY_ID } from "../../shared/public-seo-content.js";
 import { resolveGenerationCreditCost } from "./generation-control-menu.js";
+import {
+  clearResultImageAnnotation,
+  closeResultImageAnnotation,
+  encodeResultImageAnnotation,
+  mountResultImageAnnotation,
+  openResultImageAnnotation,
+  redoResultImageAnnotation,
+  selectResultAnnotationTool,
+  undoResultImageAnnotation,
+} from "./result-image-annotation.js";
 import { syncSelectionPickerSelection, syncSelectionPickerTab } from "./selection-picker-modal.js";
 import {
   EPISODE_PROMPT_SKILL_CATEGORIES,
@@ -3029,6 +3040,8 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       episodeAssetCreateModal: null,
       episodeWorkbenchAttachments: [],
       episodeWorkbenchSelectedAttachmentIds: [],
+      episodeWorkbenchAnnotationSelectedAttachmentId: "",
+      episodeWorkbenchAnnotationSelectedAttachmentUrl: "",
       storyboardMediaComposerDrafts: {},
       storyboardBoardModeComposerDrafts: {},
       episodeWorkbenchScrollTarget: null,
@@ -3372,6 +3385,7 @@ export async function initProductionWorkbench({ root, session, api, onLogout, on
       storyboardVideoDeleteTarget: null,
       generationResultDeleteTarget: null,
       assetInspector: null,
+      resultImageAnnotation: null,
       referenceAssetPickerKind: null,
       referenceAssetPickerMediaType: "image",
       referencePromptPreset: "comic-style",
@@ -10055,6 +10069,7 @@ function render(workbench, options = {}) {
   }
   restoreToolboxWatermarkRemovalMask(workbench);
   applyPostRenderEffects(workbench);
+  mountResultImageAnnotation(workbench);
   void syncEpisodePromptEditor(workbench);
   void syncStoryboardGeneratorPromptEditor(workbench);
   if (!restoreDirectorDeskMountAfterRender(workbench, preservedDirectorDeskMount)) {
@@ -11730,6 +11745,16 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
     (assetGroups?.[activeAssetTab] ?? []).find((item) => item.id === workbench.ui.selectedEpisodeAssetId) ??
     (assetGroups?.[activeAssetTab] ?? [])[0] ??
     null;
+  const resultAnnotationTarget = resolveResultAnnotationTarget({
+    scopeMode,
+    selectedStoryboard,
+    selectedAsset,
+    assetKind: activeAssetTab,
+    generationState: scopeMode === "assets" ? workbench.ui.assetPromptDraft : selectedStoryboard?.generationState,
+    attachments: workbench.ui.episodeWorkbenchAttachments ?? [],
+    selectedAttachmentId: workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId ?? "",
+    selectedAttachmentUrl: workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl ?? "",
+  });
   const replacement = document.createElement("div");
   replacement.innerHTML = renderPromptDock({
     selectedStoryboard,
@@ -11787,11 +11812,13 @@ function renderEpisodeWorkbenchPromptDockOnly(workbench, options = {}) {
     videoMode: workbench.ui.videoGenerationMode ?? "reference-video",
     attachments: workbench.ui.episodeWorkbenchAttachments ?? [],
     selectedAttachmentIds: workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? [],
+    annotationSelectedAttachmentId: workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId ?? "",
     generationPollingActive: isCurrentEpisodeComposerGenerationPending(workbench, scopeMode, mediaMode, {
       storyboardId: selectedStoryboard?.id ?? null,
       assetId: selectedAsset?.id ?? null,
     }),
     scopeMode,
+    resultAnnotationTarget,
   });
   const nextPromptDock = replacement.firstElementChild;
   if (nextPromptDock) {
@@ -12705,7 +12732,7 @@ function renderEpisodeWorkbenchHydratedSurfacesOnly(workbench, options = {}) {
 
 function renderEpisodeWorkbenchGenerationSurfacesOnly(workbench) {
   if (workbench?.ui?.projectPanelMode !== "episode-workbench") {
-    render(workbench);
+    renderEpisodeWorkbenchPromptDockOnly(workbench);
     return;
   }
   if (!renderEpisodeWorkbenchHydratedSurfacesOnly(workbench, { submissionStateOnly: true })) {
@@ -13217,6 +13244,13 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     "open-generation-image-preview",
     "open-storyboard-image-preview",
     "close-asset-inspector",
+    "open-result-image-annotation",
+    "close-result-image-annotation",
+    "select-result-annotation-tool",
+    "undo-result-image-annotation",
+    "redo-result-image-annotation",
+    "clear-result-image-annotation",
+    "submit-result-image-annotation",
     "open-episode-batch-actions",
     "close-episode-batch-modal",
     "close-single-episode-modal",
@@ -21382,6 +21416,64 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-result-image-annotation") {
+    if (!target.dataset.imageUrl) {
+      workbench.ui.toast = "请选中素材进行修改";
+      render(workbench);
+      return;
+    }
+    if (!target.dataset.targetId) return;
+    openResultImageAnnotation(workbench.ui, {
+      imageUrl: target.dataset.imageUrl,
+      imageUrls: String(target.dataset.imageUrls ?? target.dataset.imageUrl ?? "")
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+      imageName: target.dataset.imageName,
+      scope: target.dataset.annotationScope,
+      contextScope: target.dataset.annotationContextScope,
+      targetId: target.dataset.targetId,
+      taskId: target.dataset.taskId,
+      assetKind: target.dataset.assetKind,
+    });
+    render(workbench);
+    return;
+  }
+
+  if (action === "close-result-image-annotation") {
+    closeResultImageAnnotation(workbench.ui);
+    workbench.resultImageAnnotationObjectUrlCleanup?.();
+    workbench.resultImageAnnotationObjectUrlCleanup = null;
+    workbench.resultImageAnnotationSource = null;
+    render(workbench);
+    return;
+  }
+
+  if (action === "select-result-annotation-tool") {
+    selectResultAnnotationTool(workbench, target.dataset.annotationTool ?? "brush");
+    return;
+  }
+
+  if (action === "undo-result-image-annotation") {
+    undoResultImageAnnotation(workbench);
+    return;
+  }
+
+  if (action === "redo-result-image-annotation") {
+    redoResultImageAnnotation(workbench);
+    return;
+  }
+
+  if (action === "clear-result-image-annotation") {
+    clearResultImageAnnotation(workbench);
+    return;
+  }
+
+  if (action === "submit-result-image-annotation") {
+    await submitResultImageAnnotation(workbench, target);
+    return;
+  }
+
   if (action === "open-generation-video-preview") {
     const videoUrl = String(target.dataset.videoUrl ?? "").trim();
     if (!videoUrl) {
@@ -22635,7 +22727,7 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const submission = batchResults[item.id];
       const payload = buildEpisodeBatchImageTaskPayload(workbench, modal, item, assetKind, submission);
       try {
-        const task = await workbench.api.createImageGenerationTask({
+        const task = await createImageGenerationTaskWithReferenceFallback(workbench, {
           ...payload,
           target: {
             kind: "episode_asset",
@@ -22776,6 +22868,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "remove-quick-reference") {
     syncPromptInputFromDom(workbench);
     const referenceId = target.dataset.referenceId ?? "";
+    if (workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId === referenceId) {
+      workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId = "";
+      workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl = "";
+    }
     if ((workbench.ui.museScopeMode ?? "storyboard") === "assets") {
       const assetPromptDraft = workbench.ui.assetPromptDraft ?? {};
       const removedReference = (assetPromptDraft.quickReferenceItems ?? [])
@@ -22864,6 +22960,12 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       restoreCurrentPromptReferenceTokensByFileOrder(workbench, assetPromptDraft);
     }
     const attachmentId = target.dataset.attachmentId ?? "";
+    if (target.dataset.referenceMediaType === "image") {
+      workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId =
+        target.dataset.annotationSelectionKey ?? attachmentId;
+      workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl =
+        target.querySelector?.("[data-image-preview-url]")?.dataset?.imagePreviewUrl ?? "";
+    }
     const current = new Set(workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []);
     if (current.has(attachmentId)) {
       current.delete(attachmentId);
@@ -22884,6 +22986,10 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "remove-episode-workbench-attachment") {
     syncPromptInputFromDom(workbench);
     const attachmentId = target.dataset.attachmentId ?? "";
+    if (workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId === attachmentId) {
+      workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId = "";
+      workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl = "";
+    }
     const removingFromAssetScope = isAssetScope(workbench);
     const selectedStoryboardBeforeRemoval = removingFromAssetScope
       ? null
@@ -33053,6 +33159,129 @@ function applyCanvasGraphViewport(workbench) {
   return true;
 }
 
+function stripStaleReferenceAssetVersionIds(payload) {
+  const referenceCollections = [
+    ["referenceImages", payload?.referenceImages],
+    ["quickReferences", payload?.parameters?.quickReferences],
+    ["referenceUploads", payload?.parameters?.referenceUploads],
+    ["references", payload?.parameters?.references],
+    ["filePaths", payload?.parameters?.filePaths],
+  ];
+  const hasUsableReference = referenceCollections.some(([, items]) =>
+    Array.isArray(items) && items.some((item) => String(item?.url ?? item?.sourceUrl ?? item?.storageObjectId ?? "").trim()),
+  );
+  const hasReferenceAssetVersionId = [
+    payload?.referenceAssetVersionIds,
+    payload?.parameters?.referenceAssetVersionIds,
+    ...referenceCollections.map(([, items]) => items),
+  ].some((items) =>
+    Array.isArray(items) && items.some((item) =>
+      typeof item === "string"
+        ? String(item).trim()
+        : String(item?.assetVersionId ?? "").trim(),
+    ),
+  );
+  if (!hasUsableReference && !hasReferenceAssetVersionId) {
+    return null;
+  }
+  const stripItem = (item) => {
+    if (typeof item === "string") {
+      return item;
+    }
+    if (!item || typeof item !== "object") {
+      return item;
+    }
+    const hasStaleVersionId = String(item.assetVersionId ?? "").trim();
+    const hasReplacement = String(
+      item.url ?? item.sourceUrl ?? item.previewUrl ?? item.publicUrl ?? item.src ?? item.storageObjectId ?? "",
+    ).trim();
+    if (hasStaleVersionId && !hasReplacement) {
+      return null;
+    }
+    const { assetVersionId: _assetVersionId, ...rest } = item;
+    return rest;
+  };
+  const stripCollection = (items) => Array.isArray(items)
+    ? items.map(stripItem).filter(Boolean)
+    : items;
+  const nextPayload = {
+    ...payload,
+    referenceAssetVersionIds: undefined,
+    referenceImages: stripCollection(payload.referenceImages),
+    canvasContext: payload?.canvasContext
+      ? {
+          ...payload.canvasContext,
+          referenceImages: Array.isArray(payload.canvasContext.referenceImages)
+            ? stripCollection(payload.canvasContext.referenceImages)
+            : payload.canvasContext.referenceImages,
+        }
+      : payload?.canvasContext,
+    parameters: payload?.parameters
+      ? {
+          ...payload.parameters,
+          referenceAssetVersionIds: undefined,
+          referenceImages: Array.isArray(payload.parameters.referenceImages)
+            ? stripCollection(payload.parameters.referenceImages)
+            : payload.parameters.referenceImages,
+          quickReferences: Array.isArray(payload.parameters.quickReferences)
+            ? stripCollection(payload.parameters.quickReferences)
+            : payload.parameters.quickReferences,
+          referenceUploads: Array.isArray(payload.parameters.referenceUploads)
+            ? stripCollection(payload.parameters.referenceUploads)
+            : payload.parameters.referenceUploads,
+          references: stripCollection(payload.parameters.references),
+          filePaths: stripCollection(payload.parameters.filePaths),
+        }
+      : payload?.parameters,
+  };
+  if (nextPayload.imageReference && typeof nextPayload.imageReference === "object") {
+    nextPayload.imageReference = stripItem(nextPayload.imageReference);
+  } else if (typeof nextPayload.imageReference === "string") {
+    nextPayload.imageReference = undefined;
+  }
+  if (nextPayload.parameters?.imageReference && typeof nextPayload.parameters.imageReference === "object") {
+    nextPayload.parameters.imageReference = stripItem(nextPayload.parameters.imageReference);
+  } else if (typeof nextPayload.parameters?.imageReference === "string") {
+    nextPayload.parameters.imageReference = undefined;
+  }
+  if (nextPayload.selectionContext?.selectedAsset && typeof nextPayload.selectionContext.selectedAsset === "object") {
+    const selectedAsset = nextPayload.selectionContext.selectedAsset;
+    const hasSelectedAssetReplacement = String(
+      selectedAsset.fixedImageUrl ?? selectedAsset.previewUrl ?? selectedAsset.sourceUrl ?? selectedAsset.storageObjectId ?? "",
+    ).trim();
+    nextPayload.selectionContext = {
+      ...nextPayload.selectionContext,
+      selectedAsset: hasSelectedAssetReplacement
+        ? stripItem(selectedAsset)
+        : (() => {
+            const {
+              fixedImageFileId: _fixedImageFileId,
+              fixedImageStorageObjectId: _fixedImageStorageObjectId,
+              storageObjectId: _storageObjectId,
+              ...rest
+            } = selectedAsset;
+            return rest;
+          })(),
+    };
+  }
+  return nextPayload;
+}
+
+async function createImageGenerationTaskWithReferenceFallback(workbench, payload) {
+  try {
+    return await workbench.api.createImageGenerationTask(payload);
+  } catch (error) {
+    if (String(error?.errorCode ?? "") !== "model_reference_not_found") {
+      throw error;
+    }
+    const fallbackPayload = stripStaleReferenceAssetVersionIds(payload);
+    if (!fallbackPayload) {
+      throw error;
+    }
+    return workbench.api.createImageGenerationTask(fallbackPayload);
+  }
+}
+
 async function submitCanvasRunIfAvailable(workbench, preview) {
   const canvasNode = workbench.ui.canvasDocument?.nodes?.find?.((node) => node.id === preview.nodeId);
   const workflowReferencePlan = resolveCanvasScriptWorkflowVideoReferencePlan(workbench.ui.canvasDocument, canvasNode);
@@ -33172,14 +33401,15 @@ async function submitCanvasRunIfAvailable(workbench, preview) {
     return workbench.api.runCanvasNode(canvasProjectId, preview.nodeId, audioPayload);
   }
   if (preview.mediaKind !== "video" && preview.mediaKind !== "audio" && canvasProjectId && typeof workbench.api?.createImageGenerationTask === "function") {
-    return workbench.api.createImageGenerationTask({
+    const imageTaskPayload = {
       ...payload,
       target: {
         kind: "canvas",
         canvasProjectId,
         nodeId: preview.nodeId,
       },
-    });
+    };
+    return createImageGenerationTaskWithReferenceFallback(workbench, imageTaskPayload);
   }
   throw new Error("canvas_project_context_missing");
 }
@@ -34268,7 +34498,7 @@ function createProjectShotImageBatch(workbench, input = {}) {
     throw new Error("image_generation_api_missing");
   }
   const shotId = String(input.shotId ?? "").trim();
-  return workbench.api.createImageGenerationTask({
+  return createImageGenerationTaskWithReferenceFallback(workbench, {
     ...input,
     target: {
       kind: "project_shot_batch",
@@ -34351,15 +34581,16 @@ function normalizeFirstFrameReference(item, fallbackId = "first-frame") {
   if (!item) {
     return null;
   }
+  const refreshedUrl = resolveGenerationReferenceUrl(item);
   return {
     id: item.id ?? fallbackId,
     name: item.name ?? item.fileName ?? "首帧图片",
     kind: "image",
     type: "image",
     fromQuickReference: Boolean(item.fromQuickReference),
-    url: item.url ?? item.src ?? item.preview ?? "",
-    src: item.src ?? item.url ?? item.preview ?? "",
-    preview: item.preview ?? item.url ?? item.src ?? "",
+    url: refreshedUrl || item.url || item.src || item.preview || "",
+    src: refreshedUrl || item.src || item.url || item.preview || "",
+    preview: refreshedUrl || item.preview || item.url || item.src || "",
     summary: item.summary ?? item.description ?? "已设置首帧图片",
     uploadSessionId: item.uploadSessionId ?? null,
     storageObjectId: item.storageObjectId ?? null,
@@ -34392,6 +34623,8 @@ function setSingleFrameReference(workbench, item, { frameTarget = "first", toast
   }));
   workbench.ui.episodeWorkbenchAttachments = [];
   workbench.ui.episodeWorkbenchSelectedAttachmentIds = [];
+  workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId = "";
+  workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl = "";
   if (toast) {
     workbench.ui.toast = toast;
   }
@@ -34417,6 +34650,8 @@ function applyDraggedEpisodeAssetToGenerationFrame(workbench, dataTransfer, { fr
   setSingleFrameReference(workbench, {
     id: `drag-ref:${frameTarget}:${asset.id ?? payload.assetId}`,
     assetId: asset.id ?? payload.assetId,
+    ...(asset.storageObjectId ? { storageObjectId: asset.storageObjectId } : {}),
+    ...(asset.assetVersionId ? { assetVersionId: asset.assetVersionId } : {}),
     kind: "image",
     type: "image",
     name: asset.name ?? (frameTarget === "last" ? "尾帧图" : "首帧图"),
@@ -40309,7 +40544,7 @@ function fallbackVideoModelCodeForMode(mode) {
 
 function resolveConfiguredImageModelCode(workbench, mode, fallback) {
   const config = workbench.ui.episodeGenerationConfig ?? {};
-  const selectedModelCode = String(workbench.ui.selectedModelId ?? "").trim();
+  const selectedModelCode = normalizeLegacyImageModelCode(workbench.ui.selectedModelId);
   const configuredDefault =
     typeof config.defaultImageModelCode === "string" && config.defaultImageModelCode.trim()
       ? config.defaultImageModelCode.trim()
@@ -40328,6 +40563,13 @@ function resolveConfiguredImageModelCode(workbench, mode, fallback) {
   }
   const configuredModel = models.find((model) => modelSupportsGenerationMode(model, mode));
   return configuredModel?.modelCode ?? fallback;
+}
+
+function normalizeLegacyImageModelCode(value) {
+  const modelCode = String(value ?? "").trim();
+  return ["global-ai-opc-nano-banana-2", "nano_banana_2", "nano-banana-2-image"].includes(modelCode)
+    ? "seedream-5.0"
+    : modelCode;
 }
 
 function resolveHomeAgentPreferredModels(workbench) {
@@ -40612,8 +40854,12 @@ function syncSelectedVideoGenerationParametersWithConfiguredModel(workbench) {
     workbench.ui.generationParameterValues.videoResolution = workbench.ui.videoResolution;
   }
   if (configuredParameters.durationSec !== undefined) {
-    workbench.ui.videoDurationSec = String(configuredParameters.durationSec);
+    const durationSec = /^sd_2\.5_special(?:_v1)?$/i.test(String(modelCode))
+      ? 5
+      : configuredParameters.durationSec;
+    workbench.ui.videoDurationSec = String(durationSec);
     workbench.ui.generationParameterValues.videoDurationSec = workbench.ui.videoDurationSec;
+    workbench.ui.generationParameterValues.durationSec = workbench.ui.videoDurationSec;
   }
   if (configuredParameters.count !== undefined) {
     workbench.ui.videoCount = clampCount(configuredParameters.count, 1, 4);
@@ -41296,7 +41542,7 @@ async function submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, 
       replayTask: options.replayTask,
     })
     : null;
-  const generated = await workbench.api.createImageGenerationTask({
+  const generated = await createImageGenerationTaskWithReferenceFallback(workbench, {
     target: {
       kind: "team_asset",
       assetId: options.assetId,
@@ -41457,7 +41703,7 @@ async function submitProjectAssetGenerator(workbench, assetKind, nextName, promp
     prompt,
     selectionContext: null,
   });
-  const generated = await workbench.api.createImageGenerationTask({
+  const generated = await createImageGenerationTaskWithReferenceFallback(workbench, {
     ...taskPayload,
     target: {
       kind: "project_asset",
@@ -41623,7 +41869,7 @@ async function submitRealAssetGeneratorIfAvailable(workbench, assetKind, nextNam
   });
   let task;
   try {
-    task = await workbench.api.createImageGenerationTask({
+    task = await createImageGenerationTaskWithReferenceFallback(workbench, {
       ...payload,
       target: {
         kind: "episode_asset",
@@ -44516,8 +44762,6 @@ function syncPromptFromCurrentScope(workbench) {
 function clearEpisodeWorkbenchScopeComposer(workbench, scopeMode) {
   disposeEpisodePromptEditor(workbench);
   clearEpisodeWorkbenchAttachmentComposer(workbench);
-  workbench.ui.imageGenerationResult = null;
-  workbench.ui.videoGenerationResult = null;
   workbench.ui.prompt = "";
   workbench.ui.storyboardPromptClearedContext = null;
   clearPromptMentionUi(workbench);
@@ -45122,6 +45366,7 @@ function syncGenerationStateFromStoryboardImage(workbench, storyboardId) {
     return;
   }
 
+  const refreshedUrl = resolveGenerationReferenceUrl(image) || image.src;
   updateStoryboardGenerationState(workbench, storyboardId, (state) => ({
     ...state,
     firstFrame: {
@@ -45129,8 +45374,8 @@ function syncGenerationStateFromStoryboardImage(workbench, storyboardId) {
       kind: "image",
       status: "ready",
       summary: "已引用当前分镜图片",
-      url: image.src,
-      preview: image.src,
+      url: refreshedUrl,
+      preview: refreshedUrl,
       storageObjectId: image.storageObjectId ?? null,
       assetVersionId: image.assetVersionId ?? image.id ?? null,
     },
@@ -45393,6 +45638,7 @@ export function buildImageGenerationPayload(workbench) {
     shotId: selectedStoryboard?.linkedShotId ?? null,
     promptOverride: promptOverride || null,
     model,
+    ...(orderedImageReferences.length ? { referenceImages: orderedImageReferences } : {}),
     parameters: {
       ...configuredParameters,
       mode: workbench.ui.imageGenerationMode,
@@ -45408,6 +45654,7 @@ export function buildImageGenerationPayload(workbench) {
         : {}),
       strategy: workbench.ui.multiImageStrategy ?? "spatial-multi-view",
       references: selectedStoryboard?.references ?? [],
+      ...(orderedImageReferences.length ? { referenceImages: orderedImageReferences } : {}),
       quickReferences: orderedImageReferences.length ? orderedImageReferences : quickReferenceItems,
       ...(orderedImageFilePaths.length ? { filePaths: orderedImageFilePaths } : {}),
       firstFrame: generationState.firstFrame ?? null,
@@ -45794,16 +46041,35 @@ function resolveGenerationReferenceMediaKind(item) {
 }
 
 function resolveGenerationReferenceUrl(item) {
-  return (
+  const storageObjectId = String(
+    item?.storageObjectId ??
+    item?.fileId ??
+    item?.fixedImageStorageObjectId ??
+    item?.latestVersion?.storageObjectId ??
+    item?.latestVersion?.fileId ??
+    item?.latestVersion?.metadata?.storageObjectId ??
+    item?.latestVersion?.metadata?.fileId ??
+    "",
+  ).trim();
+  if (storageObjectId) {
+    return resolveApiUrl(`/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`);
+  }
+  const directUrl = (
     readGenerationString(item?.url) ||
     readGenerationString(item?.audioUrl) ||
     readGenerationString(item?.src) ||
+    readGenerationString(item?.imageUrl) ||
+    readGenerationString(item?.imageSrc) ||
     readGenerationString(item?.previewUrl) ||
     readGenerationString(item?.preview) ||
     readGenerationString(item?.publicUrl) ||
     readGenerationString(item?.sourceUrl) ||
     readGenerationString(item?.downloadUrl)
   );
+  const providerContentMatch = directUrl.match(/\/v1\/(?:images|videos)\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+  return providerContentMatch?.[1]
+    ? resolveApiUrl(`/api/storage/objects/${encodeURIComponent(providerContentMatch[1])}/content?proxy=1`)
+    : directUrl;
 }
 
 function normalizeCurrentVideoAssetTablePromptByFileOrder(workbench, selectedStoryboard = null) {
@@ -46377,17 +46643,20 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
         frameTarget = "last";
       }
     }
+    const selectedAssetReferenceUrl = resolveGenerationReferenceUrl(selectedAsset) || selectedAssetPreview;
     const firstFrameReference = {
       id: `quick-ref:${frameTarget}-frame:${selectedAssetId ?? Date.now()}`,
       assetId: selectedAssetId,
+      ...(selectedAsset?.storageObjectId ? { storageObjectId: selectedAsset.storageObjectId } : {}),
+      ...(selectedAsset?.fileId ? { fileId: selectedAsset.fileId } : {}),
       kind: "image",
       type: "image",
       name: selectedAssetName ?? (frameTarget === "last" ? "尾帧图" : "首帧图"),
       description: nextPrompt,
       summary: nextPrompt,
-      preview: selectedAssetPreview,
-      url: selectedAssetPreview,
-      src: selectedAssetPreview,
+      preview: selectedAssetReferenceUrl,
+      url: selectedAssetReferenceUrl,
+      src: selectedAssetReferenceUrl,
       fromQuickReference: true,
       previewMarkup: domSelectionContext?.selectedAssetPreviewMarkup ?? null,
     };
@@ -46402,13 +46671,17 @@ export function appendSelectedEpisodeAssetToPrompt(workbench, options = {}) {
       reference: firstFrameReference,
     };
   }
+  const selectedAssetReferenceUrl = resolveGenerationReferenceUrl(selectedAsset) || selectedAssetPreview;
   const nextReference = {
     id: `quick-ref:${currentAssetKind}:${selectedAssetId ?? Date.now()}`,
     assetId: selectedAssetId,
+    ...(selectedAsset?.storageObjectId ? { storageObjectId: selectedAsset.storageObjectId } : {}),
+    ...(selectedAsset?.fileId ? { fileId: selectedAsset.fileId } : {}),
     kind: currentAssetKind,
     name: selectedAssetName ?? "引用素材",
     description: nextPrompt,
-    preview: selectedAssetPreview,
+    preview: selectedAssetReferenceUrl,
+    url: selectedAssetReferenceUrl,
     previewMarkup: domSelectionContext?.selectedAssetPreviewMarkup ?? null,
   };
   const isMention = Boolean(options?.mention);
@@ -46617,6 +46890,8 @@ function resetAssetPromptDraftMedia(assetPromptDraft = {}) {
 function clearEpisodeWorkbenchAttachmentComposer(workbench) {
   workbench.ui.episodeWorkbenchAttachments = [];
   workbench.ui.episodeWorkbenchSelectedAttachmentIds = [];
+  workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId = "";
+  workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl = "";
   workbench.ui.lipSyncAudioItems = [];
 }
 
@@ -46780,14 +47055,15 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
     : [];
   const mergedStoryboardReferences = dedupeStoryboardGeneratorReferenceItems(
     [...storyboardReferences, ...domStoryboardReferences, ...additionalReferences].map((item, index) => ({
+      ...item,
       id: item?.id ?? item?.assetId ?? `storyboard-ref-${index + 1}`,
       assetId: item?.assetId ?? item?.id ?? null,
       role: item?.role ?? item?.kind ?? "character",
       kind: item?.kind ?? item?.role ?? "image",
       name: item?.name ?? item?.assetName ?? `引用${index + 1}`,
-      preview: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.url ?? null,
-      previewUrl: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.url ?? null,
-      url: item?.url ?? item?.src ?? item?.previewUrl ?? item?.preview ?? null,
+      preview: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.url ?? null,
+      previewUrl: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.url ?? null,
+      url: item?.url ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.previewUrl ?? item?.preview ?? null,
     })),
   );
   const image = includeStoryboardImage
@@ -46814,15 +47090,18 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
       const duplicateIdentity = itemIdentity && mergedStoryboardReferences.some((reference, referenceIndex) => (
         referenceIndex !== index && String(reference?.id ?? "").trim() === itemIdentity
       ));
+      const refreshedUrl = resolveGenerationReferenceUrl(item);
       return {
         id: `quick-ref:storyboard-image:${storyboard.id}:${itemIdentity || index + 1}${duplicateIdentity ? `:${index + 1}` : ""}`,
         assetId: item?.assetId ?? item?.id ?? `${storyboard.id}:ref:${index + 1}`,
+        ...(item?.storageObjectId ? { storageObjectId: item.storageObjectId } : {}),
+        ...(item?.assetVersionId ? { assetVersionId: item.assetVersionId } : {}),
         sourceStoryboardId: storyboard.id,
         kind: "image",
         name: `${resolveStoryboardReferenceLabel(storyboard)} 图片 ${index + 1}`,
         description,
-        preview: item?.previewUrl ?? item?.preview ?? item?.url ?? null,
-        url: item?.url ?? item?.previewUrl ?? item?.preview ?? null,
+        preview: refreshedUrl || item?.previewUrl || item?.preview || item?.url || null,
+        url: refreshedUrl || item?.url || item?.previewUrl || item?.preview || null,
         voiceId: matchingAudio?.voiceId ?? null,
         voiceName: matchingAudio?.voiceName ?? "",
         voiceSource: matchingAudio?.voiceSource ?? null,
@@ -46832,12 +47111,14 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
   return [{
     id: `quick-ref:storyboard-image:${storyboard.id}:${image?.id ?? storyboard?.currentImageAssetVersionId ?? "preview"}`,
     assetId: storyboard.id,
+    ...(image?.storageObjectId ? { storageObjectId: image.storageObjectId } : {}),
+    ...(image?.assetVersionId ? { assetVersionId: image.assetVersionId } : {}),
     sourceStoryboardId: storyboard.id,
     kind: "image",
     name: `${resolveStoryboardReferenceLabel(storyboard)} 图片`,
     description,
-    preview: resolvedPreviewImage,
-    url: resolvedPreviewImage,
+    preview: resolveGenerationReferenceUrl(image) || resolvedPreviewImage,
+    url: resolveGenerationReferenceUrl(image) || resolvedPreviewImage,
     voiceId: null,
     voiceName: "",
     voiceSource: null,
@@ -46976,8 +47257,10 @@ function syncStoryboardQuickReferencesToVideoGenerationState(workbench, storyboa
       kind: "image",
       type: "image",
       fromQuickReference: true,
-      url: item.url,
-      preview: item.preview ?? item.url,
+      ...(item.storageObjectId ? { storageObjectId: item.storageObjectId } : {}),
+      ...(item.assetVersionId ? { assetVersionId: item.assetVersionId } : {}),
+      url: resolveGenerationReferenceUrl(item) || item.url,
+      preview: resolveGenerationReferenceUrl(item) || item.preview || item.url,
       summary: item.description ?? "",
     }));
     return {
@@ -46988,8 +47271,10 @@ function syncStoryboardQuickReferencesToVideoGenerationState(workbench, storyboa
         kind: "image",
         type: "image",
         fromQuickReference: true,
-        url: firstImage.url,
-        preview: firstImage.preview ?? firstImage.url,
+        ...(firstImage.storageObjectId ? { storageObjectId: firstImage.storageObjectId } : {}),
+        ...(firstImage.assetVersionId ? { assetVersionId: firstImage.assetVersionId } : {}),
+        url: resolveGenerationReferenceUrl(firstImage) || firstImage.url,
+        preview: resolveGenerationReferenceUrl(firstImage) || firstImage.preview || firstImage.url,
         summary: firstImage.description ?? "已从快捷引用带入首帧",
       },
       referenceUploads: additionalImages,
@@ -46999,8 +47284,10 @@ function syncStoryboardQuickReferencesToVideoGenerationState(workbench, storyboa
         kind: "image",
         type: "image",
         fromQuickReference: true,
-        url: firstImage.url,
-        preview: firstImage.preview ?? firstImage.url,
+        ...(firstImage.storageObjectId ? { storageObjectId: firstImage.storageObjectId } : {}),
+        ...(firstImage.assetVersionId ? { assetVersionId: firstImage.assetVersionId } : {}),
+        url: resolveGenerationReferenceUrl(firstImage) || firstImage.url,
+        preview: resolveGenerationReferenceUrl(firstImage) || firstImage.preview || firstImage.url,
         summary: firstImage.description ?? "已从快捷引用带入参考图",
       },
     };
@@ -47019,6 +47306,8 @@ function clearStoryboardGenerationComposerAfterSubmit(workbench, storyboardId, l
   workbench.ui.prompt = "";
   workbench.ui.episodeWorkbenchAttachments = [];
   workbench.ui.episodeWorkbenchSelectedAttachmentIds = [];
+  workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId = "";
+  workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl = "";
   workbench.ui.lipSyncAudioItems = [];
 }
 
@@ -47185,7 +47474,7 @@ export async function generateStoryboardImages(workbench, options = {}) {
     });
     const result = isRealEpisodeWorkbench(workbench) && typeof workbench.api.createImageGenerationTask === "function"
       ? normalizeEpisodeTaskForLegacyResult(
-          await workbench.api.createImageGenerationTask({
+          await createImageGenerationTaskWithReferenceFallback(workbench, {
             ...payload,
             ...(isStoryboardGenerator ? { sourceSurface: STORYBOARD_GENERATOR_SOURCE_SURFACE } : {}),
             target: {
@@ -47633,6 +47922,7 @@ function createAssetGenerationSubmissionSnapshot(workbench, asset, assetKind, me
         asset?.previewUrl ?? asset?.preview ?? asset?.sourceUrl ?? selectionContext.selectedAssetPreview,
     },
     selectedModelId,
+    modelLabel: selectedImageModel?.modelLabel ?? selectedImageModel?.name ?? selectedImageModel?.label ?? null,
     styleLabel: selectedImageStyle?.label ?? selectedImageStyle?.name ?? selectedImageStyle?.title ?? null,
     resolution: resolveGenerationDisplayResolution(
       imageParameters,
@@ -48592,15 +48882,16 @@ function normalizeConversationDraftAttachment(item, index, kind) {
     item?.src ??
     item?.audioUrl ??
     `conversation-${mediaKind}-${index + 1}`;
+  const refreshedUrl = resolveGenerationReferenceUrl(item);
   return {
     ...item,
     id: `edit-${mediaKind}:${id}`,
     type: mediaKind,
     kind: mediaKind,
     name: item?.name ?? item?.label ?? (mediaKind === "audio" ? `音频 ${index + 1}` : mediaKind === "video" ? `视频 ${index + 1}` : `图片 ${index + 1}`),
-    preview: item?.preview ?? item?.previewUrl ?? item?.src ?? item?.url ?? item?.audioUrl ?? null,
-    previewUrl: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.url ?? item?.audioUrl ?? null,
-    url: item?.url ?? item?.src ?? item?.previewUrl ?? item?.preview ?? item?.audioUrl ?? null,
+    preview: refreshedUrl || item?.preview || item?.previewUrl || item?.src || item?.url || item?.audioUrl || null,
+    previewUrl: refreshedUrl || item?.previewUrl || item?.preview || item?.src || item?.url || item?.audioUrl || null,
+    url: refreshedUrl || item?.url || item?.src || item?.previewUrl || item?.preview || item?.audioUrl || null,
     audioUrl: item?.audioUrl ?? item?.url ?? item?.src ?? null,
   };
 }
@@ -48641,7 +48932,7 @@ function normalizeConversationEditFrameImage(item, target) {
   if (!item || typeof item !== "object") {
     return null;
   }
-  const url = item.url ?? item.src ?? item.previewUrl ?? item.preview ?? null;
+  const url = resolveGenerationReferenceUrl(item) || item.url || item.src || item.previewUrl || item.preview || null;
   if (!url) {
     return null;
   }
@@ -49079,6 +49370,7 @@ function buildAssetConversationPayload(entry, messageType) {
     returnedAt: entry?.returnedAt ?? entry?.completedAt ?? null,
     taskId: entry?.taskId ?? null,
     status: entry?.status ?? null,
+    selectedModelId: entry?.selectedModelId ?? entry?.modelCode ?? null,
     modelLabel: entry?.modelLabel ?? entry?.modelName ?? null,
     styleLabel: entry?.styleLabel ?? entry?.styleName ?? null,
     skillId: entry?.skillId ?? null,
@@ -50542,7 +50834,7 @@ export async function generateAssetImages(workbench) {
     });
     let createdTask;
     try {
-      createdTask = await workbench.api.createImageGenerationTask({
+      createdTask = await createImageGenerationTaskWithReferenceFallback(workbench, {
         ...payload,
         target: {
           kind: "episode_asset",
@@ -50860,7 +51152,7 @@ async function discoverActiveTaskCenterTasks(workbench) {
   try {
     const response = await workbench.api.listTaskCenterTasks({
       page: 1,
-      pageSize: 200,
+      pageSize: 50,
       status: "active",
     });
     const items = Array.isArray(response?.items) ? response.items : [];
@@ -51111,7 +51403,7 @@ async function loadTaskCenterTasksForPolling(workbench, options = {}) {
     do {
       lastResponse = await workbench.api.listTaskCenterTasks({
         taskIds: trackedTaskIds,
-        pageSize: 200,
+        pageSize: 50,
         ...(updatedAfter ? { updatedAfter } : {}),
         ...(cursor ? { cursor } : {}),
       }, { signal: options.signal });
@@ -52643,11 +52935,14 @@ export function applyEpisodeGenerationTaskResult(workbench, task, storyboardId, 
     resolveWorkflowStatus(normalized?.status) === "completed" &&
     !hasGenerationTaskMediaResult(normalized, mediaKind)
   ) {
+    const missingMediaResultMessage = mediaKind === "video"
+      ? "生成失败，请修改素材或提示词后重新生成"
+      : "任务已结束，但没有拿到可用的生成结果，请稍后重试。";
     normalized.status = "result_unknown";
     normalized.failureCode = normalized.failureCode ?? "generation_result_missing";
     normalized.failure = {
       ...(normalized.failure ?? {}),
-      displayMessage: normalized.failure?.displayMessage ?? "任务已结束，但没有拿到可用的生成结果，请稍后重试。",
+      displayMessage: normalized.failure?.displayMessage ?? missingMediaResultMessage,
     };
     normalized.platform = {
       ...(normalized.platform ?? {}),
@@ -54740,6 +55035,10 @@ async function restoreEpisodeRouteState(workbench, locationLike, options = {}) {
     ) {
       await ensureProjectOverviewLoaded(workbench, route.projectId);
       hydratePersistedWorkbenchState(workbench);
+      // The deep-link identifies the episode to restore; project-level
+      // persistence must not redirect it to the last episode opened.
+      workbench.ui.selectedProjectCardId = route.projectId;
+      workbench.ui.selectedEpisodeId = route.episodeId;
     }
     if (
       !isCurrentHistoryRouteRestore(workbench, options.requestId) ||
@@ -58666,12 +58965,14 @@ function modelGenerationErrorMessage(value) {
       membership_required: "请先开通会员。",
       membership_expired: "会员已过期，请先续费会员。",
       model_reference_limit_exceeded: "参考素材数量超出模型限制",
-      model_reference_not_found: "参考素材不存在或无权访问",
+      model_reference_not_found: "参考素材不存在",
+      model_reference_forbidden: "参考素材无权访问",
       model_reference_unavailable: "参考素材尚未准备好，请重新选择",
       model_reference_mime_not_allowed: "当前模型不支持该参考素材格式",
+      model_reference_too_large: "参考素材不可大于20M",
       model_prompt_too_long: "提示词过长，请缩短后重试",
       model_not_configured: "模型不可用，请切换模型",
-      model_provider_unsupported: "当前模型供应商暂未接入生成执行器，请切换已支持的视频模型",
+      model_provider_unsupported: "当前模型暂未接入生成执行器，请切换已支持的视频模型",
       model_disabled: "当前模型维护中，请切换模型",
       model_task_mode_unsupported: "当前模型不支持该生成方式",
       model_media_type_mismatch: "当前模型类型不匹配",
@@ -59623,8 +59924,15 @@ function mapEpisodeStoryboardContract(storyboard) {
     storyboard?.previewImageUrl ??
     storyboard?.currentImageUrl ??
     storyboard?.currentImage?.url ??
+    storyboard?.currentImage?.previewUrl ??
     storyboard?.imageUrl ??
     null;
+  const previewImageStorageObjectId = storyboard?.previewImageStorageObjectId ?? storyboard?.currentImageStorageObjectId ?? storyboard?.currentImage?.storageObjectId ?? null;
+  const resolvedPreviewImageUrl = previewImageUrl ?? (
+    previewImageStorageObjectId
+      ? resolveApiUrl(`/api/storage/objects/${encodeURIComponent(previewImageStorageObjectId)}/content?proxy=1`)
+      : null
+  );
   const previewVideo =
     storyboard?.previewVideo ??
     storyboard?.currentVideoUrl ??
@@ -59636,6 +59944,7 @@ function mapEpisodeStoryboardContract(storyboard) {
     storyboard?.currentVideoThumbnailUrl ??
     storyboard?.currentVideo?.thumbnailUrl ??
     null;
+  const currentVideoStorageObjectId = storyboard?.currentVideoStorageObjectId ?? null;
   const generationDrafts = normalizeEpisodeStoryboardGenerationDrafts(storyboard?.generationDrafts);
   const videoDraft = generationDrafts.find((draft) => draft.mode === "video") ?? null;
   const imageDraft = generationDrafts.find((draft) => draft.mode === "image") ?? null;
@@ -59661,21 +59970,30 @@ function mapEpisodeStoryboardContract(storyboard) {
     description: resolvedVideoPrompt || (storyboard?.description ?? storyboard?.sceneAnalysis ?? storyboard?.plotPreview ?? ""),
     sceneAnalysis: storyboard?.sceneAnalysis ?? "",
     plotPreview: storyboard?.plotPreview ?? "",
-    previewImageUrl,
+    previewImageUrl: resolvedPreviewImageUrl,
+    previewImageStorageObjectId,
     previewVideo,
-    previewUrl: previewVideo ?? previewImageUrl,
+    previewUrl: previewVideo ?? resolvedPreviewImageUrl,
     previewThumbnailUrl,
-    imageStatus: previewImageUrl ? "ready" : "empty",
+    imageStatus: resolvedPreviewImageUrl ? "ready" : "empty",
     videoStatus: previewVideo ? "ready" : "empty",
     currentImageAssetVersionId: storyboard?.currentImageFileId ?? storyboard?.currentImageAssetVersionId ?? null,
+    currentImageStorageObjectId: storyboard?.currentImageStorageObjectId ?? previewImageStorageObjectId,
     currentVideoAssetVersionId: storyboard?.currentVideoFileId ?? storyboard?.currentVideoAssetVersionId ?? null,
-    uploadedImages: previewImageUrl
-      ? [{ id: storyboard?.currentImageFileId ?? `${storyboardId}-image`, src: previewImageUrl, status: "ready" }]
+    currentVideoStorageObjectId,
+    references: Array.isArray(storyboard?.references)
+      ? storyboard.references
+      : Array.isArray(storyboard?.assetRefs)
+        ? storyboard.assetRefs
+        : [],
+    uploadedImages: resolvedPreviewImageUrl
+      ? [{ id: storyboard?.currentImageFileId ?? `${storyboardId}-image`, storageObjectId: previewImageStorageObjectId, src: resolvedPreviewImageUrl, status: "ready" }]
       : [],
     uploadedVideos: previewVideo
       ? [{
           id: storyboard?.currentVideoFileId ?? `${storyboardId}-video`,
           src: previewVideo,
+          storageObjectId: currentVideoStorageObjectId,
           thumbnailSrc: previewThumbnailUrl,
           status: "ready",
         }]
@@ -59799,6 +60117,7 @@ function mapEpisodeAssetContracts(assets = [], kind) {
       fixedImageFileId: asset?.fixedImageFileId ?? null,
       fixedImageUrl: resolvedPreview,
       fixedImageStorageObjectId: asset?.fixedImageStorageObjectId ?? null,
+      storageObjectId: asset?.storageObjectId ?? asset?.previewImageStorageObjectId ?? asset?.latestVersion?.storageObjectId ?? asset?.metadata?.storageObjectId ?? asset?.latestVersion?.metadata?.storageObjectId ?? null,
     };
   });
 }
@@ -59882,6 +60201,8 @@ function mapProjectDetailAssetRecords(assets = [], kind, existingAssets = []) {
       preview,
       previewUrl: preview,
       fixedImageUrl: preview,
+      storageObjectId: asset.storageObjectId ?? asset.previewImageStorageObjectId ?? asset.latestVersion?.storageObjectId ?? asset.metadata?.storageObjectId ?? asset.latestVersion?.metadata?.storageObjectId ?? localAsset?.storageObjectId ?? null,
+      fixedImageStorageObjectId: asset.fixedImageStorageObjectId ?? asset.previewImageStorageObjectId ?? asset.latestVersion?.fixedImageStorageObjectId ?? asset.latestVersion?.metadata?.fixedImageStorageObjectId ?? localAsset?.fixedImageStorageObjectId ?? null,
       description: normalizeEpisodeAssetDescriptionText(
         asset.latestVersion?.metadata?.description ?? localAsset?.description ?? asset.assetKey ?? "",
       ),
@@ -61434,6 +61755,184 @@ function setEditSourceVideoFromStoryboard(workbench, storyboardId, videoId = "")
 
 function openAssetInspector(workbench, payload) {
   workbench.ui.assetInspector = payload;
+}
+
+async function submitResultImageAnnotation(workbench, submitButton) {
+  const state = workbench.ui.resultImageAnnotation;
+  if (!state?.open || state.submitting) return;
+  state.submitting = true;
+  state.error = "";
+  submitButton.disabled = true;
+  submitButton.textContent = "正在合成...";
+  const status = workbench.root?.querySelector?.("[data-result-annotation-status]");
+  if (status) status.textContent = "正在合成并上传图片...";
+  try {
+    const blob = await encodeResultImageAnnotation(workbench);
+    const fileName = `annotated-image-${Date.now()}.png`;
+    const file = new File([blob], fileName, { type: "image/png" });
+    const uploaded = await workbench.api.uploadFile(file, {
+      projectId: workbench.state?.project?.id ?? workbench.ui?.projectDetail?.id ?? null,
+      purpose: "episode-result-annotation",
+    });
+    const upload = uploaded?.upload ?? uploaded?.storageObject ?? {};
+    const storageObjectId = String(upload.storageObjectId ?? upload.id ?? "").trim();
+    if (!storageObjectId) throw new Error("result_annotation_upload_missing");
+    const sourceUrl = `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+    let persistedUrl = sourceUrl;
+    let assetVersionId = null;
+    if (state.scope === "composer") {
+      replaceComposerAnnotationImage(workbench, state, {
+        imageUrl: sourceUrl,
+        storageObjectId,
+        fileName,
+      });
+    } else if (state.scope === "asset") {
+      const result = typeof workbench.api.setFixedImage === "function"
+        ? await workbench.api.setFixedImage(workbench.ui.selectedEpisodeId, state.targetId, {
+            storageObjectId,
+            sourceUrl,
+            previewUrl: sourceUrl,
+          })
+        : null;
+      const savedFile = result?.file ?? {};
+      persistedUrl = resolvePreferredFixedImageUrl(savedFile.previewUrl, result?.asset?.fixedImageUrl, sourceUrl);
+      assetVersionId = result?.asset?.fixedImageFileId ?? savedFile.assetVersionId ?? null;
+      syncEpisodeAssetFixedImageState(workbench, state.targetId, {
+        previewUrl: persistedUrl,
+        sourceUrl: resolvePreferredFixedImageUrl(savedFile.sourceUrl, persistedUrl),
+        downloadUrl: resolvePreferredFixedImageUrl(savedFile.downloadUrl, savedFile.sourceUrl, persistedUrl),
+        storageObjectId: savedFile.storageObjectId ?? storageObjectId,
+        assetVersionId,
+        fixedImageFileId: assetVersionId,
+        fixedImageStorageObjectId: savedFile.storageObjectId ?? storageObjectId,
+        mimeType: "image/png",
+      });
+    } else {
+      const didSet = await setStoryboardImageResult(workbench, state.targetId, storageObjectId, "", {
+        id: storageObjectId,
+        src: sourceUrl,
+        storageObjectId,
+        status: "ready",
+      });
+      if (didSet === false) throw new Error("result_annotation_storyboard_replace_failed");
+      const storyboard = getActiveStoryboards(workbench).find((item) => item.id === state.targetId);
+      persistedUrl = storyboard?.previewImageUrl ?? sourceUrl;
+      assetVersionId = storyboard?.currentImageAssetVersionId ?? null;
+    }
+    replaceAnnotatedGenerationResult(workbench, state.taskId, persistedUrl, {
+      storageObjectId,
+      assetVersionId,
+      label: state.imageName,
+    });
+    closeResultImageAnnotation(workbench.ui);
+    workbench.resultImageAnnotationObjectUrlCleanup?.();
+    workbench.resultImageAnnotationObjectUrlCleanup = null;
+    workbench.resultImageAnnotationSource = null;
+    workbench.ui.toast = "标注已合成并替换原图。";
+    render(workbench);
+  } catch (error) {
+    state.submitting = false;
+    state.error = friendlyError(error);
+    submitButton.disabled = false;
+    submitButton.textContent = "合成并替换";
+    if (status) status.textContent = `处理失败：${state.error}`;
+  }
+}
+
+function replaceComposerAnnotationImage(workbench, state, replacement) {
+  const normalizeAnnotationReferenceUrl = (value) => {
+    const normalized = normalizeGenerationReferenceIdentity(resolveGenerationReferenceUrl({ url: value }));
+    return normalized || normalizeGenerationReferenceIdentity(String(value ?? ""));
+  };
+  const targetSelectionKey = String(state.targetId ?? "").trim();
+  const targetReferenceUrls = new Set(
+    [state.imageUrl, ...(state.imageUrls ?? [])]
+      .map((value) => normalizeAnnotationReferenceUrl(value))
+      .filter(Boolean),
+  );
+  const matches = (item) => {
+    if (!item) return false;
+    const itemSelectionKey = String(
+      item.id ??
+      item.assetId ??
+      item.storageObjectId ??
+      item.fileId ??
+      item.previewUrl ??
+      item.preview ??
+      item.url ??
+      item.src ??
+      "",
+    ).trim();
+    if (targetSelectionKey && itemSelectionKey === targetSelectionKey) {
+      return true;
+    }
+    return [item.sourceUrl, item.url, item.src, item.previewUrl, item.preview, item.imageUrl]
+      .map((value) => normalizeAnnotationReferenceUrl(value))
+      .some((value) => value && targetReferenceUrls.has(value));
+  };
+  const replaceItem = (item) => matches(item)
+    ? {
+        ...item,
+        name: replacement.fileName,
+        sourceUrl: replacement.imageUrl,
+        url: replacement.imageUrl,
+        src: replacement.imageUrl,
+        previewUrl: replacement.imageUrl,
+        preview: replacement.imageUrl,
+        imageUrl: replacement.imageUrl,
+        storageObjectId: replacement.storageObjectId,
+      }
+    : item;
+  const replaceState = (generationState = {}) => ({
+    ...generationState,
+    referenceUploads: (generationState.referenceUploads ?? []).map(replaceItem),
+    quickReferenceItems: (generationState.quickReferenceItems ?? []).map(replaceItem),
+    mentionReferences: (generationState.mentionReferences ?? []).map(replaceItem),
+    firstFrame: replaceItem(generationState.firstFrame),
+    lastFrame: replaceItem(generationState.lastFrame),
+  });
+  if (state.contextScope === "asset") {
+    workbench.ui.assetPromptDraft = replaceState(workbench.ui.assetPromptDraft ?? createEmptyGenerationState());
+  } else {
+    updateStoryboardGenerationState(workbench, workbench.ui.selectedStoryboardId, replaceState);
+  }
+  workbench.ui.episodeWorkbenchAttachments = (workbench.ui.episodeWorkbenchAttachments ?? []).map(replaceItem);
+  persistWorkbenchState(workbench);
+}
+
+function replaceAnnotatedGenerationResult(workbench, taskId, imageUrl, metadata = {}) {
+  if (!taskId) return;
+  const patchResult = (entry) => {
+    if (!entry || (taskId && resolveGenerationTaskIdForConversation(entry) !== taskId)) return entry;
+    const currentImage = Array.isArray(entry.fixedImages) ? entry.fixedImages[0] ?? {} : {};
+    const replacement = {
+      ...currentImage,
+      url: imageUrl,
+      src: imageUrl,
+      previewUrl: imageUrl,
+      storageObjectId: metadata.storageObjectId ?? currentImage.storageObjectId ?? null,
+      assetVersionId: metadata.assetVersionId ?? currentImage.assetVersionId ?? null,
+      label: metadata.label ?? currentImage.label ?? "标注图片",
+    };
+    return {
+      ...entry,
+      imageUrl,
+      previewUrl: imageUrl,
+      fixedImages: [replacement, ...(entry.fixedImages ?? []).slice(1)],
+      result: { ...entry.result, imageUrl, previewUrl: imageUrl, storageObjectId: replacement.storageObjectId },
+    };
+  };
+  workbench.ui.imageGenerationResult = patchResult(workbench.ui.imageGenerationResult);
+  for (const historyKey of ["assetConversationHistory", "storyboardConversationHistory"]) {
+    const history = workbench.ui[historyKey];
+    if (!history || typeof history !== "object") continue;
+    workbench.ui[historyKey] = Object.fromEntries(
+      Object.entries(history).map(([key, entries]) => [
+        key,
+        Array.isArray(entries) ? entries.map(patchResult) : entries,
+      ]),
+    );
+  }
 }
 
 function applyStoryboardImageToolAction(workbench, action, storyboardId) {

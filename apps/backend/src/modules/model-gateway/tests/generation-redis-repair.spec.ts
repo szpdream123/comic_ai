@@ -1387,6 +1387,39 @@ describe("generation Redis dispatch repair", () => {
     }
   });
 
+  it("does not duplicate a queued task with an active submit assignment", async () => {
+    const db = await createMigratedTestDb();
+
+    try {
+      await seedGenerationRepairTasks(db);
+      await db.query(`
+        INSERT INTO generation_queue_routes (route_key, route_code)
+        VALUES ('repair-active-route', 'rar');
+        INSERT INTO generation_queue_shards (
+          id, media_type, stage, route_key, route_code, shard_no, queue_name, admitted_count
+        ) VALUES (
+          '71000000-0000-4000-8000-000000000104', 'video', 'submit', 'repair-active-route', 'rar', 0,
+          'generation-video-submit-rar-000', 1
+        );
+        INSERT INTO generation_queue_stage_assignments (
+          assignment_key, task_id, media_type, stage, route_key, shard_id, status, admitted_at
+        ) VALUES (
+          'repair:active-submit', '50000000-0000-4000-8000-000000000101', 'video', 'submit',
+          'repair-active-route', '71000000-0000-4000-8000-000000000104', 'admitted', '2026-06-03T05:59:00.000Z'
+        );
+      `);
+
+      const repaired = await repairQueuedGenerationTaskOutbox(db, {
+        now: new Date("2026-06-03T06:00:00.000Z"),
+        limit: 10,
+      });
+
+      assert.deepEqual(repaired.repairedTaskIds, []);
+    } finally {
+      await db.close();
+    }
+  });
+
   it("does not loop image finalize recovery without a durable current attempt", async () => {
     const db = await createMigratedTestDb();
     try {

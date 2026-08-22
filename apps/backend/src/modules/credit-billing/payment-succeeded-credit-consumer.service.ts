@@ -14,6 +14,8 @@ interface PaymentSucceededPayload {
   payment_intent_id: string;
   payment_provider_event_id: string;
   amount_minor: number;
+  paid_amount_minor?: number;
+  discount_amount_minor?: number;
   currency: string;
 }
 
@@ -93,6 +95,24 @@ export async function consumePaymentSucceededCreditGrant(
         }
         assertPaymentSucceededPayloadMatchesOrder(payload, order);
 
+        // A duplicate-trade callback must never mint credits, even if an
+        // outbox event was produced by a race before the risk record landed.
+        const duplicateTradeRisk = await queryOne<{ id: string }>(
+          db,
+          `
+            SELECT id
+            FROM payment_risk_events
+            WHERE provider_event_id = $1
+              AND risk_type = 'duplicate_trade'
+            LIMIT 1
+          `,
+          [payload.payment_provider_event_id],
+        );
+        if (duplicateTradeRisk) {
+          await db.query("COMMIT");
+          return { kind: "ignored" as const };
+        }
+
         if (order.product_type !== "credit_package") {
           await db.query("COMMIT");
           return { kind: "ignored" as const };
@@ -152,6 +172,14 @@ function assertPaymentSucceededPayload(
     typeof payload.payment_intent_id !== "string" ||
     typeof payload.payment_provider_event_id !== "string" ||
     typeof payload.amount_minor !== "number" ||
+    (payload.paid_amount_minor !== undefined &&
+      (typeof payload.paid_amount_minor !== "number" ||
+        !Number.isInteger(payload.paid_amount_minor) ||
+        payload.paid_amount_minor <= 0)) ||
+    (payload.discount_amount_minor !== undefined &&
+      (typeof payload.discount_amount_minor !== "number" ||
+        !Number.isInteger(payload.discount_amount_minor) ||
+        payload.discount_amount_minor < 0)) ||
     typeof payload.currency !== "string"
   ) {
     throw new Error("invalid_payment_succeeded_payload");
@@ -162,6 +190,12 @@ function assertPaymentSucceededPayload(
     payment_intent_id: payload.payment_intent_id,
     payment_provider_event_id: payload.payment_provider_event_id,
     amount_minor: payload.amount_minor,
+    ...(payload.paid_amount_minor !== undefined
+      ? { paid_amount_minor: payload.paid_amount_minor }
+      : {}),
+    ...(payload.discount_amount_minor !== undefined
+      ? { discount_amount_minor: payload.discount_amount_minor }
+      : {}),
     currency: payload.currency,
   };
 }
@@ -180,8 +214,22 @@ function assertPaymentSucceededPayloadMatchesOrder(
     order.provider_event_order_id !== payload.order_id ||
     order.provider_event_payment_intent_id !== payload.payment_intent_id ||
     order.provider_event_type !== "payment_succeeded" ||
-    order.provider_event_processing_status !== "processed"
+    order.provider_event_processing_status !== "processed" ||
+    !paymentAmountCompositionMatchesOrder(payload)
   ) {
     throw new Error("payment_succeeded_payload_mismatch");
   }
+}
+
+function paymentAmountCompositionMatchesOrder(payload: PaymentSucceededPayload) {
+  if (payload.paid_amount_minor === undefined) {
+    return payload.discount_amount_minor === undefined;
+  }
+  const paidAmountMinor = payload.paid_amount_minor;
+  const discountAmountMinor = payload.discount_amount_minor ?? 0;
+  return (
+    (discountAmountMinor === 0 && paidAmountMinor === payload.amount_minor) ||
+    (discountAmountMinor > 0 &&
+      paidAmountMinor + discountAmountMinor === payload.amount_minor)
+  );
 }

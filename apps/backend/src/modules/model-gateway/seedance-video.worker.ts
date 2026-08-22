@@ -43,6 +43,7 @@ import { assertCanvasGenerationAssignmentActive } from "./canvas-generation-assi
 import { fetchProviderArtifactSafely } from "./provider-artifact-url-safety.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
+import { refreshGenerationInputUrls } from "./generation-input-url-refresh.ts";
 import {
   GENERATION_ARTIFACT_FETCH_NOT_READY,
   resolveGenerationArtifactStageUnavailable,
@@ -57,6 +58,7 @@ import { attachProviderRawResponse, readProviderRawResponse } from "./provider-r
 import type { ProviderRateLimiter, ProviderRateLimitGrant } from "./provider-rate-limiter.ts";
 import {
   createOrReuseProviderRequest,
+  refreshPreparedProviderRequestPayload,
   markProviderRequestCanceled,
   markProviderRequestFailed,
   markProviderRequestResultUnknown,
@@ -68,7 +70,6 @@ import {
   createUserModelRequestLog,
 } from "./user-model-request-log.service.ts";
 import { buildGlobalAiOpcVideoPayload } from "./global-ai-opc-video.provider-adapter.ts";
-import { prepareGlobalAiOpcVideoMaterials } from "./global-ai-opc-material.service.ts";
 import { buildLingdongVideoPayload } from "./lingdong-api.provider-adapter.ts";
 import { buildSanBaoVideoPayload } from "./san-bao.provider-adapter.ts";
 import {
@@ -209,6 +210,7 @@ export async function processSeedanceVideoSubmitJob(
   db: SqlDatabase,
   input: {
     taskId: string;
+    runtime?: UploadSessionRuntime;
     env: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
     rateLimiter?: ProviderRateLimiter;
@@ -284,8 +286,9 @@ export async function processSeedanceVideoSubmitJob(
     const prompt = readString(snapshot.prompt) ?? "";
     const firstFrameUrl = readString(snapshot.firstFrameUrl);
     const payloadHash = sha256(`${payloadRef}:${prompt}:${firstFrameUrl ?? ""}`);
-    const requestKey = `${row.workflow_id}:${row.task_id}`;
-    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
+    const resubmitNonce = readString(snapshot.resubmitNonce);
+    const requestKey = `${row.workflow_id}:${row.task_id}${resubmitNonce ? `:resubmit:${resubmitNonce}` : ""}`;
+    const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}:${resubmitNonce ?? ""}`);
     const originalRequestBody = {
       prompt,
       motionPrompt: prompt,
@@ -294,23 +297,32 @@ export async function processSeedanceVideoSubmitJob(
       episodeId: readString(snapshot.episodeId),
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
+      ...(Object.keys(readObject(snapshot.providerPayloadOverride)).length
+        ? { providerPayloadOverride: readObject(snapshot.providerPayloadOverride) }
+        : {}),
     };
-    const requestBody = modelConfig?.providerProtocol === "globalaiopc_video"
-      && readString(modelConfig.providerConfig.requestFormat) === "globalaiopc_model_center_video"
-      ? await prepareGlobalAiOpcVideoMaterials(db, {
-          requestBody: originalRequestBody,
-          providerConfig: modelConfig?.providerConfig ?? {},
-          env: input.env,
-          fetchImpl: resolveGenerationProviderFetch(input.fetchImpl, "video", input.env),
+    const refreshedOriginalRequestBody = input.runtime
+      ? await refreshGenerationInputUrls(db, originalRequestBody, {
+          runtime: input.runtime,
           now: input.now,
-        }).catch(() => originalRequestBody)
+          expiresInSeconds: modelSignedUrlExpiresInSeconds(input.env),
+        }).then((value) => value as typeof originalRequestBody)
+          // The client may already provide a valid signed URL. A storage
+          // refresh failure must not block provider submission.
+          .catch(() => originalRequestBody)
       : originalRequestBody;
-    const requestLogBody = buildSeedanceUserModelRequestLogBody(requestBody, {
-      providerName,
-      providerProtocol: modelConfig?.providerProtocol,
-      providerModel,
-      providerConfig: modelConfig?.providerConfig,
-    });
+    // Submit the user's original material URLs directly. Provider-side asset
+    // registration is asynchronous and must not replace user-supplied media.
+    const requestBody = refreshedOriginalRequestBody;
+    const requestLogBody = sanitizeSeedanceUserModelRequestLogBody(
+      buildSeedanceUserModelRequestLogBody(requestBody, {
+        providerName,
+        providerProtocol: modelConfig?.providerProtocol,
+        providerModel,
+        providerConfig: modelConfig?.providerConfig,
+      }),
+      readString(modelConfig?.providerConfig.requestFormat),
+    );
     const preparedProviderRequest = await createOrReuseProviderRequest(db, {
       projectId: row.project_id,
       canvasProjectId: readString(snapshot.canvasProjectId) ?? null,
@@ -326,6 +338,11 @@ export async function processSeedanceVideoSubmitJob(
       redactedPayload: requestBody,
       ...readGenerationProviderRouteReferences(snapshot),
       userId: row.user_id,
+      now: input.now,
+    });
+    await refreshPreparedProviderRequestPayload(db, {
+      providerRequestId: preparedProviderRequest.request.id,
+      redactedPayload: requestBody,
       now: input.now,
     });
     await createUserModelRequestLog(db, {
@@ -391,7 +408,7 @@ export async function processSeedanceVideoSubmitJob(
         failure: {
           failureCode,
           historicalProviderRequestId: submitted.request.id,
-          displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+          displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
         },
         creditSummary: {
           reserved: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
@@ -401,7 +418,10 @@ export async function processSeedanceVideoSubmitJob(
       });
       return { status: "failed", failureCode };
     }
-    const finalRequestBody = readSubmittedRedactedRequest(submitted) ?? requestLogBody.requestBody;
+    const finalRequestBody = sanitizeSeedance25SpecialRequestBody(
+      readSubmittedRedactedRequest(submitted) ?? requestLogBody.requestBody,
+      readString(modelConfig?.providerConfig.requestFormat) ?? requestLogBody.requestFormat,
+    );
     await createUserModelRequestLog(db, {
       providerRequestId: submitted.request.id,
       projectId: row.project_id,
@@ -524,10 +544,32 @@ export async function processSeedanceVideoSubmitJob(
     });
     const submissionIsAmbiguous = providerRequest?.status === "result_unknown";
     if (providerRequest?.provider_request_id) {
-      const logRequestBody =
+      const preparedRequestLog = buildSeedanceUserModelRequestLogBody(requestBody, {
+        providerName,
+        providerProtocol: modelConfig?.providerProtocol,
+        providerModel,
+        providerConfig: modelConfig?.providerConfig,
+      });
+      const logRequestBody = sanitizeSeedance25SpecialRequestBody(
         readProviderRedactedRequest(error) ??
         readProviderResponseRedactedRequest(providerRequest.provider_response_redacted_json) ??
-        requestBody;
+        preparedRequestLog.requestBody,
+        readString(modelConfig?.providerConfig.requestFormat) ?? preparedRequestLog.requestFormat,
+      );
+      if (!submissionIsAmbiguous) {
+        await markProviderRequestFailed(db, {
+          providerRequestId: providerRequest.provider_request_id,
+          failureCode: submissionFailureCode,
+          redactedResponse: {
+            ...(readErrorProviderDiagnostics(error) ?? {}),
+            failureCode: submissionFailureCode,
+            errorMessage,
+            phase: "submit",
+            redactedRequest: logRequestBody,
+          },
+          now: input.now,
+        });
+      }
       await createUserModelRequestLog(db, {
         providerRequestId: providerRequest.provider_request_id,
         projectId: row.project_id,
@@ -544,9 +586,9 @@ export async function processSeedanceVideoSubmitJob(
         requestHash,
         payloadHash,
         payloadSummary: null,
-        requestFormat: "generation_task",
+        requestFormat: preparedRequestLog.requestFormat ?? "generation_task",
         requestBody: logRequestBody,
-        requestText: null,
+        requestText: preparedRequestLog.requestText,
         now: input.now,
       });
       if (!submissionIsAmbiguous) {
@@ -629,6 +671,50 @@ export async function processSeedanceVideoSubmitJob(
   }
 }
 
+export function shouldPrepareGlobalAiOpcVideoMaterials(
+  modelConfig: { providerProtocol?: string | null; providerModel?: string | null; providerConfig?: Record<string, unknown> } | null | undefined,
+) {
+  return modelConfig?.providerProtocol === "globalaiopc_video"
+    && readString(modelConfig.providerConfig?.requestFormat) === "globalaiopc_model_center_video";
+}
+
+export function sanitizeSeedanceUserModelRequestLogBody(
+  requestLogBody: {
+    requestFormat?: string;
+    requestBody: Record<string, unknown>;
+    requestText: string;
+  },
+  providerRequestFormat: string | undefined,
+) {
+  if (providerRequestFormat !== "globalaiopc_model_center_video") return requestLogBody;
+  const requestBody = sanitizeSeedance25SpecialRequestBody(
+    requestLogBody.requestBody,
+    providerRequestFormat,
+  );
+  return {
+    ...requestLogBody,
+    requestFormat: providerRequestFormat,
+    requestBody,
+    requestText: JSON.stringify(requestBody, null, 2),
+  };
+}
+
+function sanitizeSeedance25SpecialRequestBody(
+  requestBody: Record<string, unknown>,
+  requestFormat?: string,
+) {
+  if (
+    requestFormat !== "globalaiopc_model_center_video" &&
+    requestBody.model !== "sd_2.5_special_v1"
+  ) return requestBody;
+  const sanitized = { ...requestBody };
+  delete sanitized.first_image;
+  if (requestBody.model === "sd_2.5_special_v1") {
+    delete sanitized.last_image;
+  }
+  return sanitized;
+}
+
 async function resolveSeedanceSubmitConflict(
   db: SqlDatabase,
   taskId: string,
@@ -707,6 +793,7 @@ async function findLatestProviderRequestForTask(
   return queryOne<{
     provider_request_id: string;
     status: string;
+    external_submission_started_at: Date | string | null;
     external_request_id: string | null;
     failure_code: string | null;
     provider_response_redacted_json: Record<string, unknown> | string | null;
@@ -716,6 +803,7 @@ async function findLatestProviderRequestForTask(
       SELECT
         request.id AS provider_request_id,
         request.status,
+        request.external_submission_started_at,
         request.external_request_id,
         request.failure_code,
         request.response_redacted_json AS provider_response_redacted_json
@@ -1144,7 +1232,7 @@ export async function processSeedanceVideoPollJob(
           failureCode,
           providerStatus: "not_found",
           providerMessage: errorMessage,
-          displayMessage: "供应商结果已不存在，系统已停止继续轮询并返还积分。请重新发起生成。",
+        displayMessage: "生成结果已不存在，系统已停止继续处理并返还积分。请重新处理生成。",
         },
         creditSummary: {
           released: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
@@ -1203,40 +1291,6 @@ export async function expireSeedanceVideoPollJob(
         now: input.now,
       });
       providerStatus = provider.status;
-      if (provider.status === "result_unknown") {
-        await markSeedanceTaskResultUnknown(db, {
-          row,
-          failureCode: "provider_poll_timeout",
-          providerRequestId: row.provider_request_id,
-          redactedResponse: buildSeedanceBillingMetadata(row, snapshot, {
-            billingEvent: "manual_review_required",
-            outcome: "manual_review_required",
-            provider: "model-gateway",
-            providerRequestId: row.provider_request_id,
-            externalRequestId: row.external_request_id,
-            failureCode: "provider_poll_timeout",
-            providerResponse: timeoutStatus,
-            settledAt: input.now,
-          }),
-          now: input.now,
-        });
-        await markGenerationTaskSnapshotResultUnknown(db, {
-          taskId: row.task_id,
-          attemptId: row.attempt_id,
-          providerRequestId: row.provider_request_id,
-          providerStatus: timeoutStatus,
-          failure: {
-            failureCode: "provider_poll_timeout",
-            displayMessage: "视频生成已超过自动轮询窗口，但供应商终态尚未确认。系统将继续后台复核，积分保持预留。",
-          },
-          creditSummary: {
-            reserved: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
-            settledAt: input.now.toISOString(),
-          },
-          now: input.now,
-        });
-        return { status: "failed", failureCode: "provider_poll_timeout" };
-      }
       if (provider.status === "succeeded") {
         return { status: "failed", failureCode: "provider_poll_timeout" };
       }
@@ -1288,7 +1342,7 @@ export async function expireSeedanceVideoPollJob(
       providerStatus: timeoutStatus,
       failure: {
         failureCode: "provider_poll_timeout",
-        displayMessage: "视频生成超过 3 小时仍未返回结果，已按失败处理并返还积分。请重新发起生成。",
+        displayMessage: "生成超时，请重新处理生成。",
       },
       creditSummary: {
         released: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
@@ -1310,7 +1364,7 @@ export async function expireSeedanceVideoPollJob(
       status: "canceled",
       responseText: buildSeedanceFailureResponseText({
         failureCode: "provider_poll_timeout",
-        errorMessage: "模型服务结果轮询超时，请稍后重试。",
+        errorMessage: "生成超时，请重新处理生成。",
         providerResponse: timeoutStatus,
       }),
       responseUsage: null,
@@ -1345,7 +1399,7 @@ export async function expireSeedanceVideoPollJob(
     providerStatus: timeoutStatus,
     failure: {
       failureCode: "provider_poll_timeout",
-      displayMessage: "视频生成超过 3 小时未完成，已按失败处理并返还积分。请重新发起生成。",
+      displayMessage: "生成超时，请重新处理生成。",
     },
     creditSummary: {
       released: resolveGenerationBillingAmount(row.amount_reserved, snapshot),
@@ -3840,6 +3894,7 @@ export function buildSeedanceUserModelRequestLogBody(
     };
   }
   if (input.providerName === "GlobalAiOpc") {
+    const requestFormat = readString(input.providerConfig?.requestFormat) ?? "globalaiopc_video";
     const providerBody = buildGlobalAiOpcVideoPayload({
       providerRequestId: "request-log-preview",
       providerName: input.providerName,
@@ -3854,7 +3909,7 @@ export function buildSeedanceUserModelRequestLogBody(
       requestFormat: readString(input.providerConfig?.requestFormat),
     });
     return {
-      requestFormat: "globalaiopc_video",
+      requestFormat,
       requestBody: providerBody,
       requestText: JSON.stringify(providerBody, null, 2),
     };
@@ -4275,6 +4330,11 @@ function readObject(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function modelSignedUrlExpiresInSeconds(env: NodeJS.ProcessEnv) {
+  const configured = Number(env.MODEL_SIGNED_URL_EXPIRES_SECONDS);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 6 * 60 * 60;
 }
 
 function readString(value: unknown) {

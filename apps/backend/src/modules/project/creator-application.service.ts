@@ -1550,8 +1550,17 @@ export function createCreatorApplication(deps: CreatorApplicationDeps) {
             return {
               ...asset,
               previewUrl,
+              thumbnailUrl: asset.latestVersion?.id && previewUrl
+                ? `/api/creator/assets/versions/${encodeURIComponent(asset.latestVersion.id)}/thumbnail`
+                : null,
               latestVersion: asset.latestVersion
-                ? { ...asset.latestVersion, previewUrl }
+                ? {
+                    ...asset.latestVersion,
+                    previewUrl,
+                    thumbnailUrl: previewUrl
+                      ? `/api/creator/assets/versions/${encodeURIComponent(asset.latestVersion.id)}/thumbnail`
+                      : null,
+                  }
                 : null,
             };
           }))
@@ -6245,6 +6254,9 @@ async function buildProjectDetail(
                   asset.latestVersion.storageObjectKey ?? null,
                   asset.latestVersion.metadata ?? null,
                 ),
+                thumbnailUrl: asset.latestVersion.id
+                  ? `/api/creator/assets/versions/${encodeURIComponent(asset.latestVersion.id)}/thumbnail`
+                  : null,
               }
             : null,
         })),

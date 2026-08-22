@@ -1,3 +1,5 @@
+import { resolveStaticAssetUrl } from "../../../shared/static-asset-url.js";
+
 export const CANVAS_AUDIO_WAVEFORM_COLUMNS = 220;
 
 const MAX_WAVEFORM_COLUMNS = 4096;
@@ -271,7 +273,9 @@ export function resolveCanvasMediaUrl(value, mediaKind = "") {
   }
   try {
     const parsed = new URL(url, "https://canvas.local/");
-    return ["http:", "https:", "blob:"].includes(parsed.protocol) ? url : "";
+    return ["http:", "https:", "blob:"].includes(parsed.protocol)
+      ? resolveStaticAssetUrl(url)
+      : "";
   } catch {
     return "";
   }

@@ -1,3 +1,5 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
+
 export function disabled(condition) {
   return condition ? "disabled" : "";
 }
@@ -12,5 +14,5 @@ export function escapeHtml(value) {
 }
 
 export function escapeAttr(value) {
-  return escapeHtml(value);
+  return escapeHtml(resolveStaticAssetUrl(value));
 }

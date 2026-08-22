@@ -41,6 +41,7 @@ import { registerGeneratedImageWithGlobalAiOpc } from "./global-ai-opc-material.
 import { buildSanBaoImagePayload } from "./san-bao.provider-adapter.ts";
 import { resolveGenerationProviderFetch } from "./generation-provider-fetch.ts";
 import { buildGenerationProviderPayloadRef } from "./generation-provider-request-identity.ts";
+import { refreshGenerationInputUrls } from "./generation-input-url-refresh.ts";
 import {
   GENERATION_ARTIFACT_FETCH_NOT_READY,
   resolveGenerationArtifactStageUnavailable,
@@ -53,6 +54,7 @@ import {
 import { generationTimeoutMsFor } from "./generation-timeout.policy.ts";
 import {
   createOrReuseProviderRequest,
+  refreshPreparedProviderRequestPayload,
   markProviderRequestFailed,
   markProviderRequestSucceeded,
   markProviderRequestResultUnknown,
@@ -407,14 +409,20 @@ export async function processGptImageSubmitJob(
     const requestKey = `${row.workflow_id}:${row.task_id}`;
     const requestHash = sha256(`${row.task_id}:${modelCode}:${prompt}`);
     const payloadHash = sha256(`${payloadRef}:${prompt}`);
-    const requestBody = {
+    const requestBody = await refreshGenerationInputUrls(db, {
       prompt,
       model: modelCode,
       parameters: readObject(snapshot.parameters),
       episodeId: readString(snapshot.episodeId),
       targetType: readString(snapshot.targetType) ?? "episode",
       targetId: readString(snapshot.targetId) ?? readString(snapshot.episodeId),
-    };
+    }, {
+      runtime: input.runtime,
+      now: input.now,
+      expiresInSeconds: modelSignedUrlExpiresInSeconds(input.env),
+      projectId: row.project_id,
+      canvasProjectId: readString(snapshot.canvasProjectId) ?? null,
+    }) as Record<string, unknown>;
     const requestLogBody = buildGptImageRequestLogBody({
       requestBody,
       modelConfig,
@@ -440,6 +448,11 @@ export async function processGptImageSubmitJob(
       redactedPayload: requestBody,
       ...readGenerationProviderRouteReferences(snapshot),
       userId: row.user_id,
+      now: input.now,
+    });
+    await refreshPreparedProviderRequestPayload(db, {
+      providerRequestId: preparedProviderRequest.request.id,
+      redactedPayload: requestBody,
       now: input.now,
     });
     providerRequestId = preparedProviderRequest.request.id;
@@ -530,7 +543,7 @@ export async function processGptImageSubmitJob(
         failure: {
           failureCode,
           historicalProviderRequestId: submitted.request.id,
-          displayMessage: "历史供应商请求仍在执行，任务已转后台复核，积分保持预留。",
+          displayMessage: "历史生成请求仍在执行，任务已转后台复核，积分保持预留。",
         },
         creditSummary: {
           reserved: resolveGptImageBillingAmount(row, snapshot),
@@ -579,7 +592,7 @@ export async function processGptImageSubmitJob(
         providerRequestId: submitted.request.id,
         failure: {
           failureCode,
-          displayMessage: "供应商已接收图片任务，但尚未返回最终结果，任务与积分状态等待后台复核。",
+          displayMessage: "图片任务已接收，但尚未返回最终结果，任务与积分状态等待后台复核。",
         },
         providerStatus: {
           provider: providerLabel,
@@ -1417,36 +1430,16 @@ export async function expireGptImagePollJob(
       });
       if (provider.status === "result_unknown") {
         const snapshot = parseSnapshot(row.input_snapshot_json);
-        await markGptImageTaskResultUnknown(db, {
+        return failGptImagePollJob(db, {
           row,
+          snapshot,
           failureCode: "provider_poll_timeout",
-          providerRequestId: row.provider_request_id,
-          metadata: {
-            billingEvent: "manual_review_required",
-            outcome: "manual_review_required",
-            providerRequestId: row.provider_request_id,
+          providerStatus: {
+            providerStatus: "timeout",
             externalRequestId: row.external_request_id ?? null,
-            failureCode: "provider_poll_timeout",
-            settledAt: input.now,
           },
           now: input.now,
         });
-        await markGenerationTaskSnapshotResultUnknown(db, {
-          taskId: row.task_id,
-          attemptId: row.attempt_id,
-          providerRequestId: row.provider_request_id,
-          providerStatus: { providerStatus: "timeout", externalRequestId: row.external_request_id ?? null },
-          failure: {
-            failureCode: "provider_poll_timeout",
-            displayMessage: "图片生成已超过自动轮询窗口，但供应商终态尚未确认。系统将继续后台复核，积分保持预留。",
-          },
-          creditSummary: {
-            reserved: resolveGptImageBillingAmount(row, snapshot),
-            settledAt: input.now.toISOString(),
-          },
-          now: input.now,
-        });
-        return { status: "failed", failureCode: "provider_poll_timeout" };
       }
       if (provider.status === "succeeded") {
         return { status: "failed", failureCode: "provider_poll_timeout" };
@@ -1466,7 +1459,7 @@ export async function expireGptImagePollJob(
         attemptId: row.attempt_id,
         providerRequestId: row.provider_request_id,
         providerStatus: { providerStatus: "canceled" },
-        failure: { failureCode: "provider_poll_timeout", displayMessage: "图片供应商任务已取消，积分已返还。" },
+        failure: { failureCode: "provider_poll_timeout", displayMessage: "生成已取消，积分已返还。" },
         creditSummary: {
           released: resolveGptImageBillingAmount(row, snapshot),
           settledAt: input.now.toISOString(),
@@ -2575,7 +2568,7 @@ async function failGptImagePollJob(
       failureCode: input.failureCode,
       providerStatus: readString(input.providerStatus.providerStatus),
       providerMessage: errorMessage,
-      displayMessage: errorMessage || "图片供应商任务失败。",
+      displayMessage: errorMessage || "图片生成失败。",
     },
     creditSummary: {
       released: resolveGptImageBillingAmount(input.row, input.snapshot),
@@ -3250,6 +3243,11 @@ function readSnapshotPromptSkills(snapshot: Record<string, unknown>) {
   return promptSkills.length || !Object.keys(legacyPromptSkill).length
     ? promptSkills
     : [legacyPromptSkill];
+}
+
+function modelSignedUrlExpiresInSeconds(env: NodeJS.ProcessEnv) {
+  const configured = Number(env.MODEL_SIGNED_URL_EXPIRES_SECONDS);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 6 * 60 * 60;
 }
 
 function readString(value: unknown) {

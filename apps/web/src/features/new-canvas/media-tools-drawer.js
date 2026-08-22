@@ -1,3 +1,4 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
 import {
   addCanvasNode,
   resolveCanvasModelOptions,
@@ -2931,5 +2932,5 @@ function escapeHtml(value) {
 }
 
 function escapeAttr(value) {
-  return escapeHtml(value);
+  return escapeHtml(resolveStaticAssetUrl(value));
 }

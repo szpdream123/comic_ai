@@ -503,7 +503,8 @@ function resolveProviderEndpoint(
   providerConfig: Record<string, unknown>,
   endpointField = "endpoint",
 ): string | undefined {
-  const requestPath = endpointField === "endpoint" || endpointField === "createTaskEndpoint"
+  const modelCenterVideo = providerConfig.requestFormat === "globalaiopc_model_center_video";
+  const requestPath = !modelCenterVideo && (endpointField === "endpoint" || endpointField === "createTaskEndpoint")
     ? readNonEmptyString(providerConfig.requestPath)
     : undefined;
   const endpoint = requestPath ?? readNonEmptyString(providerConfig[endpointField]);

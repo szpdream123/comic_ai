@@ -1,3 +1,5 @@
+import { resolveStaticAssetUrl } from "../../shared/static-asset-url.js";
+
 export function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -8,6 +10,5 @@ export function escapeHtml(value) {
 }
 
 export function escapeAttr(value) {
-  return escapeHtml(value);
+  return escapeHtml(resolveStaticAssetUrl(value));
 }
-

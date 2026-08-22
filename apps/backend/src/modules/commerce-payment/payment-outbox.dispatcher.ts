@@ -4,6 +4,7 @@ import { consumeInviteRebateForPaymentSucceeded } from "../invite-rewards/invite
 import { consumeMembershipPeriodCreditGrant } from "../membership/membership-period-credit-consumer.service.ts";
 import { consumePaymentSucceededMembershipActivation } from "../membership/payment-succeeded-membership-consumer.service.ts";
 import type { SqlDatabase } from "../shared/db/sql.ts";
+import { queryOne } from "../shared/db/sql.ts";
 import {
   claimOutboxEventsForDispatch,
   markOutboxEventFailed,
@@ -26,6 +27,14 @@ export async function dispatchPaymentOutboxBatch(
 
   for (const event of events) {
     try {
+      if (await hasDuplicateTradeRisk(db, event.payload)) {
+        await markOutboxEventProcessed(db, {
+          outboxEventId: event.id,
+          now: input.now,
+        });
+        processedEventIds.push(event.id);
+        continue;
+      }
       await consumePaymentSucceededMembershipActivation(db, {
         event,
         now: input.now,
@@ -57,6 +66,26 @@ export async function dispatchPaymentOutboxBatch(
   await dispatchMembershipPeriodCreditEvents(db, input);
 
   return { processedEventIds, failedEventIds };
+}
+
+async function hasDuplicateTradeRisk(
+  db: SqlDatabase,
+  payload: Record<string, unknown>,
+) {
+  if (typeof payload.payment_provider_event_id !== "string") {
+    return false;
+  }
+  return Boolean(await queryOne<{ id: string }>(
+    db,
+    `
+      SELECT id
+      FROM payment_risk_events
+      WHERE provider_event_id = $1
+        AND risk_type = 'duplicate_trade'
+      LIMIT 1
+    `,
+    [payload.payment_provider_event_id],
+  ));
 }
 
 async function dispatchMembershipPeriodCreditEvents(

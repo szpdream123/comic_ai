@@ -106,6 +106,8 @@ export function renderEpisodeWorkbench({
   selectedEpisodeAssetIds = [],
   selectedStoryboardIds = [],
   episodeWorkbenchSelectedAttachmentIds = [],
+  episodeWorkbenchAnnotationSelectedAttachmentId = "",
+  episodeWorkbenchAnnotationSelectedAttachmentUrl = "",
   isStoryboardDescriptionModalOpen = false,
   storyboardDescriptionDraft = "",
   selectedModelId = "gpt-image-2-cn",
@@ -166,6 +168,7 @@ export function renderEpisodeWorkbench({
   layoutMode = "standard",
   workflowWorkbenchOpen = false,
   firstLoginGuideTargetKey = "",
+  resultImageAnnotation = null,
 } = {}) {
   const isWorkflowLayout = layoutMode === "workflow";
   const scopeMode = generationUiState.museScopeMode ?? "storyboard";
@@ -300,6 +303,18 @@ export function renderEpisodeWorkbench({
     { batchScope: "storyboard", batchLabel: "一键生视频", showSetLatest: false },
   );
   const quickAssetRailToggleLabel = isQuickAssetRailCollapsed ? "展开资产快捷栏" : "收起资产快捷栏";
+  const resultAnnotationTarget = resolveResultAnnotationTarget({
+    scopeMode,
+    selectedStoryboard: currentStoryboard,
+    selectedAsset,
+    assetKind: normalizedActiveAssetTab,
+    generationState: scopeMode === "assets" ? assetPromptDraft : currentStoryboard?.generationState,
+    attachments: episodeWorkbenchAttachments,
+    selectedAttachmentId: episodeWorkbenchAnnotationSelectedAttachmentId,
+    selectedAttachmentUrl: episodeWorkbenchAnnotationSelectedAttachmentUrl,
+    generationResult: imageGenerationResult,
+    conversationEntries: scopeMode === "assets" ? assetConversationEntries : storyboardConversationEntries,
+  });
   const generationWorkbench = `
     <section class="episode-replica-center ${effectiveMediaMode === "video" || effectiveMediaMode === "lip-sync" ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? `asset-scope ${hasAssetConversationEntries ? "has-generated-stage" : "empty-composer"}` : "storyboard-scope"}">
       ${isWorkflowLayout ? `<div class="episode-replica-workflow-dock-head"><strong>${scopeMode === "assets" ? "图片生成" : "视频生成"}</strong><button type="button" class="episode-replica-workflow-dock-close" data-action="close-workflow-generation-workbench" aria-label="关闭生成工作台">×</button></div>` : ""}
@@ -350,8 +365,10 @@ export function renderEpisodeWorkbench({
         videoMode: activeVideoGenerationMode,
         attachments: episodeWorkbenchAttachments,
         selectedAttachmentIds: episodeWorkbenchSelectedAttachmentIds,
+        annotationSelectedAttachmentId: episodeWorkbenchAnnotationSelectedAttachmentId,
         generationPollingActive: currentGenerationPollingActive,
         scopeMode,
+        resultAnnotationTarget,
       })}
     </section>`;
   return `
@@ -513,6 +530,7 @@ export function renderEpisodeWorkbench({
         error: episodeVoiceTeamError,
       })}
       ${renderAssetInspectorModal(assetInspector)}
+      ${renderResultImageAnnotationModal(resultImageAnnotation)}
       ${assetImageStyleSkillModal}
       ${assetImportModal
         ? renderAssetImportModal({
@@ -804,7 +822,7 @@ function renderEpisodeLibraryCategoryTab(id, label, activeCategory) {
 }
 
 function renderEpisodeLibraryAssetCard(asset, category, selected = false) {
-  const preview = resolveReferencePreview(asset) || "";
+  const preview = resolveMediaPreviewUrl(asset, "image") || "";
   const assetName = String(asset.name ?? "").trim();
   const assetFolder = String(asset.folder ?? resolveAssetLabel(category)).trim();
   return `
@@ -1133,27 +1151,39 @@ function groupStoryboardReferences(refs = []) {
 
 function mergeStoryboardMentionReferences(storyboard, assetGroups = {}) {
   const existingRefs = Array.isArray(storyboard?.references) ? storyboard.references : [];
-  const mentionNames = extractStoryboardMentionNames(storyboard);
-  if (!mentionNames.length) {
-    return existingRefs;
-  }
-
-  const existingKeys = new Set(existingRefs.map((item) => resolveReferenceDedupeKey(item)).filter(Boolean));
+  const assetsById = new Map();
   const assetsByName = new Map();
   for (const kind of ["character", "scene", "prop"]) {
     for (const asset of assetGroups?.[kind] ?? []) {
-      const name = resolveAssetDisplayName(asset);
-      if (!name) {
-        continue;
-      }
-      assetsByName.set(name, {
+      const normalized = {
         ...asset,
         kind: asset?.kind ?? kind,
         role: asset?.role ?? kind,
-        name,
-      });
+        name: resolveAssetDisplayName(asset),
+      };
+      const assetId = String(asset?.assetId ?? asset?.id ?? "").trim();
+      if (assetId) assetsById.set(assetId, normalized);
+      if (normalized.name) assetsByName.set(normalized.name, normalized);
     }
   }
+  const hydratedRefs = existingRefs.map((ref) => {
+    const asset = assetsById.get(String(ref?.assetId ?? ref?.id ?? "").trim())
+      ?? assetsByName.get(String(ref?.name ?? ref?.assetName ?? "").trim());
+    if (!asset || (!asset.storageObjectId && !asset.fixedImageStorageObjectId)) return ref;
+    return {
+      ...ref,
+      storageObjectId: asset.storageObjectId ?? asset.fixedImageStorageObjectId,
+      fixedImageStorageObjectId: asset.fixedImageStorageObjectId ?? asset.storageObjectId,
+      preview: resolveMediaPreviewUrl(asset, "image"),
+      previewUrl: resolveMediaPreviewUrl(asset, "image"),
+    };
+  });
+  const mentionNames = extractStoryboardMentionNames(storyboard);
+  if (!mentionNames.length) {
+    return hydratedRefs;
+  }
+
+  const existingKeys = new Set(hydratedRefs.map((item) => resolveReferenceDedupeKey(item)).filter(Boolean));
 
   const matchedRefs = [];
   for (const mentionName of mentionNames) {
@@ -1165,6 +1195,8 @@ function mergeStoryboardMentionReferences(storyboard, assetGroups = {}) {
       role: asset.role ?? asset.kind ?? "character",
       kind: asset.kind ?? asset.role ?? "character",
       assetId: asset.assetId ?? asset.id ?? null,
+      storageObjectId: asset.storageObjectId ?? asset.latestVersion?.storageObjectId ?? null,
+      fixedImageStorageObjectId: asset.fixedImageStorageObjectId ?? null,
       name: asset.name,
       preview: resolveReferencePreview(asset),
       previewUrl: asset.previewUrl ?? asset.preview ?? asset.fixedImageUrl ?? null,
@@ -1179,7 +1211,7 @@ function mergeStoryboardMentionReferences(storyboard, assetGroups = {}) {
     matchedRefs.push(nextRef);
   }
 
-  return [...existingRefs, ...matchedRefs];
+  return [...hydratedRefs, ...matchedRefs];
 }
 
 function extractStoryboardMentionNames(storyboard) {
@@ -2366,7 +2398,7 @@ function renderCompactUserReferenceItem(item) {
         isAudio
           ? `<span class="episode-replica-user-ref-art audio"><span aria-hidden="true">◉</span></span>`
           : previewUrl
-            ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" /></span>`
+            ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" loading="lazy" decoding="async" fetchpriority="low" /></span>`
             : ""
       }
     </span>
@@ -2399,7 +2431,7 @@ function renderUserReferenceItem(item) {
         isAudio
           ? `<span class="episode-replica-user-ref-art audio"><span aria-hidden="true">◉</span></span>`
           : previewUrl
-          ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" /></span>`
+          ? `<span class="episode-replica-user-ref-art ${escapeAttr(item.kind ?? "image")}"><img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" loading="lazy" decoding="async" fetchpriority="low" /></span>`
           : ""
       }
       <span class="episode-replica-user-ref-copy">
@@ -2425,6 +2457,9 @@ function resolveGenerationFailureMessage(status, failureCode, generationResult =
       "",
   ).toLowerCase();
   const creditsReleased = creditStatus === "released" || Number(generationResult?.credit?.released ?? 0) > 0;
+  if (failureCode === "provider_poll_timeout") {
+    return "生成超时，请重新处理生成。";
+  }
   if (failureCode === "provider_output_storage_failed") {
     return "存储失败，等待人工处理";
   }
@@ -2444,18 +2479,15 @@ function resolveGenerationFailureMessage(status, failureCode, generationResult =
       return "生成结果已保存到平台存储，但资产记录尚未写入，任务与积分状态等待后台复核。";
     }
     if (failureCode === "provider_submission_ambiguous") {
-      return "供应商是否接收任务暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
+      return "任务接收状态暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
     }
     if (failureCode === "worker_crashed_after_external_start") {
-      return "任务已提交到供应商，但后台处理意外中断，任务与积分状态等待后台复核。";
+      return "任务已提交，但后台处理意外中断，任务与积分状态等待后台复核。";
     }
-    return "供应商结果暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
+    return "生成结果暂不明确，任务与积分状态等待后台复核，请勿重复提交。";
   }
   if (failureCode === "client_poll_timeout" || failureCode === "task_timeout") {
-    return `${mediaLabel}生成超过 ${timeoutHours} 小时未完成，已按失败处理，${creditsReleased ? "积分已返还" : "积分状态请以账本记录为准"}。`;
-  }
-  if (failureCode === "provider_poll_timeout") {
-    return `${mediaLabel}生成等待 ${timeoutHours} 小时仍未返回结果，${creditsReleased ? "供应商任务已确认终止，积分已返还" : "任务与积分状态请在后台复核"}。`;
+    return "生成超时，请重新处理生成。";
   }
   if (failureCode === "cumob_image_failed") {
     return "酷模返回生成失败，任务没有拿到可用图片，请稍后重试。";
@@ -2470,7 +2502,7 @@ function resolveGenerationFailureMessage(status, failureCode, generationResult =
     return "无法连接酷模接口，请检查网络或服务状态后重试。";
   }
   if (status === "result_unknown") {
-    return "供应商结果状态不明确，请在后台复核。";
+    return "生成结果状态不明确，请在后台复核。";
   }
   if (failureCode === "permission_denied") {
     return "当前账号没有权限处理该生成结果，请联系项目管理员。";
@@ -2478,7 +2510,7 @@ function resolveGenerationFailureMessage(status, failureCode, generationResult =
   if (failureCode === "resource_not_found") {
     return "生成结果已失效或被删除，请刷新当前剧集后重试。";
   }
-  return "生成失败，请重新编辑后再试。";
+  return "生成失败，请修改素材或提示词后重新生成";
 }
 
 function isProviderDiagnosticLikeMessage(message) {
@@ -2645,8 +2677,8 @@ function renderFailedFixedImageResult(generationResult, assetKind = "character",
   );
   const statusLabel = reviewRequired ? "待复核" : "失败";
   const reasonLabel = reviewRequired ? "复核说明" : "错误原因";
-  const reason = truncateDisplayText(failureMessage || "生成失败，请重新生成。", 48);
-  const fullReason = String(failureMessage || "生成失败，请重新生成。").trim();
+  const reason = truncateDisplayText(failureMessage || "生成失败，请修改素材或提示词后重新生成", 48);
+  const fullReason = String(failureMessage || "生成失败，请修改素材或提示词后重新生成").trim();
   return `
     <div class="episode-replica-fixed-results failure-result" role="group" aria-label="${statusLabel}结果">
       <article class="episode-replica-fixed-image-card failure-card">
@@ -2770,6 +2802,206 @@ function renderStageCanvas(selectedStoryboard, generationResult, video = false) 
   `;
 }
 
+export function resolveResultAnnotationTarget({
+  scopeMode,
+  selectedStoryboard,
+  selectedAsset,
+  assetKind,
+  generationState = {},
+  attachments = [],
+  selectedAttachmentId = "",
+  selectedAttachmentUrl = "",
+  generationResult,
+  conversationEntries = [],
+} = {}) {
+  const referenceItems = [
+    ...(generationState?.referenceUploads ?? []),
+    ...(generationState?.quickReferenceItems ?? []),
+    ...(generationState?.mentionReferences ?? []),
+    ...(scopeMode === "storyboard" ? selectedStoryboard?.references ?? [] : []),
+    generationState?.firstFrame,
+    generationState?.lastFrame,
+    ...attachments,
+  ].filter(Boolean);
+  const composerImage = referenceItems.find((item) => {
+    return resolveComposerReferenceMediaType(item) === "image"
+      && resolveAnnotationSelectionKey(item) === String(selectedAttachmentId ?? "")
+      && resolveAnnotationSourceUrl(item);
+  });
+  const resolvedComposerImageUrls = resolveAnnotationSourceUrls(composerImage)
+    .map(normalizeAnnotationImageUrl)
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+  const composerImageUrls = resolvedComposerImageUrls.some(isAnnotationStorageProxyUrl)
+    ? resolvedComposerImageUrls.filter(isAnnotationStorageProxyUrl)
+    : resolvedComposerImageUrls;
+  const composerImageUrl = composerImageUrls[0] ?? "";
+  if (composerImageUrl) {
+    return {
+      imageUrl: composerImageUrl,
+      imageUrls: composerImageUrls,
+      scope: "composer",
+      contextScope: scopeMode === "assets" ? "asset" : "storyboard",
+      targetId: composerImage?.id ?? composerImageUrl,
+      assetKind: scopeMode === "assets" ? assetKind : "",
+      name: composerImage?.name ?? composerImage?.label ?? "参考图片",
+    };
+  }
+  const selectedPreviewUrl = normalizeAnnotationImageUrl(selectedAttachmentUrl);
+  if (selectedPreviewUrl) {
+    return {
+      imageUrl: selectedPreviewUrl,
+      imageUrls: [selectedPreviewUrl],
+      scope: "composer",
+      contextScope: scopeMode === "assets" ? "asset" : "storyboard",
+      targetId: selectedAttachmentId || selectedPreviewUrl,
+      assetKind: scopeMode === "assets" ? assetKind : "",
+      name: "参考图片",
+    };
+  }
+  if (scopeMode === "assets" && selectedAsset) {
+    const assetPreviewUrl = normalizeAnnotationImageUrl(
+      selectedAsset.previewUrl ||
+      selectedAsset.preview ||
+      selectedAsset.sourceUrl ||
+      selectedAsset.url ||
+      "",
+    );
+    if (assetPreviewUrl) {
+      return {
+        imageUrl: assetPreviewUrl,
+        imageUrls: [assetPreviewUrl],
+        scope: "asset",
+        contextScope: "asset",
+        targetId: String(selectedAsset.id ?? selectedAsset.assetId ?? assetPreviewUrl),
+        assetKind,
+        name: selectedAsset.name ?? "参考图片",
+      };
+    }
+  }
+  return {
+    imageUrl: "",
+    scope: "composer",
+    contextScope: scopeMode === "assets" ? "asset" : "storyboard",
+    targetId: `annotation-selection-required:${scopeMode}`,
+    assetKind: scopeMode === "assets" ? assetKind : "",
+    name: "图片素材",
+  };
+}
+
+function resolveAnnotationSourceUrl(item) {
+  return resolveAnnotationSourceUrls(item)[0] ?? "";
+}
+
+function resolveAnnotationSourceUrls(item) {
+  if (!item) return [];
+  const nestedReference = Array.isArray(item.references)
+    ? item.references.find((reference) => resolveComposerReferenceMediaType(reference) === "image")
+    : null;
+  return [
+    resolveStorageObjectContentUrl(item, nestedReference),
+    readPublicMediaUrl(
+    item.sourceUrl,
+    item.url,
+    item.src,
+    item.previewUrl,
+    item.preview,
+    item.imageUrl,
+    nestedReference?.sourceUrl,
+    nestedReference?.url,
+    nestedReference?.src,
+    nestedReference?.previewUrl,
+    nestedReference?.preview,
+    nestedReference?.imageUrl,
+    ),
+    resolveReferencePreview(item),
+    resolveReferencePreview(nestedReference),
+  ].map((value) => String(value ?? "").trim()).filter((value, index, values) => value && values.indexOf(value) === index);
+}
+
+function resolveAnnotationSelectionKey(item) {
+  return String(
+    item?.id
+      ?? item?.assetId
+      ?? item?.storageObjectId
+      ?? item?.previewUrl
+      ?? item?.preview
+      ?? item?.url
+      ?? item?.src
+      ?? "",
+  ).trim();
+}
+
+function normalizeAnnotationImageUrl(value) {
+  const url = String(value ?? "").trim();
+  const storageMatch = url.match(/\/api\/storage\/objects\/([^/]+)\/content(?:[/?#]|$)/i);
+  if (storageMatch?.[1]) {
+    let storageObjectId = storageMatch[1];
+    try {
+      storageObjectId = decodeURIComponent(storageObjectId);
+    } catch {
+      // Keep the original path segment when it is not URI-encoded.
+    }
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
+  const providerMatch = url.match(/\/v1\/(?:images|videos)\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+  if (!providerMatch?.[1]) return url;
+  let storageObjectId = providerMatch[1];
+  try {
+    storageObjectId = decodeURIComponent(storageObjectId);
+  } catch {
+    // Keep the original path segment when it is not URI-encoded.
+  }
+  return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+}
+
+function isAnnotationStorageProxyUrl(value) {
+  return /^\/api\/storage\/objects\/[^/]+\/content\?proxy=1(?:[&#]|$)/i.test(String(value ?? "").trim());
+}
+
+function resolveGenerationAnnotationImageUrl(generationResult) {
+  const firstImage = Array.isArray(generationResult?.fixedImages)
+    ? generationResult.fixedImages.find(Boolean)
+    : null;
+  const resultAsset = Array.isArray(generationResult?.resultAssets)
+    ? generationResult.resultAssets.find((item) => String(item?.mediaKind ?? "image").toLowerCase() === "image")
+    : Array.isArray(generationResult?.result?.resultAssets)
+      ? generationResult.result.resultAssets.find((item) => String(item?.mediaKind ?? "image").toLowerCase() === "image")
+      : null;
+  return resolveStorageObjectContentUrl(firstImage, resultAsset, generationResult?.result, generationResult) || readPublicMediaUrl(
+    firstImage?.url,
+    firstImage?.src,
+    firstImage?.sourceUrl,
+    firstImage?.previewUrl,
+    resultAsset?.url,
+    resultAsset?.previewUrl,
+    resultAsset?.sourceUrl,
+    generationResult?.result?.imageUrl,
+    generationResult?.result?.previewUrl,
+    generationResult?.imageUrl,
+    generationResult?.previewUrl,
+  );
+}
+
+function renderResultAnnotationTrigger(target) {
+  if (!target?.targetId) return "";
+  return `<div class="episode-replica-annotation-bar">
+    <button
+      type="button"
+      class="episode-replica-annotation-trigger"
+      data-action="open-result-image-annotation"
+      data-image-url="${escapeAttr(target.imageUrl)}"
+      data-image-urls="${escapeAttr((target.imageUrls ?? [target.imageUrl]).filter(Boolean).join("\n"))}"
+      data-image-name="${escapeAttr(target.name ?? "图片")}"
+      data-annotation-scope="${escapeAttr(target.scope ?? "storyboard")}"
+      data-annotation-context-scope="${escapeAttr(target.contextScope ?? target.scope ?? "storyboard")}"
+      data-target-id="${escapeAttr(target.targetId)}"
+      data-task-id="${escapeAttr(target.taskId ?? "")}"
+      data-asset-kind="${escapeAttr(target.assetKind ?? "")}"
+      ${target.disabled ? 'disabled aria-disabled="true" title="请先添加或生成图片"' : ""}
+    >图片修改</button>
+  </div>`;
+}
+
 export function renderPromptDock({
   selectedStoryboard,
   selectedAsset,
@@ -2785,8 +3017,10 @@ export function renderPromptDock({
   videoMode = null,
   attachments = [],
   selectedAttachmentIds = [],
+  annotationSelectedAttachmentId = "",
   generationPollingActive = false,
   scopeMode = "storyboard",
+  resultAnnotationTarget = null,
 }) {
   if (mediaMode === "lip-sync") {
     return renderLipSyncDock({
@@ -2797,6 +3031,7 @@ export function renderPromptDock({
       generationPollingActive,
       validationMessage,
       attachments,
+      resultAnnotationTarget,
     });
   }
   const supportsAudioUpload = mediaMode === "video" || mediaMode === "lip-sync";
@@ -2904,8 +3139,8 @@ export function renderPromptDock({
           .filter((candidate) => resolveComposerReferenceMediaType(candidate.item) === mediaType)
           .length - 1;
         return entry.type === "quick-reference"
-          ? renderQuickReferenceItem(entry.item, mediaIndex)
-          : renderAttachment(entry.item, mediaIndex, selectedAttachmentIds.includes(entry.item.id));
+          ? renderQuickReferenceItem(entry.item, mediaIndex, selectedAttachmentIds.includes(entry.item.id), annotationSelectedAttachmentId === resolveAnnotationSelectionKey(entry.item))
+          : renderAttachment(entry.item, mediaIndex, selectedAttachmentIds.includes(entry.item.id), annotationSelectedAttachmentId === resolveAnnotationSelectionKey(entry.item));
       });
   const supportsMixedUpload = !isSingleFrameInputMode && (!isReferenceFreeImageMode || scopeMode === "assets");
   const mixedUploadLabel = isVideoMode ? "图片/视频/音频" : "图片";
@@ -2958,7 +3193,8 @@ export function renderPromptDock({
         : "分镜：";
 
   return `
-    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
+    <section class="episode-replica-prompt ${isVideoMode ? "video-mode" : "image-mode"} ${scopeMode === "assets" ? "asset-scope" : "storyboard-scope"} ${resultAnnotationTarget?.targetId ? "has-result-annotation" : ""} ${isVideoSettingsPanelOpen || isImageSettingsPanelOpen ? "video-settings-open" : ""}" ${interactionBusy ? 'aria-busy="true"' : ""}>
+      ${renderResultAnnotationTrigger(resultAnnotationTarget)}
       ${shouldShowPromptTools && contextSummary ? `<div class="episode-replica-prompt-context">${escapeHtml(contextSummary)}</div>` : ""}
       ${renderUploadLimitHint(uploadLimits, supportsAudioUpload && !isSingleFrameInputMode)}
       ${
@@ -2995,7 +3231,7 @@ export function renderPromptDock({
                   <span class="episode-replica-mention-thumb">
                     ${
                       previewUrl
-                        ? `<img src="${escapeAttr(previewUrl)}" alt="" />`
+                        ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low" />`
                         : renderPromptMediaPlaceholder(itemKind, itemName)
                     }
                   </span>
@@ -3232,7 +3468,7 @@ function renderPromptMentionPreview(asset) {
       <span class="episode-replica-mention-preview-thumb">
         ${
           previewUrl
-            ? `<img src="${escapeAttr(previewUrl)}" alt="" />`
+            ? `<img src="${escapeAttr(previewUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low" />`
             : renderPromptMediaPlaceholder(kind, name)
         }
       </span>
@@ -3410,20 +3646,22 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
   const imagePreviewUrl = resolvePromptEditorMentionPreview(item, mediaType);
   const tooltipName = resolveReferenceTooltipName(item, mediaType === "audio" ? item.summary : "");
   const title = mediaType === "audio" ? `音频 ${index + 1}` : mediaType === "video" ? `视频 ${index + 1}` : item.name ?? `图片 ${index + 1}`;
+  const annotationSelected = options.annotationSelected === true;
+  const annotationSelectionKey = resolveAnnotationSelectionKey(item);
   const preview =
     mediaType === "audio"
       ? "<i>♫</i>"
       : mediaType === "video"
         ? imagePreviewUrl
-          ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" />`
+          ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low" />`
           : mediaSourceUrl
             ? `<video src="${escapeAttr(mediaSourceUrl)}"${previewUrl && previewUrl !== mediaSourceUrl ? ` poster="${escapeAttr(previewUrl)}"` : ""} muted playsinline preload="none"></video>`
             : renderPromptMediaPlaceholder(mediaType, item.name ?? "视频")
         : previewUrl
-          ? `<img src="${escapeAttr(previewUrl)}" alt="reference image" />`
+          ? `<img src="${escapeAttr(previewUrl)}" alt="reference image" loading="lazy" decoding="async" fetchpriority="low" />`
           : renderQuickPlaceholder(mediaType, item.name ?? "图片");
   return `
-    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""}"${cardActionMarkup} title="${escapeAttr(tooltipName)}">
+    <article class="episode-replica-ref-card attachment ${escapeAttr(mediaType)} ${selected ? "selected" : ""} ${annotationSelected ? "annotation-selected" : ""}" data-reference-media-type="${escapeAttr(mediaType)}" data-annotation-selection-key="${escapeAttr(annotationSelectionKey)}"${cardActionMarkup} title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button"${removeActionMarkup} data-attachment-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(mediaType)}"${mediaType === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? title)}" data-image-preview-key="attachment:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? title)}" title="双击查看大图"` : ""}>${preview}</span>
       ${mediaType === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
@@ -3432,8 +3670,8 @@ export function renderPromptAttachmentCard(item, index, selected, options = {}) 
   `;
 }
 
-function renderAttachment(item, index, selected) {
-  return renderPromptAttachmentCard(item, index, selected);
+function renderAttachment(item, index, selected, annotationSelected = false) {
+  return renderPromptAttachmentCard(item, index, selected, { annotationSelected });
 }
 
 function resolveComposerReferenceMediaType(item) {
@@ -3501,7 +3739,7 @@ function renderFrameImageSlot(frameTarget, label, item) {
   `;
 }
 
-function renderQuickReferenceItem(item, index = 0) {
+function renderQuickReferenceItem(item, index = 0, selected = false, annotationSelected = false) {
   const previewUrl = resolveReferencePreview(item);
   const previewMarkup = typeof item?.previewMarkup === "string" ? item.previewMarkup.trim() : "";
   const kind = resolveComposerReferenceMediaType(item);
@@ -3510,8 +3748,9 @@ function renderQuickReferenceItem(item, index = 0) {
   const storyboardReferences = Array.isArray(item?.references) ? item.references.filter(Boolean) : [];
   const voiceName = String(item?.voiceName ?? "").trim();
   const tooltipName = resolveReferenceTooltipName(item, voiceName);
+  const annotationSelectionKey = resolveAnnotationSelectionKey(item);
   return `
-    <article class="episode-replica-ref-card quick-reference ${voiceName ? "voice configured " : ""}${escapeAttr(kind)}" title="${escapeAttr(tooltipName)}">
+    <article class="episode-replica-ref-card quick-reference ${selected ? "selected " : ""}${annotationSelected ? "annotation-selected " : ""}${voiceName ? "voice configured " : ""}${escapeAttr(kind)}" data-action="toggle-episode-workbench-attachment-selection" data-attachment-id="${escapeAttr(item.id ?? "")}" data-annotation-selection-key="${escapeAttr(annotationSelectionKey)}" data-reference-media-type="${escapeAttr(kind)}" title="${escapeAttr(tooltipName)}">
       <button class="episode-replica-ref-remove" type="button" data-action="remove-quick-reference" data-reference-id="${escapeAttr(item.id ?? "")}">×</button>
       <span class="episode-replica-ref-art ${escapeAttr(kind)}"${kind === "image" && previewUrl ? ` data-image-preview-url="${escapeAttr(previewUrl)}" data-image-preview-name="${escapeAttr(item.name ?? "参考图片")}" data-image-preview-key="quick-reference:${escapeAttr(item.id ?? index)}" role="button" tabindex="0" aria-label="放大查看${escapeAttr(item.name ?? "参考图片")}" title="双击查看大图"` : ""}>
         ${storyboardReferences.length
@@ -3520,12 +3759,12 @@ function renderQuickReferenceItem(item, index = 0) {
             ? renderPromptMediaPlaceholder(kind, item.name ?? "音频")
             : kind === "video"
               ? imagePreviewUrl
-                ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" />`
+                ? `<img src="${escapeAttr(imagePreviewUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low" />`
                 : mediaSourceUrl
                   ? `<video src="${escapeAttr(mediaSourceUrl)}"${previewUrl && previewUrl !== mediaSourceUrl ? ` poster="${escapeAttr(previewUrl)}"` : ""} muted playsinline preload="none"></video>`
                   : previewMarkup || renderPromptMediaPlaceholder(kind, item.name ?? "视频")
               : previewUrl
-                ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
+                ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" loading="lazy" decoding="async" fetchpriority="low" />`
                 : previewMarkup || renderQuickPlaceholder(kind || inferKind(item.name), item.name ?? "reference")}
       </span>
       ${kind === "image" ? `<span class="episode-replica-ref-index">图${index + 1}</span>` : ""}
@@ -3558,7 +3797,7 @@ function renderResultReference(item) {
   const previewMarkup = typeof item?.previewMarkup === "string" ? item.previewMarkup.trim() : "";
   return `<span class="episode-replica-mini-thumb enriched">${
     previewUrl
-      ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" />`
+      ? `<img src="${escapeAttr(previewUrl)}" alt="${escapeAttr(item.name ?? "reference")}" loading="lazy" decoding="async" fetchpriority="low" />`
       : previewMarkup || renderQuickPlaceholder(item.kind || inferKind(item.name), item.name)
   }</span>`;
 }
@@ -4540,8 +4779,10 @@ export function renderAssetInspectorModal(inspector) {
       <section class="modal-backdrop storyboard-description-backdrop asset-image-lightbox" role="dialog" aria-modal="true" aria-label="图片预览">
         <button class="modal-backdrop-hit" type="button" data-action="close-asset-inspector" aria-label="关闭图片预览"></button>
         <div class="asset-image-lightbox-content">
-          <button class="asset-image-lightbox-close" type="button" data-action="close-asset-inspector" aria-label="关闭图片预览">×</button>
-          <img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "生成图片")}" />
+          <div class="asset-image-lightbox-media">
+            <button class="asset-image-lightbox-close" type="button" data-action="close-asset-inspector" aria-label="关闭图片预览">×</button>
+            <img src="${escapeAttr(mediaUrl)}" alt="${escapeAttr(inspector.name ?? "生成图片")}" />
+          </div>
         </div>
       </section>
     `;
@@ -4564,6 +4805,56 @@ export function renderAssetInspectorModal(inspector) {
         <div class="single-episode-actions storyboard-description-actions">
           <button class="primary-action compact" type="button" data-action="close-asset-inspector">关闭</button>
         </div>
+      </div>
+    </section>
+  `;
+}
+
+export function renderResultImageAnnotationModal(modal) {
+  if (!modal?.open || !modal?.imageUrl) return "";
+  const activeTool = String(modal.tool ?? "brush");
+  const tools = [
+    ["select", "选择"],
+    ["brush", "画笔"],
+    ["rectangle", "矩形"],
+    ["arrow", "箭头"],
+    ["grid", "网格"],
+    ["marker", "编号"],
+    ["text", "文字"],
+    ["eraser", "橡皮擦"],
+  ];
+  return `
+    <section class="result-image-annotation-backdrop" role="dialog" aria-modal="true" aria-label="图片标注">
+      <button class="result-image-annotation-hit" type="button" data-action="close-result-image-annotation" aria-label="关闭图片标注"></button>
+      <div class="result-image-annotation-dialog">
+        <header>
+          <div><strong>图片标注</strong><span>${escapeHtml(modal.imageName ?? "当前图片")}</span></div>
+          <button type="button" data-action="close-result-image-annotation" aria-label="关闭">×</button>
+        </header>
+        <div class="result-image-annotation-stage" data-result-annotation-stage>
+          <canvas data-result-annotation-canvas aria-label="图片标注画布"></canvas>
+          <div class="result-image-annotation-loading" data-result-annotation-loading>正在载入图片...</div>
+        </div>
+        <div class="result-image-annotation-toolbar" role="toolbar" aria-label="标注工具">
+          ${tools.map(([id, label]) => `<button type="button" class="${activeTool === id ? "active" : ""}" aria-pressed="${activeTool === id}" data-action="select-result-annotation-tool" data-annotation-tool="${id}">${label}</button>`).join("")}
+          <button type="button" data-action="undo-result-image-annotation">撤销</button>
+          <button type="button" data-action="redo-result-image-annotation">重做</button>
+          <button type="button" data-action="clear-result-image-annotation">清空</button>
+        </div>
+        <div class="result-image-annotation-settings">
+          <label><span>画笔</span><input type="range" min="2" max="96" value="${escapeAttr(String(modal.brushSize ?? 24))}" data-result-annotation-field="brushSize" /></label>
+          <label><span>颜色</span><input type="color" value="${escapeAttr(modal.color ?? "#ef4444")}" data-result-annotation-field="color" /></label>
+          <label data-result-annotation-grid-setting ${activeTool === "grid" ? "" : "hidden"}><span>行数</span><input type="number" min="1" max="20" value="${escapeAttr(String(modal.gridRows ?? 4))}" data-result-annotation-field="gridRows" /></label>
+          <label data-result-annotation-grid-setting ${activeTool === "grid" ? "" : "hidden"}><span>列数</span><input type="number" min="1" max="20" value="${escapeAttr(String(modal.gridColumns ?? 4))}" data-result-annotation-field="gridColumns" /></label>
+          <label class="result-image-annotation-text-field"><span>文字</span><input type="text" maxlength="80" value="${escapeAttr(modal.text ?? "标注")}" data-result-annotation-field="text" /></label>
+        </div>
+        <footer>
+          <span data-result-annotation-status>${escapeHtml(modal.error ?? "")}</span>
+          <div>
+            <button type="button" data-action="close-result-image-annotation">取消</button>
+            <button type="button" class="primary" data-action="submit-result-image-annotation" ${modal.submitting ? "disabled" : ""}>${modal.submitting ? "正在合成..." : "合成并替换"}</button>
+          </div>
+        </footer>
       </div>
     </section>
   `;
@@ -5245,7 +5536,7 @@ function renderPromptMediaPlaceholder(kind, label) {
 
 function renderStoryboardPreviewThumb(refs) {
   const items = refs.slice(0, 4).map((item) => {
-    const preview = resolveReferencePreview(item);
+    const preview = resolveMediaPreviewUrl(item, item?.kind ?? item?.type ?? "image") || resolveReferencePreview(item);
     const name = item.name ?? item.assetName ?? "素材";
     const id = item.assetId ?? item.id ?? "";
     return { id, preview, name, kind: item.kind || inferKind(name) };
@@ -5257,7 +5548,7 @@ function renderStoryboardPreviewThumb(refs) {
     <span class="episode-replica-shot-ref-card" aria-label="引用图片">
       ${
         item.preview
-          ? `<img src="${escapeAttr(item.preview)}" alt="" data-reference-id="${escapeAttr(item.id)}" data-reference-name="${escapeAttr(item.name)}" />`
+          ? `<img src="${escapeAttr(item.preview)}" alt="" loading="lazy" decoding="async" fetchpriority="low" data-reference-id="${escapeAttr(item.id)}" data-reference-name="${escapeAttr(item.name)}" />`
           : renderQuickPlaceholder(item.kind, "")
       }
     </span>
@@ -5349,6 +5640,7 @@ function resolveMediaPreviewUrl(item, mediaKind = "") {
     ? [
         item?.thumbnailSrc,
         item?.thumbnailUrl,
+        item?.latestVersion?.thumbnailUrl,
         item?.previewThumbnailUrl,
         item?.posterUrl,
         item?.poster,
@@ -5358,14 +5650,21 @@ function resolveMediaPreviewUrl(item, mediaKind = "") {
         item?.latestVersion?.metadata?.thumbnailUrl,
         item?.latestVersion?.metadata?.coverImageUrl,
       ]
-    : [item?.thumbnailSrc, item?.thumbnailUrl, item?.previewThumbnailUrl];
-  const explicit = explicitCandidates.find((candidate) => isUsableMediaPreview(candidate, kind));
-  if (explicit) {
-    return explicit;
-  }
+    : [
+        item?.thumbnailSrc,
+        item?.thumbnailUrl,
+        item?.latestVersion?.thumbnailUrl,
+        item?.previewThumbnailUrl,
+      ];
+  // Storage-backed previews should use the server-generated thumbnail instead of
+  // downloading the original PNG/JPEG into a small card.
   const thumbnailUrl = resolveStorageObjectThumbnailUrl(item);
   if (thumbnailUrl) {
     return thumbnailUrl;
+  }
+  const explicit = explicitCandidates.find((candidate) => isUsableMediaPreview(candidate, kind));
+  if (explicit) {
+    return explicit;
   }
   if (kind === "video") {
     return "";
@@ -5401,15 +5700,57 @@ function resolveStorageObjectId(...items) {
   for (const item of items) {
     const storageObjectId = [
       item?.storageObjectId,
+      item?.fileId,
       item?.fixedImageStorageObjectId,
+      item?.previewImageStorageObjectId,
+      item?.currentImageStorageObjectId,
+      item?.currentVideoStorageObjectId,
       item?.latestVersion?.storageObjectId,
+      item?.latestVersion?.fileId,
       item?.metadata?.storageObjectId,
+      item?.metadata?.fileId,
       item?.latestVersion?.metadata?.storageObjectId,
+      item?.latestVersion?.metadata?.fileId,
     ]
       .map((value) => String(value ?? "").trim())
       .find((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
     if (storageObjectId) {
       return storageObjectId;
+    }
+    const urlCandidates = [
+      item?.previewUrl,
+      item?.preview,
+      item?.sourceUrl,
+      item?.url,
+      item?.src,
+      item?.imageUrl,
+      item?.imageSrc,
+      item?.publicUrl,
+      item?.downloadUrl,
+      item?.latestVersion?.previewUrl,
+      item?.latestVersion?.imageUrl,
+      item?.latestVersion?.imageSrc,
+      item?.latestVersion?.metadata?.previewUrl,
+      item?.latestVersion?.metadata?.imageUrl,
+      item?.latestVersion?.metadata?.imageSrc,
+    ];
+    for (const candidate of urlCandidates) {
+      const value = String(candidate ?? "");
+      const storageMatch = value.match(/\/api\/storage\/objects\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+      if (storageMatch?.[1]) {
+        return storageMatch[1];
+      }
+      const providerImageMatch = value.match(/\/v1\/(?:images|videos)\/([0-9a-f-]{36})\/content(?:[/?#]|$)/i);
+      if (providerImageMatch?.[1]) {
+        return providerImageMatch[1];
+      }
+    }
+    const itemId = String(item?.id ?? "").trim();
+    if (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(itemId) &&
+      urlCandidates.some((candidate) => String(candidate ?? "").includes(itemId))
+    ) {
+      return itemId;
     }
   }
   return "";

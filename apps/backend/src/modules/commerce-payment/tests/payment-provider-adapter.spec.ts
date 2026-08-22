@@ -251,6 +251,28 @@ describe("payment provider adapters", () => {
     });
   });
 
+  it("normalizes provider-reported card discounts without losing the paid amount", () => {
+    const testPublicKey = createPublicKey(testPrivateKey).export({
+      type: "spki",
+      format: "pem",
+    }).toString();
+    const alipay = createAlipayAdapter({
+      appId: "ali-test",
+      merchantPrivateKey: testPrivateKey,
+      alipayPublicKey: testPublicKey,
+    });
+
+    const event = alipay.normalizeCallback(
+      "out_trade_no=ORD-CARD&trade_no=ALI-CARD&total_amount=100.00&buyer_pay_amount=98.00&trade_status=TRADE_SUCCESS",
+      {},
+      { signatureStatus: "verified", signatureAlgorithm: "RSA2", replayWindowStatus: "not_applicable" },
+    );
+
+    assert.equal(event?.amountMinor, 9800);
+    assert.equal(event?.discountAmountMinor, 200);
+    assert.equal(event?.safeMetadata.providerTotalAmountMinor, 10000);
+  });
+
   it("returns WeChat Native code_url with server-side qr image rendering", async () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify({

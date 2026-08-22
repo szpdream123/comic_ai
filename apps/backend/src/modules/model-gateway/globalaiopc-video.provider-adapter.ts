@@ -175,6 +175,16 @@ function buildGlobalAiOpcVideoPayload(
   }
 
   const sd2ModelName = resolveSd2ModelName(options.model, parameters);
+  if (isSeedance25SpecialModel(options.model) || sd2ModelName === "sd_2.5_special_v1") {
+    return removeUndefinedValues({
+      model: "sd_2.5_special_v1",
+      prompt,
+      duration: readDuration(parameters),
+      aspect_ratio: readRatio(parameters),
+      resolution: readString(parameters.resolution),
+      reference_images: buildReferenceImageUrls(payload, parameters),
+    });
+  }
   const firstImage =
     readString(payload.firstFrameUrl) ??
     readString(payload.imageUrl) ??
@@ -246,6 +256,10 @@ function resolveSd2ModelName(model: string | undefined, parameters: Record<strin
 
 function isSd2VideoReferenceModel(modelName: string) {
   return modelName.startsWith("sd2_manxue_video_") || modelName.startsWith("sd2_manxue_video_fast_");
+}
+
+function isSeedance25SpecialModel(model: string | undefined) {
+  return /^sd_2\.5_special(?:_v1)?(?:_(?:720p|1080p))?$/i.test(model?.trim() ?? "");
 }
 
 function normalizeSd2Resolution(value: unknown) {

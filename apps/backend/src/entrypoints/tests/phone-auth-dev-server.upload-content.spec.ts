@@ -42,6 +42,58 @@ it("re-signs stable canvas storage references before provider dispatch without d
   assert.deepEqual(calls.sort(), [imageObjectId, videoObjectId].sort());
 });
 
+it("re-signs historical COS URLs when an edit draft has no storage object id", async () => {
+  const calls: string[] = [];
+  const historicalUrl = "https://creator-test.cos.ap-shanghai.myqcloud.com/legacy/reference.png?X-Amz-Expires=60&X-Amz-Signature=expired";
+  const resolved = await resolveGenerationStorageObjectReferences({
+    firstFrameUrl: historicalUrl,
+    parameters: { filePaths: [historicalUrl] },
+  }, async (storageObjectId) => `https://signed.example/${storageObjectId}`, async (sourceUrl) => {
+    calls.push(sourceUrl);
+    return "https://signed.example/refreshed";
+  }) as Record<string, any>;
+
+  assert.equal(resolved.firstFrameUrl, "https://signed.example/refreshed");
+  assert.equal(resolved.parameters.filePaths[0], "https://signed.example/refreshed");
+  assert.deepEqual(calls, [historicalUrl, historicalUrl]);
+});
+
+it("defers stale storage proxies to an accompanying asset version", async () => {
+  const staleObjectId = "51000000-0000-4000-8000-000000000099";
+  const assetVersionId = "52000000-0000-4000-8000-000000000099";
+  const staleProxy = `/api/storage/objects/${staleObjectId}/content`;
+  const resolved = await resolveGenerationStorageObjectReferences({
+    parameters: {
+      quickReferences: [{ assetVersionId, storageObjectId: staleObjectId, url: staleProxy }],
+    },
+  }, async () => {
+    throw new Error("storage_object_missing");
+  }) as Record<string, any>;
+
+  assert.deepEqual(resolved.parameters.quickReferences[0], { assetVersionId, storageObjectId: staleObjectId });
+});
+
+it("falls back to a valid COS URL when a historical storage proxy id is stale", async () => {
+  const staleObjectId = "51000000-0000-4000-8000-000000000098";
+  const sourceUrl = "https://creator-test.cos.ap-shanghai.myqcloud.com/legacy/reference.png";
+  let sourceCalls = 0;
+  const resolved = await resolveGenerationStorageObjectReferences({
+    parameters: {
+      quickReferences: [{ storageObjectId: staleObjectId, url: sourceUrl }],
+    },
+  }, async () => {
+    throw new Error("storage_object_missing");
+  }, async (candidate) => {
+    sourceCalls += 1;
+    assert.equal(candidate, sourceUrl);
+    return "https://signed.example/refreshed-reference";
+  }) as Record<string, any>;
+
+  assert.equal(resolved.parameters.quickReferences[0].url, "https://signed.example/refreshed-reference");
+  assert.equal(resolved.parameters.quickReferences[0].storageObjectId, staleObjectId);
+  assert.equal(sourceCalls, 1);
+});
+
 it("serves an authenticated user's completed upload through the credentialed content route", async () => {
   const db = await createMigratedTestDb();
   const panoramaBytes = Buffer.from("panorama-image");

@@ -201,6 +201,25 @@ describe("generation model execution resolver", () => {
     });
   });
 
+  it("normalizes decimal strings for integer enum parameters", () => {
+    const execution = resolveGenerationModelExecution({
+      kind: "video",
+      modelCode: "sd_2.5_special",
+      modelConfig: videoModelConfig({
+        modelCode: "sd_2.5_special",
+        parameterSchema: {
+          durationSec: { type: "integer", options: ["4", "15", "30"] },
+        },
+        defaultParams: { durationSec: 15 },
+      }),
+      dispatchPolicy: undefined,
+      parameters: { durationSec: "15.0" },
+      fallbackQueueName: "generation-submit-video",
+    });
+
+    assert.equal(execution.parameters.durationSec, "15");
+  });
+
   it("keeps an authorized source video when the configured model schema omits the optional field", () => {
     const sourceVideo = { storageObjectId: "storage-reference", url: "https://signed.example/reference.mp4" };
     const execution = resolveGenerationModelExecution({

@@ -11286,7 +11286,9 @@ describe("phone auth dev server", { concurrency: false }, () => {
         (storyboard: { storyboardId: string }) => storyboard.storyboardId === storyboardId,
       );
       assert.equal(updatedStoryboard.currentImageFileId, imageTask.result.assetVersionId);
+      assert.equal(updatedStoryboard.currentImageStorageObjectId, imageTask.result.storageObjectId);
       assert.equal(updatedStoryboard.currentVideoFileId, videoTask.result.assetVersionId);
+      assert.equal(updatedStoryboard.currentVideoStorageObjectId, videoTask.result.storageObjectId);
       assert.equal(updatedStoryboard.currentVideoUrl, displayedVideoUrl);
       assert.equal(updatedStoryboard.currentVideoThumbnailUrl, displayedVideoThumbnailUrl);
       assert.equal(exportWithoutSelectionResponse.status, 400);
@@ -14683,7 +14685,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
     }
   });
 
-  it("marks expired result-unknown image tasks as task_timeout and releases reserved credits", async () => {
+  it("marks expired result-unknown image tasks as timed out and releases reserved credits", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -14852,25 +14854,25 @@ describe("phone auth dev server", { concurrency: false }, () => {
       assert.equal(timeoutLookupResponse.status, 200);
       assert.equal(concurrentTimeoutLookupResponse.status, 200);
       assert.equal(timeoutLookupEnvelope.data.status, "failed");
-      assert.equal(timeoutLookupEnvelope.data.failureCode, "task_timeout");
+      assert.equal(timeoutLookupEnvelope.data.failureCode, "provider_poll_timeout");
       assert.equal(timeoutLookupEnvelope.data.failure.noticeType, "error");
-      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成任务超过平台等待时间（图片和音频 1 小时，视频 3 小时），已按超时策略处理。积分结果请以任务账务状态和积分账本为准。");
+      assert.equal(timeoutLookupEnvelope.data.failure.displayMessage, "生成超时，请重新处理生成。");
       assert.equal(timeoutLookupEnvelope.data.credit.released, 90);
       assert.equal(Number(reservation.rows[0]?.amount_reserved ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_consumed ?? -1), 0);
       assert.equal(Number(reservation.rows[0]?.amount_released ?? -1), 90);
       assert.equal(reservation.rows[0]?.status, "released");
       assert.deepEqual(attempt.rows[0]?.status, "failed");
-      assert.deepEqual(attempt.rows[0]?.failure_code, "task_timeout");
+      assert.deepEqual(attempt.rows[0]?.failure_code, "provider_poll_timeout");
       assert.ok(attempt.rows[0]?.finished_at);
-      assert.deepEqual(providerRequest.rows[0], { status: "failed", failure_code: "task_timeout" });
+      assert.deepEqual(providerRequest.rows[0], { status: "failed", failure_code: "provider_poll_timeout" });
       assert.equal(Number(timeoutAllocations.rows[0]?.count ?? 0), 1);
     } finally {
       await server.close();
     }
   });
 
-  it("preserves credits and marks the task graph result_unknown when an expired provider request already started", async () => {
+  it("releases credits and fails the task when an expired generation request already started", async () => {
     const db = await createMigratedTestDb();
     const server = createPhoneAuthDevServer({ db });
 
@@ -15044,20 +15046,20 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const current = taskGraph.rows[0];
 
       assert.equal(timeoutLookupResponse.status, 200);
-      assert.equal(timeoutLookupEnvelope.data.status, "result_unknown");
+      assert.equal(timeoutLookupEnvelope.data.status, "failed");
       assert.equal(timeoutLookupEnvelope.data.failureCode, "provider_poll_timeout");
-      assert.equal(current?.task_status, "result_unknown");
+      assert.equal(current?.task_status, "failed");
       assert.equal(current?.task_failure_code, "provider_poll_timeout");
-      assert.equal(current?.attempt_status, "result_unknown");
+      assert.equal(current?.attempt_status, "failed");
       assert.equal(current?.attempt_failure_code, "provider_poll_timeout");
       assert.ok(current?.attempt_finished_at);
-      assert.equal(current?.provider_status, "result_unknown");
-      assert.equal(current?.provider_failure_code, "provider_poll_timeout");
-      assert.equal(current?.snapshot_status, "result_unknown");
-      assert.equal(current?.credit_status, "manual_review_required");
-      assert.equal(current?.reservation_status, "manual_review_required");
-      assert.equal(Number(current?.amount_reserved ?? -1), 90);
-      assert.equal(Number(current?.amount_released ?? -1), 0);
+      assert.equal(current?.provider_status, "running");
+      assert.equal(current?.provider_failure_code, null);
+      assert.equal(current?.snapshot_status, "failed");
+      assert.equal(current?.credit_status, "released");
+      assert.equal(current?.reservation_status, "released");
+      assert.equal(Number(current?.amount_reserved ?? -1), 0);
+      assert.equal(Number(current?.amount_released ?? -1), 90);
     } finally {
       await server.close();
     }
@@ -17186,6 +17188,49 @@ describe("phone auth dev server", { concurrency: false }, () => {
       } else {
         process.env.DATABASE_URL = originalDatabaseUrl;
       }
+      await server.close();
+    }
+  });
+
+  it("resolves COS source urls to the same-origin storage proxy", async () => {
+    const db = await createMigratedTestDb();
+    const server = createPhoneAuthDevServer({ db });
+
+    try {
+      await server.listen(0);
+      const cookie = await login(server.origin, "13800138000");
+      const user = await db.query<{ id: string }>(
+        "SELECT id FROM users WHERE phone_e164 = '13800138000' LIMIT 1",
+      );
+      const userId = user.rows[0]?.id;
+      assert.ok(userId);
+
+      const storageObjectId = randomUUID();
+      const bucket = "aimanhuadrama-1310122982";
+      const objectKey = "AIManhuaDrama/20260808/0838ea12-0a77-4bd4-9879-bcc000000001.png";
+      await db.query(
+        `
+          INSERT INTO storage_objects (
+            id, bucket, object_key, content_type, size_bytes, provider,
+            status, etag, created_by_user_id, created_at, last_verified_at
+          )
+          VALUES ($1, $2, $3, 'image/png', 4, 'tencent_cos', 'available', 'etag', $4, now(), now())
+        `,
+        [storageObjectId, bucket, objectKey, userId],
+      );
+
+      const sourceUrl = `https://${bucket}.cos.ap-guangzhou.myqcloud.com/${objectKey}`;
+      const response = await fetch(`${server.origin}/api/storage/resolve?sourceUrl=${encodeURIComponent(sourceUrl)}`, {
+        headers: { cookie },
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(
+        body.data.proxyUrl,
+        `/api/storage/objects/${storageObjectId}/content?proxy=1`,
+      );
+    } finally {
       await server.close();
     }
   });

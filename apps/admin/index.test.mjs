@@ -1471,6 +1471,13 @@ test("new BananaRouter image models use the documented recoverable async transpo
   assert.equal(context.result.dispatchPolicy.pollQueueName, "generation-poll-image");
 });
 
+test("Model Center video editors ignore stale legacy request paths", () => {
+  assert.match(script, /providerConfig\.requestFormat === "globalaiopc_model_center_video"/);
+  assert.match(script, /return providerConfig\.createTaskEndpoint \|\| "\/v2\/model-center\/tasks"/);
+  assert.match(script, /base\.providerConfig \|\| \{\}\);/);
+  assert.match(script, /modelEditorRequestPathFromProviderConfig\(template\.providerConfig \|\| \{\}\)/);
+});
+
 test("existing model edits preserve hidden transport fields until the adapter changes", () => {
   const start = script.indexOf("function modelTransportFields");
   assert.notEqual(start, -1, "model transport preservation helper exists");
@@ -3221,6 +3228,7 @@ test("admin risk workspace exposes project-aware task, queue, payment, and audit
     "provider_output_download_failed",
     "provider_output_upload_failed",
     "provider_output_persist_failed",
+    'duplicate_trade: "重复支付交易"',
     "/api/admin/ops/tasks/retry-finalize",
     "/api/admin/ops/tasks/retry-persist-asset",
     "/api/admin/ops/tasks/manual-settle",
