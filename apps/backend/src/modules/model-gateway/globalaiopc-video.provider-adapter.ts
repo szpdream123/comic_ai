@@ -38,13 +38,14 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const redactedRequest = await recordProviderAdapterRequest(
-      input,
-      buildGlobalAiOpcVideoPayload(input, {
-        model: this.config.model,
-        family: resolveFamily(this.config),
-      }),
-    );
+    const redactedRequest = buildGlobalAiOpcVideoPayload(input, {
+      model: this.config.model,
+      family: resolveFamily(this.config),
+    });
+    // Reference-video requests use reference media fields, never frame mode.
+    delete redactedRequest.first_image;
+    delete redactedRequest.last_image;
+    await recordProviderAdapterRequest(input, redactedRequest);
     const response = await fetchImpl(this.config.createTaskEndpoint, {
       method: "POST",
       headers: {

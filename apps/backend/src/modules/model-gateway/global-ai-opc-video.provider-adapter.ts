@@ -43,10 +43,10 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
       delete requestPayload.first_image;
       delete requestPayload.last_image;
     }
-    if (isSeedanceModelCenterCompat(this.config.model, this.config.requestFormat)) {
-      delete requestPayload.first_image;
-      delete requestPayload.last_image;
-    }
+    // GlobalAiOpc reference-video models use reference_images (and the
+    // corresponding reference media fields). Never send frame-mode fields.
+    delete requestPayload.first_image;
+    delete requestPayload.last_image;
     await input.recordRedactedRequest?.(requestPayload);
     const response = await fetchWithTimeout(
       fetchImpl,

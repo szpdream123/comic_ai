@@ -121,9 +121,9 @@ describe("globalaiopc video provider adapter", () => {
       prompt: "keep the pose while camera circles",
       duration: 8,
       ratio: "16:9",
-      first_image: "https://cdn.example.com/first.png",
-      last_image: "https://cdn.example.com/last.png",
     });
+    assert.equal(parsedBody.first_image, undefined);
+    assert.equal(parsedBody.last_image, undefined);
     assert.equal(result.externalRequestId, "global-sd2-task-1");
     assert.equal(result.status, "accepted");
     assert.deepEqual(result.redactedRequest, parsedBody);
