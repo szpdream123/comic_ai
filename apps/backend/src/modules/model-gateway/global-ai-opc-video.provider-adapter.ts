@@ -31,6 +31,7 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
 
   async submit(input: ProviderSubmissionInput): Promise<ProviderSubmissionResult> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const modelCenterRequest = isSeedanceModelCenterCompat(this.config.model, this.config.requestFormat);
     const requestPayload = buildGlobalAiOpcVideoPayload(input, {
       model: this.config.model,
       defaultRequestParams: this.config.defaultRequestParams,
@@ -42,13 +43,16 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
       delete requestPayload.first_image;
       delete requestPayload.last_image;
     }
-    if (this.config.requestFormat === "globalaiopc_model_center_video") {
+    if (isSeedanceModelCenterCompat(this.config.model, this.config.requestFormat)) {
       delete requestPayload.first_image;
+      delete requestPayload.last_image;
     }
     await input.recordRedactedRequest?.(requestPayload);
     const response = await fetchWithTimeout(
       fetchImpl,
-      this.config.createTaskEndpoint,
+      modelCenterRequest
+        ? normalizeSeedanceModelCenterEndpoint(this.config.createTaskEndpoint)
+        : this.config.createTaskEndpoint,
       {
         method: "POST",
         headers: {
@@ -112,9 +116,12 @@ export class GlobalAiOpcVideoProviderAdapter implements ProviderAdapter {
     }
 
     const fetchImpl = this.config.fetchImpl ?? fetch;
+    const modelCenterRequest = isSeedanceModelCenterCompat(this.config.model, this.config.requestFormat);
     const response = await fetchWithTimeout(
       fetchImpl,
-      this.config.queryTaskEndpoint
+      (modelCenterRequest
+        ? normalizeSeedanceModelCenterEndpoint(this.config.queryTaskEndpoint)
+        : this.config.queryTaskEndpoint)
         .replace("{taskId}", encodeURIComponent(input.externalRequestId))
         .replace("{id}", encodeURIComponent(input.externalRequestId)),
       {
@@ -175,6 +182,13 @@ export function buildGlobalAiOpcVideoPayload(
 ): Record<string, unknown> {
   const override = readObject(input.redactedPayload.providerPayloadOverride);
   if (Object.keys(override).length > 0) {
+    if (config.requestFormat === "globalaiopc_seedance_special" || isSeedance25SpecialModel(config.model)) {
+      return stripUndefined({
+        ...override,
+        first_image: undefined,
+        last_image: undefined,
+      });
+    }
     if (isSeedance25SpecialModel(config.model) || override.model === "sd_2.5_special_v1") {
       const sanitizedOverride = { ...override };
       delete sanitizedOverride.first_image;
@@ -241,7 +255,7 @@ export function buildGlobalAiOpcVideoPayload(
     ...readMediaUrlArray(parameters.referenceAudio),
     ...readMediaUrlArray(parameters.audioFilePaths),
   ]);
-  if (config.requestFormat === "globalaiopc_model_center_video") {
+  if (isSeedanceModelCenterCompat(config.model, config.requestFormat)) {
     const firstImage = firstHttpUrl([
       readString(payload.firstFrameUrl),
       readMediaUrl(parameters.firstFrame),
@@ -250,15 +264,18 @@ export function buildGlobalAiOpcVideoPayload(
     const isHappyHorse11 = /^happyhorse-1\.1-r2v$/i.test(config.model?.trim() ?? "");
     const isWan27R2v = /^wan2\.7-r2v$/i.test(config.model?.trim() ?? "");
     const isKlingO3 = isKlingO3Model(config.model);
-    const resolvedModel = resolveGlobalAiOpcVideoModel(config.model, {
-      resolution,
-      hasReferenceVideos: videoUrls.length > 0,
-    });
+    const resolvedModel = isSeedance20SpecialModel(config.model)
+      ? config.model!.trim()
+      : resolveGlobalAiOpcVideoModel(config.model, {
+        resolution,
+        hasReferenceVideos: videoUrls.length > 0,
+      });
     const modelCenterResolution = isSeedance25SpecialModel(config.model)
       ? normalizeSeedance25SpecialResolution(resolution) ?? "720p"
       : resolution;
     const modelCenterDuration = isSeedance25SpecialModel(config.model) ? 5 : duration;
-    const modelCenterReferenceImages = isMiniMaxH3768p || isHappyHorse11 || isWan27R2v
+    const isSeedance20Reference = isSeedance20SpecialModel(config.model);
+    const modelCenterReferenceImages = isMiniMaxH3768p || isHappyHorse11 || isWan27R2v || isSeedance20Reference
       ? dedupeHttpUrls([firstImage, ...referenceImageUrls]).slice(0, isWan27R2v ? 3 : 9)
       : (isKlingO3 ? referenceImageUrls.slice(0, 3) : referenceImageUrls);
     const omitFrameImages = isMiniMaxH3768p
@@ -266,6 +283,7 @@ export function buildGlobalAiOpcVideoPayload(
       || isWan27R2v
       || isKlingO3
       || isSeedance25SpecialModel(config.model)
+      || isSeedance20Reference
       // Model Center identifies every Seedance 2.5 Special alias as this
       // provider model; never let frame fields leak back in through aliases.
       || resolvedModel === "sd_2.5_special_v1";
@@ -295,6 +313,8 @@ export function buildGlobalAiOpcVideoPayload(
         : readBoolean(parameters.watermark) ?? readBoolean(defaults.watermark),
       generate_audio: isKlingO3
         ? readBoolean(parameters.generateAudio) ?? readBoolean(defaults.generate_audio) ?? readBoolean(defaults.generateAudio)
+        : isSeedance20Reference
+          ? readBoolean(parameters.generateAudio) ?? readBoolean(defaults.generate_audio) ?? readBoolean(defaults.generateAudio)
         : undefined,
       reference_mode: isKlingO3
         ? klingReferenceMode
@@ -498,6 +518,25 @@ function normalizeSeedance25SpecialResolution(value: string | undefined) {
 
 function isSeedance25SpecialModel(model: string | undefined) {
   return /^sd_2\.5_special(?:_v1)?(?:_(?:720p|1080p))?$/i.test(model?.trim() ?? "");
+}
+
+function isSeedance20SpecialModel(model: string | undefined) {
+  return /^sd_2\.0_special$/i.test(model?.trim() ?? "");
+}
+
+function isSeedanceModelCenterCompat(model: string | undefined, requestFormat: string | undefined) {
+  return requestFormat === "globalaiopc_model_center_video"
+    || requestFormat === "globalaiopc_seedance_special"
+    || isSeedance25SpecialModel(model);
+}
+
+function normalizeSeedanceModelCenterEndpoint(endpoint: string) {
+  return endpoint
+    .replace(
+    /\/v1\/(?:sd2_manxue|seedance-special|seedance-discount)\/videos(?=\/|$)/i,
+    "/v2/model-center/tasks",
+    )
+    .replace(/\/v1\/result(?=\/|$)/i, "/v2/model-center/tasks");
 }
 
 function isKlingO3Model(model: string | undefined) {

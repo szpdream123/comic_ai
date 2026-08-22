@@ -291,7 +291,7 @@ describe("provider request text lifecycle", () => {
     }
   });
 
-  it("compacts binary user model request log content before persistence", async () => {
+  it("preserves user model request content while compacting provider responses", async () => {
     const db = await createMigratedTestDb();
 
     try {
@@ -318,10 +318,10 @@ describe("provider request text lifecycle", () => {
         now: new Date("2026-06-01T10:02:00.000Z"),
       });
 
-      assert.equal(completed?.requestBody.reference, "[binary omitted: data URL, 100022 chars]");
-      assert.match(completed?.requestText ?? "", /\[binary omitted: data URL, 100022 chars\]/);
+      assert.equal(completed?.requestBody.reference, dataUrl);
+      assert.match(completed?.requestText ?? "", /data:image\/png;base64,A{100}/);
       assert.match(completed?.responseText ?? "", /\[binary omitted: base64, 100000 chars\]/);
-      assert.ok((completed?.requestText?.length ?? Infinity) < 5_000);
+      assert.ok((completed?.requestText?.length ?? 0) > 100_000);
       assert.ok((completed?.responseText?.length ?? Infinity) < 5_000);
     } finally {
       await db.close();
@@ -358,7 +358,7 @@ describe("provider request text lifecycle", () => {
       });
       const redactedRequest = updated.redactedResponse?.redactedRequest as Record<string, unknown>;
       assert.equal(redactedRequest.prompt, "保留请求");
-      assert.equal(redactedRequest.image, "[binary omitted: data URL, 100022 chars]");
+      assert.equal(redactedRequest.image, `data:image/png;base64,${"A".repeat(100_000)}`);
     } finally {
       await db.close();
     }

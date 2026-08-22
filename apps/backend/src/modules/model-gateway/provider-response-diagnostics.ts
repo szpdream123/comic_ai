@@ -15,13 +15,33 @@ const PROVIDER_AUDIT_TOTAL_LIMIT = 65_536;
 const PROVIDER_AUDIT_MAX_DEPTH = 12;
 const PROVIDER_AUDIT_MAX_ENTRIES = 200;
 
-export function compactProviderAuditValue(value: unknown, parentKey = ""): unknown {
+export function compactProviderAuditValue(
+  value: unknown,
+  parentKey = "",
+  limits: { stringLimit?: number; totalLimit?: number } = {},
+): unknown {
+  return compactProviderAuditValueWithLimits(value, parentKey, {
+    stringLimit: limits.stringLimit ?? PROVIDER_AUDIT_STRING_LIMIT,
+    totalLimit: limits.totalLimit ?? PROVIDER_AUDIT_TOTAL_LIMIT,
+  });
+}
+
+/** Provider request bodies are already redacted by the adapter; preserve them verbatim. */
+export function preserveProviderRequestValue(value: unknown): unknown {
+  return value;
+}
+
+function compactProviderAuditValueWithLimits(
+  value: unknown,
+  parentKey: string,
+  limits: { stringLimit: number; totalLimit: number },
+): unknown {
   const compacted = compactProviderAuditEntry(value, parentKey, {
-    remaining: PROVIDER_AUDIT_TOTAL_LIMIT,
-  }, 0);
+    remaining: limits.totalLimit,
+  }, 0, limits.stringLimit);
   const serialized = JSON.stringify(compacted);
   const serializedBytes = Buffer.byteLength(serialized, "utf8");
-  return serializedBytes <= PROVIDER_AUDIT_TOTAL_LIMIT
+  return serializedBytes <= limits.totalLimit
     ? compacted
     : {
         omitted: true,
@@ -36,35 +56,37 @@ function compactProviderAuditEntry(
   parentKey: string,
   budget: { remaining: number },
   depth: number,
+  stringLimit: number,
 ): unknown {
   if (depth > PROVIDER_AUDIT_MAX_DEPTH) {
-    return consumeProviderAuditText("[omitted: maximum audit depth exceeded]", budget);
+    return consumeProviderAuditText("[omitted: maximum audit depth exceeded]", budget, stringLimit);
   }
   if (budget.remaining <= 0) {
     return "[omitted: audit value budget exhausted]";
   }
   if (typeof value === "string") {
     if (/^data:[^,]*;base64,/i.test(value)) {
-      return consumeProviderAuditText(`[binary omitted: data URL, ${value.length} chars]`, budget);
+      return consumeProviderAuditText(`[binary omitted: data URL, ${value.length} chars]`, budget, stringLimit);
     }
     if (isProviderBinaryField(parentKey)) {
-      return consumeProviderAuditText(`[binary omitted: base64, ${value.length} chars]`, budget);
+      return consumeProviderAuditText(`[binary omitted: base64, ${value.length} chars]`, budget, stringLimit);
     }
     const parsed = parseOversizedJson(value);
-    if (value.length > PROVIDER_AUDIT_STRING_LIMIT && parsed !== undefined) {
+    if (value.length > stringLimit && parsed !== undefined) {
       return consumeProviderAuditText(
-        JSON.stringify(compactProviderAuditEntry(parsed, parentKey, budget, depth + 1)),
+        JSON.stringify(compactProviderAuditEntry(parsed, parentKey, budget, depth + 1, stringLimit)),
         budget,
+        stringLimit,
       );
     }
-    return consumeProviderAuditText(value, budget);
+    return consumeProviderAuditText(value, budget, stringLimit);
   }
   if (value instanceof Uint8Array) {
-    return consumeProviderAuditText(`[binary omitted: ${value.byteLength} bytes]`, budget);
+    return consumeProviderAuditText(`[binary omitted: ${value.byteLength} bytes]`, budget, stringLimit);
   }
   if (Array.isArray(value)) {
     const result = value.slice(0, PROVIDER_AUDIT_MAX_ENTRIES)
-      .map((item) => compactProviderAuditEntry(item, parentKey, budget, depth + 1));
+      .map((item) => compactProviderAuditEntry(item, parentKey, budget, depth + 1, stringLimit));
     if (value.length > result.length) {
       result.push({ omittedEntries: value.length - result.length });
     }
@@ -77,7 +99,7 @@ function compactProviderAuditEntry(
   const result: Record<string, unknown> = {};
   for (const [key, entryValue] of entries.slice(0, PROVIDER_AUDIT_MAX_ENTRIES)) {
     budget.remaining -= Buffer.byteLength(key, "utf8");
-    result[key] = compactProviderAuditEntry(entryValue, key, budget, depth + 1);
+    result[key] = compactProviderAuditEntry(entryValue, key, budget, depth + 1, stringLimit);
     if (budget.remaining <= 0) break;
   }
   if (entries.length > Object.keys(result).length) {
@@ -106,8 +128,8 @@ function parseOversizedJson(value: string): unknown | undefined {
   }
 }
 
-function consumeProviderAuditText(value: string, budget: { remaining: number }) {
-  const maximum = Math.max(0, Math.min(PROVIDER_AUDIT_STRING_LIMIT, budget.remaining));
+function consumeProviderAuditText(value: string, budget: { remaining: number }, stringLimit: number) {
+  const maximum = Math.max(0, Math.min(stringLimit, budget.remaining));
   const compacted = truncateProviderAuditTextToBytes(value, maximum);
   budget.remaining = Math.max(0, budget.remaining - Buffer.byteLength(compacted, "utf8"));
   return compacted;

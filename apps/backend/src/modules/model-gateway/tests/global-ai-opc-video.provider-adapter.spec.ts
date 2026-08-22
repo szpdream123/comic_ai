@@ -796,6 +796,79 @@ describe("GlobalAiOpc video provider adapter", () => {
     assert.equal(JSON.parse(capturedBody).first_image, undefined);
   });
 
+  it("upgrades legacy Seedance special configs to Model Center reference payloads", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    const adapter = createProviderAdapterFromModelConfig({
+      providerProtocol: "globalaiopc_video",
+      providerModel: "sd_2.0_special",
+      providerConfig: {
+        baseURL: "https://zcbservice.aizfw.cn/kyyReactApiServer",
+        createTaskEndpoint: "/v1/sd2_manxue/videos",
+        queryTaskEndpoint: "/v1/result/{taskId}",
+        apiKeyEnv: "GLOBAL_AI_OPC_API_KEY",
+        requestFormat: "globalaiopc_seedance_special",
+      },
+    }, { GLOBAL_AI_OPC_API_KEY: "global-ai-opc-key" }, (async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = String(init?.body ?? "");
+      if (String(init?.method || "GET").toUpperCase() === "GET") {
+        return new Response(JSON.stringify({
+          id: "legacy-seedance-task",
+          status: "completed",
+          video_url: "https://cdn.example.com/result.mp4",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ id: "legacy-seedance-task", status: "queued" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch);
+
+    await adapter.submit({
+      providerRequestId: "provider-request-legacy-seedance-special",
+      providerName: "GlobalAiOpc",
+      providerOperation: "shot.video.generate",
+      requestKey: "workflow-global-video:legacy-seedance-special",
+      payloadRef: "creator://legacy-seedance-special",
+      payloadHash: "hash-legacy-seedance-special",
+      redactedPayload: {
+        prompt: "Reference guided shot",
+        firstFrameUrl: "https://cdn.example.com/reference.png",
+        lastFrameUrl: "https://cdn.example.com/should-not-send.png",
+        parameters: {
+          mode: "reference-video",
+          durationSec: 5,
+          aspectRatio: "16:9",
+          resolution: "720p",
+          referenceImages: [{ url: "https://cdn.example.com/character.png" }],
+        },
+      },
+    });
+
+    assert.equal(capturedUrl, "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks");
+    assert.deepEqual(JSON.parse(capturedBody), {
+      model: "sd_2.0_special",
+      prompt: "Reference guided shot",
+      reference_images: [
+        "https://cdn.example.com/reference.png",
+        "https://cdn.example.com/character.png",
+      ],
+      duration: 5,
+      aspect_ratio: "16:9",
+      resolution: "720p",
+    });
+    assert.equal(JSON.parse(capturedBody).first_image, undefined);
+    assert.equal(JSON.parse(capturedBody).last_image, undefined);
+
+    const polled = await adapter.poll({ externalRequestId: "legacy-seedance-task" });
+    assert.equal(capturedUrl, "https://zcbservice.aizfw.cn/kyyReactApiServer/v2/model-center/tasks/legacy-seedance-task");
+    assert.equal(polled.videoUrl, "https://cdn.example.com/result.mp4");
+  });
+
   it("builds the HappyHorse 1.1 Model Center payload", () => {
     assert.deepEqual(buildGlobalAiOpcVideoPayload({
       providerRequestId: "provider-request-happyhorse11",

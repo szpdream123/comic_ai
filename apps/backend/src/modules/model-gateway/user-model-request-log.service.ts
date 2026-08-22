@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import type { SqlDatabase } from "../shared/db/sql.ts";
 import { queryOne } from "../shared/db/sql.ts";
-import { compactProviderAuditValue } from "./provider-response-diagnostics.ts";
+import {
+  compactProviderAuditValue,
+  preserveProviderRequestValue,
+} from "./provider-response-diagnostics.ts";
 
 export interface UserModelRequestLogCreateInput {
   providerRequestId: string;
@@ -111,8 +114,8 @@ export async function createUserModelRequestLog(
   db: SqlDatabase,
   input: UserModelRequestLogCreateInput,
 ): Promise<UserModelRequestLogRecord> {
-  const requestBody = compactProviderAuditValue(input.requestBody) as Record<string, unknown>;
-  const requestText = compactProviderAuditValue(input.requestText ?? null);
+  const requestBody = preserveProviderRequestValue(input.requestBody) as Record<string, unknown>;
+  const requestText = preserveProviderRequestValue(input.requestText ?? null);
   const row = await queryOne<UserModelRequestLogRow>(
     db,
     `

@@ -6,7 +6,11 @@ import { queryOne } from "../shared/db/sql.ts";
 import type { MediaGenerationArtifact, ProviderAdapter } from "./provider-adapter.contract.ts";
 import { ModelError } from "./model-error.ts";
 import { translateProviderErrorMessageField } from "./provider-error-message.ts";
-import { compactProviderAuditValue, readProviderRawResponse } from "./provider-response-diagnostics.ts";
+import {
+  compactProviderAuditValue,
+  preserveProviderRequestValue,
+  readProviderRawResponse,
+} from "./provider-response-diagnostics.ts";
 import { buildTaskCenterProviderDiagnostics } from "./task-center-provider-diagnostics.ts";
 
 const PROVIDER_SUBMISSION_RECOVERY_IN_PROGRESS = "provider_submission_recovery_in_progress";
@@ -661,7 +665,7 @@ export async function recordProviderRequestRedactedBody(
     `,
     [
       input.providerRequestId,
-      JSON.stringify(compactProviderAuditValue(input.request)),
+      JSON.stringify(preserveProviderRequestValue(input.request)),
       input.now,
     ],
   );
