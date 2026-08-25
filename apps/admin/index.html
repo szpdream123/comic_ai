@@ -13985,11 +13985,16 @@
           state.geoOperations = {
             platforms: [], questions: [], evidence: [], content: [], details: {}, settings: null,
             selectedQuestionId: "", selectedQuestionIds: [], selectedEvidenceIds: [], loadError: "",
+            monitoringContentItemId: "", monitoringPlatformId: "", monitoring: null, monitoringLoadError: "", monitoringLoading: false, monitoringRequestToken: 0,
           };
         }
         if (!Array.isArray(state.geoOperations.selectedQuestionIds)) {
           state.geoOperations.selectedQuestionIds = state.geoOperations.selectedQuestionId ? [state.geoOperations.selectedQuestionId] : [];
         }
+        if (typeof state.geoOperations.monitoringContentItemId !== "string") state.geoOperations.monitoringContentItemId = "";
+        if (typeof state.geoOperations.monitoringPlatformId !== "string") state.geoOperations.monitoringPlatformId = "";
+        if (typeof state.geoOperations.monitoringLoading !== "boolean") state.geoOperations.monitoringLoading = false;
+        if (!Number.isSafeInteger(state.geoOperations.monitoringRequestToken)) state.geoOperations.monitoringRequestToken = 0;
         return state.geoOperations;
       }
 
@@ -14029,6 +14034,15 @@
             catch { return [item.id, null]; }
           }));
           store.details = Object.fromEntries(details);
+          const published = store.content.filter((item) => item.status === "published" && item.currentPublishedVersionId);
+          if (!published.some((item) => item.id === store.monitoringContentItemId)) {
+            store.monitoringContentItemId = published[0]?.id || "";
+          }
+          if (!store.platforms.some((item) => item.id === store.monitoringPlatformId)) {
+            store.monitoringPlatformId = store.platforms[0]?.id || "";
+          }
+          if (store.monitoringContentItemId) await loadGeoMonitoring(store.monitoringContentItemId);
+          else store.monitoring = null;
           store.loadError = "";
           clearPageForbidden("geoOperations");
         } catch (error) {
@@ -14068,6 +14082,49 @@
           return null;
         }
       }
+
+      async function loadGeoMonitoring(contentItemId, requestToken) {
+        const store = geoOperationsState();
+        const token = requestToken ?? ++store.monitoringRequestToken;
+        store.monitoringContentItemId = contentItemId || "";
+        if (!store.monitoringContentItemId) {
+          if (token !== store.monitoringRequestToken) return;
+          store.monitoring = null;
+          store.monitoringLoadError = "";
+          return;
+        }
+        try {
+          const response = await api(`/api/admin/geo/monitoring?contentItemId=${encodeURIComponent(store.monitoringContentItemId)}`);
+          if (token !== store.monitoringRequestToken || store.monitoringContentItemId !== contentItemId) return;
+          store.monitoring = response.data || null;
+          store.monitoringLoadError = "";
+        } catch (error) {
+          if (token !== store.monitoringRequestToken || store.monitoringContentItemId !== contentItemId) return;
+          store.monitoring = null;
+          store.monitoringLoadError = error.payload?.error?.message || error.message || "监测记录加载失败";
+        }
+      }
+
+      async function geoSelectMonitoringContent(contentItemId) {
+        const store = geoOperationsState();
+        store.monitoringContentItemId = contentItemId || "";
+        store.monitoring = null;
+        store.monitoringLoading = true;
+        const requestToken = ++store.monitoringRequestToken;
+        renderShell();
+        try {
+          await loadGeoMonitoring(contentItemId, requestToken);
+        } finally {
+          if (requestToken === store.monitoringRequestToken && store.monitoringContentItemId === contentItemId) store.monitoringLoading = false;
+          renderShell();
+        }
+      }
+
+      function geoSelectMonitoringPlatform(platformId) {
+        geoOperationsState().monitoringPlatformId = platformId;
+        renderShell();
+      }
+
 
       const geoPlatformGroups = [
         { id: "general_model", label: "综合大模型" },
@@ -14476,6 +14533,25 @@
           const route = { guide: "guides", case: "cases", report: "reports", answer: "answers" }[item.contentType];
           return `<tr><td><strong>${escapeHtml(quality.title)}</strong><div class="metric-note">/${route}/${escapeHtml(item.slug)}</div></td><td><span class="tag blue">${escapeHtml({ draft: "草稿", in_review: "审核中", published: "已发布", archived: "已归档" }[item.status] || item.status)}</span></td><td><span class="tag ${quality.blockers ? "danger" : "blue"}">阻断 ${quality.blockers}</span> <span class="tag warn">警告 ${quality.warnings}</span></td><td><div class="row-actions"><button class="btn ghost" onclick="openGeoContentDetails('${item.id}')">版本与质检</button><button class="btn ghost" ${item.status === "archived" ? "disabled" : ""} onclick="openGeoDraftEditor('${item.id}')">编辑草稿</button><button class="btn ghost" ${canReview ? "" : "disabled"} onclick="geoSubmitReview('${item.id}', ${item.lockVersion})">提交审核</button><button class="btn primary" ${canPublish ? "" : "disabled"} onclick="geoPublishContent('${item.id}')">发布官网</button>${item.status !== "archived" && item.currentPublishedVersionId ? `<a class="btn ghost" href="/${route}/${encodeURIComponent(item.slug)}" target="_blank">预览</a>` : ""}</div></td></tr>`;
         }).join("") : `<tr><td colspan="4">暂无内容草稿。</td></tr>`;
+        const publishedContent = store.content.filter((item) => item.status === "published" && item.currentPublishedVersionId);
+        const monitorPlatform = store.platforms.find((item) => item.id === store.monitoringPlatformId) || store.platforms[0] || null;
+        const monitorQuestions = store.monitoring?.questions || [];
+        const monitoringStatusLabel = { cited: "已引用文章", mentioned: "已提及品牌", not_mentioned: "未提及品牌" };
+        const monitoringRunRows = (store.monitoring?.runs || []).length ? store.monitoring.runs.map((run) => {
+          const counts = (run.results || []).reduce((summary, result) => ({ ...summary, [result.status]: (summary[result.status] || 0) + 1 }), {});
+          const platformLabel = store.platforms.find((item) => item.id === run.platformId)?.label || run.platformId;
+          const resultDetails = (run.results || []).map((result) => `<section class="geo-monitor-result-detail"><div class="toolbar"><strong>${escapeHtml(result.rawQuestion || "未记录问题")}</strong><span class="tag ${result.status === "cited" ? "blue" : result.status === "mentioned" ? "warn" : ""}">${escapeHtml(monitoringStatusLabel[result.status] || result.status)}</span></div><pre>${escapeHtml(result.rawAnswer || "")}</pre><div class="geo-monitor-citations"><strong>引用链接</strong>${(result.citedUrls || []).length ? result.citedUrls.map((url) => `<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`).join("") : `<span class="metric-note">无</span>`}</div></section>`).join("");
+          const summary = run.status === "failed"
+            ? `<span class="tag danger">失败</span> ${escapeHtml(run.errorSummary || run.errorCode || "调用失败")}`
+            : ["cited", "mentioned", "not_mentioned"].filter((status) => counts[status]).map((status) => `<span class="tag ${status === "cited" ? "blue" : status === "mentioned" ? "warn" : ""}">${monitoringStatusLabel[status]} ${counts[status]}</span>`).join(" ");
+          return `<tr><td><strong>${escapeHtml(platformLabel)}</strong><div class="metric-note">${run.sourceType === "official_api" ? "官方API" : "人工导入"}${run.modelCode ? ` · ${escapeHtml(run.modelCode)}` : ""}${run.contentVersionNumber ? ` · 文章版本 ${Number(run.contentVersionNumber)}` : ""}</div></td><td>${summary || "无结果"}${resultDetails ? `<details class="geo-monitor-result-details"><summary>复核原始快照</summary><div class="section-stack">${resultDetails}</div></details>` : ""}</td><td>${escapeHtml(new Date(run.createdAt).toLocaleString("zh-CN"))}</td></tr>`;
+        }).join("") : `<tr><td colspan="3">尚无监测记录。</td></tr>`;
+        const monitoringQuestionFields = monitorQuestions.map((question) => `<section class="geo-monitor-question"><strong>${escapeHtml(question.rawQuestion)}</strong><label class="field"><span>平台回答原文</span><textarea name="answer:${escapeAttribute(question.id)}" rows="4" required placeholder="粘贴该平台对这个问题的完整回答"></textarea></label><label class="field"><span>引用链接（每行一个，可留空）</span><textarea name="citedUrls:${escapeAttribute(question.id)}" rows="2" placeholder="https://..."></textarea></label></section>`).join("");
+        const monitoringPanel = publishedContent.length ? `<section class="card geo-monitoring-card" aria-busy="${store.monitoringLoading ? "true" : "false"}"><div class="toolbar"><div><h3>大模型回答监测</h3><p class="metric-note">保存可复核的回答快照，判断其中是否提及灵曦AI或引用当前文章；结果不代表平台内部索引状态。</p></div><a class="btn ghost" href="${escapeAttribute(store.monitoring?.content?.href || "#")}" target="_blank">查看官网文章</a></div>
+          <div class="form-grid geo-monitor-controls"><label class="field"><span>已发布文章</span><select onchange="geoSelectMonitoringContent(this.value)">${publishedContent.map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === store.monitoringContentItemId ? "selected" : ""}>${escapeHtml(item.topic)} · ${escapeHtml(item.slug)}</option>`).join("")}</select></label><label class="field"><span>检测平台</span><select onchange="geoSelectMonitoringPlatform(this.value)">${store.platforms.filter((item) => item.enabled).map((item) => `<option value="${escapeAttribute(item.id)}" ${item.id === monitorPlatform?.id ? "selected" : ""}>${escapeHtml(item.label)} · ${item.monitoring?.mode === "official_api" ? "可自动检测" : "人工导入"}</option>`).join("")}</select></label></div>
+          ${store.monitoringLoadError ? `<p class="form-error" role="alert">${escapeHtml(store.monitoringLoadError)}</p>` : ""}
+          ${store.monitoringLoading ? `<div class="state-panel"><strong>正在加载监测快照</strong><span>已暂停旧文章表单，完成后会自动恢复。</span></div>` : monitorQuestions.length ? `<div class="grid geo-monitoring-grid"><form onsubmit="geoImportMonitoring(event)" class="section-stack"><div><h4>导入回答快照</h4><p class="metric-note">请逐题粘贴同一次检测得到的完整回答；缺少任一问题时不会入库。</p></div><input type="hidden" name="platformId" value="${escapeAttribute(monitorPlatform?.id || "")}" />${monitoringQuestionFields}<div class="form-error" role="alert"></div><button class="btn primary" type="submit">保存并判定</button></form><aside class="section-stack"><div><h4>自动检测</h4><p class="metric-note">仅调用已配置且与目标平台匹配的官方模型API，不登录第三方网页、不绕过验证码。</p></div>${monitorPlatform?.monitoring?.mode === "official_api" ? `<form onsubmit="geoRunOfficialMonitoring(event)" class="section-stack"><input type="hidden" name="platformId" value="${escapeAttribute(monitorPlatform.id)}" /><label class="field"><span>模型编码</span><input name="modelCode" required value="${escapeAttribute(store.settings?.defaultModelCode || "")}" /></label><div class="form-error" role="alert"></div><button class="btn primary" type="submit">运行官方 API 检测</button></form>` : `<div class="state-panel"><strong>${escapeHtml(monitorPlatform?.label || "该平台")}暂不支持自动检测</strong><span>请在平台中提问后，将回答原文和引用链接粘贴到左侧。</span></div>`}</aside></div>` : `<div class="state-panel"><strong>正在读取已发布版本的问题</strong><span>若持续为空，请确认文章的当前发布版本已关联目标问题。</span></div>`}
+          <div class="table-wrap"><table><thead><tr><th>平台与方式</th><th>回答快照判定</th><th>检测时间</th></tr></thead><tbody>${monitoringRunRows}</tbody></table></div></section>` : `<section class="card"><div class="state-panel"><strong>大模型回答监测</strong><span>请先发布至少一篇关联目标问题的GEO文章。</span></div></section>`;
         return `<style>
           .geo-platform-picker{margin:0;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--surface-subtle,#f8fafc)}
           .geo-platform-picker legend{padding:0 6px;font-weight:700;color:var(--text,#172635)}
@@ -14555,13 +14631,15 @@
           .geo-quality-issue{display:grid;gap:4px}.geo-quality-issue span{font-size:12px;color:var(--muted)}
           .geo-quality-issue.danger{border-color:#fecaca;background:#fff7f7}.geo-quality-issue.warning{border-color:#fde68a;background:#fffdf2}
           .geo-danger-zone{border-color:#fecaca;background:#fff7f7}
+          .geo-operations-page{grid-template-columns:minmax(0,1fr);min-width:0}.geo-operations-page>*{min-width:0}.geo-monitoring-card{display:grid;gap:18px;min-width:0;max-width:100%}.geo-monitoring-card>*,.geo-monitoring-card form,.geo-monitoring-card aside,.geo-monitoring-card label{min-width:0;max-width:100%}.geo-monitoring-card select,.geo-monitoring-card textarea,.geo-monitoring-card input{max-width:100%}.geo-monitor-controls{grid-template-columns:1fr 1fr}.geo-monitoring-grid{grid-template-columns:minmax(0,1.35fr) minmax(280px,.65fr);align-items:start}.geo-monitor-question{display:grid;gap:10px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}.geo-monitor-question strong{line-height:1.5}.geo-monitoring-grid aside{position:sticky;top:18px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surface-subtle,#f8fafc)}.geo-monitor-result-details{margin-top:10px}.geo-monitor-result-details summary{cursor:pointer;color:var(--primary);font-weight:700}.geo-monitor-result-detail{display:grid;gap:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-subtle,#f8fafc)}.geo-monitor-result-detail pre{max-height:240px;margin:0;padding:10px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;font:inherit;line-height:1.6}.geo-monitor-citations{display:grid;gap:5px}.geo-monitor-citations a{overflow-wrap:anywhere}
           @media(max-width:720px){.geo-operation-entry-grid{grid-template-columns:1fr}}
           @media(max-width:720px){.geo-platform-groups{grid-template-columns:1fr}}
           @media(max-width:720px){.geo-source-grid{grid-template-columns:1fr}}
+          @media(max-width:900px){.geo-monitoring-grid,.geo-monitor-controls{grid-template-columns:1fr}.geo-monitoring-grid aside{position:static}}
           @media(max-width:900px){.geo-draft-editor{width:100vw}.geo-article-edit-surface{padding:34px 20px 46px}.geo-article-edit-header h1{font-size:36px}.geo-inline-edit-summary{font-size:18px}.geo-heading-level,.geo-list-style,.geo-note-tone{position:static;display:inline-flex;margin-bottom:4px;opacity:1}.geo-block-tools{position:static;margin-bottom:8px;opacity:1;pointer-events:auto;transform:none;box-shadow:none}.geo-block-kind{display:none}.geo-block-insert-point{opacity:.7}.geo-cta-link-edit{grid-template-columns:1fr}.geo-draft-save-bar{padding:12px 16px}.geo-draft-save-bar span{display:none}}
           @media(pointer:coarse){.geo-block-tools{opacity:1;pointer-events:auto;transform:none}.geo-block-insert-point{opacity:.7}}
           @media(prefers-reduced-motion:reduce){.geo-block-tools,.geo-block-insert-point{transition:none}}
-        </style><div class="section-stack">
+        </style><div class="section-stack geo-operations-page">
           <section class="card"><div class="toolbar"><div><div class="eyebrow">灵曦AI · 国内GEO</div><h2>GEO运营</h2><p class="metric-note">从目标问题和审核证据生成草稿，经自动质检后由人工审核发布。</p></div><button class="btn ghost" onclick="loadGeoOperations().then(renderShell)">刷新</button></div></section>
           <section class="grid geo-operation-entry-grid">
             <article class="card"><div class="toolbar"><h3>问题库</h3><span class="tag blue">${store.questions.length}</span></div><form onsubmit="geoCreateQuestion(event)" class="section-stack"><label class="field"><span>目标问题</span><input name="rawQuestion" required placeholder="例如：AI短剧怎样保持角色一致？" /></label><div class="form-grid"><label class="field"><span>主题</span><input name="topic" required /></label><label class="field"><span>意图</span><select name="intent"><option value="tutorial">教程</option><option value="comparison">对比</option><option value="decision">决策</option></select></label></div><label class="field"><span>优先级</span><input name="priority" type="number" min="0" max="100" value="80" /></label>${geoPlatformPicker(store.platforms)}<div class="form-error" role="alert"></div><button class="btn ghost" type="submit">新增问题</button></form></article>
@@ -14570,6 +14648,7 @@
           </section>
           <section class="card"><div class="toolbar"><h3>问题与证据选择</h3><span class="metric-note">所选资料将作为模型唯一事实来源</span></div><div class="grid geo-source-grid"><div class="table-wrap"><table><thead><tr><th>选择</th><th>问题</th><th>优先级</th><th>覆盖</th></tr></thead><tbody>${questionRows}</tbody></table></div><div class="table-wrap"><table><thead><tr><th>选择</th><th>证据</th><th>审核</th><th>公开</th></tr></thead><tbody>${evidenceRows}</tbody></table></div></div></section>
           <section class="card"><div class="toolbar"><h3>内容中心</h3><span class="metric-note">阻断项必须清零，警告项可在人工确认后发布</span></div><div class="table-wrap"><table><thead><tr><th>内容</th><th>状态</th><th>自动质检</th><th>操作</th></tr></thead><tbody>${contentRows}</tbody></table></div></section>
+          ${monitoringPanel}
           <section class="card"><div class="toolbar"><h3>GEO设置</h3><span class="tag blue">品牌固定为灵曦AI</span></div><form onsubmit="geoSaveSettings(event)" class="form-grid"><label class="field"><span>默认模型</span><input name="defaultModelCode" value="${escapeHtml(store.settings?.defaultModelCode || "")}" /></label><label class="field"><span>公开作者</span><input name="publicAuthorName" value="${escapeHtml(store.settings?.publicAuthorName || "灵曦AI内容团队")}" /></label><label class="field"><span>品牌语气</span><input name="brandTone" value="${escapeHtml(store.settings?.brandTone || "专业、克制、清晰，不夸大效果")}" /></label><label class="field"><span>品牌事实（每行一条）</span><textarea name="brandFacts">${escapeHtml((store.settings?.brandFacts || []).join("\n"))}</textarea></label><label class="field"><span>禁用词（每行一条）</span><textarea name="forbiddenPhrases">${escapeHtml((store.settings?.forbiddenPhrases || []).join("\n"))}</textarea></label><label class="field"><span>目标字数</span><div class="row-actions"><input name="wordMin" type="number" min="300" value="${Number(store.settings?.defaultWordRange?.min || 1200)}" /><input name="wordMax" type="number" min="300" value="${Number(store.settings?.defaultWordRange?.max || 2600)}" /></div></label><label class="field"><span>内容相似度阻断线</span><input name="similarityThreshold" type="number" min="0.5" max="1" step="0.01" value="${Number(store.settings?.similarityThreshold || 0.82)}" /></label><button class="btn primary" type="submit">保存设置</button></form></section>
         </div>`;
       }
@@ -14624,6 +14703,49 @@
         await runAdminMutation(form, error, () => api("/api/admin/geo/generate", { method: "POST", headers: { "idempotency-key": `admin-ui-geo-generate-${Date.now()}` }, body: JSON.stringify({ questionId: primaryQuestionId, questionIds: store.selectedQuestionIds, evidenceIds: store.selectedEvidenceIds, contentType: data.get("contentType"), topic: question?.topic || "GEO内容", slug: data.get("slug"), modelCode: data.get("modelCode") }) }), "草稿已生成并完成自动质检");
         await loadGeoOperations(); renderShell();
       }
+      async function geoImportMonitoring(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const store = geoOperationsState();
+        const contentItemId = store.monitoringContentItemId;
+        const data = new FormData(form);
+        const error = form.querySelector(".form-error") || { textContent: "" };
+        const citedUrls = (value) => String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+        const results = (store.monitoring?.questions || []).map((question) => ({
+          questionId: question.id,
+          answer: String(data.get(`answer:${question.id}`) || "").trim(),
+          citedUrls: citedUrls(data.get(`citedUrls:${question.id}`)),
+        }));
+        await runAdminMutation(form, error, () => api("/api/admin/geo/monitoring/manual", {
+          method: "POST",
+          headers: { "idempotency-key": `admin-ui-geo-monitor-manual-${Date.now()}` },
+          body: JSON.stringify({
+            contentItemId,
+            platformId: data.get("platformId"),
+            results,
+          }),
+        }), "回答快照已保存并完成判定");
+        if (store.monitoringContentItemId === contentItemId) await geoSelectMonitoringContent(contentItemId);
+      }
+      async function geoRunOfficialMonitoring(event) {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const store = geoOperationsState();
+        const contentItemId = store.monitoringContentItemId;
+        const data = new FormData(form);
+        const error = form.querySelector(".form-error") || { textContent: "" };
+        await runAdminMutation(form, error, () => api("/api/admin/geo/monitoring/official-api", {
+          method: "POST",
+          headers: { "idempotency-key": `admin-ui-geo-monitor-official-${Date.now()}` },
+          body: JSON.stringify({
+            contentItemId,
+            platformId: data.get("platformId"),
+            modelCode: data.get("modelCode"),
+          }),
+        }), "官方API检测已完成");
+        if (store.monitoringContentItemId === contentItemId) await geoSelectMonitoringContent(contentItemId);
+      }
+
       async function geoSubmitReview(contentId, lockVersion) {
         const detail = await loadGeoContentDetail(contentId);
         if (!detail) return;
@@ -16195,6 +16317,10 @@
       window.geoToggleQuestion = geoToggleQuestion;
       window.geoToggleEvidence = geoToggleEvidence;
       window.geoGenerateDraft = geoGenerateDraft;
+      window.geoSelectMonitoringContent = geoSelectMonitoringContent;
+      window.geoSelectMonitoringPlatform = geoSelectMonitoringPlatform;
+      window.geoImportMonitoring = geoImportMonitoring;
+      window.geoRunOfficialMonitoring = geoRunOfficialMonitoring;
       window.openGeoDraftEditor = openGeoDraftEditor;
       window.geoAddDraftBlock = geoAddDraftBlock;
       window.geoMoveDraftBlock = geoMoveDraftBlock;

@@ -150,6 +150,9 @@ const migrations = [
   ["20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql", "packages/db/migrations/20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql"],
   ["20261016-correct-globalaiopc-wan27-duration-options.sql", "packages/db/migrations/20261016-correct-globalaiopc-wan27-duration-options.sql"],
   ["20261017-disable-klingo3-frame-parameters.sql", "packages/db/migrations/20261017-disable-klingo3-frame-parameters.sql"],
+  ["20261020-create-geo-monitoring.sql", "packages/db/migrations/20261020-create-geo-monitoring.sql"],
+  ["20261021-harden-geo-monitoring.sql", "packages/db/migrations/20261021-harden-geo-monitoring.sql"],
+  ["20261022-fence-geo-monitor-runs.sql", "packages/db/migrations/20261022-fence-geo-monitor-runs.sql"],
 ];
 const requiredBaselineMigrationNames = ["user-centric-schema.sql", "model-reference-seed.sql"];
 const mutableSnapshotMigrationNames = new Set(requiredBaselineMigrationNames);
@@ -205,6 +208,9 @@ const runtimeSafeMigrationNames = new Set([
   "20261015-restore-globalaiopc-klingo3-wan27-parameter-schema.sql",
   "20261016-correct-globalaiopc-wan27-duration-options.sql",
   "20261017-disable-klingo3-frame-parameters.sql",
+  "20261020-create-geo-monitoring.sql",
+  "20261021-harden-geo-monitoring.sql",
+  "20261022-fence-geo-monitor-runs.sql",
   "20261008-enable-globalaiopc-seedream5.sql",
 ]);
 const runtimeRequiredPostconditionMigrationNames = new Set([

@@ -109,6 +109,7 @@ import {
 import { TextModelGatewayError } from "../modules/model-gateway/text-model-gateway.errors.ts";
 import { createGeoContentService } from "../modules/geo/geo-content.service.ts";
 import { createGeoGenerationService, parseGeoGeneratedDocument, recoverStaleGeoGenerationRuns } from "../modules/geo/geo-generation.service.ts";
+import { createGeoMonitoringService } from "../modules/geo/geo-monitoring.service.ts";
 import { listGeoPlatforms } from "../modules/geo/geo-platforms.ts";
 import type { GeoContentType, GeoDocument } from "../modules/geo/geo-types.ts";
 import { renderGeoArticle, renderGeoListing } from "../modules/geo/geo-public-renderer.ts";
@@ -19756,9 +19757,64 @@ export function createPhoneAuthDevServer(
           gateway: canvasTextChatGateway,
           contentService: geoContentService,
         });
+        const geoMonitoringService = createGeoMonitoringService({
+          db,
+          gateway: canvasTextChatGateway,
+          publicSiteOrigin: publicSiteOrigin(request, runtimeEnv),
+          resolveModelProvider: async (modelCode) => (
+            await new AdminBackedTextModelResolver(db, { requireAgentCompatibility: false }).resolve(modelCode)
+          ).providerName,
+        });
 
         if (request.method === "GET" && pathname === "/api/admin/geo/platforms") {
           return writeJson(response, { status: 200, body: { data: listGeoPlatforms() } });
+        }
+        if (request.method === "GET" && pathname === "/api/admin/geo/monitoring") {
+          return writeJson(response, await geoMonitoringService.listForContent(readString(url.searchParams.get("contentItemId"))));
+        }
+        if (request.method === "POST" && pathname === "/api/admin/geo/monitoring/manual") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const results = Array.isArray(body.results) ? body.results.map((value) => {
+            const item = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+            return {
+              questionId: readString(item.questionId),
+              answer: readString(item.answer),
+              citedUrls: readStringArray(item.citedUrls),
+            };
+          }) : [];
+          const result = await executeIdempotentGeoMutation(db, {
+            adminAccountId: actorAdminAccountId,
+            idempotencyKey: geoIdempotencyKey!,
+            request: { pathname, body },
+            execute: () => geoMonitoringService.importManual({
+              contentItemId: readString(body.contentItemId),
+              platformId: readString(body.platformId),
+              results,
+              actorAdminAccountId,
+            }) as Promise<{ status: number; body: Record<string, unknown> }>,
+          });
+          return writeJson(response, result);
+        }
+        if (request.method === "POST" && pathname === "/api/admin/geo/monitoring/official-api") {
+          const body = (await readJsonBody(request)) as Record<string, unknown>;
+          const abortController = createRequestAbortController(request, response);
+          try {
+            const result = await executeIdempotentGeoMutation(db, {
+              adminAccountId: actorAdminAccountId,
+              idempotencyKey: geoIdempotencyKey!,
+              request: { pathname, body },
+              execute: () => geoMonitoringService.runOfficialApi({
+                contentItemId: readString(body.contentItemId),
+                platformId: readString(body.platformId),
+                modelCode: readString(body.modelCode),
+                actorAdminAccountId,
+                signal: abortController.signal,
+              }) as Promise<{ status: number; body: Record<string, unknown> }>,
+            });
+            return writeJson(response, result);
+          } finally {
+            abortController.cleanup();
+          }
         }
         if (request.method === "GET" && pathname === "/api/admin/geo/questions") {
           return writeJson(response, await geoContentService.listQuestions());

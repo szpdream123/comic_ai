@@ -10,7 +10,8 @@ test("admin shell exposes the super-admin GEO workflow", () => {
   for (const text of [
     "GEO运营", "问题库", "证据库", "内容中心", "自动质检", "提交审核", "发布官网",
     "/api/admin/geo/questions", "/api/admin/geo/evidence", "/api/admin/geo/content",
-    "/api/admin/geo/generate", "/submit-review", "/publish",
+    "/api/admin/geo/generate", "/submit-review", "/publish", "大模型回答监测",
+    "/api/admin/geo/monitoring", "/monitoring/manual", "/monitoring/official-api",
   ]) assert.match(script, new RegExp(escapeRegExp(text)));
   assert.match(script, /state\.adminRoles\.includes\("super_admin"\)/);
   assert.doesNotMatch(script, /一键发布/);
@@ -3887,6 +3888,197 @@ test("marketing scheduling treats datetime-local values as Asia/Shanghai and sub
   vm.runInNewContext(`${script.slice(start, end)}
     result = marketingChinaDatetimeLocalToIso("2026-08-16T09:30");`, context);
   assert.equal(context.result, "2026-08-16T01:30:00.000Z");
+});
+
+test("admin GEO monitoring explains snapshot scope and submits complete manual evidence", async () => {
+  const pageStart = script.indexOf("function geoOperationsPage");
+  const pageEnd = script.indexOf("async function geoCreateQuestion", pageStart);
+  const actionsStart = script.indexOf("async function geoImportMonitoring");
+  const actionsEnd = script.indexOf("async function geoSubmitReview", actionsStart);
+  assert.notEqual(actionsStart, -1, "GEO monitoring actions exist");
+
+  const store = {
+    loadError: "",
+    platforms: [
+      { id: "kimi", label: "Kimi", enabled: true, monitoring: { mode: "manual_import", providerNames: [] } },
+      { id: "deepseek", label: "DeepSeek", enabled: true, monitoring: { mode: "official_api", providerNames: ["deepseek"] } },
+    ],
+    questions: [], evidence: [], details: {},
+    content: [{ id: "content-1", topic: "角色一致性", slug: "character-consistency", contentType: "guide", status: "published", currentPublishedVersionId: "version-1" }],
+    settings: { defaultModelCode: "deepseek-chat" },
+    selectedQuestionIds: [], selectedEvidenceIds: [],
+    monitoringContentItemId: "content-1",
+    monitoringPlatformId: "kimi",
+    monitoring: {
+      content: { id: "content-1", href: "/guides/character-consistency" },
+      questions: [
+        { id: "question-1", rawQuestion: "怎样保持角色一致？" },
+        { id: "question-2", rawQuestion: "如何复用角色设定？" },
+      ],
+      runs: [{ id: "run-1", platformId: "kimi", sourceType: "manual_import", status: "succeeded", contentVersionNumber: 3, createdAt: "2026-08-25T04:00:00.000Z", results: [
+        { status: "cited", rawQuestion: "怎样保持角色一致？", rawAnswer: "<img src=x onerror=alert(1)>", citedUrls: ["https://www.lingxiyunai.com/guides/character-consistency?q=\"quoted\""] },
+        { status: "mentioned", rawQuestion: "如何复用角色设定？", rawAnswer: "灵曦AI", citedUrls: [] },
+      ] }],
+    },
+  };
+  const requests = [];
+  const context = {
+    result: {}, store, Date,
+    geoOperationsState: () => store,
+    escapeHtml: (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"),
+    escapeAttribute: (value) => String(value ?? "").replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+    geoPlatformTags: () => "", geoPlatformPicker: () => "",
+    geoQualityCounts: () => ({ blockers: 0, warnings: 0, title: "" }),
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: JSON.parse(options.body) });
+      return { data: { runId: "run-new" } };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    loadGeoMonitoring: async () => undefined,
+    geoSelectMonitoringContent: async () => undefined,
+    renderShell: () => undefined,
+  };
+  vm.runInNewContext(`${script.slice(pageStart, pageEnd)}\n${script.slice(actionsStart, actionsEnd)}\nresult.render = geoOperationsPage; result.importManual = geoImportMonitoring; result.runOfficial = geoRunOfficialMonitoring;`, context);
+
+  const rendered = context.result.render();
+  assert.match(rendered, /大模型回答监测/);
+  assert.match(rendered, /回答快照/);
+  assert.match(rendered, /不代表平台内部索引状态/);
+  assert.match(rendered, /\.geo-monitoring-card\{[^}]*min-width:0[^}]*max-width:100%/);
+  assert.match(rendered, /\.geo-operations-page\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
+  const monitoringLoader = script.slice(script.indexOf("async function loadGeoMonitoring"), script.indexOf("function geoSelectMonitoringPlatform"));
+  assert.match(monitoringLoader, /monitoringRequestToken/);
+  assert.match(monitoringLoader, /token !== store\.monitoringRequestToken/);
+  assert.match(monitoringLoader, /requestToken === store\.monitoringRequestToken/);
+  assert.match(rendered, /怎样保持角色一致？/);
+  assert.match(rendered, /已引用文章/);
+  assert.match(rendered, /已提及品牌/);
+  assert.match(rendered, /文章版本 3/);
+  assert.match(rendered, /复核原始快照/);
+  assert.match(rendered, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(rendered, /<img src=x/);
+  assert.match(rendered, /rel="noopener noreferrer"/);
+  assert.match(rendered, /aria-busy="false"/);
+  assert.match(script.slice(script.indexOf("async function geoSelectMonitoringContent"), script.indexOf("function geoSelectMonitoringPlatform")), /monitoringLoading = true/);
+
+  const form = {
+    values: {
+      platformId: "kimi",
+      "answer:question-1": "灵曦AI，见官网文章。",
+      "citedUrls:question-1": "https://www.lingxiyunai.com/guides/character-consistency\n",
+      "answer:question-2": "未找到。",
+      "citedUrls:question-2": "",
+    },
+    querySelector: () => ({ textContent: "" }),
+  };
+  await context.result.importManual({ preventDefault() {}, currentTarget: form });
+  assert.equal(requests[0].path, "/api/admin/geo/monitoring/manual");
+  assert.equal(requests[0].payload.contentItemId, "content-1");
+  assert.deepEqual(Array.from(requests[0].payload.results, (item) => item.questionId), ["question-1", "question-2"]);
+  assert.deepEqual(Array.from(requests[0].payload.results[0].citedUrls), ["https://www.lingxiyunai.com/guides/character-consistency"]);
+
+  store.monitoringPlatformId = "deepseek";
+  const officialForm = { values: { platformId: "deepseek", modelCode: "deepseek-chat" }, querySelector: () => ({ textContent: "" }) };
+  await context.result.runOfficial({ preventDefault() {}, currentTarget: officialForm });
+  assert.equal(requests[1].path, "/api/admin/geo/monitoring/official-api");
+  assert.equal(requests[1].payload.modelCode, "deepseek-chat");
+});
+
+test("admin GEO monitoring ignores stale A to B to A responses by request token", async () => {
+  const loaderStart = script.indexOf("function geoOperationsState");
+  const loaderEnd = script.indexOf("function geoSelectMonitoringPlatform", loaderStart);
+  const state = { geoOperations: {
+    platforms: [], questions: [], evidence: [], content: [], details: {}, settings: null,
+    selectedQuestionId: "", selectedQuestionIds: [], selectedEvidenceIds: [], loadError: "",
+    monitoringContentItemId: "", monitoringPlatformId: "", monitoring: null,
+    monitoringLoadError: "", monitoringLoading: false, monitoringRequestToken: 0,
+  } };
+  const pending = [];
+  const context = {
+    result: {}, state,
+    api: (path) => new Promise((resolve) => pending.push({ path, resolve })),
+    renderShell: () => undefined,
+  };
+  vm.runInNewContext(`${script.slice(loaderStart, loaderEnd)}\nresult.select = geoSelectMonitoringContent;`, context);
+
+  const firstA = context.result.select("article-a");
+  const articleB = context.result.select("article-b");
+  const latestA = context.result.select("article-a");
+  assert.deepEqual(pending.map((item) => item.path), [
+    "/api/admin/geo/monitoring?contentItemId=article-a",
+    "/api/admin/geo/monitoring?contentItemId=article-b",
+    "/api/admin/geo/monitoring?contentItemId=article-a",
+  ]);
+
+  pending[0].resolve({ data: { marker: "old-a" } });
+  await firstA;
+  assert.equal(state.geoOperations.monitoring, null);
+  assert.equal(state.geoOperations.monitoringLoading, true);
+  pending[1].resolve({ data: { marker: "b" } });
+  await articleB;
+  assert.equal(state.geoOperations.monitoring, null);
+  assert.equal(state.geoOperations.monitoringLoading, true);
+  pending[2].resolve({ data: { marker: "latest-a" } });
+  await latestA;
+  assert.equal(state.geoOperations.monitoring.marker, "latest-a");
+  assert.equal(state.geoOperations.monitoringLoading, false);
+});
+
+
+test("admin GEO monitoring does not invalidate a newly selected article after a mutation completes", async () => {
+  const actionsStart = script.indexOf("async function geoImportMonitoring");
+  const actionsEnd = script.indexOf("async function geoSubmitReview", actionsStart);
+  const store = {
+    monitoringContentItemId: "article-a",
+    monitoringLoading: false,
+    monitoringRequestToken: 3,
+    monitoring: { questions: [{ id: "question-1" }] },
+  };
+  let releaseMutation;
+  const mutationGate = new Promise((resolve) => { releaseMutation = resolve; });
+  let refreshCount = 0;
+  const requests = [];
+  const context = {
+    result: {}, Date,
+    geoOperationsState: () => store,
+    FormData: class {
+      constructor(form) { this.form = form; }
+      get(name) { return this.form.values[name] ?? null; }
+    },
+    api: async (path, options) => {
+      requests.push({ path, payload: JSON.parse(options.body) });
+      await mutationGate;
+      return { data: {} };
+    },
+    runAdminMutation: async (_form, _error, operation) => operation(),
+    geoSelectMonitoringContent: async () => { refreshCount += 1; },
+  };
+  vm.runInNewContext(`${script.slice(actionsStart, actionsEnd)}\nresult.importManual = geoImportMonitoring;`, context);
+
+  const form = {
+    values: {
+      platformId: "kimi",
+      "answer:question-1": "回答快照",
+      "citedUrls:question-1": "",
+    },
+    querySelector: () => ({ textContent: "" }),
+  };
+  const mutation = context.result.importManual({ preventDefault() {}, currentTarget: form });
+  store.monitoringContentItemId = "article-b";
+  store.monitoringLoading = true;
+  store.monitoringRequestToken = 4;
+  releaseMutation();
+  await mutation;
+
+  assert.equal(requests[0].payload.contentItemId, "article-a");
+  assert.equal(store.monitoringContentItemId, "article-b");
+  assert.equal(store.monitoringLoading, true);
+  assert.equal(store.monitoringRequestToken, 4);
+  assert.equal(refreshCount, 0);
 });
 
 function escapeRegExp(value) {

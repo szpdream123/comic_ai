@@ -23,5 +23,14 @@ describe("GEO platform registry", () => {
     assert.equal(platforms.find((item) => item.id === "baidu")?.label, "百度文心助手");
     assert.equal(new Set(platforms.map((item) => item.id)).size, 11);
     assert.ok(platforms.every((item) => item.enabled && item.defaultSelected));
+    assert.deepEqual(platforms.find((item) => item.id === "deepseek")?.monitoring, {
+      mode: "official_api",
+      providerNames: ["deepseek"],
+    });
+    assert.deepEqual(platforms.find((item) => item.id === "tongyi")?.monitoring, {
+      mode: "official_api",
+      providerNames: ["qwen", "dashscope", "aliyun-bailian"],
+    });
+    assert.equal(platforms.find((item) => item.id === "kimi")?.monitoring.mode, "manual_import");
   });
 });
