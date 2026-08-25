@@ -10643,7 +10643,9 @@
       })(renderLogin);
 
       window.addEventListener("popstate", () => {
-        state.page = routeFromPath();
+        const nextPage = routeFromPath();
+        if (state.page === "geoOperations" && nextPage !== "geoOperations") invalidateGeoContentRequests();
+        state.page = nextPage;
         if (state.session) {
           renderShell();
           ensureAdminPageData(state.page).catch(() => undefined);
@@ -13991,10 +13993,20 @@
         return state.geoOperations;
       }
 
-      async function loadGeoOperations() {
+      function invalidateGeoContentRequests() {
+        if (!state.geoOperations) return;
         const store = geoOperationsState();
         store.draftEditorRequestToken = (Number(store.draftEditorRequestToken) || 0) + 1;
         store.detailRequestTokens = {};
+      }
+
+      function isGeoContentDetail(detail) {
+        return Boolean(detail && typeof detail === "object" && detail.item && typeof detail.item === "object" && Array.isArray(detail.versions) && detail.versions.every((version) => version && typeof version === "object"));
+      }
+
+      async function loadGeoOperations() {
+        const store = geoOperationsState();
+        invalidateGeoContentRequests();
         setPageLoading("geoOperations", true);
         try {
           const [platforms, questions, evidence, content, settings] = await Promise.all([
@@ -14010,7 +14022,10 @@
           store.content = content.data || [];
           store.settings = settings.data || null;
           const details = await Promise.all(store.content.map(async (item) => {
-            try { return [item.id, (await api(`/api/admin/geo/content/${encodeURIComponent(item.id)}`)).data]; }
+            try {
+              const detail = (await api(`/api/admin/geo/content/${encodeURIComponent(item.id)}`)).data;
+              return [item.id, isGeoContentDetail(detail) && detail.item.id === item.id ? detail : null];
+            }
             catch { return [item.id, null]; }
           }));
           store.details = Object.fromEntries(details);
@@ -14026,7 +14041,7 @@
 
       async function loadGeoContentDetail(contentId) {
         const store = geoOperationsState();
-        if (store.details[contentId]) return store.details[contentId];
+        if (isGeoContentDetail(store.details[contentId]) && store.details[contentId].item.id === contentId) return store.details[contentId];
         const requestTokens = store.detailRequestTokens || (store.detailRequestTokens = {});
         const requestToken = (Number(requestTokens[contentId]) || 0) + 1;
         requestTokens[contentId] = requestToken;
@@ -14034,6 +14049,10 @@
           const detail = (await api(`/api/admin/geo/content/${encodeURIComponent(contentId)}`)).data;
           if (store.detailRequestTokens !== requestTokens || requestTokens[contentId] !== requestToken) {
             return store.details[contentId] || null;
+          }
+          if (!isGeoContentDetail(detail) || detail.item.id !== contentId) {
+            showToast("内容详情加载失败，请稍后重试");
+            return null;
           }
           store.details[contentId] = detail;
           const itemIndex = store.content.findIndex((item) => item.id === contentId);
@@ -14339,7 +14358,7 @@
         store.draftEditorRequestToken = requestToken;
         let item = store.content.find((entry) => entry.id === contentId);
         let detail = store.details[contentId];
-        if (item && !detail) {
+        if (item && (!isGeoContentDetail(detail) || detail.item.id !== contentId)) {
           detail = await loadGeoContentDetail(contentId);
           if (!detail || store.draftEditorRequestToken !== requestToken || state.page !== "geoOperations") return;
           item = store.content.find((entry) => entry.id === contentId);
@@ -16141,7 +16160,10 @@
         };
         const previousNavigate = navigate;
         navigate = function navigate(page) {
-          if (page !== "geoOperations") return previousNavigate(page);
+          if (page !== "geoOperations") {
+            if (state.page === "geoOperations") invalidateGeoContentRequests();
+            return previousNavigate(page);
+          }
           state.page = page;
           history.pushState(null, "", "/admin/geo-operations");
           renderShell();
@@ -16198,6 +16220,7 @@
         const previousNavigate = navigate;
         navigate = function navigate(page) {
           if (page !== "marketingSkills") return previousNavigate(page);
+          if (state.page === "geoOperations") invalidateGeoContentRequests();
           state.page = "marketingSkills";
           history.pushState(null, "", "/admin/marketing/skills");
           renderShell();
