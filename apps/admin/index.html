@@ -13993,6 +13993,8 @@
 
       async function loadGeoOperations() {
         const store = geoOperationsState();
+        store.draftEditorRequestToken = (Number(store.draftEditorRequestToken) || 0) + 1;
+        store.detailRequestTokens = {};
         setPageLoading("geoOperations", true);
         try {
           const [platforms, questions, evidence, content, settings] = await Promise.all([
@@ -14019,6 +14021,32 @@
           store.loadError = error.payload?.error?.message || error.message || "GEO运营数据加载失败";
         } finally {
           setPageLoading("geoOperations", false);
+        }
+      }
+
+      async function loadGeoContentDetail(contentId) {
+        const store = geoOperationsState();
+        if (store.details[contentId]) return store.details[contentId];
+        const requestTokens = store.detailRequestTokens || (store.detailRequestTokens = {});
+        const requestToken = (Number(requestTokens[contentId]) || 0) + 1;
+        requestTokens[contentId] = requestToken;
+        try {
+          const detail = (await api(`/api/admin/geo/content/${encodeURIComponent(contentId)}`)).data;
+          if (store.detailRequestTokens !== requestTokens || requestTokens[contentId] !== requestToken) {
+            return store.details[contentId] || null;
+          }
+          store.details[contentId] = detail;
+          const itemIndex = store.content.findIndex((item) => item.id === contentId);
+          if (itemIndex >= 0 && detail?.item) {
+            store.content[itemIndex] = { ...store.content[itemIndex], ...detail.item };
+          }
+          return detail;
+        } catch (error) {
+          if (store.detailRequestTokens !== requestTokens || requestTokens[contentId] !== requestToken) {
+            return store.details[contentId] || null;
+          }
+          showToast(error.payload?.error?.message || error.message || "内容详情加载失败，请稍后重试");
+          return null;
         }
       }
 
@@ -14305,12 +14333,19 @@
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
       }
 
-      function openGeoDraftEditor(contentId) {
+      async function openGeoDraftEditor(contentId) {
         const store = geoOperationsState();
-        const item = store.content.find((entry) => entry.id === contentId);
-        const detail = store.details[contentId];
+        const requestToken = (Number(store.draftEditorRequestToken) || 0) + 1;
+        store.draftEditorRequestToken = requestToken;
+        let item = store.content.find((entry) => entry.id === contentId);
+        let detail = store.details[contentId];
+        if (item && !detail) {
+          detail = await loadGeoContentDetail(contentId);
+          if (!detail || store.draftEditorRequestToken !== requestToken || state.page !== "geoOperations") return;
+          item = store.content.find((entry) => entry.id === contentId);
+        }
         const version = detail?.versions?.find((entry) => entry.id === item?.currentDraftVersionId) || detail?.versions?.[0];
-        if (!item || !version?.document) return showToast("草稿详情尚未加载，请刷新后重试");
+        if (!item || !version?.document) return showToast("草稿详情加载失败，请稍后重试");
         store.activeDraftEditor = { item: structuredClone(item), version: structuredClone(version) };
         geoMountDraftEditor();
       }
@@ -14571,11 +14606,16 @@
         await loadGeoOperations(); renderShell();
       }
       async function geoSubmitReview(contentId, lockVersion) {
+        const detail = await loadGeoContentDetail(contentId);
+        if (!detail) return;
         await api(`/api/admin/geo/content/${encodeURIComponent(contentId)}/submit-review`, { method: "POST", headers: { "idempotency-key": `admin-ui-geo-review-${Date.now()}` }, body: JSON.stringify({ expectedLockVersion: lockVersion }) });
         showToast("内容已提交审核"); await loadGeoOperations(); renderShell();
       }
       async function geoPublishContent(contentId) {
-        const item = geoOperationsState().content.find((entry) => entry.id === contentId);
+        const store = geoOperationsState();
+        const detail = await loadGeoContentDetail(contentId);
+        if (!detail) return;
+        const item = store.content.find((entry) => entry.id === contentId);
         const quality = item ? geoQualityCounts(item) : { blockers: 0, warnings: 0, title: "" };
         if (quality.blockers > 0) return showToast("仍有阻断项，暂不能发布");
         const reason = window.prompt(`确认将“${quality.title}”发布到官网吗？当前警告 ${quality.warnings} 项。\n请输入发布原因：`, "人工审核通过");
