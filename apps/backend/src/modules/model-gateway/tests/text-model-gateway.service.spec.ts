@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import { createMigratedTestDb } from "../../shared/db/test-db.ts";
 import { isTransientDatabasePersistenceError } from "../../shared/db/dev-db.ts";
 import type { SqlDatabase } from "../../shared/db/sql.ts";
+import { createTextModelChatGateway } from "../../ai-storyboard/ai-storyboard-preview.service.ts";
 import type {
   TextGatewayChatCompletionChunk,
   TextGatewayChatCompletionRequest,
@@ -461,6 +462,67 @@ describe("text model gateway service", () => {
 
       assert.equal(stored.rows[0]?.status, "canceled");
       assert.equal(stored.rows[0]?.failure_code, "client_aborted_stream");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("finalizes provider audit rows when a bounded completion closes the stream early", async () => {
+    const db = await createMigratedTestDb();
+    const adapter = new FakeTextAdapter([
+      chunk("chatcmpl-bounded", "1234", null),
+      chunk("chatcmpl-bounded", "5678", null),
+    ]);
+    const gateway = createTextModelChatGateway({
+      gateway: new TextModelGatewayService({
+        db,
+        adapter,
+        resolver: {
+          async resolve() {
+            return {
+              id: "deepseek-chat",
+              label: "DeepSeek Chat",
+              providerName: "deepseek",
+              providerModel: "deepseek-chat",
+              baseURL: "https://api.deepseek.com",
+              apiKeyEnv: "DEEPSEEK_API_KEY",
+              apiKey: "secret",
+              enabled: true,
+            };
+          },
+        },
+        now: () => new Date("2026-06-01T10:00:00.000Z"),
+      }),
+    });
+
+    try {
+      await assert.rejects(
+        gateway.completeJsonWithUsage!({
+          model: "deepseek-chat",
+          prompt: "Return bounded JSON",
+          requestKeyPrefix: "geo-monitor-bounded",
+          maxResponseChars: 6,
+        }),
+        (error: unknown) => Boolean(error && typeof error === "object" && "code" in error
+          && error.code === "provider_response_too_large"),
+      );
+      const provider = await db.query<{ id: string; status: string; failure_code: string | null }>(
+        `SELECT id,status,failure_code
+           FROM provider_requests
+          WHERE request_key LIKE 'geo-monitor-bounded:%'
+          ORDER BY created_at DESC
+          LIMIT 1`,
+      );
+      assert.equal(provider.rows.length, 1);
+      assert.deepEqual(
+        { status: provider.rows[0]!.status, failure_code: provider.rows[0]!.failure_code },
+        { status: "canceled", failure_code: "client_aborted_stream" },
+      );
+      const log = await db.query<{ status: string; failure_code: string | null }>(
+        "SELECT status,failure_code FROM user_model_request_logs WHERE provider_request_id=$1",
+        [provider.rows[0]!.id],
+      );
+      assert.deepEqual(log.rows, [{ status: "canceled", failure_code: "client_aborted_stream" }]);
     } finally {
       await db.close();
     }

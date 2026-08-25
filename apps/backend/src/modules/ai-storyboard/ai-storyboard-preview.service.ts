@@ -52,6 +52,7 @@ export interface TextChatGatewayLike {
     maxTokens?: number;
     payloadSummary?: string;
     requestKeyPrefix?: string;
+    maxResponseChars?: number;
     signal?: AbortSignal;
   }): Promise<string>;
   completeJsonWithUsage?(input: {
@@ -65,6 +66,7 @@ export interface TextChatGatewayLike {
     maxTokens?: number;
     payloadSummary?: string;
     requestKeyPrefix?: string;
+    maxResponseChars?: number;
     signal?: AbortSignal;
   }): Promise<{
     content: string;
@@ -82,6 +84,7 @@ export interface TextChatGatewayLike {
     maxTokens?: number;
     payloadSummary?: string;
     requestKeyPrefix?: string;
+    maxResponseChars?: number;
     signal?: AbortSignal;
   }): AsyncIterable<string>;
 }
@@ -454,6 +457,7 @@ export function createTextModelChatGateway(deps: {
     maxTokens?: number;
     payloadSummary?: string;
     requestKeyPrefix?: string;
+    maxResponseChars?: number;
     signal?: AbortSignal;
   }) {
     const messages = input.messages ?? [{ role: "user" as const, content: input.prompt ?? "" }];
@@ -499,7 +503,10 @@ export function createTextModelChatGateway(deps: {
       for await (const chunk of streamResult.stream) {
         for (const choice of chunk.choices ?? []) {
           const delta = choice.delta?.content;
-          if (typeof delta === "string" && delta) content += delta;
+          if (typeof delta === "string" && delta) {
+            assertTextResponseWithinLimit(content.length + delta.length, input.maxResponseChars, streamResult.abort);
+            content += delta;
+          }
         }
       }
       const completed = await streamResult.completed;
@@ -519,6 +526,7 @@ export function createTextModelChatGateway(deps: {
     async *streamJson(input) {
       const streamResult = await createStream(input);
       const finishReasons = new Set<string>();
+      let emittedChars = 0;
       for await (const chunk of streamResult.stream) {
         for (const choice of chunk.choices ?? []) {
           if (typeof choice.finish_reason === "string" && choice.finish_reason) {
@@ -526,6 +534,8 @@ export function createTextModelChatGateway(deps: {
           }
           const delta = choice.delta?.content;
           if (typeof delta === "string" && delta) {
+            emittedChars += delta.length;
+            assertTextResponseWithinLimit(emittedChars, input.maxResponseChars, streamResult.abort);
             yield delta;
           }
         }
@@ -837,6 +847,12 @@ function normalizePreview(scriptText: string, promptResult: Record<string, unkno
       storyboards,
     },
   };
+}
+
+function assertTextResponseWithinLimit(length: number, limit: number | undefined, abort: () => void) {
+  if (!Number.isSafeInteger(limit) || (limit ?? 0) <= 0 || length <= limit!) return;
+  abort();
+  throw Object.assign(new Error("provider_response_too_large"), { code: "provider_response_too_large" });
 }
 
 function resolvePreviewScenes(promptResult: Record<string, unknown>) {

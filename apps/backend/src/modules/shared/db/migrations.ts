@@ -139,6 +139,9 @@ const GLOBALAIOPC_KLINGO3_WAN27_SCHEMA_FIX_RELATIVE_PATH = ["packages", "db", "m
 const GLOBALAIOPC_WAN27_DURATION_OPTIONS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261016-correct-globalaiopc-wan27-duration-options.sql"];
 const GLOBALAIOPC_KLINGO3_FRAME_PARAMETERS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261017-disable-klingo3-frame-parameters.sql"];
 const GLOBALAIOPC_SD25_SPECIAL_FRAME_PARAMETERS_FIX_RELATIVE_PATH = ["packages", "db", "migrations", "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql"];
+const GEO_MONITORING_RELATIVE_PATH = ["packages", "db", "migrations", "20261020-create-geo-monitoring.sql"];
+const GEO_MONITORING_HARDENING_RELATIVE_PATH = ["packages", "db", "migrations", "20261021-harden-geo-monitoring.sql"];
+const GEO_MONITORING_RUN_FENCE_RELATIVE_PATH = ["packages", "db", "migrations", "20261022-fence-geo-monitor-runs.sql"];
 const CANVAS_AGENT_OUTBOX_WAKEUP_RELATIVE_PATH = ["packages", "db", "migrations", "20260831-canvas-agent-outbox-wakeup.sql"];
 const PROJECT_COVER_STORAGE_OBJECT_BACKFILL_MIGRATION_NAME = "20260909-backfill-project-cover-storage-objects.sql";
 const SMS_SEND_RECORD_SECRET_REDACTION_RELATIVE_PATH = ["packages", "db", "migrations", "20260804-z-redact-sms-send-record-secrets.sql"];
@@ -736,6 +739,18 @@ export async function loadSqlMigrations(rootDir = process.cwd(), options = {}) {
     {
       name: "20261018-disable-globalaiopc-sd25-special-frame-parameters.sql",
       sql: await readFile(join(rootDir, ...GLOBALAIOPC_SD25_SPECIAL_FRAME_PARAMETERS_FIX_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261020-create-geo-monitoring.sql",
+      sql: await readFile(join(rootDir, ...GEO_MONITORING_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261021-harden-geo-monitoring.sql",
+      sql: await readFile(join(rootDir, ...GEO_MONITORING_HARDENING_RELATIVE_PATH), "utf8"),
+    },
+    {
+      name: "20261022-fence-geo-monitor-runs.sql",
+      sql: await readFile(join(rootDir, ...GEO_MONITORING_RUN_FENCE_RELATIVE_PATH), "utf8"),
     },
   ];
   return fromName

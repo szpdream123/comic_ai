@@ -40,6 +40,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
       assert.equal(anonymous.status, 401);
       const anonymousPlatforms = await fetch(`${server.origin}/api/admin/geo/platforms`);
       assert.equal(anonymousPlatforms.status, 401);
+      const anonymousMonitoring = await fetch(`${server.origin}/api/admin/geo/monitoring?contentItemId=${randomUUID()}`);
+      assert.equal(anonymousMonitoring.status, 401);
 
       const opsDb = await createMigratedTestDb();
       const { server: opsServer, cookie: opsCookie } = await createLoggedInAdminServer(opsDb, { role: "ops_admin" });
@@ -48,6 +50,8 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         assert.equal(forbidden.status, 403);
         const forbiddenPlatforms = await fetch(`${opsServer.origin}/api/admin/geo/platforms`, { headers: { cookie: opsCookie } });
         assert.equal(forbiddenPlatforms.status, 403);
+        const forbiddenMonitoring = await fetch(`${opsServer.origin}/api/admin/geo/monitoring?contentItemId=${randomUUID()}`, { headers: { cookie: opsCookie } });
+        assert.equal(forbiddenMonitoring.status, 403);
       } finally {
         await opsServer.close();
         await opsDb.close();
@@ -130,6 +134,61 @@ describe("admin management platform HTTP routes", { concurrency: false }, () => 
         method: "POST", headers: { "content-type": "application/json", "idempotency-key": `geo-publish-${randomUUID()}`, cookie }, body: JSON.stringify({ reason: "HTTP流程验证" }),
       });
       assert.equal(publishResponse.status, 200, await publishResponse.text());
+
+      const malformedMonitoring = await fetch(`${server.origin}/api/admin/geo/monitoring?contentItemId=not-a-uuid`, { headers: { cookie } });
+      assert.equal(malformedMonitoring.status, 400);
+      const monitoringBody = JSON.stringify({
+        contentItemId: generated.data.item.id,
+        platformId: "kimi",
+        results: [
+          { questionId: question.data.id, answer: `灵曦AI角色一致性指南：${server.origin}/guides/http-character-consistency`, citedUrls: [] },
+          { questionId: relatedQuestion.data.id, answer: "回答中没有提及灵曦AI。", citedUrls: [] },
+        ],
+      });
+      const missingMonitoringIdempotency = await fetch(`${server.origin}/api/admin/geo/monitoring/manual`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: monitoringBody,
+      });
+      assert.equal(missingMonitoringIdempotency.status, 400);
+      const missingOfficialMonitoringIdempotency = await fetch(`${server.origin}/api/admin/geo/monitoring/official-api`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ contentItemId: generated.data.item.id, platformId: "deepseek", modelCode: "configured-geo-model" }),
+      });
+      assert.equal(missingOfficialMonitoringIdempotency.status, 400);
+      const manualOnlyOfficialMonitoring = await fetch(`${server.origin}/api/admin/geo/monitoring/official-api`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": `geo-monitor-official-${randomUUID()}`, cookie },
+        body: JSON.stringify({ contentItemId: generated.data.item.id, platformId: "kimi", modelCode: "configured-geo-model" }),
+      });
+      assert.equal(manualOnlyOfficialMonitoring.status, 400);
+      const monitoringIdempotencyKey = `geo-monitor-manual-${randomUUID()}`;
+      const monitoringImportResponse = await fetch(`${server.origin}/api/admin/geo/monitoring/manual`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": monitoringIdempotencyKey, cookie },
+        body: monitoringBody,
+      });
+      const monitoringImport = await monitoringImportResponse.json();
+      assert.equal(monitoringImportResponse.status, 201, JSON.stringify(monitoringImport));
+      const monitoringReplayResponse = await fetch(`${server.origin}/api/admin/geo/monitoring/manual`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": monitoringIdempotencyKey, cookie },
+        body: monitoringBody,
+      });
+      assert.equal(monitoringReplayResponse.status, 201, await monitoringReplayResponse.text());
+      const monitoringResponse = await fetch(
+        `${server.origin}/api/admin/geo/monitoring?contentItemId=${generated.data.item.id}`,
+        { headers: { cookie } },
+      );
+      const monitoring = await monitoringResponse.json();
+      assert.equal(monitoringResponse.status, 200, JSON.stringify(monitoring));
+      assert.equal(monitoring.data.runs[0].platformId, "kimi");
+      assert.deepEqual(
+        Object.fromEntries(monitoring.data.runs[0].results.map((item: { questionId: string; status: string }) => [item.questionId, item.status])),
+        { [question.data.id]: "cited", [relatedQuestion.data.id]: "mentioned" },
+      );
+      assert.equal(monitoring.data.runs.length, 1);
 
       const settingsResponse = await fetch(`${server.origin}/api/admin/geo/settings`, { headers: { cookie } });
       const settings = await settingsResponse.json();

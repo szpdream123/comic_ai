@@ -196,6 +196,41 @@ describe("ai storyboard preview service", () => {
     assert.deepEqual(result.usage, { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 });
   });
 
+  it("aborts text completion streams that exceed the caller response limit", async () => {
+    let aborted = false;
+    const gateway = createTextModelChatGateway({
+      gateway: {
+        chat: {
+          completions: {
+            async create() {
+              return {
+                providerRequestId: "provider-request-oversized",
+                stream: (async function* () {
+                  yield { choices: [{ delta: { content: "1234" } }] };
+                  yield { choices: [{ delta: { content: "5678" } }] };
+                })(),
+                abort() { aborted = true; },
+                completed: Promise.resolve({
+                  status: "canceled" as const,
+                  failureCode: "client_aborted_stream",
+                  usage: null,
+                  usageSource: "provider_missing" as const,
+                }),
+              };
+            },
+          },
+        },
+      } as never,
+    });
+
+    await assert.rejects(
+      gateway.completeJsonWithUsage!({ model: "text-model", prompt: "prompt", maxResponseChars: 6 }),
+      (error: unknown) => Boolean(error && typeof error === "object" && "code" in error
+        && error.code === "provider_response_too_large"),
+    );
+    assert.equal(aborted, true);
+  });
+
   it("passes canvas ownership to every storyboard model stage", async () => {
     const canvasProjectId = "40000000-0000-4000-8000-000000000098";
     const calls: Array<Parameters<TextChatGatewayLike["completeJson"]>[0]> = [];

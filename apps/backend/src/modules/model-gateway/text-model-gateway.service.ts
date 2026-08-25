@@ -300,6 +300,7 @@ export class TextModelGatewayService {
     resolveCompleted: (value: TextGatewayFinalUsage) => void;
     now: () => Date;
   }) {
+    let terminalStateRecorded = false;
     try {
       for await (const chunk of input.stream) {
         input.tracker.observe(chunk);
@@ -342,6 +343,7 @@ export class TextModelGatewayService {
           usage,
           usageSource,
         });
+        terminalStateRecorded = true;
         return;
       }
       const final: TextGatewayFinalUsage = {
@@ -365,6 +367,7 @@ export class TextModelGatewayService {
         now: input.now(),
       });
       input.resolveCompleted(final);
+      terminalStateRecorded = true;
     } catch (error) {
       const status = input.isAborted() ? "canceled" : "failed";
       const failureCode = input.isAborted()
@@ -419,7 +422,42 @@ export class TextModelGatewayService {
         usage: input.tracker.usage,
         usageSource,
       });
+      terminalStateRecorded = true;
       throw modelError ?? error;
+    } finally {
+      if (!terminalStateRecorded) {
+        const failureCode = input.isAborted() ? "client_aborted_stream" : "consumer_closed_stream";
+        const usageSource = input.tracker.usage ? "provider" : "provider_missing";
+        const redactedResponse = {
+          model: input.modelId,
+          providerModel: input.providerModel,
+          chunkCount: input.tracker.chunkCount,
+          finishReasons: input.tracker.finishReasons,
+          usage: input.tracker.usage,
+          usageSource,
+        };
+        await markProviderRequestCanceled(this.config.db, {
+          providerRequestId: input.providerRequestId,
+          failureCode,
+          redactedResponse,
+          now: input.now(),
+        });
+        await completeUserModelRequestLog(this.config.db, {
+          providerRequestId: input.providerRequestId,
+          status: "canceled",
+          responseText: input.tracker.responseText,
+          responseUsage: input.tracker.usage,
+          finishReasons: input.tracker.finishReasons,
+          failureCode,
+          now: input.now(),
+        });
+        input.resolveCompleted({
+          status: "canceled",
+          failureCode,
+          usage: input.tracker.usage,
+          usageSource,
+        });
+      }
     }
   }
 }
