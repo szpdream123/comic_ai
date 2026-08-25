@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { runRuntimeSchemaMigrations } from "./runtime-schema-migrations.mjs";
+import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
-loadDotEnvFile(join(process.cwd(), ".env"));
+loadDotEnvFile(runtimeEnvFilePath());
 if (process.env.CREATOR_DEV_STACK_MANAGED !== "true") {
   runRuntimeSchemaMigrations({ runtime: process.execPath, cwd: process.cwd(), env: process.env });
 }

@@ -13,9 +13,10 @@ import {
   loadDotEnvFile,
   readWindowsProcess,
 } from "./creator-dev-process-utils.mjs";
+import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
 const pidFile = join(process.cwd(), ".local", "run", "creator-dev-stack.pid");
-loadDotEnvFile(join(process.cwd(), ".env"), { override: true });
+loadDotEnvFile(runtimeEnvFilePath(process.cwd(), { production: false }), { override: true });
 const pid = readPidFile(pidFile);
 const port = configuredPort();
 

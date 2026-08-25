@@ -1322,6 +1322,7 @@ export function renderProjectDetail(context = {}) {
     })}
     ${renderGenerationQueueJobConfirmModal(ui)}
     ${activeNavTab === "library" && ui.assetGeneratorTarget === "team" && ui.assetGeneratorModal ? renderAssetGeneratorModal(ui, state) : ""}
+    ${activeNavTab === "library" ? renderAssetImageStyleSkillModal(ui, state) : ""}
     ${activeNavTab === "library" && ui.assetImportModalSource === "team" && ui.assetImportModal ? renderAssetImportModal(ui) : ""}
     ${activeNavTab === "library" ? renderImportedAssetRenameModal(ui) : ""}
     ${activeNavTab === "library" ? renderImportedAssetDeleteModal(ui) : ""}
@@ -1579,7 +1580,7 @@ function renderTaskCenterDetail(task) {
         <div class="task-center-section-label">生成内容</div>
         ${resultUrl ? taskCenterMediaKind(task) === "video"
           ? `<video src="${escapeAttr(resolveApiUrl(resultUrl))}" controls preload="none"></video>`
-          : `<img src="${escapeAttr(resolveApiUrl(resultUrl))}" alt="任务生成结果" loading="lazy" />`
+          : `<img src="${escapeAttr(resolveApiUrl(resultUrl))}" alt="任务生成结果" loading="eager" />`
         : resultText
           ? `<pre>${escapeHtml(resultText)}</pre>`
           : `<div class="task-center-result-empty">${status.tone === "active" ? "正在生成" : "暂无生成内容"}</div>`}
@@ -1705,11 +1706,24 @@ function taskCenterTaskTitle(task = {}) {
 
 function resolveTaskCenterResultUrl(task = {}) {
   const asset = Array.isArray(task.resultAssets) ? task.resultAssets[0] : null;
-  return String(
+  const originalUrl = String(
     task.result?.imageUrl ?? task.result?.videoUrl ?? task.result?.sourceUrl ?? task.result?.downloadUrl ??
     asset?.previewUrl ?? asset?.sourceUrl ?? asset?.downloadUrl ??
     task.fixedImages?.[0]?.url ?? task.fixedImages?.[0]?.src ?? task.fixedVideos?.[0]?.url ?? task.fixedVideos?.[0]?.src ?? "",
   ).trim();
+  if (originalUrl) return originalUrl;
+  const storageObjectId = [
+    asset?.storageObjectId,
+    task.result?.storageObjectId,
+    task.fixedImages?.[0]?.storageObjectId,
+    task.fixedVideos?.[0]?.storageObjectId,
+  ]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean);
+  if (storageObjectId) {
+    return `/api/storage/objects/${encodeURIComponent(storageObjectId)}/content?proxy=1`;
+  }
+  return "";
 }
 
 function resolveTaskCenterResultText(task = {}) {
@@ -7626,7 +7640,7 @@ function resolveAssetGeneratorModelCredits(model = {}, resolution = "") {
 function renderAssetGeneratorModal(ui, state = {}) {
   const assetKind = ui.assetGeneratorModal ?? "character";
   const isStoryboardGenerator = assetKind === "storyboard";
-  const showImageStyleControl = isStoryboardGenerator || ui.assetGeneratorTarget === "project";
+  const showImageStyleControl = isStoryboardGenerator || ["project", "team"].includes(ui.assetGeneratorTarget);
   const tab = ASSET_TABS.find((item) => item.id === assetKind) ?? ASSET_TABS[0];
   const label = isStoryboardGenerator ? "故事板" : tab.label;
   const isEditing = ui.assetGeneratorMode === "edit";

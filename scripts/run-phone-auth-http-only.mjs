@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runtimeEnvFilePath } from "./runtime-env-file.mjs";
 
 const runtime = findNodeRuntime(18);
-const envFilePath = join(process.cwd(), ".env");
+const envFilePath = runtimeEnvFilePath(process.cwd(), { production: false });
 const launcherPath = join(process.cwd(), "scripts", "run-phone-auth-dev-server.mjs");
 
 loadDotEnvFile(envFilePath);

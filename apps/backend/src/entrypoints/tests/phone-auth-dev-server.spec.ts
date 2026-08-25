@@ -2822,6 +2822,15 @@ describe("phone auth dev server", { concurrency: false }, () => {
     try {
       await server.listen(0);
 
+      const localResponse = await fetch(`${server.origin}/robots.txt`, {
+        headers: {
+          host: "127.0.0.1:4310",
+          "x-forwarded-proto": "http",
+        },
+        redirect: "manual",
+      });
+      assert.notEqual(localResponse.status, 308);
+
       const pageResponse = await fetch(`${server.origin}/projects?tab=active`, {
         headers: proxyHeaders,
         redirect: "manual",
@@ -2852,6 +2861,7 @@ describe("phone auth dev server", { concurrency: false }, () => {
       const appendedProxyProtocolResponse = await fetch(`${server.origin}/projects`, {
         headers: {
           host: "www.lingxiyunai.com:443",
+          "x-forwarded-host": "www.lingxiyunai.com:443",
           "x-forwarded-proto": "https, http",
         },
         redirect: "manual",
@@ -2863,7 +2873,10 @@ describe("phone auth dev server", { concurrency: false }, () => {
       );
 
       const misleadingPortResponse = await fetch(`${server.origin}/projects`, {
-        headers: { host: "www.lingxiyunai.com:443" },
+        headers: {
+          host: "www.lingxiyunai.com:443",
+          "x-forwarded-host": "www.lingxiyunai.com:443",
+        },
         redirect: "manual",
       });
       assert.equal(misleadingPortResponse.status, 308);

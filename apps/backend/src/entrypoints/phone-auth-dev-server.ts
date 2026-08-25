@@ -3694,10 +3694,11 @@ function resolveStorageIdentityFromCosUrl(value: string) {
   }
 }
 
-export async function resolveGenerationStorageObjectReferences(
+async function resolveGenerationStorageObjectReferencesInternal(
   value: unknown,
   resolveStorageObjectUrl: (storageObjectId: string) => Promise<string>,
   resolveSourceUrl?: (sourceUrl: string) => Promise<string | null>,
+  onMissingStorageObject?: (storageObjectId: string) => void,
 ): Promise<unknown> {
   const resolvedById = new Map<string, Promise<string>>();
   const resolveId = (storageObjectId: string) => {
@@ -3714,7 +3715,12 @@ export async function resolveGenerationStorageObjectReferences(
       const storageObjectId = storageObjectIdFromContentUrl(candidate);
       if (storageObjectId) {
         try {
-          return await resolveId(storageObjectId);
+          const resolved = await resolveId(storageObjectId);
+          if (!resolved) {
+            onMissingStorageObject?.(storageObjectId);
+            return undefined;
+          }
+          return resolved;
         } catch (error) {
           if (allowMissingStorageObject) return undefined;
           throw error;
@@ -3724,7 +3730,10 @@ export async function resolveGenerationStorageObjectReferences(
         ? (await resolveSourceUrl(candidate)) ?? candidate
         : candidate;
     }
-    if (Array.isArray(candidate)) return Promise.all(candidate.map((item) => visit(item, allowMissingStorageObject)));
+    if (Array.isArray(candidate)) {
+      const resolved = await Promise.all(candidate.map((item) => visit(item, allowMissingStorageObject)));
+      return resolved.filter((item) => item !== undefined);
+    }
     if (!candidate || typeof candidate !== "object") return candidate;
 
     const record = candidate as Record<string, unknown>;
@@ -3735,9 +3744,12 @@ export async function resolveGenerationStorageObjectReferences(
       ? record.assetVersionId.trim()
       : "";
     let signedUrl = "";
+    let missingStorageObject = false;
     if (storageObjectId) {
       try {
         signedUrl = await resolveId(storageObjectId);
+        missingStorageObject = !signedUrl;
+        if (missingStorageObject) onMissingStorageObject?.(storageObjectId);
       } catch (error) {
         if (!assetVersionId) {
           // Historical drafts can retain a stale proxy id alongside a valid COS URL.
@@ -3759,19 +3771,34 @@ export async function resolveGenerationStorageObjectReferences(
     }
     const entries = await Promise.all(Object.entries(record).map(async ([key, item]) => [
       key,
-      signedUrl && generationMediaUrlKeys.has(key) && typeof item === "string"
+      missingStorageObject && key === "storageObjectId"
+        ? undefined
+        : missingStorageObject && generationMediaUrlKeys.has(key) && typeof item === "string" && storageObjectIdFromContentUrl(item) === storageObjectId
+          ? undefined
+          : signedUrl && generationMediaUrlKeys.has(key) && typeof item === "string"
         ? signedUrl
         : !signedUrl && assetVersionId && generationMediaUrlKeys.has(key) && typeof item === "string" && storageObjectIdFromContentUrl(item) === storageObjectId
           ? undefined
           : await visit(item, Boolean(assetVersionId)),
     ] as const));
     const resolved = Object.fromEntries(entries.filter(([, item]) => item !== undefined));
+    if (missingStorageObject && !assetVersionId && !Object.keys(resolved).some((key) => key !== "storageObjectId" && !generationMediaUrlKeys.has(key))) {
+      return undefined;
+    }
     if (signedUrl && !Object.keys(resolved).some((key) => generationMediaUrlKeys.has(key))) {
       resolved.url = signedUrl;
     }
     return resolved;
   };
   return visit(value);
+}
+
+export async function resolveGenerationStorageObjectReferences(
+  value: unknown,
+  resolveStorageObjectUrl: (storageObjectId: string) => Promise<string>,
+  resolveSourceUrl?: (sourceUrl: string) => Promise<string | null>,
+): Promise<unknown> {
+  return resolveGenerationStorageObjectReferencesInternal(value, resolveStorageObjectUrl, resolveSourceUrl);
 }
 
 function resolveFirstFrameUrl(body: Record<string, unknown>): string {
@@ -5338,6 +5365,7 @@ function modelConfigToGenerationConfigModel(modelConfig: AiModelConfigRecord) {
     providerName: modelConfig.providerName,
     providerModel: modelConfig.providerModel,
     providerProtocol: modelConfig.providerProtocol,
+    capabilities: modelConfig.capabilities,
     remark: modelConfig.remark,
     mediaType: modelConfig.mediaType,
     modelKind: readString(modelConfig.uiConfig.modelKind),
@@ -7205,9 +7233,10 @@ async function listTaskCenterTasks(
     );
     const mediaKind = readString(row.media_kind) || "image";
     const firstResultAsset = resultAssets[0] ?? null;
-    const result = firstResultAsset
+    const rawResult = firstResultAsset
       ? generationResultFromSnapshotAsset(firstResultAsset, mediaKind, [])
       : null;
+    const result = rawResult;
     const mediaUrl = readGenerationPublicAssetUrl(
       result?.imageUrl,
       result?.videoUrl,
@@ -10655,12 +10684,29 @@ async function createGenerationTask(
       expiresAt: new Date(input.now.getTime() + modelSignedUrlExpiresInSeconds * 1000),
     })).url;
   };
-  const resolvedBody = await resolveGenerationStorageObjectReferences(input.body, resolveStorageObjectUrl, resolveGenerationSourceUrl) as Record<string, unknown>;
-  const resolvedModelParameters = await resolveGenerationStorageObjectReferences(
+  const missingGenerationStorageObjectIds = new Set<string>();
+  const recordMissingGenerationStorageObject = (storageObjectId: string) => {
+    missingGenerationStorageObjectIds.add(storageObjectId);
+  };
+  const resolvedBody = await resolveGenerationStorageObjectReferencesInternal(
+    input.body,
+    resolveStorageObjectUrl,
+    resolveGenerationSourceUrl,
+    recordMissingGenerationStorageObject,
+  ) as Record<string, unknown>;
+  const resolvedModelParameters = await resolveGenerationStorageObjectReferencesInternal(
     executionParameters,
     resolveStorageObjectUrl,
     resolveGenerationSourceUrl,
+    recordMissingGenerationStorageObject,
   ) as Record<string, unknown>;
+  if (missingGenerationStorageObjectIds.size) {
+    console.warn("[generation][material] skipped missing storage references", {
+      kind: input.kind,
+      modelCode: requestedModelCode ?? null,
+      storageObjectIds: [...missingGenerationStorageObjectIds],
+    });
+  }
   const parameters = resolvedReferenceImages.length
     ? {
         ...resolvedModelParameters,
@@ -17734,9 +17780,9 @@ function serverOriginFromRequest(request: Parameters<typeof createServer>[0]) {
 }
 
 function storageProxyRelativeUrlOrigin(request: Parameters<typeof createServer>[0]) {
-  const port = request.socket.localPort;
+  const port = request.socket?.localPort;
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error("storage_proxy_local_port_unavailable");
+    return serverOriginFromRequest(request);
   }
   return `http://127.0.0.1:${port}`;
 }
@@ -17746,6 +17792,13 @@ function redirectInsecureProductionRequest(
   response: Parameters<typeof createServer>[1],
   httpsOrigin: string | undefined,
 ) {
+  const requestHost = (
+    firstRequestHeader(request.headers["x-forwarded-host"])
+    || String(request.headers.host ?? "")
+  ).trim().toLowerCase();
+  if (isLocalRequestHost(requestHost)) {
+    return false;
+  }
   const forwardedProtocols = String(request.headers["x-forwarded-proto"] ?? "")
     .split(",")
     .map((value) => value.trim().toLowerCase())
@@ -17763,6 +17816,14 @@ function redirectInsecureProductionRequest(
   response.setHeader("cache-control", "no-store");
   response.end();
   return true;
+}
+
+function isLocalRequestHost(host: string) {
+  const normalizedHost = host.replace(/^\[|\]$/g, "").replace(/:\d+$/, "");
+  return normalizedHost === "127.0.0.1"
+    || normalizedHost === "localhost"
+    || normalizedHost === "::1"
+    || normalizedHost === "0.0.0.0";
 }
 
 function productionHttpsOrigin(env: NodeJS.ProcessEnv) {

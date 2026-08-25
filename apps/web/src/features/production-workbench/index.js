@@ -2452,10 +2452,7 @@ function isDeferredMediaSource(source) {
 }
 
 function resolveDirectStorageImageSource(source) {
-  return String(source ?? "").replace(
-    /(\/api\/storage\/objects\/[^/]+\/content)\?proxy=1$/i,
-    "$1",
-  );
+  return String(source ?? "").trim();
 }
 
 function syncDeferredVideoPreload(root) {
@@ -2471,9 +2468,11 @@ function prepareDeferredMediaElements(root) {
   const media = [...(root?.querySelectorAll?.("img") ?? [])];
   for (const image of media) {
     if (!image?.dataset || image.dataset.deferredMediaManaged === "true") continue;
+    if (image.closest?.(".task-center-result")) continue;
+    if (image.closest?.(".asset-generator-backdrop")) continue;
     // Picker dialogs have their own scroll container; native lazy loading is
     // more reliable there than observing against the workbench root.
-    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen]")) continue;
+    if (image.closest?.("[data-selection-picker-id], .asset-image-lightbox, .modal-backdrop, [data-canvas-image-fullscreen], .canvas-text-skill-layer, .canvas-script-batch-layer")) continue;
     const source = String(image.getAttribute?.("src") ?? "").trim();
     if (!isDeferredMediaSource(source)) continue;
     image.dataset.deferredMediaManaged = "true";
@@ -22657,6 +22656,90 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     return;
   }
 
+  if (action === "open-episode-batch-style-modal") {
+    if (workbench.ui.episodeBatchModal) {
+      workbench.ui.episodeBatchModal.styleModalOpen = true;
+      workbench.ui.episodeBatchModal.styleDraftId = workbench.ui.episodeBatchModal.selectedStyleId;
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "close-episode-batch-style-modal") {
+    if (workbench.ui.episodeBatchModal) {
+      workbench.ui.episodeBatchModal.styleModalOpen = false;
+      workbench.ui.episodeBatchModal.styleDraftId = "";
+      render(workbench);
+    }
+    return;
+  }
+
+  if (action === "set-episode-batch-style-modal-tab") {
+    const tab = String(target?.dataset?.pickerTab ?? "").trim();
+    if (workbench.ui.episodeBatchModal && (tab === "public" || tab === "custom")) {
+      workbench.ui.episodeBatchModal.styleTab = tab;
+      const modal = workbench.ui.episodeBatchModal;
+      const publicStyles = Array.isArray(modal.publicStyles) ? modal.publicStyles : [];
+      const customStyles = Array.isArray(modal.customStyles) ? modal.customStyles : [];
+      const toPickerItem = (style, group) => ({
+        id: String(style.id ?? ""),
+        group,
+        label: String(style.label ?? "未命名风格"),
+        description: "生图风格提示词",
+        previewUrl: style.preview ? resolveApiUrl(String(style.preview)) : "",
+        meta: style.priceCredits > 0 ? `${style.priceCredits}积分/张` : "免费",
+      });
+      const items = [
+        ...publicStyles.map((style) => toPickerItem(style, "public")),
+        ...customStyles.map((style) => toPickerItem(style, "custom")),
+      ];
+      syncSelectionPickerTab(workbench.root, {
+        pickerId: "episode-batch-style-picker",
+        activeTab: tab,
+        items,
+        selectedId: modal.styleDraftId ?? "",
+        selectAction: "select-episode-batch-style-draft",
+        emptyLabel: tab === "custom" ? "暂无私人生图风格技能" : "暂无官方生图风格技能",
+      });
+    }
+    return;
+  }
+
+  if (action === "select-episode-batch-style-draft") {
+    const styleId = String(target?.dataset?.pickerItemId ?? "").trim();
+    if (workbench.ui.episodeBatchModal && styleId) {
+      workbench.ui.episodeBatchModal.styleDraftId = styleId;
+      syncSelectionPickerSelection(workbench.root, {
+        pickerId: "episode-batch-style-picker",
+        selectedId: styleId,
+      });
+    }
+    return;
+  }
+
+  if (action === "confirm-episode-batch-style") {
+    if (workbench.ui.episodeBatchModal) {
+      const styleDraftId = workbench.ui.episodeBatchModal.styleDraftId;
+      if (styleDraftId) {
+        const isProjectStyle = styleDraftId === String(workbench.ui.episodeBatchModal.projectStyle?.id ?? "").trim();
+        workbench.ui.selectedEpisodePromptSkillIds = {
+          ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+          image_style: isProjectStyle ? "" : styleDraftId,
+        };
+        if (workbench.ui.episodeBatchModal.mode === "image") {
+          workbench.ui.assetImageStyleSkillId = isProjectStyle ? "project-style" : styleDraftId || "project-style";
+          workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+        }
+        workbench.ui.episodeBatchModal.selectedStyleId = styleDraftId;
+      }
+      workbench.ui.episodeBatchModal.styleModalOpen = false;
+      workbench.ui.episodeBatchModal.styleDraftId = "";
+      workbench.ui.episodeBatchModal = syncEpisodeBatchModal(workbench.ui.episodeBatchModal);
+      render(workbench);
+    }
+    return;
+  }
+
   if (action === "close-episode-batch-modal") {
     if (workbench.ui.episodeBatchModal?.isSubmitting === true) {
       return;
@@ -23001,15 +23084,30 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       const assetPromptDraft = workbench.ui.assetPromptDraft ?? {};
       const removedReference = (assetPromptDraft.quickReferenceItems ?? [])
         .find((item) => item?.id === referenceId) ?? null;
+      const removedAttachmentIds = new Set(
+        (workbench.ui.episodeWorkbenchAttachments ?? [])
+          .filter((item) => (
+            item?.id === referenceId ||
+            (removedReference && isSameGenerationReference(item, removedReference))
+          ))
+          .map((item) => item?.id)
+          .filter(Boolean),
+      );
       restoreCurrentPromptReferenceTokensByFileOrder(workbench, assetPromptDraft);
       removeCurrentPromptMentionsForReference(
         workbench,
         removedReference,
         assetPromptDraft.mentionReferences ?? [],
       );
+      workbench.ui.episodeWorkbenchAttachments = (workbench.ui.episodeWorkbenchAttachments ?? []).filter(
+        (item) => !removedAttachmentIds.has(item?.id),
+      );
+      workbench.ui.episodeWorkbenchSelectedAttachmentIds = (workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []).filter(
+        (item) => !removedAttachmentIds.has(item),
+      );
       const nextDraft = {
         ...assetPromptDraft,
-        quickReferenceItems: (assetPromptDraft.quickReferenceItems ?? []).filter((item) => item.id !== referenceId),
+        quickReferenceItems: (assetPromptDraft.quickReferenceItems ?? []).filter((item) => item?.id !== referenceId),
         mentionReferences: (assetPromptDraft.mentionReferences ?? []).filter((item) => (
           item.id !== referenceId && !isPromptMentionSameMediaAsset(item, removedReference)
         )),
@@ -23035,6 +23133,15 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     }
     const removedReference = (selectedStoryboard.generationState?.quickReferenceItems ?? [])
       .find((item) => item?.id === referenceId) ?? null;
+    const removedAttachmentIds = new Set(
+      (workbench.ui.episodeWorkbenchAttachments ?? [])
+        .filter((item) => (
+          item?.id === referenceId ||
+          (removedReference && isSameGenerationReference(item, removedReference))
+        ))
+        .map((item) => item?.id)
+        .filter(Boolean),
+    );
     restoreCurrentPromptReferenceTokensByFileOrder(
       workbench,
       selectedStoryboard.generationState ?? createEmptyGenerationState(),
@@ -23044,10 +23151,16 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       removedReference,
       selectedStoryboard.generationState?.mentionReferences ?? [],
     );
+    workbench.ui.episodeWorkbenchAttachments = (workbench.ui.episodeWorkbenchAttachments ?? []).filter(
+      (item) => !removedAttachmentIds.has(item?.id),
+    );
+    workbench.ui.episodeWorkbenchSelectedAttachmentIds = (workbench.ui.episodeWorkbenchSelectedAttachmentIds ?? []).filter(
+      (item) => !removedAttachmentIds.has(item),
+    );
     updateStoryboardGenerationState(workbench, selectedStoryboard.id, (generationState) => {
       const nextState = {
         ...generationState,
-        quickReferenceItems: (generationState.quickReferenceItems ?? []).filter((item) => item.id !== referenceId),
+        quickReferenceItems: (generationState.quickReferenceItems ?? []).filter((item) => item?.id !== referenceId),
         mentionReferences: (generationState.mentionReferences ?? []).filter((item) => (
           item.id !== referenceId && !isPromptMentionSameMediaAsset(item, removedReference)
         )),
@@ -23111,6 +23224,14 @@ export async function handleProductionWorkbenchAction(workbench, target) {
   if (action === "remove-episode-workbench-attachment") {
     syncPromptInputFromDom(workbench);
     const attachmentId = target.dataset.attachmentId ?? "";
+    const frameTarget = target.dataset.frameTarget
+      ?? target.closest?.("[data-frame-target]")?.dataset?.frameTarget
+      ?? "";
+    const explicitFrameStateKey = frameTarget === "last"
+      ? "lastFrame"
+      : frameTarget === "first"
+        ? "firstFrame"
+        : "";
     if (workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId === attachmentId) {
       workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentId = "";
       workbench.ui.episodeWorkbenchAnnotationSelectedAttachmentUrl = "";
@@ -23125,14 +23246,19 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     const generationStateBeforeRemoval = removingFromAssetScope
       ? workbench.ui.assetPromptDraft ?? createEmptyGenerationState()
       : selectedStoryboardBeforeRemoval?.generationState ?? createEmptyGenerationState();
-    const removedReference = [
-      ...(generationStateBeforeRemoval.referenceUploads ?? []),
-      ...(generationStateBeforeRemoval.quickReferenceItems ?? []),
-      ...(workbench.ui.episodeWorkbenchAttachments ?? []),
-      generationStateBeforeRemoval.firstFrame,
-      generationStateBeforeRemoval.lastFrame,
-      generationStateBeforeRemoval.editSourceVideo,
-    ].filter(Boolean).find((item) => item?.id === attachmentId) ?? null;
+    const composerSlot = resolveComposerAttachmentSlot(generationStateBeforeRemoval, attachmentId);
+    const frameStateKey = explicitFrameStateKey || composerSlot.frameStateKey;
+    const removingEditSourceVideo = composerSlot.isEditSourceVideo;
+    const removedReference = frameStateKey
+      ? generationStateBeforeRemoval[frameStateKey] ?? null
+      : composerSlot.reference ?? [
+          ...(generationStateBeforeRemoval.referenceUploads ?? []),
+          ...(generationStateBeforeRemoval.quickReferenceItems ?? []),
+          ...(workbench.ui.episodeWorkbenchAttachments ?? []),
+          generationStateBeforeRemoval.firstFrame,
+          generationStateBeforeRemoval.lastFrame,
+          generationStateBeforeRemoval.editSourceVideo,
+        ].filter(Boolean).find((item) => item?.id === attachmentId) ?? null;
     restoreCurrentPromptReferenceTokensByFileOrder(
       workbench,
       generationStateBeforeRemoval,
@@ -23149,12 +23275,31 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       (item) => item !== attachmentId,
     );
     if (removingFromAssetScope) {
+      const assetPromptDraft = workbench.ui.assetPromptDraft ?? createEmptyGenerationState();
+      workbench.ui.assetPromptDraft = {
+        ...assetPromptDraft,
+        firstFrame: frameStateKey === "firstFrame" || isSameGenerationReference(assetPromptDraft.firstFrame, removedReference) ? null : assetPromptDraft.firstFrame,
+        lastFrame: frameStateKey === "lastFrame" || isSameGenerationReference(assetPromptDraft.lastFrame, removedReference) ? null : assetPromptDraft.lastFrame,
+        imageReference: isSameGenerationReference(assetPromptDraft.imageReference, removedReference) ? null : assetPromptDraft.imageReference,
+        editSourceVideo: removingEditSourceVideo || isSameGenerationReference(assetPromptDraft.editSourceVideo, removedReference)
+          ? null
+          : assetPromptDraft.editSourceVideo,
+        referenceUploads: (assetPromptDraft.referenceUploads ?? []).filter(
+          (item) => !isRemovedComposerAttachment(item, attachmentId, removedReference),
+        ),
+        quickReferenceItems: (assetPromptDraft.quickReferenceItems ?? []).filter(
+          (item) => !isRemovedComposerAttachment(item, attachmentId, removedReference),
+        ),
+        mentionReferences: (assetPromptDraft.mentionReferences ?? []).filter(
+          (item) => !isPromptMentionSameMediaAsset(item, removedReference),
+        ),
+      };
       setCurrentScopePrompt(
         workbench,
         normalizePromptByImageReferenceOrder(
           workbench,
           getCurrentScopePrompt(workbench),
-          workbench.ui.assetPromptDraft ?? createEmptyGenerationState(),
+          workbench.ui.assetPromptDraft,
         ),
       );
       clearPromptMentionUi(workbench);
@@ -23170,10 +23315,18 @@ export async function handleProductionWorkbenchAction(workbench, target) {
       updateStoryboardGenerationState(workbench, selectedStoryboard.id, (state) => {
         const nextState = {
           ...state,
-          firstFrame: attachmentId === "first-frame" ? null : state.firstFrame,
-          lastFrame: attachmentId === "last-frame" ? null : state.lastFrame,
-          editSourceVideo: attachmentId === "edit-source-video" ? null : state.editSourceVideo,
-          referenceUploads: (state.referenceUploads ?? []).filter((item) => item.id !== attachmentId),
+          firstFrame: frameStateKey === "firstFrame" || isSameGenerationReference(state.firstFrame, removedReference) ? null : state.firstFrame,
+          lastFrame: frameStateKey === "lastFrame" || isSameGenerationReference(state.lastFrame, removedReference) ? null : state.lastFrame,
+          imageReference: isSameGenerationReference(state.imageReference, removedReference) ? null : state.imageReference,
+          editSourceVideo: removingEditSourceVideo || isSameGenerationReference(state.editSourceVideo, removedReference)
+            ? null
+            : state.editSourceVideo,
+          referenceUploads: (state.referenceUploads ?? []).filter(
+            (item) => !isRemovedComposerAttachment(item, attachmentId, removedReference),
+          ),
+          quickReferenceItems: (state.quickReferenceItems ?? []).filter(
+            (item) => !isRemovedComposerAttachment(item, attachmentId, removedReference),
+          ),
           mentionReferences: (state.mentionReferences ?? []).filter(
             (item) => !isPromptMentionSameMediaAsset(item, removedReference),
           ),
@@ -25930,12 +26083,29 @@ export async function handleProductionWorkbenchAction(workbench, target) {
     workbench.ui.assetGeneratorRetryPreviewFile = null;
     workbench.ui.assetGeneratorUploading = false;
     workbench.ui.assetGeneratorSubmitting = false;
+    workbench.ui.assetImageStyleSkillId = "project-style";
+    workbench.ui.assetImageStyleSkillProjectId = resolveActiveProjectId(workbench);
+    workbench.ui.selectedEpisodePromptSkillIds = {
+      ...(workbench.ui.selectedEpisodePromptSkillIds ?? {}),
+      image_style: "",
+    };
     workbench.ui.openGenerationSelectMenu = null;
-    try {
-      await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
-    } catch {
-      syncAssetGeneratorModelDefaults(workbench);
-    }
+    await Promise.all([
+      (!Array.isArray(workbench.ui.projectStyles) || workbench.ui.projectStyles.length === 0) &&
+        typeof workbench.api?.getProjectStyles === "function"
+        ? syncProjectStyles(workbench)
+        : Promise.resolve(),
+      syncEpisodeBatchImageStyleSkills(workbench),
+      (async () => {
+        try {
+          await loadAssetGeneratorGenerationConfig(workbench, { fresh: true });
+        } catch {
+          syncAssetGeneratorModelDefaults(workbench);
+        }
+      })(),
+    ]);
+    const projectStyle = resolveEpisodeGenerationStyle(workbench);
+    workbench.ui.assetGeneratorStyleCode = String(projectStyle?.code ?? projectStyle?.id ?? "").trim();
     render(workbench);
     return;
   }
@@ -33416,6 +33586,21 @@ async function createImageGenerationTaskWithReferenceFallback(workbench, payload
   }
 }
 
+async function createVideoTaskWithReferenceFallback(workbench, episodeId, payload) {
+  try {
+    return await workbench.api.createVideoTask(episodeId, payload);
+  } catch (error) {
+    if (String(error?.errorCode ?? "") !== "model_reference_not_found") {
+      throw error;
+    }
+    const fallbackPayload = stripStaleReferenceAssetVersionIds(payload);
+    if (!fallbackPayload) {
+      throw error;
+    }
+    return workbench.api.createVideoTask(episodeId, fallbackPayload);
+  }
+}
+
 async function submitCanvasRunIfAvailable(workbench, preview) {
   const canvasNode = workbench.ui.canvasDocument?.nodes?.find?.((node) => node.id === preview.nodeId);
   const workflowReferencePlan = resolveCanvasScriptWorkflowVideoReferencePlan(workbench.ui.canvasDocument, canvasNode);
@@ -40842,6 +41027,20 @@ function configuredGenerationModelSupportsAudioReferences(workbench, modelCode) 
   if (!model) {
     return false;
   }
+  const providerProtocol = String(model.providerProtocol ?? "").trim();
+  if (providerProtocol === "globalaiopc_video" || providerProtocol === "global_ai_opc_video") {
+    return true;
+  }
+  const capabilities = model.capabilities && typeof model.capabilities === "object" && !Array.isArray(model.capabilities)
+    ? model.capabilities
+    : {};
+  if (
+    capabilities.audio === true ||
+    capabilities.referenceAudio === true ||
+    capabilities.referenceAudios === true
+  ) {
+    return true;
+  }
   const schema = model.parameterSchema && typeof model.parameterSchema === "object" && !Array.isArray(model.parameterSchema)
     ? model.parameterSchema
     : {};
@@ -41663,13 +41862,14 @@ async function submitTeamAssetGenerator(workbench, assetKind, nextName, prompt, 
     })
     : null;
   const generated = await createImageGenerationTaskWithReferenceFallback(workbench, {
+    ...taskPayload,
     target: {
       kind: "team_asset",
       assetId: options.assetId,
       category: assetKind,
       name: nextName,
     },
-    prompt,
+    prompt: taskPayload.promptOverride ?? prompt,
     model:
       replayPayload?.model ??
       workbench.ui.assetGeneratorModelCode ??
@@ -47179,13 +47379,14 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
       id: item?.id ?? item?.assetId ?? `storyboard-ref-${index + 1}`,
       assetId: item?.assetId ?? item?.id ?? null,
       role: item?.role ?? item?.kind ?? "character",
-      kind: item?.kind ?? item?.role ?? "image",
+      kind: resolveGenerationReferenceMediaKind(item),
       name: item?.name ?? item?.assetName ?? `引用${index + 1}`,
       preview: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.url ?? null,
       previewUrl: item?.previewUrl ?? item?.preview ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.url ?? null,
-      url: item?.url ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.previewUrl ?? item?.preview ?? null,
+      url: item?.url ?? item?.audioUrl ?? item?.src ?? item?.imageUrl ?? item?.imageSrc ?? item?.previewUrl ?? item?.preview ?? null,
+      audioUrl: item?.audioUrl ?? null,
     })),
-  );
+  ).filter((item) => Boolean(resolveGenerationReferenceUrl(item)));
   const image = includeStoryboardImage
     ? (storyboard?.uploadedImages ?? []).find((item) => item.id === storyboard?.currentImageAssetVersionId && item.src) ??
       (storyboard?.uploadedImages ?? []).find((item) => item.status === "ready" && item.src) ??
@@ -47206,6 +47407,8 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
   if (mergedStoryboardReferences.length) {
     return mergedStoryboardReferences.map((item, index) => {
       const matchingAudio = mentionAudioMap.get(String(item?.name ?? item?.assetName ?? "").trim()) ?? null;
+      const mediaKind = resolveGenerationReferenceMediaKind(item);
+      const mediaLabel = mediaKind === "video" ? "视频" : mediaKind === "audio" ? "音频" : "图片";
       const itemIdentity = String(item?.id ?? "").trim();
       const duplicateIdentity = itemIdentity && mergedStoryboardReferences.some((reference, referenceIndex) => (
         referenceIndex !== index && String(reference?.id ?? "").trim() === itemIdentity
@@ -47217,8 +47420,9 @@ function buildSelectedStoryboardQuickReference(workbench, storyboard, descriptio
         ...(item?.storageObjectId ? { storageObjectId: item.storageObjectId } : {}),
         ...(item?.assetVersionId ? { assetVersionId: item.assetVersionId } : {}),
         sourceStoryboardId: storyboard.id,
-        kind: "image",
-        name: `${resolveStoryboardReferenceLabel(storyboard)} 图片 ${index + 1}`,
+        kind: mediaKind,
+        ...(mediaKind !== "image" ? { type: mediaKind } : {}),
+        name: `${resolveStoryboardReferenceLabel(storyboard)} ${mediaLabel} ${index + 1}`,
         description,
         preview: refreshedUrl || item?.previewUrl || item?.preview || item?.url || null,
         url: refreshedUrl || item?.url || item?.previewUrl || item?.preview || null,
@@ -47744,7 +47948,7 @@ export async function generateStoryboardVideos(workbench) {
     });
     const result = isRealEpisodeWorkbench(workbench) && typeof workbench.api.createVideoTask === "function"
       ? normalizeEpisodeTaskForLegacyResult(
-          await workbench.api.createVideoTask(submissionEpisodeId, {
+          await createVideoTaskWithReferenceFallback(workbench, submissionEpisodeId, {
             ...payload,
             targetType: "storyboard",
             targetId: selectedStoryboard.linkedShotId ?? selectedStoryboard.id,
@@ -50802,7 +51006,7 @@ async function submitEpisodeBatchStoryboardVideoTasks(workbench, modal, items, n
     }));
     workbench.ui.videoGenerationResult = submission;
     await persistStoryboardConversationEntry(workbench, submission, { includeUserRequest: true });
-    const task = await workbench.api.createVideoTask(workbench.ui.selectedEpisodeId, {
+    const task = await createVideoTaskWithReferenceFallback(workbench, workbench.ui.selectedEpisodeId, {
       ...payload,
       targetType: "storyboard",
       targetId: storyboard.linkedShotId ?? storyboard.id,
@@ -51382,6 +51586,13 @@ function taskCenterTaskVersion(task) {
       task?.fixedVideos?.[0]?.url ??
       "",
   );
+  const resultStorageObjectId = String(
+    task?.resultAssets?.[0]?.storageObjectId ??
+      task?.result?.storageObjectId ??
+      task?.fixedImages?.[0]?.storageObjectId ??
+      task?.fixedVideos?.[0]?.storageObjectId ??
+      "",
+  );
   return [
     task?.updatedAt ?? "",
     task?.status ?? "",
@@ -51398,6 +51609,7 @@ function taskCenterTaskVersion(task) {
     task?.lastFailureCode ?? "",
     task?.deadlineFinalPollCompletedAt ?? "",
     resultUrl,
+    resultStorageObjectId,
   ].join("|");
 }
 
@@ -53396,6 +53608,43 @@ function dedupeQuickReferenceItems(items = []) {
     uniqueItems.push(item);
     return true;
   });
+}
+
+// The composer renders semantic slots with synthetic ids (see
+// buildGenerationAttachmentCards), so a remove click may carry an id that no
+// stored reference actually has. Map that id back onto the generation state.
+function resolveComposerAttachmentSlot(generationState = {}, attachmentId = "") {
+  const id = String(attachmentId ?? "").trim();
+  if (id === "first-frame" || id === "last-frame") {
+    return {
+      frameStateKey: id === "last-frame" ? "lastFrame" : "firstFrame",
+      isEditSourceVideo: false,
+      reference: null,
+    };
+  }
+  if (id === "edit-source-video") {
+    return {
+      frameStateKey: "",
+      isEditSourceVideo: true,
+      reference: generationState.editSourceVideo ?? null,
+    };
+  }
+  const uploadIndexMatch = /^reference-upload-(\d+)$/.exec(id);
+  if (uploadIndexMatch) {
+    const uploads = (generationState.referenceUploads ?? []).filter(
+      (item) => item?.fromQuickReference !== true,
+    );
+    return {
+      frameStateKey: "",
+      isEditSourceVideo: false,
+      reference: uploads[Number(uploadIndexMatch[1]) - 1] ?? null,
+    };
+  }
+  return { frameStateKey: "", isEditSourceVideo: false, reference: null };
+}
+
+function isRemovedComposerAttachment(item, attachmentId, removedReference) {
+  return item?.id === attachmentId || isSameGenerationReference(item, removedReference);
 }
 
 function isSameGenerationReference(left, right) {
@@ -57192,10 +57441,13 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
         const upload = await uploadLocalFile(workbench, file, `episode-attachments/${resolvedAttachmentType}`);
         const mediaKind = resolvedAttachmentType === "audio" ? "audio" : resolvedAttachmentType === "video" ? "video" : "image";
         const previewUrl = resolveApiUrl(upload.previewUrl ?? upload.publicUrl);
+        const publicUrl = resolveApiUrl(upload.publicUrl);
         // For videos, use thumbnail if available, otherwise use video URL as src
         const videoPreview = resolvedAttachmentType === "video" && upload.thumbnailUrl
           ? resolveApiUrl(upload.thumbnailUrl)
           : null;
+        // For audio, use publicUrl to avoid base64 data URLs
+        const audioUrl = resolvedAttachmentType === "audio" ? publicUrl : null;
         return {
           id: upload.storageObjectId ?? `episode-attachment-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
           type: mediaKind,
@@ -57203,6 +57455,9 @@ function handleEpisodeWorkbenchAttachmentFiles(workbench, attachmentType, files,
           name: normalizeAssetImportName(file.name),
           fileName: file.name,
           src: previewUrl,
+          url: audioUrl || publicUrl || previewUrl,
+          audioUrl,
+          publicUrl,
           preview: resolvedAttachmentType === "audio" ? "" : (videoPreview || previewUrl),
           thumbnailUrl: videoPreview,
           uploadSessionId: upload.uploadSessionId ?? null,
